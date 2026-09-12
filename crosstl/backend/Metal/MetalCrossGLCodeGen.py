@@ -1100,7 +1100,15 @@ class MetalToCrossGLConverter:
         self,
         cooperative_matrix_fragment_mapping=None,
         cooperative_matrix_fragment_mapping_provenance=None,
+        preserve_pointer_pointee_const=True,
+        resolve_standard_remove_cv_aliases=True,
     ):
+        if not isinstance(preserve_pointer_pointee_const, bool):
+            raise ValueError("preserve_pointer_pointee_const must be a boolean")
+        self.preserve_pointer_pointee_const = preserve_pointer_pointee_const
+        if not isinstance(resolve_standard_remove_cv_aliases, bool):
+            raise ValueError("resolve_standard_remove_cv_aliases must be a boolean")
+        self.resolve_standard_remove_cv_aliases = resolve_standard_remove_cv_aliases
         mapping_is_configured = cooperative_matrix_fragment_mapping is not None
         provenance_is_configured = (
             cooperative_matrix_fragment_mapping_provenance is not None
@@ -6000,7 +6008,11 @@ class MetalToCrossGLConverter:
         if declaration is not None:
             return f"{self.resolve_alias_template_declaration(declaration, arguments)}{suffix}"
 
-        if self.metal_standard_remove_cv_alias_visible(name) and len(arguments) == 1:
+        if (
+            self.resolve_standard_remove_cv_aliases
+            and self.metal_standard_remove_cv_alias_visible(name)
+            and len(arguments) == 1
+        ):
             argument = self.materialize_alias_template_type(
                 arguments[0],
                 required=required,
@@ -8081,7 +8093,8 @@ class MetalToCrossGLConverter:
             str(qualifier).lower() for qualifier in pointee_qualifiers or []
         }
         const_pointer_pointee = bool(
-            pointee_qualifiers is not None
+            self.preserve_pointer_pointee_const
+            and pointee_qualifiers is not None
             and "const" in pointee_qualifier_names
             and self.pointer_element_type(resolved_effective_type) is not None
         )

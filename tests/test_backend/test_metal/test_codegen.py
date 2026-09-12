@@ -1236,19 +1236,35 @@ def test_codegen_reference_parameters_preserve_readonly_direction(tmp_path):
 def test_codegen_pointer_reference_direction_is_independent_of_pointee_constness():
     code = """
     void advance(
+        const thread float* values,
         const device float*& source,
         device float*& destination,
         int amount) {
-      source += amount;
+      float observed = values[0];
+      source += amount + int(observed);
       destination += amount;
     }
     """
 
     crossgl = normalize(convert_without_preprocessing(code))
+    compatibility_ast = MetalParser(
+        MetalLexer(code, preprocess=False).tokenize()
+    ).parse()
+    compatibility_crossgl = normalize(
+        MetalToCrossGLConverter(preserve_pointer_pointee_const=False).generate(
+            compatibility_ast
+        )
+    )
 
     assert (
-        "void advance(inout const device float* source, "
+        "void advance(const thread float* values, "
+        "inout const device float* source, "
         "inout device float* destination, int amount)" in crossgl
+    )
+    assert (
+        "void advance(thread float* values, "
+        "inout const device float* source, "
+        "inout device float* destination, int amount)" in compatibility_crossgl
     )
 
 
@@ -15864,6 +15880,31 @@ def test_codegen_does_not_replace_source_shadowed_remove_cv_alias_template():
 
     normalized = normalize(crossgl)
     assert "Wrapper<bfloat> keep(Wrapper<bfloat> value)" in normalized
+
+    standard_source = """
+        using namespace metal;
+
+        bfloat keep_standard(bfloat value) {
+            return static_cast<remove_cv_t<bfloat>>(value);
+        }
+        """
+    resolved = normalize(convert_without_preprocessing(standard_source))
+    standard_ast = MetalParser(
+        MetalLexer(standard_source, preprocess=False).tokenize()
+    ).parse()
+    preserved = normalize(
+        MetalToCrossGLConverter(resolve_standard_remove_cv_aliases=False).generate(
+            standard_ast
+        )
+    )
+
+    assert "return (bfloat16)value;" in resolved
+    assert "return (remove_cv_t<bfloat>)value;" in preserved
+    with pytest.raises(
+        ValueError,
+        match="resolve_standard_remove_cv_aliases must be a boolean",
+    ):
+        MetalToCrossGLConverter(resolve_standard_remove_cv_aliases="false")
 
 
 def test_codegen_preserves_private_pointer_pointee_const_without_constifying_pointer_objects():

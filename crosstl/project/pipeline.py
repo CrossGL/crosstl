@@ -1537,6 +1537,10 @@ DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION = (
     "relative_wave_shuffle_out_of_range"
 )
 DIRECTX_WIDEN_NATIVE_FLOAT16_SOURCE_OPTION = "widen_native_float16"
+METAL_PRESERVE_POINTER_POINTEE_CONST_SOURCE_OPTION = "preserve_pointer_pointee_const"
+METAL_RESOLVE_STANDARD_REMOVE_CV_ALIASES_SOURCE_OPTION = (
+    "resolve_standard_remove_cv_aliases"
+)
 TEMPLATE_VARIANTS_SOURCE_OPTION = "template_variants"
 SPECIALIZATION_CONSTANTS_CONFIG_KEY = "specialization_constants"
 SOURCE_SPECIALIZATION_CONSTANTS_CONFIG_KEY = "source_specialization_constants"
@@ -13968,6 +13972,7 @@ def _metal_template_parameter_names(source: str) -> set[str]:
 
 def _materialized_template_specialization_record(
     *,
+    preprocessor: Any,
     name: str,
     materialized_name: str,
     parameters: Mapping[str, str],
@@ -13983,10 +13988,16 @@ def _materialized_template_specialization_record(
         )
         for parameter in parameters
     }
+    report_parameters = {
+        parameter: preprocessor._canonicalize_template_materialization_parameter(
+            str(value)
+        )
+        for parameter, value in parameters.items()
+    }
     payload = {
         "name": name,
         "materializedName": materialized_name,
-        "parameters": dict(sorted(parameters.items())),
+        "parameters": dict(sorted(report_parameters.items())),
         "parameterSources": dict(sorted(sources.items())),
         "source": source,
     }
@@ -14944,6 +14955,7 @@ def _materialize_inherited_source_template_helpers(
             seen_records.add(record_key)
             specialization_records.append(
                 _materialized_template_specialization_record(
+                    preprocessor=preprocessor,
                     name=name,
                     materialized_name=materialized_name,
                     parameters=parameters,
@@ -15173,6 +15185,7 @@ def _metal_find_implicit_template_function_calls(
     *,
     type_cache: _MetalMaterializationTypeEnvironmentCache | None = None,
     work_budget: _MetalTemplateMaterializationWorkBudget | None = None,
+    decay_local_array_arguments: bool = True,
 ) -> list[tuple[str, list[str], tuple[int, int]]]:
     calls: list[tuple[str, list[str], tuple[int, int]]] = []
     environment_cache = type_cache or _MetalMaterializationTypeEnvironmentCache()
@@ -15279,6 +15292,7 @@ def _metal_find_implicit_template_function_calls(
                     integral_constants,
                     call_position,
                 ),
+                decay_local_array_arguments=decay_local_array_arguments,
             )
             if inferred_arguments:
                 calls.append(
@@ -15537,6 +15551,7 @@ def _materialize_implicit_template_function_calls(
         return_types,
         type_cache=type_cache,
         work_budget=work_budget,
+        decay_local_array_arguments=target == "opengl",
     )
     context_by_materialized_name = {
         context.materialized_name: context for context in source_contexts
@@ -15652,6 +15667,7 @@ def _materialize_implicit_template_function_calls(
             )
             specializations.append(
                 _materialized_template_specialization_record(
+                    preprocessor=preprocessor,
                     name=function_name,
                     materialized_name=materialized_name,
                     parameters=parameters,
@@ -18478,6 +18494,7 @@ def _infer_plain_template_helper_arguments(
     explicit_template_arguments: Sequence[str] = (),
     template_structs_by_name: Mapping[str, Any] | None = None,
     static_values: Mapping[str, str] | None = None,
+    decay_local_array_arguments: bool = True,
 ) -> list[str] | None:
     header = _metal_template_header(template)
     parameter_declarations = _metal_function_parameter_declarations(
@@ -18650,7 +18667,8 @@ def _infer_plain_template_helper_arguments(
                 return None
             continue
         if (
-            explicit_expected_type is None
+            decay_local_array_arguments
+            and explicit_expected_type is None
             and expected_clean in template_parameters
             and _normalize_metal_type_text(expected_type) == expected_clean
             and _metal_array_element_type(actual_type) is not None
@@ -18738,6 +18756,7 @@ def _infer_plain_template_helper_matches(
     template_argument_alias_contexts: Sequence[
         tuple[Mapping[str, Sequence[Any]], int, str]
     ] = (),
+    decay_local_array_arguments: bool = True,
 ) -> list[tuple[Any, list[str], list[tuple[str, str, bool]]]]:
     matches: list[tuple[Any, list[str], list[tuple[str, str, bool]]]] = []
     for template in candidate_templates:
@@ -18842,6 +18861,7 @@ def _infer_plain_template_helper_matches(
                 arguments_to_use,
                 template_structs_by_name,
                 static_values,
+                decay_local_array_arguments=decay_local_array_arguments,
             )
 
         arguments = infer(preferred_explicit_arguments)
@@ -18898,6 +18918,7 @@ def _materialize_plain_template_helper_calls(
     *,
     work_budget: _MetalTemplateMaterializationWorkBudget | None = None,
     include_struct_members: bool = False,
+    decay_local_array_arguments: bool = True,
     known_materializations: (
         Mapping[tuple[str, tuple[str, ...], tuple[str, ...]], str] | None
     ) = None,
@@ -19082,6 +19103,7 @@ def _materialize_plain_template_helper_calls(
             )
             specialization_records.append(
                 _materialized_template_specialization_record(
+                    preprocessor=preprocessor,
                     name=function_name,
                     materialized_name=materialized_name,
                     parameters=parameters,
@@ -19227,6 +19249,7 @@ def _materialize_plain_template_helper_calls(
                                 child_span[0],
                             ),
                             template_argument_alias_contexts=child_alias_contexts,
+                            decay_local_array_arguments=decay_local_array_arguments,
                         )
                         if len(inferred_matches) != 1:
                             if (
@@ -19312,6 +19335,7 @@ def _materialize_plain_template_helper_calls(
                         span[0],
                     ),
                     template_argument_alias_contexts=call_alias_contexts,
+                    decay_local_array_arguments=decay_local_array_arguments,
                 )
                 if len(inferred_matches) != 1:
                     if inferred_matches or function_name not in concrete_function_names:
@@ -22407,6 +22431,7 @@ def _project_template_materialization_for_artifact(
 
     base_preprocessor_kwargs: dict[str, Any] = {
         "include_paths": list(include_paths),
+        "group_non_type_template_substitutions": target == "opengl",
     }
     if "strict_preprocessor" in source_options:
         base_preprocessor_kwargs["strict"] = bool(source_options["strict_preprocessor"])
@@ -22736,6 +22761,7 @@ def _project_template_materialization_for_artifact(
         }
         specializations.append(
             _materialized_template_specialization_record(
+                preprocessor=preprocessor,
                 name=template.name,
                 materialized_name=materialized_name,
                 parameters=parameters,
@@ -22833,6 +22859,7 @@ def _project_template_materialization_for_artifact(
         parameter_sources = {parameter: "call-site" for parameter in parameters}
         specializations.append(
             _materialized_template_specialization_record(
+                preprocessor=preprocessor,
                 name=function_name,
                 materialized_name=materialized_name,
                 parameters=parameters,
@@ -22883,6 +22910,7 @@ def _project_template_materialization_for_artifact(
         )
         specializations.append(
             _materialized_template_specialization_record(
+                preprocessor=preprocessor,
                 name=function_name,
                 materialized_name=materialized_name,
                 parameters=parameters,
@@ -22958,6 +22986,7 @@ def _project_template_materialization_for_artifact(
         preprocessor,
         materialized,
         work_budget=explicit_work_budget,
+        decay_local_array_arguments=target == "opengl",
         known_materializations={
             **concrete_materializations,
             **implicit_materialization.materialized_names,
@@ -23009,6 +23038,7 @@ def _project_template_materialization_for_artifact(
             materialized,
             work_budget=explicit_work_budget,
             include_struct_members=True,
+            decay_local_array_arguments=target == "opengl",
             known_materializations=inferred_plain_materialized_names,
         )
         specializations.extend(struct_field_specializations)
@@ -23243,6 +23273,7 @@ def _project_template_materialization_for_artifact(
                 continue
             specializations.append(
                 _materialized_template_specialization_record(
+                    preprocessor=preprocessor,
                     name=template.name,
                     materialized_name=materialized_name,
                     parameters=parameters,
@@ -23386,6 +23417,7 @@ def _project_template_materialization_for_artifact(
         materialized,
         work_budget=explicit_work_budget,
         include_struct_members=True,
+        decay_local_array_arguments=target == "opengl",
         known_materializations=late_known_materializations,
     )
     specializations.extend(late_helper_specializations)
@@ -28828,9 +28860,16 @@ def _translate_project_impl(
                             file.write(template_materialization.text)
                         translation_input_path = materialized_path
                         translation_defines = template_materialization.defines
-                        translation_source_options = (
+                        translation_source_options = dict(
                             template_materialization.source_options
                         )
+                        if translation_source_backend == "metal":
+                            translation_source_options[
+                                METAL_PRESERVE_POINTER_POINTEE_CONST_SOURCE_OPTION
+                            ] = (target == "opengl")
+                            translation_source_options[
+                                METAL_RESOLVE_STANDARD_REMOVE_CV_ALIASES_SOURCE_OPTION
+                            ] = (target != "metal")
                     (
                         specialization_constants,
                         specialization_materialization,

@@ -829,6 +829,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         ),
         template_specialization_limit_source: Optional[str] = None,
         promote_derived_pointer_members: bool = False,
+        group_non_type_template_substitutions: bool = True,
     ):
         super().__init__(
             include_paths=include_paths,
@@ -839,6 +840,13 @@ class MetalPreprocessor(HLSLPreprocessor):
         if not isinstance(promote_derived_pointer_members, bool):
             raise ValueError("Metal promote_derived_pointer_members must be a boolean")
         self.promote_derived_pointer_members = promote_derived_pointer_members
+        if not isinstance(group_non_type_template_substitutions, bool):
+            raise ValueError(
+                "Metal group_non_type_template_substitutions must be a boolean"
+            )
+        self.group_non_type_template_substitutions = (
+            group_non_type_template_substitutions
+        )
         if isinstance(max_template_specializations, bool):
             raise ValueError(
                 "Metal max_template_specializations must be a non-negative integer"
@@ -24802,18 +24810,30 @@ class MetalPreprocessor(HLSLPreprocessor):
         return arguments
 
     def _is_atomic_non_type_template_id(self, value: str) -> bool:
-        """Whether ``value`` is one atomic qualified-id with a template-id.
+        """Whether ``value`` is exactly one qualified template-id.
 
         A function template specialization such as ``radix2<float>`` is a
         primary expression when used as a non-type template argument.  Wrapping
         it before textual callback substitution changes ``radix_func(x)`` into
         ``(radix2<float>)(x)``, which hides the call from later materialization.
-        A dependent static member such as ``WorkPerThread<T>::n`` is likewise
-        one qualified-id and must retain its source spelling in materialization
-        evidence.  Consume only balanced template arguments and qualified-name
-        suffixes so arithmetic around either form remains grouped as a compound
-        expression.
+        Require both a qualified template name and a balanced angle list that
+        consumes the complete value so arithmetic around a template-id remains
+        grouped as a compound expression.
         """
+
+        text = str(value).strip()
+        match = re.match(
+            r"(?:::)?[A-Za-z_][A-Za-z0-9_]*" r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*\s*<",
+            text,
+        )
+        if match is None:
+            return False
+        angle_start = match.end() - 1
+        angle_end = self._find_matching_angle(text, angle_start)
+        return angle_end == len(text) - 1
+
+    def _is_atomic_qualified_non_type_template_id(self, value: str) -> bool:
+        """Whether ``value`` is one qualified-id containing a template-id."""
 
         text = str(value).strip()
         match = re.match(
@@ -24853,6 +24873,31 @@ class MetalPreprocessor(HLSLPreprocessor):
                     return False
                 position = angle_end + 1
 
+    def _canonicalize_template_materialization_parameter(self, value: str) -> str:
+        """Remove redundant outer grouping from one report-only parameter.
+
+        Non-type substitutions retain their context-safe grouped source spelling,
+        while materialization metadata records the standalone value without
+        balanced outer parentheses.  Removing those parentheses is safe only for
+        the report value as a whole; generated source continues to use the
+        grouped spelling so compound-expression precedence remains unchanged.
+        """
+
+        text = str(value)
+        normalized = self._normalize_template_argument_text(text)
+        candidate = normalized
+        while candidate.startswith("(") and candidate.endswith(")"):
+            closing = self._find_matching_delimiter(candidate, 0, "(", ")")
+            if closing != len(candidate) - 1:
+                break
+            inner = candidate[1:-1].strip()
+            if not inner:
+                break
+            candidate = inner
+        if candidate != normalized:
+            return candidate
+        return text
+
     def _group_non_type_template_substitution(self, value: str) -> str:
         """Return a context-safe spelling for one non-type template value.
 
@@ -24866,7 +24911,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         """
 
         text = str(value).strip()
-        if not text:
+        if not text or not self.group_non_type_template_substitutions:
             return text
         if text.startswith("(") and text.endswith(")"):
             closing = self._find_matching_delimiter(text, 0, "(", ")")
