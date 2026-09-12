@@ -4,9 +4,22 @@ import textwrap
 
 import pytest
 
+import crosstl.project.pipeline as project_pipeline
 from crosstl.project import load_project_config, translate_project
 
 SOURCE = "matrix.cgl"
+
+
+@pytest.fixture(autouse=True)
+def _declare_opengl_validation_tool_available(monkeypatch):
+    """Keep these target-option assertions independent of host-installed tools."""
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/test-tools/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
 
 
 def _write_fixture(repo) -> None:

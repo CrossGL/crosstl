@@ -2006,7 +2006,30 @@ def test_preprocessor_does_not_treat_function_pointer_aliases_as_functor_calls()
 
 
 def test_preprocessor_materializes_callable_non_type_template_arguments():
-    code = """
+    preprocessor = MetalPreprocessor()
+
+    assert (
+        preprocessor._group_non_type_template_substitution("radix2<float>")
+        == "radix2<float>"
+    )
+    assert (
+        preprocessor._group_non_type_template_substitution(
+            "::mlx::fft::radix2<metal::vec<float, 2>>"
+        )
+        == "::mlx::fft::radix2<metal::vec<float, 2>>"
+    )
+    assert preprocessor._group_non_type_template_substitution("count / lanes") == (
+        "(count / lanes)"
+    )
+    assert preprocessor._group_non_type_template_substitution("count > lanes") == (
+        "(count > lanes)"
+    )
+    assert (
+        preprocessor._group_non_type_template_substitution("radix2<float> + offset")
+        == "(radix2<float> + offset)"
+    )
+
+    direct_code = """
     typedef void (*RadixFunc)(thread float2*, thread float2*);
 
     void radix2(thread float2* values, thread float2* scratch) {
@@ -2031,15 +2054,58 @@ def test_preprocessor_materializes_callable_non_type_template_arguments():
     }
     """
 
-    output = MetalPreprocessor().preprocess(code)
+    direct_output = preprocessor.preprocess(direct_code)
 
-    assert "typedef void (*RadixFunc)(thread float2*, thread float2*);" in output
-    assert "apply_radix_2_radix2(values, scratch);" in output
-    assert "apply_radix_4_radix4(values, scratch);" in output
-    assert "void apply_radix_2_radix2(" in output
-    assert "radix2(values, scratch);" in output
-    assert "void apply_radix_4_radix4(" in output
-    assert "radix4(values, scratch);" in output
+    assert "typedef void (*RadixFunc)(thread float2*, thread float2*);" in direct_output
+    assert "apply_radix_2_radix2(values, scratch);" in direct_output
+    assert "apply_radix_4_radix4(values, scratch);" in direct_output
+    assert "void apply_radix_2_radix2(" in direct_output
+    assert "radix2(values, scratch);" in direct_output
+    assert "void apply_radix_4_radix4(" in direct_output
+    assert "radix4(values, scratch);" in direct_output
+
+    # Reduced from MLX FFT: an outer function specialization forwards a
+    # templated radix function as a function-valued non-type argument.  The
+    # resulting template-id must remain a visible call so the radix helper is
+    # materialized in the next fixed-point pass.
+    template_id_code = """
+    template <typename T>
+    using RadixFunc = void (*)(thread T*, thread T*);
+
+    template <typename T>
+    void radix2(thread T* values, thread T* scratch) {
+        values[0] = scratch[0];
+    }
+
+    template <typename T, bool UseTwiddles, int Radix, RadixFunc<T> Function>
+    void radix_butterfly(thread T* values, thread T* scratch) {
+        Function(values, scratch);
+    }
+
+    template <typename T>
+    void perform_fft(thread T* values, thread T* scratch) {
+        radix_butterfly<T, false, 2, radix2<T>>(values, scratch);
+    }
+
+    kernel void fft(device float* out [[buffer(0)]]) {
+        float values[2];
+        float scratch[2];
+        perform_fft<float>(values, scratch);
+        out[0] = values[0];
+    }
+    """
+
+    template_id_output = MetalPreprocessor().preprocess(template_id_code)
+
+    assert "perform_fft_float(values, scratch);" in template_id_output
+    assert (
+        "radix_butterfly_float_false_2_radix2_float(values, scratch);"
+        in template_id_output
+    )
+    assert "radix2_float(values, scratch);" in template_id_output
+    assert "void radix2_float(" in template_id_output
+    assert "(radix2<float>)(values, scratch);" not in template_id_output
+    assert "radix2<float>" not in template_id_output
 
 
 def test_preprocessor_materializes_helper_calls_from_local_alias_arguments():

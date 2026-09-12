@@ -24801,15 +24801,39 @@ class MetalPreprocessor(HLSLPreprocessor):
             arguments.append(default)
         return arguments
 
+    def _is_atomic_non_type_template_id(self, value: str) -> bool:
+        """Whether ``value`` is exactly one qualified template-id.
+
+        A function template specialization such as ``radix2<float>`` is a
+        primary expression when used as a non-type template argument.  Wrapping
+        it before textual callback substitution changes ``radix_func(x)`` into
+        ``(radix2<float>)(x)``, which hides the call from later materialization.
+        Require both a qualified template name and a balanced angle list that
+        consumes the complete value so arithmetic around a template-id remains
+        grouped as a compound expression.
+        """
+
+        text = str(value).strip()
+        match = re.match(
+            r"(?:::)?[A-Za-z_][A-Za-z0-9_]*" r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*\s*<",
+            text,
+        )
+        if match is None:
+            return False
+        angle_start = match.end() - 1
+        angle_end = self._find_matching_angle(text, angle_start)
+        return angle_end == len(text) - 1
+
     def _group_non_type_template_substitution(self, value: str) -> str:
         """Return a context-safe spelling for one non-type template value.
 
         Identifier replacement is textual, so substituting an arithmetic default
         such as ``BCOLS / n_reads`` into ``tgp_size / TCOLS`` must retain the
-        substituted expression as one operand.  Atomic values already bind as one
-        expression; compound values receive one balanced outer pair.  The helper
-        is deliberately limited to parameters recorded as non-type by callers so
-        type substitutions never acquire expression parentheses.
+        substituted expression as one operand.  Atomic values and complete
+        qualified template-ids already bind as one expression; compound values
+        receive one balanced outer pair.  The helper is deliberately limited to
+        parameters recorded as non-type by callers so type substitutions never
+        acquire expression parentheses.
         """
 
         text = str(value).strip()
@@ -24827,7 +24851,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         qualified_identifier = (
             r"(?:::)?[A-Za-z_][A-Za-z0-9_]*" r"(?:::[A-Za-z_][A-Za-z0-9_]*)*"
         )
-        if re.fullmatch(rf"(?:{scalar}|{qualified_identifier})", text):
+        if re.fullmatch(
+            rf"(?:{scalar}|{qualified_identifier})", text
+        ) or self._is_atomic_non_type_template_id(text):
             return text
         return f"({text})"
 
