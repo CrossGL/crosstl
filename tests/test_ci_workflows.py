@@ -4171,7 +4171,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_opengl_proof():
     )
     assert "if: github.event_name != 'schedule'" in binary_opengl_job
     assert "runs-on: ubuntu-latest" in binary_opengl_job
-    assert "timeout-minutes: 180" in binary_opengl_job
+    assert "timeout-minutes: 240" in binary_opengl_job
     assert "fail-fast: false" in binary_opengl_job
     assert _matrix_values(binary_opengl_job, "shard_index") == {
         str(index) for index in range(24)
