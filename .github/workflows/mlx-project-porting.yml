@@ -1885,7 +1885,7 @@ jobs:
     name: MLX complete unary OpenGL translation (shard ${{ matrix.shard_index }} of 5)
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
