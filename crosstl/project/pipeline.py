@@ -1529,10 +1529,18 @@ REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
 SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
 TARGET_SOURCE_OPTIONS_KEY = "target_options"
 SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION = "software_subgroup_width"
+COOPERATIVE_MATRIX_SOFTWARE_LOWERING_SOURCE_OPTION = (
+    "cooperative_matrix_software_lowering"
+)
+PRIVATE_POINTER_OUT_OF_BOUNDS_READ_SOURCE_OPTION = "private_pointer_out_of_bounds_read"
 DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION = (
     "relative_wave_shuffle_out_of_range"
 )
 DIRECTX_WIDEN_NATIVE_FLOAT16_SOURCE_OPTION = "widen_native_float16"
+METAL_PRESERVE_POINTER_POINTEE_CONST_SOURCE_OPTION = "preserve_pointer_pointee_const"
+METAL_RESOLVE_STANDARD_REMOVE_CV_ALIASES_SOURCE_OPTION = (
+    "resolve_standard_remove_cv_aliases"
+)
 TEMPLATE_VARIANTS_SOURCE_OPTION = "template_variants"
 SPECIALIZATION_CONSTANTS_CONFIG_KEY = "specialization_constants"
 SOURCE_SPECIALIZATION_CONSTANTS_CONFIG_KEY = "source_specialization_constants"
@@ -6177,6 +6185,8 @@ def _frontend_source_options(source_options: Mapping[str, Any]) -> dict[str, Any
             TEMPLATE_VARIANTS_SOURCE_OPTION,
             TARGET_SOURCE_OPTIONS_KEY,
             SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION,
+            COOPERATIVE_MATRIX_SOFTWARE_LOWERING_SOURCE_OPTION,
+            PRIVATE_POINTER_OUT_OF_BOUNDS_READ_SOURCE_OPTION,
             DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION,
             METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION,
             METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION,
@@ -13962,6 +13972,7 @@ def _metal_template_parameter_names(source: str) -> set[str]:
 
 def _materialized_template_specialization_record(
     *,
+    preprocessor: Any,
     name: str,
     materialized_name: str,
     parameters: Mapping[str, str],
@@ -13977,10 +13988,16 @@ def _materialized_template_specialization_record(
         )
         for parameter in parameters
     }
+    report_parameters = {
+        parameter: preprocessor._canonicalize_template_materialization_parameter(
+            str(value)
+        )
+        for parameter, value in parameters.items()
+    }
     payload = {
         "name": name,
         "materializedName": materialized_name,
-        "parameters": dict(sorted(parameters.items())),
+        "parameters": dict(sorted(report_parameters.items())),
         "parameterSources": dict(sorted(sources.items())),
         "source": source,
     }
@@ -14938,6 +14955,7 @@ def _materialize_inherited_source_template_helpers(
             seen_records.add(record_key)
             specialization_records.append(
                 _materialized_template_specialization_record(
+                    preprocessor=preprocessor,
                     name=name,
                     materialized_name=materialized_name,
                     parameters=parameters,
@@ -15167,6 +15185,7 @@ def _metal_find_implicit_template_function_calls(
     *,
     type_cache: _MetalMaterializationTypeEnvironmentCache | None = None,
     work_budget: _MetalTemplateMaterializationWorkBudget | None = None,
+    decay_local_array_arguments: bool = True,
 ) -> list[tuple[str, list[str], tuple[int, int]]]:
     calls: list[tuple[str, list[str], tuple[int, int]]] = []
     environment_cache = type_cache or _MetalMaterializationTypeEnvironmentCache()
@@ -15273,6 +15292,7 @@ def _metal_find_implicit_template_function_calls(
                     integral_constants,
                     call_position,
                 ),
+                decay_local_array_arguments=decay_local_array_arguments,
             )
             if inferred_arguments:
                 calls.append(
@@ -15531,6 +15551,7 @@ def _materialize_implicit_template_function_calls(
         return_types,
         type_cache=type_cache,
         work_budget=work_budget,
+        decay_local_array_arguments=target == "opengl",
     )
     context_by_materialized_name = {
         context.materialized_name: context for context in source_contexts
@@ -15646,6 +15667,7 @@ def _materialize_implicit_template_function_calls(
             )
             specializations.append(
                 _materialized_template_specialization_record(
+                    preprocessor=preprocessor,
                     name=function_name,
                     materialized_name=materialized_name,
                     parameters=parameters,
@@ -15951,6 +15973,61 @@ def _metal_array_element_type(type_text: str) -> str | None:
     return match.group("element").strip()
 
 
+def _metal_decay_array_argument_for_value_template_deduction(
+    argument: str,
+    actual_type: str,
+    type_environment: Mapping[str, str],
+) -> str | None:
+    """Return the pointer type used to deduce a direct by-value type parameter.
+
+    C++ function-template deduction applies array-to-pointer conversion when the
+    function parameter is not a reference.  A local Metal array without an
+    explicit address space lives in ``thread`` storage; explicitly qualified
+    arrays retain their source address space and pointee cv qualifiers.  Only a
+    one-dimensional array with provenance from a bare local binding is admitted
+    when the source omits its address space.  Member expressions and
+    pointer-to-array shapes remain fail-closed rather than guessing storage.
+    """
+
+    normalized = _normalize_metal_type_text(actual_type)
+    match = re.fullmatch(r"(?P<element>[^\[\]]+)\[(?P<extent>[^\[\]]+)\]", normalized)
+    if match is None or not match.group("extent").strip():
+        return None
+
+    element = match.group("element").strip()
+    tokens = element.split(" ")
+    qualifiers: list[str] = []
+    while tokens and tokens[0] in _METAL_STORAGE_TYPE_QUALIFIERS:
+        qualifiers.append(tokens.pop(0))
+    if not tokens:
+        return None
+    base = " ".join(tokens).strip()
+    if any(token in base for token in ("*", "&", "(", ")", "[", "]")) or any(
+        token in _METAL_STORAGE_TYPE_QUALIFIERS
+        for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", base)
+    ):
+        return None
+
+    address_spaces = [
+        qualifier
+        for qualifier in qualifiers
+        if qualifier in _METAL_ADDRESS_SPACE_QUALIFIERS
+    ]
+    if len(address_spaces) > 1:
+        return None
+    if not address_spaces:
+        binding = _metal_strip_outer_parentheses(argument)
+        if (
+            re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", binding) is None
+            or _normalize_metal_type_text(type_environment.get(binding, ""))
+            != normalized
+        ):
+            return None
+        qualifiers.append("thread")
+
+    return _normalize_metal_type_text(f"{' '.join(qualifiers)} {base}*")
+
+
 def _metal_generic_type_parts(
     preprocessor: Any, type_text: str
 ) -> tuple[str, list[str]]:
@@ -16055,6 +16132,13 @@ def _collect_metal_template_type_bindings(
     actual_binding = _metal_template_argument_binding_type(actual_type)
     if not expected or not actual:
         return True
+
+    # Array-to-pointer conversion is a by-value function-parameter adjustment.
+    # A reference parameter instead binds the array type itself, whose concrete
+    # parenthesized declarator is not representable by this materializer.  Reject
+    # it rather than decaying the array or emitting ``float[8]& value``.
+    if "&" in expected and _metal_array_element_type(actual) is not None:
+        return False
 
     while expected.endswith("&") or actual.endswith("&"):
         expected = expected[:-1].strip() if expected.endswith("&") else expected
@@ -18410,6 +18494,7 @@ def _infer_plain_template_helper_arguments(
     explicit_template_arguments: Sequence[str] = (),
     template_structs_by_name: Mapping[str, Any] | None = None,
     static_values: Mapping[str, str] | None = None,
+    decay_local_array_arguments: bool = True,
 ) -> list[str] | None:
     header = _metal_template_header(template)
     parameter_declarations = _metal_function_parameter_declarations(
@@ -18581,6 +18666,20 @@ def _infer_plain_template_helper_arguments(
             if contextual_match is False:
                 return None
             continue
+        if (
+            decay_local_array_arguments
+            and explicit_expected_type is None
+            and expected_clean in template_parameters
+            and _normalize_metal_type_text(expected_type) == expected_clean
+            and _metal_array_element_type(actual_type) is not None
+        ):
+            actual_type = _metal_decay_array_argument_for_value_template_deduction(
+                argument,
+                actual_type,
+                type_environment,
+            )
+            if actual_type is None:
+                return None
         if explicit_expected_type is not None:
             if not _metal_concrete_parameter_type_compatible(
                 explicit_expected_type,
@@ -18657,6 +18756,7 @@ def _infer_plain_template_helper_matches(
     template_argument_alias_contexts: Sequence[
         tuple[Mapping[str, Sequence[Any]], int, str]
     ] = (),
+    decay_local_array_arguments: bool = True,
 ) -> list[tuple[Any, list[str], list[tuple[str, str, bool]]]]:
     matches: list[tuple[Any, list[str], list[tuple[str, str, bool]]]] = []
     for template in candidate_templates:
@@ -18761,6 +18861,7 @@ def _infer_plain_template_helper_matches(
                 arguments_to_use,
                 template_structs_by_name,
                 static_values,
+                decay_local_array_arguments=decay_local_array_arguments,
             )
 
         arguments = infer(preferred_explicit_arguments)
@@ -18817,6 +18918,7 @@ def _materialize_plain_template_helper_calls(
     *,
     work_budget: _MetalTemplateMaterializationWorkBudget | None = None,
     include_struct_members: bool = False,
+    decay_local_array_arguments: bool = True,
     known_materializations: (
         Mapping[tuple[str, tuple[str, ...], tuple[str, ...]], str] | None
     ) = None,
@@ -19001,6 +19103,7 @@ def _materialize_plain_template_helper_calls(
             )
             specialization_records.append(
                 _materialized_template_specialization_record(
+                    preprocessor=preprocessor,
                     name=function_name,
                     materialized_name=materialized_name,
                     parameters=parameters,
@@ -19146,6 +19249,7 @@ def _materialize_plain_template_helper_calls(
                                 child_span[0],
                             ),
                             template_argument_alias_contexts=child_alias_contexts,
+                            decay_local_array_arguments=decay_local_array_arguments,
                         )
                         if len(inferred_matches) != 1:
                             if (
@@ -19231,6 +19335,7 @@ def _materialize_plain_template_helper_calls(
                         span[0],
                     ),
                     template_argument_alias_contexts=call_alias_contexts,
+                    decay_local_array_arguments=decay_local_array_arguments,
                 )
                 if len(inferred_matches) != 1:
                     if inferred_matches or function_name not in concrete_function_names:
@@ -22326,6 +22431,7 @@ def _project_template_materialization_for_artifact(
 
     base_preprocessor_kwargs: dict[str, Any] = {
         "include_paths": list(include_paths),
+        "group_non_type_template_substitutions": target == "opengl",
     }
     if "strict_preprocessor" in source_options:
         base_preprocessor_kwargs["strict"] = bool(source_options["strict_preprocessor"])
@@ -22337,6 +22443,10 @@ def _project_template_materialization_for_artifact(
         base_preprocessor_kwargs["template_specialization_limit_source"] = (
             source_options["template_specialization_limit_source"]
         )
+    if "promote_derived_pointer_members" in source_options:
+        base_preprocessor_kwargs["promote_derived_pointer_members"] = source_options[
+            "promote_derived_pointer_members"
+        ]
     materialization_work_limit = _metal_template_materialization_work_limit(
         source_options
     )
@@ -22651,6 +22761,7 @@ def _project_template_materialization_for_artifact(
         }
         specializations.append(
             _materialized_template_specialization_record(
+                preprocessor=preprocessor,
                 name=template.name,
                 materialized_name=materialized_name,
                 parameters=parameters,
@@ -22748,6 +22859,7 @@ def _project_template_materialization_for_artifact(
         parameter_sources = {parameter: "call-site" for parameter in parameters}
         specializations.append(
             _materialized_template_specialization_record(
+                preprocessor=preprocessor,
                 name=function_name,
                 materialized_name=materialized_name,
                 parameters=parameters,
@@ -22798,6 +22910,7 @@ def _project_template_materialization_for_artifact(
         )
         specializations.append(
             _materialized_template_specialization_record(
+                preprocessor=preprocessor,
                 name=function_name,
                 materialized_name=materialized_name,
                 parameters=parameters,
@@ -22873,6 +22986,7 @@ def _project_template_materialization_for_artifact(
         preprocessor,
         materialized,
         work_budget=explicit_work_budget,
+        decay_local_array_arguments=target == "opengl",
         known_materializations={
             **concrete_materializations,
             **implicit_materialization.materialized_names,
@@ -22924,6 +23038,7 @@ def _project_template_materialization_for_artifact(
             materialized,
             work_budget=explicit_work_budget,
             include_struct_members=True,
+            decay_local_array_arguments=target == "opengl",
             known_materializations=inferred_plain_materialized_names,
         )
         specializations.extend(struct_field_specializations)
@@ -23158,6 +23273,7 @@ def _project_template_materialization_for_artifact(
                 continue
             specializations.append(
                 _materialized_template_specialization_record(
+                    preprocessor=preprocessor,
                     name=template.name,
                     materialized_name=materialized_name,
                     parameters=parameters,
@@ -23301,6 +23417,7 @@ def _project_template_materialization_for_artifact(
         materialized,
         work_budget=explicit_work_budget,
         include_struct_members=True,
+        decay_local_array_arguments=target == "opengl",
         known_materializations=late_known_materializations,
     )
     specializations.extend(late_helper_specializations)
@@ -27456,6 +27573,42 @@ def _project_software_subgroup_width(
     return width
 
 
+def _project_cooperative_matrix_software_lowering(
+    target: str,
+    source_options: Mapping[str, Any],
+) -> bool | None:
+    option = COOPERATIVE_MATRIX_SOFTWARE_LOWERING_SOURCE_OPTION
+    if option not in source_options:
+        return None
+    enabled = source_options[option]
+    if target != "opengl":
+        raise ValueError(
+            "cooperative_matrix_software_lowering is supported only by "
+            "the OpenGL target"
+        )
+    if not isinstance(enabled, bool):
+        raise TypeError("cooperative_matrix_software_lowering must be a boolean")
+    return enabled
+
+
+def _project_private_pointer_out_of_bounds_read(
+    target: str,
+    source_options: Mapping[str, Any],
+) -> str | None:
+    option = PRIVATE_POINTER_OUT_OF_BOUNDS_READ_SOURCE_OPTION
+    if option not in source_options:
+        return None
+    policy = source_options[option]
+    if target != "opengl":
+        raise ValueError(
+            "private_pointer_out_of_bounds_read is supported only by the "
+            "OpenGL target"
+        )
+    if not isinstance(policy, str) or policy not in {"error", "zero"}:
+        raise ValueError("private_pointer_out_of_bounds_read must be 'error' or 'zero'")
+    return policy
+
+
 def _project_directx_relative_wave_shuffle_out_of_range(
     target: str,
     source_options: Mapping[str, Any],
@@ -27497,10 +27650,32 @@ def _generate_project_target_from_crossgl_ast(
     index_range_assertions: Sequence[IndexRangeAssertion] = (),
     workgroup_access_assertions: Sequence[WorkgroupAccessAssertion] = (),
     software_subgroup_width: Any | None = None,
+    cooperative_matrix_software_lowering: bool | None = None,
+    private_pointer_out_of_bounds_read: str | None = None,
     directx_relative_wave_shuffle_out_of_range: Any | None = None,
     directx_widen_native_float16: Any | None = None,
 ) -> str:
     codegen = get_codegen(target)
+    if cooperative_matrix_software_lowering is not None:
+        configure_cooperative_matrix = getattr(
+            codegen, "set_cooperative_matrix_software_lowering", None
+        )
+        if not callable(configure_cooperative_matrix):
+            raise ValueError(
+                f"Target '{target}' does not consume "
+                "cooperative_matrix_software_lowering"
+            )
+        configure_cooperative_matrix(cooperative_matrix_software_lowering)
+    if private_pointer_out_of_bounds_read is not None:
+        configure_private_pointer_reads = getattr(
+            codegen, "set_private_pointer_out_of_bounds_read", None
+        )
+        if not callable(configure_private_pointer_reads):
+            raise ValueError(
+                f"Target '{target}' does not consume "
+                "private_pointer_out_of_bounds_read"
+            )
+        configure_private_pointer_reads(private_pointer_out_of_bounds_read)
     if directx_widen_native_float16 is not None:
         configure_float16_widening = getattr(codegen, "set_widen_native_float16", None)
         if not callable(configure_float16_widening):
@@ -28536,12 +28711,26 @@ def _translate_project_impl(
                     else ()
                 )
                 software_subgroup_width = None
+                cooperative_matrix_software_lowering = None
+                private_pointer_out_of_bounds_read = None
                 directx_relative_wave_shuffle_out_of_range = None
                 directx_widen_native_float16 = None
                 try:
                     software_subgroup_width = _project_software_subgroup_width(
                         target,
                         source_options,
+                    )
+                    cooperative_matrix_software_lowering = (
+                        _project_cooperative_matrix_software_lowering(
+                            target,
+                            source_options,
+                        )
+                    )
+                    private_pointer_out_of_bounds_read = (
+                        _project_private_pointer_out_of_bounds_read(
+                            target,
+                            source_options,
+                        )
                     )
                     directx_relative_wave_shuffle_out_of_range = (
                         _project_directx_relative_wave_shuffle_out_of_range(
@@ -28671,9 +28860,16 @@ def _translate_project_impl(
                             file.write(template_materialization.text)
                         translation_input_path = materialized_path
                         translation_defines = template_materialization.defines
-                        translation_source_options = (
+                        translation_source_options = dict(
                             template_materialization.source_options
                         )
+                        if translation_source_backend == "metal":
+                            translation_source_options[
+                                METAL_PRESERVE_POINTER_POINTEE_CONST_SOURCE_OPTION
+                            ] = (target == "opengl")
+                            translation_source_options[
+                                METAL_RESOLVE_STANDARD_REMOVE_CV_ALIASES_SOURCE_OPTION
+                            ] = (target != "metal")
                     (
                         specialization_constants,
                         specialization_materialization,
@@ -28846,6 +29042,8 @@ def _translate_project_impl(
                         requires_workgroup_specialization
                         or requires_subgroup_specialization
                         or software_subgroup_width is not None
+                        or cooperative_matrix_software_lowering is not None
+                        or private_pointer_out_of_bounds_read is not None
                         or directx_relative_wave_shuffle_out_of_range is not None
                         or directx_widen_native_float16 is not None
                     ):
@@ -29011,6 +29209,12 @@ def _translate_project_impl(
                                             software_subgroup_width=(
                                                 software_subgroup_width
                                             ),
+                                            cooperative_matrix_software_lowering=(
+                                                cooperative_matrix_software_lowering
+                                            ),
+                                            private_pointer_out_of_bounds_read=(
+                                                private_pointer_out_of_bounds_read
+                                            ),
                                             directx_relative_wave_shuffle_out_of_range=(
                                                 directx_relative_wave_shuffle_out_of_range
                                             ),
@@ -29083,6 +29287,12 @@ def _translate_project_impl(
                                         software_subgroup_width=(
                                             software_subgroup_width
                                         ),
+                                        cooperative_matrix_software_lowering=(
+                                            cooperative_matrix_software_lowering
+                                        ),
+                                        private_pointer_out_of_bounds_read=(
+                                            private_pointer_out_of_bounds_read
+                                        ),
                                         directx_relative_wave_shuffle_out_of_range=(
                                             directx_relative_wave_shuffle_out_of_range
                                         ),
@@ -29114,6 +29324,8 @@ def _translate_project_impl(
                         index_range_assertions
                         or workgroup_access_assertions
                         or software_subgroup_width is not None
+                        or cooperative_matrix_software_lowering is not None
+                        or private_pointer_out_of_bounds_read is not None
                         or directx_relative_wave_shuffle_out_of_range is not None
                         or directx_widen_native_float16 is not None
                     ):
@@ -29138,6 +29350,12 @@ def _translate_project_impl(
                             index_range_assertions=index_range_assertions,
                             workgroup_access_assertions=(workgroup_access_assertions),
                             software_subgroup_width=software_subgroup_width,
+                            cooperative_matrix_software_lowering=(
+                                cooperative_matrix_software_lowering
+                            ),
+                            private_pointer_out_of_bounds_read=(
+                                private_pointer_out_of_bounds_read
+                            ),
                             directx_relative_wave_shuffle_out_of_range=(
                                 directx_relative_wave_shuffle_out_of_range
                             ),

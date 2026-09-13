@@ -67,7 +67,8 @@ def _assert_generated_contract(generated: str, target: str, proof: str) -> None:
     assert "uint words[2];" in generated
     assert "(index < 8)" in generated
     if target == "directx":
-        assert "uint sum_bytes(in uint bytes[2], int bytes_base)" in generated
+        assert "uint sum_bytes(const uint bytes[2], int bytes_base)" in generated
+        assert "uint sum_bytes(in uint bytes[2]" not in generated
         assert "output[tid] = sum_bytes(block.words, 0);" in generated
         assert "if (4 == 4)" not in generated
         assert "(index < 16)" not in generated
@@ -75,7 +76,8 @@ def _assert_generated_contract(generated: str, target: str, proof: str) -> None:
         assert "* (index + 1)" in generated
     else:
         assert target == "opengl"
-        assert "uint sum_bytes(inout WordBlock bytes, int bytes_base)" in generated
+        assert "uint sum_bytes(WordBlock bytes, int bytes_base)" in generated
+        assert "uint sum_bytes(inout WordBlock bytes" not in generated
         assert "output_[tid] = sum_bytes(block, 0);" in generated
         assert "(index < 16)" not in generated
         assert "bitfieldExtract(bytes.words" in generated

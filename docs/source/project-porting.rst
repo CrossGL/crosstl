@@ -896,6 +896,54 @@ this closes complete discovered-reduce translation, reflection, and native
 compiler coverage on all three targets; it does not claim numerical execution,
 MLX host-runtime redirection, or MLX test-suite parity.
 
+OpenGL Pointer and Matrix Policies
+----------------------------------
+
+Private pointer helpers lower to fixed array parameters with separate element
+offsets. Bounded cumulative pointer updates retain those offsets; proven-zero,
+side-effect-free updates may be omitted only when their result is discarded.
+Unknown rebasing, escaping pointer values, and unsupported aliasing remain
+translation errors.
+
+Two optional target policies are available through project source options:
+
+.. code-block:: toml
+
+   [project.source_options.metal.target_options.opengl]
+   cooperative_matrix_software_lowering = true
+   private_pointer_out_of_bounds_read = "error"
+
+``cooperative_matrix_software_lowering`` defaults to ``false``. When enabled,
+supported fragment operations lower to explicit scalar storage and subgroup
+operations. Multiply-accumulate currently requires the float 8-by-8,
+32-lane, two-elements-per-lane ``tile_4x4_row_pair`` contract, matching operand
+dimensions, and an exact subgroup-width contract. Unsupported mappings are
+rejected. This option does not remove the hardware subgroup requirement or
+establish numerical equivalence for an entire kernel.
+
+``private_pointer_out_of_bounds_read`` defaults to ``"error"``. An explicit
+``"zero"`` policy guards eligible reads through const private pointers backed
+by complete, statically sized local arrays, returning a typed zero outside the
+array. It does not permit out-of-bounds writes or unresolved array slices.
+The selected policy is retained in project source options; recovered artifacts
+also contain ``CROSSTL_PRIVATE_POINTER_OOB_READ_ZERO``. This is an explicit
+behavior choice for an otherwise invalid source access, not evidence that the
+result matches the source runtime. Numerical validation remains necessary.
+
+Metal sources may also opt into ``promote_derived_pointer_members = true`` under
+``project.source_options.metal`` to separate supported derived pointer members
+into backing objects and offsets during materialization. Unknown origins and
+unsupported pointer mutations remain errors rather than guessed bindings.
+
+The pinned MLX quantized-wide OpenGL gate covers 18 selected entries with strict
+pointer bounds and no upstream edits. It binds the pinned host dispatch to its
+source-faithful ``[32, 2, 1]`` workgroup for both two- and four-vector kernels:
+two logical 32-lane software subgroups and 64 total invocations. The gate
+validates source identities, reports, array preservation, logical subgroup
+indexing, exact execution metadata, GLSL compilation, and SPIR-V modules on
+Linux without claiming KHR hardware-subgroup metadata. It does not claim full
+quantized coverage or MLX runtime integration.
+
 OpenGL Software Subgroup Specialization
 ----------------------------------------
 

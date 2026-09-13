@@ -3995,7 +3995,7 @@ def test_mlx_project_porting_workflow_runs_unary_complete_opengl_proof():
     )
     assert "if: github.event_name != 'schedule'" in opengl_job
     assert "runs-on: ubuntu-latest" in opengl_job
-    assert "timeout-minutes: 75" in opengl_job
+    assert "timeout-minutes: 120" in opengl_job
     assert "fail-fast: false" in opengl_job
     assert _matrix_values(opengl_job, "shard_index") == {
         "0",
@@ -5140,6 +5140,28 @@ def test_mlx_project_porting_workflow_runs_quantized_complete_metal_proof():
     assert "Prove current MLX complete quantized family Metal round-trips" not in (
         matrix_job
     )
+
+
+def test_mlx_project_porting_workflow_requires_quantized_wide_opengl_compilation():
+    workflow = _workflow_texts()["mlx-project-porting.yml"]
+    job = _workflow_job_section(workflow, "mlx-quantized-wide-opengl")
+    test_path = "tests/test_translator/test_mlx_quantized_wide_opengl.py"
+
+    assert "runs-on: ubuntu-latest" in job
+    assert "timeout-minutes: 60" in job
+    assert "persist-credentials: false" in job
+    assert "continue-on-error" not in job
+    assert "sudo apt-get install -y glslang-tools spirv-tools" in job
+    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in job
+    assert 'CROSTL_REQUIRE_MLX_QUANTIZED_WIDE_OPENGL: "1"' in job
+    assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in job
+    assert "python -m pytest -q -n auto" in job
+    assert test_path in job
+    assert "--junitxml=quantized-wide-junit.xml" in job
+    assert "--basetemp=quantized-wide-results" in job
+    assert "if: always()" in job
+    assert "if-no-files-found: error" in job
+    assert workflow.count(f'- "{test_path}"') == 2
 
 
 def test_mlx_project_porting_workflow_runs_reduce_complete_opengl_proof():

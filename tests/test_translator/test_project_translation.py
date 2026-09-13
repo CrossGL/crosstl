@@ -14179,12 +14179,24 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
             #include <metal_stdlib>
             using namespace metal;
 
-            template <typename T, typename IdxT, int N = 4>
-            T rope_impl(device const T* src, IdxT index) {
-                return src[index] + T(N);
+            template <typename T>
+            struct WorkPerThread {
+                static constexpr constant int n = 4;
+            };
+
+            float read_local(const thread float* values) {
+                return values[0];
             }
 
-            template <typename T, typename IdxT, int N = 4>
+            template <typename T, typename IdxT,
+                      int N = WorkPerThread<T>::n>
+            T rope_impl(device const T* src, IdxT index) {
+                float local_values[1] = {float(N)};
+                return src[index] + T(read_local(local_values));
+            }
+
+            template <typename T, typename IdxT,
+                      int N = WorkPerThread<T>::n>
             [[kernel]] void rope(
                 device const T* src [[buffer(0)]],
                 device T* dst [[buffer(1)]],
@@ -14194,7 +14206,8 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
                 dst[gid] = rope_impl<T, IdxT, N>(src, pos);
             }
 
-            template <typename T, typename IdxT, int N = 4>
+            template <typename T, typename IdxT,
+                      int N = WorkPerThread<T>::n>
             [[kernel]] void rope_freqs(
                 device const T* freqs [[buffer(0)]],
                 device T* dst [[buffer(1)]],
@@ -14248,7 +14261,11 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
         assert specializations[("rope", "source-instantiation")] == {
             "name": "rope",
             "materializedName": "rope_float32",
-            "parameters": {"T": "float", "IdxT": "uint", "N": "4"},
+            "parameters": {
+                "T": "float",
+                "IdxT": "uint",
+                "N": "WorkPerThread<float>::n",
+            },
             "parameterSources": {
                 "T": "source-instantiation",
                 "IdxT": "source-instantiation",
@@ -14260,7 +14277,11 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
         assert specializations[("rope_freqs", "source-instantiation")] == {
             "name": "rope_freqs",
             "materializedName": "rope_freqs_float32",
-            "parameters": {"T": "float", "IdxT": "uint", "N": "4"},
+            "parameters": {
+                "T": "float",
+                "IdxT": "uint",
+                "N": "WorkPerThread<float>::n",
+            },
             "parameterSources": {
                 "T": "source-instantiation",
                 "IdxT": "source-instantiation",
@@ -14271,8 +14292,12 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
         }
         assert specializations[("rope_impl", "call-site")] == {
             "name": "rope_impl",
-            "materializedName": "rope_impl_float_uint_4",
-            "parameters": {"T": "float", "IdxT": "uint", "N": "4"},
+            "materializedName": "rope_impl_float_uint_WorkPerThread_float_n",
+            "parameters": {
+                "T": "float",
+                "IdxT": "uint",
+                "N": "WorkPerThread<float>::n",
+            },
             "parameterSources": {
                 "T": "call-site",
                 "IdxT": "call-site",
@@ -14283,6 +14308,13 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
         if artifact["status"] == "translated":
             output = (repo / artifact["path"]).read_text(encoding="utf-8")
             assert not re.search(r"\b(?:T|IdxT|N)\b", output)
+            if artifact["target"] == "directx":
+                assert (
+                    "float read_local(inout float values[1], int values_base)" in output
+                )
+                assert "read_local(const float values[1]" not in output
+            elif artifact["target"] == "opengl":
+                assert "float read_local(float values[1], int values_base)" in output
 
     report_path = repo / "translated" / "report.json"
     report.write_json(report_path)
@@ -14544,6 +14576,188 @@ def test_plain_metal_helper_materialization_deduces_threadgroup_array_decay():
     assert "gemm_loop_aligned_float_MatrixOp_TileLoader(" in materialized
     assert "gemm_loop_unaligned_false_true_float_MatrixOp_TileLoader(" in materialized
     assert "gemm_loop_finalize_float_MatrixOp_TileLoader(" in materialized
+
+
+def test_plain_metal_helper_materialization_decays_implicit_local_array():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <typename W>
+        void decode(W output) {
+          output += 1;
+          output[0] = 2.0f;
+        }
+
+        kernel void launch(device float* output [[buffer(0)]]) {
+          float values[8];
+          decode(values);
+          output[0] = values[0];
+        }
+        """)
+
+    materialized, records, completed_names, materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert completed_names == {"decode"}
+    assert records == [
+        {
+            "name": "decode",
+            "materializedName": "decode_thread_float",
+            "parameters": {"W": "thread float*"},
+            "parameterSources": {"W": "call-site"},
+            "source": "call-site",
+        }
+    ]
+    assert materialized_names == {
+        ("decode", ("thread float*",), ("W",)): "decode_thread_float"
+    }
+    assert "decode_thread_float(values)" in materialized
+    assert "void decode_thread_float(thread float* output)" in materialized
+    assert "output += 1;" in materialized
+    assert "float output[8]" not in materialized
+
+    preserved, preserved_records, preserved_names, _ = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+            decay_local_array_arguments=False,
+        )
+    )
+    assert preserved_names == {"decode"}
+    assert preserved_records[0]["parameters"] == {"W": "float[8]"}
+    assert "decode_float_8(values)" in preserved
+    assert "void decode_float_8(float output[8])" in preserved
+    assert "thread float* output" not in preserved
+
+
+def test_plain_metal_helper_materialization_preserves_decayed_array_const():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <typename W>
+        float decode(W input) {
+          return input[0];
+        }
+
+        kernel void launch(device float* output [[buffer(0)]]) {
+          const float values[8] = {};
+          output[0] = decode(values);
+        }
+        """)
+
+    materialized, records, completed_names, _materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert completed_names == {"decode"}
+    assert records[0]["parameters"] == {"W": "const thread float*"}
+    assert "float decode_const_thread_float(const thread float* input)" in materialized
+
+
+def test_plain_metal_helper_materialization_preserves_explicit_array_argument():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <typename W>
+        void decode(W output) {
+          output[0] = 2.0f;
+        }
+
+        kernel void launch(device float* output [[buffer(0)]]) {
+          float values[8];
+          decode<float[8]>(values);
+          output[0] = values[0];
+        }
+        """)
+
+    materialized, records, completed_names, _materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert completed_names == {"decode"}
+    assert records[0]["parameters"] == {"W": "float[8]"}
+    assert "void decode_float_8(float output[8])" in materialized
+    assert "thread float* output" not in materialized
+
+
+def test_plain_metal_helper_materialization_rejects_array_reference_deduction():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <typename W>
+        void decode(W& output) {
+          output[0] = 2.0f;
+        }
+
+        kernel void launch(device float* output [[buffer(0)]]) {
+          float values[8];
+          decode(values);
+          output[0] = values[0];
+        }
+        """)
+
+    materialized, records, completed_names, materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert "decode(values)" in materialized
+    assert "decode_float_8" not in materialized
+    assert records == []
+    assert completed_names == set()
+    assert materialized_names == {}
+
+
+@pytest.mark.parametrize(
+    "second_declaration",
+    [
+        "threadgroup float second[8];",
+        "const float second[8] = {};",
+    ],
+)
+def test_plain_metal_helper_materialization_rejects_incompatible_array_decay(
+    second_declaration,
+):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent(f"""
+        template <typename W>
+        void transfer(W first, W second) {{
+          first[0] = second[0];
+        }}
+
+        kernel void launch(device float* output [[buffer(0)]]) {{
+          float first[8];
+          {second_declaration}
+          transfer(first, second);
+          output[0] = first[0];
+        }}
+        """)
+
+    materialized, records, completed_names, materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert "transfer(first, second)" in materialized
+    assert "void transfer_" not in materialized
+    assert records == []
+    assert completed_names == set()
+    assert materialized_names == {}
 
 
 def test_plain_metal_helper_materialization_preserves_direct_pointer_address_space():
@@ -17158,7 +17372,7 @@ def test_translate_project_metal_materializes_quantized_uint64_conditional_alias
     )
 
 
-@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize("target", ["directx", "metal", "opengl", "vulkan"])
 def test_metal_project_materialization_propagates_local_constexpr_extents(
     tmp_path,
     target,
@@ -17178,6 +17392,21 @@ def test_metal_project_materialization_propagates_local_constexpr_extents(
             return WordBits / Bits;
         }
 
+        template <
+            short BROWS,
+            short BCOLS,
+            short tgp_size,
+            short n_reads = (BCOLS * BROWS) / (tgp_size),
+            short TCOLS = BCOLS / n_reads,
+            short TROWS = tgp_size / TCOLS>
+        struct Loader {
+            static void clear(threadgroup float* values) {
+                for (short i = 0; i < BROWS; i += TROWS) {
+                    values[i] = float(TCOLS + n_reads);
+                }
+            }
+        };
+
         template <typename T, int Count>
         void load_vector(const device T* source, thread T* values) {
             for (int index = 0; index < Count; ++index) {
@@ -17193,8 +17422,10 @@ def test_metal_project_materialization_propagates_local_constexpr_extents(
             constexpr int pack_factor = get_pack_factor<word_bits, Bits>();
             constexpr int values_per_thread = pack_factor * packs_per_thread;
             thread T values[values_per_thread];
+            threadgroup float shared[32];
+            Loader<32, 32, 128>::clear(shared);
             load_vector<T, values_per_thread>(source, values);
-            output[0] = values[0];
+            output[0] = values[0] + T(shared[0]);
         }
 
         instantiate_kernel("dispatch_float_4", dispatch, float, 4)
@@ -17227,6 +17458,14 @@ def test_metal_project_materialization_propagates_local_constexpr_extents(
     assert "load_vector_float_16(source, values);" in materialized.text
     assert "load_vector_float_values_per_thread" not in materialized.text
     assert not re.search(r"values\s*\[\s*values_per_thread\s*\]", materialized.text)
+    grouped_stride = "i += (128 /(32 /((32*32)/(128))))"
+    ungrouped_stride = "i += 128 / 32 /(32*32)/(128)"
+    if target == "opengl":
+        assert grouped_stride in materialized.text
+        assert ungrouped_stride not in materialized.text
+    else:
+        assert ungrouped_stride in materialized.text
+        assert grouped_stride not in materialized.text
 
 
 def test_translate_project_materializes_helper_arguments_from_local_type_aliases(
@@ -17241,7 +17480,7 @@ def test_translate_project_materializes_helper_arguments_from_local_type_aliases
 
             template <typename T, typename U, int Count>
             inline U convert_value(T value) {
-                return U(value + T(Count));
+                return static_cast<remove_cv_t<U>>(value + T(Count));
             }
 
             template <typename T>
@@ -17263,14 +17502,14 @@ def test_translate_project_materializes_helper_arguments_from_local_type_aliases
 
     payload = translate_project(
         repo,
-        targets=["directx", "opengl", "vulkan"],
+        targets=["directx", "metal", "opengl", "vulkan"],
         output_dir="out",
         format_output=False,
     ).to_json()
 
     assert payload["diagnostics"] == []
     artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
-    assert set(artifacts) == {"directx", "opengl", "vulkan"}
+    assert set(artifacts) == {"directx", "metal", "opengl", "vulkan"}
     assert all(artifact["status"] == "translated" for artifact in artifacts.values())
     for artifact in artifacts.values():
         helper = next(
@@ -17291,10 +17530,19 @@ def test_translate_project_materializes_helper_arguments_from_local_type_aliases
         for target, artifact in artifacts.items()
     }
     assert "float convert_value_float_float_2(float value)" in outputs["directx"]
+    assert "float convert_value_float_float_2(float value)" in outputs["metal"]
     assert "float convert_value_float_float_2(float value)" in outputs["opengl"]
+    assert "return remove_cv_t<float>(value + float(2));" in outputs["metal"]
+    for target in ("directx", "opengl", "vulkan"):
+        assert "remove_cv_t" not in outputs[target]
     assert "convert_value_float_U" not in "\n".join(outputs.values())
     assert not re.search(r"\b(?:Scalar|U)\b", "\n".join(outputs.values()))
     assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
+    assert_metal_validates_if_available(
+        outputs["metal"],
+        tmp_path,
+        warnings_as_errors=True,
+    )
     assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
     assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
 

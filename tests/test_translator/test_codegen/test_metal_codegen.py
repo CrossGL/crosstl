@@ -15261,6 +15261,8 @@ def test_compute_builtin_semantics_roundtrip():
                       uvec3 lid @ gl_LocalInvocationID,
                       uvec3 group @ gl_WorkGroupID,
                       uint idx @ gl_LocalInvocationIndex,
+                      uint quadGroup @ gl_QuadGroupID,
+                      uint quadLane @ gl_QuadGroupInvocationID,
                       uvec3 size @ gl_WorkGroupSize,
                       uvec3 groups @ gl_NumWorkGroups) { }
         }
@@ -15273,6 +15275,8 @@ def test_compute_builtin_semantics_roundtrip():
         "uint3 lid [[thread_position_in_threadgroup]]",
         "uint3 group [[threadgroup_position_in_grid]]",
         "uint idx [[thread_index_in_threadgroup]]",
+        "uint quadGroup [[quadgroup_index_in_threadgroup]]",
+        "uint quadLane [[thread_index_in_quadgroup]]",
         "uint3 size [[threads_per_threadgroup]]",
         "uint3 groups [[threadgroups_per_grid]]",
     ]:
@@ -15342,6 +15346,8 @@ def test_compute_hlsl_system_value_semantic_alias_variants_lower_to_metal_builti
         # threads-per-threadgroup roundtrip test.)
         ("vec2", "gl_LocalInvocationID", "thread_position_in_threadgroup", "uint3"),
         ("int", "gl_LocalInvocationIndex", "thread_index_in_threadgroup", "uint"),
+        ("int", "gl_QuadGroupID", "quadgroup_index_in_threadgroup", "uint"),
+        ("vec2", "gl_QuadGroupInvocationID", "thread_index_in_quadgroup", "uint"),
         ("vec3", "gl_NumWorkGroups", "threadgroups_per_grid", "uint3"),
     ],
 )
@@ -15428,6 +15434,31 @@ def test_compute_direct_subgroup_builtin_references_inject_metal_parameters():
     assert "uint subgroupInvocation = thread_index_in_simdgroup;" in generated
     assert "gl_SubgroupSize" not in generated
     assert "gl_SubgroupInvocationID" not in generated
+
+
+def test_compute_direct_quadgroup_builtin_references_inject_metal_parameters():
+    code = """
+    shader MetalQuadGroupBuiltins {
+        compute {
+            void main() {
+                uint quadGroup = gl_QuadGroupID;
+                uint quadLane = gl_QuadGroupInvocationID;
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+    generated = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert (
+        "uint quadgroup_index_in_threadgroup "
+        "[[quadgroup_index_in_threadgroup]]" in generated
+    )
+    assert "uint thread_index_in_quadgroup [[thread_index_in_quadgroup]]" in generated
+    assert "uint quadGroup = quadgroup_index_in_threadgroup;" in generated
+    assert "uint quadLane = thread_index_in_quadgroup;" in generated
+    assert "gl_QuadGroupID" not in generated
+    assert "gl_QuadGroupInvocationID" not in generated
 
 
 def test_compute_subgroup_builtins_share_wave_lane_parameters():

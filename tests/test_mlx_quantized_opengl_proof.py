@@ -87,7 +87,7 @@ void adjust_matrix_offsets_float_glsl(
 float load_vector_float_float_16_2_glsl(
     inout float x_thread[16], int x_thread_base, int x_offset);
 float qdot_float_16_2_glsl(
-    inout float x_thread[16], int x_thread_base, float scale, float bias,
+    float x_thread[16], int x_thread_base, float scale, float bias,
     float sum, int w_offset, int w_byte_offset);
 float load_vector_float_float_16_2_glsl(
     inout float x_thread[16], int x_thread_base, int x_offset) {
@@ -96,7 +96,7 @@ float load_vector_float_float_16_2_glsl(
     return x_thread[x_thread_base];
 }
 float qdot_float_16_2_glsl(
-    inout float x_thread[16], int x_thread_base, float scale, float bias,
+    float x_thread[16], int x_thread_base, float scale, float bias,
     float sum, int w_offset, int w_byte_offset) {
     int i = 0;
     return float(bitfieldExtract(w[int(((w_byte_offset + (w_offset + i))) / 4)],
@@ -625,6 +625,40 @@ def test_quantized_gather_opengl_generated_contract_rejects_pointer_drift(
     )
 
     with pytest.raises(module.MlxQuantizedOpenGLProofError):
+        module._validate_generated_glsl(
+            artifact_path,
+            entry_point=module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+        )
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        (
+            "float load_vector_float_float_16_2_glsl(\n" "    inout float x_thread[16]",
+            "float load_vector_float_float_16_2_glsl(\n" "    float x_thread[16]",
+            "load-vector mutability",
+        ),
+        (
+            "float qdot_float_16_2_glsl(\n    float x_thread[16]",
+            "float qdot_float_16_2_glsl(\n    inout float x_thread[16]",
+            "qdot readonly",
+        ),
+    ],
+)
+def test_quantized_gather_opengl_generated_contract_rejects_qualifier_drift(
+    tmp_path,
+    old,
+    new,
+    message,
+):
+    module = _load_proof()
+    generated = _generated_gather_glsl().replace(old, new)
+    assert generated != _generated_gather_glsl()
+    artifact_path = tmp_path / "quantized-gather.glsl"
+    artifact_path.write_text(generated, encoding="utf-8")
+
+    with pytest.raises(module.MlxQuantizedOpenGLProofError, match=message):
         module._validate_generated_glsl(
             artifact_path,
             entry_point=module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
