@@ -7902,11 +7902,9 @@ class MetalCodeGen:
                     "param_type",
                     getattr(parameter, "vtype", None),
                 )
-                pointee_type = self.pointer_pointee_type_name(parameter_type)
-                if pointee_type is None and self.is_array_type_node(parameter_type):
-                    pointee_type, _array_suffix = split_array_type_suffix(
-                        self.type_name_string(parameter_type)
-                    )
+                if not isinstance(parameter_type, PointerType):
+                    continue
+                pointee_type = parameter_type.pointee_type
                 native_pointee = self.metal_native_narrow_bitcast_storage_type(
                     pointee_type
                 )

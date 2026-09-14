@@ -3959,6 +3959,37 @@ kernel void native_width_probe() {
     compile_with_metal_if_available(generated_code)
 
 
+def test_metal_private_fixed_array_matches_widened_array_parameter(tmp_path):
+    shader_path = tmp_path / "private-widened-array-parameter.metal"
+    shader_path.write_text(
+        """
+#include <metal_stdlib>
+using namespace metal;
+
+void consume_array(thread int8_t values[4]) {
+  values[0] = int8_t(1);
+}
+
+kernel void widened_array_parameter_probe() {
+  int8_t values[4];
+  consume_array(values);
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+    )
+
+    assert "void consume_array(thread int values[4])" in generated_code
+    assert "\n    int values[4];" in generated_code
+    assert "\n    char values[4];" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_stage_local_shared_variables_emit_inside_kernel():
     shader = """
     shader StageLocalSharedStorage {
