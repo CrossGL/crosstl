@@ -28,6 +28,7 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from crosstl.project.directx_toolchain import dxc_compiler_arguments_for_source
 
 ROOT = Path(__file__).resolve().parents[2]
 MLX_COMMIT = "d9add9d11f3154111a4c85f267ec2fd307ecd18e"
@@ -38,31 +39,43 @@ REQUIRE_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_CURRENT_ARG_REDUCE_RUNTIME"
 ARTIFACTS = {
     "directx": {
         "argmin_float32": {
-            "sha256": "0768cdc9658dd81ab76c02b6d59baf9a7b1103dae09ef56e77e09e181c0ed825",
+            "sha256": (
+                "0768cdc9658dd81ab76c02b6d59baf9a7b1103dae09ef56e77e09e181c0ed825"
+            ),
             "sizeBytes": 6813,
         },
         "argmax_float32": {
-            "sha256": "35be05ff5f8485644cb3cddad86c1e17b19eaa05599611baf95997e9ff646d88",
+            "sha256": (
+                "35be05ff5f8485644cb3cddad86c1e17b19eaa05599611baf95997e9ff646d88"
+            ),
             "sizeBytes": 6815,
         },
     },
     "opengl": {
         "argmin_float32": {
-            "sha256": "14fcee01e9c7f5b5bb05a32262e6c3932cf80ea8bdd50582f26ae77f8976d320",
+            "sha256": (
+                "14fcee01e9c7f5b5bb05a32262e6c3932cf80ea8bdd50582f26ae77f8976d320"
+            ),
             "sizeBytes": 7750,
         },
         "argmax_float32": {
-            "sha256": "4b0595da819da2efaa81672604182e87f870b6fde30cb255bbcf434d2ddc7e21",
+            "sha256": (
+                "4b0595da819da2efaa81672604182e87f870b6fde30cb255bbcf434d2ddc7e21"
+            ),
             "sizeBytes": 7756,
         },
     },
     "metal": {
         "argmin_float32": {
-            "sha256": "955ededf34bbf85d26c24b75da7d9a8f2d394eb359af0898a81c379e5ae2205e",
+            "sha256": (
+                "955ededf34bbf85d26c24b75da7d9a8f2d394eb359af0898a81c379e5ae2205e"
+            ),
             "sizeBytes": 4000,
         },
         "argmax_float32": {
-            "sha256": "1a9f08f4a607e9f1f45ee95da2d08fd753fac967073f081f6c3bb2d2d3c39d4c",
+            "sha256": (
+                "1a9f08f4a607e9f1f45ee95da2d08fd753fac967073f081f6c3bb2d2d3c39d4c"
+            ),
             "sizeBytes": 4002,
         },
     },
@@ -588,9 +601,13 @@ def test_current_mlx_arg_reduce_native_validation(
         (execution,) = artifact["execution"]["entryPoints"]
         assert execution["workgroupSize"] == [32, 1, 1]
         if target == "directx":
+            compiler_arguments = dxc_compiler_arguments_for_source(generated_text)
+            assert compiler_arguments == ("-enable-16bit-types",)
             _run(
                 [
                     "dxc",
+                    *compiler_arguments,
+                    "-WX",
                     "-T",
                     "cs_6_6",
                     "-E",
