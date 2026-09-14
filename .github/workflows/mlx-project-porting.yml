@@ -145,7 +145,7 @@ jobs:
     name: MLX Metal project porting (${{ matrix.os }})
     if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
@@ -330,6 +330,9 @@ jobs:
           PYOPENGL_PLATFORM: egl
         run: |
           set -euo pipefail
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            export PYTEST_ADDOPTS="-n auto"
+          fi
           case "$RUNNER_OS" in
             Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
             Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
