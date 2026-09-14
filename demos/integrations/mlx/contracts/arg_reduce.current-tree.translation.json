@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-arg-reduce-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "d9add9d11f3154111a4c85f267ec2fd307ecd18e",
+    "source": "mlx/backend/metal/kernels/arg_reduce.metal",
+    "sourceSha256": "036a586af92b869a94f0b67e54590abf935e87f99290db46daed86cd8941e429"
+  },
+  "corpusCensus": {
+    "metalUnitCount": 42,
+    "entryCount": 17478,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "argmin_float32",
+    "argmax_float32"
+  ],
+  "artifacts": {
+    "directx": {
+      "argmin_float32": {
+        "sha256": "0768cdc9658dd81ab76c02b6d59baf9a7b1103dae09ef56e77e09e181c0ed825",
+        "sizeBytes": 6813
+      },
+      "argmax_float32": {
+        "sha256": "35be05ff5f8485644cb3cddad86c1e17b19eaa05599611baf95997e9ff646d88",
+        "sizeBytes": 6815
+      }
+    },
+    "opengl": {
+      "argmin_float32": {
+        "sha256": "14fcee01e9c7f5b5bb05a32262e6c3932cf80ea8bdd50582f26ae77f8976d320",
+        "sizeBytes": 7750
+      },
+      "argmax_float32": {
+        "sha256": "4b0595da819da2efaa81672604182e87f870b6fde30cb255bbcf434d2ddc7e21",
+        "sizeBytes": 7756
+      }
+    },
+    "metal": {
+      "argmin_float32": {
+        "sha256": "955ededf34bbf85d26c24b75da7d9a8f2d394eb359af0898a81c379e5ae2205e",
+        "sizeBytes": 4000
+      },
+      "argmax_float32": {
+        "sha256": "1a9f08f4a607e9f1f45ee95da2d08fd753fac967073f081f6c3bb2d2d3c39d4c",
+        "sizeBytes": 4002
+      }
+    }
+  },
+  "validationContract": {
+    "workgroupSize": [
+      32,
+      1,
+      1
+    ],
+    "axisSizes": [
+      32,
+      129
+    ],
+    "axisStrides": [
+      1,
+      2
+    ],
+    "rowsPerCase": 2,
+    "ordinaryValues": true,
+    "nanAndInfinityValues": true,
+    "targets": {
+      "directx": {
+        "compiler": "dxc",
+        "profile": "cs_6_6",
+        "runtime": "Direct3D 12 WARP",
+        "runtimeRequiredInCi": true
+      },
+      "opengl": {
+        "compiler": "glslangValidator",
+        "validator": "spirv-val",
+        "runtime": "Mesa EGL",
+        "runtimeRequiredInCi": true
+      },
+      "metal": {
+        "compiler": "xcrun metal",
+        "runtime": "Metal",
+        "upstreamMetallibParity": true,
+        "runtimeRequiredInCi": true
+      }
+    }
+  },
+  "scope": {
+    "coveredEntryCount": 2,
+    "completeCorpusEntryCount": 17478,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}

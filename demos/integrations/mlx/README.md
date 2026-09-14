@@ -8,6 +8,17 @@ an active repository-level verification target: configured coverage and expected
 baselines are not, by themselves, evidence that every kernel translates or
 passes a target validator.
 
+The next corpus increment is separately pinned to
+`d9add9d11f3154111a4c85f267ec2fd307ecd18e`. Its authoritative discovery census
+is 42 Metal units, 17,478 entries, and zero discovery diagnostics. The compact
+`contracts/arg_reduce.current-tree.translation.json` contract pins the first two
+entries, `argmin_float32` and `argmax_float32`, across Metal, OpenGL, and DirectX.
+Required CI compiles each target natively and executes the translated kernels on
+Metal, Mesa EGL, and Direct3D 12 WARP over axis sizes 32 and 129, strides 1 and 2,
+ordinary values, and NaN/Infinity inputs; macOS additionally compares against the
+upstream metallib. This is an explicit 2/17,478 increment, not full-tree coverage,
+upstream MLX test-suite execution, or MLX host-runtime redirection.
+
 ## Scope
 
 The current harness verifies:

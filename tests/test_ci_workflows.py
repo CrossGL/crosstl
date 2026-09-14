@@ -2385,11 +2385,13 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     ).read_text(encoding="utf-8")
     mlx_reference_commit = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
     mlx_corpus_commit = "846d176227a0ac13d2667e58d2bb68b322109ab0"
+    mlx_current_tree_commit = "d9add9d11f3154111a4c85f267ec2fd307ecd18e"
 
     assert mlx_porting, "mlx-project-porting.yml must exist"
     assert "demos/integrations/mlx/run_mlx_porting.py" in mlx_porting
     assert f'MLX_COMMIT: "{mlx_reference_commit}"' in mlx_porting
     assert f'MLX_CORPUS_COMMIT: "{mlx_corpus_commit}"' in mlx_porting
+    assert f'MLX_CURRENT_TREE_COMMIT: "{mlx_current_tree_commit}"' in mlx_porting
     assert 'git -C mlx-upstream checkout "$MLX_COMMIT"' in mlx_porting
     assert 'git -C mlx-upstream checkout "$MLX_CORPUS_COMMIT"' in mlx_porting
     current_runtime_checkout = _load_ci_coverage_module().workflow_step_section(
@@ -2406,6 +2408,45 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         'test "$(git -C mlx-current-upstream rev-parse HEAD)" = '
         '"$MLX_CORPUS_COMMIT"' in current_runtime_checkout
     )
+    current_tree_checkout = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting,
+        "Checkout current MLX kernel tree",
+    )
+    assert "mlx-current-tree-upstream" in current_tree_checkout
+    assert (
+        "git -C mlx-current-tree-upstream checkout --detach "
+        '"$MLX_CURRENT_TREE_COMMIT"' in current_tree_checkout
+    )
+    assert (
+        'test "$(git -C mlx-current-tree-upstream rev-parse HEAD)" = '
+        '"$MLX_CURRENT_TREE_COMMIT"' in current_tree_checkout
+    )
+    current_census = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting,
+        "Audit current MLX kernel census",
+    )
+    assert "if: runner.os == 'Linux'" in current_census
+    assert '--expected-commit "$MLX_CURRENT_TREE_COMMIT"' in current_census
+    assert "--expected-unit-count 42" in current_census
+    assert "--expected-entry-count 17478" in current_census
+    current_arg_reduce = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting,
+        "Prove current MLX arg-reduce native validation",
+    )
+    assert (
+        "CROSTL_MLX_CURRENT_ROOT: "
+        "${{ github.workspace }}/mlx-current-tree-upstream" in current_arg_reduce
+    )
+    assert 'CROSTL_REQUIRE_MLX_CURRENT_ARG_REDUCE: "1"' in current_arg_reduce
+    assert 'CROSTL_REQUIRE_MLX_CURRENT_ARG_REDUCE_RUNTIME: "1"' in current_arg_reduce
+    assert "Linux) export CROSTL_MLX_CURRENT_TARGET=opengl" in current_arg_reduce
+    assert "Windows) export CROSTL_MLX_CURRENT_TARGET=directx" in current_arg_reduce
+    assert "macOS) export CROSTL_MLX_CURRENT_TARGET=metal" in current_arg_reduce
+    assert (
+        "python -m pytest -q "
+        "tests/test_translator/test_mlx_current_arg_reduce.py" in current_arg_reduce
+    )
+    assert '"tests/test_translator/test_mlx_current_arg_reduce.py"' in mlx_porting
     assert '--expected-commit "$MLX_COMMIT"' in mlx_porting
     assert "--expected-unit-count 40" in mlx_porting
     assert "--expected-entry-count 16446" in mlx_porting

@@ -4,6 +4,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
   MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
+  MLX_CURRENT_TREE_COMMIT: "d9add9d11f3154111a4c85f267ec2fd307ecd18e"
 
 on:
   push:
@@ -60,6 +61,7 @@ on:
       - "tests/test_translator/test_mlx_logsumexp_native_loader.py"
       - "tests/test_translator/test_mlx_softmax_native_loader.py"
       - "tests/test_translator/test_mlx_arg_reduce_native_loader.py"
+      - "tests/test_translator/test_mlx_current_arg_reduce.py"
       - "tests/test_translator/test_mlx_scaled_dot_product_attention_native_loader.py"
       - "tests/test_translator/test_mlx_rms_norm_native_loader.py"
       - "tests/test_translator/test_mlx_layer_norm_native_loader.py"
@@ -122,6 +124,7 @@ on:
       - "tests/test_translator/test_mlx_logsumexp_native_loader.py"
       - "tests/test_translator/test_mlx_softmax_native_loader.py"
       - "tests/test_translator/test_mlx_arg_reduce_native_loader.py"
+      - "tests/test_translator/test_mlx_current_arg_reduce.py"
       - "tests/test_translator/test_mlx_scaled_dot_product_attention_native_loader.py"
       - "tests/test_translator/test_mlx_rms_norm_native_loader.py"
       - "tests/test_translator/test_mlx_layer_norm_native_loader.py"
@@ -292,6 +295,48 @@ jobs:
           git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
           git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
           test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+
+      - name: Checkout current MLX kernel tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf mlx-current-tree-upstream
+          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-tree-upstream
+          git -C mlx-current-tree-upstream config core.autocrlf false
+          git -C mlx-current-tree-upstream sparse-checkout init --cone
+          git -C mlx-current-tree-upstream sparse-checkout set mlx/backend/metal/kernels
+          git -C mlx-current-tree-upstream checkout --detach "$MLX_CURRENT_TREE_COMMIT"
+          test "$(git -C mlx-current-tree-upstream rev-parse HEAD)" = "$MLX_CURRENT_TREE_COMMIT"
+
+      - name: Audit current MLX kernel census
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python demos/integrations/mlx/discover_entries.py \
+            --mlx-root mlx-current-tree-upstream \
+            --expected-commit "$MLX_CURRENT_TREE_COMMIT" \
+            --expected-unit-count 42 \
+            --expected-entry-count 17478
+
+      - name: Prove current MLX arg-reduce native validation
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_ARG_REDUCE: "1"
+          CROSTL_REQUIRE_MLX_CURRENT_ARG_REDUCE_RUNTIME: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          python -m pytest -q tests/test_translator/test_mlx_current_arg_reduce.py
 
       - name: Translate pinned MLX unary Square entry
         env:

@@ -8426,6 +8426,63 @@ def test_tail_expression_returns_struct_constructor_and_vector():
     assert "ConstructorNode(" not in generated_code
 
 
+def test_function_style_plain_struct_call_emits_metal_aggregate_braces():
+    shader = """
+    shader FunctionStyleAggregateConstructor {
+        struct Pair {
+            uint index;
+            float value;
+        }
+
+        Pair make_pair(uint index, float value) {
+            return Pair(index, value);
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Pair make_pair(uint index, float value)" in generated_code
+    assert "return Pair{index, value};" in generated_code
+    assert "return Pair(index, value);" not in generated_code
+
+
+def test_function_style_plain_struct_call_rejects_excess_arguments():
+    shader = """
+    shader InvalidFunctionStyleAggregateConstructor {
+        struct Pair {
+            uint index;
+            float value;
+        }
+
+        Pair make_pair(uint index, float value) {
+            return Pair(index, value, 1.0);
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"Struct constructor Pair expects at most 2 arguments, got 3",
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_function_named_like_struct_is_not_rewritten_as_aggregate_constructor():
+    codegen = MetalCodeGen()
+    codegen.struct_member_types["Pair"] = {
+        "index": "uint",
+        "value": "float",
+    }
+    codegen.user_function_names.add("Pair")
+    codegen.function_return_types["Pair"] = "float"
+    codegen.local_variable_types["value"] = "float"
+    call = FunctionCallNode(IdentifierNode("Pair"), [IdentifierNode("value")])
+
+    assert codegen.expression_result_type(call) == "float"
+    assert codegen.generate_expression(call) == "Pair(value)"
+
+
 def test_stage_tail_struct_constructor_returns_stage_output():
     shader = """
     shader StageTailReturn {
@@ -14587,6 +14644,51 @@ def test_metal_mixed_address_space_ternary_pointer_alias_emits_diagnostic():
         "requires threadgroup */;"
     ) in generated
     assert "bumpThreadgroup(useShared ? scratch" not in generated
+
+
+@pytest.mark.parametrize("stride_type", ["int", "uint", "int64", "uint64"])
+@pytest.mark.parametrize("operator", ["+=", "-="])
+def test_metal_pointer_offset_accepts_integer_reference_values(stride_type, operator):
+    code = f"""
+    shader ReferencePointerOffset {{
+        compute {{
+            void main(
+                device float* values @buffer(0),
+                constant {stride_type}& stride @buffer(1)
+            ) {{
+                device float* cursor = values;
+                cursor {operator} stride;
+                values[0] = *cursor;
+            }}
+        }}
+    }}
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert f"cursor {operator} stride;" in generated
+    assert "unsupported Metal pointer offset assignment" not in generated
+    assert "values[0] = *cursor;" in generated
+
+
+@pytest.mark.parametrize("stride_type", ["float", "bool", "int2", "int*"])
+def test_metal_pointer_offset_rejects_noninteger_scalar_references(stride_type):
+    code = f"""
+    shader InvalidReferencePointerOffset {{
+        compute {{
+            void main(
+                device float* values @buffer(0),
+                constant {stride_type}& stride @buffer(1)
+            ) {{
+                device float* cursor = values;
+                cursor += stride;
+            }}
+        }}
+    }}
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "unsupported Metal pointer offset assignment" in generated
+    assert "cursor += stride;" not in generated
 
 
 def test_metal_mixed_address_space_pointer_assignment_emits_diagnostic():

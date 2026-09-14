@@ -130,6 +130,7 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
     normalize_specialization_type_text,
+    render_constructor_arguments,
 )
 from .glsl_buffer_layout import (
     byte_offset_add,
@@ -3956,6 +3957,42 @@ class MetalCodeGen:
             if columns in {"2", "3", "4"} and rows in {"2", "3", "4"}:
                 return component_prefix, int(columns), int(rows)
         return None
+
+    def metal_aggregate_constructor_name(self, function_name):
+        """Return a known unshadowed struct type used as a call expression."""
+        if not isinstance(function_name, str):
+            return None
+
+        candidates = [function_name]
+        mapped_name = self.map_type(function_name)
+        if mapped_name != function_name:
+            candidates.append(mapped_name)
+        if any(name in self.user_function_names for name in candidates):
+            return None
+
+        return next(
+            (name for name in candidates if name in self.struct_member_types),
+            None,
+        )
+
+    def generate_metal_aggregate_constructor_call(self, expr, function_name):
+        """Restore Metal brace semantics lost when aggregate IR uses a call."""
+        constructor_name = self.metal_aggregate_constructor_name(function_name)
+        if constructor_name is None:
+            return None
+
+        fields = list(self.struct_member_types[constructor_name].items())
+        rendered_args = render_constructor_arguments(
+            self,
+            constructor_name,
+            expr,
+            fields,
+        )
+        return format_struct_constructor_expression(
+            self,
+            self.map_type(constructor_name),
+            rendered_args,
+        )
 
     def generate_metal_matrix_resize_constructor(self, target_type, args):
         target_dimensions = self.metal_matrix_dimensions(target_type)
@@ -7920,6 +7957,10 @@ class MetalCodeGen:
         type_name = self.type_name_string(vtype)
         if not type_name or "[" in type_name:
             return False
+        # Reference expressions supply the referenced value as the offset.
+        type_name = type_name.strip()
+        if type_name.endswith("&"):
+            type_name = type_name[:-1].rstrip()
         integral_names = {
             "char",
             "uchar",
@@ -9172,6 +9213,9 @@ class MetalCodeGen:
                 return None
             if func_name in getattr(self, "function_return_types", {}):
                 return self.function_return_types[func_name]
+            aggregate_constructor = self.metal_aggregate_constructor_name(func_name)
+            if aggregate_constructor is not None:
+                return aggregate_constructor
             unsupported_functions = getattr(
                 self, "unsupported_glsl_buffer_block_functions", {}
             )
@@ -10504,6 +10548,12 @@ class MetalCodeGen:
             )
             if registered_conversion is not None:
                 return registered_conversion
+            aggregate_constructor = self.generate_metal_aggregate_constructor_call(
+                expr,
+                func_name,
+            )
+            if aggregate_constructor is not None:
+                return aggregate_constructor
             if (
                 func_name in self.metal_type_aliases
                 or re.fullmatch(

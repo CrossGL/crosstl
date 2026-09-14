@@ -494,6 +494,21 @@ Entry selection scopes shader or kernel translation; it does not infer host
 dispatch dimensions, runtime bindings, or backend integration. Record those
 requirements through the corresponding dispatch and runtime contracts.
 
+The next MLX kernel-tree increment is pinned independently at
+``d9add9d11f3154111a4c85f267ec2fd307ecd18e``. Entry discovery must report
+exactly 42 Metal units, 17,478 entries, and zero diagnostics. The compact
+``arg_reduce.current-tree.translation.json`` contract pins deterministic
+Metal, OpenGL, and DirectX artifacts for ``argmin_float32`` and
+``argmax_float32``. Required macOS, Linux, and Windows CI respectively uses the
+native Metal compiler and runtime, ``glslangValidator``/``spirv-val`` plus Mesa
+EGL, and DXC plus Direct3D 12 WARP. The runtime matrix covers two rows, axis
+sizes 32 and 129, strides 1 and 2, ordinary values, and NaN/Infinity values;
+the Metal path also executes the exact upstream metallib for parity. This is a
+2/17,478 increment. The contract explicitly records that the upstream MLX test
+suite and MLX host-runtime redirection have not yet been implemented. Strict
+JSON runtime requests encode non-finite float32 inputs with the exact strings
+``nan``, ``+infinity``, and ``-infinity`` before deterministic IEEE-754 packing.
+
 The current-pinned MLX integration exercises entry-scoped translation for all
 877 discovered entries from the include-expanded ``unary.metal`` source. The
 finite split is 183 each for ``v_``, ``v2_``, ``gn1_``, and ``gn4large_``, plus
