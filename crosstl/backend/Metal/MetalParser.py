@@ -449,6 +449,10 @@ class MetalParser:
         self.last_struct_constructors = []
         self.last_struct_call_operator_declarations = []
         self.last_struct_nested_aggregates = []
+        self.last_type_specifier_qualifier_contract = {
+            "pointee": (),
+            "indirection": (),
+        }
 
     def skip_comments(self):
         while self.pos < len(self.tokens) and self.current_token[0] in [
@@ -2351,13 +2355,17 @@ class MetalParser:
 
     def parse_type_specifier(self, attributes=None):
         qualifiers = []
+        pointee_qualifiers = []
+        indirection_qualifiers = []
         while (
             self.is_type_qualifier_start()
             or self.current_token[0] == "ATTRIBUTE"
             or self.is_gnu_attribute_start()
         ):
             if self.is_type_qualifier_start():
-                qualifiers.extend(self.parse_type_qualifier())
+                parsed_qualifiers = self.parse_type_qualifier()
+                qualifiers.extend(parsed_qualifiers)
+                pointee_qualifiers.extend(parsed_qualifiers)
                 continue
             parsed_attributes = self.parse_attributes()
             if attributes is not None:
@@ -2431,20 +2439,31 @@ class MetalParser:
             self.eat(self.current_token[0])
 
         pointer_suffix = ""
+        saw_indirection = False
         while self.is_post_type_qualifier_start() or self.current_token[0] in [
             "MULTIPLY",
             "BITWISE_AND",
         ]:
             if self.is_post_type_qualifier_start():
-                qualifiers.extend(self.parse_type_qualifier())
+                parsed_qualifiers = self.parse_type_qualifier()
+                qualifiers.extend(parsed_qualifiers)
+                if saw_indirection:
+                    indirection_qualifiers.extend(parsed_qualifiers)
+                else:
+                    pointee_qualifiers.extend(parsed_qualifiers)
                 continue
             pointer_suffix += "*" if self.current_token[0] == "MULTIPLY" else "&"
+            saw_indirection = True
             self.eat(self.current_token[0])
 
         if self.current_token[0] == "ELLIPSIS":
             pointer_suffix += "..."
             self.eat("ELLIPSIS")
 
+        self.last_type_specifier_qualifier_contract = {
+            "pointee": tuple(dict.fromkeys(pointee_qualifiers)),
+            "indirection": tuple(dict.fromkeys(indirection_qualifiers)),
+        }
         return base_type + pointer_suffix, qualifiers
 
     def is_post_type_qualifier_start(self):
@@ -3809,6 +3828,7 @@ class MetalParser:
                 )
             attributes = self.parse_attributes()
             vtype, qualifiers = self.parse_type_specifier(attributes=attributes)
+            qualifier_contract = dict(self.last_type_specifier_qualifier_contract)
             name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
             if grouped_suffix and self.current_token[0] == "LPAREN":
                 self.parse_function_pointer_parameter_suffix()
@@ -3823,6 +3843,8 @@ class MetalParser:
             var_node = VariableNode(
                 param_type, name, qualifiers=qualifiers, attributes=attributes
             )
+            var_node.pointee_qualifiers = list(qualifier_contract["pointee"])
+            var_node.indirection_qualifiers = list(qualifier_contract["indirection"])
             var_node.array_sizes = array_sizes
             self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
             var_node.default_value = default_value

@@ -759,6 +759,40 @@ unsupported constructs as structured failures. This corpus scan measures
 translation coverage only; it does not claim MLX runtime integration or
 numerical parity on either target.
 
+## Quantized Wide OpenGL Checks
+
+The Linux CI job `mlx-quantized-wide-opengl` translates 18 selected
+`affine_qmv_wide` entries from the current pinned corpus. It covers float32,
+float16, and bfloat16 inputs; 3-, 5-, and 6-bit weights; and two or four vectors
+per threadgroup. Each case uses group size 128, eight reduction lanes, batch
+mode 0, and the source-faithful `[32, 2, 1]` workgroup: two logical 32-lane
+SIMD groups and 64 total invocations. The vector count controls input-vector
+tiling and does not change the fixed subgroup count. These cases exercise the
+local eight-element dequantization array, including zero-offset and nonzero
+pointer updates.
+
+The gate checks the pinned host-dispatch and kernel source identities, project
+report, source and artifact hashes, preserved array parameters, and exact
+execution metadata. It explicitly lowers the two logical SIMD groups in shared
+memory with software subgroup width 32, without KHR hardware-subgroup metadata,
+then requires GLSL compilation and SPIR-V validation. Missing tools or a missing
+pinned checkout fail the required CI job. Generated shaders, portability reports,
+SPIR-V modules, and JUnit results are uploaded for inspection. No upstream MLX
+source changes or out-of-bounds recovery policy are used by these cases.
+
+To run the gate locally with `glslangValidator` and `spirv-val` on `PATH`:
+
+```bash
+CROSTL_MLX_ROOT=/path/to/pinned/mlx \
+CROSTL_REQUIRE_MLX_QUANTIZED_WIDE_OPENGL=1 \
+python -m pytest -q -n auto \
+  tests/test_translator/test_mlx_quantized_wide_opengl.py
+```
+
+This is selected-entry compiler coverage, not completion of all 2,052 quantized
+entries. It does not execute those entries, establish numerical parity, redirect
+the MLX host runtime, or run the upstream MLX test suite on OpenGL.
+
 ## Current Translator Gaps
 
 The latest full-corpus scout at MLX commit

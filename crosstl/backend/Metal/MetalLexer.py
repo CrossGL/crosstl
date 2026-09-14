@@ -361,8 +361,11 @@ class MetalLexer:
         file_path: Optional[str] = None,
         max_template_specializations: Optional[int] = None,
         template_specialization_limit_source: Optional[str] = None,
+        promote_derived_pointer_members: bool = False,
     ):
         """Initialize the lexer with raw Metal source text."""
+        if not isinstance(promote_derived_pointer_members, bool):
+            raise ValueError("Metal promote_derived_pointer_members must be a boolean")
         code = code.lstrip("\ufeff")
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         if preprocess:
@@ -379,6 +382,9 @@ class MetalLexer:
                 preprocessor_kwargs["template_specialization_limit_source"] = (
                     template_specialization_limit_source
                 )
+            preprocessor_kwargs["promote_derived_pointer_members"] = (
+                promote_derived_pointer_members
+            )
             preprocessor = MetalPreprocessor(**preprocessor_kwargs)
             code = preprocessor.preprocess(code, file_path=file_path)
         self.code = code

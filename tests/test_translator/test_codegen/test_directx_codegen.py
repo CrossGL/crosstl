@@ -47505,7 +47505,8 @@ def test_hlsl_metal_private_struct_byte_view_reads_fixed_word_array(tmp_path):
 
     packed = (67305985).to_bytes(4, "little") + (134678021).to_bytes(4, "little")
     assert sum(packed) == 36
-    assert "uint sum8(in uint bytes[2], int bytes_base)" in generated
+    assert "uint sum8(const uint bytes[2], int bytes_base)" in generated
+    assert "uint sum8(in uint bytes[2]" not in generated
     assert "bytes[uint(((bytes_base + index)) / 4)]" in generated
     assert "% 4) * 8" in generated
     assert "& 255u" in generated
@@ -47558,9 +47559,12 @@ def test_hlsl_metal_private_struct_scalar_views_preserve_aligned_offsets(tmp_pat
         source_backend="metal",
     )
 
-    assert "uint read8(in uint values[2], int values_base)" in generated
-    assert "uint read16(in uint values[2], int values_base)" in generated
-    assert "uint read32(in uint values[2], int values_base)" in generated
+    assert "uint read8(const uint values[2], int values_base)" in generated
+    assert "uint read16(const uint values[2], int values_base)" in generated
+    assert "uint read32(const uint values[2], int values_base)" in generated
+    assert "uint read8(in uint values[2]" not in generated
+    assert "uint read16(in uint values[2]" not in generated
+    assert "uint read32(in uint values[2]" not in generated
     assert "read8(w_local.wi, 1)" in generated
     assert "read16(w_local.wi, 1)" in generated
     assert "read32(w_local.wi, 0)" in generated
@@ -47603,7 +47607,8 @@ def test_hlsl_metal_private_vec_w_vector_byte_view(tmp_path):
         source_backend="metal",
     )
 
-    assert "uint read_byte(in uint4 values, int values_base, int index)" in generated
+    assert "uint read_byte(const uint4 values, int values_base, int index)" in generated
+    assert "uint read_byte(in uint4 values" not in generated
     assert "read_byte(w_local.wi, 0, 0)" in generated
     assert "read_byte(w_local.wi, 0, 15)" in generated
     assert "values[uint(((values_base + index)) / 4)]" in generated
@@ -47663,7 +47668,11 @@ def test_hlsl_metal_private_aggregate_byte_view_preserves_word_bits(tmp_path):
     assert "asuint(value.signed_words" in generated
     assert "asuint(value.floating_word)" in generated
     assert "value.array_words[uint((word_index - 8u))]" in generated
-    assert "read_byte(in PackedWords values, int values_base, int index)" in generated
+    assert (
+        "uint read_byte(const PackedWords values, int values_base, int index)"
+        in generated
+    )
+    assert "uint read_byte(in PackedWords values" not in generated
     assert "read_byte(local, 0, 32)" in generated
     assert "PointerReinterpretNode" not in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()

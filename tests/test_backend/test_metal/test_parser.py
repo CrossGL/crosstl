@@ -415,6 +415,34 @@ def test_parse_reinterpret_cast_retains_pointer_qualifiers():
     ]
 
 
+def test_parse_parameter_retains_pointee_and_pointer_object_const_provenance():
+    code = """
+    void qualifiers(
+        const thread float* leading_const,
+        thread const float* middle_const,
+        thread float const* trailing_const,
+        thread float* const pointer_const,
+        thread float* mutable_values) {}
+    """
+
+    params = parse_ok(code).functions[0].params
+
+    assert [param.pointee_qualifiers for param in params] == [
+        ["const", "thread"],
+        ["thread", "const"],
+        ["thread", "const"],
+        ["thread"],
+        ["thread"],
+    ]
+    assert [param.indirection_qualifiers for param in params] == [
+        [],
+        [],
+        [],
+        ["const"],
+        [],
+    ]
+
+
 def test_parse_global_scoped_metal_array_declaration_from_pytorch_mps_scatter():
     # Reduced from:
     # Repo: https://github.com/pytorch/pytorch

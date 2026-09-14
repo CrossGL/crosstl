@@ -514,6 +514,8 @@ def _reverse_directx():
 def _reverse_metal(
     cooperative_matrix_fragment_mapping=None,
     cooperative_matrix_fragment_mapping_provenance=None,
+    preserve_pointer_pointee_const=True,
+    resolve_standard_remove_cv_aliases=True,
 ):
     from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
 
@@ -522,6 +524,8 @@ def _reverse_metal(
         cooperative_matrix_fragment_mapping_provenance=(
             cooperative_matrix_fragment_mapping_provenance
         ),
+        preserve_pointer_pointee_const=preserve_pointer_pointee_const,
+        resolve_standard_remove_cv_aliases=resolve_standard_remove_cv_aliases,
     )
 
 

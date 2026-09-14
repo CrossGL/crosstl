@@ -119,6 +119,20 @@ _GENERATED_INDEX_SENTINELS = {
         "out_[uint((out_index / uint64_t(writes_per_reduce)))]"
     ),
 }
+_GATHER_LOAD_VECTOR_SIGNATURE_RE = re.compile(
+    r"\bfloat\s+load_vector_float_float_16_2[A-Za-z0-9_]*\s*"
+    r"\(\s*inout\s+float\s+x_thread\s*\[\s*16\s*\]\s*,\s*"
+    r"int\s+x_thread_base\s*,\s*int\s+x_offset\s*\)\s*(?:;|\{)",
+    re.DOTALL,
+)
+_GATHER_QDOT_SIGNATURE_RE = re.compile(
+    r"\bfloat\s+qdot_float_16_2[A-Za-z0-9_]*\s*"
+    r"\(\s*float\s+x_thread\s*\[\s*16\s*\]\s*,\s*"
+    r"int\s+x_thread_base\s*,\s*float\s+scale\s*,\s*"
+    r"float\s+bias\s*,\s*float\s+sum\s*,\s*int\s+w_offset\s*,\s*"
+    r"int\s+w_byte_offset\s*\)\s*(?:;|\{)",
+    re.DOTALL,
+)
 _GATHER_QDOT_DEFINITION_RE = re.compile(
     r"\bfloat\s+qdot_float_16_2[A-Za-z0-9_]*\s*"
     r"\([^)]*\bint\s+w_offset\s*,\s*\bint\s+w_byte_offset\s*\)\s*"
@@ -642,8 +656,15 @@ def _validate_gather_generated_glsl(source: str) -> dict[str, Any]:
         "generated gather GLSL does not preserve mutable resource offsets",
     )
     _require(
-        source.count("inout float x_thread[16]") == 4
-        and "x_thread[(x_thread_base + int(i))] = x[(x_offset + i)];" in source
+        len(_GATHER_LOAD_VECTOR_SIGNATURE_RE.findall(source)) == 2,
+        "generated gather GLSL load-vector mutability contract changed",
+    )
+    _require(
+        len(_GATHER_QDOT_SIGNATURE_RE.findall(source)) == 2,
+        "generated gather GLSL qdot readonly contract changed",
+    )
+    _require(
+        "x_thread[(x_thread_base + int(i))] = x[(x_offset + i)];" in source
         and "result[row] = subgroupAdd(result[row]);" in source,
         "generated gather GLSL fixed-array or subgroup computation changed",
     )

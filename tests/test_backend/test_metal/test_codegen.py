@@ -1236,19 +1236,35 @@ def test_codegen_reference_parameters_preserve_readonly_direction(tmp_path):
 def test_codegen_pointer_reference_direction_is_independent_of_pointee_constness():
     code = """
     void advance(
+        const thread float* values,
         const device float*& source,
         device float*& destination,
         int amount) {
-      source += amount;
+      float observed = values[0];
+      source += amount + int(observed);
       destination += amount;
     }
     """
 
     crossgl = normalize(convert_without_preprocessing(code))
+    compatibility_ast = MetalParser(
+        MetalLexer(code, preprocess=False).tokenize()
+    ).parse()
+    compatibility_crossgl = normalize(
+        MetalToCrossGLConverter(preserve_pointer_pointee_const=False).generate(
+            compatibility_ast
+        )
+    )
 
     assert (
-        "void advance(inout const device float* source, "
+        "void advance(const thread float* values, "
+        "inout const device float* source, "
         "inout device float* destination, int amount)" in crossgl
+    )
+    assert (
+        "void advance(thread float* values, "
+        "inout const device float* source, "
+        "inout device float* destination, int amount)" in compatibility_crossgl
     )
 
 
@@ -5681,6 +5697,39 @@ def test_codegen_simdgroup_indices_from_public_pmetal_kernel():
     assert "@threads_per_simdgroup" not in result
     assert "@simdgroups_per_threadgroup" not in result
     assert parse_crossgl(result) is not None
+
+
+def test_codegen_quadgroup_indices_roundtrip_to_glsl_and_metal(tmp_path):
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void quad_indices(device uint* output [[buffer(0)]],
+                             uint tid [[thread_index_in_threadgroup]],
+                             uint quad_gid [[quadgroup_index_in_threadgroup]],
+                             uint quad_lid [[thread_index_in_quadgroup]]) {
+        output[tid] = quad_gid * 4u + quad_lid;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "uint quad_gid @gl_QuadGroupID" in crossgl
+    assert "uint quad_lid @gl_QuadGroupInvocationID" in crossgl
+    assert "@quadgroup_index_in_threadgroup" not in crossgl
+    assert "@thread_index_in_quadgroup" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate_stage(ast, "compute")
+    assert "(gl_LocalInvocationIndex / 4u)" in glsl
+    assert "(gl_LocalInvocationIndex % 4u)" in glsl
+    assert "quad_gid" not in glsl
+    assert "quad_lid" not in glsl
+    assert_opengl_compute_validates_if_available(glsl, tmp_path, "quad_indices")
+
+    metal = MetalCodeGen().generate_stage(ast, "compute")
+    assert "uint quad_gid [[quadgroup_index_in_threadgroup]]" in metal
+    assert "uint quad_lid [[thread_index_in_quadgroup]]" in metal
+    assert_metal_compute_validates_if_available(metal, tmp_path, "quad_indices")
 
 
 def test_codegen_packed_and_simd_types():
@@ -15812,3 +15861,90 @@ def test_codegen_local_const_pointee_pointer_slot_address_round_trips_to_native_
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert air_path.stat().st_size > 0
+
+
+def test_codegen_does_not_replace_source_shadowed_remove_cv_alias_template():
+    crossgl = convert_without_preprocessing("""
+        using namespace metal;
+
+        template <typename T>
+        struct Wrapper {};
+
+        template <typename T>
+        using remove_cv_t = Wrapper<T>;
+
+        remove_cv_t<bfloat> keep(remove_cv_t<bfloat> value) {
+            return value;
+        }
+        """)
+
+    normalized = normalize(crossgl)
+    assert "Wrapper<bfloat> keep(Wrapper<bfloat> value)" in normalized
+
+    standard_source = """
+        using namespace metal;
+
+        bfloat keep_standard(bfloat value) {
+            return static_cast<remove_cv_t<bfloat>>(value);
+        }
+        """
+    resolved = normalize(convert_without_preprocessing(standard_source))
+    standard_ast = MetalParser(
+        MetalLexer(standard_source, preprocess=False).tokenize()
+    ).parse()
+    preserved = normalize(
+        MetalToCrossGLConverter(resolve_standard_remove_cv_aliases=False).generate(
+            standard_ast
+        )
+    )
+
+    assert "return (bfloat16)value;" in resolved
+    assert "return (remove_cv_t<bfloat>)value;" in preserved
+    with pytest.raises(
+        ValueError,
+        match="resolve_standard_remove_cv_aliases must be a boolean",
+    ):
+        MetalToCrossGLConverter(resolve_standard_remove_cv_aliases="false")
+
+
+def test_codegen_preserves_private_pointer_pointee_const_without_constifying_pointer_objects():
+    crossgl = convert_without_preprocessing("""
+        float read_private(const thread float* values) {
+            return values[0];
+        }
+
+        void write_private(thread float* values) {
+            values[0] = 1.0f;
+        }
+
+        void write_through_const_pointer(thread float* const values) {
+            values[0] = 2.0f;
+        }
+
+        float read_device(const device float* values) {
+            return values[0];
+        }
+
+        float read_constant(constant float* values) {
+            return values[0];
+        }
+
+        float read_fixed(const thread float values[4]) {
+            return values[0];
+        }
+
+        float read_mutable_fixed(thread float values[4]) {
+            return values[0];
+        }
+        """)
+    normalized = normalize(crossgl)
+
+    assert "float read_private(const thread float* values)" in normalized
+    assert "void write_private(thread float* values)" in normalized
+    assert "void write_through_const_pointer(thread float* values)" in normalized
+    assert "write_through_const_pointer(const thread float*" not in normalized
+    assert "float read_device(const device float* values)" in normalized
+    assert "float read_constant(constant float* values)" in normalized
+    assert "float read_fixed(thread float[4] values)" in normalized
+    assert "float read_mutable_fixed(inout thread float[4] values)" in normalized
+    assert parse_crossgl(crossgl) is not None

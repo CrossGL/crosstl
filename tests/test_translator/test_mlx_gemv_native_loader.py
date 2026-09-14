@@ -57,8 +57,8 @@ MLX_GEMV_GENERATED_ARTIFACTS = {
         "sizeBytes": 8188,
     },
     "opengl": {
-        "sha256": "f5ef8900ee65d63a6df2818ef111f56b4f269c6366c82d82a9d97c967042f562",
-        "sizeBytes": 7705,
+        "sha256": "158f653cccd16d6f17c4f7bd3988f249029436417d0ec797bdeaf580ff4ceb40",
+        "sizeBytes": 7665,
     },
 }
 REQUIRE_DIRECTX_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_GEMV_DIRECTX_NATIVE_LOADER"
