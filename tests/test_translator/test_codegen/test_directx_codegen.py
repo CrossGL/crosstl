@@ -55,6 +55,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXAggregateConditionalError,
     DirectXAggregateInitializerError,
     DirectXAtomicFenceLoweringError,
+    DirectXBFloat16UnsupportedError,
     DirectXBooleanCompoundAssignmentError,
     DirectXBooleanOrderedIntrinsicError,
     DirectXCompileTimeGlobalError,
@@ -48518,6 +48519,113 @@ def test_hlsl_private_pointer_if_preserves_assignment_before_shadowing():
     generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "float read_selected(inout float values[8], int values_base)" in generated
+
+
+def test_hlsl_groupshared_bfloat_struct_uses_internal_register_representation(
+    tmp_path,
+):
+    shader = """
+    shader InternalGroupsharedBfloatAggregate {
+        struct Pair {
+            uint index;
+            bfloat16_t value;
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main(uint lane @ gl_LocalInvocationIndex) {
+                threadgroup Pair sharedValues[32];
+                Pair value;
+                value.index = lane;
+                value.value = bfloat16_t(float(lane));
+                sharedValues[lane] = value;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(shader)
+    )
+
+    assert "struct Pair {\n    uint index;\n    uint value;\n};" in generated
+    assert "groupshared Pair main_sharedValues[32];" in generated
+    assert "__crossgl_bfloat16_from_float" in generated
+    assert "groupshared uint16_t" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_groupshared_bfloat_struct_rejects_dx11_profile():
+    shader = """
+    shader InternalGroupsharedBfloatAggregateDX11 {
+        struct Pair {
+            uint index;
+            bfloat16_t value;
+        }
+
+        compute {
+            void main() {
+                threadgroup Pair sharedValues[1];
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXBFloat16UnsupportedError) as excinfo:
+        HLSLCodeGen(target_profile="dx11").generate(crosstl.translator.parse(shader))
+
+    assert excinfo.value.reason == "target-profile-lacks-native-16bit-storage"
+    assert excinfo.value.operation == "groupshared variable 'main_sharedValues'"
+
+
+def test_hlsl_groupshared_bfloat_struct_rejects_vector_member():
+    shader = """
+    shader InternalGroupsharedBfloatVector {
+        struct Pair {
+            bfloat16_t2 value;
+        }
+
+        compute {
+            void main() {
+                threadgroup Pair sharedValues[1];
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXBFloat16UnsupportedError) as excinfo:
+        HLSLCodeGen(target_profile="dx12").generate(crosstl.translator.parse(shader))
+
+    assert excinfo.value.reason == "unsupported-storage-shape"
+    assert excinfo.value.source_type == "Pair[1]"
+
+
+def test_hlsl_external_bfloat_struct_resource_remains_rejected():
+    shader = """
+    shader ExternalBfloatAggregate {
+        struct Pair {
+            uint index;
+            bfloat16_t value;
+        }
+
+        StructuredBuffer<Pair> input;
+        RWStructuredBuffer<uint> output;
+
+        compute {
+            void main() {
+                output[0] = input[0].index;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXBFloat16UnsupportedError) as excinfo:
+        HLSLCodeGen(target_profile="dx12").generate(crosstl.translator.parse(shader))
+
+    assert excinfo.value.reason == "unsupported-storage-shape"
+    assert excinfo.value.operation == "StructuredBuffer element"
+    assert excinfo.value.source_type == "Pair"
 
 
 def test_hlsl_metal_bfloat_workgroup_pointer_preserves_logical_pointee_alias(

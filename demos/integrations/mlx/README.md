@@ -11,13 +11,16 @@ passes a target validator.
 The next corpus increment is separately pinned to
 `d9add9d11f3154111a4c85f267ec2fd307ecd18e`. Its authoritative discovery census
 is 42 Metal units, 17,478 entries, and zero discovery diagnostics. The compact
-`contracts/arg_reduce.current-tree.translation.json` contract pins the first two
-entries, `argmin_float32` and `argmax_float32`, across Metal, OpenGL, and DirectX.
-Required CI compiles each target natively and executes the translated kernels on
-Metal, Mesa EGL, and Direct3D 12 WARP over axis sizes 32 and 129, strides 1 and 2,
-ordinary values, and NaN/Infinity inputs; macOS additionally compares against the
-upstream metallib. This is an explicit 2/17,478 increment, not full-tree coverage,
-upstream MLX test-suite execution, or MLX host-runtime redirection.
+`contracts/arg_reduce.current-tree.translation.json` contract pins all 24
+entries from `arg_reduce.metal` and all 72 deterministic Metal, OpenGL, and
+DirectX artifacts. Required CI compiles every entry with the applicable native
+validator. Numerical execution remains an explicit float32 subset:
+`argmin_float32` and `argmax_float32` run on Metal, Mesa EGL, and Direct3D 12
+WARP over axis sizes 32 and 129, strides 1 and 2, ordinary values, and
+NaN/Infinity inputs; macOS additionally compares against the upstream metallib.
+This is a 24/17,478 deterministic translation and native-compiler increment with
+2/17,478 numerical runtime coverage, not full-tree coverage, upstream MLX
+test-suite execution, or MLX host-runtime redirection.
 
 ## Scope
 

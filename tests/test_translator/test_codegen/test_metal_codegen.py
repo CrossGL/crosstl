@@ -3908,6 +3908,57 @@ kernel void native_width_probe(uint lid [[thread_index_in_threadgroup]]) {
     compile_with_metal_if_available(generated_code)
 
 
+def test_metal_private_fixed_arrays_preserve_native_width_for_pointer_decay(
+    tmp_path,
+):
+    shader_path = tmp_path / "private-native-widths.metal"
+    shader_path.write_text(
+        """
+#include <metal_stdlib>
+using namespace metal;
+
+void consume_i8(thread int8_t* values) { values[0] = int8_t(1); }
+void consume_u8(thread uint8_t* values) { values[0] = uint8_t(1); }
+void consume_i16(thread int16_t* values) { values[0] = int16_t(1); }
+void consume_u16(thread uint16_t* values) { values[0] = uint16_t(1); }
+
+kernel void native_width_probe() {
+  int8_t i8_values[4];
+  uint8_t u8_values[4];
+  int16_t i16_values[4];
+  uint16_t u16_values[4];
+  consume_i8(i8_values);
+  consume_u8(u8_values);
+  consume_i16(i16_values);
+  consume_u16(u16_values);
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+    )
+
+    for declaration in (
+        "char i8_values[4];",
+        "uchar u8_values[4];",
+        "short i16_values[4];",
+        "ushort u16_values[4];",
+    ):
+        assert declaration in generated_code
+    for widened_declaration in (
+        "int i8_values[4];",
+        "uint u8_values[4];",
+        "int i16_values[4];",
+        "uint u16_values[4];",
+    ):
+        assert widened_declaration not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_stage_local_shared_variables_emit_inside_kernel():
     shader = """
     shader StageLocalSharedStorage {
