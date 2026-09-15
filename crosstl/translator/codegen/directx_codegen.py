@@ -31087,7 +31087,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         vtype = self.hlsl_groupshared_declaration_type(node)
         name = alias or getattr(node, "name", None)
         if self.hlsl_type_contains_bfloat16(vtype):
-            mapped_type = self.hlsl_bfloat16_storage_type(
+            mapped_type = self.hlsl_bfloat16_groupshared_register_type(
                 vtype,
                 operation=f"groupshared variable '{name}'",
                 source_location=getattr(node, "source_location", None),
@@ -45974,6 +45974,62 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             reason="target-profile-lacks-native-16bit-storage",
             source_location=source_location,
         )
+
+    def hlsl_bfloat16_groupshared_register_type(
+        self,
+        vtype,
+        *,
+        operation="groupshared declaration",
+        source_location=None,
+    ):
+        type_name = self.type_name_string(vtype)
+        base_type, array_suffix = split_array_type_suffix(str(type_name or ""))
+        if self.is_hlsl_bfloat16_type(base_type):
+            return self.hlsl_bfloat16_storage_type(
+                vtype,
+                operation=operation,
+                source_location=source_location,
+            )
+
+        def supports_register_aggregate(struct_name, seen=None):
+            seen = set(seen or ())
+            if struct_name in seen:
+                return True
+            members = self.struct_member_types.get(struct_name)
+            if not members:
+                return False
+            seen.add(struct_name)
+            for member_type in members.values():
+                if not self.hlsl_type_contains_bfloat16(member_type):
+                    continue
+                member_name = self.type_name_string(member_type)
+                member_base, _member_array = split_array_type_suffix(
+                    str(member_name or "")
+                )
+                if self.is_hlsl_bfloat16_type(member_base):
+                    continue
+                if not supports_register_aggregate(member_base, seen):
+                    return False
+            return True
+
+        if not array_suffix or not supports_register_aggregate(base_type):
+            return self.hlsl_bfloat16_storage_type(
+                vtype,
+                operation=operation,
+                source_location=source_location,
+            )
+
+        self.validate_hlsl_bfloat16_storage_profile(
+            operation=operation,
+            source_type=vtype,
+            source_location=source_location,
+        )
+        # The user-defined aggregate itself is internal register state: its
+        # logical bfloat members are represented by uint low-bit payloads.  Do
+        # not relax ABI-visible resource storage, which still goes through the
+        # scalar-only hlsl_bfloat16_storage_type contract.
+        self.requires_hlsl_bfloat16_storage = True
+        return self.map_type(vtype)
 
     def hlsl_bfloat16_storage_type(
         self, vtype, *, operation="storage declaration", source_location=None

@@ -290,6 +290,7 @@ class _MetalTemplateFunction:
     template_parameter_defaults: Dict[str, str] = field(default_factory=dict)
     template_parameter_types: Dict[str, str] = field(default_factory=dict)
     template_type_traits: Dict[str, Dict[str, object]] = field(default_factory=dict)
+    template_constraints: List[str] = field(default_factory=list)
     namespace: str = ""
     materializations: List[str] = field(default_factory=list)
 
@@ -443,6 +444,7 @@ class _MetalConstexprCall:
     template_arguments: Optional[List[str]]
     arguments: List[str]
     span: Tuple[int, int]
+    argument_open: int
 
 
 @dataclass(frozen=True)
@@ -945,6 +947,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         # original concrete specialization through normalized keys.
         processed = self._materialize_explicit_template_struct_instantiations(processed)
         processed = self._materialize_explicit_template_function_calls(processed)
+        processed = self._materialize_inferred_constrained_template_function_calls(
+            processed
+        )
         processed = self._substitute_local_integral_constant_array_extents(processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
@@ -1227,6 +1232,293 @@ class MetalPreprocessor(HLSLPreprocessor):
                 working = working.rstrip() + "\n\n" + "\n\n".join(new_materializations)
                 if not working.endswith("\n"):
                     working += "\n"
+
+    def _materialize_inferred_constrained_template_function_calls(
+        self, code: str
+    ) -> str:
+        """Resolve ordinary calls to constrained free function templates.
+
+        Metal overload sets commonly provide an SFINAE fallback next to a native
+        overload, for example MLX's integral-only ``isnan(T)`` beside
+        ``metal::isnan(float)``.  The CrossGL generic-function path cannot retain
+        anonymous ``enable_if_t`` parameters, so allowing such a declaration to
+        reach it silently turns the fallback into an unconstrained helper.
+
+        Resolve only calls in reachable concrete function bodies.  A uniquely
+        enabled constrained candidate is materialized and the call is renamed;
+        when every viable constrained candidate is disabled, the original call
+        remains for native overload resolution.  Unknown argument types,
+        unrecognized constraints, and multiple enabled candidates fail closed.
+        Residual template declarations that participated in this resolution are
+        removed so a target generic specializer cannot later discard the SFINAE
+        contract.
+        """
+
+        templates = self._find_template_functions(code)
+        constrained = [
+            template for template in templates if template.template_constraints
+        ]
+        if not constrained:
+            return code
+
+        # A template method retained inside a residual aggregate declaration is
+        # not a free overload. Member-template lowering owns those declarations.
+        aggregate_spans = sorted(
+            [struct.span for struct in self._find_concrete_struct_definitions(code)]
+            + [struct.span for struct in self._find_template_structs(code)]
+        )
+        constrained = [
+            template
+            for template in constrained
+            if self._containing_span(template.span[0], aggregate_spans) is None
+        ]
+        if not constrained:
+            return code
+
+        by_name: Dict[str, List[_MetalTemplateFunction]] = {}
+        for template in constrained:
+            by_name.setdefault(template.name, []).append(template)
+
+        template_spans = self._find_template_declaration_spans(code)
+        functions = self._find_non_template_function_definitions(code, template_spans)
+        reachable_spans = self._reachable_function_spans(code, template_spans)
+        if reachable_spans is not None:
+            reachable_set = set(reachable_spans)
+            functions = [
+                function for function in functions if function.span in reachable_set
+            ]
+        body_spans = [function.body_span for function in functions]
+        if not body_spans:
+            return code
+
+        calls = [
+            call
+            for call in self._find_static_constexpr_calls(code, set(by_name))
+            if self._containing_span(call.span[0], body_spans) is not None
+            and not self._function_reference_is_member_call(code, call.span[0], set())
+        ]
+        if not calls:
+            return code
+
+        structs = self._find_concrete_struct_definitions(code)
+        context = self._reachability_type_context(code, template_spans, structs)
+        namespace_visibility = self._metal_namespace_visibility(code)
+        replacements: List[Tuple[int, int, str]] = []
+        materializations: List[str] = []
+        materialized_names: Dict[Tuple[Tuple[int, int], Tuple[str, ...]], str] = {}
+        generated_name_owners: Dict[str, Tuple[Tuple[int, int], Tuple[str, ...]]] = {}
+        handled_template_spans: Set[Tuple[int, int]] = set()
+
+        for call in calls:
+            visible_candidates = [
+                template
+                for template in by_name.get(call.name, [])
+                if template.span[0] <= call.span[0]
+                and self._metal_template_function_call_visible(
+                    template,
+                    call.qualified_name,
+                    call.span[0],
+                    namespace_visibility,
+                    None,
+                )
+            ]
+            if not visible_candidates:
+                continue
+
+            argument_count_candidates: List[Tuple[_MetalTemplateFunction, str]] = []
+            for template in visible_candidates:
+                parameters = self._template_function_parameter_text(template)
+                if parameters is None or not self._callable_accepts_argument_count(
+                    parameters, len(call.arguments)
+                ):
+                    continue
+                argument_count_candidates.append((template, parameters))
+            if not argument_count_candidates:
+                continue
+
+            buffer_view = self._flatten_types_at(
+                context.buffer_element_types, call.argument_open
+            )
+            local_view = self._flatten_types_at(
+                context.local_variable_types, call.argument_open
+            )
+            field_types = self._struct_field_types_at(
+                context.receiver_variable_types,
+                context.structs_by_name,
+                call.argument_open,
+            )
+            argument_types = [
+                self._infer_argument_type(
+                    argument,
+                    buffer_view,
+                    local_view,
+                    field_types,
+                    context.structs_by_name,
+                )
+                for argument in call.arguments
+            ]
+            if any(argument_type is None for argument_type in argument_types):
+                self._raise_constrained_free_function_error(
+                    code,
+                    call,
+                    "one or more call argument types could not be inferred "
+                    "conservatively",
+                )
+
+            enabled: List[Tuple[_MetalTemplateFunction, Dict[str, str]]] = []
+            saw_unrecognized_constraint = False
+            for template, parameters in argument_count_candidates:
+                method = _MetalStructMethod(
+                    name=template.name,
+                    free_name="",
+                    is_static=True,
+                    is_operator_call=False,
+                    return_type="",
+                    parameters=parameters,
+                    parameter_names=[],
+                    body="",
+                    span=template.span,
+                    template_parameters=list(template.template_parameters),
+                    template_parameter_types=dict(template.template_parameter_types),
+                    variadic_template_parameters=set(
+                        template.variadic_template_parameters
+                    ),
+                    template_parameter_defaults=dict(
+                        template.template_parameter_defaults
+                    ),
+                    template_constraints=list(template.template_constraints),
+                )
+                bindings = self._bind_template_method_parameters(
+                    method,
+                    list(argument_types),
+                    explicit_template_arguments=list(call.template_arguments or []),
+                    structs_by_name=context.structs_by_name,
+                    argument_type_aliases=context.source_type_aliases,
+                    argument_type_position=call.argument_open,
+                    argument_type_fallback_position=call.argument_open,
+                )
+                if bindings is None:
+                    continue
+                try:
+                    candidate_enabled = all(
+                        self._evaluate_template_constraint(
+                            constraint,
+                            bindings,
+                            structs=structs,
+                            type_aliases=context.source_type_aliases,
+                            position=call.span[0],
+                        )
+                        for constraint in template.template_constraints
+                    )
+                except self._UnrecognizedConstraint:
+                    saw_unrecognized_constraint = True
+                    continue
+                handled_template_spans.add(template.span)
+                if candidate_enabled:
+                    enabled.append((template, bindings))
+
+            if saw_unrecognized_constraint:
+                self._raise_constrained_free_function_error(
+                    code,
+                    call,
+                    "a viable SFINAE constraint is not recognized",
+                )
+            if len(enabled) > 1:
+                self._raise_constrained_free_function_error(
+                    code,
+                    call,
+                    "multiple constrained overloads are enabled",
+                )
+            if not enabled:
+                # Every recognized constrained candidate is disabled. Preserve
+                # the spelling so a native overload (such as metal::isnan) can
+                # resolve it after the fallback declaration is removed.
+                continue
+
+            template, bindings = enabled[0]
+            ordered_arguments = tuple(
+                bindings[name] for name in template.template_parameters
+            )
+            key = (template.span, ordered_arguments)
+            specialized_name = materialized_names.get(key)
+            if specialized_name is None:
+                specialized_name = self._template_specialization_identifier(
+                    template.name, list(ordered_arguments)
+                )
+                prior_owner = generated_name_owners.get(specialized_name)
+                if prior_owner is not None and prior_owner != key:
+                    self._raise_constrained_free_function_error(
+                        code,
+                        call,
+                        "enabled specializations would produce the same concrete "
+                        "helper name",
+                    )
+                materialized = self._materialize_template_function_with_name(
+                    template,
+                    list(ordered_arguments),
+                    specialized_name,
+                    host_name=None,
+                )
+                if not materialized:
+                    self._raise_constrained_free_function_error(
+                        code,
+                        call,
+                        "the uniquely enabled overload could not be materialized",
+                    )
+                generated_name_owners[specialized_name] = key
+                materialized_names[key] = specialized_name
+                materializations.append(materialized.rstrip())
+
+            replacements.append((call.span[0], call.argument_open, specialized_name))
+
+        if not handled_template_spans:
+            return code
+        replacements.extend((start, end, "") for start, end in handled_template_spans)
+        resolved = self._apply_text_replacements(code, replacements)
+        if materializations:
+            resolved = resolved.rstrip() + "\n\n" + "\n\n".join(materializations)
+            if not resolved.endswith("\n"):
+                resolved += "\n"
+        return resolved
+
+    def _template_function_parameter_text(
+        self, template: _MetalTemplateFunction
+    ) -> Optional[str]:
+        body_start = self._find_next_top_level_char(template.source, 0, "{")
+        if body_start is None:
+            return None
+        header = template.source[:body_start]
+        parameter_start = self._function_parameter_start(header)
+        if parameter_start is None:
+            return None
+        parameter_end = self._find_matching_delimiter(header, parameter_start, "(", ")")
+        if parameter_end is None:
+            return None
+        return header[parameter_start + 1 : parameter_end]
+
+    def _raise_constrained_free_function_error(
+        self,
+        code: str,
+        call: _MetalConstexprCall,
+        reason: str,
+    ) -> None:
+        requested = re.sub(r"\s+", " ", code[call.span[0] : call.span[1]]).strip()
+        suggested_action = (
+            "specialize the free function explicitly, or restrict the overload "
+            "set to recognized enable_if_t constraints and inferable argument types"
+        )
+        raise MetalTemplateSpecializationError(
+            "Metal constrained free-function call "
+            f"'{requested}' could not be resolved because {reason}. "
+            f"Suggested action: {suggested_action}.",
+            requested_signature=requested,
+            suggested_action=suggested_action,
+            source_location=self._source_location_for_offsets(
+                code, call.span[0], call.span[1]
+            ),
+            callee_template=call.name,
+            requested_arguments=tuple(call.arguments),
+        )
 
     def _materialize_explicit_template_struct_instantiations(
         self,
@@ -9578,6 +9870,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     template_arguments=template_arguments,
                     arguments=arguments,
                     span=(call_start, arguments_end + 1),
+                    argument_open=cursor,
                 )
             )
             i = arguments_end + 1
@@ -20609,6 +20902,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                         and parameter.declared_type is not None
                     },
                     template_type_traits=template_type_traits,
+                    template_constraints=self._template_parameter_constraints(
+                        parameter_text
+                    ),
                     namespace=self._namespace_at(namespace_spans, start),
                 )
             )

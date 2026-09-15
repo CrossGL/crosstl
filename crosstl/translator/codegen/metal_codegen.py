@@ -130,6 +130,7 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
     normalize_specialization_type_text,
+    render_constructor_arguments,
 )
 from .glsl_buffer_layout import (
     byte_offset_add,
@@ -902,6 +903,7 @@ class MetalCodeGen:
         self.current_generic_function_substitutions = {}
         self.local_variable_types = {}
         self.current_address_space_variables = {}
+        self.current_metal_native_width_local_array_declaration_ids = set()
         self.current_local_identifier_remaps = {}
         self.struct_member_types = {}
         self.struct_member_address_spaces = {}
@@ -2127,6 +2129,7 @@ class MetalCodeGen:
         self.required_metal_ray_desc_runtime = False
         self.required_metal_ray_query_helpers = set()
         self.local_variable_types = {}
+        self.current_metal_native_width_local_array_declaration_ids = set()
         self.current_metal_graphics_builtin_parameter_names = {}
         (
             self.lowered_glsl_buffer_blocks,
@@ -3957,6 +3960,42 @@ class MetalCodeGen:
                 return component_prefix, int(columns), int(rows)
         return None
 
+    def metal_aggregate_constructor_name(self, function_name):
+        """Return a known unshadowed struct type used as a call expression."""
+        if not isinstance(function_name, str):
+            return None
+
+        candidates = [function_name]
+        mapped_name = self.map_type(function_name)
+        if mapped_name != function_name:
+            candidates.append(mapped_name)
+        if any(name in self.user_function_names for name in candidates):
+            return None
+
+        return next(
+            (name for name in candidates if name in self.struct_member_types),
+            None,
+        )
+
+    def generate_metal_aggregate_constructor_call(self, expr, function_name):
+        """Restore Metal brace semantics lost when aggregate IR uses a call."""
+        constructor_name = self.metal_aggregate_constructor_name(function_name)
+        if constructor_name is None:
+            return None
+
+        fields = list(self.struct_member_types[constructor_name].items())
+        rendered_args = render_constructor_arguments(
+            self,
+            constructor_name,
+            expr,
+            fields,
+        )
+        return format_struct_constructor_expression(
+            self,
+            self.map_type(constructor_name),
+            rendered_args,
+        )
+
     def generate_metal_matrix_resize_constructor(self, target_type, args):
         target_dimensions = self.metal_matrix_dimensions(target_type)
         if target_dimensions is None or len(args or []) != 1:
@@ -4523,6 +4562,9 @@ class MetalCodeGen:
         )
         previous_local_variable_types = self.local_variable_types
         previous_address_space_variables = self.current_address_space_variables
+        previous_native_width_local_array_declaration_ids = (
+            self.current_metal_native_width_local_array_declaration_ids
+        )
         previous_generic_function_substitutions = (
             self.current_generic_function_substitutions
         )
@@ -4639,6 +4681,9 @@ class MetalCodeGen:
         self.current_metal_compute_builtin_parameter_names = {}
         self.local_variable_types = {}
         self.current_address_space_variables = {}
+        self.current_metal_native_width_local_array_declaration_ids = (
+            self.metal_native_width_local_array_declaration_ids(func)
+        )
         if shader_type in {"vertex", "fragment"}:
             for interface in self.spirv_stage_input_layouts(shader_type):
                 name = getattr(interface, "variable_name", None)
@@ -5613,6 +5658,9 @@ class MetalCodeGen:
         )
         self.local_variable_types = previous_local_variable_types
         self.current_address_space_variables = previous_address_space_variables
+        self.current_metal_native_width_local_array_declaration_ids = (
+            previous_native_width_local_array_declaration_ids
+        )
         self.current_generic_function_substitutions = (
             previous_generic_function_substitutions
         )
@@ -7811,17 +7859,78 @@ class MetalCodeGen:
     def local_variable_type_node(self, stmt):
         return getattr(stmt, "var_type", None) or getattr(stmt, "vtype", None)
 
+    def metal_native_width_local_array_declaration_ids(self, func):
+        declarations = {}
+        for current in self.iter_ast_nodes(getattr(func, "body", None)):
+            if not isinstance(current, (VariableNode, BackendVariableNode)):
+                continue
+            name = getattr(current, "name", None)
+            declared_type = self.local_variable_declared_type(current)
+            base_type, array_suffix = split_array_type_suffix(
+                self.type_name_string(declared_type)
+            )
+            native_type = self.metal_native_narrow_bitcast_storage_type(base_type)
+            if name and array_suffix and native_type is not None:
+                declarations.setdefault(name, []).append((current, native_type))
+        if not declarations:
+            return set()
+
+        required = set()
+        for current in self.iter_ast_nodes(getattr(func, "body", None)):
+            if not isinstance(current, FunctionCallNode):
+                continue
+            function_name = self.function_call_name(current)
+            arguments = list(
+                getattr(current, "arguments", getattr(current, "args", [])) or []
+            )
+            parameters = self.metal_user_function_parameter_nodes_for_call(
+                function_name,
+                arguments,
+            )
+            if parameters is None:
+                continue
+            for index, argument in enumerate(arguments):
+                if index >= len(parameters):
+                    continue
+                argument_name = self.assignment_target_root_name(argument)
+                candidates = declarations.get(argument_name, ())
+                if not candidates:
+                    continue
+                parameter = parameters[index]
+                parameter_type = getattr(
+                    parameter,
+                    "param_type",
+                    getattr(parameter, "vtype", None),
+                )
+                if not isinstance(parameter_type, PointerType):
+                    continue
+                pointee_type = parameter_type.pointee_type
+                native_pointee = self.metal_native_narrow_bitcast_storage_type(
+                    pointee_type
+                )
+                if native_pointee is None:
+                    continue
+                required.update(
+                    id(declaration)
+                    for declaration, native_type in candidates
+                    if native_type == native_pointee
+                )
+        return required
+
     def metal_local_storage_declaration_type(self, node, declared_type):
-        """Map a local type while preserving native threadgroup storage width.
+        """Map local storage while preserving proven native array element widths.
 
         Arithmetic values intentionally use CrossGL's widened fixed-width integer
-        mapping, but Metal threadgroup storage has a physical ABI.  In particular,
-        an array passed to a ``threadgroup T*`` helper must retain the source
-        ``char``/``uchar``/``short``/``ushort`` element width rather than decay
-        from a widened ``int``/``uint`` array.
+        mapping.  Metal threadgroup storage retains its native physical ABI, and a
+        fixed local array passed to a ``thread T*`` helper must retain the helper's
+        ``char``/``uchar``/``short``/``ushort`` pointee width.
         """
         mapped_type = self.map_type(declared_type)
-        if self.local_variable_address_space(node) != "threadgroup":
+        if (
+            self.local_variable_address_space(node) != "threadgroup"
+            and id(node)
+            not in self.current_metal_native_width_local_array_declaration_ids
+        ):
             return mapped_type
 
         source_type = self.type_name_string(declared_type)
@@ -7920,6 +8029,10 @@ class MetalCodeGen:
         type_name = self.type_name_string(vtype)
         if not type_name or "[" in type_name:
             return False
+        # Reference expressions supply the referenced value as the offset.
+        type_name = type_name.strip()
+        if type_name.endswith("&"):
+            type_name = type_name[:-1].rstrip()
         integral_names = {
             "char",
             "uchar",
@@ -9172,6 +9285,9 @@ class MetalCodeGen:
                 return None
             if func_name in getattr(self, "function_return_types", {}):
                 return self.function_return_types[func_name]
+            aggregate_constructor = self.metal_aggregate_constructor_name(func_name)
+            if aggregate_constructor is not None:
+                return aggregate_constructor
             unsupported_functions = getattr(
                 self, "unsupported_glsl_buffer_block_functions", {}
             )
@@ -10504,6 +10620,12 @@ class MetalCodeGen:
             )
             if registered_conversion is not None:
                 return registered_conversion
+            aggregate_constructor = self.generate_metal_aggregate_constructor_call(
+                expr,
+                func_name,
+            )
+            if aggregate_constructor is not None:
+                return aggregate_constructor
             if (
                 func_name in self.metal_type_aliases
                 or re.fullmatch(
