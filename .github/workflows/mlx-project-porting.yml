@@ -16,7 +16,9 @@ on:
       - "demos/integrations/mlx/**"
       - "pyproject.toml"
       - "requirements.txt"
+      - "tools/run_bounded_command.py"
       - "tests/test_ci_workflows.py"
+      - "tests/test_run_bounded_command.py"
       - "tests/test_mlx_copy_opengl_proof.py"
       - "tests/test_mlx_copy_directx_proof.py"
       - "tests/test_mlx_dispatch_contract_fixture.py"
@@ -79,7 +81,9 @@ on:
       - "demos/integrations/mlx/**"
       - "pyproject.toml"
       - "requirements.txt"
+      - "tools/run_bounded_command.py"
       - "tests/test_ci_workflows.py"
+      - "tests/test_run_bounded_command.py"
       - "tests/test_mlx_copy_opengl_proof.py"
       - "tests/test_mlx_copy_directx_proof.py"
       - "tests/test_mlx_dispatch_contract_fixture.py"
@@ -328,6 +332,7 @@ jobs:
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
           case "$RUNNER_OS" in
@@ -340,9 +345,15 @@ jobs:
             python -m pytest -q -n auto \
               tests/test_translator/test_mlx_current_arg_reduce.py \
               -k "not argmin_float32 and not argmax_float32"
-            python -m pytest -q \
-              tests/test_translator/test_mlx_current_arg_reduce.py \
-              -k "argmin_float32 or argmax_float32"
+            for entry in argmin_float32 argmax_float32; do
+              python tools/run_bounded_command.py \
+                --label "current MLX $entry WARP runtime" \
+                --timeout-seconds 900 \
+                -- \
+                python -m pytest -vv -s --tb=long \
+                  tests/test_translator/test_mlx_current_arg_reduce.py \
+                  -k "$entry"
+            done
           else
             python -m pytest -q tests/test_translator/test_mlx_current_arg_reduce.py
           fi

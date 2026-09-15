@@ -2388,6 +2388,10 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     mlx_current_tree_commit = "d9add9d11f3154111a4c85f267ec2fd307ecd18e"
 
     assert mlx_porting, "mlx-project-porting.yml must exist"
+    for event_name in ("push", "pull_request"):
+        trigger_paths = set(_workflow_event_paths(mlx_porting, event_name))
+        assert "tools/run_bounded_command.py" in trigger_paths
+        assert "tests/test_run_bounded_command.py" in trigger_paths
     assert "demos/integrations/mlx/run_mlx_porting.py" in mlx_porting
     assert f'MLX_COMMIT: "{mlx_reference_commit}"' in mlx_porting
     assert f'MLX_CORPUS_COMMIT: "{mlx_corpus_commit}"' in mlx_porting
@@ -2461,8 +2465,14 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         "tests/test_translator/test_mlx_current_arg_reduce.py \\" in current_arg_reduce
     )
     assert '-k "not argmin_float32 and not argmax_float32"' in current_arg_reduce
-    assert "python -m pytest -q \\" in current_arg_reduce
-    assert '-k "argmin_float32 or argmax_float32"' in current_arg_reduce
+    assert 'PYTHONUNBUFFERED: "1"' in current_arg_reduce
+    assert "for entry in argmin_float32 argmax_float32; do" in current_arg_reduce
+    assert "python tools/run_bounded_command.py \\" in current_arg_reduce
+    assert '--label "current MLX $entry WARP runtime" \\' in current_arg_reduce
+    assert "--timeout-seconds 900 \\" in current_arg_reduce
+    assert "python -m pytest -vv -s --tb=long \\" in current_arg_reduce
+    assert '-k "$entry"' in current_arg_reduce
+    assert '-k "argmin_float32 or argmax_float32"' not in current_arg_reduce
     assert "timeout-minutes: 60" in mlx_porting
     assert re.search(r"\bschedule\s*:", mlx_porting)
     assert 'cron: "31 4 * * 1"' in mlx_porting
