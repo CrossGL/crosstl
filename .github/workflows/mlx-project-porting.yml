@@ -145,7 +145,7 @@ jobs:
     name: MLX Metal project porting (${{ matrix.os }})
     if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 240
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -330,16 +330,22 @@ jobs:
           PYOPENGL_PLATFORM: egl
         run: |
           set -euo pipefail
-          if [[ "$RUNNER_OS" == Windows ]]; then
-            export PYTEST_ADDOPTS="-n auto"
-          fi
           case "$RUNNER_OS" in
             Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
             Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
             macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
             *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
           esac
-          python -m pytest -q tests/test_translator/test_mlx_current_arg_reduce.py
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python -m pytest -q -n auto \
+              tests/test_translator/test_mlx_current_arg_reduce.py \
+              -k "not argmin_float32 and not argmax_float32"
+            python -m pytest -q \
+              tests/test_translator/test_mlx_current_arg_reduce.py \
+              -k "argmin_float32 or argmax_float32"
+          else
+            python -m pytest -q tests/test_translator/test_mlx_current_arg_reduce.py
+          fi
 
       - name: Translate pinned MLX unary Square entry
         env:
