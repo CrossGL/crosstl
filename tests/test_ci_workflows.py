@@ -2475,6 +2475,9 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         in current_arg_reduce
     )
     assert '--basetemp="mlx-current-results/$entry"' in current_arg_reduce
+    assert current_arg_reduce.index(
+        "mkdir -p mlx-current-results"
+    ) < current_arg_reduce.index('--basetemp="mlx-current-results/$entry"')
     assert '--junitxml="mlx-current-results/$entry.xml"' in current_arg_reduce
     runtime_upload = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Upload current MLX runtime diagnostics"

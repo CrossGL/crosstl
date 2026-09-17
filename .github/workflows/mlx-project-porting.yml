@@ -344,6 +344,7 @@ jobs:
             *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
           esac
           if [[ "$RUNNER_OS" == Windows ]]; then
+            mkdir -p mlx-current-results
             python -m pytest -q -n auto \
               tests/test_translator/test_mlx_current_arg_reduce.py \
               -k "not argmin_float32 and not argmax_float32"
