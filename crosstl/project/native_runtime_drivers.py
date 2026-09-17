@@ -4485,6 +4485,19 @@ def _pack_values(
         raise RuntimeExecutorUnavailable(
             f"{target} compute runtime buffer value count does not match shape."
         )
+    if dtype == "float32":
+        special_bits = {
+            "nan": 0x7FC00000,
+            "+infinity": 0x7F800000,
+            "-infinity": 0xFF800000,
+        }
+        payload = bytearray()
+        for item in values:
+            bits = special_bits.get(item) if isinstance(item, str) else None
+            payload.extend(
+                struct.pack("<I", bits) if bits is not None else struct.pack("<f", item)
+            )
+        return bytes(payload)
     return struct.pack("<" + _dtype_format(dtype) * expected_count, *values)
 
 

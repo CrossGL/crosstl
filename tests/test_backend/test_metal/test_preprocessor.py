@@ -12717,3 +12717,119 @@ def test_preprocessor_resolves_unqualified_remove_cv_in_concrete_trait_result():
         )
         == "bfloat"
     )
+
+
+def test_preprocessor_materializes_enabled_free_function_sfinae_fallback():
+    code = """
+    template <
+        typename T,
+        metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    inline bool isnan(T value) {
+      return false;
+    }
+
+    [[kernel]] void k(device bool* out [[buffer(0)]]) {
+      int value = 1;
+      out[0] = isnan(value);
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    (template,) = preprocessor._find_template_functions(code)
+    assert template.template_constraints == [
+        "metal::enable_if_t<metal::is_integral_v<T>, bool>"
+    ]
+
+    output = preprocessor.preprocess(code)
+
+    assert "template <" not in output
+    assert "inline bool isnan_int(int value)" in output
+    assert "out[0] = isnan_int(value);" in output
+
+
+def test_preprocessor_rejects_disabled_free_function_sfinae_for_native_overload():
+    code = """
+    template <
+        typename T,
+        metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    inline bool isnan(T value) {
+      return false;
+    }
+
+    [[kernel]] void k(device bool* out [[buffer(0)]]) {
+      float value = 1.0f;
+      out[0] = isnan(value);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "template <" not in output
+    assert "isnan_float" not in output
+    assert "return false" not in output
+    assert "out[0] = isnan(value);" in output
+
+
+def test_preprocessor_rejects_unknown_free_function_sfinae_constraint():
+    code = """
+    template <typename T, metal::enable_if_t<is_supported_v<T>, bool> = true>
+    inline bool classify(T value) {
+      return true;
+    }
+
+    [[kernel]] void k(device bool* out [[buffer(0)]]) {
+      float value = 1.0f;
+      out[0] = classify(value);
+    }
+    """
+
+    with pytest.raises(
+        MetalTemplateSpecializationError,
+        match="viable SFINAE constraint is not recognized",
+    ) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    assert excinfo.value.callee_template == "classify"
+    assert excinfo.value.requested_signature == "classify(value)"
+
+
+def test_preprocessor_selects_unique_free_function_sfinae_overload_and_fails_ambiguous():
+    code = """
+    template <
+        typename T,
+        metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    inline bool classify(T value) {
+      return true;
+    }
+
+    template <
+        typename T,
+        metal::enable_if_t<!metal::is_integral_v<T>, bool> = true>
+    inline bool classify(T value) {
+      return false;
+    }
+
+    [[kernel]] void k(device bool* out [[buffer(0)]]) {
+      float value = 1.0f;
+      out[0] = classify(value);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+    assert "inline bool classify_float(float value)" in output
+    assert "out[0] = classify_float(value);" in output
+    assert "return false;" in output
+    assert "return true;" not in output
+
+    ambiguous = code.replace(
+        "metal::enable_if_t<!metal::is_integral_v<T>, bool>",
+        "metal::enable_if_t<true, bool>",
+    ).replace(
+        "metal::enable_if_t<metal::is_integral_v<T>, bool>",
+        "metal::enable_if_t<true, bool>",
+    )
+    with pytest.raises(
+        MetalTemplateSpecializationError,
+        match="multiple constrained overloads are enabled",
+    ):
+        MetalPreprocessor().preprocess(ambiguous)

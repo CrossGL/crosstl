@@ -2385,11 +2385,17 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     ).read_text(encoding="utf-8")
     mlx_reference_commit = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
     mlx_corpus_commit = "846d176227a0ac13d2667e58d2bb68b322109ab0"
+    mlx_current_tree_commit = "d9add9d11f3154111a4c85f267ec2fd307ecd18e"
 
     assert mlx_porting, "mlx-project-porting.yml must exist"
+    for event_name in ("push", "pull_request"):
+        trigger_paths = set(_workflow_event_paths(mlx_porting, event_name))
+        assert "tools/run_bounded_command.py" in trigger_paths
+        assert "tests/test_run_bounded_command.py" in trigger_paths
     assert "demos/integrations/mlx/run_mlx_porting.py" in mlx_porting
     assert f'MLX_COMMIT: "{mlx_reference_commit}"' in mlx_porting
     assert f'MLX_CORPUS_COMMIT: "{mlx_corpus_commit}"' in mlx_porting
+    assert f'MLX_CURRENT_TREE_COMMIT: "{mlx_current_tree_commit}"' in mlx_porting
     assert 'git -C mlx-upstream checkout "$MLX_COMMIT"' in mlx_porting
     assert 'git -C mlx-upstream checkout "$MLX_CORPUS_COMMIT"' in mlx_porting
     current_runtime_checkout = _load_ci_coverage_module().workflow_step_section(
@@ -2406,13 +2412,81 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         'test "$(git -C mlx-current-upstream rev-parse HEAD)" = '
         '"$MLX_CORPUS_COMMIT"' in current_runtime_checkout
     )
+    current_tree_checkout = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting,
+        "Checkout current MLX kernel tree",
+    )
+    assert "mlx-current-tree-upstream" in current_tree_checkout
+    assert (
+        "git -C mlx-current-tree-upstream checkout --detach "
+        '"$MLX_CURRENT_TREE_COMMIT"' in current_tree_checkout
+    )
+    assert (
+        'test "$(git -C mlx-current-tree-upstream rev-parse HEAD)" = '
+        '"$MLX_CURRENT_TREE_COMMIT"' in current_tree_checkout
+    )
+    current_census = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting,
+        "Audit current MLX kernel census",
+    )
+    assert "if: runner.os == 'Linux'" in current_census
+    assert '--expected-commit "$MLX_CURRENT_TREE_COMMIT"' in current_census
+    assert "--expected-unit-count 42" in current_census
+    assert "--expected-entry-count 17478" in current_census
+    current_arg_reduce = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting,
+        "Prove current MLX arg-reduce native validation",
+    )
+    assert (
+        "CROSTL_MLX_CURRENT_ROOT: "
+        "${{ github.workspace }}/mlx-current-tree-upstream" in current_arg_reduce
+    )
+    assert 'CROSTL_REQUIRE_MLX_CURRENT_ARG_REDUCE: "1"' in current_arg_reduce
+    assert 'CROSTL_REQUIRE_MLX_CURRENT_ARG_REDUCE_RUNTIME: "1"' in current_arg_reduce
+    assert "Linux) export CROSTL_MLX_CURRENT_TARGET=opengl" in current_arg_reduce
+    assert "Windows) export CROSTL_MLX_CURRENT_TARGET=directx" in current_arg_reduce
+    assert "macOS) export CROSTL_MLX_CURRENT_TARGET=metal" in current_arg_reduce
+    assert (
+        "python -m pytest -q "
+        "tests/test_translator/test_mlx_current_arg_reduce.py" in current_arg_reduce
+    )
+    assert '"tests/test_translator/test_mlx_current_arg_reduce.py"' in mlx_porting
     assert '--expected-commit "$MLX_COMMIT"' in mlx_porting
     assert "--expected-unit-count 40" in mlx_porting
     assert "--expected-entry-count 16446" in mlx_porting
     assert "Enumerate current MLX Metal entry points" in mlx_porting
     assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
     matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "timeout-minutes: 120" in matrix_job
+    assert "timeout-minutes: 360" in matrix_job
+    assert 'if [[ "$RUNNER_OS" == Windows ]]' in current_arg_reduce
+    assert 'export PYTEST_ADDOPTS="-n auto"' not in current_arg_reduce
+    assert "python -m pytest -q -n auto \\" in current_arg_reduce
+    assert (
+        "tests/test_translator/test_mlx_current_arg_reduce.py \\" in current_arg_reduce
+    )
+    assert '-k "not argmin_float32 and not argmax_float32"' in current_arg_reduce
+    assert 'PYTHONUNBUFFERED: "1"' in current_arg_reduce
+    assert "for entry in argmin_float32 argmax_float32; do" in current_arg_reduce
+    assert "python tools/run_bounded_command.py \\" in current_arg_reduce
+    assert '--label "current MLX $entry WARP runtime" \\' in current_arg_reduce
+    assert "--timeout-seconds 900 \\" in current_arg_reduce
+    assert (
+        "python -m pytest -vv -s --tb=long -o faulthandler_timeout=120 \\"
+        in current_arg_reduce
+    )
+    assert '--basetemp="mlx-current-results/$entry"' in current_arg_reduce
+    assert current_arg_reduce.index(
+        "mkdir -p mlx-current-results"
+    ) < current_arg_reduce.index('--basetemp="mlx-current-results/$entry"')
+    assert '--junitxml="mlx-current-results/$entry.xml"' in current_arg_reduce
+    runtime_upload = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Upload current MLX runtime diagnostics"
+    )
+    assert "if: always() && runner.os == 'Windows'" in runtime_upload
+    assert "path: mlx-current-results" in runtime_upload
+    assert "actions/upload-artifact@v4" in runtime_upload
+    assert '-k "$entry"' in current_arg_reduce
+    assert '-k "argmin_float32 or argmax_float32"' not in current_arg_reduce
     assert "timeout-minutes: 60" in mlx_porting
     assert re.search(r"\bschedule\s*:", mlx_porting)
     assert 'cron: "31 4 * * 1"' in mlx_porting
