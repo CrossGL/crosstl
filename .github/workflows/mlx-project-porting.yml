@@ -19,6 +19,7 @@ on:
       - "tools/run_bounded_command.py"
       - "tests/test_ci_workflows.py"
       - "tests/test_run_bounded_command.py"
+      - "tests/test_mlx_current_runtime_diagnostics.py"
       - "tests/test_mlx_copy_opengl_proof.py"
       - "tests/test_mlx_copy_directx_proof.py"
       - "tests/test_mlx_dispatch_contract_fixture.py"
@@ -84,6 +85,7 @@ on:
       - "tools/run_bounded_command.py"
       - "tests/test_ci_workflows.py"
       - "tests/test_run_bounded_command.py"
+      - "tests/test_mlx_current_runtime_diagnostics.py"
       - "tests/test_mlx_copy_opengl_proof.py"
       - "tests/test_mlx_copy_directx_proof.py"
       - "tests/test_mlx_dispatch_contract_fixture.py"
@@ -350,13 +352,24 @@ jobs:
                 --label "current MLX $entry WARP runtime" \
                 --timeout-seconds 900 \
                 -- \
-                python -m pytest -vv -s --tb=long \
+                python -m pytest -vv -s --tb=long -o faulthandler_timeout=120 \
+                  --basetemp="mlx-current-results/$entry" \
+                  --junitxml="mlx-current-results/$entry.xml" \
                   tests/test_translator/test_mlx_current_arg_reduce.py \
                   -k "$entry"
             done
           else
             python -m pytest -q tests/test_translator/test_mlx_current_arg_reduce.py
           fi
+
+      - name: Upload current MLX runtime diagnostics
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-current-runtime-${{ matrix.os }}
+          path: mlx-current-results
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Translate pinned MLX unary Square entry
         env:

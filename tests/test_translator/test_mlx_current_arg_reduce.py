@@ -8,6 +8,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -566,6 +567,29 @@ def test_current_mlx_arg_reduce_contract_is_exact():
     }
 
 
+@contextmanager
+def _runtime_stage(work, stage, *, entry, target, case=None):
+    record = {"stage": stage, "entry": entry, "target": target, "case": case}
+    path = work / "runtime-progress.jsonl"
+
+    def emit(status):
+        payload = {**record, "status": status}
+        line = json.dumps(payload, sort_keys=True)
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(line + "\n")
+            stream.flush()
+        print(f"[mlx-runtime] {line}", flush=True)
+
+    emit("started")
+    try:
+        yield
+    except BaseException:
+        emit("failed")
+        raise
+    else:
+        emit("completed")
+
+
 def _write_json(path, payload):
     path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
@@ -950,16 +974,19 @@ def _runtime_dispatch_request(
 
 
 def _run_runtime_parity(translation, work, target, entry):
-    descriptor, package_dir = _runtime_descriptor(
-        translation,
-        work,
-        target,
-        entry,
-    )
+    with _runtime_stage(work, "package", entry=entry, target=target):
+        descriptor, package_dir = _runtime_descriptor(
+            translation,
+            work,
+            target,
+            entry,
+        )
+    _write_json(work / "native-loader-abi.json", descriptor)
     executor = _runtime_executor(target)
     evidence = []
     for name, request, rows, storage in _cases():
         expected = _expected_indices(entry, rows)
+        _write_json(work / f"{name}-input.json", {**request, "expected": expected})
         dispatch, output_name = _runtime_dispatch_request(
             descriptor,
             package_dir,
@@ -969,14 +996,18 @@ def _run_runtime_parity(translation, work, target, entry):
             storage,
             expected,
         )
-        availability = executor.is_available(dispatch)
+        with _runtime_stage(
+            work, "availability", entry=entry, target=target, case=name
+        ):
+            availability = executor.is_available(dispatch)
         if not availability.available:
             if os.environ.get(REQUIRE_RUNTIME_ENV) == "1":
                 pytest.fail(
                     availability.reason or f"The native {target} runtime is unavailable"
                 )
             return []
-        result = executor.run(dispatch)
+        with _runtime_stage(work, "execute", entry=entry, target=target, case=name):
+            result = executor.run(dispatch)
         assert result.status == "ok"
         assert result.outputs[output_name]["dtype"] == "uint32"
         assert result.outputs[output_name]["shape"] == [request["rows"]]
@@ -988,6 +1019,7 @@ def _run_runtime_parity(translation, work, target, entry):
                 "translated": result.outputs[output_name]["values"],
             }
         )
+        _write_json(work / "runtime-cases.json", evidence)
     return evidence
 
 
@@ -1002,12 +1034,13 @@ def test_current_mlx_arg_reduce_native_validation(
         work = Path(directory)
         config = work / "crosstl.toml"
         config.write_text(_config(f"{work.name}/out", target, entry), encoding="utf-8")
-        translation = translate_project(
-            load_project_config(root, config),
-            format_output=False,
-            validate=True,
-            run_toolchains=False,
-        )
+        with _runtime_stage(tmp_path, "translate", entry=entry, target=target):
+            translation = translate_project(
+                load_project_config(root, config),
+                format_output=False,
+                validate=True,
+                run_toolchains=False,
+            )
         report = translation.to_json()
         report_path = tmp_path / "report.json"
         translation.write_json(report_path)
@@ -1058,7 +1091,7 @@ def test_current_mlx_arg_reduce_native_validation(
                 "dxc",
             )
             if entry in RUNTIME_ENTRIES:
-                evidence = _run_runtime_parity(translation, work, target, entry)
+                evidence = _run_runtime_parity(translation, tmp_path, target, entry)
                 if evidence:
                     _write_json(
                         tmp_path / "parity.json",
@@ -1093,7 +1126,7 @@ def test_current_mlx_arg_reduce_native_validation(
                 "spirv-val",
             )
             if entry in RUNTIME_ENTRIES:
-                evidence = _run_runtime_parity(translation, work, target, entry)
+                evidence = _run_runtime_parity(translation, tmp_path, target, entry)
                 if evidence:
                     _write_json(
                         tmp_path / "parity.json",

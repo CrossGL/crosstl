@@ -2470,7 +2470,18 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "python tools/run_bounded_command.py \\" in current_arg_reduce
     assert '--label "current MLX $entry WARP runtime" \\' in current_arg_reduce
     assert "--timeout-seconds 900 \\" in current_arg_reduce
-    assert "python -m pytest -vv -s --tb=long \\" in current_arg_reduce
+    assert (
+        "python -m pytest -vv -s --tb=long -o faulthandler_timeout=120 \\"
+        in current_arg_reduce
+    )
+    assert '--basetemp="mlx-current-results/$entry"' in current_arg_reduce
+    assert '--junitxml="mlx-current-results/$entry.xml"' in current_arg_reduce
+    runtime_upload = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Upload current MLX runtime diagnostics"
+    )
+    assert "if: always() && runner.os == 'Windows'" in runtime_upload
+    assert "path: mlx-current-results" in runtime_upload
+    assert "actions/upload-artifact@v4" in runtime_upload
     assert '-k "$entry"' in current_arg_reduce
     assert '-k "argmin_float32 or argmax_float32"' not in current_arg_reduce
     assert "timeout-minutes: 60" in mlx_porting
