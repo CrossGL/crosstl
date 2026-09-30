@@ -679,10 +679,19 @@ the generated GLSL, validates its SPIR-V, and executes the source through the
 OpenGL runtime, retaining readbacks for finite values, NaNs, infinities, signed
 zeros, mixed vector masks, and argument side effects. This is a focused operation
 contract, not evidence that every MLX kernel or its host integration works.
-Qualified builtin calls that collide with source helper names can still lose
-their namespace identity in Metal normalization, before target lowering;
-this separate frontend limitation is tracked in
-`issue #1947 <https://github.com/CrossGL/crosstl/issues/1947>`_.
+
+Metal normalization retains qualified math builtin ownership when source helpers
+share the same name. Source overloads receive deterministic, collision-safe
+internal names before namespace qualification is removed. Explicit global calls,
+namespace-local helpers, imported names, materialized templates, and source-owned
+extensions in ``metal`` remain distinguishable from the builtin overloads.
+Existing overload diagnostics reject unresolved bindings instead of guessing.
+Required bounded CI on Windows, Linux, and macOS compiles and executes a reduced
+ownership fixture, preserving generated source, native modules, and readbacks;
+macOS also executes the original Metal source for comparison. These focused
+checks cover the regression in
+`issue #1947 <https://github.com/CrossGL/crosstl/issues/1947>`_, not general C++
+namespace conformance or whole-repository runtime integration.
 
 Required CI partitions the family across five disjoint Windows shards. Each
 shard retranslates its exact entries, verifies deterministic identity,

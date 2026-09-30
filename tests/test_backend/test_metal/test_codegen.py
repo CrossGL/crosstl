@@ -11250,7 +11250,7 @@ def test_codegen_composes_precise_bfloat_extension_with_standard_float_builtin()
 
     normalized = normalize(convert_without_preprocessing(source))
 
-    assert "bfloat16 result = sqrt(value);" in normalized
+    assert "bfloat16 result = sqrt__metal_overload_1(value);" in normalized
     assert "complex64_t crosstl_ctor_complex64_t_1_float(float value)" in normalized
     assert "return crosstl_ctor_complex64_t_1_float(sqrt(value));" in normalized
     assert "<unknown>" not in normalized
@@ -11555,9 +11555,11 @@ def test_codegen_canonicalizes_qualified_copysign_without_shadowing_user_code():
 
     assert "float scalar_result = copysign(magnitude, sign_source);" in builtin
     assert "vec4 vector_result = copysign(magnitudes, sign_sources);" in builtin
-    assert "float copysign(float magnitude, float sign_source)" in user
+    assert (
+        "float copysign__metal_overload_1(float magnitude, float sign_source)" in user
+    )
     assert "return magnitude + sign_source;" in user
-    assert "return copysign(magnitude, sign_source);" in user
+    assert "return copysign__metal_overload_1(magnitude, sign_source);" in user
 
 
 def test_codegen_reports_called_unsupported_metal_stdlib_wrapper():

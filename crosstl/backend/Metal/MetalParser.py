@@ -5221,6 +5221,7 @@ class MetalParser:
                 start_token = self.current_token
                 name = self.parse_scoped_identifier()
                 node = VariableNode("", name)
+                node.globally_qualified = start_token[0] == "SCOPE"
                 if "::" in name:
                     node.source_location = self.source_span_from_tokens(
                         start_token,
@@ -5241,6 +5242,7 @@ class MetalParser:
             start_token = self.current_token
             name = self.parse_scoped_identifier()
             node = VariableNode("", name)
+            node.globally_qualified = start_token[0] == "SCOPE"
             if "::" in name:
                 node.source_location = self.source_span_from_tokens(
                     start_token,
@@ -5473,7 +5475,10 @@ class MetalParser:
         if isinstance(callee, VariableNode):
             if callee.name == "discard_fragment" and not args:
                 return DiscardNode()
-            node = FunctionCallNode(callee.name, args)
+            call_name = callee.name
+            if getattr(callee, "globally_qualified", False):
+                call_name = f"::{call_name}"
+            node = FunctionCallNode(call_name, args)
             call_location = self.source_span_from_tokens(open_token, close_token)
             callee_location = getattr(callee, "source_location", None)
             if callee_location is not None:

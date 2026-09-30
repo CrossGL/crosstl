@@ -71,6 +71,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Fixed
 
+- Qualified Metal math builtins retain their identity when source helpers share a name. Source overloads receive collision-safe internal names, explicit global calls retain their scope, and namespace extensions remain distinct from builtin overloads. Required Windows, Linux, and macOS numerical checks cover builtin/helper selection, including original-source Metal parity.
 - DirectX lowers canonical Metal `fabs`, `fmin`, and `fmax` to native intrinsics and preserves `select(falseValue, trueValue, condition)` argument order, scalar/vector result types, and eager evaluation. Source-defined helpers remain ordinary calls; unresolved or non-Boolean selection conditions and shadowed target intrinsics produce structured diagnostics. Required Windows readbacks cover finite values, NaNs, infinities, and both selection branches.
 - OpenGL lowers canonical Metal floating math and Boolean selection with typed, collision-safe helpers, explicit min/max NaN handling, and eager single evaluation of arguments. Unsupported operand contracts produce structured diagnostics. Required Linux compiler, SPIR-V, and numerical checks retain evidence for scalar/vector values, signed zeros, and side effects.
 - Historical and current-pinned MLX FFT HLSL evidence now reflects C++ integer promotion of all 20 native-16 shift counts, with refreshed deterministic artifact identities and an explicit structural regression.

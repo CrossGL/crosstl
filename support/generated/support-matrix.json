@@ -122,9 +122,10 @@
         "paths": [
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_translator/test_directx_metal_math.py",
+          "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1532
+        "test_count": 1539
       },
       "translator_codegen": {
         "exists": true,
@@ -248,9 +249,10 @@
           "tests/test_translator/test_codegen/test_GLSL_storage_pointer_codegen.py",
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_translator/test_opengl_metal_math.py",
+          "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1776
+        "test_count": 1783
       },
       "translator_codegen": {
         "exists": true,
@@ -619,9 +621,10 @@
       "tests": {
         "paths": [
           "tests/test_translator/test_codegen/test_metal_codegen.py",
+          "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1860
+        "test_count": 1868
       },
       "translator_codegen": {
         "exists": true,
@@ -1816,9 +1819,13 @@
         },
         "metal": {
           "evidence": [
-            "tests/test_backend/test_metal/test_parser.py::def test_"
+            "tests/test_backend/test_metal/test_parser.py::def test_",
+            "tests/test_translator/test_metal_builtin_ownership.py::def test_qualified_metal_builtin_and_source_overloads_compile",
+            "tests/test_translator/test_metal_builtin_ownership.py::def test_imported_builtin_does_not_bind_unrelated_namespace_helper",
+            "tests/test_translator/test_metal_builtin_ownership.py::def test_builtin_transport_avoids_source_identifiers",
+            "tests/test_translator/test_metal_builtin_ownership.py::def test_metal_builtin_ownership_executes"
           ],
-          "notes": "",
+          "notes": "Qualified Metal math builtins retain ownership across colliding source helpers, explicit global calls, imported names, and source-owned namespace extensions through collision-safe overload transport. Required bounded numerical CI executes the reduced fixture on DirectX, OpenGL, and Metal, with original-source Metal parity; this does not establish general C++ namespace conformance or whole-repository runtime coverage.",
           "status": "supported"
         },
         "mojo": {

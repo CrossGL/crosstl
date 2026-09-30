@@ -3897,5 +3897,16 @@ def test_parse_invalid_syntax_cases(code):
     parse_fails(code)
 
 
+def test_parse_retains_explicit_global_call_qualification():
+    ast = MetalParser(tokenize_code("""
+        namespace custom {
+            float probe() { return ::fmin(2.0f, 3.0f); }
+        }
+    """)).parse()
+    returned = ast.functions[0].body[0]
+    assert isinstance(returned.value, FunctionCallNode)
+    assert returned.value.name == "::fmin"
+
+
 if __name__ == "__main__":
     pytest.main()
