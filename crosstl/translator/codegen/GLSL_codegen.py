@@ -659,6 +659,30 @@ class OpenGLCopySignError(ValueError):
         self.source_location = source_location
 
 
+class OpenGLMetalMathError(ValueError):
+    """Raised when canonical Metal math cannot be preserved in GLSL."""
+
+    project_diagnostic_code = "project.translate.opengl-metal-math-unrepresentable"
+    missing_capabilities = ("opengl.metal-math-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation,
+        operand_types=(),
+        target_profile=None,
+        reason,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.operand_types = tuple(operand_types)
+        self.target_profile = target_profile
+        self.reason = reason
+        self.source_location = source_location
+
+
 class OpenGLSignBitError(ValueError):
     """Raised when ``signbit`` has no exact 32-bit GLSL lowering."""
 
@@ -2450,6 +2474,7 @@ class GLSLCodeGen:
         self.workgroup_access_assertions = ()
         self.required_glsl_complex64_helpers = set()
         self.required_glsl_boolean_order_helpers = set()
+        self.required_glsl_metal_math_helpers = set()
         self.required_glsl_trailing_zero_helpers = set()
         self.glsl_trailing_zero_helper_names = {}
         self.glsl_trailing_zero_reserved_names = set()
@@ -6537,6 +6562,7 @@ class GLSLCodeGen:
         self.local_variable_source_types = {}
         self.required_glsl_complex64_helpers = set()
         self.required_glsl_boolean_order_helpers = set()
+        self.required_glsl_metal_math_helpers = set()
         self.required_glsl_trailing_zero_helpers = set()
         self.glsl_trailing_zero_helper_names = {}
         self.glsl_trailing_zero_reserved_names = set()
@@ -6737,6 +6763,11 @@ class GLSLCodeGen:
             target_stage,
         )
         self.prepare_glsl_trailing_zero_helper_names(functions)
+        self.glsl_metal_math_reserved_names = {
+            self.glsl_sanitized_identifier_base(name)
+            for function in functions
+            for name in self.collect_glsl_function_local_identifier_names(function)
+        }
         self.prepare_glsl_enum_identifier_names()
         self.prepare_glsl_mapped_function_overloads(
             identifier_functions,
@@ -7720,6 +7751,7 @@ class GLSLCodeGen:
             self.generate_glsl_software_subgroup_support()
             + self.generate_glsl_trailing_zero_helpers()
             + self.generate_glsl_boolean_order_helpers()
+            + self.generate_glsl_metal_math_helpers()
             + self.generate_glsl_complex64_helpers()
         )
         if generated_helpers:
@@ -28632,6 +28664,36 @@ class GLSLCodeGen:
             )
         return ("\n".join(helpers) + "\n") if helpers else ""
 
+    def generate_glsl_metal_math_helpers(self):
+        helpers = []
+        for name, operation, value_type, condition_type, width in sorted(
+            self.required_glsl_metal_math_helpers
+        ):
+            parameters = f"{value_type} left, {value_type} right"
+            if operation == "select":
+                parameters += f", {condition_type} condition"
+            values = []
+            for component in ("",) if width == 1 else "xyzw"[:width]:
+                suffix = f".{component}" if component else ""
+                left, right = f"left{suffix}", f"right{suffix}"
+                if operation == "select":
+                    condition = "condition"
+                    if condition_type != "bool":
+                        condition += suffix
+                    value = f"({condition} ? {right} : {left})"
+                else:
+                    operator = "<" if operation == "fmin" else ">"
+                    value = (
+                        f"(isnan({left}) ? {right} : (isnan({right}) ? {left} : "
+                        f"({left} {operator} {right} ? {left} : {right})))"
+                    )
+                values.append(value)
+            result = values[0] if width == 1 else f"{value_type}({', '.join(values)})"
+            helpers.append(
+                f"{value_type} {name}({parameters}) {{\n    return {result};\n}}\n"
+            )
+        return "\n".join(helpers) + ("\n" if helpers else "")
+
     def generate_glsl_complex64_helpers(self):
         if not getattr(self, "required_glsl_complex64_helpers", set()):
             return ""
@@ -30651,7 +30713,7 @@ complex64_t crossgl_complex64_mod_assign(
             if func_name in {"normalize", "reflect"} and args:
                 return self.expression_result_type(args[0])
             if (
-                func_name in {"max", "min"}
+                func_name in {"max", "min", "fabs", "fmin", "fmax", "select"}
                 and args
                 and func_name not in self.function_return_types
             ):
@@ -33368,6 +33430,12 @@ complex64_t crossgl_complex64_mod_assign(
             if log10_call is not None:
                 return log10_call
 
+            metal_math_call = self.generate_glsl_metal_math_call(
+                original_func_name, expr.args, call_node=expr
+            )
+            if metal_math_call is not None:
+                return metal_math_call
+
             trailing_zero_call = self.generate_glsl_trailing_zero_call(
                 original_func_name,
                 expr.args,
@@ -34135,6 +34203,81 @@ complex64_t crossgl_complex64_mod_assign(
         ):
             return f"(1.0 / {value})"
         return None
+
+    def generate_glsl_metal_math_call(self, func_name, args, *, call_node=None):
+        arities = {"fabs": 1, "fmin": 2, "fmax": 2, "select": 3}
+        if func_name not in arities or func_name in self.function_return_types:
+            return None
+        types = tuple(self.glsl_source_expression_type(arg) for arg in args)
+
+        def reject(reason):
+            raise OpenGLMetalMathError(
+                f"OpenGL cannot preserve '{func_name}' for operand types {types}: {reason}",
+                operation=func_name,
+                operand_types=tuple(self.type_name_string(item) for item in types),
+                target_profile=self.current_glsl_version_line,
+                reason=reason,
+                source_location=getattr(call_node, "source_location", None),
+            )
+
+        if len(args) != arities[func_name]:
+            reject("invalid-arity")
+        if any(item is None for item in types):
+            reject("unresolved-operand-type")
+        infos = [self.glsl_value_type_info(item) for item in types]
+        if any(info is None or info["width"] not in {1, 2, 3, 4} for info in infos):
+            reject("unsupported-operand-type")
+        version = re.match(r"#version\s+(\d+)\b", self.current_glsl_version_line or "")
+        if self.GLSL_TARGET_DISPLAY_NAME != "OpenGL" or (
+            version is not None and int(version.group(1)) < 400
+        ):
+            reject("unsupported-profile")
+        value = infos[0]
+        values = infos[:2] if func_name != "fabs" else infos
+        if any(
+            info["family"] != "bool" and info["bits"] not in {32, 64} for info in values
+        ):
+            reject("unsupported-operand-width")
+        if func_name != "select" and any(info["family"] != "float" for info in values):
+            reject("non-floating-operand")
+        if any(info["mapped"] != value["mapped"] for info in values):
+            reject("operand-type-mismatch")
+        condition_type = ""
+        if func_name == "select":
+            condition = infos[2]
+            if condition["family"] != "bool":
+                reject("non-boolean-condition")
+            if condition["width"] not in {1, value["width"]}:
+                reject("condition-shape-mismatch")
+            condition_type = condition["mapped"]
+        builtin = "abs" if func_name == "fabs" else "isnan"
+        if func_name != "select" and (
+            builtin in self.function_return_types
+            or builtin in self.global_variable_types
+            or builtin in self.local_variable_types
+        ):
+            reject("target-builtin-shadowed")
+        rendered = [self.generate_expression(arg) for arg in args]
+        if func_name == "fabs":
+            return f"abs({rendered[0]})"
+
+        # Helper parameters retain eager, single evaluation of both source values.
+        identity = ("metal-math", func_name, value["mapped"], condition_type)
+        helper_name = self.glsl_module_generated_identifier_names.get(identity)
+        if helper_name is None:
+            used_names = self.glsl_module_used_identifier_names | getattr(
+                self, "glsl_metal_math_reserved_names", set()
+            )
+            helper_name = self.glsl_unique_identifier(
+                f"crossgl_{func_name}_{value['mapped']}_{condition_type}".rstrip("_"),
+                used_names,
+            )
+            self.glsl_module_used_identifier_names.add(helper_name)
+            self.glsl_module_generated_identifier_names[identity] = helper_name
+        self.required_glsl_metal_math_helpers.add(
+            (helper_name, func_name, value["mapped"], condition_type, value["width"])
+        )
+        return f"{helper_name}({', '.join(rendered)})"
 
     def generate_glsl_log10_call(self, func_name, args):
         if (

@@ -2454,6 +2454,21 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "if: always() && runner.os == 'Windows'" in math_upload
     assert "path: directx-math-results" in math_upload
     assert "if-no-files-found: error" in math_upload
+    opengl_math_checks = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Validate OpenGL Metal math semantics"
+    )
+    assert mlx_porting.count('"tests/test_translator/test_opengl_metal_math.py"') == 2
+    assert "if: runner.os == 'Linux'" in opengl_math_checks
+    assert 'CROSTL_REQUIRE_OPENGL_METAL_MATH: "1"' in opengl_math_checks
+    assert "--timeout-seconds 120 --" in opengl_math_checks
+    assert "pytest -q -n auto" in opengl_math_checks
+    assert "tests/test_translator/test_opengl_metal_math.py" in opengl_math_checks
+    opengl_math_upload = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Upload OpenGL Metal math evidence"
+    )
+    assert "if: always() && runner.os == 'Linux'" in opengl_math_upload
+    assert "path: opengl-math-results" in opengl_math_upload
+    assert "if-no-files-found: error" in opengl_math_upload
     primitive_checks = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate Direct3D reduction primitives"
     )

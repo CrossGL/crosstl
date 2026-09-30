@@ -54,6 +54,7 @@
         "tests/test_translator/test_codegen/test_GLSL_codegen.py",
         "tests/test_translator/test_codegen/test_GLSL_storage_pointer_codegen.py",
         "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
+        "tests/test_translator/test_opengl_metal_math.py",
         "tests/test_backend/test_GLSL"
       ],
       "docs": [

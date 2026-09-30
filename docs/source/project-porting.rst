@@ -665,6 +665,25 @@ requires DXC compilation and Direct3D readbacks for finite values, NaNs,
 infinities, vector selection, and eager evaluation. This isolated arithmetic
 check does not establish whole-MLX numerical or host-runtime coverage.
 
+OpenGL also lowers canonical ``fabs``, ``fmin``, ``fmax``, and Boolean
+``select`` for desktop GLSL 4.00 and later. Floating min/max helpers explicitly
+return the numeric operand when the other operand is NaN, in either argument
+order. Selection uses typed helper parameters and per-component conditions,
+without numeric interpolation or short-circuiting the source value arguments.
+Both values must have matching scalar/vector types; the condition may be a
+scalar Boolean or a Boolean vector of the same width. Integer masks, mismatched
+types, unresolved operands, and shadowed required target builtins produce
+structured diagnostics. Generated helpers avoid source identifiers, and
+source-defined functions retain their own behavior. Required Linux CI compiles
+the generated GLSL, validates its SPIR-V, and executes the source through the
+OpenGL runtime, retaining readbacks for finite values, NaNs, infinities, signed
+zeros, mixed vector masks, and argument side effects. This is a focused operation
+contract, not evidence that every MLX kernel or its host integration works.
+Qualified builtin calls that collide with source helper names can still lose
+their namespace identity in Metal normalization, before target lowering;
+this separate frontend limitation is tracked in
+`issue #1947 <https://github.com/CrossGL/crosstl/issues/1947>`_.
+
 Required CI partitions the family across five disjoint Windows shards. Each
 shard retranslates its exact entries, verifies deterministic identity,
 materialization, ``CSMain`` workgroup metadata, and reflected ABI, then compiles
