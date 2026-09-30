@@ -26824,10 +26824,6 @@ def _source_entry_location(source: str, start: int, end: int):
     )
 
 
-def _position_in_spans(position: int, spans: Sequence[Tuple[int, int]]) -> bool:
-    return any(start <= position < end for start, end in spans)
-
-
 def _static_metal_host_name(preprocessor: MetalPreprocessor, expression: str) -> str:
     if (
         re.fullmatch(
@@ -26850,7 +26846,7 @@ def _unresolved_metal_host_name_diagnostics(
 
     diagnostics = []
     for match in re.finditer(r"\bhost_name\s*\(", source):
-        if _position_in_spans(match.start(), excluded_spans):
+        if preprocessor._containing_span(match.start(), excluded_spans) is not None:
             continue
         open_paren = source.find("(", match.start(), match.end())
         close_paren = preprocessor._find_matching_delimiter(
@@ -26876,7 +26872,7 @@ def _unresolved_metal_host_name_diagnostics(
         )
 
     for match in MLX_INSTANTIATE_KERNEL_RE.finditer(source):
-        if _position_in_spans(match.start(), excluded_spans):
+        if preprocessor._containing_span(match.start(), excluded_spans) is not None:
             continue
         open_paren = source.find("(", match.start(), match.end())
         arguments, consumed = preprocessor._parse_macro_args(source, open_paren)
@@ -26941,7 +26937,12 @@ def discover_metal_entry_points(
 
     candidates = []
     for instantiation in preprocessor._find_project_template_instantiations(source):
-        if _position_in_spans(instantiation.span[0], comment_and_literal_spans):
+        if (
+            preprocessor._containing_span(
+                instantiation.span[0], comment_and_literal_spans
+            )
+            is not None
+        ):
             continue
         declaration = source[instantiation.span[0] : instantiation.span[1]]
         if "host_name" in preprocessor._mask_comments_and_literals(
