@@ -25,6 +25,8 @@ on:
       - "tests/test_translator/test_directx_metal_math.py"
       - "tests/test_translator/test_opengl_metal_math.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
+      - "tests/test_translator/test_struct_buffer_layouts.py"
+      - "tests/test_translator/test_mlx_current_complex_power.py"
       - "tests/test_mlx_current_runtime_diagnostics.py"
       - "tests/test_mlx_copy_opengl_proof.py"
       - "tests/test_mlx_copy_directx_proof.py"
@@ -97,6 +99,8 @@ on:
       - "tests/test_translator/test_directx_metal_math.py"
       - "tests/test_translator/test_opengl_metal_math.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
+      - "tests/test_translator/test_struct_buffer_layouts.py"
+      - "tests/test_translator/test_mlx_current_complex_power.py"
       - "tests/test_mlx_current_runtime_diagnostics.py"
       - "tests/test_mlx_copy_opengl_proof.py"
       - "tests/test_mlx_copy_directx_proof.py"
@@ -452,6 +456,42 @@ jobs:
             --expected-commit "$MLX_CURRENT_TREE_COMMIT" \
             --expected-unit-count 42 \
             --expected-entry-count 17478
+
+      - name: Prove current MLX complex-power native dispatch
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_POWER: "1"
+          CROSTL_REQUIRE_STRUCT_BUFFER_RUNTIME: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-complex-power-results
+          python tools/run_bounded_command.py \
+            --label "current MLX complex power" --timeout-seconds 900 -- \
+            python -m pytest -q -n auto \
+              --basetemp="mlx-complex-power-results/pytest" \
+              --junitxml="mlx-complex-power-results/results.xml" \
+              tests/test_translator/test_struct_buffer_layouts.py \
+              tests/test_translator/test_mlx_current_complex_power.py
+
+      - name: Upload current MLX complex-power evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-complex-power-${{ runner.os }}
+          path: mlx-complex-power-results
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Prove current MLX arg-reduce native validation
         shell: bash

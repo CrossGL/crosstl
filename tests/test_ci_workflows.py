@@ -2486,6 +2486,26 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "if: always()" in ownership_upload
     assert "name: metal-builtin-ownership-${{ runner.os }}" in ownership_upload
     assert "if-no-files-found: error" in ownership_upload
+    struct_checks = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Prove current MLX complex-power native dispatch"
+    )
+    assert 'CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_POWER: "1"' in struct_checks
+    assert 'CROSTL_REQUIRE_STRUCT_BUFFER_RUNTIME: "1"' in struct_checks
+    assert "--timeout-seconds 900 --" in struct_checks
+    assert "pytest -q -n auto" in struct_checks
+    assert "if: runner.os" not in struct_checks
+    for filename in (
+        "test_struct_buffer_layouts.py",
+        "test_mlx_current_complex_power.py",
+    ):
+        assert mlx_porting.count(f'"tests/test_translator/{filename}"') == 2
+        assert filename in struct_checks
+    struct_upload = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Upload current MLX complex-power evidence"
+    )
+    assert "if: always()" in struct_upload
+    assert "name: mlx-complex-power-${{ runner.os }}" in struct_upload
+    assert "if-no-files-found: error" in struct_upload
     primitive_checks = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate Direct3D reduction primitives"
     )

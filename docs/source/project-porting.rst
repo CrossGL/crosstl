@@ -2005,13 +2005,43 @@ tables. Runtime ``vec2`` and ``vec4`` storage arrays remain tightly packed,
 while ``vec3`` records its logical element size and padded array stride
 separately. The current native loader rejects padded storage vectors rather
 than uploading a falsely tight layout. GLSL ``dvec`` values, HLSL 64-bit
-vectors, matrices, fixed arrays, aggregates, unsupported narrow or
+vectors, matrices, fixed arrays, unsupported aggregate shapes, narrow or
 floating-point scalar widths, implicit GLSL block layouts, arbitrary member
 offsets, and multi-member blocks do not receive usable loader metadata. Those
 shapes remain unresolved or fail closed when a native loader request requires
 a physical layout. Native requests range-check signed and unsigned 64-bit
 values and preserve them with little-endian 8-byte packing; 64-bit
 specialization constants remain intentionally unsupported.
+
+Flat homogeneous structs are supported as HLSL structured-buffer elements and
+GLSL ``std430`` storage-array elements. Each may contain 1-64 members of one
+supported scalar type: ``float``, ``int``, ``uint``, ``int64_t``, or ``uint64_t``.
+The layout retains the actual struct name as ``physicalType``, a
+``componentCount``, and ordered ``structMembers`` containing each member's
+``name``, scalar ``physicalType``, and ``offsetBytes``. Structs are not relabeled
+as native vectors: two float members have an 8-byte element size and 4-byte
+alignment on these storage paths. Allocation sizing divides the flattened scalar
+count by the member count before applying the element stride.
+
+Dispatch validation requires unique member names, exact homogeneous types and
+offsets, tight stride, complete elements, and the matching target storage class.
+Nested structs, mixed scalar types, arrays, padded records, explicit member
+qualifiers, duplicate declarations and struct uniform blocks remain unsupported.
+No MLX-specific type-name mapping is used.
+The storage rules follow `DXC buffer packing
+<https://github.com/microsoft/DirectXShaderCompiler/wiki/Buffer-Packing>`_ and
+the `GLSL buffer layout specification
+<https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html#uniform-and-shader-storage-block-layout-qualifiers>`_.
+
+Required native CI exercises a reduced two-field transform and the unmodified
+``g1_Powercomplex64`` entry from MLX commit
+``d9add9d11f3154111a4c85f267ec2fd307ecd18e``. The latter runs 256 finite and
+zero-base cases through translated HLSL/GLSL runtime packages; macOS compiles
+and executes both original and roundtrip Metal. The numerical bound is
+``5e-5 * max(1, abs(reference))`` for the complex absolute error. Reports retain
+every input, output, error and bound, and buffers use nonzero sentinels to detect
+missed writes. This proves the selected kernel and layout path, not full binary
+family coverage, upstream MLX-suite execution, or MLX host-runtime redirection.
 
 At pinned MLX commit ``4367c73b60541ddd5a266ce4644fd93d20223b6e``, the
 ``arangeuint32`` entry from ``arange.metal`` is translated to DirectX and
