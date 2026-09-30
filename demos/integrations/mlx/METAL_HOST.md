@@ -1,6 +1,6 @@
 # MLX Metal Host Integration
 
-This harness builds MLX at `d9add9d11f3154111a4c85f267ec2fd307ecd18e` and
+This harness builds MLX at `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8` and
 redirects selected kernel lookups to CrossTL-generated Metal libraries. MLX
 continues to own its arrays, allocation views, command encoders, synchronization
 and dispatch geometry. No Python implementation substitutes for GPU computation.

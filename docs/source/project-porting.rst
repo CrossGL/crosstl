@@ -502,8 +502,8 @@ dispatch dimensions, runtime bindings, or backend integration. Record those
 requirements through the corresponding dispatch and runtime contracts.
 
 The next MLX kernel-tree increment is pinned independently at
-``d9add9d11f3154111a4c85f267ec2fd307ecd18e``. Entry discovery must report
-exactly 42 Metal units, 17,478 entries, and zero diagnostics. The compact
+``9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8``. Entry discovery must report
+exactly 49 Metal units, 17,832 entries, and zero diagnostics. The compact
 ``arg_reduce.current-tree.translation.json`` contract pins all 24 discovered
 ``arg_reduce.metal`` entries and 72 deterministic Metal, OpenGL, and DirectX
 artifacts. Required macOS, Linux, and Windows CI compiles all 24 entries with
@@ -512,8 +512,8 @@ respectively. Numerical runtime parity remains an explicit representative
 float32 subset: ``argmin_float32`` and ``argmax_float32`` must execute on Metal,
 Mesa EGL, and Direct3D 12 WARP over two rows, axis sizes 32 and 129, strides 1
 and 2, ordinary values, and NaN/Infinity values; the Metal path also executes
-the exact upstream metallib for parity. This is a 24/17,478 deterministic
-translation and native-compiler increment with 2/17,478 numerical runtime
+the exact upstream metallib for parity. This is a 24/17,832 deterministic
+translation and native-compiler increment with 2/17,832 numerical runtime
 coverage, not full-tree coverage. The contract explicitly records that the
 upstream MLX test suite and MLX host-runtime redirection have not yet been
 implemented. Strict JSON runtime requests encode non-finite float32 inputs with
@@ -2283,7 +2283,7 @@ the `GLSL buffer layout specification
 
 Required native CI exercises a reduced two-field transform and the unmodified
 ``g1_Powercomplex64`` entry from MLX commit
-``d9add9d11f3154111a4c85f267ec2fd307ecd18e``. The latter runs 256 finite and
+``9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8``. The latter runs 256 finite and
 zero-base cases through translated HLSL/GLSL runtime packages; macOS compiles
 and executes both original and roundtrip Metal. The numerical bound is
 ``5e-5 * max(1, abs(reference))`` for the complex absolute error. Reports retain

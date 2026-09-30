@@ -3,13 +3,13 @@
   "kind": "crosstl-mlx-current-tree-arg-reduce-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "d9add9d11f3154111a4c85f267ec2fd307ecd18e",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
     "source": "mlx/backend/metal/kernels/arg_reduce.metal",
     "sourceSha256": "036a586af92b869a94f0b67e54590abf935e87f99290db46daed86cd8941e429"
   },
   "corpusCensus": {
-    "metalUnitCount": 42,
-    "entryCount": 17478,
+    "metalUnitCount": 49,
+    "entryCount": 17832,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -237,100 +237,100 @@
     },
     "metal": {
       "argmin_bool_": {
-        "sha256": "02ae43a54bd28570f69b3733745c690c02685afdf3591e5f7bfd5acc531cf4af",
-        "sizeBytes": 4923
+        "sha256": "d820a05afb49c704a71b2555f8bc22c88da65a5b5fb376ded05271b56438eb8b",
+        "sizeBytes": 5069
       },
       "argmax_bool_": {
-        "sha256": "cda6ef6fc99842bca63546bceb052d062e73de01ed93c3183f462bd90dd4e98a",
-        "sizeBytes": 4925
+        "sha256": "ce3fd10d927f235ec862ad9a74e5a82a45d54d6a4c9baa1874b017b8ca538e13",
+        "sizeBytes": 5071
       },
       "argmin_uint8": {
-        "sha256": "c1dcd224bda22c06fe25c90689be79dac5277a87c7f7416530168789ea43e727",
-        "sizeBytes": 4117
+        "sha256": "080821cfc61c96fd0f661177f4afb3e94d7e5425e2ca2fa941149334df00a5f4",
+        "sizeBytes": 4228
       },
       "argmax_uint8": {
-        "sha256": "9542580180bad0a0b201099151a93aa59fe1ef71b7e0b9760f71f122473c37ca",
-        "sizeBytes": 4113
+        "sha256": "ca0b1b1f3148b2ed9b7d4a442baae233f7ee2304a3b5cbbc185692fac1957a30",
+        "sizeBytes": 4224
       },
       "argmin_uint16": {
-        "sha256": "e07ecb0f8bcfb12505e946b86a55ec1672ee86f9575d747af1e248e905415b16",
-        "sizeBytes": 4158
+        "sha256": "d3f2a47e83647ab77cba95946180f9ddb3502169b23a886cb7e64aa0d9cb3907",
+        "sizeBytes": 4269
       },
       "argmax_uint16": {
-        "sha256": "b5cfbd64a6f95b082d0db194718c563efd9c53a6002321712bf79c17332bfc50",
-        "sizeBytes": 4150
+        "sha256": "d5bf4ae6c52a18ec0b8976a1febf7b37695f81e9d01d8c27109d83bad9388916",
+        "sizeBytes": 4261
       },
       "argmin_uint32": {
-        "sha256": "f48065265af057f5477bdab5ed6d5232fa9d267b65af8693f5d6c9304053c58e",
-        "sizeBytes": 4160
+        "sha256": "d8f852504d9385b42802ef86e548da23e6667acd72b6d2573937a123ccd931d0",
+        "sizeBytes": 4271
       },
       "argmax_uint32": {
-        "sha256": "fe8276460c6399e82bf55ae0f44aa8cdfd77073ff47a279373074aec2a334d1a",
-        "sizeBytes": 4142
+        "sha256": "3929cd46176f75890a0673f591181ddfc12e7affbd67e6f3a33d84e8d8e5d72d",
+        "sizeBytes": 4253
       },
       "argmin_uint64": {
-        "sha256": "716042ba37fa828f4d5988d0737b3d00156964c38a13dfa969065c7a960b65f4",
-        "sizeBytes": 5112
+        "sha256": "de7ae7046ea1edf9a4ed4553957564d7752a0c038565a472782c56f9f6b12237",
+        "sizeBytes": 5258
       },
       "argmax_uint64": {
-        "sha256": "39513c295098950b3ea2c1a7ed975d384dc9e44280af159c361b05b8270bba76",
-        "sizeBytes": 5074
+        "sha256": "99b7d9df7e416078eafffc79db5fd071705af44cab15cfc7a005b689e74600e7",
+        "sizeBytes": 5220
       },
       "argmin_int8": {
-        "sha256": "f7785b93901d5b1a2c6b9370a5c87fded5a1d1d809129bf987e5a002b3036b6c",
-        "sizeBytes": 4075
+        "sha256": "7a4a7b0529f678b08a0db7d578f72b95cf30c16450a1b6cf7ecd964b986921d8",
+        "sizeBytes": 4186
       },
       "argmax_int8": {
-        "sha256": "e2d4170d03a9c5c1603118c181c97e5de3e39def46d63405dd4d2f471f9c9dad",
-        "sizeBytes": 4077
+        "sha256": "acce7c72eeb9775116841487833b537753a925eac21be7059d0387557d509a53",
+        "sizeBytes": 4188
       },
       "argmin_int16": {
-        "sha256": "98aaad1ec921acd02ba7626f70dcc7ad64e0daad042d6098019ff2ff09fb39d5",
-        "sizeBytes": 4116
+        "sha256": "8b915cc87e3bd20ca5c04f3a88b1b4ed32b9857663a0bcaa64277624858effb0",
+        "sizeBytes": 4227
       },
       "argmax_int16": {
-        "sha256": "a8b012bdabcdd1ade236f6460a53abf3e1090948e54fc28a972d1e1029286466",
-        "sizeBytes": 4118
+        "sha256": "7a3a0009bf6b51b2cf99999ef48f79ef8c333db04cf1cae59c7fcdae5d88f132",
+        "sizeBytes": 4229
       },
       "argmin_int32": {
-        "sha256": "1303af3b44a5a6e2f8a860e7a9840ce2de6ed8ea846c34bac40cb528eb82b582",
-        "sizeBytes": 4118
+        "sha256": "c3634a39c945a80e9048697975063dca41e0ac8b1c86a641168985550139ce6f",
+        "sizeBytes": 4229
       },
       "argmax_int32": {
-        "sha256": "9b17151107a518cbf5db58def922848b983da5555c61956c1242f9d21babc1b5",
-        "sizeBytes": 4120
+        "sha256": "512f518434f119f07e08994e6d6ce381d3ae4200e3d923551a3a69a70bb05106",
+        "sizeBytes": 4231
       },
       "argmin_int64": {
-        "sha256": "71d7c03cf2fb66d82fb944e302d49b0542c0cfe033ac32b4522d1f73c8934a15",
-        "sizeBytes": 5068
+        "sha256": "68cf24a75d6462b52e557b1be9c7fa4d929ba9190ac5dbde5818410929a1bfdd",
+        "sizeBytes": 5214
       },
       "argmax_int64": {
-        "sha256": "f75a4b6ae0fdd783d204638012314e00d85eb03bec441d192fbe340b227babca",
-        "sizeBytes": 5086
+        "sha256": "f30d905e581d40957a044282b498147fd832b5cf48f01a5213fba2e1e08f9bcc",
+        "sizeBytes": 5232
       },
       "argmin_float16": {
-        "sha256": "623a6bbb83613892520a68ce7d33b3793f8c34e3121c9a4b16a8ad6417867103",
-        "sizeBytes": 3980
+        "sha256": "f461b7828cf5ded828de6020956bf8f85cfdf399c510783eec0498908f3d9ec1",
+        "sizeBytes": 4084
       },
       "argmax_float16": {
-        "sha256": "94c4a3d37c10f093fd1556b8e4c2747d0266cb7aee281455182a6db58fc9c03e",
-        "sizeBytes": 3982
+        "sha256": "49abab8dbd2024736da98d432d0dbfb522e46d33d853b4f7beb0b7f7d5937fc8",
+        "sizeBytes": 4086
       },
       "argmin_float32": {
-        "sha256": "955ededf34bbf85d26c24b75da7d9a8f2d394eb359af0898a81c379e5ae2205e",
-        "sizeBytes": 4000
+        "sha256": "84397184333d4b4a2240265917ad6200d4f6fec4d56643dac07ed9889addeef8",
+        "sizeBytes": 4104
       },
       "argmax_float32": {
-        "sha256": "1a9f08f4a607e9f1f45ee95da2d08fd753fac967073f081f6c3bb2d2d3c39d4c",
-        "sizeBytes": 4002
+        "sha256": "e2d4f8755d8a4856af05eaaf9a430d758823ab25fefbfdba9c338d497f518ac2",
+        "sizeBytes": 4106
       },
       "argmin_bfloat16": {
-        "sha256": "02197cbd75af21ec86bf9151c7caba697168f0662bea23f3ebe6f219eb8f56e0",
-        "sizeBytes": 4184
+        "sha256": "256cd7a8ed81276fd8a72cb5c8a51a5be26019c8eefcc936d9e035d56ef09fee",
+        "sizeBytes": 4288
       },
       "argmax_bfloat16": {
-        "sha256": "d77f0d264519f6b9868dfe6741013878368044ab3cf10e2a8925730fc2836ae2",
-        "sizeBytes": 4194
+        "sha256": "581b277142f347ce8835fac2f3b6b1fa31ef4f53e691936c45b3567ea0587071",
+        "sizeBytes": 4298
       }
     }
   },
@@ -477,7 +477,7 @@
   "scope": {
     "coveredEntryCount": 24,
     "runtimeCoveredEntryCount": 2,
-    "completeCorpusEntryCount": 17478,
+    "completeCorpusEntryCount": 17832,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false
   }

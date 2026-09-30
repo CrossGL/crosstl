@@ -2385,7 +2385,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     ).read_text(encoding="utf-8")
     mlx_reference_commit = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
     mlx_corpus_commit = "846d176227a0ac13d2667e58d2bb68b322109ab0"
-    mlx_current_tree_commit = "d9add9d11f3154111a4c85f267ec2fd307ecd18e"
+    mlx_current_tree_commit = "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     assert mlx_porting, "mlx-project-porting.yml must exist"
     for event_name in ("push", "pull_request"):
@@ -2437,8 +2437,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     )
     assert "if: runner.os == 'Linux'" in current_census
     assert '--expected-commit "$MLX_CURRENT_TREE_COMMIT"' in current_census
-    assert "--expected-unit-count 42" in current_census
-    assert "--expected-entry-count 17478" in current_census
+    assert "--expected-unit-count 49" in current_census
+    assert "--expected-entry-count 17832" in current_census
     math_checks = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate Direct3D Metal math semantics"
     )

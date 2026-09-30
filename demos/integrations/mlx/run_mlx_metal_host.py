@@ -16,7 +16,7 @@ import tempfile
 from collections import Counter
 from pathlib import Path
 
-MLX_COMMIT = "d9add9d11f3154111a4c85f267ec2fd307ecd18e"
+MLX_COMMIT = "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 HERE = Path(__file__).resolve().parent
 SOURCE = "mlx/backend/metal/kernels/binary.metal"
 SHAPES = (
@@ -50,8 +50,8 @@ HOST_LAYOUTS = {
 }
 SOURCE_HASHES = {
     "mlx/backend/metal/device.cpp": (
-        "008b67e599f5508ab670a91f2ea80372162a8767b5226fbbeb9f3d23c85cdb7c",
-        "e8a11aadc5def6f01aef07c99ef5671205f5761a6453a787883d1bda8220f809",
+        "d2254ea5cb2ac282f65c2869c6ef56decc97669e2a5fc26fba9d831b60569c9f",
+        "25981c452fc28eb4a8f3273b87966578df03f2a891ec901630dfe52beaca8af7",
     ),
     "mlx/backend/metal/device.h": (
         "ab1e07495b916a86eb762cddc68c6f1ae5e4c61020baacdea3c0dadd59150603",

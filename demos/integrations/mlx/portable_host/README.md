@@ -14,7 +14,7 @@ Dispatch is synchronous, uses host staging buffers and supports at most 65,535
 elements with one thread per workgroup. Empty arrays do not dispatch. This is a
 host integration proof, not a complete MLX backend or a performance benchmark.
 
-The pin is `d9add9d11f3154111a4c85f267ec2fd307ecd18e`. CI builds and runs the same
+The pin is `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. CI builds and runs the same
 proof on Linux/OpenGL and Windows/Direct3D 12. Mesa software rendering and pinned
 WARP make execution reproducible without dedicated GPU runners. DirectX 10/11,
 Vulkan, asynchronous queues, persistent GPU allocations, automatic operation
@@ -59,7 +59,7 @@ and retains dependency-install output even when setup fails.
 ```sh
 python -m pip install -e . moderngl PyOpenGL setuptools wheel cmake ninja nanobind numpy packaging
 git clone https://github.com/ml-explore/mlx.git mlx-upstream
-git -C mlx-upstream checkout d9add9d11f3154111a4c85f267ec2fd307ecd18e
+git -C mlx-upstream checkout 9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8
 python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output adaptation.json
 CMAKE_ARGS='-DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_CROSTL_HOST=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON' python -m pip install -e ./mlx-upstream --no-build-isolation
 python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream --target opengl --output-dir host-packages

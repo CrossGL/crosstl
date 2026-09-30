@@ -8,7 +8,7 @@ import json
 import subprocess
 from pathlib import Path
 
-COMMIT = "d9add9d11f3154111a4c85f267ec2fd307ecd18e"
+COMMIT = "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 HERE = Path(__file__).resolve().parent
 
 

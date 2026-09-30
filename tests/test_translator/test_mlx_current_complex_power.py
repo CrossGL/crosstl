@@ -24,7 +24,7 @@ from tests.test_translator.test_mlx_current_arg_reduce import _metal_library, _r
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
 ROOT = Path(__file__).resolve().parents[2]
-MLX_COMMIT = "d9add9d11f3154111a4c85f267ec2fd307ecd18e"
+MLX_COMMIT = "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 SOURCE = "mlx/backend/metal/kernels/binary.metal"
 ENTRY = "g1_Powercomplex64"
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_POWER"
