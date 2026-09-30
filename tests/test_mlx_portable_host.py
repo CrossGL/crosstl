@@ -593,3 +593,59 @@ def test_ci_requires_native_math_before_building_mlx():
     assert "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream" in binary
     timeout = ci_coverage.workflow_job_timeout_minutes(workflow, "portable-host")
     assert timeout * 60 > 120 + 900 + 1800 + 300 + 1000
+
+
+def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
+    from tools import ci_coverage
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/mlx-portable-host.yml").read_text()
+    for name, directory, seconds, flag, module in (
+        (
+            "Validate DirectX float atomics",
+            "float-atomics",
+            180,
+            "CROSTL_REQUIRE_DIRECTX_FLOAT_ATOMICS",
+            "test_directx_float_atomics.py",
+        ),
+        (
+            "Compile pinned DirectX gated-delta backward entry",
+            "gated-delta",
+            300,
+            "CROSTL_REQUIRE_MLX_GATED_DELTA_DIRECTX",
+            "test_mlx_gated_delta_directx.py",
+        ),
+    ):
+        step = ci_coverage.workflow_job_step_section(workflow, "portable-host", name)
+        assert "if: runner.os == 'Windows'" in step
+        assert "continue-on-error" not in step
+        assert f'{flag}: "1"' in step
+        assert "pytest -q -n auto" in step
+        assert "set -euo pipefail" in step
+        assert f"--timeout-seconds {seconds}" in step
+        assert f"--basetemp=.mlx-portable-host/{directory}/pytest" in step
+        assert f"--junitxml=.mlx-portable-host/{directory}/results.xml" in step
+        assert f"tee .mlx-portable-host/{directory}.log" in step
+        assert f"tests/test_translator/{module}" in step
+        assert ci_coverage.workflow_job_step_after(
+            workflow, "portable-host", "Build adapted upstream MLX", name
+        )
+        for event in ("push", "pull_request"):
+            paths = ci_coverage.workflow_event_path_filters(workflow, event)
+            assert f"tests/test_translator/{module}" in paths
+            assert "tests/test_translator/test_metal_float_atomics.py" in paths
+            assert "tests/test_translator/test_mlx_gated_delta_metal.py" in paths
+    metal = (root / ".github/workflows/mlx-metal-host.yml").read_text()
+    control = ci_coverage.workflow_job_step_section(
+        metal, "metal-host", "Validate native float atomics"
+    )
+    assert (
+        "test_directx_float_atomics.py::test_original_metal_matches_atomic_oracle"
+        in control
+    )
+    assert 'CROSTL_REQUIRE_METAL_FLOAT_ATOMICS: "1"' in control
+    for event in ("push", "pull_request"):
+        assert (
+            "tests/test_translator/test_directx_float_atomics.py"
+            in ci_coverage.workflow_event_path_filters(metal, event)
+        )

@@ -12,6 +12,7 @@ on:
       - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tests/test_translator/test_metal_float_atomics.py"
+      - "tests/test_translator/test_directx_float_atomics.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
       - "tests/fixtures/runtime_verification/metal_uint32_buffers.swift"
       - "tools/run_bounded_command.py"
@@ -27,6 +28,7 @@ on:
       - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tests/test_translator/test_metal_float_atomics.py"
+      - "tests/test_translator/test_directx_float_atomics.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
       - "tests/fixtures/runtime_verification/metal_uint32_buffers.swift"
       - "tools/run_bounded_command.py"
@@ -89,6 +91,7 @@ jobs:
               --basetemp=.mlx-metal-host/float-atomics/pytest \
               --junitxml=.mlx-metal-host/float-atomics/results.xml \
               tests/test_translator/test_metal_float_atomics.py \
+              tests/test_translator/test_directx_float_atomics.py::test_original_metal_matches_atomic_oracle \
               2>&1 | tee .mlx-metal-host/float-atomics.log
       - name: Checkout pinned upstream MLX
         run: |

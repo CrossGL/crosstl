@@ -9,6 +9,10 @@ on:
       - "demos/integrations/mlx/portable_host/**"
       - "tests/test_mlx_portable_host.py"
       - "tests/test_translator/test_directx_atan2.py"
+      - "tests/test_translator/test_directx_float_atomics.py"
+      - "tests/test_translator/test_metal_float_atomics.py"
+      - "tests/test_translator/test_mlx_gated_delta_directx.py"
+      - "tests/test_translator/test_mlx_gated_delta_metal.py"
       - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_metal_fma.py"
       - "tests/test_translator/test_project_metal_discovery.py"
@@ -32,6 +36,10 @@ on:
       - "demos/integrations/mlx/portable_host/**"
       - "tests/test_mlx_portable_host.py"
       - "tests/test_translator/test_directx_atan2.py"
+      - "tests/test_translator/test_directx_float_atomics.py"
+      - "tests/test_translator/test_metal_float_atomics.py"
+      - "tests/test_translator/test_mlx_gated_delta_directx.py"
+      - "tests/test_translator/test_mlx_gated_delta_metal.py"
       - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_metal_fma.py"
       - "tests/test_translator/test_project_metal_discovery.py"
@@ -68,7 +76,7 @@ jobs:
   portable-host:
     name: MLX native host (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 80
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -165,6 +173,19 @@ jobs:
               tests/test_translator/test_directx_atan2.py \
               tests/test_translator/test_metal_precise_asin.py \
               2>&1 | tee .mlx-portable-host/scalar-math.log
+      - name: Validate DirectX float atomics
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_REQUIRE_DIRECTX_FLOAT_ATOMICS: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/float-atomics
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "DirectX float atomics" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/float-atomics/pytest \
+              --junitxml=.mlx-portable-host/float-atomics/results.xml \
+              tests/test_translator/test_directx_float_atomics.py \
+              2>&1 | tee .mlx-portable-host/float-atomics.log
       - name: Validate binary32 fused arithmetic
         env:
           CROSTL_REQUIRE_FUSED_MATH: "1"
@@ -191,6 +212,20 @@ jobs:
           git -C mlx-upstream checkout --detach FETCH_HEAD
           mkdir -p .mlx-portable-host
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-host/adaptation.json
+      - name: Compile pinned DirectX gated-delta backward entry
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_REQUIRE_MLX_GATED_DELTA_DIRECTX: "1"
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/gated-delta
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "MLX DirectX gated-delta compilation" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/gated-delta/pytest \
+              --junitxml=.mlx-portable-host/gated-delta/results.xml \
+              tests/test_translator/test_mlx_gated_delta_directx.py \
+              2>&1 | tee .mlx-portable-host/gated-delta.log
       - name: Validate pinned unary fused arithmetic
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream

@@ -14654,7 +14654,7 @@ def test_directx_typed_buffer_atomics_lift_inside_ternary_conditions():
         "InterlockedAdd(counters[tid.x], 1u, __crossgl_atomic_expr_0);"
         in generated_code
     )
-    assert "if ((__crossgl_atomic_expr_0 != 0u)) {" in generated_code
+    assert "if (__crossgl_atomic_expr_0 != 0u) {" in generated_code
     assert "selected = 11u;" in generated_code
     assert "uint __crossgl_atomic_expr_1;" in generated_code
     assert (
@@ -14913,7 +14913,7 @@ def test_directx_typed_buffer_atomics_lift_in_array_literals():
     assert "atomicCompareExchange(counters" not in generated_code
 
 
-def test_directx_typed_buffer_atomics_reject_non_integer_targets():
+def test_directx_typed_buffer_atomics_reject_unsupported_float_operations():
     shader = """
     shader BadTypedBufferAtomicHLSL {
         RWBuffer<float> values @register(u1);
@@ -14921,7 +14921,7 @@ def test_directx_typed_buffer_atomics_reject_non_integer_targets():
         compute {
             @numthreads(1, 1, 1)
             void main(uvec3 tid @gl_GlobalInvocationID) {
-                float original = atomicAdd(values[tid.x], 1.0);
+                float original = atomicMin(values[tid.x], 1.0);
             }
         }
     }
@@ -14930,7 +14930,7 @@ def test_directx_typed_buffer_atomics_reject_non_integer_targets():
     with pytest.raises(
         ValueError,
         match=(
-            "DirectX typed buffer atomic 'atomicAdd' requires a scalar "
+            "DirectX typed buffer atomic 'atomicMin' requires a scalar "
             "int or uint target, got float"
         ),
     ):

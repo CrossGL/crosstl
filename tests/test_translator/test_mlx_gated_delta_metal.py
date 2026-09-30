@@ -20,11 +20,8 @@ ENTRY = "seq_gated_delta_vjp_float_128_128_24_24_1"
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_GATED_DELTA_METAL"
 
 
-def test_pinned_gated_delta_backward_compiles_with_float_storage(tmp_path):
+def _translate_pinned(tmp_path, target):
     root_value = os.environ.get("CROSTL_MLX_CURRENT_ROOT")
-    if os.environ.get(REQUIRE_ENV) != "1":
-        pytest.skip(f"set {REQUIRE_ENV}=1 to require the pinned Metal compiler gate")
-    assert sys.platform == "darwin", "Native Metal compilation requires macOS"
     assert root_value, "Set CROSTL_MLX_CURRENT_ROOT to the pinned checkout"
     root = Path(root_value).resolve()
     revision = subprocess.run(
@@ -61,7 +58,7 @@ def test_pinned_gated_delta_backward_compiles_with_float_storage(tmp_path):
                 root=root,
                 include_patterns=(SOURCE,),
                 include_dirs=(".",),
-                targets=("metal",),
+                targets=(target,),
                 entry_points={SOURCE: (ENTRY,)},
                 entry_workgroup_size_rules={SOURCE: {ENTRY: (32, 1, 1)}},
                 source_options={
@@ -80,10 +77,21 @@ def test_pinned_gated_delta_backward_compiles_with_float_storage(tmp_path):
         assert payload["diagnostics"] == []
         assert payload["summary"]["translatedCount"] == 1
         record = payload["artifacts"][0]
-        assert record["entryPoint"]["target"] == ENTRY
+        assert record["entryPoint"]["target"] == (
+            ENTRY if target == "metal" else "CSMain"
+        )
         generated = (
             tmp_path / "translated" / (root / record["path"]).relative_to(output)
         )
+    return revision, source, generated
+
+
+def test_pinned_gated_delta_backward_compiles_with_float_storage(tmp_path):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 to require the pinned Metal compiler gate")
+    assert sys.platform == "darwin", "Native Metal compilation requires macOS"
+    revision, source, generated = _translate_pinned(tmp_path, "metal")
+    root = source.parents[4]
     text = generated.read_text(encoding="utf-8")
     assert "reinterpret_cast<device atomic_float*>" in text
     assert "atomic_fetch_add_explicit(" in text

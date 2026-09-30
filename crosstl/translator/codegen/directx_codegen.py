@@ -2052,6 +2052,8 @@ class HLSLCodeGen:
         self.required_texture_query_helpers = set()
         self.required_image_atomic_helpers = set()
         self.required_byteaddress_atomic_helpers = set()
+        self.hlsl_float_atomic_helpers = {}
+        self.hlsl_float_atomic_reserved_names = set()
         self.required_glsl_buffer_aggregate_load_helpers = {}
         self.comparison_sampler_parameters = {}
         self.regular_sampler_parameters = {}
@@ -3013,6 +3015,8 @@ class HLSLCodeGen:
         self.required_texture_query_helpers = set()
         self.required_image_atomic_helpers = set()
         self.required_byteaddress_atomic_helpers = set()
+        self.hlsl_float_atomic_helpers = {}
+        self.hlsl_float_atomic_reserved_names = set()
         self.required_glsl_buffer_aggregate_load_helpers = {}
         self.comparison_sampler_parameters = {}
         self.regular_sampler_parameters = {}
@@ -3312,6 +3316,9 @@ class HLSLCodeGen:
         self.prepare_hlsl_inverse_hyperbolic_helper_names(functions)
         self.prepare_hlsl_atan2_helper_names(functions)
         self.prepare_hlsl_physical_subgroup_id_helper_names(functions)
+        self.hlsl_float_atomic_reserved_names = self.hlsl_helper_reserved_names(
+            functions
+        )
         self.vertex_entry_output_struct_names = (
             self.collect_hlsl_vertex_entry_output_struct_names(ast, target_stage)
         )
@@ -4382,6 +4389,7 @@ class HLSLCodeGen:
         code += self.generate_texture_query_helpers()
         code += self.generate_image_atomic_helpers()
         code += self.generate_byteaddress_atomic_helpers()
+        code += self.generate_hlsl_float_atomic_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
         code += self.generate_hlsl_inverse_helpers()
         code += self.generate_hlsl_fragment_shading_rate_helper()
@@ -41146,6 +41154,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_typed_buffer_atomic_target_resource_type(
         self, target, resource_types=None
     ):
+        if isinstance(target, PointerAccessNode):
+            target = ArrayAccessNode(target.pointer_expr, 0)
+        if isinstance(target, UnaryOpNode) and target.op == "*":
+            target = ArrayAccessNode(target.operand, 0)
+        load_access = self.hlsl_typed_buffer_atomic_load_access(target)
+        if load_access is not None:
+            target = load_access
         struct_buffer_type = self.hlsl_struct_buffer_expression_resource_type(target)
         if struct_buffer_type is not None:
             if (
@@ -41159,6 +41174,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             array_expr = getattr(target, "array", getattr(target, "array_expr", None))
             array_type = self.expression_result_type(array_expr)
+            binding = self.hlsl_resource_pointer_binding(array_expr)
+            if binding is not None and binding.get("kind") != "workgroup-pointer":
+                array_type = binding.get("resource_type") or array_type
             if (
                 self.hlsl_typed_buffer_element_type(array_type, resource_types)
                 is not None
@@ -41177,6 +41195,179 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 object_expr, resource_types
             )
         return None
+
+    def hlsl_typed_buffer_atomic_load_access(self, target):
+        if not isinstance(target, FunctionCallNode):
+            return None
+        name = self.function_call_name(target)
+        args = getattr(target, "args", [])
+        if (
+            name == "buffer_load"
+            and name not in self.function_return_types
+            and len(args) == 2
+            and self.hlsl_typed_buffer_element_type(
+                self.hlsl_buffer_helper_resource_type(args[0]),
+                {"Buffer", "StructuredBuffer", "RWBuffer", "RWStructuredBuffer"},
+            )
+            is not None
+        ):
+            return ArrayAccessNode(args[0], args[1])
+        return None
+
+    def hlsl_typed_buffer_atomic_lvalue(self, target):
+        load_access = self.hlsl_typed_buffer_atomic_load_access(target)
+        if load_access is not None:
+            return load_access
+        if isinstance(target, MemberAccessNode):
+            return MemberAccessNode(
+                self.hlsl_typed_buffer_atomic_lvalue(target.object), target.member
+            )
+        if isinstance(target, ArrayAccessNode):
+            return ArrayAccessNode(
+                self.hlsl_typed_buffer_atomic_lvalue(target.array), target.index
+            )
+        return target
+
+    def hlsl_float_atomic_storage(self, target):
+        if isinstance(target, PointerAccessNode):
+            target = MemberAccessNode(
+                ArrayAccessNode(target.pointer_expr, 0), target.member
+            )
+        if isinstance(target, UnaryOpNode) and target.op == "*":
+            target = ArrayAccessNode(target.operand, 0)
+        load_access = self.hlsl_typed_buffer_atomic_load_access(target)
+        if load_access is not None:
+            target = load_access
+        if isinstance(target, MemberAccessNode):
+            storage = self.hlsl_float_atomic_storage(target.object)
+            if storage is not None:
+                storage["suffix"] += f".{target.member}"
+            return storage
+        if isinstance(target, ArrayAccessNode):
+            container, index = target.array, target.index
+            binding = self.hlsl_resource_pointer_binding(container)
+            if isinstance(
+                container, ArrayAccessNode
+            ) and self.is_hlsl_buffer_resource_array_type(
+                self.expression_result_type(container.array)
+            ):
+                # Descriptor selection is not an element offset into one buffer.
+                binding = None
+            resource_type = (
+                binding.get("resource_type") if binding is not None else None
+            ) or self.hlsl_buffer_helper_resource_type(container)
+            if self.hlsl_typed_buffer_element_type(resource_type) is not None:
+                if binding is not None and (
+                    binding.get("pointer_reinterpretation")
+                    or str(binding.get("byte_offset", "0")) != "0"
+                ):
+                    raise ValueError(
+                        "DirectX float atomic requires an unambiguous typed storage view"
+                    )
+                resource = (
+                    binding["root"]
+                    if binding is not None
+                    else self.generate_expression(container)
+                )
+                rendered_index = self.generate_expression(index)
+                if binding is not None:
+                    rendered_index = self.hlsl_resource_pointer_offset_sum(
+                        binding.get("offset"), rendered_index
+                    )
+                rendered_index = self.hlsl_resource_index_expression(
+                    container,
+                    index,
+                    rendered_index,
+                    rendered_resource=resource,
+                    resource_type=resource_type,
+                )
+                return {
+                    "resource_type": self.map_type(
+                        self.directx_resource_declaration_type(resource_type)
+                    ),
+                    "arguments": [resource, rendered_index],
+                    "index_types": ["uint"],
+                    "suffix": "[index0]",
+                }
+            storage = self.hlsl_float_atomic_storage(container)
+            if storage is not None:
+                index_type = self.map_type(self.expression_result_type(index))
+                if index_type not in {"int", "uint", "int64_t", "uint64_t"}:
+                    raise ValueError(
+                        "DirectX float atomic requires scalar integer member indices"
+                    )
+                storage["suffix"] += f"[index{len(storage['index_types'])}]"
+                storage["index_types"].append(index_type)
+                storage["arguments"].append(self.generate_expression(index))
+            return storage
+        name = self.expression_name(target)
+        resource_type = self.hlsl_struct_buffer_resource_types.get(name)
+        if resource_type is not None:
+            return {
+                "resource_type": self.map_type(resource_type),
+                "arguments": [self.hlsl_identifier_name(name), "0u"],
+                "index_types": ["uint"],
+                "suffix": "[index0]",
+            }
+        return None
+
+    def hlsl_float_atomic_helper(self, func_name, storage):
+        key = (
+            func_name,
+            storage["resource_type"],
+            tuple(storage["index_types"]),
+            storage["suffix"],
+        )
+        helper = self.hlsl_float_atomic_helpers.get(key)
+        if helper is None:
+            digest = sha1(repr(key).encode("utf-8")).hexdigest()[:12]
+            name = f"__crossgl_float_atomic_{digest}"
+            reserved = (
+                self.hlsl_float_atomic_reserved_names
+                | set(self.function_return_types)
+                | set(self.global_variable_types)
+                | set(self.structs_by_name)
+            )
+            reserved.update(self.local_variable_types)
+            reserved.update(
+                item["name"] for item in self.hlsl_float_atomic_helpers.values()
+            )
+            while name in reserved:
+                name += "_"
+            helper = {**storage, "name": name, "operation": func_name}
+            self.hlsl_float_atomic_helpers[key] = helper
+        return helper["name"]
+
+    def generate_hlsl_float_atomic_helpers(self):
+        code = ""
+        for helper in self.hlsl_float_atomic_helpers.values():
+            parameters = [f"{helper['resource_type']} storage"]
+            parameters.extend(
+                f"{kind} index{index}"
+                for index, kind in enumerate(helper["index_types"])
+            )
+            parameters.extend(["float value", "out float original"])
+            target = f"storage{helper['suffix']}"
+            code += f"void {helper['name']}({', '.join(parameters)}) {{\n"
+            if helper["operation"] == "atomicExchange":
+                code += f"    InterlockedExchange({target}, value, original);\n"
+            else:
+                code += (
+                    "    float observed;\n"
+                    f"    InterlockedCompareExchangeFloatBitwise({target}, 0.0f, 0.0f, observed);\n"
+                    "    [allow_uav_condition]\n"
+                    "    while (true) {\n"
+                    "        float expected = observed;\n"
+                    "        precise float desired = expected + value;\n"
+                    f"        InterlockedCompareExchangeFloatBitwise({target}, expected, desired, observed);\n"
+                    "        if (asuint(observed) == asuint(expected)) {\n"
+                    "            original = expected;\n"
+                    "            return;\n"
+                    "        }\n"
+                    "    }\n"
+                )
+            code += "}\n\n"
+        return code
 
     def hlsl_typed_buffer_atomic_parts(self, func_name, args):
         operation_info = self.hlsl_typed_buffer_atomic_operations().get(func_name)
@@ -41211,7 +41402,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         target_type = self.expression_result_type(target)
         target_kind = self.scalar_expression_kind(target)
-        if target_kind not in {"int", "uint"}:
+        float_atomic = self.map_type(target_type) == "float" and func_name in {
+            "atomicAdd",
+            "atomicExchange",
+        }
+        if target_kind not in {"int", "uint"} and not float_atomic:
             target_label = self.type_name_string(target_type) or str(resource_type)
             raise ValueError(
                 f"DirectX typed buffer atomic '{func_name}' requires a scalar "
@@ -41231,7 +41426,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"must be scalar {target_kind}, got {value_kind}"
             )
 
-        rendered_target = self.generate_expression(target)
+        rendered_target = self.generate_expression(
+            self.hlsl_typed_buffer_atomic_lvalue(target)
+        )
+        target_args = [rendered_target]
+        if float_atomic:
+            storage = self.hlsl_float_atomic_storage(target)
+            if storage is None:
+                raise ValueError(
+                    "DirectX float atomic requires a writable typed buffer element"
+                )
+            intrinsic = self.hlsl_float_atomic_helper(func_name, storage)
+            target_args = storage["arguments"]
         rendered_values = [
             self.generate_expression_with_expected(value_arg, target_type)
             for value_arg in value_args
@@ -41259,6 +41465,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "func_name": func_name,
             "intrinsic": intrinsic,
             "target": rendered_target,
+            "target_args": target_args,
+            "float_atomic": float_atomic,
             "values": rendered_values,
             "target_type": target_type,
             "target_kind": target_kind,
@@ -41352,12 +41560,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         else:
             original = None
 
-        call_args = [parts["target"], *parts["values"]]
+        call_args = [*parts["target_args"], *parts["values"]]
         if original is not None:
             call_args.append(original)
             return f"{parts['intrinsic']}({', '.join(call_args)})"
 
-        if parts["intrinsic"] == "InterlockedCompareExchange":
+        if parts["intrinsic"] == "InterlockedCompareExchange" or parts["float_atomic"]:
             temp_type = self.map_type(parts["target_type"])
             temp_name = self.next_hlsl_temp_variable("atomic_original")
             call_args.append(temp_name)
@@ -41395,7 +41603,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             original = self.next_hlsl_temp_variable("atomic_return")
             declaration = f"{temp_type} {original};\n"
 
-        call_args = [parts["target"], *parts["values"], original]
+        call_args = [*parts["target_args"], *parts["values"], original]
         indent_str = "    " * indent
         code = ""
         if declaration:
@@ -41970,7 +42178,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             original = self.next_hlsl_temp_variable("atomic_expr")
             code = f"{indent_str}{self.map_type(parts['target_type'])} {original};\n"
 
-        call_args = [parts["target"], *parts["values"], original]
+        call_args = [*parts["target_args"], *parts["values"], original]
         code += f"{indent_str}{parts['intrinsic']}({', '.join(call_args)});\n"
         return code, original
 
@@ -43004,6 +43212,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         )
                         return code, f"{callee}({', '.join(call_args)})"
 
+                if (
+                    func_name in {"sqrt", "abs", "floor", "ceil", "round", "trunc"}
+                    and len(args) == 1
+                ):
+                    code, value = self.render_hlsl_typed_buffer_atomic_value_expression(
+                        args[0], self.expression_result_type(args[0]), indent
+                    )
+                    return code, f"{func_name}({value})"
+
         if hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
             left_expr = getattr(expr, "left", "")
             right_expr = getattr(expr, "right", "")
@@ -43012,6 +43229,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     left_expr, self.expression_result_type(left_expr), indent
                 )
             )
+            op = self.map_operator(getattr(expr, "operator", getattr(expr, "op", "+")))
+            if op in {"&&", "||"}:
+                temp_name = self.next_hlsl_temp_variable("atomic_condition")
+                indent_str = "    " * indent
+                code = left_code + f"{indent_str}bool {temp_name} = {rendered_left};\n"
+                condition = temp_name if op == "&&" else f"!{temp_name}"
+                code += f"{indent_str}if ({condition}) {{\n"
+                right_code, rendered_right = (
+                    self.render_hlsl_typed_buffer_atomic_value_expression(
+                        right_expr, "bool", indent + 1
+                    )
+                )
+                code += (
+                    right_code + f"{indent_str}    {temp_name} = {rendered_right};\n"
+                )
+                code += f"{indent_str}}}\n"
+                return code, temp_name
             right_code, rendered_right = (
                 self.render_hlsl_typed_buffer_atomic_value_expression(
                     right_expr, self.expression_result_type(right_expr), indent
@@ -43143,7 +43377,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         indent_str = "    " * indent
         code = condition_code
-        code += f"{indent_str}if ({rendered_condition}) {{\n"
+        code += f"{indent_str}if ({self.hlsl_strip_wrapping_parentheses(rendered_condition)}) {{\n"
         code += self.generate_hlsl_typed_buffer_atomic_assignment_from_expression(
             true_expr, target, op, expected_type, indent + 1
         )
@@ -43202,7 +43436,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             indent_str = "    " * indent
             code = condition_code
-            code += f"{indent_str}if ({rendered_condition}) {{\n"
+            code += f"{indent_str}if ({self.hlsl_strip_wrapping_parentheses(rendered_condition)}) {{\n"
             code += self.generate_hlsl_typed_buffer_atomic_return_from_expression(
                 true_expr, indent + 1
             )
@@ -43258,7 +43492,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         temp_type = self.map_type(parts["target_type"])
                         original = self.next_hlsl_temp_variable("atomic_expr")
                         declaration = [f"{temp_type} {original}"]
-                    call_args = [parts["target"], *parts["values"], original]
+                    call_args = [*parts["target_args"], *parts["values"], original]
                     return (
                         [
                             *declaration,

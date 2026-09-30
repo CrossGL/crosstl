@@ -80,6 +80,21 @@ artifacts, readbacks and test reports even if a later build or host test fails.
 They also remain in the project-porting workflow; the focused host checks do not
 replace corpus-wide or upstream-suite validation.
 
+The Windows gate also executes generated floating-point atomic add and exchange
+on scalar and structured buffers, using Shader Model 6.0 bitwise compare/exchange
+for addition. Readbacks check contention, returned values, single operand
+evaluation, pointer offsets, conditional execution and unchanged neighboring
+fields. Special-value cases cover signed zero, infinities, NaNs and flushed
+denormals; NaN payload preservation is not an arithmetic guarantee. The same
+oracle is checked against the original Metal source in the macOS workflow.
+
+A separate required compiler gate translates the pinned
+`seq_gated_delta_vjp_float_128_128_24_24_1` entry and compiles it with DXC,
+Shader Model 6.2 and native 16-bit types. That gate retains the source identity,
+translation report and compiled module. It does not establish numerical
+correctness of the full backward kernel or add that operation to the MLX host
+adapter. OpenGL floating-point atomic lowering remains outstanding.
+
 ## Required Evidence
 
 The verifier checks the pin, reconstructs the five adapted files from the pinned
