@@ -3157,6 +3157,44 @@ def test_mlx_project_porting_workflow_runs_backend_runtime_contracts():
     assert "mlx-upstream" not in vulkan_step
 
 
+def test_mlx_project_porting_workflow_requires_native_artifact_refresh():
+    workflow = _workflow_texts().get("mlx-project-porting.yml", "")
+    coverage = _load_ci_coverage_module()
+    step = coverage.workflow_step_section(
+        workflow, "Prove native artifact contract refresh"
+    )
+    assert 'CROSTL_REQUIRE_ARTIFACT_REFRESH_COMPILER: "1"' in step
+    assert (
+        "tests/test_artifact_contract_refresh.py::test_native_compiler_creates_candidate"
+        in step
+    )
+    assert "-n auto" in step
+    assert "if:" not in step
+    assert "continue-on-error" not in step
+    assert "--basetemp support/generated/artifact-refresh-native" in step
+    assert "--junitxml support/generated/artifact-refresh-native.xml" in step
+    assert workflow.index("Install Linux SPIR-V tools") < workflow.index(
+        "Prove native artifact contract refresh"
+    )
+    assert workflow.index("Install Windows DirectX Shader Compiler") < workflow.index(
+        "Prove native artifact contract refresh"
+    )
+    assert workflow.index("Install macOS Metal Toolchain") < workflow.index(
+        "Prove native artifact contract refresh"
+    )
+    for path in (
+        "tools/refresh_artifact_contract.py",
+        "tests/test_artifact_contract_refresh.py",
+    ):
+        assert workflow.count(f'"{path}"') == 2
+    upload = coverage.workflow_step_section(
+        workflow, "Upload native artifact refresh evidence"
+    )
+    assert "if: always()" in upload
+    assert "artifact-refresh-native-${{ runner.os }}" in upload
+    assert "support/generated/artifact-refresh-native" in upload
+
+
 def test_mlx_project_porting_workflow_runs_native_loader_dispatch_bridge():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
     ci_coverage = _load_ci_coverage_module()

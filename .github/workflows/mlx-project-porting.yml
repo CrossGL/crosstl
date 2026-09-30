@@ -18,6 +18,8 @@ on:
       - "requirements.txt"
       - "tools/run_bounded_command.py"
       - "tools/run_directx_diagnostics.py"
+      - "tools/refresh_artifact_contract.py"
+      - "tests/test_artifact_contract_refresh.py"
       - "tests/test_ci_workflows.py"
       - "tests/test_run_bounded_command.py"
       - "tests/test_run_directx_diagnostics.py"
@@ -98,6 +100,8 @@ on:
       - "requirements.txt"
       - "tools/run_bounded_command.py"
       - "tools/run_directx_diagnostics.py"
+      - "tools/refresh_artifact_contract.py"
+      - "tests/test_artifact_contract_refresh.py"
       - "tests/test_ci_workflows.py"
       - "tests/test_run_bounded_command.py"
       - "tests/test_run_directx_diagnostics.py"
@@ -265,6 +269,26 @@ jobs:
             throw "dxc.exe not found in release archive."
           }
           $dxc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Prove native artifact contract refresh
+        env:
+          CROSTL_REQUIRE_ARTIFACT_REFRESH_COMPILER: "1"
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_artifact_contract_refresh.py::test_native_compiler_creates_candidate
+          --basetemp support/generated/artifact-refresh-native
+          --junitxml support/generated/artifact-refresh-native.xml
+
+      - name: Upload native artifact refresh evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifact-refresh-native-${{ runner.os }}
+          path: |
+            support/generated/artifact-refresh-native
+            support/generated/artifact-refresh-native.xml
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Install Windows Direct3D runtime dependencies
         if: runner.os == 'Windows'
