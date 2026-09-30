@@ -38,7 +38,7 @@ UNARY_DIRECTX_CONTRACT_PATH = (
     / "unary.directx-translation.json"
 )
 UNARY_DIRECTX_CONTRACT_SHA256 = (
-    "0dc9b141add78c9a9fa0d109b9b21846ccf6919b521ebf2c74a5c9c68ccfeb30"
+    "90937acb39015301a3e22858f946d9ec95ee4785ee32c37a23f6a47718ee2ccd"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
@@ -259,12 +259,12 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
             "gn4large": 1098,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 3081324,
+        "generatedSizeBytesTotal": 3110472,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 2252},
             "maximum": {
                 "entryPoint": "gn4large_ArcTancomplex64complex64",
-                "sizeBytes": 7332,
+                "sizeBytes": 8373,
             },
         },
         "nativeCompiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
@@ -298,13 +298,13 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 3081324
+    assert sum(entry["sizeBytes"] for entry in entries) == 3110472
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
         2252,
         "v_Absint8int8",
     )
     assert max((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
-        7332,
+        8373,
         "gn4large_ArcTancomplex64complex64",
     )
 
@@ -494,6 +494,39 @@ def _required_tool(name: str) -> str:
     if os.environ.get(REQUIRE_UNARY_DIRECTX_ENV) == "1":
         pytest.fail(message)
     pytest.skip(message)
+
+
+def test_unary_precise_math_artifact_refresh_preserves_corpus_scope():
+    assert UNARY_DIRECTX_CONTRACT["artifactIdentityRefresh"] == {
+        "reason": "Preserve precise Metal arcsine and embedded math notices in HLSL.",
+        "previousContractSha256": (
+            "8ea2d623d72b0afefa0c54ab2e45f94ed97a1e1992e5e5c5725e2039ceabb984"
+        ),
+        "changedEntryCount": 30,
+        "unaffectedEntryCount": 847,
+        "nativeCompiledChangedEntryCount": 30,
+        "unchangedSourceAndInterfaceContracts": True,
+        "numericalExecution": False,
+        "fullUpstreamSuite": False,
+    }
+    affected = [
+        workload
+        for workload in UNARY_DIRECTX_WORKLOADS
+        if workload.input_type in {"float", "half", "bfloat16_t"}
+        and workload.operator_type in {"ArcSin", "ArcCos"}
+    ]
+    assert len(affected) == 30
+
+
+def test_unary_atan2_dependencies_preserve_corpus_scope():
+    affected = [
+        workload
+        for workload in UNARY_DIRECTX_WORKLOADS
+        if workload.input_type == "complex64_t"
+        and workload.operator_type
+        in {"Log", "Log2", "Log10", "Log1p", "ArcSin", "ArcCos", "ArcTan"}
+    ]
+    assert len(affected) == 28
 
 
 def _expected_resources(workload: UnaryDirectXWorkload) -> dict[str, tuple]:

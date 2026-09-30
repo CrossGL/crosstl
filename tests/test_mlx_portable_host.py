@@ -9,29 +9,39 @@ import pytest
 from demos.integrations.mlx.portable_host import packages, prepare, runtime, verify
 
 
-def checkout(root, monkeypatch):
+def checkout(root, monkeypatch, newline=b"\n"):
     backend = root / "mlx/backend/no_gpu"
     backend.mkdir(parents=True)
-    (backend / "CMakeLists.txt").write_text(
-        "target_sources(mlx PRIVATE primitives.cpp)\n"
-    )
-    (backend / "primitives.cpp").write_text("NO_GPU(Arange)\nNO_GPU(Abs)\n")
-    (backend / "event.cpp").write_text(
-        "void Event::wait(Stream stream) {\n  cpu_wait();\n}\n"
-        "void Event::signal(Stream stream) {\n  cpu_signal();\n}\n"
-    )
-    monkeypatch.setattr(
-        prepare.subprocess,
-        "check_output",
-        lambda command, **kwargs: prepare.COMMIT if "rev-parse" in command else "",
-    )
+    originals = {
+        "CMakeLists.txt": b"target_sources(mlx PRIVATE primitives.cpp)\n",
+        "primitives.cpp": b"NO_GPU(Arange)\nNO_GPU(Abs)\n",
+        "event.cpp": (
+            b"void Event::wait(Stream stream) {\n  cpu_wait();\n}\n"
+            b"void Event::signal(Stream stream) {\n  cpu_signal();\n}\n"
+        ),
+    }
+    # Git blobs retain LF even when the checkout uses converted line endings.
+    for name, data in originals.items():
+        (backend / name).write_bytes(data.replace(b"\n", newline))
+
+    def git(command, **kwargs):
+        if "rev-parse" in command:
+            return prepare.COMMIT
+        if "show" in command:
+            return originals[command[-1].rsplit("/", 1)[-1]]
+        if "diff" in command:
+            return b"mlx/backend/no_gpu/CMakeLists.txt\0"
+        return ""
+
+    monkeypatch.setattr(prepare.subprocess, "check_output", git)
     return backend
 
 
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"], ids=["lf", "crlf"])
 def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, newline
 ):
-    backend = checkout(tmp_path, monkeypatch)
+    backend = checkout(tmp_path, monkeypatch, newline)
     record = prepare.prepare(tmp_path, tmp_path / "adaptation.json")
     assert record["commit"] == prepare.COMMIT and len(record["files"]) == 5
     assert "NO_GPU(Arange)" not in (backend / "crosstl_primitives.cpp").read_text()
@@ -47,6 +57,39 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
         assert (
             prepare.hashlib.sha256((tmp_path / name).read_bytes()).hexdigest() == digest
         )
+    assert prepare.verify_prepared(tmp_path) == record
+
+
+@pytest.mark.parametrize(
+    "fault", ["revision", "unrelated", "missing", "modified", "symlink"]
+)
+def test_prepared_verifier_rejects_source_changes(tmp_path, monkeypatch, fault):
+    backend = checkout(tmp_path, monkeypatch)
+    prepare.prepare(tmp_path, tmp_path / "adaptation.json")
+    original_git = prepare.subprocess.check_output
+
+    def git(command, **kwargs):
+        if fault == "revision" and "rev-parse" in command:
+            return "wrong"
+        if fault == "unrelated" and "diff" in command:
+            return (
+                b"mlx/backend/no_gpu/CMakeLists.txt\0mlx/backend/cpu/primitives.cpp\0"
+            )
+        return original_git(command, **kwargs)
+
+    monkeypatch.setattr(prepare.subprocess, "check_output", git)
+    source = backend / "crosstl_backend.cpp"
+    if fault == "missing":
+        source.unlink()
+    elif fault == "modified":
+        source.write_bytes(source.read_bytes() + b"\n// changed\n")
+    elif fault == "symlink":
+        is_symlink = Path.is_symlink
+        monkeypatch.setattr(
+            Path, "is_symlink", lambda path: path == source or is_symlink(path)
+        )
+    with pytest.raises(ValueError):
+        prepare.verify_prepared(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -288,7 +331,29 @@ def test_registration_retains_callback_and_uses_platform_library(
         host.install()
 
 
-@pytest.mark.parametrize("fault", [None, "command", "values", "trace", "target"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "command",
+        "values",
+        "trace",
+        "target",
+        "arrays",
+        "same-wrong-values",
+        "truncated-readback",
+        "wrong-dtype",
+        "boolean-count",
+        "tests",
+        "skipped",
+        "negative",
+        "negative-message",
+        "threads",
+        "duplicate",
+        "source-before",
+        "source-after",
+    ],
+)
 def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
     tmp_path, monkeypatch, fault
 ):
@@ -306,6 +371,17 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         ),
     )
     calls = []
+    identities = []
+
+    def prepared(root):
+        identities.append(root)
+        if fault == "source-before" or (
+            fault == "source-after" and len(identities) == 2
+        ):
+            raise ValueError("Prepared MLX source does not match")
+        return {"commit": prepare.COMMIT, "files": {"adapter": "unchanged"}}
+
+    monkeypatch.setattr(verify, "verify_prepared", prepared)
 
     def run(command, **kwargs):
         calls.append(command)
@@ -313,25 +389,62 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         mode = command[command.index("--worker") + 1]
         output = Path(command[-1])
         output.mkdir(parents=True)
-        result = {"tests": 3, "skipped": 0, "arrays": [1, 2, 3]}
+        arrays = [
+            {
+                "dtype": dtype,
+                "count": count,
+                "values": [2 + 3 * i for i in range(count)],
+            }
+            for dtype in verify.DTYPES
+            for count in verify.COUNTS
+        ]
+        result = {"tests": 3, "skipped": 0, "arrays": arrays}
+        if fault == "arrays":
+            result["arrays"] = arrays[:-1]
+        if fault == "same-wrong-values":
+            arrays[1]["values"] = [4]
+        if fault == "truncated-readback":
+            arrays[2]["values"].pop()
+        if fault == "wrong-dtype":
+            arrays[1]["dtype"] = "uint8"
+        if fault == "boolean-count":
+            arrays[1]["count"] = True
+        if fault == "tests":
+            result["tests"] = 0
+        if fault == "skipped":
+            result["skipped"] = 1
         if mode == "native":
             if fault == "values":
-                result["arrays"] = [1, 2, 4]
+                result["arrays"][1]["values"] = [4]
             entries = packages.ENTRIES[:-1] if fault == "trace" else packages.ENTRIES
-            (output / "dispatch.jsonl").write_text(
-                "\n".join(
-                    json.dumps(
-                        {
-                            "entry": entry,
-                            "target": "directx" if fault == "target" else "opengl",
-                        }
-                    )
-                    for entry in entries
-                )
-            )
+            trace = [
+                {
+                    "entry": entry,
+                    "target": "directx" if fault == "target" else "opengl",
+                    "threads": count,
+                }
+                for entry in entries
+                for count in (1, 7, 257)
+            ]
+            if fault == "threads":
+                trace[0]["threads"] = 0
+            if fault == "duplicate":
+                trace.insert(1, trace[0])
+            (output / "dispatch.jsonl").write_text("\n".join(map(json.dumps, trace)))
         verify.save(
             output / "result.json",
-            result if mode in {"cpu", "native"} else {"rejected": True},
+            (
+                result
+                if mode in {"cpu", "native"}
+                else {
+                    "rejected": fault != "negative",
+                    "message": (
+                        "unexpected"
+                        if fault == "negative-message"
+                        else verify.NEGATIVE_CHECKS[mode]
+                    ),
+                }
+            ),
         )
         return SimpleNamespace(returncode=124 if fault == "command" else 0)
 
@@ -342,9 +455,11 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         output_dir=tmp_path / "evidence",
     )
     if fault:
-        with pytest.raises(RuntimeError):
+        with pytest.raises((RuntimeError, ValueError)):
             verify.verify(args)
         assert not (args.output_dir / "evidence.json").exists()
+        if fault == "source-before":
+            assert calls == []
         if fault == "command":
             assert (
                 json.loads((args.output_dir / "cpu.command.json").read_text())[
@@ -354,7 +469,10 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             )
     else:
         evidence = verify.verify(args)
-        assert len(calls) == 5 and evidence["dispatchCount"] == 5
+        assert len(calls) == 5 and evidence["dispatchCount"] == 15
+        assert len(identities) == 2
+        assert evidence["schemaVersion"] == 2
+        assert evidence["adaptation"]["files"] == {"adapter": "unchanged"}
         assert evidence["fullUpstreamSuite"] is False
         assert evidence["fullTranslatedBackend"] is False
         assert evidence["original"] == evidence["translated"]
@@ -392,3 +510,81 @@ def test_ci_requires_both_native_platforms_and_retains_evidence():
     assert "continue-on-error" not in workflow
     assert "opengl-runtime" not in workflow
     assert len(verify.UPSTREAM_TESTS) == 3
+
+
+def test_ci_requires_native_math_before_building_mlx():
+    from tools import ci_coverage
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/mlx-portable-host.yml").read_text()
+    order = (
+        "Validate native scalar math",
+        "Checkout and prepare pinned upstream MLX",
+        "Validate pinned native binary math",
+        "Build adapted upstream MLX",
+    )
+    for earlier, later in zip(order, order[1:]):
+        assert ci_coverage.workflow_job_step_after(
+            workflow, "portable-host", later, earlier
+        )
+    for name, seconds, modules, flags in (
+        (
+            "Validate native scalar math",
+            120,
+            ("test_directx_atan2.py", "test_metal_precise_asin.py"),
+            ("CROSTL_REQUIRE_METAL_PRECISE_ASIN",),
+        ),
+        (
+            "Validate pinned native binary math",
+            900,
+            (
+                "test_struct_buffer_layouts.py",
+                "test_buffer_requirements.py",
+                "test_native_dispatch_limits.py",
+                "test_native_loader_dispatch_integration.py",
+                "test_mlx_current_complex_power.py",
+                "test_mlx_current_binary_shapes.py",
+            ),
+            (
+                "CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_POWER",
+                "CROSTL_REQUIRE_MLX_CURRENT_BINARY_SHAPES",
+                "CROSTL_REQUIRE_STRUCT_BUFFER_RUNTIME",
+            ),
+        ),
+    ):
+        step = ci_coverage.workflow_job_step_section(workflow, "portable-host", name)
+        assert "if:" not in step and "continue-on-error" not in step
+        assert f"--timeout-seconds {seconds}" in step
+        assert "pytest -q -n auto" in step
+        assert "set -euo pipefail" in step
+        assert "--junitxml=.mlx-portable-host/" in step
+        assert "--basetemp=.mlx-portable-host/" in step
+        for module in modules:
+            path = f"tests/test_translator/{module}"
+            assert path in step
+            for event in ("push", "pull_request"):
+                assert path in ci_coverage.workflow_event_path_filters(workflow, event)
+        for flag in flags:
+            assert f'{flag}: "1"' in step
+    scalar = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Validate native scalar math"
+    )
+    assert (
+        "CROSTL_REQUIRE_DIRECTX_ATAN2: ${{ runner.os == 'Windows' && '1' || '0' }}"
+        in scalar
+    )
+    binary = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Validate pinned native binary math"
+    )
+    assert "CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}" in binary
+    assert (
+        "CROSTL_RUN_NATIVE_LOADER_DIRECTX_DEVICE_TEST: "
+        "${{ runner.os == 'Windows' && '1' || '0' }}" in binary
+    )
+    assert (
+        "CROSTL_RUN_NATIVE_LOADER_OPENGL_DEVICE_TEST: "
+        "${{ runner.os == 'Linux' && '1' || '0' }}" in binary
+    )
+    assert "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream" in binary
+    timeout = ci_coverage.workflow_job_timeout_minutes(workflow, "portable-host")
+    assert timeout * 60 > 120 + 900 + 1800 + 300 + 1000

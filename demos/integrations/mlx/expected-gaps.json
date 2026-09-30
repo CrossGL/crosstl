@@ -1498,8 +1498,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
       "schema_version": 2,
-      "sha256": "0dc9b141add78c9a9fa0d109b9b21846ccf6919b521ebf2c74a5c9c68ccfeb30",
-      "size_bytes": 318158,
+      "sha256": "90937acb39015301a3e22858f946d9ec95ee4785ee32c37a23f6a47718ee2ccd",
+      "size_bytes": 318594,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -1668,7 +1668,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 3081324,
+      "generated_size_bytes_total": 3110472,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "v_Absint8int8",
@@ -1676,7 +1676,7 @@
         },
         "maximum": {
           "entryPoint": "gn4large_ArcTancomplex64complex64",
-          "sizeBytes": 7332
+          "sizeBytes": 8373
         }
       }
     },
@@ -2250,8 +2250,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.directx-translation.json",
       "schema_version": 2,
-      "sha256": "2645dbde8b1ed36875c941b9ea7ba8bb6152fb0d1956d1de42fc0ee161731cbf",
-      "size_bytes": 1469277,
+      "sha256": "768bd2733739e2449f9d0ec8361efb0e592a66fec22104da44a13870086f3448",
+      "size_bytes": 1469704,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -2380,7 +2380,7 @@
       "dispatch_metadata_shape_count": 9
     },
     "artifacts": {
-      "generated_size_bytes_total": 11321166,
+      "generated_size_bytes_total": 11409060,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "ss_Addint8",
@@ -2388,7 +2388,7 @@
         },
         "maximum": {
           "entryPoint": "gn4large_LogAddExpcomplex64",
-          "sizeBytes": 7570
+          "sizeBytes": 8611
         }
       }
     },
