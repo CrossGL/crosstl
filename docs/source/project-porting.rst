@@ -2017,6 +2017,14 @@ a native reference path; it does not provide persistent MLX streams, automatic
 host-code redirection, a generated Metal C++ loader, full upstream-suite parity,
 or the remaining runtime adapters tracked by issue #1424.
 
+A separate `MLX Metal host integration harness
+<https://github.com/CrossGL/crosstl/blob/main/demos/integrations/mlx/METAL_HOST.md>`_
+builds the pinned upstream runtime with a documented per-entry library resolver.
+It runs the unchanged upstream operations module with selected translated
+complex-power entries and records dispatches from MLX's own command encoder.
+Other operations remain on the original backend; this is partial, explicit host
+integration, not automatic C++ runtime translation or full upstream-suite parity.
+
 Exact Scalar Physical Resource Layouts
 --------------------------------------
 

@@ -42,6 +42,11 @@ not cover arbitrary dynamic indexing.
 
 ## Scope
 
+The [Metal host integration harness](METAL_HOST.md) redirects selected current-pinned
+complex-power kernels through MLX's own runtime and runs its unchanged upstream
+operations tests. Its dispatch trace distinguishes actual host execution from
+compile-only coverage; unselected operations still use upstream kernels.
+
 The current harness verifies:
 
 - the [pinned native MLX Metal reference baseline](NATIVE_METAL.md) for exact
