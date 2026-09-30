@@ -62,8 +62,14 @@ checkpoints. Completed checkpoints are deliberately rejected; omit ``--resume``
 to regenerate a completed run. Native compilers still run again and cannot reuse
 an old output as successful evidence.
 ``--timeout-seconds`` bounds individual translation jobs and compiler calls.
-Warnings, translation failures, interface drift, compiler failures and incomplete
-coverage prevent a candidate from being written.
+Translation warnings, translation failures, interface drift, compiler failures
+and incomplete coverage prevent a candidate from being written. Default
+toolchain discovery is separate from the explicit compiler command. A warning
+that the default compiler for the selected target is unavailable remains in the
+portability report and in ``audit.json`` under ``defaultToolchainDiagnostics``;
+it does not prevent the explicit command from running. That command must still
+produce a fresh nonempty binary for every entry. Missing or failing explicit
+compilers cannot produce a candidate, and other warnings remain fatal.
 Changes to the source, configuration or input contract during an audit also
 invalidate the result. Compiler timeouts retain captured output for diagnosis.
 
@@ -73,8 +79,8 @@ tests and numerical gates. A refreshed artifact identity establishes neither
 numerical correctness nor a passing upstream test suite; those remain separate
 requirements.
 
-The project-porting workflow requires a small native refresh on macOS (Metal),
-Windows (DXC) and Linux (GLSL). Missing compilers fail the required check. Each
-job retains its generated source, compiler output, audit, candidate and test
-report. This checks the refresh workflow, not numerical execution or complete
-corpus coverage.
+The project-porting workflow requires the refresh contract tests and a native
+refresh on macOS (Metal), Windows (DXC) and Linux (GLSL). Missing explicit
+compilers fail the required check. Each job retains its generated source,
+compiler output, audit, candidate and test report. This checks the refresh
+workflow, not numerical execution or complete corpus coverage.

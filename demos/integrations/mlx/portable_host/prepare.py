@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -19,40 +18,13 @@ def replace_once(text, before, after):
     return text.replace(before, after, 1)
 
 
-def prepare(root, output):
-    root = Path(root).resolve()
-    head = subprocess.check_output(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True, timeout=30
-    ).strip()
-    if head != COMMIT:
-        raise ValueError(f"Expected MLX {COMMIT}, got {head}")
-    modified = subprocess.check_output(
-        ["git", "-C", str(root), "status", "--porcelain"], text=True, timeout=30
-    )
-    if modified.strip():
-        raise ValueError("Preparation requires a clean MLX checkout")
-    backend = root / "mlx/backend/no_gpu"
-    generated = [
-        backend / name
-        for name in (
-            "crosstl_primitives.cpp",
-            "crosstl_event.cpp",
-            "crosstl_backend.cpp",
-            "crosstl_dispatch.h",
-        )
-    ]
-    if any(path.exists() or path.is_symlink() for path in generated):
-        raise ValueError("Preparation cannot overwrite an existing backend file")
-    if Path(output).exists():
-        raise ValueError("Preparation evidence already exists")
-    cmake = backend / "CMakeLists.txt"
-    original = cmake.read_text(encoding="utf-8")
+def adapted_sources(original, primitives, events):
+    """Render the complete adaptation without changing the source tree."""
     primitives = replace_once(
-        (backend / "primitives.cpp").read_text(encoding="utf-8"),
+        primitives,
         "NO_GPU(Arange)",
         "// Arange is implemented by the registered native dispatch backend.",
     )
-    events = (backend / "event.cpp").read_text(encoding="utf-8")
     events = replace_once(
         events,
         "void Event::wait(Stream stream) {",
@@ -76,8 +48,7 @@ def prepare(root, output):
     return;
   }""",
     )
-    cmake.write_text(
-        """option(MLX_CROSTL_HOST "Use the CrossTL synchronous host backend" OFF)
+    cmake = """option(MLX_CROSTL_HOST "Use the CrossTL synchronous host backend" OFF)
 if(MLX_CROSTL_HOST)
   target_sources(mlx PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator.cpp
@@ -86,21 +57,86 @@ if(MLX_CROSTL_HOST)
     ${CMAKE_CURRENT_SOURCE_DIR}/crosstl_event.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/crosstl_primitives.cpp)
 else()
-""" + original + "\nendif()\n",
-        encoding="utf-8",
-    )
-    (backend / "crosstl_primitives.cpp").write_text(primitives, encoding="utf-8")
-    (backend / "crosstl_event.cpp").write_text(events, encoding="utf-8")
-    shutil.copyfile(HERE / "backend.cpp", backend / "crosstl_backend.cpp")
-    shutil.copyfile(HERE / "dispatch.h", backend / "crosstl_dispatch.h")
-    paths = [cmake, *generated]
-    record = {
-        "commit": head,
+""" + original + "\nendif()\n"
+    return {
+        "CMakeLists.txt": cmake.encode("utf-8"),
+        "crosstl_primitives.cpp": primitives.encode("utf-8"),
+        "crosstl_event.cpp": events.encode("utf-8"),
+        "crosstl_backend.cpp": (HERE / "backend.cpp").read_bytes(),
+        "crosstl_dispatch.h": (HERE / "dispatch.h").read_bytes(),
+    }
+
+
+def require_revision(root):
+    head = subprocess.check_output(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True, timeout=30
+    ).strip()
+    if head != COMMIT:
+        raise ValueError(f"Expected MLX {COMMIT}, got {head}")
+
+
+def source_record(sources):
+    return {
+        "commit": COMMIT,
         "files": {
-            str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in paths
+            f"mlx/backend/no_gpu/{name}": hashlib.sha256(data).hexdigest()
+            for name, data in sources.items()
         },
     }
+
+
+def verify_prepared(root):
+    """Require exactly the current adapter and otherwise unchanged tracked sources."""
+    root = Path(root).resolve()
+    require_revision(root)
+    changed = (
+        subprocess.check_output(
+            ["git", "-C", str(root), "diff", "--name-only", "-z", "HEAD", "--"],
+            timeout=30,
+        )
+        .decode("utf-8")
+        .split("\0")
+    )
+    if set(changed) - {"", "mlx/backend/no_gpu/CMakeLists.txt"}:
+        raise ValueError("Unrelated tracked MLX sources were modified")
+    originals = [
+        subprocess.check_output(
+            ["git", "-C", str(root), "show", f"HEAD:mlx/backend/no_gpu/{name}"],
+            timeout=30,
+        ).decode("utf-8")
+        for name in ("CMakeLists.txt", "primitives.cpp", "event.cpp")
+    ]
+    sources = adapted_sources(*originals)
+    for name, expected in sources.items():
+        path = root / "mlx/backend/no_gpu" / name
+        if path.is_symlink() or not path.is_file() or path.read_bytes() != expected:
+            raise ValueError(f"Prepared MLX source does not match: {name}")
+    return source_record(sources)
+
+
+def prepare(root, output):
+    root = Path(root).resolve()
+    require_revision(root)
+    modified = subprocess.check_output(
+        ["git", "-C", str(root), "status", "--porcelain"], text=True, timeout=30
+    )
+    if modified.strip():
+        raise ValueError("Preparation requires a clean MLX checkout")
+    backend = root / "mlx/backend/no_gpu"
+    sources = adapted_sources(
+        *(
+            (backend / name).read_text(encoding="utf-8")
+            for name in ("CMakeLists.txt", "primitives.cpp", "event.cpp")
+        )
+    )
+    generated = [backend / name for name in sources if name != "CMakeLists.txt"]
+    if any(path.exists() or path.is_symlink() for path in generated):
+        raise ValueError("Preparation cannot overwrite an existing backend file")
+    if Path(output).exists() or Path(output).is_symlink():
+        raise ValueError("Preparation evidence already exists")
+    for name, data in sources.items():
+        (backend / name).write_bytes(data)
+    record = source_record(sources)
     Path(output).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     return record
 

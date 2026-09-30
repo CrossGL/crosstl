@@ -87,6 +87,117 @@ def test_refresh_translates_through_public_project_api_and_preserves_contract(pr
     )
 
 
+@pytest.fixture
+def unavailable_default_toolchain(monkeypatch):
+    from crosstl.project import pipeline
+
+    monkeypatch.setattr(
+        pipeline,
+        "_tool_status",
+        lambda target: {
+            "target": target,
+            "status": "unavailable",
+            "tools": [{"name": "default-compiler", "available": False, "path": None}],
+        },
+    )
+
+
+def test_explicit_compiler_replaces_unavailable_default(
+    project, unavailable_default_toolchain
+):
+    result = refresh.refresh(**project)
+    assert result["status"] == "passed", result
+    assert result["records"][0]["status"] == "passed"
+    report = json.loads(Path(result["portabilityReport"]).read_text())
+    diagnostics = report["diagnostics"]
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["code"] == "project.validate.toolchain-unavailable"
+    assert report["summary"]["diagnosticCounts"]["warning"] == 1
+    assert result["defaultToolchainDiagnostics"] == diagnostics
+    assert result["numericalExecution"] is False
+
+
+@pytest.mark.parametrize("failure", ["missing", "nonzero", "empty"])
+def test_unavailable_default_does_not_bypass_explicit_compiler_failure(
+    project, unavailable_default_toolchain, failure
+):
+    if failure == "missing":
+        project["compiler_command"][0] = str(project["root"] / "missing-compiler")
+    else:
+        Path(project["compiler_command"][1]).write_text(
+            "raise SystemExit(4)\n" if failure == "nonzero" else "pass\n"
+        )
+    result = refresh.refresh(**project)
+    assert result["status"] == "failed"
+    assert len(result["defaultToolchainDiagnostics"]) == 1
+    assert len(result["records"]) == 1
+    assert result["records"][0]["status"] == "failed"
+    assert result["records"][0]["error"]
+    assert not (project["work"] / "candidate.json").exists()
+
+
+@pytest.mark.parametrize(
+    "code,severity,target,capabilities",
+    [
+        ("project.source.unsupported", "warning", "opengl", ["source.translation"]),
+        (
+            "project.validate.toolchain-unavailable",
+            "error",
+            "opengl",
+            ["toolchain.validation"],
+        ),
+        (
+            "project.validate.toolchain-unavailable",
+            "warning",
+            "vulkan",
+            ["toolchain.validation"],
+        ),
+        (
+            "project.validate.toolchain-unavailable",
+            "warning",
+            "opengl",
+            ["source.translation"],
+        ),
+    ],
+)
+def test_explicit_compiler_does_not_suppress_other_diagnostics(
+    project,
+    unavailable_default_toolchain,
+    monkeypatch,
+    code,
+    severity,
+    target,
+    capabilities,
+):
+    import crosstl.project
+    from crosstl.project import pipeline
+
+    translate = crosstl.project.translate_project
+
+    def with_diagnostic(*args, **kwargs):
+        report = translate(*args, **kwargs)
+        report.diagnostics.append(
+            pipeline.ProjectDiagnostic(
+                severity=severity,
+                code=code,
+                message="Additional validation diagnostic",
+                location=pipeline.SourceLocation(file="source.cgl"),
+                target=target,
+                missing_capabilities=capabilities,
+            )
+        )
+        return report
+
+    monkeypatch.setattr(crosstl.project, "translate_project", with_diagnostic)
+    result = refresh.refresh(**project)
+    assert result["status"] == "failed"
+    assert result["records"] == []
+    assert (
+        result["failures"][-1]["error"] == "Translation reported warnings or failures"
+    )
+    assert not (project["work"] / "candidate.json").exists()
+
+
 @pytest.mark.parametrize("jobs", [1, 2])
 def test_complete_multi_entry_source_refreshes_in_serial_and_parallel(project, jobs):
     source = (

@@ -106,6 +106,61 @@ def test_derived_workgroup_counts_use_exact_integer_arithmetic():
     assert _workgroup_count(request) == (2**59 + 1, 1, 1)
 
 
+@pytest.mark.parametrize("bad", [False, 0, "", {}, set(), 1, True, b"\x01"])
+@pytest.mark.parametrize(
+    "field,reported",
+    [
+        ("workgroup_count", "workgroupCount"),
+        ("global_size", "globalSize"),
+        ("workgroup_size", "workgroupSize"),
+    ],
+)
+def test_malformed_dimensions_cannot_fall_back_to_other_metadata(bad, field, reported):
+    dimensions = {"workgroup_count": (), "global_size": (8,), "workgroup_size": (4,)}
+    dimensions[field] = bad
+    request = SimpleNamespace(dispatch=SimpleNamespace(**dimensions))
+    with pytest.raises(RuntimeAdapterSetupError) as caught:
+        _workgroup_count(request, target="OpenGL")
+    assert caught.value.details["reasonKind"] == "dispatch-dimensions-invalid"
+    assert caught.value.details["field"] == reported
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl", "vulkan"])
+@pytest.mark.parametrize("bad", [False, 0, "", {}, set(), 1, True, b"\x01"])
+def test_malformed_local_size_cannot_bypass_native_limit_validation(target, bad):
+    with pytest.raises(RuntimeAdapterSetupError) as caught:
+        _validate_dispatch_limits(
+            (1,),
+            bad,
+            target=target,
+            max_count=(65535,) * 3,
+            max_size=(1024, 1024, 64),
+            max_invocations=1024,
+        )
+    assert caught.value.details["reasonKind"] == "dispatch-dimensions-invalid"
+    assert caught.value.details["field"] == "workgroupSize"
+
+
+@pytest.mark.parametrize("omitted", [None, (), []])
+def test_omitted_dimensions_keep_geometry_defaults(omitted):
+    request = SimpleNamespace(
+        dispatch=SimpleNamespace(
+            workgroup_count=omitted,
+            global_size=(9,),
+            workgroup_size=(4,),
+        )
+    )
+    assert _workgroup_count(request) == (3, 1, 1)
+    _validate_dispatch_limits(
+        (1,),
+        omitted,
+        target="directx",
+        max_count=(65535,) * 3,
+        max_size=(1024, 1024, 64),
+        max_invocations=1024,
+    )
+
+
 @pytest.mark.parametrize("axis", [0, 1, 2])
 def test_directx_rejects_over_limit_before_allocating_or_dispatching(tmp_path, axis):
     module = _FakeCompushady()
@@ -122,6 +177,36 @@ def test_directx_rejects_over_limit_before_allocating_or_dispatching(tmp_path, a
         runtime.dispatch(None, None, request)
     assert caught.value.details["axis"] == axis
     assert module.buffers == [] and module.computes == []
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize("field", ["workgroup_count", "workgroup_size"])
+def test_malformed_sequence_geometry_prevents_all_device_work(tmp_path, target, field):
+    module = _FakeCompushady()
+    context = _SequenceOpenGLContext()
+    runtime = (
+        DirectXComputeRuntime(module_loader=lambda _: module, platform_name="win32")
+        if target == "directx"
+        else OpenGLComputeRuntime(
+            module_loader=lambda _: object(), context_factory=lambda _: context
+        )
+    )
+    requests = list(_native_dispatch_sequence_requests(tmp_path, target))
+    requests[1] = replace(
+        requests[1],
+        dispatch=replace(
+            RuntimeDispatchGeometry(
+                workgroup_count=(1,), workgroup_size=(1,), global_size=(1,)
+            ),
+            **{field: False},
+        ),
+    )
+    with pytest.raises(RuntimeAdapterSetupError) as caught:
+        runtime.dispatch_sequence(None, None, requests)
+    assert caught.value.details["reasonKind"] == "dispatch-dimensions-invalid"
+    assert not module.buffers and not module.computes
+    assert not context.events and not context.buffers and not context.shaders
+    assert caught.value.details["nodeIndex"] == 1
 
 
 def test_opengl_preflights_entire_sequence_before_any_device_work(tmp_path):
