@@ -22,6 +22,18 @@ This is a 24/17,478 deterministic translation and native-compiler increment with
 2/17,478 numerical runtime coverage, not full-tree coverage, upstream MLX
 test-suite execution, or MLX host-runtime redirection.
 
+A separate native gate exercises all 15 discovered `Powercomplex64` entry
+shapes at the same `d9add9d` pin. Its 291 complex outputs cover scalar/vector
+broadcasting, multidimensional grids, non-contiguous inputs, zero strides,
+32/64-bit index variants, and partial final tiles in four-dimensional gathers.
+DirectX and OpenGL use the public runtime-package and native-loader APIs.
+Metal executes both the original source and generated kernels. Each output is
+checked against an independently indexed CPU reference; required CI retains
+the compiler logs, packages, bindings and numerical results. The OpenGL
+index-range assertions are bounded fixture preconditions, not general runtime
+bounds checks. Other binary operators and types, the complete upstream suite,
+and MLX host-runtime redirection remain outside this proof.
+
 ## Scope
 
 The current harness verifies:

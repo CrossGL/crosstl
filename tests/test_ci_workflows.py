@@ -2506,6 +2506,26 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "if: always()" in struct_upload
     assert "name: mlx-complex-power-${{ runner.os }}" in struct_upload
     assert "if-no-files-found: error" in struct_upload
+    binary_shapes = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Prove current MLX binary shape parity"
+    )
+    assert 'CROSTL_REQUIRE_MLX_CURRENT_BINARY_SHAPES: "1"' in binary_shapes
+    assert "--timeout-seconds 900 --" in binary_shapes
+    assert "pytest -q -n auto" in binary_shapes
+    assert "if: runner.os" not in binary_shapes
+    assert "test_mlx_current_binary_shapes.py" in binary_shapes
+    assert (
+        mlx_porting.count('"tests/test_translator/test_mlx_current_binary_shapes.py"')
+        == 2
+    )
+    binary_upload = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Upload current MLX binary shape evidence"
+    )
+    assert "if: always()" in binary_upload
+    assert "name: mlx-binary-shapes-${{ runner.os }}" in binary_upload
+    assert "mlx-current-tree-upstream/.current-binary-shapes-*" in binary_upload
+    assert "include-hidden-files: true" in binary_upload
+    assert "if-no-files-found: error" in binary_upload
     primitive_checks = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate Direct3D reduction primitives"
     )

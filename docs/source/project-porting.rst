@@ -2043,6 +2043,24 @@ every input, output, error and bound, and buffers use nonzero sentinels to detec
 missed writes. This proves the selected kernel and layout path, not full binary
 family coverage, upstream MLX-suite execution, or MLX host-runtime redirection.
 
+The separate binary-shape gate discovers and executes every one of the 15
+``Powercomplex64`` entry shapes at that pin. Its 291 complex outputs exercise
+scalar/vector broadcasting, two- and three-dimensional dispatch, non-contiguous
+storage, zero strides, 32/64-bit index paths and partial final tiles in
+four-dimensional gathers. Expected input locations are enumerated from logical
+coordinates and strides independently of the shader's index helpers. Metal
+executes both original and translated kernels; DirectX and OpenGL consume the
+public runtime packages. DirectX also compiles with warnings fatal, and OpenGL
+validates a generated SPIR-V 1.3 module before native GLSL execution.
+
+The gate rejects a changed source census, missing native tools, missing entry
+outputs and numerical mismatches. OpenGL's explicit ``[0, 511]`` index-range
+assertions apply only to these bounded workloads; they are not inferred bounds
+for arbitrary tensors. A 900-second outer deadline and always-uploaded artifacts
+preserve failures without converting them to optional skips. This extends
+access-shape coverage for one operator and type, not every binary operation or
+the upstream MLX test suite.
+
 At pinned MLX commit ``4367c73b60541ddd5a266ce4644fd93d20223b6e``, the
 ``arangeuint32`` entry from ``arange.metal`` is translated to DirectX and
 OpenGL, reflected, packaged, converted through the public native loader bridge,
