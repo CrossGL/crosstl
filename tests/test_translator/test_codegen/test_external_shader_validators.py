@@ -1450,6 +1450,7 @@ layout(std430, binding = 24) buffer MatrixAtomicBlock {
 void main() {
     uint readonlyOld = atomicAdd(readAtomicBlock.value, 1u);
     float floatOld = atomicAdd(floatAtomicBlock.value, 1.0);
+    float minimumOld = atomicMin(floatAtomicBlock.value, 1.0);
     uint vectorOld = atomicAdd(vectorAtomicBlock.value, 1u);
     float matrixOld = atomicAdd(matrixAtomicBlock.value, 1.0);
 }
@@ -5487,8 +5488,11 @@ def test_mixed_glsl_ssbo_unsupported_atomics_metal_output_compiles_with_xcrun_me
     )
     assert "#version" not in code
     assert "unsupported Metal GLSL buffer block atomic" in code
-    assert "atomic_fetch_" not in code
-    assert "float floatOld = /* unsupported Metal GLSL buffer block atomic" in code
+    assert code.count("atomic_fetch_add_explicit(") == 1
+    assert "reinterpret_cast<device atomic_float*>(floatAtomicBlock + 0)" in code
+    assert "float floatOld = atomic_fetch_add_explicit(" in code
+    assert "float minimumOld = /* unsupported Metal GLSL buffer block atomic" in code
+    assert "atomic_fetch_min_explicit(" not in code
     assert "*/ 0;" in code
     shader_path.write_text(code, encoding="utf-8")
 

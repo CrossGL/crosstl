@@ -9139,6 +9139,8 @@ class MetalCodeGen:
             metal_array_element_type = self.metal_array_element_type(array_type)
             if metal_array_element_type is not None:
                 return metal_array_element_type
+            if self.is_structured_buffer_type(array_type):
+                return self.structured_buffer_element_type(array_type)
             pointee_type = self.pointer_pointee_type_name(array_type)
             if pointee_type is not None:
                 return pointee_type
@@ -9196,6 +9198,11 @@ class MetalCodeGen:
         if isinstance(expr, RayQueryOpNode):
             return self.metal_ray_query_method_return_type(expr.operation)
         if isinstance(expr, FunctionCallNode):
+            buffer_source = self.structured_buffer_load_source(expr)
+            if buffer_source is not None:
+                return self.structured_buffer_element_type(
+                    self.expression_result_type(buffer_source)
+                )
             ray_query_operation = self.ray_query_operation_from_function_call(expr)
             if ray_query_operation is not None:
                 return self.metal_ray_query_method_return_type(ray_query_operation)
@@ -13363,12 +13370,12 @@ class MetalCodeGen:
         target = args[0]
         target_type = self.expression_result_type(target)
         mapped_target_type = self.map_type(target_type)
-        if mapped_target_type not in {"int", "uint"}:
+        if not self.buffer_atomic_supports_scalar_type(operation, mapped_target_type):
             return self.unsupported_metal_buffer_resource_atomic_call(
                 func_name,
                 target,
                 (
-                    "requires a scalar int or uint device/threadgroup target, "
+                    "requires a supported scalar device/threadgroup target, "
                     f"got {mapped_target_type or 'unknown'}"
                 ),
             )
@@ -13379,6 +13386,19 @@ class MetalCodeGen:
                 func_name,
                 target,
                 "requires a device or threadgroup target",
+            )
+
+        root_name = self.assignment_target_root_name(target)
+        if (
+            root_name in self.current_readonly_metal_parameters
+            or root_name in self.current_readonly_raw_buffer_parameters
+            or self.structured_buffer_type_name(
+                self.local_variable_types.get(root_name)
+            )
+            == "StructuredBuffer"
+        ):
+            return self.unsupported_metal_buffer_resource_atomic_call(
+                func_name, target, "requires writable storage"
             )
 
         target_expr = self.generate_expression(target)
@@ -14165,6 +14185,21 @@ class MetalCodeGen:
         return self.metal_native_narrow_bitcast_storage_type(
             element_type_name
         ) or self.map_type(element_type_name)
+
+    def structured_buffer_load_source(self, expr):
+        if not isinstance(expr, FunctionCallNode):
+            return None
+        function = getattr(expr, "function", None) or getattr(expr, "name", None)
+        name = getattr(function, "name", function)
+        args = getattr(expr, "args", [])
+        if (
+            name == "buffer_load"
+            and name not in self.user_function_names
+            and len(args) == 2
+            and self.is_structured_buffer_type(self.expression_result_type(args[0]))
+        ):
+            return args[0]
+        return None
 
     def metal_thread_pointer_return_surrogate_type(self, func):
         """Recover a pointer ABI from one canonical CrossGL buffer surrogate.
@@ -15799,6 +15834,9 @@ class MetalCodeGen:
         return member_address_spaces
 
     def assignment_target_root_name(self, target):
+        buffer_source = self.structured_buffer_load_source(target)
+        if buffer_source is not None:
+            return self.assignment_target_root_name(buffer_source)
         if isinstance(target, UnaryOpNode) and getattr(target, "operator", None) in {
             "&",
             "*",
@@ -21329,6 +21367,12 @@ class MetalCodeGen:
             "atomicCompSwap": ("compare_exchange", 3),
         }
 
+    @staticmethod
+    def buffer_atomic_supports_scalar_type(operation, component_type):
+        return component_type in {"int", "uint"} or (
+            component_type == "float" and operation in {"fetch_add", "exchange"}
+        )
+
     def glsl_buffer_block_atomic_access(self, target):
         access = self.glsl_buffer_block_array_access(target)
         if access is not None:
@@ -21380,11 +21424,13 @@ class MetalCodeGen:
                 "requires a scalar int or uint buffer member",
                 access,
             )
-        if access.get("component_type") not in {"int", "uint"}:
+        if not self.buffer_atomic_supports_scalar_type(
+            operation, access.get("component_type")
+        ):
             return self.unsupported_glsl_buffer_block_atomic_call(
                 target,
                 func_name,
-                "currently supports only int or uint buffer members",
+                f"does not support {access.get('component_type')} buffer members",
                 access,
             )
 

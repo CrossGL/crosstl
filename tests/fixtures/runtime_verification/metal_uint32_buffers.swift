@@ -53,9 +53,13 @@ func run() throws {
     guard command.status == .completed else {
         throw ExecutionError.unavailable("Dispatch failed: \(String(describing: command.error))")
     }
-    let values = Array(UnsafeBufferPointer(
-        start: buffers.last!.contents().assumingMemoryBound(to: UInt32.self), count: request.outputCount))
-    let output = try JSONSerialization.data(withJSONObject: ["values": values, "device": device.name],
+    let readbacks = buffers.map { allocation in
+        Array(UnsafeBufferPointer(
+            start: allocation.contents().assumingMemoryBound(to: UInt32.self),
+            count: allocation.length / MemoryLayout<UInt32>.stride))
+    }
+    let output = try JSONSerialization.data(withJSONObject: ["values": readbacks.last!,
+        "buffers": readbacks, "device": device.name],
                                             options: [.sortedKeys])
     FileHandle.standardOutput.write(output)
 }

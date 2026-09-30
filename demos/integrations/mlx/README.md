@@ -854,13 +854,26 @@ the MLX host runtime, or run the upstream MLX test suite on OpenGL.
 
 ## Current Translator Gaps
 
-The current-pin gated-delta backward kernels remain blocked by floating-point
+The current-pin gated-delta backward kernels still need portable floating-point
 atomic lowering ([#1986](https://github.com/CrossGL/crosstl/issues/1986)). Struct
 selection now preserves anonymous type-parameter defaults and evaluates supported
 `enable_if` partial specializations ([#1985](https://github.com/CrossGL/crosstl/issues/1985)).
 The selected `seq_gated_delta_vjp_float_128_128_24_24_1` entry retains the floating
-field in `mlx_atomic<float>`, but its generated atomic operations still fail native
-compilation. This is not an executable gated-delta port.
+field in `mlx_atomic<float>`. Its generated Metal now compiles with warnings fatal;
+the macOS host workflow requires compilation of both the original source and the
+translated entry and retains their libraries, compiler logs and identities.
+DirectX and OpenGL floating atomic lowering remain incomplete. Compilation is
+not a numerical execution proof for this backward kernel.
+
+Reduced Metal roundtrip tests execute float atomic addition and exchange on
+scalar buffers and aggregate fields. They check 513 competing updates, returned
+values, final storage and single evaluation of address/value operands. Separate
+isolated cases preserve signed zeros, infinities, NaN bit patterns and subnormal
+inputs against original-source Metal controls. The macOS workflow requires these
+readbacks and retains the original/generated sources, compiled libraries and raw
+buffer contents. Float min/max and bitwise atomics remain unsupported; local and
+read-only storage are rejected. These tests do not establish portable float
+atomic support or a complete gated-delta port.
 
 Unknown predicates, unresolved constraint result types and multiple viable
 constrained partials produce diagnostics instead of selecting a primary

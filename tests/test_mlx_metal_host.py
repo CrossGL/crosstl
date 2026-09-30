@@ -269,6 +269,24 @@ def test_ci_requires_pinned_native_host_execution():
     assert "--timeout-seconds 3300" in workflow
     assert '--label "MLX translated host verification"' in workflow
     assert "pytest -q -n auto tests/test_mlx_metal_host.py" in workflow
+    assert 'CROSTL_REQUIRE_METAL_FLOAT_ATOMICS: "1"' in workflow
+    assert '--label "Native float atomics"' in workflow
+    assert "--basetemp=.mlx-metal-host/float-atomics/pytest" in workflow
+    assert "--junitxml=.mlx-metal-host/float-atomics/results.xml" in workflow
+    assert workflow.count('"tests/test_translator/test_metal_float_atomics.py"') == 2
+    assert (
+        workflow.count(
+            '"tests/fixtures/runtime_verification/metal_uint32_buffers.swift"'
+        )
+        == 2
+    )
+    assert "tests/test_translator/test_metal_float_atomics.py \\" in workflow
+    assert 'CROSTL_REQUIRE_MLX_GATED_DELTA_METAL: "1"' in workflow
+    assert "CROSTL_MLX_CURRENT_ROOT: mlx-upstream" in workflow
+    assert "--basetemp=.mlx-metal-host/gated-delta/pytest" in workflow
+    assert "--junitxml=.mlx-metal-host/gated-delta/results.xml" in workflow
+    assert workflow.count('"tests/test_translator/test_mlx_gated_delta_metal.py"') == 2
+    assert "tests/test_translator/test_mlx_gated_delta_metal.py \\" in workflow
     assert "if: always()" in workflow
     assert "continue-on-error" not in workflow
 
