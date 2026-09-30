@@ -49964,7 +49964,7 @@ def test_hlsl_software_subgroup_rejects_divergent_shuffle_control_flow():
     assert excinfo.value.workgroup_size == (32, 2, 1)
 
 
-def test_hlsl_software_subgroup_rejects_helper_without_invocation_identity():
+def test_hlsl_software_subgroup_helpers_inherit_entry_invocation_identity(tmp_path):
     code = """
     shader HLSLSoftwareSubgroupMissingIdentity {
         uint shuffled(uint value) {
@@ -49987,13 +49987,245 @@ def test_hlsl_software_subgroup_rejects_helper_without_invocation_identity():
         software_subgroup_width=32,
     )
 
-    with pytest.raises(
-        DirectXSoftwareSubgroupError,
-        match="require a local-invocation index",
-    ) as excinfo:
-        codegen.generate(parse_code(tokenize_code(code)))
+    generated = codegen.generate(parse_code(tokenize_code(code)))
+    identity = "__crossgl_software_subgroup_invocation"
+    assert f"static uint {identity};" in generated
+    assert f"{identity} = uint(groupIndex);" in generated
+    assert f"uint({identity})" in generated
+    assert generated.index(f"{identity} =") < generated.index(
+        "output[groupIndex] = shuffled(groupIndex);"
+    )
+    assert "WaveReadLaneAt" not in generated
+    assert_directx_warnings_clean_if_available(generated, tmp_path, profile="cs_6_6")
 
-    assert excinfo.value.reason == "invocation-index-unavailable"
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_hlsl_software_subgroup_returning_helpers_keep_invocation_identity(
+    tmp_path, nested
+):
+    wrapper = "uint wrapper(uint value) { return shuffled(value); }" if nested else ""
+    call = "wrapper" if nested else "shuffled"
+    code = f"""
+    shader ReturningSubgroupHelper {{
+        uint shuffled(uint value) {{ return WaveShuffleDown(value, 1u); }}
+        {wrapper}
+        compute {{
+            @ stage_entry
+            @ numthreads(32, 2, 1)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      uint index @gl_LocalInvocationIndex) @ WaveSize(32) {{
+                output[index] = {call}(index);
+            }}
+        }}
+    }}
+    """
+    generated = HLSLCodeGen(
+        relative_wave_shuffle_out_of_range="self", software_subgroup_width=32
+    ).generate(parse_code(tokenize_code(code)))
+    assert "static uint __crossgl_software_subgroup_invocation;" in generated
+    assert "__crossgl_software_subgroup_invocation = uint(index);" in generated
+    assert "return __crossgl_software_subgroup_shuffle_down_uint(" in generated
+    assert "WaveReadLaneAt" not in generated
+    assert_directx_warnings_clean_if_available(generated, tmp_path, profile="cs_6_6")
+
+
+def test_hlsl_software_subgroup_helper_identity_avoids_local_names():
+    code = """
+    shader SubgroupIdentityCollision {
+        uint shuffled(uint __crossgl_software_subgroup_invocation) {
+            return WaveShuffleDown(__crossgl_software_subgroup_invocation, 1u);
+        }
+        compute {
+            @ stage_entry
+            @ numthreads(32, 1, 1)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      uint index @gl_LocalInvocationIndex) @ WaveSize(32) {
+                output[index] = shuffled(index);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen(
+        relative_wave_shuffle_out_of_range="self", software_subgroup_width=32
+    ).generate(parse_code(tokenize_code(code)))
+    assert "static uint __crossgl_software_subgroup_invocation_;" in generated
+    assert "uint(__crossgl_software_subgroup_invocation_)" in generated
+
+
+@pytest.mark.parametrize(
+    "entry_parameter, helper_body, call, reason",
+    [
+        (
+            "uint index @SV_DispatchThreadID",
+            "return WaveShuffleDown(value, 1u);",
+            "output[index] = shuffled(index);",
+            "invocation-index-unavailable",
+        ),
+        (
+            "uint index @gl_LocalInvocationIndex",
+            "return WaveShuffleDown(value, 1u);",
+            "if (index < 16u) { output[index] = shuffled(index); }",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "uint index @gl_LocalInvocationIndex",
+            "if (value == 0u) { return value; } return WaveShuffleDown(value, 1u);",
+            "output[index] = shuffled(index);",
+            "early-return-unproven",
+        ),
+    ],
+)
+def test_hlsl_software_subgroup_helper_identity_keeps_safety_checks(
+    entry_parameter, helper_body, call, reason
+):
+    code = f"""
+    shader UnsafeSubgroupHelper {{
+        uint shuffled(uint value) {{ {helper_body} }}
+        compute {{
+            @ stage_entry
+            @ numthreads(32, 1, 1)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      {entry_parameter}) @ WaveSize(32) {{ {call} }}
+        }}
+    }}
+    """
+    with pytest.raises(DirectXSoftwareSubgroupError) as excinfo:
+        HLSLCodeGen(
+            relative_wave_shuffle_out_of_range="self", software_subgroup_width=32
+        ).generate(parse_code(tokenize_code(code)))
+    assert excinfo.value.reason == reason
+
+
+@pytest.mark.parametrize("groups", [1, 2])
+def test_hlsl_software_subgroup_requires_workgroup_uniform_returns(tmp_path, groups):
+    code = f"""
+    shader UniformSubgroupReturn {{
+        uint shuffled(uint value, uint offset) {{
+            return WaveShuffleDown(value, offset);
+        }}
+        uint half_width(uint width) {{ return width / 2u; }}
+        compute {{
+            @ stage_entry
+            @ numthreads(32, {groups}, 1)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      uint index @gl_LocalInvocationIndex,
+                      uint subgroup @gl_SubgroupID,
+                      uint width @gl_SubgroupSize) @ WaveSize(32) {{
+                if (index == 0u) {{ output[subgroup] = index; }}
+                if (subgroup != 0u) {{ return; }}
+                uint value = half_width(width);
+                for (uint offset = width / 2u; offset > 0u; offset /= 2u) {{
+                    value += shuffled(value, offset);
+                }}
+                output[index] = value;
+            }}
+        }}
+    }}
+    """
+    codegen = HLSLCodeGen(
+        relative_wave_shuffle_out_of_range="self", software_subgroup_width=32
+    )
+    ast = parse_code(tokenize_code(code))
+    if groups > 1:
+        with pytest.raises(DirectXSoftwareSubgroupError) as excinfo:
+            codegen.generate(ast)
+        assert excinfo.value.reason == "early-return-unproven"
+        return
+    generated = codegen.generate(ast)
+    assert "if (subgroup != 0u)" in generated
+    assert "return;" in generated
+    assert "for (uint offset = (width / 2u);" in generated
+    assert "WaveReadLaneAt" not in generated
+    assert_directx_warnings_clean_if_available(generated, tmp_path, profile="cs_6_6")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "subgroup = index;",
+        "subgroup += index;",
+        "change(subgroup, index);",
+        "uint subgroup = index;",
+    ],
+)
+def test_hlsl_software_subgroup_rejects_modified_uniform_return_condition(mutation):
+    code = f"""
+    shader ModifiedUniformReturn {{
+        void change(inout uint value, uint index) {{ value = index; }}
+        compute {{
+            @ stage_entry
+            @ numthreads(32, 1, 1)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      uint index @gl_LocalInvocationIndex,
+                      uint subgroup @gl_SubgroupID) @ WaveSize(32) {{
+                {{
+                    {mutation}
+                    if (subgroup != 0u) {{ return; }}
+                    output[index] = WaveShuffleDown(index, 1u);
+                }}
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(DirectXSoftwareSubgroupError) as excinfo:
+        HLSLCodeGen(
+            relative_wave_shuffle_out_of_range="self", software_subgroup_width=32
+        ).generate(parse_code(tokenize_code(code)))
+    assert excinfo.value.reason == "early-return-unproven"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["change(offset, index);", "width = index;", "change(width, index);"],
+)
+def test_hlsl_software_subgroup_rejects_mutated_loop_controls(mutation):
+    code = f"""
+    shader ModifiedUniformLoop {{
+        void change(inout uint value, uint index) {{ value = index; }}
+        compute {{
+            @ stage_entry
+            @ numthreads(32, 1, 1)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      uint index @gl_LocalInvocationIndex,
+                      uint width @gl_SubgroupSize) @ WaveSize(32) {{
+                for (uint offset = width / 2u; offset > 0u; offset /= 2u) {{
+                    {mutation}
+                    output[index] = WaveShuffleDown(index, offset);
+                }}
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(DirectXSoftwareSubgroupError) as excinfo:
+        HLSLCodeGen(
+            relative_wave_shuffle_out_of_range="self", software_subgroup_width=32
+        ).generate(parse_code(tokenize_code(code)))
+    assert excinfo.value.reason == "potentially-divergent-control-flow"
+
+
+def test_hlsl_software_subgroup_helper_cannot_inherit_uniform_parameter_name():
+    code = """
+    shader ShadowedUniformParameter {
+        uint shuffled(uint width) {
+            if (width != 0u) { return width; }
+            return WaveShuffleDown(width, 1u);
+        }
+        compute {
+            @ stage_entry
+            @ numthreads(32, 1, 1)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      uint index @gl_LocalInvocationIndex,
+                      uint width @gl_SubgroupSize) @ WaveSize(32) {
+                output[index] = shuffled(index);
+            }
+        }
+    }
+    """
+    with pytest.raises(DirectXSoftwareSubgroupError) as excinfo:
+        HLSLCodeGen(
+            relative_wave_shuffle_out_of_range="self", software_subgroup_width=32
+        ).generate(parse_code(tokenize_code(code)))
+    assert excinfo.value.reason == "early-return-unproven"
 
 
 def test_hlsl_software_subgroup_rejects_unsupported_operation():

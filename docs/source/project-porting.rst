@@ -502,7 +502,7 @@ exactly 42 Metal units, 17,478 entries, and zero diagnostics. The compact
 artifacts. Required macOS, Linux, and Windows CI compiles all 24 entries with
 the native Metal compiler, ``glslangValidator``/``spirv-val``, and DXC,
 respectively. Numerical runtime parity remains an explicit representative
-float32 subset: ``argmin_float32`` and ``argmax_float32`` execute on Metal,
+float32 subset: ``argmin_float32`` and ``argmax_float32`` must execute on Metal,
 Mesa EGL, and Direct3D 12 WARP over two rows, axis sizes 32 and 129, strides 1
 and 2, ordinary values, and NaN/Infinity values; the Metal path also executes
 the exact upstream metallib for parity. This is a 24/17,478 deterministic
@@ -512,6 +512,19 @@ upstream MLX test suite and MLX host-runtime redirection have not yet been
 implemented. Strict JSON runtime requests encode non-finite float32 inputs with
 the exact strings ``nan``, ``+infinity``, and ``-infinity`` before
 deterministic IEEE-754 packing.
+
+The two current-tree DirectX float32 entries explicitly select
+``software_subgroup_width = 32``. Their shuffle helpers use shared storage and
+workgroup barriers instead of hardware wave instructions. A private
+per-invocation index initialized by the entry point preserves lane identity
+through helper calls. Early returns are accepted only under proven
+workgroup-uniform control flow; a subgroup-ID condition is uniform only when
+the workgroup contains one logical subgroup. Writes, shadowing, and mutable
+helper arguments invalidate the corresponding uniformity assumptions.
+Other DirectX entries retain the native-wave compiler path. Both paths still
+require DXC validation, and the numerical entries retain every existing case
+and the required Windows WARP execution gate. Compilation alone does not
+establish numerical parity or resolve a native-runtime timeout.
 
 The current-pinned MLX integration exercises entry-scoped translation for all
 877 discovered entries from the include-expanded ``unary.metal`` source. The

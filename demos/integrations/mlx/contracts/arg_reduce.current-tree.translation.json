@@ -121,12 +121,12 @@
         "sizeBytes": 6844
       },
       "argmin_float32": {
-        "sha256": "0768cdc9658dd81ab76c02b6d59baf9a7b1103dae09ef56e77e09e181c0ed825",
-        "sizeBytes": 6813
+        "sha256": "982c090fb7001d557976cebaae61d392a4ade3db3bc116e71a32f1708a92d9f8",
+        "sizeBytes": 7625
       },
       "argmax_float32": {
-        "sha256": "35be05ff5f8485644cb3cddad86c1e17b19eaa05599611baf95997e9ff646d88",
-        "sizeBytes": 6815
+        "sha256": "44deffd7bb7baf3df53cdf1a509588123a2028f226b17abc5aa8bbd4a6063780",
+        "sizeBytes": 7627
       },
       "argmin_bfloat16": {
         "sha256": "fc486b3bcbbcaaa07f4b86794b15107bf71c8c82a7bd6bdf26e4139d84b56f9b",

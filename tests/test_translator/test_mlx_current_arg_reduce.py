@@ -188,15 +188,15 @@ ARTIFACTS = {
         },
         "argmin_float32": {
             "sha256": (
-                "0768cdc9658dd81ab76c02b6d59baf9a7b1103dae09ef56e77e09e181c0ed825"
+                "982c090fb7001d557976cebaae61d392a4ade3db3bc116e71a32f1708a92d9f8"
             ),
-            "sizeBytes": 6813,
+            "sizeBytes": 7625,
         },
         "argmax_float32": {
             "sha256": (
-                "35be05ff5f8485644cb3cddad86c1e17b19eaa05599611baf95997e9ff646d88"
+                "44deffd7bb7baf3df53cdf1a509588123a2028f226b17abc5aa8bbd4a6063780"
             ),
-            "sizeBytes": 6815,
+            "sizeBytes": 7627,
         },
         "argmin_bfloat16": {
             "sha256": (
@@ -677,6 +677,8 @@ max_template_materialization_work = 8192
 [project.source_options.metal.target_options.directx]
 relative_wave_shuffle_out_of_range = "self"
 """
+        if entry in RUNTIME_ENTRIES:
+            source_options += "software_subgroup_width = 32\n"
     elif target == "opengl":
         source_options += """
 [project.source_options.metal.target_options.opengl]
@@ -1072,6 +1074,10 @@ def test_current_mlx_arg_reduce_native_validation(
         (execution,) = artifact["execution"]["entryPoints"]
         assert execution["workgroupSize"] == [32, 1, 1]
         if target == "directx":
+            if entry in RUNTIME_ENTRIES:
+                assert "WaveReadLaneAt" not in generated_text
+                assert "WaveGetLane" not in generated_text
+                assert "__crossgl_software_subgroup_invocation =" in generated_text
             compiler_arguments = dxc_compiler_arguments_for_source(generated_text)
             assert compiler_arguments == ("-enable-16bit-types",)
             _run(
