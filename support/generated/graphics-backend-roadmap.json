@@ -68,9 +68,13 @@
             "tests/test_translator/test_directx_metal_math.py::def test_metal_math_translates_and_compiles_for_directx",
             "tests/test_translator/test_directx_metal_math.py::def test_directx_metal_math_executes",
             "tests/test_translator/test_directx_metal_math.py::def test_directx_metal_math_rejects_shadowed_target",
-            "tests/test_translator/test_directx_metal_math.py::def test_hlsl_select_roundtrip_retains_hlsl_argument_order"
+            "tests/test_translator/test_directx_metal_math.py::def test_hlsl_select_roundtrip_retains_hlsl_argument_order",
+            "tests/test_translator/test_directx_atan2.py::def test_directx_atan2_executes",
+            "tests/test_translator/test_directx_atan2.py::def test_original_metal_atan2_executes",
+            "tests/test_translator/test_directx_atan2.py::def test_hlsl_atan2_roundtrip_keeps_native_intrinsic",
+            "tests/test_translator/test_directx_atan2.py::def test_atan2_rejects_unproven_contracts"
           ],
-          "notes": "Canonical Metal fabs/fmin/fmax lower to native HLSL intrinsics; Boolean scalar/vector select preserves argument order and eager evaluation. Source helper names avoid the HLSL select intrinsic. Unsupported condition types, alias target shadowing, and unresolved HLSL source select overload ownership fail closed. Bounded Windows numerical tests are required by CI; this is not whole-repository runtime coverage.",
+          "notes": "Canonical Metal fabs/fmin/fmax lower to native HLSL intrinsics; Boolean scalar/vector select preserves argument order and eager evaluation. Canonical atan2 preserves signed-zero quadrants, infinity angles and NaN classification through typed helpers; native HLSL atan2 round trips remain native. Source helpers retain their ownership. Unsupported operand types, alias target shadowing, and unresolved HLSL source select overload ownership fail closed. Bounded Windows numerical tests and original precise Metal atan2 controls are required by CI; this is not whole-repository runtime coverage.",
           "status": "supported"
         },
         "metal": {
@@ -3601,6 +3605,7 @@
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_buffer_native_readback",
             "tests/test_translator/test_mlx_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
             "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
             "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
@@ -3626,6 +3631,7 @@
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_buffer_native_readback",
             "tests/test_translator/test_mlx_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
             "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
             "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",

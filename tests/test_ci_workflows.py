@@ -2454,6 +2454,37 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "if: always() && runner.os == 'Windows'" in math_upload
     assert "path: directx-math-results" in math_upload
     assert "if-no-files-found: error" in math_upload
+    atan2_checks = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Validate atan2 signed-zero semantics"
+    )
+    assert mlx_porting.count('"tests/test_translator/test_directx_atan2.py"') == 2
+    assert (
+        mlx_porting.count(
+            '"tests/fixtures/runtime_verification/metal_uint32_buffers.swift"'
+        )
+        == 2
+    )
+    assert "if: runner.os == 'Windows' || runner.os == 'macOS'" in atan2_checks
+    assert (
+        "CROSTL_REQUIRE_DIRECTX_ATAN2: ${{ runner.os == 'Windows' && '1' || '0' }}"
+        in atan2_checks
+    )
+    assert (
+        "CROSTL_REQUIRE_METAL_ATAN2: ${{ runner.os == 'macOS' && '1' || '0' }}"
+        in atan2_checks
+    )
+    assert "--timeout-seconds 120 --" in atan2_checks
+    assert "pytest -q -n auto" in atan2_checks
+    assert "tests/test_translator/test_directx_atan2.py" in atan2_checks
+    atan2_upload = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Upload atan2 signed-zero evidence"
+    )
+    assert (
+        "if: always() && (runner.os == 'Windows' || runner.os == 'macOS')"
+        in atan2_upload
+    )
+    assert "path: atan2-results" in atan2_upload
+    assert "if-no-files-found: error" in atan2_upload
     opengl_math_checks = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate OpenGL Metal math semantics"
     )

@@ -35,6 +35,7 @@ from tests.test_translator.test_mlx_current_complex_power import (
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_BINARY_SHAPES"
+DATASETS = ("random", "positive-zero", "negative-zero")
 SHAPES = (
     "ss",
     "sv",
@@ -88,7 +89,9 @@ maximum = 511
     return text
 
 
-def _workload(shape):
+def _workload(shape, dataset="random"):
+    if dataset not in DATASETS:
+        raise ValueError(f"Unknown binary dataset: {dataset}")
     constants = {}
     if shape == "ss":
         indices, grid = [(0, 0)], [1, 1, 1]
@@ -148,6 +151,10 @@ def _workload(shape):
 
     a = values(max(pair[0] for pair in indices) + 1)
     b = values(max(pair[1] for pair in indices) + 1)
+    if dataset != "random":
+        imaginary = -0.0 if dataset == "negative-zero" else 0.0
+        a = [complex(-(1 + i % 7), imaginary) for i in range(len(a))]
+        b = [complex(0.5, 0.0)] * len(b)
     return {
         "a": a,
         "b": b,
@@ -169,16 +176,25 @@ def _complex_value(values):
 def test_binary_shape_fixture_covers_exact_family():
     assert len(SHAPES) == len(set(SHAPES)) == 15
     assert sum(len(_workload(shape)["pairs"]) for shape in SHAPES) == 291
+    assert (
+        sum(
+            len(_workload(shape, dataset)["pairs"])
+            for shape in SHAPES
+            for dataset in DATASETS
+        )
+        == 873
+    )
 
 
 @pytest.mark.parametrize("shape", SHAPES)
-def test_binary_shape_fixture_bounds_and_complete_output(shape):
-    workload = _workload(shape)
+@pytest.mark.parametrize("dataset", DATASETS)
+def test_binary_shape_fixture_bounds_and_complete_output(shape, dataset):
+    workload = _workload(shape, dataset)
     assert all(0 <= index < 512 for pair in workload["indices"] for index in pair)
     assert len(workload["pairs"]) < 512
     assert len(workload["grid"]) == 3 and all(size > 0 for size in workload["grid"])
     assert len(set(workload["indices"])) == len(workload["pairs"])
-    assert workload == _workload(shape)
+    assert workload == _workload(shape, dataset)
     if shape.startswith("gn"):
         assert list(workload["constants"]) == [
             "shape",
@@ -188,6 +204,24 @@ def test_binary_shape_fixture_bounds_and_complete_output(shape):
         ]
         assert len(workload["pairs"]) == 60
         assert workload["grid"] == ([3, 3, 4] if shape == "gn2" else [2, 3, 4])
+
+
+@pytest.mark.parametrize("shape", SHAPES)
+@pytest.mark.parametrize("dataset", DATASETS[1:])
+def test_binary_shape_branch_cut_preserves_uploaded_zero_sign(shape, dataset):
+    workload = _workload(shape, dataset)
+    expected_sign = -1.0 if dataset == "negative-zero" else 1.0
+    upload = _complex_value(workload["a"])["values"]
+    uploaded = struct.unpack(
+        f"<{len(upload)}f", struct.pack(f"<{len(upload)}f", *upload)
+    )
+    assert all(math.copysign(1.0, value) == expected_sign for value in uploaded[1::2])
+    for base, exponent in workload["pairs"]:
+        assert base.real < 0 and base.imag == 0
+        assert exponent == complex(0.5, 0.0)
+        reference = _reference(base, exponent)
+        assert math.isclose(reference.real, 0, abs_tol=1e-15)
+        assert math.isclose(reference.imag, expected_sign * math.sqrt(-base.real))
 
 
 @pytest.fixture(scope="module")
@@ -303,7 +337,7 @@ def _validate_generated_artifact(path, work, target):
     assert module.stat().st_size > 0
 
 
-def _native_request(report, work, target, entry, workload):
+def _prepare_native_package(report, work):
     report.write_json(work / "report.json")
     manifest = build_runtime_artifact_manifest(work / "report.json")
     assert manifest["success"], manifest
@@ -320,6 +354,11 @@ def _native_request(report, work, target, entry, workload):
     (work / "descriptor.json").write_text(
         json.dumps(descriptor, indent=2), encoding="utf-8"
     )
+    return descriptor, package
+
+
+def _prepare_native_request(native_package, work, target, entry, workload):
+    descriptor, package = native_package
     names = (
         ("a", "b", "c") if target == "directx" else ("aBuffer", "bBuffer", "cBuffer")
     )
@@ -347,17 +386,25 @@ def _native_request(report, work, target, entry, workload):
         ),
         encoding="utf-8",
     )
+    return request, names[2]
+
+
+def _native_request(native_package, work, target, entry, workload):
+    request, output_name = _prepare_native_request(
+        native_package, work, target, entry, workload
+    )
     executor = _executor(target)
     availability = executor.is_available(request)
     assert availability.available, availability.reason
     result = executor.run(request)
     assert result.status == "ok"
-    output = result.outputs[names[2]]
+    pairs = workload["pairs"]
+    output = result.outputs[output_name]
     assert output["dtype"] == "float32" and output["shape"] == [len(pairs), 2]
     return {"translated": _check_values(output["values"], pairs)}
 
 
-def _metal_parity(root, work, artifact, entry, workload, reference):
+def _metal_parity(work, artifact, entry, workload, reference, generated):
     runner, original = reference
     pairs = workload["pairs"]
     values = [_complex_value(workload[name]) for name in ("a", "b")]
@@ -388,9 +435,6 @@ def _metal_parity(root, work, artifact, entry, workload, reference):
         ),
         encoding="utf-8",
     )
-    generated = _metal_library(
-        root / artifact["path"], work / "translated.metallib", root
-    )
     evidence = {}
     for label, library, kernel in (
         ("source", original, entry),
@@ -409,7 +453,6 @@ def test_current_mlx_complex_power_shape_native_parity(
 ):
     root, target = current_binary_source
     entry = f"{shape}_Powercomplex64"
-    workload = _workload(shape)
     with tempfile.TemporaryDirectory(
         prefix=".current-binary-shapes-", dir=root
     ) as directory:
@@ -430,27 +473,43 @@ def test_current_mlx_complex_power_shape_native_parity(
             assert artifact["entryPoint"]["source"] == entry
             if target != "metal":
                 _validate_generated_artifact(root / artifact["path"], work, target)
-            evidence = (
-                _metal_parity(root, work, artifact, entry, workload, metal_reference)
-                if target == "metal"
-                else _native_request(report, work, target, entry, workload)
-            )
-            (work / "parity.json").write_text(
-                json.dumps(
-                    {
-                        "commit": MLX_COMMIT,
-                        "entry": entry,
-                        "target": target,
-                        "results": evidence,
-                    },
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-            for label, cases in evidence.items():
-                assert all(case["matched"] for case in cases), (
-                    label,
-                    [case for case in cases if not case["matched"]],
+                native_package = _prepare_native_package(report, work)
+            else:
+                generated = _metal_library(
+                    root / artifact["path"], work / "translated.metallib", root
                 )
+            evidence = {}
+            for dataset in DATASETS:
+                workload = _workload(shape, dataset)
+                case_work = work / dataset
+                case_work.mkdir()
+                evidence[dataset] = (
+                    _metal_parity(
+                        case_work, artifact, entry, workload, metal_reference, generated
+                    )
+                    if target == "metal"
+                    else _native_request(
+                        native_package, case_work, target, entry, workload
+                    )
+                )
+                (work / "parity.json").write_text(
+                    json.dumps(
+                        {
+                            "commit": MLX_COMMIT,
+                            "entry": entry,
+                            "target": target,
+                            "results": evidence,
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+            for dataset, results in evidence.items():
+                for label, cases in results.items():
+                    assert all(case["matched"] for case in cases), (
+                        dataset,
+                        label,
+                        [case for case in cases if not case["matched"]],
+                    )
         finally:
             shutil.copytree(work, tmp_path / "evidence", dirs_exist_ok=True)
