@@ -121,9 +121,10 @@
       "tests": {
         "paths": [
           "tests/test_translator/test_codegen/test_directx_codegen.py",
+          "tests/test_translator/test_directx_metal_math.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1520
+        "test_count": 1532
       },
       "translator_codegen": {
         "exists": true,
@@ -1700,9 +1701,13 @@
         },
         "directx": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_",
+            "tests/test_translator/test_directx_metal_math.py::def test_metal_math_translates_and_compiles_for_directx",
+            "tests/test_translator/test_directx_metal_math.py::def test_directx_metal_math_executes",
+            "tests/test_translator/test_directx_metal_math.py::def test_directx_metal_math_rejects_shadowed_target",
+            "tests/test_translator/test_directx_metal_math.py::def test_hlsl_select_roundtrip_retains_hlsl_argument_order"
           ],
-          "notes": "",
+          "notes": "Canonical Metal fabs/fmin/fmax lower to native HLSL intrinsics; Boolean scalar/vector select preserves argument order and eager evaluation. Source helper names avoid the HLSL select intrinsic. Unsupported condition types, alias target shadowing, and unresolved HLSL source select overload ownership fail closed. Bounded Windows numerical tests are required by CI; this is not whole-repository runtime coverage.",
           "status": "supported"
         },
         "hip": {

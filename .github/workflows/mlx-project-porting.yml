@@ -22,6 +22,7 @@ on:
       - "tests/test_run_bounded_command.py"
       - "tests/test_run_directx_diagnostics.py"
       - "tests/test_translator/test_directx_reduction_primitives.py"
+      - "tests/test_translator/test_directx_metal_math.py"
       - "tests/test_mlx_current_runtime_diagnostics.py"
       - "tests/test_mlx_copy_opengl_proof.py"
       - "tests/test_mlx_copy_directx_proof.py"
@@ -91,6 +92,7 @@ on:
       - "tests/test_run_bounded_command.py"
       - "tests/test_run_directx_diagnostics.py"
       - "tests/test_translator/test_directx_reduction_primitives.py"
+      - "tests/test_translator/test_directx_metal_math.py"
       - "tests/test_mlx_current_runtime_diagnostics.py"
       - "tests/test_mlx_copy_opengl_proof.py"
       - "tests/test_mlx_copy_directx_proof.py"
@@ -280,6 +282,35 @@ jobs:
           Copy-Item -Path $warp -Destination $pythonWarp -Force
           Write-Host "Installed WARP $((Get-Item $pythonWarp).VersionInfo.FileVersion) beside python.exe."
           Write-Host "WARP DLL SHA256: $((Get-FileHash -Path $pythonWarp -Algorithm SHA256).Hash.ToLowerInvariant())"
+
+      - name: Validate Direct3D Metal math semantics
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          CROSTL_REQUIRE_DIRECTX_METAL_MATH: "1"
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p directx-math-results
+          python tools/run_bounded_command.py \
+            --label "Direct3D Metal math semantics" \
+            --timeout-seconds 120 -- \
+            python tools/run_directx_diagnostics.py \
+              --output "directx-math-results/directx.jsonl" \
+              --module pytest -- \
+              -vv -s --tb=long -o faulthandler_timeout=60 \
+              --basetemp="directx-math-results/pytest" \
+              --junitxml="directx-math-results/results.xml" \
+              tests/test_translator/test_directx_metal_math.py::test_directx_metal_math_executes
+
+      - name: Upload Direct3D Metal math evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: directx-metal-math
+          path: directx-math-results
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Validate Direct3D reduction primitives
         if: runner.os == 'Windows'

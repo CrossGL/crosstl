@@ -13839,7 +13839,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             } and func_name not in getattr(self, "function_return_types", {}):
                 return "float"
             if (
-                func_name in {"clamp", "lerp", "max", "min", "mix"}
+                func_name
+                in {
+                    "clamp",
+                    "lerp",
+                    "max",
+                    "min",
+                    "mix",
+                    "fabs",
+                    "fmax",
+                    "fmin",
+                    "select",
+                }
                 and args
                 and func_name not in getattr(self, "function_return_types", {})
             ):
@@ -21670,6 +21681,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 bfloat_argument_types,
                 source_location=source_location,
             )
+        metal_math_call = self.hlsl_metal_math_call(
+            func_name, args, source_location=source_location
+        )
+        if metal_math_call is not None:
+            return metal_math_call
         boolean_order_call = self.hlsl_ordered_boolean_minmax_call(
             func_name,
             args,
@@ -21720,6 +21736,57 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         left = self.generate_expression(args[0])
         right = self.generate_expression(args[1])
         return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
+
+    def hlsl_metal_math_call(self, func_name, args, *, source_location=None):
+        aliases = {"fabs": ("abs", 1), "fmax": ("max", 2), "fmin": ("min", 2)}
+        if func_name in aliases:
+            target_name, arity = aliases[func_name]
+        elif func_name == "select":
+            target_name, arity = "select", 3
+        else:
+            return None
+        if len(args) != arity:
+            raise DirectXContextualConversionError(
+                f"DirectX builtin '{func_name}' requires {arity} arguments, "
+                f"got {len(args)}",
+                source_type=None,
+                target_type=target_name,
+                reason="metal-math-invalid-arity",
+                source_location=source_location,
+            )
+        if (
+            self.hlsl_function_name_is_shadowed(target_name)
+            or target_name in self.global_variable_types
+        ):
+            raise DirectXContextualConversionError(
+                f"DirectX cannot lower '{func_name}' through shadowed "
+                f"intrinsic '{target_name}'",
+                source_type=None,
+                target_type=target_name,
+                reason="metal-math-target-shadowed",
+                source_location=source_location,
+            )
+        if func_name == "select":
+            condition_type = self.expression_result_type(args[2])
+            mapped_condition = self.map_type(condition_type) if condition_type else None
+            if not mapped_condition or not is_boolean_type(mapped_condition):
+                raise DirectXContextualConversionError(
+                    "DirectX canonical select requires a resolved boolean "
+                    "scalar or vector condition",
+                    source_type=mapped_condition,
+                    target_type="bool or boolean vector",
+                    reason=(
+                        "select-condition-not-boolean"
+                        if mapped_condition
+                        else "select-condition-unresolved"
+                    ),
+                    source_location=source_location,
+                )
+            # Metal orders arguments as (false, true, condition); HLSL uses
+            # (condition, true, false). Both evaluate the two value arguments.
+            args = (args[2], args[1], args[0])
+        rendered = ", ".join(self.generate_expression(argument) for argument in args)
+        return f"{target_name}({rendered})"
 
     def hlsl_bfloat16_builtin_result_type(
         self, func_name, argument_types, argument_count
@@ -32698,7 +32765,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         used_names.update(getattr(self, "enum_type_names", set()))
         used_names.update(getattr(self, "enum_struct_type_names", set()))
         aliases = {}
-        for name in sorted(names & self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES):
+        # DXC resolves select as an intrinsic even with a same-named declaration.
+        reserved_functions = set(self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES)
+        if any(
+            getattr(function, "name", None) == "select"
+            and len(getattr(function, "parameters", ())) >= 3
+            for function in functions
+        ):
+            reserved_functions.add("select")
+            for function in functions:
+                used_names.update(self.collect_hlsl_function_identifier_names(function))
+        for name in sorted(names & reserved_functions):
             alias = f"{name}_"
             while (
                 alias in used_names

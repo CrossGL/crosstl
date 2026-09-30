@@ -2439,6 +2439,21 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert '--expected-commit "$MLX_CURRENT_TREE_COMMIT"' in current_census
     assert "--expected-unit-count 42" in current_census
     assert "--expected-entry-count 17478" in current_census
+    math_checks = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Validate Direct3D Metal math semantics"
+    )
+    assert mlx_porting.count('"tests/test_translator/test_directx_metal_math.py"') == 2
+    assert "if: runner.os == 'Windows'" in math_checks
+    assert 'CROSTL_REQUIRE_DIRECTX_METAL_MATH: "1"' in math_checks
+    assert "--timeout-seconds 120 --" in math_checks
+    assert "test_directx_metal_math.py::test_directx_metal_math_executes" in math_checks
+    assert "mkdir -p directx-math-results" in math_checks
+    math_upload = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Upload Direct3D Metal math evidence"
+    )
+    assert "if: always() && runner.os == 'Windows'" in math_upload
+    assert "path: directx-math-results" in math_upload
+    assert "if-no-files-found: error" in math_upload
     primitive_checks = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate Direct3D reduction primitives"
     )

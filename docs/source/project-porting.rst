@@ -652,6 +652,19 @@ shader model ``cs_6_2``. As with OpenGL, explicit host/runtime bounds of
 ``[0, 2147483647]`` for ``offset + i``, ``out_idx++``, and ``idx`` remain
 portability preconditions rather than inferred or generated checks.
 
+Canonical Metal ``fabs``, ``fmin``, and ``fmax`` calls lower to HLSL
+``abs``, ``min``, and ``max``. Boolean scalar/vector ``select`` conditions
+use HLSL's ``select(condition, trueValue, falseValue)`` ordering, preserving
+evaluation of both value arguments. Source-defined helpers keep their own
+semantics. Unresolved or non-Boolean conditions, invalid argument counts, and
+shadowed target intrinsics produce source-located diagnostics; integer-mask
+selection is not inferred from a Boolean conversion. The HLSL frontend normalizes
+condition-first selection before target lowering and rejects three-argument
+calls when a same-named source overload makes ownership unresolved. A bounded Windows test
+requires DXC compilation and Direct3D readbacks for finite values, NaNs,
+infinities, vector selection, and eager evaluation. This isolated arithmetic
+check does not establish whole-MLX numerical or host-runtime coverage.
+
 Required CI partitions the family across five disjoint Windows shards. Each
 shard retranslates its exact entries, verifies deterministic identity,
 materialization, ``CSMain`` workgroup metadata, and reflected ABI, then compiles
