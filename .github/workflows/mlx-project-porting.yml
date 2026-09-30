@@ -17,8 +17,10 @@ on:
       - "pyproject.toml"
       - "requirements.txt"
       - "tools/run_bounded_command.py"
+      - "tools/run_directx_diagnostics.py"
       - "tests/test_ci_workflows.py"
       - "tests/test_run_bounded_command.py"
+      - "tests/test_run_directx_diagnostics.py"
       - "tests/test_mlx_current_runtime_diagnostics.py"
       - "tests/test_mlx_copy_opengl_proof.py"
       - "tests/test_mlx_copy_directx_proof.py"
@@ -83,8 +85,10 @@ on:
       - "pyproject.toml"
       - "requirements.txt"
       - "tools/run_bounded_command.py"
+      - "tools/run_directx_diagnostics.py"
       - "tests/test_ci_workflows.py"
       - "tests/test_run_bounded_command.py"
+      - "tests/test_run_directx_diagnostics.py"
       - "tests/test_mlx_current_runtime_diagnostics.py"
       - "tests/test_mlx_copy_opengl_proof.py"
       - "tests/test_mlx_copy_directx_proof.py"
@@ -353,7 +357,10 @@ jobs:
                 --label "current MLX $entry WARP runtime" \
                 --timeout-seconds 900 \
                 -- \
-                python -m pytest -vv -s --tb=long -o faulthandler_timeout=120 \
+                python tools/run_directx_diagnostics.py \
+                  --output "mlx-current-results/$entry-directx.jsonl" \
+                  --module pytest -- \
+                  -vv -s --tb=long -o faulthandler_timeout=120 \
                   --basetemp="mlx-current-results/$entry" \
                   --junitxml="mlx-current-results/$entry.xml" \
                   tests/test_translator/test_mlx_current_arg_reduce.py \

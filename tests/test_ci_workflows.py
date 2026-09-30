@@ -2392,6 +2392,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         trigger_paths = set(_workflow_event_paths(mlx_porting, event_name))
         assert "tools/run_bounded_command.py" in trigger_paths
         assert "tests/test_run_bounded_command.py" in trigger_paths
+        assert "tools/run_directx_diagnostics.py" in trigger_paths
+        assert "tests/test_run_directx_diagnostics.py" in trigger_paths
     assert "demos/integrations/mlx/run_mlx_porting.py" in mlx_porting
     assert f'MLX_COMMIT: "{mlx_reference_commit}"' in mlx_porting
     assert f'MLX_CORPUS_COMMIT: "{mlx_corpus_commit}"' in mlx_porting
@@ -2470,10 +2472,10 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "python tools/run_bounded_command.py \\" in current_arg_reduce
     assert '--label "current MLX $entry WARP runtime" \\' in current_arg_reduce
     assert "--timeout-seconds 900 \\" in current_arg_reduce
-    assert (
-        "python -m pytest -vv -s --tb=long -o faulthandler_timeout=120 \\"
-        in current_arg_reduce
-    )
+    assert "python tools/run_directx_diagnostics.py \\" in current_arg_reduce
+    assert '--output "mlx-current-results/$entry-directx.jsonl"' in current_arg_reduce
+    assert "--module pytest -- \\" in current_arg_reduce
+    assert "-vv -s --tb=long -o faulthandler_timeout=120 \\" in current_arg_reduce
     assert '--basetemp="mlx-current-results/$entry"' in current_arg_reduce
     assert current_arg_reduce.index(
         "mkdir -p mlx-current-results"
