@@ -124,7 +124,8 @@ The current harness verifies:
   reflection, and native compiler coverage on both targets, not numerical
   execution or MLX host runtime redirection;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 2,496
-  discovered current-pinned copy entries from `copy.metal`. The schema-v2
+  discovered copy entries from `copy.metal` at the legacy reference revision
+  `846d176227a0ac13d2667e58d2bb68b322109ab0`. The schema-v2
   `contracts/copy.metal-roundtrip.json` contract spans 30 shapes, 16 concrete
   templates, 13 source types, all 169 conversion pairs, 6,566 exact
   materializations, and 8,684 reflected resources. It records the conditional
@@ -134,7 +135,11 @@ The current harness verifies:
   macOS shards each compile 104 exact artifacts with warnings fatal and require
   2,496 non-empty AIR objects in aggregate. This is complete copy translation,
   reflection, and native compiler coverage, not numerical execution or MLX host
-  runtime redirection;
+  runtime redirection. The compiler-gated identity refresh retains source
+  coverage, materializations and resource ABI; generated differences are limited
+  to helper linkage qualifiers. `artifactIdentityRefresh` records the new audit
+  separately from the historical `proof` metadata. Neither record establishes
+  coverage of a newer MLX revision;
 - selected-entry translation of all 2,496 discovered current-pinned
   `copy.metal` entries to OpenGL. The schema-v2
   `contracts/copy.opengl-translation.json` contract pins every standalone

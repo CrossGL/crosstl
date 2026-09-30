@@ -2442,8 +2442,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/copy.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "648e989cacb5e9567ef889531c7bf9d3dd488bb0fb77f2aa924a9b032c47d564",
-      "size_bytes": 2599160,
+      "sha256": "3ec6b3b2e1999aa3534cc0312271fe49ab747eb44098f2bcb1bd67291f7eb316",
+      "size_bytes": 2600536,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -2626,15 +2626,15 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 2154368,
+      "generated_size_bytes_total": 2183866,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "g1_copybool_bool_",
-          "sizeBytes": 563
+          "sizeBytes": 577
         },
         "maximum": {
           "entryPoint": "ggn4large_dynamic_copycomplex64complex64",
-          "sizeBytes": 1871
+          "sizeBytes": 1885
         }
       }
     },

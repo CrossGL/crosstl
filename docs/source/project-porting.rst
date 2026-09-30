@@ -702,7 +702,8 @@ close complete discovered-unary translation, reflection, and native compiler
 coverage on both targets; they do not claim numerical execution, MLX host
 runtime redirection, or MLX test-suite parity.
 
-The current-pinned MLX copy integration proves all 2,496 discovered entries
+The legacy MLX copy reference at
+``846d176227a0ac13d2667e58d2bb68b322109ab0`` proves all 2,496 discovered entries
 from ``copy.metal`` through Metal-to-CrossGL-to-Metal translation. The family
 covers 30 shapes, 16 concrete templates, 13 input and output types, and all 169
 conversion pairs. Its schema-v2 contract pins every artifact and shape ABI,
@@ -723,6 +724,12 @@ artifacts with ``xcrun -sdk macosx metal -Werror -c``, requiring a non-empty AIR
 object for each. This proves translation, reflection, and native compiler
 acceptance; it does not claim Metal numerical execution, MLX host-runtime
 redirection, or MLX test-suite parity.
+
+The compiler-gated identity refresh retains source coverage, materializations
+and resource ABI. Its generated-source changes are limited to helper linkage
+qualifiers. ``artifactIdentityRefresh`` records this audit separately from the
+historical ``proof`` metadata; it does not establish coverage of a newer MLX
+revision or add numerical execution claims.
 
 The same selected-entry pipeline translates all 2,496 copy entries to
 standalone OpenGL ``main`` artifacts. The schema-v2
