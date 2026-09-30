@@ -10,6 +10,7 @@ on:
       - "tests/test_mlx_portable_host.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_directx_float_atomics.py"
+      - "tests/test_translator/test_directx_software_reductions.py"
       - "tests/test_translator/test_metal_float_atomics.py"
       - "tests/test_translator/test_mlx_gated_delta_directx.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
@@ -37,6 +38,7 @@ on:
       - "tests/test_mlx_portable_host.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_directx_float_atomics.py"
+      - "tests/test_translator/test_directx_software_reductions.py"
       - "tests/test_translator/test_metal_float_atomics.py"
       - "tests/test_translator/test_mlx_gated_delta_directx.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
@@ -186,6 +188,19 @@ jobs:
               --junitxml=.mlx-portable-host/float-atomics/results.xml \
               tests/test_translator/test_directx_float_atomics.py \
               2>&1 | tee .mlx-portable-host/float-atomics.log
+      - name: Validate DirectX software reductions
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_REQUIRE_DIRECTX_SOFTWARE_REDUCTIONS: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/software-reductions
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "DirectX software reductions" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/software-reductions/pytest \
+              --junitxml=.mlx-portable-host/software-reductions/results.xml \
+              tests/test_translator/test_directx_software_reductions.py \
+              2>&1 | tee .mlx-portable-host/software-reductions.log
       - name: Validate binary32 fused arithmetic
         env:
           CROSTL_REQUIRE_FUSED_MATH: "1"

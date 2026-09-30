@@ -57,6 +57,32 @@ actionable diagnostic instead of silently substituting a minimum-precision
 type. Explicit ``min16float``, ``min16int``, and ``min16uint`` types retain
 their HLSL minimum-precision semantics.
 
+Software Subgroup Reductions
+----------------------------
+
+The explicit ``software_subgroup_width=32`` target option lowers scalar
+``WaveActiveSum``, ``WaveActiveMin`` and ``WaveActiveMax`` through groupshared
+storage. It also supports ``WaveShuffleDown`` with
+``relative_wave_shuffle_out_of_range="self"``. Each logical group contains 32
+consecutive local invocations, independently of the device's physical wave
+width. Multiple logical groups share an allocation but never read each other's
+values. Every invocation participates in both barriers around a collective;
+unproven divergent control flow remains a structured translation error.
+
+Payloads are limited to 32-bit ``float``, ``int`` and ``uint`` scalars. Floating
+sums use a precise, increasing-lane-order fold; different native reduction
+orders can round differently. Integer sums retain 32-bit wraparound. Floating
+minimum and maximum ignore NaNs when a numeric lane exists and return NaN when
+all lanes are NaN. Minimum chooses negative zero and maximum chooses positive
+zero when both signs occur. NaN payloads are not a portable guarantee, and
+floating arithmetic retains the selected DirectX toolchain's denormal behavior.
+
+The Windows execution gate tests mixed reductions and shuffles, scratch reuse,
+three workgroups with four logical subgroups each, integer overflow,
+cancellation, NaNs, infinities and signed zeros. It retains compiler output,
+shader and module hashes, input words and full output readbacks. This explicit
+software path does not replace native-wave generation when the option is absent.
+
 Implementation Notes
 --------------------
 

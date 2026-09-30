@@ -2011,7 +2011,14 @@ class HLSLCodeGen:
     HLSL_SPECIALIZATION_CONSTANT_TYPES = frozenset({"bool", "int", "uint", "float"})
     HLSL_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_POLICIES = frozenset({"undefined", "self"})
     HLSL_SOFTWARE_SUBGROUP_SUPPORTED_WIDTH = 32
-    HLSL_SOFTWARE_SUBGROUP_OPERATIONS = frozenset({"WaveShuffleDown"})
+    HLSL_SOFTWARE_SUBGROUP_REDUCTIONS = {
+        "WaveActiveSum": "sum",
+        "WaveActiveMin": "min",
+        "WaveActiveMax": "max",
+    }
+    HLSL_SOFTWARE_SUBGROUP_OPERATIONS = frozenset(
+        {"WaveShuffleDown", *HLSL_SOFTWARE_SUBGROUP_REDUCTIONS}
+    )
     HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES = frozenset({"float", "int", "uint"})
 
     def __init__(
@@ -4881,6 +4888,7 @@ class HLSLCodeGen:
     def prepare_hlsl_software_subgroup_contract(self, ast, target_stage=None):
         self.required_hlsl_software_subgroup_helpers = set()
         self.hlsl_software_subgroup_helper_names = {}
+        self.hlsl_software_subgroup_reserved_names = set()
         self.hlsl_software_subgroup_workgroup_size = None
         self.hlsl_software_subgroup_invocation_count = None
         self.hlsl_software_subgroup_function_names = set()
@@ -5036,6 +5044,7 @@ class HLSLCodeGen:
             entry_function
         )
         reserved_names = self.hlsl_helper_reserved_names(functions)
+        self.hlsl_software_subgroup_reserved_names = reserved_names
         for name in direct_names:
             function = functions_by_name[name]
             expression = self.hlsl_software_subgroup_parameter_expression(function)
@@ -5147,6 +5156,7 @@ class HLSLCodeGen:
         reserved_names = set(self.function_return_types)
         reserved_names.update(self.global_variable_types)
         reserved_names.update(self.structs_by_name)
+        reserved_names.update(self.hlsl_software_subgroup_reserved_names)
         reserved_names.update(self.hlsl_software_subgroup_helper_names.values())
         name = base_name
         suffix = 1
@@ -5165,18 +5175,21 @@ class HLSLCodeGen:
 
     def hlsl_software_subgroup_helper_name(self, operation, value_type):
         suffix = re.sub(r"[^A-Za-z0-9_]", "_", value_type)
+        operation_name = self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS.get(
+            operation, "shuffle_down"
+        )
         return self.hlsl_software_subgroup_identifier(
             ("helper", operation, value_type),
-            f"__crossgl_software_subgroup_shuffle_down_{suffix}",
+            f"__crossgl_software_subgroup_{operation_name}_{suffix}",
         )
 
-    def hlsl_software_subgroup_shuffle_call(
-        self, operation, value_type, value_expression, delta_expression
+    def hlsl_software_subgroup_call(
+        self, operation, value_type, value_expression, delta_expression=None
     ):
         mapped_value_type = self.map_type(value_type)
         if mapped_value_type not in self.HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES:
             raise self.hlsl_software_subgroup_error(
-                "DirectX software subgroup shuffles support only 32-bit float, "
+                "DirectX software subgroup operations support only 32-bit float, "
                 "int, and uint scalar payloads",
                 workgroup_size=self.hlsl_software_subgroup_workgroup_size,
                 operation=operation,
@@ -5187,7 +5200,7 @@ class HLSLCodeGen:
         )
         if invocation is None:
             raise self.hlsl_software_subgroup_error(
-                "DirectX software subgroup shuffle has no proven logical "
+                "DirectX software subgroup operation has no proven logical "
                 "invocation index in the current function",
                 workgroup_size=self.hlsl_software_subgroup_workgroup_size,
                 operation=operation,
@@ -5196,10 +5209,42 @@ class HLSLCodeGen:
         key = (operation, mapped_value_type)
         self.required_hlsl_software_subgroup_helpers.add(key)
         helper = self.hlsl_software_subgroup_helper_name(operation, mapped_value_type)
-        return (
-            f"{helper}({value_expression}, uint({delta_expression}), "
-            f"uint({invocation}))"
+        arguments = [value_expression]
+        if delta_expression is not None:
+            arguments.append(f"uint({delta_expression})")
+        arguments.append(f"uint({invocation})")
+        return f"{helper}({', '.join(arguments)})"
+
+    def hlsl_software_subgroup_reduction_body(self, operation, value_type, scratch):
+        reducer = self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS[operation]
+        qualifier = "precise " if value_type == "float" else ""
+        code = (
+            f"    {qualifier}{value_type} result = {scratch}[subgroupBase];\n"
+            "    [unroll]\n"
+            f"    for (uint offset = 1u; offset < {self.software_subgroup_width}u; ++offset) {{\n"
+            f"        {value_type} operand = {scratch}[subgroupBase + offset];\n"
         )
+        if reducer == "sum":
+            code += "        result = result + operand;\n"
+        elif value_type == "float":
+            # Classify bits before comparisons so NaNs cannot erase numeric lanes.
+            zero_operator = "|" if reducer == "min" else "&"
+            code += (
+                "        uint leftBits = asuint(result);\n"
+                "        uint rightBits = asuint(operand);\n"
+                "        if ((leftBits & 0x7fffffffu) > 0x7f800000u) {\n"
+                "            result = operand;\n"
+                "        } else if ((rightBits & 0x7fffffffu) <= 0x7f800000u) {\n"
+                "            if (((leftBits | rightBits) & 0x7fffffffu) == 0u) {\n"
+                f"                result = asfloat(leftBits {zero_operator} rightBits);\n"
+                "            } else {\n"
+                f"                result = {reducer}(result, operand);\n"
+                "            }\n"
+                "        }\n"
+            )
+        else:
+            code += f"        result = {reducer}(result, operand);\n"
+        return code + "    }\n"
 
     def generate_hlsl_software_subgroup_helpers(self):
         if not self.required_hlsl_software_subgroup_helpers:
@@ -5207,8 +5252,12 @@ class HLSLCodeGen:
         invocation_count = self.hlsl_software_subgroup_invocation_count
         width = self.software_subgroup_width
         value_types = sorted(
-            value_type
-            for _operation, value_type in self.required_hlsl_software_subgroup_helpers
+            {
+                value_type
+                for _operation, value_type in (
+                    self.required_hlsl_software_subgroup_helpers
+                )
+            }
         )
         code = ""
         if self.hlsl_software_subgroup_invocation_variable is not None:
@@ -5223,18 +5272,29 @@ class HLSLCodeGen:
         ):
             helper = self.hlsl_software_subgroup_helper_name(operation, value_type)
             scratch = self.hlsl_software_subgroup_scratch_name(value_type)
+            reduction = operation in self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS
+            delta_parameter = "" if reduction else "uint delta, "
             code += (
-                f"{value_type} {helper}({value_type} value, uint delta, "
+                f"{value_type} {helper}({value_type} value, {delta_parameter}"
                 "uint invocation) {\n"
                 f"    uint lane = invocation % {width}u;\n"
                 "    uint subgroupBase = invocation - lane;\n"
                 f"    {scratch}[invocation] = value;\n"
                 "    GroupMemoryBarrierWithGroupSync();\n"
-                f"    bool sourceValid = delta < ({width}u - lane);\n"
-                "    uint sourceLane = sourceValid ? lane + delta : lane;\n"
-                f"    {value_type} result = sourceValid\n"
-                f"        ? {scratch}[subgroupBase + sourceLane]\n"
-                "        : value;\n"
+            )
+            if reduction:
+                code += self.hlsl_software_subgroup_reduction_body(
+                    operation, value_type, scratch
+                )
+            else:
+                code += (
+                    f"    bool sourceValid = delta < ({width}u - lane);\n"
+                    "    uint sourceLane = sourceValid ? lane + delta : lane;\n"
+                    f"    {value_type} result = sourceValid\n"
+                    f"        ? {scratch}[subgroupBase + sourceLane]\n"
+                    "        : value;\n"
+                )
+            code += (
                 "    GroupMemoryBarrierWithGroupSync();\n"
                 "    return result;\n"
                 "}\n\n"
@@ -22812,7 +22872,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             delta = self.generate_expression_with_expected(args[1], "uint")
             if self.software_subgroup_width is not None:
                 return self.hlsl_cast_metal_simd_shuffle_result(
-                    self.hlsl_software_subgroup_shuffle_call(
+                    self.hlsl_software_subgroup_call(
                         "WaveShuffleDown", value_type, data, delta
                     )
                 )
@@ -23763,6 +23823,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         self.validate_hlsl_wave_intrinsic_arguments(operation, args)
         self.validate_hlsl_wave_intrinsic_result_context(operation, args)
+        if (
+            self.software_subgroup_width is not None
+            and operation in self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS
+        ):
+            value_type = self.expression_result_type(args[0])
+            value = self.generate_expression_with_expected(args[0], value_type)
+            return self.hlsl_software_subgroup_call(operation, value_type, value)
         if operation in self.HLSL_WAVE_SHUFFLE_AND_FILL_INTRINSICS:
             return self.generate_hlsl_wave_shuffle_and_fill_up_call(operation, args)
         relative_operator = self.HLSL_WAVE_RELATIVE_SHUFFLE_OPERATORS.get(operation)
@@ -23777,7 +23844,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value = self.generate_expression_with_expected(args[0], mapped_value_type)
             delta = self.generate_expression_with_expected(args[1], "uint")
             if self.software_subgroup_width is not None:
-                result = self.hlsl_software_subgroup_shuffle_call(
+                result = self.hlsl_software_subgroup_call(
                     operation,
                     mapped_value_type,
                     value,

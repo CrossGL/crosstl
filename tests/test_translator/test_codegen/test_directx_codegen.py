@@ -50236,7 +50236,7 @@ def test_hlsl_software_subgroup_rejects_unsupported_operation():
             @ numthreads(32, 2, 1)
             void main(RWStructuredBuffer<uint> output @buffer(0),
                       uint groupIndex @gl_LocalInvocationIndex) @ WaveSize(32) {
-                output[groupIndex] = WaveActiveSum(groupIndex);
+                output[groupIndex] = WaveActiveProduct(groupIndex);
             }
         }
     }
@@ -50248,12 +50248,12 @@ def test_hlsl_software_subgroup_rejects_unsupported_operation():
 
     with pytest.raises(
         DirectXSoftwareSubgroupError,
-        match="does not support 'WaveActiveSum'",
+        match="does not support 'WaveActiveProduct'",
     ) as excinfo:
         codegen.generate(parse_code(tokenize_code(code)))
 
     assert excinfo.value.reason == "operation-unsupported"
-    assert excinfo.value.operation == "WaveActiveSum"
+    assert excinfo.value.operation == "WaveActiveProduct"
 
 
 def test_hlsl_software_subgroup_rejects_mixed_metal_shuffle_operations():

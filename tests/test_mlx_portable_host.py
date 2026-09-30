@@ -602,6 +602,13 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
     workflow = (root / ".github/workflows/mlx-portable-host.yml").read_text()
     for name, directory, seconds, flag, module in (
         (
+            "Validate DirectX software reductions",
+            "software-reductions",
+            180,
+            "CROSTL_REQUIRE_DIRECTX_SOFTWARE_REDUCTIONS",
+            "test_directx_software_reductions.py",
+        ),
+        (
             "Validate DirectX float atomics",
             "float-atomics",
             180,
