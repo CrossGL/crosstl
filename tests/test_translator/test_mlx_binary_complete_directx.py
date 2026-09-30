@@ -44,12 +44,12 @@ BINARY_DIRECTX_CONTRACT_PATH = (
     / "binary.directx-translation.json"
 )
 BINARY_DIRECTX_CONTRACT_SHA256 = (
-    "2645dbde8b1ed36875c941b9ea7ba8bb6152fb0d1956d1de42fc0ee161731cbf"
+    "768bd2733739e2449f9d0ec8361efb0e592a66fec22104da44a13870086f3448"
 )
-BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1469277
-BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 11321166
+BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1469704
+BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 11409060
 BINARY_DIRECTX_GENERATED_SIZE_MINIMUM = ("ss_Addint8", 1842)
-BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_LogAddExpcomplex64", 7570)
+BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_LogAddExpcomplex64", 8611)
 INDEX_RANGE_ASSERTIONS = (
     ("offset + i", 0, 2147483647),
     ("a_idx", 0, 2147483647),
@@ -200,6 +200,7 @@ def test_current_mlx_binary_directx_contract_is_complete_and_classified() -> Non
         "portabilityPreconditions",
         "artifactContract",
         "entries",
+        "artifactIdentityRefresh",
     ]
     assert contract["schemaVersion"] == 2
     assert contract["commit"] == MLX_COMMIT
@@ -411,6 +412,31 @@ def _required_tool(name: str) -> str:
     if os.environ.get(REQUIRE_BINARY_DIRECTX_ENV) == "1":
         pytest.fail(message)
     pytest.skip(message)
+
+
+def test_binary_atan2_artifact_refresh_preserves_corpus_scope():
+    assert BINARY_DIRECTX_CONTRACT["artifactIdentityRefresh"] == {
+        "reason": "Preserve canonical atan2 signed-zero quadrants in HLSL.",
+        "previousContractSha256": (
+            "2645dbde8b1ed36875c941b9ea7ba8bb6152fb0d1956d1de42fc0ee161731cbf"
+        ),
+        "changedEntryCount": 84,
+        "unaffectedEntryCount": 4038,
+        "nativeCompiledChangedEntryCount": 84,
+        "unchangedSourceAndInterfaceContracts": True,
+        "numericalExecution": False,
+        "fullUpstreamSuite": False,
+    }
+    affected = [
+        workload
+        for workload in BINARY_DIRECTX_WORKLOADS
+        if workload.operator_type == "ArcTan2"
+        or (
+            workload.input_type == "complex64_t"
+            and workload.operator_type in {"Power", "LogAddExp"}
+        )
+    ]
+    assert len(affected) == 84
 
 
 def _expected_resources(workload: BinaryMetalWorkload) -> dict[str, tuple]:
