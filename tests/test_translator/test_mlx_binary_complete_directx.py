@@ -44,12 +44,12 @@ BINARY_DIRECTX_CONTRACT_PATH = (
     / "binary.directx-translation.json"
 )
 BINARY_DIRECTX_CONTRACT_SHA256 = (
-    "768bd2733739e2449f9d0ec8361efb0e592a66fec22104da44a13870086f3448"
+    "7f8faa377f44812c6964bfdf6d578bb47b226372a69f9116dff9b1a744750cfa"
 )
-BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1469704
-BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 11409060
+BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1469717
+BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 11623848
 BINARY_DIRECTX_GENERATED_SIZE_MINIMUM = ("ss_Addint8", 1842)
-BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_LogAddExpcomplex64", 8611)
+BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_LogAddExpcomplex64", 11168)
 INDEX_RANGE_ASSERTIONS = (
     ("offset + i", 0, 2147483647),
     ("a_idx", 0, 2147483647),
@@ -416,9 +416,9 @@ def _required_tool(name: str) -> str:
 
 def test_binary_atan2_artifact_refresh_preserves_corpus_scope():
     assert BINARY_DIRECTX_CONTRACT["artifactIdentityRefresh"] == {
-        "reason": "Preserve canonical atan2 signed-zero quadrants in HLSL.",
+        "reason": "Preserve finite atan2 accuracy and signed-zero quadrants in HLSL.",
         "previousContractSha256": (
-            "2645dbde8b1ed36875c941b9ea7ba8bb6152fb0d1956d1de42fc0ee161731cbf"
+            "768bd2733739e2449f9d0ec8361efb0e592a66fec22104da44a13870086f3448"
         ),
         "changedEntryCount": 84,
         "unaffectedEntryCount": 4038,

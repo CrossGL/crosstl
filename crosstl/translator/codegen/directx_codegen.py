@@ -5353,8 +5353,58 @@ uint {helper_name}(uint groupIndex) {{
     if (xMagnitude == 0x7f800000u) {{
         return asfloat(sign | (negativeX ? 0x40490fdbu : 0u));
     }}
-    uint result = asuint(atan2(y, x));
-    return asfloat((result & 0x7fffffffu) | sign);
+    bool invert = yMagnitude > xMagnitude;
+    uint smaller = invert ? xMagnitude : yMagnitude;
+    uint larger = invert ? yMagnitude : xMagnitude;
+    uint smallExponent = smaller >> 23;
+    uint largeExponent = larger >> 23;
+    uint smallSignificand = (smaller & 0x007fffffu)
+        | (smallExponent == 0u ? 0u : 0x00800000u);
+    uint largeSignificand = (larger & 0x007fffffu)
+        | (largeExponent == 0u ? 0u : 0x00800000u);
+    uint difference = (largeExponent == 0u ? 1u : largeExponent)
+        - (smallExponent == 0u ? 1u : smallExponent);
+    precise float fraction = float(smallSignificand) / float(largeSignificand);
+    // Scale significands instead of dividing subnormal or overflowing operands.
+    if (difference > 24u) {{
+        if (invert) {{ return asfloat(sign | 0x3fc90fdbu); }}
+        if (negativeX) {{ return asfloat(sign | 0x40490fdbu); }}
+        uint fractionBits = asuint(fraction);
+        int exponent = int(fractionBits >> 23) - int(difference);
+        uint result = 0u;
+        if (exponent > 0) {{
+            result = fractionBits - (difference << 23);
+        }} else if (exponent >= -23) {{
+            // Round a subnormal result to nearest-even without float flushing.
+            uint shift = uint(1 - exponent);
+            uint significand = (fractionBits & 0x007fffffu) | 0x00800000u;
+            result = significand >> shift;
+            uint remainder = significand & ((1u << shift) - 1u);
+            uint halfway = 1u << (shift - 1u);
+            if (remainder > halfway || (remainder == halfway && (result & 1u) != 0u)) {{
+                result += 1u;
+            }}
+        }}
+        return asfloat(result | sign);
+    }}
+    precise float ratio = fraction * asfloat((127u - difference) << 23);
+    bool reduce = ratio > 0.4142135623730950488f;
+    precise float reduced = reduce ? (ratio - 1.0f) / (ratio + 1.0f) : ratio;
+    precise float squared = reduced * reduced;
+    // atan's alternating series through degree 17 on |reduced| <= tan(pi/8).
+    precise float series = 1.0f / 17.0f;
+    series = -1.0f / 15.0f + squared * series;
+    series = 1.0f / 13.0f + squared * series;
+    series = -1.0f / 11.0f + squared * series;
+    series = 1.0f / 9.0f + squared * series;
+    series = -1.0f / 7.0f + squared * series;
+    series = 1.0f / 5.0f + squared * series;
+    series = -1.0f / 3.0f + squared * series;
+    precise float angle = reduced + (reduced * squared) * series;
+    if (reduce) {{ angle = 0.7853981633974483096f + angle; }}
+    if (invert) {{ angle = 1.5707963267948966192f - angle; }}
+    if (negativeX) {{ angle = 3.1415926535897932385f - angle; }}
+    return asfloat(asuint(angle) | sign);
 }}
 """
         for value_type in sorted(self.required_hlsl_atan2_helpers - {"float"}):

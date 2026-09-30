@@ -12081,8 +12081,8 @@ def test_unary_directx_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
         "schema_version": 2,
-        "sha256": "90937acb39015301a3e22858f946d9ec95ee4785ee32c37a23f6a47718ee2ccd",
-        "size_bytes": 318594,
+        "sha256": "2f7617926d5b5f2d9798b49d26aaa9c55139f5b56c50b1e8f5f91200deffb0cc",
+        "size_bytes": 318602,
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12198,12 +12198,12 @@ def test_unary_directx_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 3110472,
+        "generated_size_bytes_total": 3182068,
         "generated_size_range": {
             "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 2252},
             "maximum": {
                 "entryPoint": "gn4large_ArcTancomplex64complex64",
-                "sizeBytes": 8373,
+                "sizeBytes": 10930,
             },
         },
     }

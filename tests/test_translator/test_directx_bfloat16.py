@@ -153,10 +153,10 @@ def test_directx_bfloat16_binary_builtin_contract_rounds_back_to_bfloat(builtin)
 
     generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert f"{builtin}(" in generated
+    lowered = "__crossgl_atan2_float" if builtin == "atan2" else builtin
+    assert f"{lowered}(" in generated
     assert generated.count("__crossgl_bfloat16_to_float(") >= 2
     assert "__crossgl_bfloat16_from_float(" in generated
-    lowered = "__crossgl_atan2_float" if builtin == "atan2" else builtin
     assert (
         f"__crossgl_bfloat16_from_float(float({lowered}("
         "__crossgl_bfloat16_to_float(uint(left)), "
