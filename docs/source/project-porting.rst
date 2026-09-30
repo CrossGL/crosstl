@@ -674,8 +674,10 @@ check does not establish whole-MLX numerical or host-runtime coverage.
 
 Canonical ``atan2(y, x)`` uses typed HLSL helpers to retain the sign of zero
 when selecting a quadrant. The helpers also handle both-infinite operands,
-signed axis angles, and NaNs explicitly; ordinary finite values still use the
-native HLSL approximation. Float scalar/vector operands are supported, with
+signed axis angles, and NaNs explicitly. Finite angles use exponent-scaled
+significands and a range-reduced polynomial instead of the target intrinsic;
+``precise`` intermediates preserve the polynomial evaluation order. Float
+scalar/vector operands are supported, with
 explicit promotion and narrowing for half/minimum-precision forms and the
 existing scalar bfloat decode/encode path. Arguments are evaluated once.
 Unknown, mismatched or unsupported operand types and shadowed target intrinsics
@@ -683,9 +685,12 @@ fail closed. Source-defined overloads retain their behavior, and HLSL-to-HLSL
 ``atan2`` round trips remain native. This is not a general subnormal or
 transcendental-accuracy contract.
 
-A bounded Windows readback test checks 209 operand pairs through scalar and
+A bounded Windows readback test checks 1,121 operand pairs through scalar and
 vector calls, including raw-bit and float-upload echoes, signed zeros,
-infinities and NaNs. macOS executes the unchanged Metal source with fast math
+infinities, NaNs, extreme normal exponents, all quadrants and range-reduction
+boundaries. Finite results must stay within the unchanged absolute error
+bound of ``2e-6``; signed axis and infinite angles retain exact bit checks.
+macOS executes the unchanged Metal source with fast math
 disabled as a control; fast-math compilation may ignore signed zeros and
 non-finite values. The pinned MLX complex-power test separately retains its
 existing numerical reference and error bound; passing an isolated angular

@@ -4,6 +4,7 @@ import json
 import math
 import os
 import random
+import re
 import struct
 import sys
 from pathlib import Path
@@ -71,6 +72,9 @@ def test_atan2_scalar_and_vector_helpers_compile(tmp_path):
     generated = _translate(tmp_path)
     for suffix in ("", "2", "3", "4"):
         assert f"__crossgl_atan2_float{suffix}(" in generated
+    assert not re.search(r"\batan2\s*\(", generated)
+    assert "precise float reduced" in generated
+    assert "precise float angle" in generated
     _compile(generated, "directx", tmp_path)
 
 
@@ -149,6 +153,10 @@ def test_atan2_narrow_operands_promote_then_narrow_once(value_type, mapped, suff
             "float asfloat; float f(float y, float x) { return atan2(y, x); }",
             "atan2-target-intrinsic-shadowed",
         ),
+        (
+            "float atan2; float f(float y, float x) { return atan2(y, x); }",
+            "atan2-target-intrinsic-shadowed",
+        ),
     ],
 )
 def test_atan2_rejects_unproven_contracts(source, reason):
@@ -193,11 +201,41 @@ def _pairs():
         tuple(_bits(random_source.uniform(-100, 100)) for _ in range(2))
         for _ in range(128)
     )
+    # Cover exponent scaling, range-reduction boundaries and all four quadrants.
+    finite = (
+        0x00800000,
+        0x00FFFFFF,
+        _bits(math.sqrt(2) - 1) - 1,
+        _bits(math.sqrt(2) - 1),
+        _bits(math.sqrt(2) - 1) + 1,
+        0x3F7FFFFF,
+        0x3F800000,
+        0x3F800001,
+        0x7F000000,
+        0x7F7FFFFF,
+    )
+    pairs.extend(
+        (y | y_sign, x | x_sign)
+        for y in finite
+        for x in finite
+        for y_sign in (0, 0x80000000)
+        for x_sign in (0, 0x80000000)
+    )
+    pairs.extend(
+        tuple(
+            random_source.randrange(0x00800000, 0x7F800000)
+            | random_source.choice((0, 0x80000000))
+            for _ in range(2)
+        )
+        for _ in range(512)
+    )
     return pairs
 
 
 def _check_outputs(pairs, outputs):
     assert len(outputs) == 16 * len(pairs)
+    maximum_error = 0.0
+    finite_count = axis_count = nan_count = 0
     for index, (y_bits, x_bits) in enumerate(pairs):
         row = outputs[16 * index : 16 * index + 16]
         # The float and integer uploads must retain the same bits, including -0.
@@ -222,6 +260,7 @@ def _check_outputs(pairs, outputs):
             actual = _float(bits)
             if math.isnan(expected):
                 assert math.isnan(actual)
+                nan_count += 1
             elif left == 0 or right == 0 or math.isinf(left) or math.isinf(right):
                 assert bits == _bits(expected), (
                     index,
@@ -230,8 +269,34 @@ def _check_outputs(pairs, outputs):
                     bits,
                     _bits(expected),
                 )
+                axis_count += 1
             else:
                 assert abs(actual - expected) <= 2e-6, (index, actual, expected)
+                maximum_error = max(maximum_error, abs(actual - expected))
+                finite_count += 1
+    return {
+        "pairCount": len(pairs),
+        "angleCount": 11 * len(pairs),
+        "finiteAngleCount": finite_count,
+        "exactAxisAngleCount": axis_count,
+        "nanAngleCount": nan_count,
+        "maximumFiniteAbsoluteError": maximum_error,
+        "finiteAbsoluteErrorBound": 2e-6,
+        "inputBitsPreserved": True,
+        "singleOperandEvaluation": True,
+    }
+
+
+def test_numerical_check_rejects_windows_finite_angle_error():
+    pairs = [(_bits(1.0), _bits(1.0))]
+    outputs = [_bits(1.0)] * 4 + [_bits(math.pi / 4)] * 11 + [1]
+    outputs[10] = _bits(-math.pi / 4)
+    evidence = _check_outputs(pairs, outputs)
+    assert evidence["finiteAngleCount"] == evidence["angleCount"] == 11
+    assert evidence["maximumFiniteAbsoluteError"] < 2e-6
+    outputs[4] = _bits(0.7854096293449402)
+    with pytest.raises(AssertionError):
+        _check_outputs(pairs, outputs)
 
 
 def test_directx_atan2_executes(tmp_path):
@@ -303,7 +368,10 @@ def test_directx_atan2_executes(tmp_path):
     (tmp_path / "runtime.json").write_text(
         json.dumps(state.details, indent=2), encoding="utf-8"
     )
-    _check_outputs(pairs, output)
+    evidence = _check_outputs(pairs, output)
+    (tmp_path / "numerical-summary.json").write_text(
+        json.dumps(evidence, indent=2), encoding="utf-8"
+    )
 
 
 def test_original_metal_atan2_executes(tmp_path):
@@ -350,4 +418,7 @@ def test_original_metal_atan2_executes(tmp_path):
     )
     output = _run([str(runner), str(library), "angles", str(request)])
     (tmp_path / "readback-bits.json").write_text(output, encoding="utf-8")
-    _check_outputs(pairs, json.loads(output)["values"])
+    evidence = _check_outputs(pairs, json.loads(output)["values"])
+    (tmp_path / "numerical-summary.json").write_text(
+        json.dumps(evidence, indent=2), encoding="utf-8"
+    )
