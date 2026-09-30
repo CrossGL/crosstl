@@ -9,18 +9,20 @@ import pytest
 from demos.integrations.mlx.portable_host import packages, prepare, runtime, verify
 
 
-def checkout(root, monkeypatch):
+def checkout(root, monkeypatch, newline=b"\n"):
     backend = root / "mlx/backend/no_gpu"
     backend.mkdir(parents=True)
-    (backend / "CMakeLists.txt").write_text(
-        "target_sources(mlx PRIVATE primitives.cpp)\n"
-    )
-    (backend / "primitives.cpp").write_text("NO_GPU(Arange)\nNO_GPU(Abs)\n")
-    (backend / "event.cpp").write_text(
-        "void Event::wait(Stream stream) {\n  cpu_wait();\n}\n"
-        "void Event::signal(Stream stream) {\n  cpu_signal();\n}\n"
-    )
-    originals = {path.name: path.read_bytes() for path in backend.iterdir()}
+    originals = {
+        "CMakeLists.txt": b"target_sources(mlx PRIVATE primitives.cpp)\n",
+        "primitives.cpp": b"NO_GPU(Arange)\nNO_GPU(Abs)\n",
+        "event.cpp": (
+            b"void Event::wait(Stream stream) {\n  cpu_wait();\n}\n"
+            b"void Event::signal(Stream stream) {\n  cpu_signal();\n}\n"
+        ),
+    }
+    # Git blobs retain LF even when the checkout uses converted line endings.
+    for name, data in originals.items():
+        (backend / name).write_bytes(data.replace(b"\n", newline))
 
     def git(command, **kwargs):
         if "rev-parse" in command:
@@ -35,10 +37,11 @@ def checkout(root, monkeypatch):
     return backend
 
 
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"], ids=["lf", "crlf"])
 def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, newline
 ):
-    backend = checkout(tmp_path, monkeypatch)
+    backend = checkout(tmp_path, monkeypatch, newline)
     record = prepare.prepare(tmp_path, tmp_path / "adaptation.json")
     assert record["commit"] == prepare.COMMIT and len(record["files"]) == 5
     assert "NO_GPU(Arange)" not in (backend / "crosstl_primitives.cpp").read_text()
