@@ -98,6 +98,15 @@ cancellation, NaNs, infinities and signed zeros. It retains compiler output,
 shader and module hashes, input words and full output readbacks. This explicit
 software path does not replace native-wave generation when the option is absent.
 
+A separate required Windows gate translates eight pinned MLX gated-delta
+backward configurations with software subgroups and dispatches the generated
+DXIL using the upstream ``(32, 4, 1)`` workgroup shape. All six gradients are
+checked against the same independent reference and tolerances used by the
+Metal gate. Evidence includes all output words, guard regions, compiler output,
+resource bindings and module identities. Read-only input bindings are uploaded
+but not read back by the DirectX driver. These are direct kernel tests, not a
+claim of complete MLX host integration or upstream-suite coverage.
+
 Implementation Notes
 --------------------
 

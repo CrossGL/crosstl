@@ -18,6 +18,16 @@ REQUIRE_ENV = "CROSTL_REQUIRE_MLX_GATED_DELTA_RUNTIME"
 ROOT = Path(__file__).resolve().parents[2]
 GUARD = struct.pack("<I", 0x6A15BEEF) * 32
 RTOL = ATOL = 1e-5
+CONFIGURATIONS = (
+    (1, 24, 24, 1, 1, "float32", True),
+    (1, 24, 24, 1, 5, "float32", False),
+    (2, 16, 32, 4, 5, "float32", False),
+    (1, 16, 48, 8, 9, "float32", False),
+    (1, 16, 64, 16, 17, "float32", False),
+    (1, 32, 32, 4, 3, "float32", False),
+    (1, 16, 16, 8, 8, "float32", False),
+    (1, 16, 32, 4, 5, "float16", False),
+)
 
 
 @pytest.fixture(scope="module")
@@ -110,19 +120,7 @@ def _check_readbacks(np, directory, buffers, gradients, *, exact=False):
     return records, outputs
 
 
-@pytest.mark.parametrize(
-    "configuration",
-    [
-        (1, 24, 24, 1, 1, "float32", True),
-        (1, 24, 24, 1, 5, "float32", False),
-        (2, 16, 32, 4, 5, "float32", False),
-        (1, 16, 48, 8, 9, "float32", False),
-        (1, 16, 64, 16, 17, "float32", False),
-        (1, 32, 32, 4, 3, "float32", False),
-        (1, 16, 16, 8, 8, "float32", False),
-        (1, 16, 32, 4, 5, "float16", False),
-    ],
-)
+@pytest.mark.parametrize("configuration", CONFIGURATIONS)
 def test_pinned_gated_delta_gradients(tmp_path, metal_runner, reference, configuration):
     np = importlib.import_module("numpy")
     case = reference.Case(*configuration)

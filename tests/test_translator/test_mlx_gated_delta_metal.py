@@ -20,7 +20,9 @@ ENTRY = "seq_gated_delta_vjp_float_128_128_24_24_1"
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_GATED_DELTA_METAL"
 
 
-def _translate_pinned(tmp_path, target, *, entry=ENTRY, workgroup_size=(32, 1, 1)):
+def _translate_pinned(
+    tmp_path, target, *, entry=ENTRY, workgroup_size=(32, 1, 1), target_options=None
+):
     root_value = os.environ.get("CROSTL_MLX_CURRENT_ROOT")
     assert root_value, "Set CROSTL_MLX_CURRENT_ROOT to the pinned checkout"
     root = Path(root_value).resolve()
@@ -65,6 +67,7 @@ def _translate_pinned(tmp_path, target, *, entry=ENTRY, workgroup_size=(32, 1, 1
                     "metal": {
                         "max_template_specializations": 128,
                         "max_template_materialization_work": 8192,
+                        "target_options": {target: target_options or {}},
                     }
                 },
                 output_dir=Path(output).relative_to(root),

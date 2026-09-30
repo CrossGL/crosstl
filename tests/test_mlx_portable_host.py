@@ -622,6 +622,13 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
             "CROSTL_REQUIRE_MLX_GATED_DELTA_DIRECTX",
             "test_mlx_gated_delta_directx.py",
         ),
+        (
+            "Execute pinned DirectX gated-delta gradients",
+            "gated-delta-runtime",
+            900,
+            "CROSTL_REQUIRE_MLX_GATED_DELTA_DIRECTX_RUNTIME",
+            "test_mlx_gated_delta_directx_runtime.py",
+        ),
     ):
         step = ci_coverage.workflow_job_step_section(workflow, "portable-host", name)
         assert "if: runner.os == 'Windows'" in step
@@ -642,6 +649,11 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
             assert f"tests/test_translator/{module}" in paths
             assert "tests/test_translator/test_metal_float_atomics.py" in paths
             assert "tests/test_translator/test_mlx_gated_delta_metal.py" in paths
+            assert "tests/test_translator/test_mlx_gated_delta_runtime.py" in paths
+            assert (
+                "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
+                in paths
+            )
     metal = (root / ".github/workflows/mlx-metal-host.yml").read_text()
     reductions = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Validate DirectX software reductions"
