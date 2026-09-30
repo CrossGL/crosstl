@@ -2469,6 +2469,23 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "if: always() && runner.os == 'Linux'" in opengl_math_upload
     assert "path: opengl-math-results" in opengl_math_upload
     assert "if-no-files-found: error" in opengl_math_upload
+    metal_package = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Validate native Metal package execution"
+    )
+    assert 'CROSTL_REQUIRE_METAL_PACKAGE_RUNTIME: "1"' in metal_package
+    assert "if: runner.os == 'macOS'" in metal_package
+    assert "--timeout-seconds 180 --" in metal_package
+    assert "pytest -q -n auto" in metal_package
+    assert "test_metal_native_runtime.py" in metal_package
+    assert (
+        mlx_porting.count('"tests/test_translator/test_metal_native_runtime.py"') == 2
+    )
+    metal_package_upload = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Upload native Metal package evidence"
+    )
+    assert "if: always() && runner.os == 'macOS'" in metal_package_upload
+    assert "path: metal-package-results" in metal_package_upload
+    assert "if-no-files-found: error" in metal_package_upload
     ownership = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate Metal builtin ownership"
     )

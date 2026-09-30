@@ -6,6 +6,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Added
 
+- Native Metal execution through public runtime packages and loader descriptors, with exact buffer layouts, function constants, bounded compiler/worker processes and compiled-interface checks. Required macOS CI covers generic package readback and all 15 current MLX complex-power shapes without claiming full MLX host-runtime integration.
 - Proven minimum buffer footprints from HLSL/GLSL constant-index access paths are preserved through packaging and rejected at native preflight when a bound view is too short. Current MLX multidimensional complex-power checks exercise undersized-stride rejection without executing invalid requests; unknown dynamic bounds remain outside this guarantee.
 - Required native numerical checks for all 15 complex-power entry shapes in the current MLX pin, covering 291 complex outputs across broadcasting, multidimensional and strided access, 32/64-bit indices and partial gather tiles. DirectX/OpenGL execute public runtime packages, while Metal also compares the original upstream kernels against independent CPU references.
 - Exact runtime layouts for flat homogeneous struct storage buffers in DirectX and OpenGL, preserving member names, scalar types, offsets, alignment and stride through packaging and dispatch. Required CI executes the pinned MLX `g1_Powercomplex64` artifact on Windows, Linux and macOS against 256 finite/zero-base reference cases; macOS also runs the original Metal source. This does not establish whole-MLX runtime integration.

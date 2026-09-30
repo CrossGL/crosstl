@@ -1969,6 +1969,54 @@ diagnostics and runtime-reference review actions forward, and it remains a
 metadata contract only: it does not rewrite host application code, execute
 device code, generate runtime framework code, or install target SDKs.
 
+Native Metal Package Execution
+------------------------------
+
+``MetalRuntimeParityAdapter`` and ``MetalComputeRuntime`` execute compute
+artifacts through the public package, loader descriptor and dispatch-request
+APIs on macOS 13 or newer. They require Xcode's Metal and Swift tools and an
+available Metal device. No additional Python GPU binding is required. The
+runtime compiles an identity-checked source snapshot with warnings fatal and
+fast math disabled, links a Metal library, and runs a shipped Swift worker.
+
+Requests require explicit or reflected ``workgroupSize`` and
+``workgroupCount``; the runtime does not guess a group size from a maximum-thread
+attribute. Buffer arguments share one index namespace, from 0 through 30, in
+resource set zero. Scalar buffers, tightly packed two-/four-component 32-bit
+vectors and flat homogeneous scalar structs retain their exact physical layout.
+``constant T*`` parameters are read-only runtime buffers; supported
+``constant T&`` scalar/vector parameters are fixed-size values. Metal ``long``
+and ``ulong`` scalar storage uses signed/unsigned 64-bit host values. Padded
+vectors, half/bool storage, nested or mixed structs, textures, samplers and
+dynamic threadgroup arguments are not supported by this buffer runtime.
+
+The worker specializes Boolean, float32, int32 and uint32 function constants
+by numeric ID, verifies required compiled buffer arguments and alignment,
+checks device and pipeline threadgroup limits, dispatches three-dimensional
+threadgroups, synchronizes and reads the requested byte views. Compatible
+aliased views share one allocation; contradictory overlapping initial bytes
+are rejected. The default combined buffer limit is 256 MiB, configurable with
+``MetalComputeRuntime(max_buffer_bytes=...)``. This is not dynamic shader
+memory-safety analysis.
+
+Compilation, probing and execution each have a default 120-second deadline,
+configurable with ``MetalRuntimeParityAdapter(timeout_seconds=...)``. A timeout
+terminates and reaps the worker process group and reports a structured failure;
+it never substitutes host computation. Call ``close()`` on the Metal runtime
+when finished to release the temporary worker executable. Device name,
+compiled-library hash, execution width and dispatch geometry accompany readback
+evidence. The implementation follows Metal's
+`compiled binding reflection
+<https://developer.apple.com/documentation/metal/mtlcomputepipelinereflection>`_.
+
+Required macOS CI covers package execution, sparse bindings, multidimensional
+indexing, function constants and invalid contracts. The current MLX binary-shape
+gate additionally runs all 15 selected complex-power shapes through this public
+runtime, alongside original-source and roundtrip Metal comparisons. This adds
+a native reference path; it does not provide persistent MLX streams, automatic
+host-code redirection, a generated Metal C++ loader, full upstream-suite parity,
+or the remaining runtime adapters tracked by issue #1424.
+
 Exact Scalar Physical Resource Layouts
 --------------------------------------
 
@@ -2069,8 +2117,9 @@ scalar/vector broadcasting, two- and three-dimensional dispatch, non-contiguous
 storage, zero strides, 32/64-bit index paths and partial final tiles in
 four-dimensional gathers. Expected input locations are enumerated from logical
 coordinates and strides independently of the shader's index helpers. Metal
-executes both original and translated kernels; DirectX and OpenGL consume the
-public runtime packages. DirectX also compiles with warnings fatal, and OpenGL
+executes original and translated kernels and separately consumes the public
+runtime package, as DirectX and OpenGL do. DirectX also compiles with warnings
+fatal, and OpenGL
 validates a generated SPIR-V 1.3 module before native GLSL execution.
 
 The gate rejects a changed source census, missing native tools, missing entry

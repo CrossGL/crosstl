@@ -555,6 +555,7 @@ def _reflect_metal_source(
     stage: str | None,
 ) -> dict[str, Any]:
     source = _strip_comments(_read_text(artifact_path))
+    struct_declarations = _homogeneous_struct_declarations(source)
     entry_points = []
     resources = []
     stage_names = {
@@ -586,6 +587,11 @@ def _reflect_metal_source(
                 entry_point=entry_name,
             )
             if resource is not None:
+                layout = _metal_buffer_layout(resource, struct_declarations)
+                if layout is not None:
+                    resource["scalarLayout"] = layout
+                    if layout["runtimeSized"]:
+                        resource["kind"] = "buffer"
                 resources.append(resource)
 
     specialization_constants = []
@@ -614,6 +620,56 @@ def _reflect_metal_source(
         constants=[],
         specialization_constants=specialization_constants,
         diagnostics=[],
+    )
+
+
+def _metal_buffer_layout(
+    resource: Mapping[str, Any],
+    struct_declarations: Mapping[str, list[tuple[str, str]]],
+) -> dict[str, Any] | None:
+    if resource["kind"] not in {"buffer", "constant-buffer"}:
+        return None
+    match = re.fullmatch(
+        r"(?P<qualifiers>(?:(?:const|device|constant)\s+)+)"
+        r"(?P<type>[A-Za-z_]\w*)\s*(?P<reference>[*&])",
+        resource["type"],
+    )
+    if match is None:
+        return None
+    qualifiers = match.group("qualifiers").split()
+    if (
+        len(qualifiers) != len(set(qualifiers))
+        or len(set(qualifiers) & {"device", "constant"}) != 1
+    ):
+        return None
+    pointer = match.group("reference") == "*"
+    if not pointer and "constant" not in qualifiers:
+        return None
+    type_name = match.group("type")
+    scalar = re.fullmatch(
+        r"(float|int|uint|long|ulong|int64_t|uint64_t)([24]?)", type_name
+    )
+    if scalar is None:
+        return (
+            _homogeneous_struct_buffer_layout(
+                type_name, struct_declarations, storage_layout="metal-buffer"
+            )
+            if pointer
+            else None
+        )
+    base, width_text = scalar.groups()
+    base = {"long": "int64_t", "ulong": "uint64_t"}.get(base, base)
+    width = int(width_text or 1)
+    if base in {"int64_t", "uint64_t"} and width != 1:
+        return None
+    size = SCALAR_PHYSICAL_SIZES[base] * width
+    return _physical_value_layout(
+        base,
+        vector_width=width,
+        storage_layout="metal-buffer" if pointer else "metal-constant",
+        alignment_bytes=size,
+        runtime_sized=pointer,
+        block_size_bytes=None if pointer else size,
     )
 
 

@@ -37,10 +37,17 @@ from crosstl.project.runtime_verification import (
 _ERROR_PREFIX = "project.native-loader-dispatch"
 _COMPUTE_STAGE = "compute"
 _TARGET_ARTIFACT_FORMATS = {
+    "metal": frozenset(("Metal source",)),
     "directx": frozenset(("HLSL source", "DXIL binary")),
     "opengl": frozenset(("GLSL source", "SPIR-V binary")),
 }
 _TARGET_RESOURCE_NAMESPACES = {
+    "metal": {
+        ("buffer", "read"): "buffer",
+        ("buffer", "write"): "buffer",
+        ("buffer", "read_write"): "buffer",
+        ("constant-buffer", "read"): "buffer",
+    },
     "directx": {
         ("buffer", "read"): "srv",
         ("buffer", "write"): "uav",
@@ -104,6 +111,7 @@ _PHYSICAL_TYPES = {
     "uint64": "uint64_t",
 }
 _TARGET_STORAGE_LAYOUTS = {
+    "metal": {"buffer": "metal-buffer", "constant-buffer": "metal-constant"},
     "directx": {
         "buffer": "hlsl-structured-buffer",
         "constant-buffer": "hlsl-constant-buffer",
@@ -162,7 +170,7 @@ def build_native_loader_dispatch_request(
     *,
     expected_target: str | None = None,
 ) -> RuntimeExecutionRequest:
-    """Build and preflight one DirectX or OpenGL native runtime request.
+    """Build and preflight one DirectX, OpenGL or Metal native runtime request.
 
     The descriptor remains the source of truth for artifact identity, resource
     coordinates, entry-point metadata, and specialization identities. Callers
@@ -185,6 +193,12 @@ def build_native_loader_dispatch_request(
         entry_point=entry_point["name"],
         reflected_workgroup_size=_reflected_workgroup_size(entry_point),
     )
+    if target == "metal" and not dispatch.workgroup_size:
+        raise NativeLoaderDispatchError(
+            "workgroup-size-missing",
+            "Metal native dispatch requires an explicit or reflected workgroup size.",
+            path="$.dispatchGeometry.workgroupSize",
+        )
     inputs = _with_derived_execution_inputs(
         inputs,
         normalized["bindings"],
@@ -300,7 +314,7 @@ def _validated_target(
     if target not in _TARGET_ARTIFACT_FORMATS:
         raise NativeLoaderDispatchError(
             "target-unsupported",
-            "Native loader dispatch supports DirectX and OpenGL targets only.",
+            "Native loader dispatch supports DirectX, OpenGL and Metal targets only.",
             path="$.target",
             details={
                 "target": target,
@@ -319,7 +333,7 @@ def _validated_target(
         if expected not in _TARGET_ARTIFACT_FORMATS:
             raise NativeLoaderDispatchError(
                 "expected-target-invalid",
-                "Expected target must identify DirectX or OpenGL.",
+                "Expected target must identify DirectX, OpenGL or Metal.",
                 path="$.expectedTarget",
                 details={"value": expected_target},
             )
@@ -340,9 +354,11 @@ def _validated_target(
             path="$.artifact.format",
             details={
                 "target": target,
-                "expectedFormat": (
-                    "HLSL source" if target == "directx" else "GLSL source"
-                ),
+                "expectedFormat": {
+                    "directx": "HLSL source",
+                    "opengl": "GLSL source",
+                    "metal": "Metal source",
+                }[target],
                 "supportedFormats": sorted(supported_formats),
                 "actualFormat": actual_format,
             },
@@ -1023,7 +1039,7 @@ def _resource_bindings(
         if coordinates["set"] != 0:
             raise NativeLoaderDispatchError(
                 "resource-set-unsupported",
-                "DirectX and OpenGL native runtime adapters currently require resource set zero.",
+                "Native runtime buffer adapters require resource set zero.",
                 path=f"{path}.coordinates.set",
                 details={"target": target, "name": name, "set": coordinates["set"]},
             )
@@ -1568,6 +1584,8 @@ def _specialization_constants(
             "descriptorProvenance": copy.deepcopy(constant.get("provenance", {})),
         }
         kind = "specialization-constant"
+        if target == "metal":
+            kind = "function-constant"
         if target == "directx":
             kind = "compile-time-constant"
             metadata["mechanism"] = "compiled"

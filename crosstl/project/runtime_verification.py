@@ -1848,6 +1848,77 @@ class VulkanRuntimeParityAdapter(NativeRuntimeParityAdapter):
         )
 
 
+class MetalRuntimeParityAdapter(NativeRuntimeParityAdapter):
+    """Compile an identity-checked Metal snapshot before native buffer execution."""
+
+    name = "metal-native-runtime"
+    target = "metal"
+    targets = ("metal",)
+    required_tools = ("xcrun",)
+    supported_platforms = ("darwin",)
+
+    def __init__(self, runtime=None, *, timeout_seconds=120, **kwargs):
+        from .metal_runtime import MetalComputeRuntime, run_metal_command
+
+        if (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+        ):
+            raise ValueError("Metal operation timeout must be positive and finite.")
+        if runtime is None:
+            runtime = MetalComputeRuntime(timeout_seconds=timeout_seconds)
+        if kwargs.get("command_runner") is None:
+
+            def runner(command, *, input_text=None):
+                return run_metal_command(
+                    command, input_text=input_text, timeout_seconds=timeout_seconds
+                )
+
+            kwargs["command_runner"] = runner
+        super().__init__(runtime=runtime, **kwargs)
+
+    def validation_commands(self, state, artifact_path, *, temp_dir):
+        _ = state
+        if artifact_path.suffix == ".metallib":
+            return ()
+        air = temp_dir / "kernel.air"
+        library = temp_dir / "kernel.metallib"
+        xcrun = self._tool_command("xcrun")
+        return (
+            NativeRuntimeValidationCommand(
+                command=(
+                    xcrun,
+                    "--sdk",
+                    "macosx",
+                    "metal",
+                    "-Werror",
+                    "-fno-fast-math",
+                    "-c",
+                    str(artifact_path),
+                    "-o",
+                    str(air),
+                ),
+                action="compile-metal-for-native-runtime",
+                module_path=air,
+            ),
+            NativeRuntimeValidationCommand(
+                command=(
+                    xcrun,
+                    "--sdk",
+                    "macosx",
+                    "metallib",
+                    str(air),
+                    "-o",
+                    str(library),
+                ),
+                action="link-metal-for-native-runtime",
+                module_path=library,
+            ),
+        )
+
+
 def native_runtime_parity_adapter(
     target: str,
     runtime: Any | None = None,
@@ -1857,6 +1928,7 @@ def native_runtime_parity_adapter(
 
     normalized = _normalize_target(target)
     adapter_classes = {
+        "metal": MetalRuntimeParityAdapter,
         "directx": DirectXRuntimeParityAdapter,
         "opengl": OpenGLRuntimeParityAdapter,
         "vulkan": VulkanRuntimeParityAdapter,
@@ -1894,7 +1966,7 @@ def native_runtime_parity_adapters(
             runtime=runtime_by_target.get(target),
             **kwargs,
         )
-        for target in ("directx", "opengl", "vulkan")
+        for target in ("directx", "opengl", "vulkan", "metal")
     }
 
 

@@ -322,9 +322,7 @@ def _native_request(report, work, target, entry, workload):
     (work / "descriptor.json").write_text(
         json.dumps(descriptor, indent=2), encoding="utf-8"
     )
-    names = (
-        ("a", "b", "c") if target == "directx" else ("aBuffer", "bBuffer", "cBuffer")
-    )
+    names = ("aBuffer", "bBuffer", "cBuffer") if target == "opengl" else ("a", "b", "c")
     pairs = workload["pairs"]
     inputs = {
         names[0]: _complex_value(workload["a"]),
@@ -334,12 +332,12 @@ def _native_request(report, work, target, entry, workload):
     binding_names = {binding["name"] for binding in descriptor["bindings"]}
     suffix = "Constants" if target == "directx" else "Args"
     for name, (dtype, values) in workload["constants"].items():
-        candidate = name if target == "directx" else f"{name}Buffer"
+        candidate = f"{name}Buffer" if target == "opengl" else name
         actual = candidate if candidate in binding_names else f"{entry}_{name}_{suffix}"
         assert actual in binding_names
         inputs[actual] = {"dtype": dtype, "shape": [len(values)], "values": values}
     outputs = {names[2]: _complex_value([_reference(*pair) for pair in pairs])}
-    if entry.startswith(("g2_", "g2large_", "g3_", "g3large_")):
+    if target != "metal" and entry.startswith(("g2_", "g2large_", "g3_", "g3large_")):
         rejections = []
         for stride_name in ("a_strides", "b_strides"):
             binding_name = (
@@ -373,7 +371,16 @@ def _native_request(report, work, target, entry, workload):
             json.dumps(rejections, indent=2), encoding="utf-8"
         )
     request = build_native_loader_dispatch_request(
-        descriptor, package, inputs, outputs, workload["grid"], expected_target=target
+        descriptor,
+        package,
+        inputs,
+        outputs,
+        (
+            {"workgroupCount": workload["grid"], "workgroupSize": [1, 1, 1]}
+            if target == "metal"
+            else workload["grid"]
+        ),
+        expected_target=target,
     )
     assert request.execution_plan.diagnostics == ()
     (work / "values.json").write_text(
@@ -383,9 +390,19 @@ def _native_request(report, work, target, entry, workload):
         encoding="utf-8",
     )
     executor = _executor(target)
-    availability = executor.is_available(request)
-    assert availability.available, availability.reason
-    result = executor.run(request)
+    try:
+        availability = executor.is_available(request)
+        assert availability.available, availability.reason
+        result = executor.run(request)
+        (work / "native-runtime-result.json").write_text(
+            json.dumps(
+                {"outputs": result.outputs, "details": result.details}, indent=2
+            ),
+            encoding="utf-8",
+        )
+    finally:
+        if target == "metal":
+            executor.runtime_adapter.runtime.close()
     assert result.status == "ok"
     output = result.outputs[names[2]]
     assert output["dtype"] == "float32" and output["shape"] == [len(pairs), 2]
@@ -470,6 +487,10 @@ def test_current_mlx_complex_power_shape_native_parity(
                 if target == "metal"
                 else _native_request(report, work, target, entry, workload)
             )
+            if target == "metal":
+                evidence["nativePackage"] = _native_request(
+                    report, work, target, entry, workload
+                )["translated"]
             (work / "parity.json").write_text(
                 json.dumps(
                     {
