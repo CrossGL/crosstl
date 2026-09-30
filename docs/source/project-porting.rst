@@ -541,6 +541,10 @@ stored outside pytest's temporary directory and uploaded with the runtime
 evidence, including on timeout. Missing debug-layer tooling is reported
 explicitly and does not skip or replace the numerical test. The wrapper
 preserves the wrapped Python module's arguments and exit status.
+The current DirectX kernel test additionally saves the actual runtime-loaded
+DXIL and the final packed register payloads immediately before each dispatch in
+``native-dispatches``. This distinguishes the executed module and bindings from
+the standalone compiler check's artifacts, including when dispatch never returns.
 
 Before the full kernels, Windows also executes four small translated reduction
 checks: sparse-register metadata reads, signed 64-bit index division, helper-level

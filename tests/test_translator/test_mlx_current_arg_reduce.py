@@ -30,6 +30,12 @@ from crosstl.project import (
     validate_project_report,
 )
 from crosstl.project.directx_toolchain import dxc_compiler_arguments_for_source
+from crosstl.project.native_runtime_drivers import (
+    _complete_directx_register_layout,
+    _prepare_directx_buffers,
+    _prepare_directx_constants,
+    _validate_directx_register_layout,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 MLX_COMMIT = "d9add9d11f3154111a4c85f267ec2fd307ecd18e"
@@ -876,9 +882,57 @@ def _runtime_descriptor(translation, work, target, entry):
     return descriptor, package_dir
 
 
-def _runtime_executor(target):
+class _RecordingDirectXRuntime(DirectXComputeRuntime):
+    def __init__(self, work):
+        super().__init__()
+        self.work = work
+        self.dispatch_index = 0
+
+    def dispatch_sequence(self, adapter, state, requests):
+        requests = tuple(requests)
+        for request in requests:
+            directory = self.work / "native-dispatches" / str(self.dispatch_index)
+            self.dispatch_index += 1
+            directory.mkdir(parents=True)
+            shader = self._shader_code(request)
+            (directory / "kernel.dxil").write_bytes(shader)
+            prepared = _validate_directx_register_layout(
+                _complete_directx_register_layout(
+                    (
+                        *_prepare_directx_buffers(request.buffers),
+                        *_prepare_directx_constants(request.constants),
+                    )
+                )
+            )
+            _write_json(
+                directory / "dispatch.json",
+                {
+                    "shaderSha256": hashlib.sha256(shader).hexdigest(),
+                    "entryPoint": request.entry_point,
+                    "dispatch": request.dispatch.to_json(),
+                    "resources": [
+                        {
+                            "name": resource.name,
+                            "namespace": resource.namespace,
+                            "binding": resource.binding_index,
+                            "dtype": resource.dtype,
+                            "shape": list(resource.shape),
+                            "stride": resource.stride,
+                            "allocationSize": resource.allocation_size,
+                            "upload": resource.upload,
+                            "readback": resource.readback,
+                            "payloadHex": resource.payload.hex(),
+                        }
+                        for resource in prepared
+                    ],
+                },
+            )
+        return super().dispatch_sequence(adapter, state, requests)
+
+
+def _runtime_executor(target, work):
     if target == "directx":
-        adapter = DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime())
+        adapter = DirectXRuntimeParityAdapter(runtime=_RecordingDirectXRuntime(work))
     else:
         adapter = OpenGLRuntimeParityAdapter(
             runtime=OpenGLComputeRuntime(context_backends=("egl",))
@@ -984,7 +1038,7 @@ def _run_runtime_parity(translation, work, target, entry):
             entry,
         )
     _write_json(work / "native-loader-abi.json", descriptor)
-    executor = _runtime_executor(target)
+    executor = _runtime_executor(target, work)
     evidence = []
     for name, request, rows, storage in _cases():
         expected = _expected_indices(entry, rows)
