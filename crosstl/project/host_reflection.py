@@ -10,6 +10,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
+from crosstl.project.buffer_requirements import (
+    MAX_BINDING_SIZE,
+    source_buffer_minimum_elements,
+)
 from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
@@ -980,6 +984,17 @@ def _reflect_hlsl_source(
             resource["scalarLayout"] = scalar_layout
         resources.append(resource)
 
+    _reflect_buffer_requirements(
+        source,
+        target="directx",
+        entry_points=entry_points,
+        resources=resources,
+        resource_names={
+            resource["name"]: resource["name"]
+            for resource in resources
+            if resource.get("scalarLayout", {}).get("runtimeSized") is True
+        },
+    )
     constants = [
         {
             "name": match.group("name"),
@@ -1012,6 +1027,34 @@ def _hlsl_entry_stage(name: str, attributes: str, stage: str | None) -> str | No
     if name == "main" and stage:
         return _stage_name(stage)
     return None
+
+
+def _reflect_buffer_requirements(
+    source: str,
+    *,
+    target: str,
+    entry_points: Sequence[Mapping[str, Any]],
+    resources: Sequence[dict[str, Any]],
+    resource_names: Mapping[str, str],
+) -> None:
+    requirements = source_buffer_minimum_elements(
+        source,
+        target=target,
+        entry_points=[entry["name"] for entry in entry_points],
+        resource_names=resource_names,
+    )
+    for resource in resources:
+        count = requirements.get(resource["name"])
+        layout = resource.get("scalarLayout")
+        if count is None or layout is None:
+            continue
+        size = (
+            layout["memberOffsetBytes"]
+            + (count - 1) * layout["elementStrideBytes"]
+            + layout["elementSizeBytes"]
+        )
+        if 0 < size <= MAX_BINDING_SIZE:
+            layout["minimumBindingSizeBytes"] = size
 
 
 def _hlsl_resource_kind(type_name: str) -> str:
@@ -1265,6 +1308,7 @@ def _reflect_glsl_source(
 
     resources = []
     occupied_spans = []
+    resource_names = {}
     for match in GLSL_BLOCK_RESOURCE_RE.finditer(source):
         occupied_spans.append(match.span())
         layout = _parse_layout(match.group("layout"))
@@ -1306,6 +1350,10 @@ def _reflect_glsl_source(
                 )
         if scalar_layout is not None:
             resource["scalarLayout"] = scalar_layout
+            if scalar_layout.get("runtimeSized") is True:
+                member = scalar_layout["memberName"]
+                source_name = f"{name}.{member}" if match.group("name") else member
+                resource_names[source_name] = name
         resources.append(resource)
     for match in GLSL_RESOURCE_RE.finditer(source):
         if any(start <= match.start() < end for start, end in occupied_spans):
@@ -1324,6 +1372,13 @@ def _reflect_glsl_source(
             }
         )
 
+    _reflect_buffer_requirements(
+        source,
+        target="opengl",
+        entry_points=entry_points,
+        resources=resources,
+        resource_names=resource_names,
+    )
     constants = []
     specialization_constants = []
     spec_spans = []

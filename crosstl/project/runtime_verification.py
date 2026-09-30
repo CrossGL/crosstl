@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
+from crosstl.project.buffer_requirements import valid_minimum_binding_size
 from crosstl.project.directx_toolchain import (
     dxc_compiler_arguments_for_source,
     dxc_profile_for_source,
@@ -6461,6 +6462,51 @@ def _validate_runtime_allocations(
                 view = resource.allocation
             if view is None:
                 continue
+            layout = resource.binding.metadata.get("scalarLayout", {})
+            if isinstance(layout, Mapping) and "minimumBindingSizeBytes" in layout:
+                minimum = layout["minimumBindingSizeBytes"]
+                value = (
+                    resource.initial_value or resource.expected_output or resource.value
+                )
+                value_bytes = (
+                    _runtime_value_physical_byte_length(
+                        replace(value, metadata={}), resource.binding
+                    )
+                    if value is not None
+                    else None
+                )
+                if not valid_minimum_binding_size(minimum):
+                    record(
+                        (index,),
+                        _runtime_execution_diagnostic(
+                            "error",
+                            "project.runtime-verification.resource-minimum-binding-size-invalid",
+                            "Minimum binding size must be a positive signed 64-bit byte count.",
+                            artifact,
+                            binding=_runtime_allocation_binding_payload(resource),
+                            minimumBindingSizeBytes=minimum,
+                        ),
+                    )
+                elif (
+                    view.byte_length is None
+                    or view.byte_length < minimum
+                    or value_bytes is None
+                    or value_bytes < minimum
+                ):
+                    record(
+                        (index,),
+                        _runtime_execution_diagnostic(
+                            "error",
+                            "project.runtime-verification.resource-view-too-small",
+                            "Bound resource view is smaller than its proven minimum footprint.",
+                            artifact,
+                            binding=_runtime_allocation_binding_payload(resource),
+                            byteLength=view.byte_length,
+                            valueByteLength=value_bytes,
+                            minimumBindingSizeBytes=minimum,
+                            targetConstraint="minimum-binding-size",
+                        ),
+                    )
             if view.byte_length is not None and allocation_size is not None:
                 end = view.byte_offset + view.byte_length
                 if end > allocation_size:

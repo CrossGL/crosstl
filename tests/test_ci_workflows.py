@@ -2496,6 +2496,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "if: runner.os" not in struct_checks
     for filename in (
         "test_struct_buffer_layouts.py",
+        "test_buffer_requirements.py",
         "test_mlx_current_complex_power.py",
     ):
         assert mlx_porting.count(f'"tests/test_translator/{filename}"') == 2

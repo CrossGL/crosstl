@@ -34,6 +34,12 @@ index-range assertions are bounded fixture preconditions, not general runtime
 bounds checks. Other binary operators and types, the complete upstream suite,
 and MLX host-runtime redirection remain outside this proof.
 
+The DirectX/OpenGL two- and three-dimensional cases also verify that truncated
+stride buffers are rejected before dispatch. Their minimum lengths come from
+proven constant-index accesses in the generated helpers, not from MLX-specific
+buffer names. Valid workloads still run unchanged; this preflight guarantee does
+not cover arbitrary dynamic indexing.
+
 ## Scope
 
 The current harness verifies:

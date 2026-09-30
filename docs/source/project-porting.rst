@@ -2028,6 +2028,26 @@ offsets, tight stride, complete elements, and the matching target storage class.
 Nested structs, mixed scalar types, arrays, padded records, explicit member
 qualifiers, duplicate declarations and struct uniform blocks remain unsupported.
 No MLX-specific type-name mapping is used.
+
+For a single reflected HLSL or GLSL entry, ``minimumBindingSizeBytes`` records
+the minimum buffer footprint proven by constant-index accesses in its mandatory
+straight-line prefix. Analysis uses the existing target parsers, follows unique
+helper definitions, and propagates buffer identity and bounded integer offsets.
+It stops at unresolved calls, ambiguous overloads, recursion and dynamic control
+flow. Unresolved preprocessing disables this analysis; array parameter extents
+alone do not establish required sizes. Missing metadata means unknown, not zero.
+This is a lower bound from proven accesses, not a complete dynamic bounds check.
+
+Packaging and native loader descriptors preserve this requirement. Runtime
+preflight checks both the bound view and the provided values against the binding's
+physical layout. A larger backing allocation or weaker value metadata cannot
+make a short view valid. Larger usable buffers remain accepted. Malformed or
+overflowing minimum byte counts and undersized views produce structured errors
+before native execution. Required native CI covers a general helper-based
+buffer access and rejects truncated stride buffers for the current MLX two- and
+three-dimensional complex-power entries before executing the unchanged valid
+numerical workloads.
+
 The storage rules follow `DXC buffer packing
 <https://github.com/microsoft/DirectXShaderCompiler/wiki/Buffer-Packing>`_ and
 the `GLSL buffer layout specification

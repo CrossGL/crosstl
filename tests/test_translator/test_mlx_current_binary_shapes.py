@@ -1,5 +1,6 @@
 """Native complex-power parity across every pinned MLX binary entry shape."""
 
+import copy
 import itertools
 import json
 import math
@@ -14,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from crosstl.project import (
+    NativeLoaderDispatchError,
     build_native_loader_abi_descriptor,
     build_native_loader_dispatch_request,
     build_runtime_artifact_manifest,
@@ -337,6 +339,39 @@ def _native_request(report, work, target, entry, workload):
         assert actual in binding_names
         inputs[actual] = {"dtype": dtype, "shape": [len(values)], "values": values}
     outputs = {names[2]: _complex_value([_reference(*pair) for pair in pairs])}
+    if entry.startswith(("g2_", "g2large_", "g3_", "g3large_")):
+        rejections = []
+        for stride_name in ("a_strides", "b_strides"):
+            binding_name = (
+                stride_name if target == "directx" else f"{stride_name}Buffer"
+            )
+            binding = next(
+                b for b in descriptor["bindings"] if b["name"] == binding_name
+            )
+            original = inputs[binding_name]
+            required_bytes = len(original["values"]) * 8
+            assert binding["scalarLayout"]["minimumBindingSizeBytes"] == required_bytes
+            truncated = copy.deepcopy(inputs)
+            truncated[binding_name]["values"] = original["values"][:-1]
+            truncated[binding_name]["shape"] = [len(original["values"]) - 1]
+            with pytest.raises(NativeLoaderDispatchError) as caught:
+                build_native_loader_dispatch_request(
+                    descriptor,
+                    package,
+                    truncated,
+                    outputs,
+                    workload["grid"],
+                    expected_target=target,
+                )
+            diagnostics = caught.value.details["diagnostics"]
+            assert any(
+                diagnostic["code"].endswith("resource-view-too-small")
+                for diagnostic in diagnostics
+            ), diagnostics
+            rejections.append({"binding": binding_name, "diagnostics": diagnostics})
+        (work / "undersized-stride-preflight.json").write_text(
+            json.dumps(rejections, indent=2), encoding="utf-8"
+        )
     request = build_native_loader_dispatch_request(
         descriptor, package, inputs, outputs, workload["grid"], expected_target=target
     )

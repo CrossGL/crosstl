@@ -14,6 +14,7 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+from crosstl.project.buffer_requirements import valid_minimum_binding_size
 from crosstl.project.native_loader_abi import (
     NativeLoaderABIError,
     _validate_descriptor,
@@ -1135,6 +1136,15 @@ def _validated_scalar_layout(
             "resource-layout-unsupported",
             "Native runtime buffer bindings require a concrete scalar or vector layout.",
             path=path,
+            details={"binding": runtime_value.name},
+        )
+    if "minimumBindingSizeBytes" in layout and not valid_minimum_binding_size(
+        layout["minimumBindingSizeBytes"]
+    ):
+        raise NativeLoaderDispatchError(
+            "resource-minimum-binding-size-invalid",
+            "Minimum binding size must be a positive signed 64-bit byte count.",
+            path=f"{path}.minimumBindingSizeBytes",
             details={"binding": runtime_value.name},
         )
     if "structMembers" in layout or "componentCount" in layout:
