@@ -2444,11 +2444,23 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     )
     assert "if: runner.os == 'Windows'" in primitive_checks
     assert 'CROSTL_REQUIRE_DIRECTX_REDUCTION_PRIMITIVES: "1"' in primitive_checks
-    assert "for case in metadata division shuffle combined; do" in primitive_checks
+    assert (
+        "for case in metadata division shuffle combined pair-reduction "
+        "special-values two-phase private-array; do" in primitive_checks
+    )
     assert "--timeout-seconds 120 --" in primitive_checks
     assert "test_directx_reduction_primitives_execute[$case]" in primitive_checks
     assert "|| failed=1" in primitive_checks
     assert 'exit "$failed"' in primitive_checks
+    primitive_upload = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Upload Direct3D reduction primitive diagnostics"
+    )
+    assert "if: always() && runner.os == 'Windows'" in primitive_upload
+    assert "name: directx-reduction-primitives" in primitive_upload
+    assert "path: mlx-current-results" in primitive_upload
+    assert mlx_porting.index(
+        "Upload Direct3D reduction primitive diagnostics"
+    ) < mlx_porting.index("Prove current MLX arg-reduce native validation")
     assert mlx_porting.index(
         "Validate Direct3D reduction primitives"
     ) < mlx_porting.index("Prove current MLX arg-reduce native validation")

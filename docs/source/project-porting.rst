@@ -546,14 +546,17 @@ DXIL and the final packed register payloads immediately before each dispatch in
 ``native-dispatches``. This distinguishes the executed module and bindings from
 the standalone compiler check's artifacts, including when dispatch never returns.
 
-Before the full kernels, Windows also executes four small translated reduction
+Before the full kernels, Windows also executes eight small translated reduction
 checks: sparse-register metadata reads, signed 64-bit index division, helper-level
-software shuffles, and their combination with a bounded input loop. Each runs in
-a separate process with a two-minute deadline and exact readback comparisons.
+software shuffles, their combination with a bounded input loop, NaN-aware pair
+comparisons, non-finite inputs, a second shared-memory reduction stage, and
+private-array accumulation. Each runs in a separate process with a two-minute
+deadline and exact readback comparisons.
 The diagnostic logs, CrossGL input, generated HLSL, DXIL, and completed readbacks
-are retained under ``mlx-current-results``. All four checks are attempted and
-any failure fails the step. These isolate runtime failures; they neither replace
-the MLX numerical cases nor establish whole-kernel parity.
+are retained under ``mlx-current-results`` and uploaded before the full kernels
+run. All eight checks are attempted and any failure fails the step. These isolate
+runtime failures; they neither replace the MLX numerical cases nor establish
+whole-kernel parity.
 
 The current-pinned MLX integration exercises entry-scoped translation for all
 877 discovered entries from the include-expanded ``unary.metal`` source. The

@@ -1,6 +1,7 @@
 """Native checks that isolate the operations used by repository reductions."""
 
 import json
+import math
 import os
 import shutil
 import struct
@@ -25,7 +26,17 @@ from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
-CASES = ("metadata", "division", "shuffle", "combined")
+PAIR_CASES = {"pair-reduction", "special-values", "two-phase", "private-array"}
+CASES = (
+    "metadata",
+    "division",
+    "shuffle",
+    "combined",
+    "pair-reduction",
+    "special-values",
+    "two-phase",
+    "private-array",
+)
 REQUIRE_ENV = "CROSTL_REQUIRE_DIRECTX_REDUCTION_PRIMITIVES"
 
 DECLARATIONS = """
@@ -59,6 +70,76 @@ SHUFFLE_HELPER = """
         return result;
     }
 """
+
+PAIR_REDUCER = """
+    Pair reducePair(Pair best, Pair current) {
+        if ((isnan(current.value) && (!isnan(best.value) || best.index > current.index))
+            || (!isnan(best.value) && (best.value > current.value
+                || (best.value == current.value && best.index > current.index)))) {
+            return current;
+        } else {
+            return best;
+        }
+    }
+
+    Pair reduceValues(Pair best, inout float values[4], uint offset) {
+        for (int i = 0; i < 4; i++) {
+            if ((!isnan(best.value) && isnan(values[i])) || values[i] < best.value) {
+                best.value = values[i];
+                best.index = offset + i;
+            }
+        }
+        return best;
+    }
+"""
+
+
+def _pair_body(case):
+    body = """
+        Pair best;
+        best.index = lid.x;
+        best.value = inputValues[gid.y * 32u + lid.x];
+    """
+    if case == "private-array":
+        body = """
+            int64_t row = int64_t(gid.y) + int64_t(groupCount.y) * gid.z;
+            int64_t loc = locate(row, int(ndim));
+            Pair best;
+            best.index = 0u;
+            best.value = asfloat(2139095040u);
+            for (uint r = 0u; r < (axisSize + 127u) / 128u; r++) {
+                uint current = r * 128u + lid.x * 4u;
+                uint start = current;
+                int64_t position = loc + current * axisStride;
+                float values[4];
+                for (int i = 0; i < 4; i++) {
+                    values[i] = current < axisSize ? inputValues[uint(position)]
+                                                 : asfloat(2139095040u);
+                    current++;
+                    position += axisStride;
+                }
+                best = reduceValues(best, values, start);
+            }
+        """
+    reduction = """
+        for (uint offset = 16u; offset > 0u; offset /= 2u) {
+            Pair other = neighbor(best, offset);
+            best = reducePair(best, other);
+        }
+    """
+    body += reduction
+    if case in {"two-phase", "private-array"}:
+        body += """
+            threadgroup Pair partials[32];
+            if (subgroupLane == 0u) { partials[subgroupID] = best; }
+            GroupMemoryBarrierWithGroupSync();
+            if (subgroupID != 0u) { return; }
+            if (subgroupLane < 1u) { best = partials[subgroupLane]; }
+        """
+        body += reduction
+    return body + """
+        if (lid.x == 0u) { outputValues[gid.y] = best.index; }
+    """
 
 
 def _source(case):
@@ -108,8 +189,16 @@ def _source(case):
         """
         ),
     }
-    body = bodies[case]
+    body = _pair_body(case) if case in PAIR_CASES else bodies[case]
     helpers = DECLARATIONS
+    extra_parameters = ""
+    if case in PAIR_CASES:
+        helpers += SHUFFLE_HELPER + PAIR_REDUCER
+        if case in {"two-phase", "private-array"}:
+            extra_parameters = """,
+                uint subgroupID @ gl_SubgroupID,
+                uint subgroupLane @ gl_SubgroupInvocationID
+            """
     if case in {"shuffle", "combined"}:
         helpers += SHUFFLE_HELPER
         body += """
@@ -127,7 +216,8 @@ def _source(case):
             compute {{
                 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
                 void main(uint3 gid @ gl_GlobalInvocationID,
-                          uint3 lid @ gl_LocalInvocationID) @ WaveSize(32) {{
+                          uint3 lid @ gl_LocalInvocationID
+                          {extra_parameters}) @ WaveSize(32) {{
                     {body}
                 }}
             }}
@@ -145,7 +235,7 @@ def _compile(case, work):
     (work / "input.cgl").write_text(source, encoding="utf-8")
     ast = Parser(Lexer(source).get_tokens()).parse()
     generated = HLSLCodeGen(
-        software_subgroup_width=32 if case in {"shuffle", "combined"} else None,
+        software_subgroup_width=32 if case not in {"metadata", "division"} else None,
         relative_wave_shuffle_out_of_range="self",
     ).generate(ast)
     artifact = work / "kernel.hlsl"
@@ -172,6 +262,16 @@ def _compile(case, work):
     return artifact, module
 
 
+def _input_values(case):
+    values = [float(31 - lane + row * 100) for row in range(2) for lane in range(32)]
+    if case in {"special-values", "two-phase", "private-array"}:
+        values[6] = values[14] = math.nan
+        values[2] = math.inf
+        values[32 + 2] = values[32 + 5] = -math.inf
+        values[32 + 31] = math.inf
+    return values
+
+
 def _buffers(case):
     result = {}
     specifications = (
@@ -180,7 +280,7 @@ def _buffers(case):
             0,
             "float32",
             "float",
-            [float(31 - lane + row * 100) for row in range(2) for lane in range(32)],
+            _input_values(case),
         ),
         ("shape", 2, "int32", "int", [2]),
         ("inputStrides", 3, "int64", "int64_t", [32]),
@@ -232,7 +332,7 @@ def _buffers(case):
                 (
                     len(values)
                     if values is not None
-                    else (2 if case in {"shuffle", "combined"} else 64)
+                    else (64 if case in {"metadata", "division"} else 2)
                 ),
             ),
             value=values,
@@ -241,6 +341,10 @@ def _buffers(case):
 
 
 def _expected(case):
+    if case == "pair-reduction":
+        return [31, 31]
+    if case in {"special-values", "two-phase", "private-array"}:
+        return [6, 2]
     if case in {"shuffle", "combined"}:
         return [31, 131]
     if case == "division":
@@ -267,6 +371,19 @@ def test_directx_reduction_primitive_resource_layout(case):
     assert by_name["inputStrides"].payload == struct.pack("<q", 32)
     assert by_name["outputValues"].upload is False
     assert by_name["outputValues"].shape == (len(_expected(case)),)
+
+
+@pytest.mark.parametrize("case", sorted(PAIR_CASES))
+def test_directx_pair_reduction_reference(case):
+    values = _input_values(case)
+    expected = []
+    for start in (0, 32):
+        row = values[start : start + 32]
+        nan_indices = [index for index, value in enumerate(row) if math.isnan(value)]
+        expected.append(
+            nan_indices[0] if nan_indices else min(range(32), key=row.__getitem__)
+        )
+    assert _expected(case) == expected
 
 
 @pytest.mark.parametrize("case", CASES)

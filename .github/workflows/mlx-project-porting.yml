@@ -290,7 +290,7 @@ jobs:
           set -euo pipefail
           mkdir -p mlx-current-results
           failed=0
-          for case in metadata division shuffle combined; do
+          for case in metadata division shuffle combined pair-reduction special-values two-phase private-array; do
             python tools/run_bounded_command.py \
               --label "Direct3D reduction primitive $case" \
               --timeout-seconds 120 -- \
@@ -304,6 +304,15 @@ jobs:
                 || failed=1
           done
           exit "$failed"
+
+      - name: Upload Direct3D reduction primitive diagnostics
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: directx-reduction-primitives
+          path: mlx-current-results
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Install Linux runtime dependencies
         if: runner.os == 'Linux'
