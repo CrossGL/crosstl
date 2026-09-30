@@ -23,6 +23,8 @@ on:
       - "tests/test_run_directx_diagnostics.py"
       - "tests/test_translator/test_directx_reduction_primitives.py"
       - "tests/test_translator/test_directx_metal_math.py"
+      - "tests/test_translator/test_directx_atan2.py"
+      - "tests/fixtures/runtime_verification/metal_uint32_buffers.swift"
       - "tests/test_translator/test_opengl_metal_math.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tests/test_translator/test_struct_buffer_layouts.py"
@@ -101,6 +103,8 @@ on:
       - "tests/test_run_directx_diagnostics.py"
       - "tests/test_translator/test_directx_reduction_primitives.py"
       - "tests/test_translator/test_directx_metal_math.py"
+      - "tests/test_translator/test_directx_atan2.py"
+      - "tests/fixtures/runtime_verification/metal_uint32_buffers.swift"
       - "tests/test_translator/test_opengl_metal_math.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tests/test_translator/test_struct_buffer_layouts.py"
@@ -360,6 +364,32 @@ jobs:
           name: directx-reduction-primitives
           path: mlx-current-results
           if-no-files-found: warn
+          retention-days: 14
+
+      - name: Validate atan2 signed-zero semantics
+        if: runner.os == 'Windows' || runner.os == 'macOS'
+        shell: bash
+        env:
+          CROSTL_REQUIRE_DIRECTX_ATAN2: ${{ runner.os == 'Windows' && '1' || '0' }}
+          CROSTL_REQUIRE_METAL_ATAN2: ${{ runner.os == 'macOS' && '1' || '0' }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p atan2-results
+          python tools/run_bounded_command.py \
+            --label "atan2 signed-zero semantics" --timeout-seconds 120 -- \
+            python -m pytest -q -n auto \
+              --basetemp="atan2-results/pytest" \
+              --junitxml="atan2-results/results.xml" \
+              tests/test_translator/test_directx_atan2.py
+
+      - name: Upload atan2 signed-zero evidence
+        if: always() && (runner.os == 'Windows' || runner.os == 'macOS')
+        uses: actions/upload-artifact@v4
+        with:
+          name: atan2-signed-zero-${{ runner.os }}
+          path: atan2-results
+          if-no-files-found: error
           retention-days: 14
 
       - name: Install Linux runtime dependencies

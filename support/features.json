@@ -17,13 +17,17 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "Canonical Metal fabs/fmin/fmax lower to native HLSL intrinsics; Boolean scalar/vector select preserves argument order and eager evaluation. Source helper names avoid the HLSL select intrinsic. Unsupported condition types, alias target shadowing, and unresolved HLSL source select overload ownership fail closed. Bounded Windows numerical tests are required by CI; this is not whole-repository runtime coverage.",
+          "notes": "Canonical Metal fabs/fmin/fmax lower to native HLSL intrinsics; Boolean scalar/vector select preserves argument order and eager evaluation. Canonical atan2 preserves signed-zero quadrants, infinity angles and NaN classification through typed helpers; native HLSL atan2 round trips remain native. Source helpers retain their ownership. Unsupported operand types, alias target shadowing, and unresolved HLSL source select overload ownership fail closed. Bounded Windows numerical tests and original precise Metal atan2 controls are required by CI; this is not whole-repository runtime coverage.",
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_",
             "tests/test_translator/test_directx_metal_math.py::def test_metal_math_translates_and_compiles_for_directx",
             "tests/test_translator/test_directx_metal_math.py::def test_directx_metal_math_executes",
             "tests/test_translator/test_directx_metal_math.py::def test_directx_metal_math_rejects_shadowed_target",
-            "tests/test_translator/test_directx_metal_math.py::def test_hlsl_select_roundtrip_retains_hlsl_argument_order"
+            "tests/test_translator/test_directx_metal_math.py::def test_hlsl_select_roundtrip_retains_hlsl_argument_order",
+            "tests/test_translator/test_directx_atan2.py::def test_directx_atan2_executes",
+            "tests/test_translator/test_directx_atan2.py::def test_original_metal_atan2_executes",
+            "tests/test_translator/test_directx_atan2.py::def test_hlsl_atan2_roundtrip_keeps_native_intrinsic",
+            "tests/test_translator/test_directx_atan2.py::def test_atan2_rejects_unproven_contracts"
           ]
         },
         "opengl": {
@@ -7669,6 +7673,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7679,6 +7686,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7689,6 +7699,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7699,6 +7712,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7709,6 +7725,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7719,6 +7738,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7729,6 +7751,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7739,6 +7764,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7749,6 +7777,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7759,6 +7790,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7769,6 +7803,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -11099,6 +11136,7 @@
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_buffer_native_readback",
             "tests/test_translator/test_mlx_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
             "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
             "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
@@ -11120,6 +11158,7 @@
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_buffer_native_readback",
             "tests/test_translator/test_mlx_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
             "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
             "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
