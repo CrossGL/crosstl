@@ -56,6 +56,38 @@ failures are outside the selected complex-power entries, and no upstream test is
 edited or skipped to hide them. The required gate covers `test_ops` and the eight
 additional layouts above. Full-suite compatibility remains unproven.
 
+The current pin also has a seed-dependent failure in `TestOps.test_scans` at
+`test_ops.py:2707`, comparing bfloat16 cumulative sums with a separately reduced
+reference. A local replay of seeds 0 through 63 reproduced the assertion for
+seeds 14 and 55 with overrides both disabled and enabled. All 64 paired results
+matched, including the saved input, output and reference arrays for both failing
+seeds; none of these isolated scan runs dispatched a translated entry. The
+comparison uses the adapted build, not a separately rebuilt unmodified MLX.
+
+For a deterministic single-case reproduction, start a fresh process in the
+pinned checkout's `python/tests` directory using its Metal-enabled environment:
+
+```python
+import random
+import unittest
+
+import mlx.core as mx
+import numpy as np
+
+random.seed(14)
+np.random.seed(14)
+mx.random.seed(14)
+mx.set_default_device(mx.gpu)
+unittest.main(module=None, argv=["unittest", "test_ops.TestOps.test_scans"])
+```
+
+Unset both override variables to run the original path. This baseline defect
+does not establish a translated scan regression or successful scan coverage.
+The required host gate retains the original test and tolerances and still fails
+on any unsuccessful run; no retry, skip or known-failure allowance is built into
+the verifier. Its ordinary upstream invocations are not seeded, so their random
+inputs need not match between processes.
+
 ## Upstream Adaptation
 
 `metal-library-overrides.patch` modifies only MLX's `device.cpp` and `device.h`.

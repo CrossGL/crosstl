@@ -11423,6 +11423,55 @@ def test_preprocessor_instantiates_template_method_from_stdint_array_subscript()
     assert "Sum__reduce__int32_t(op, values[i])" in output
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize(
+    "comment",
+    ["// output", "// punctuation: , < > ( ) [ ] { }", '// "unterminated'],
+)
+def test_parameter_split_continues_after_line_comments(newline, comment):
+    text = f"first, {comment}{newline}second, third"
+    assert MetalPreprocessor()._split_top_level_commas(text) == [
+        "first",
+        f"{comment}{newline}second",
+        "third",
+    ]
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        (
+            "first, second // trailing, comment",
+            ["first", "second // trailing, comment"],
+        ),
+        ('"// ,", last', ['"// ,"', "last"]),
+        ('"/* , */", last', ['"/* , */"', "last"]),
+        ("'/', last", ["'/'", "last"]),
+        ("call(first, // ) ,\nsecond), last", ["call(first, // ) ,\nsecond)", "last"]),
+        ("Box<int, // > ,\nfloat>, last", ["Box<int, // > ,\nfloat>", "last"]),
+        ("value /* , */ , last", ["value /* , */", "last"]),
+    ],
+)
+def test_parameter_split_preserves_nested_comments_and_literals(text, expected):
+    assert MetalPreprocessor()._split_top_level_commas(text) == expected
+
+
+def test_constrained_call_infers_parameters_after_line_comments():
+    source = """
+    template <typename T, enable_if_t<is_same_v<T, uint>, bool> = true>
+    T identity(T value) { return value; }
+    kernel void copy_index(
+        device uint* out [[buffer(0)]], // output, [B, T]
+        constant uint& count [[buffer(1)]], // number of elements
+        uint tid [[thread_position_in_grid]]) {
+        out[tid] = identity(tid) + count;
+    }
+    """
+    output = MetalPreprocessor().preprocess(source)
+    assert "uint identity_uint(uint value)" in output
+    assert "identity_uint(tid) + count" in output
+
+
 def test_infer_argument_type_recognizes_stdint_scalar_aliases():
     # stdint scalar aliases infer as themselves across the subscript / cast /
     # bare-local shapes (they carry known sizes for SFINAE `sizeof(T)`).
@@ -11430,6 +11479,79 @@ def test_infer_argument_type_recognizes_stdint_scalar_aliases():
     assert pp._infer_argument_type("vals[i]", {"vals": "int32_t"}, {}) == "int32_t"
     assert pp._infer_argument_type("uint8_t(x)", {}, {}) == "uint8_t"
     assert pp._infer_argument_type("v", {}, {"v": "int64_t"}) == "int64_t"
+
+
+@pytest.mark.parametrize("operator", ["+", "-", "*", "/", "%"])
+@pytest.mark.parametrize(
+    "left,right,expected",
+    [
+        ("bool", "bool", "int"),
+        ("char", "char", "int"),
+        ("uchar", "short", "int"),
+        ("ushort", "ushort", "int"),
+        ("int", "uint", "uint"),
+        ("uint", "int", "uint"),
+        ("int32_t", "uint32_t", "uint"),
+        ("uint32_t", "int64_t", "long"),
+        ("long", "uint", "long"),
+        ("long", "ulong", "ulong"),
+        ("size_t", "int", "ulong"),
+        ("uint64_t", "long", "ulong"),
+        ("short2", "short2", "short2"),
+        ("uint3", "uint3", "uint3"),
+        ("int4", "int4", "int4"),
+    ],
+)
+def test_integral_arithmetic_inference_preserves_result_type(
+    operator, left, right, expected
+):
+    assert (
+        MetalPreprocessor()._infer_argument_type(
+            f"left {operator} right", {}, {"left": left, "right": right}
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "left,right",
+    [
+        ("float", "float"),
+        ("float", "int"),
+        ("half", "uint"),
+        ("Value", "int"),
+        ("Value", "Value"),
+        ("device int*", "int"),
+        ("uint2", "int2"),
+        ("uint2", "uint3"),
+        ("bool2", "bool2"),
+    ],
+)
+def test_remainder_inference_rejects_unproven_operators(left, right):
+    assert (
+        MetalPreprocessor()._infer_argument_type(
+            "left % right", {}, {"left": left, "right": right}
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "expression,expected",
+    [
+        ("n % 24", "uint"),
+        ("(n % 24) * 2", "uint"),
+        ("n / 24 % 3", "uint"),
+        ("n % (3 * 2)", "uint"),
+        ("n %= 24", None),
+        ("n % 1.0f", None),
+    ],
+)
+def test_remainder_inference_preserves_grouping(expression, expected):
+    assert (
+        MetalPreprocessor()._infer_argument_type(expression, {}, {"n": "uint"})
+        == expected
+    )
 
 
 def test_infer_argument_type_recognizes_pointer_arguments_and_offsets():

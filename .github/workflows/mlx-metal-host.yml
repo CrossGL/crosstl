@@ -8,6 +8,9 @@ on:
       - "crosstl/**"
       - "demos/integrations/mlx/**"
       - "tests/test_mlx_metal_host.py"
+      - "tests/test_translator/test_project_metal_discovery.py"
+      - "tests/test_translator/test_fused_math.py"
+      - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tools/run_bounded_command.py"
       - "pyproject.toml"
   push:
@@ -17,6 +20,9 @@ on:
       - "crosstl/**"
       - "demos/integrations/mlx/**"
       - "tests/test_mlx_metal_host.py"
+      - "tests/test_translator/test_project_metal_discovery.py"
+      - "tests/test_translator/test_fused_math.py"
+      - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tools/run_bounded_command.py"
       - "pyproject.toml"
   workflow_dispatch:
@@ -52,6 +58,19 @@ jobs:
         env:
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
         run: python -m pytest -q -n auto tests/test_mlx_metal_host.py
+      - name: Validate Metal argument inference
+        env:
+          CROSTL_REQUIRE_METAL_ARGUMENT_INFERENCE: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/argument-inference
+          python tools/run_bounded_command.py --timeout-seconds 120 --label "Native argument inference" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/argument-inference/pytest \
+              --junitxml=.mlx-metal-host/argument-inference/results.xml \
+              tests/test_translator/test_project_metal_discovery.py \
+              2>&1 | tee .mlx-metal-host/argument-inference.log
       - name: Checkout pinned upstream MLX
         run: |
           git init mlx-upstream

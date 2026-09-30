@@ -19949,7 +19949,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         if self._contains_bare_pointer_operand(expr, buffer_element_types):
             return None
 
-        # Binary arithmetic `a + b`, `a - b`, `a * b`, `a / b` (checked last, as a
+        # Binary arithmetic `a + b`, `a - b`, `a * b`, `a / b`, `a % b` (checked last, as a
         # fallback for a COMPOUND expression once every atomic shape above has been
         # ruled out) -> the conservative result type of the usual arithmetic
         # conversion between the two operand types.
@@ -20349,7 +20349,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         structs_by_name: Optional[Dict[str, "_MetalStructDefinition"]],
     ) -> Optional[str]:
         # Split a compound expression at its lowest-precedence top-level binary
-        # arithmetic operator (`+ - * /`), infer both operands, and combine them
+        # arithmetic operator (`+ - * / %`), infer both operands, and combine them
         # under a conservative model of the usual arithmetic conversion.
         split = self._split_top_level_binary_arithmetic(expr)
         if split is None:
@@ -20380,9 +20380,59 @@ class MetalPreprocessor(HLSLPreprocessor):
         )
         if integral_constant_type is not None:
             return integral_constant_type
+        integral_type = self._integral_arithmetic_operand_result_type(
+            left_type, right_type
+        )
+        if integral_type is not None or arithmetic_operator == "%":
+            return integral_type
         return self._combine_binary_arithmetic_operand_types(
             left_type, right_type, left_expr, right_expr
         )
+
+    def _integral_arithmetic_operand_result_type(
+        self, left_type: str, right_type: str
+    ) -> Optional[str]:
+        """Apply integral promotions without guessing user-defined operators."""
+        left = self._scalar_and_width(left_type)
+        right = self._scalar_and_width(right_type)
+        if left is None or right is None:
+            return None
+        left_base, left_width = left
+        right_base, right_width = right
+        if (
+            left_base not in self._METAL_INTEGRAL_SCALAR_TYPES
+            or right_base not in self._METAL_INTEGRAL_SCALAR_TYPES
+        ):
+            return None
+        if left_width != 1 or right_width != 1:
+            if left == right and left_width in {2, 3, 4} and left_base != "bool":
+                return f"{left_base}{left_width}"
+            return None
+
+        promoted_left = self._promote_small_integral_scalar(left_base)
+        promoted_right = self._promote_small_integral_scalar(right_base)
+        if promoted_left is None or promoted_right is None:
+            return None
+        if promoted_left == promoted_right:
+            return promoted_left
+        left_size = self._METAL_SCALAR_TYPE_SIZES[promoted_left]
+        right_size = self._METAL_SCALAR_TYPE_SIZES[promoted_right]
+        left_signed = promoted_left in self._METAL_SIGNED_SCALAR_TYPES
+        right_signed = promoted_right in self._METAL_SIGNED_SCALAR_TYPES
+        size = max(left_size, right_size)
+        # At equal rank the unsigned type wins; a wider signed type represents
+        # every value of the narrower unsigned type supported by Metal.
+        signed = (
+            left_signed and right_signed
+            if left_size == right_size
+            else left_signed if left_size > right_size else right_signed
+        )
+        return {
+            (4, True): "int",
+            (4, False): "uint",
+            (8, True): "long",
+            (8, False): "ulong",
+        }.get((size, signed))
 
     def _integral_constant_binary_result_type(
         self, left_type: str, right_type: str, arithmetic_operator: str
@@ -20552,13 +20602,13 @@ class MetalPreprocessor(HLSLPreprocessor):
         self, expr: str
     ) -> Optional[Tuple[str, str, str]]:
         # Locate the operator at which to split `expr` for arithmetic inference:
-        # the LOWEST-precedence top-level `+ - * /` (additive below
+        # the LOWEST-precedence top-level `+ - * / %` (additive below
         # multiplicative), rightmost among equal precedence so the split mirrors
         # C++'s left-associative grouping. Operators inside (), [], {} or string
         # literals are skipped, as are unary signs, `->`, `++`/`--`, compound
         # assignments and floating-point exponent signs. Returns (left, op, right)
         # or None when no top-level binary arithmetic operator is present.
-        precedence = {"+": 0, "-": 0, "*": 1, "/": 1}
+        precedence = {"+": 0, "-": 0, "*": 1, "/": 1, "%": 1}
         depth = 0
         best_index: Optional[int] = None
         best_precedence: Optional[int] = None
@@ -20593,7 +20643,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         return expr[:best_index], expr[best_index], expr[best_index + 1 :]
 
     def _is_binary_operator_position(self, expr: str, index: int) -> bool:
-        # True when the `+ - * /` at `index` is a BINARY operator rather than a
+        # True when the `+ - * / %` at `index` is a BINARY operator rather than a
         # unary sign, a `->` arrow, an increment/decrement, a compound assignment,
         # or a floating-point exponent sign.
         ch = expr[index]
@@ -26233,8 +26283,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                 i += consumed
                 continue
             if text.startswith("//", i):
-                current += text[i:]
-                break
+                end = text.find("\n", i)
+                if end == -1:
+                    current += text[i:]
+                    break
+                current += text[i:end]
+                i = end
+                continue
             if text.startswith("/*", i):
                 end = text.find("*/", i + 2)
                 if end == -1:
