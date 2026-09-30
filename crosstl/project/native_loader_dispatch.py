@@ -1154,6 +1154,14 @@ def _validated_scalar_layout(
             path=path,
             details={"binding": runtime_value.name},
         )
+    # Metal's constant address space does not imply a fixed-size argument.
+    if (
+        target == "metal"
+        and resource_kind == "constant-buffer"
+        and layout.get("storageLayout") == "metal-buffer"
+        and layout.get("runtimeSized") is True
+    ):
+        resource_kind = "buffer"
     if "minimumBindingSizeBytes" in layout and not valid_minimum_binding_size(
         layout["minimumBindingSizeBytes"]
     ):

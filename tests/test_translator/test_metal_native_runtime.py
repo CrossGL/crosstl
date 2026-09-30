@@ -75,7 +75,9 @@ def test_metal_scalar_layouts(
     resource = _reflection(tmp_path, f"{qualifier} {scalar}{suffix} values")
     layout = resource["scalarLayout"]
     assert resource["binding"] == 3
-    assert resource["kind"] == ("buffer" if runtime_sized else "constant-buffer")
+    assert resource["kind"] == (
+        "constant-buffer" if qualifier == "constant" else "buffer"
+    )
     assert resource["access"] == ("read_write" if qualifier == "device" else "read")
     assert layout["elementType"] == dtype
     assert layout["elementSizeBytes"] == layout["elementStrideBytes"] == size
@@ -97,6 +99,21 @@ def test_metal_homogeneous_struct_is_not_a_vector(tmp_path):
     assert layout["elementStrideBytes"] == 8
     assert layout["componentCount"] == 2
     assert "vectorWidth" not in layout
+
+
+@pytest.mark.parametrize(
+    "attribute", ["__attribute__((aligned(16)))", "__attribute__((packed))"]
+)
+def test_metal_explicit_struct_layout_is_not_inferred(tmp_path, attribute):
+    source = tmp_path / "aligned.metal"
+    source.write_text(
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        "struct Pair { float real; float imag; } " + attribute + ";\n"
+        "kernel void sample(device Pair* values [[buffer(0)]]) {}\n",
+        encoding="utf-8",
+    )
+    resource = reflect_target_host_interface(source, target="metal")["resources"][0]
+    assert "scalarLayout" not in resource
 
 
 @pytest.mark.parametrize(
@@ -171,13 +188,20 @@ output_dir = "out"
     return descriptor, package
 
 
-def _request(tmp_path):
-    descriptor, package = _package(tmp_path)
+def _request(tmp_path, constant_pointer=False):
+    source = SOURCE
+    if constant_pointer:
+        source = source.replace(
+            "constant uint& offset", "constant uint* offset"
+        ).replace("float(offset)", "float(offset[1])")
+    descriptor, package = _package(tmp_path, source)
     inputs = {
         "input": {"dtype": "float32", "shape": [8, 2], "values": list(range(16))},
         "result": {"dtype": "float32", "shape": [8, 2], "values": [-1234] * 16},
         "offset": {"dtype": "uint32", "shape": [1], "values": [7]},
     }
+    if constant_pointer:
+        inputs["offset"] = {"dtype": "uint32", "shape": [2], "values": [100, 7]}
     outputs = {
         "result": {
             "dtype": "float32",
@@ -474,8 +498,9 @@ def _execute_native(request, tmp_path):
         executor.runtime_adapter.runtime.close()
 
 
-def test_metal_package_native_readback(tmp_path):
-    request, _, _, _, outputs = _request(tmp_path)
+@pytest.mark.parametrize("constant_pointer", [False, True])
+def test_metal_package_native_readback(tmp_path, constant_pointer):
+    request, _, _, _, outputs = _request(tmp_path, constant_pointer)
     result = _execute_native(request, tmp_path)
     assert result.outputs["result"]["values"] == outputs["result"]["values"]
 

@@ -590,8 +590,6 @@ def _reflect_metal_source(
                 layout = _metal_buffer_layout(resource, struct_declarations)
                 if layout is not None:
                     resource["scalarLayout"] = layout
-                    if layout["runtimeSized"]:
-                        resource["kind"] = "buffer"
                 resources.append(resource)
 
     specialization_constants = []
@@ -1184,6 +1182,8 @@ def _homogeneous_struct_declarations(source: str) -> dict[str, list[tuple[str, s
         seen.add(name)
         body = _braced_body(source, match.end() - 1)
         if body is None:
+            continue
+        if re.compile(r"\s*;").match(source, match.end() + len(body) + 1) is None:
             continue
         members = []
         position = 0
