@@ -3,6 +3,7 @@
 
 import argparse
 import ctypes
+import hashlib
 import importlib
 import json
 import runpy
@@ -12,6 +13,41 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+
+
+def _loaded_runtime_libraries():
+    if sys.platform != "win32":
+        return []
+    library = ctypes.WinDLL("kernel32.dll", use_last_error=True)
+    get_handle = library.GetModuleHandleW
+    get_handle.argtypes = [ctypes.c_wchar_p]
+    get_handle.restype = ctypes.c_void_p
+    get_filename = library.GetModuleFileNameW
+    get_filename.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_wchar),
+        ctypes.c_uint32,
+    ]
+    get_filename.restype = ctypes.c_uint32
+    modules = []
+    for name in ("d3d12.dll", "D3D12Core.dll", "d3d10warp.dll"):
+        handle = get_handle(name)
+        record = {"name": name, "loaded": bool(handle)}
+        if handle:
+            buffer = ctypes.create_unicode_buffer(32768)
+            length = get_filename(handle, buffer, len(buffer))
+            if not 0 < length < len(buffer):
+                record["error"] = "Could not read the complete loaded module path"
+            else:
+                record["path"] = buffer.value
+                try:
+                    record["sha256"] = hashlib.sha256(
+                        Path(buffer.value).read_bytes()
+                    ).hexdigest()
+                except OSError as error:
+                    record["error"] = str(error)
+        modules.append(record)
+    return modules
 
 
 def _enable_debug_layer():
@@ -100,6 +136,10 @@ def collect_diagnostics(output, *, interval=2.0):
                     for device in devices
                 ],
             )
+            try:
+                record("runtime-libraries", libraries=_loaded_runtime_libraries())
+            except Exception as error:
+                record("library-inspection-unavailable", error=str(error))
             worker = threading.Thread(target=poll, args=(devices,), daemon=True)
             worker.start()
             thread = worker

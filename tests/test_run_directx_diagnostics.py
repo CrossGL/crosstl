@@ -14,6 +14,51 @@ def _records(path):
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
+@pytest.mark.parametrize("failure", [None, "missing", "truncated", "unreadable"])
+def test_loaded_runtime_library_identity(tmp_path, monkeypatch, failure):
+    module = tmp_path / "d3d10warp.dll"
+    if failure != "unreadable":
+        module.write_bytes(b"runtime binary")
+
+    def get_handle(name):
+        return 0x100000000 if name == "d3d10warp.dll" else None
+
+    def get_filename(handle, buffer, capacity):
+        assert handle == 0x100000000
+        if failure == "missing":
+            return 0
+        if failure == "truncated":
+            return capacity
+        buffer.value = str(module)
+        return len(buffer.value)
+
+    monkeypatch.setattr(diagnostics.sys, "platform", "win32")
+    monkeypatch.setattr(
+        ctypes,
+        "WinDLL",
+        lambda name, **kwargs: SimpleNamespace(
+            GetModuleHandleW=get_handle, GetModuleFileNameW=get_filename
+        ),
+        raising=False,
+    )
+    records = diagnostics._loaded_runtime_libraries()
+    assert records[:2] == [
+        {"name": "d3d12.dll", "loaded": False},
+        {"name": "D3D12Core.dll", "loaded": False},
+    ]
+    warp = records[2]
+    assert warp["loaded"] is True
+    assert get_handle.restype is ctypes.c_void_p
+    if failure:
+        assert "error" in warp
+        assert "sha256" not in warp
+    else:
+        assert warp["path"] == str(module)
+        assert (
+            warp["sha256"] == diagnostics.hashlib.sha256(b"runtime binary").hexdigest()
+        )
+
+
 def test_debug_layer_uses_native_interface_and_releases_it(monkeypatch):
     calls = []
     release = ctypes.CFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(
@@ -63,7 +108,10 @@ def test_missing_debug_interface_is_checked_before_using_pointer(monkeypatch):
         diagnostics._enable_debug_layer()
 
 
-def test_collector_flushes_live_and_final_device_messages(tmp_path, monkeypatch):
+@pytest.mark.parametrize("library_error", [False, True])
+def test_collector_flushes_live_and_final_device_messages(
+    tmp_path, monkeypatch, library_error
+):
     polled = threading.Event()
     pending = ["first diagnostic"]
     initialized = []
@@ -88,6 +136,14 @@ def test_collector_flushes_live_and_final_device_messages(tmp_path, monkeypatch)
     )
     monkeypatch.setattr(diagnostics, "_enable_debug_layer", lambda: None)
     monkeypatch.setattr(diagnostics.importlib, "import_module", lambda _name: module)
+
+    def libraries():
+        assert initialized == [True]
+        if library_error:
+            raise OSError("Module query failed")
+        return [{"name": "d3d10warp.dll", "loaded": True, "sha256": "test-digest"}]
+
+    monkeypatch.setattr(diagnostics, "_loaded_runtime_libraries", libraries)
     path = tmp_path / "nested" / "diagnostics.jsonl"
     with diagnostics.collect_diagnostics(path, interval=1000):
         assert polled.wait(timeout=5)
@@ -98,6 +154,11 @@ def test_collector_flushes_live_and_final_device_messages(tmp_path, monkeypatch)
     ] == ["first diagnostic", "final diagnostic"]
     assert records[-1]["event"] == "finished"
     assert records[-1]["collectorStopped"] is True
+    if library_error:
+        assert any(r["event"] == "library-inspection-unavailable" for r in records)
+    else:
+        identity = next(r for r in records if r["event"] == "runtime-libraries")
+        assert identity["libraries"][0]["sha256"] == "test-digest"
 
 
 def test_unavailable_diagnostics_preserve_module_arguments_and_exit(

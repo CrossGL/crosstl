@@ -250,8 +250,8 @@ jobs:
         shell: pwsh
         run: |
           $ProgressPreference = "SilentlyContinue"
-          $warpVersion = "1.0.20"
-          $warpSha256 = "e5fe5de661ce98b58ef9cfb736e73c0a7a2623d3bbf5f14839b2d55566d87e40"
+          $warpVersion = "1.0.21"
+          $warpSha256 = "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681"
           $archive = Join-Path $env:RUNNER_TEMP "microsoft.direct3d.warp.$warpVersion.zip"
           $warpRoot = Join-Path $env:RUNNER_TEMP "microsoft.direct3d.warp.$warpVersion"
           $warpUri = "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/$warpVersion/microsoft.direct3d.warp.$warpVersion.nupkg"
@@ -279,6 +279,7 @@ jobs:
           $pythonWarp = Join-Path $env:pythonLocation "d3d10warp.dll"
           Copy-Item -Path $warp -Destination $pythonWarp -Force
           Write-Host "Installed WARP $((Get-Item $pythonWarp).VersionInfo.FileVersion) beside python.exe."
+          Write-Host "WARP DLL SHA256: $((Get-FileHash -Path $pythonWarp -Algorithm SHA256).Hash.ToLowerInvariant())"
 
       - name: Validate Direct3D reduction primitives
         if: runner.os == 'Windows'

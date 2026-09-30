@@ -541,6 +541,12 @@ stored outside pytest's temporary directory and uploaded with the runtime
 evidence, including on timeout. Missing debug-layer tooling is reported
 explicitly and does not skip or replace the numerical test. The wrapper
 preserves the wrapped Python module's arguments and exit status.
+After device creation it records the loaded Direct3D and WARP DLL paths and
+SHA-256 hashes, independently of the runtime installation log. The Windows
+project-porting job pins WARP 1.0.21 with an archive checksum. Its
+`release notes <https://www.nuget.org/packages/Microsoft.Direct3D.WARP/1.0.21>`_
+describe revised uniform and divergent control-flow handling; numerical tests
+remain the acceptance gate for the runtime update.
 The current DirectX kernel test additionally saves the actual runtime-loaded
 DXIL and the final packed register payloads immediately before each dispatch in
 ``native-dispatches``. This distinguishes the executed module and bindings from

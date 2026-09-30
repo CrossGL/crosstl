@@ -4600,12 +4600,13 @@ def test_mlx_project_porting_workflow_installs_pinned_warp_runtime():
         "Install Windows Direct3D runtime dependencies",
     )
     assert "if: runner.os == 'Windows'" in step
-    assert 'warpVersion = "1.0.20"' in step
-    assert "e5fe5de661ce98b58ef9cfb736e73c0a7a2623d3bbf5f14839b2d55566d87e40" in step
+    assert 'warpVersion = "1.0.21"' in step
+    assert "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681" in step
     assert "api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp" in step
     assert "Get-FileHash -Path $archive -Algorithm SHA256" in step
     assert '"build\\native\\bin\\x64\\d3d10warp.dll"' in step
     assert 'Join-Path $env:pythonLocation "d3d10warp.dll"' in step
+    assert "Get-FileHash -Path $pythonWarp -Algorithm SHA256" in step
 
 
 def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():
