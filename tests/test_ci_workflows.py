@@ -3161,8 +3161,17 @@ def test_mlx_project_porting_workflow_runs_native_loader_dispatch_bridge():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
     ci_coverage = _load_ci_coverage_module()
     integration_test = "test_native_loader_dispatch_integration.py"
+    limits_step = ci_coverage.workflow_step_section(
+        mlx_porting, "Validate native dispatch limits"
+    )
+    assert "test_native_dispatch_limits.py" in limits_step
+    assert "-n auto" in limits_step
+    assert "if:" not in limits_step
 
     assert mlx_porting.count(f'"tests/test_translator/{integration_test}"') == 2
+    assert (
+        mlx_porting.count('"tests/test_translator/test_native_dispatch_limits.py"') == 2
+    )
 
     directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
@@ -3177,6 +3186,7 @@ def test_mlx_project_porting_workflow_runs_native_loader_dispatch_bridge():
     assert "-n auto" in directx_step
     assert "-k" not in directx_step
     assert "mlx-upstream" not in directx_step
+    assert f"{integration_test}::test_native_directx_workgroup_limits" in directx_step
 
     opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
@@ -3194,6 +3204,11 @@ def test_mlx_project_porting_workflow_runs_native_loader_dispatch_bridge():
     assert "-n auto" in opengl_step
     assert "-k" not in opengl_step
     assert "mlx-upstream" not in opengl_step
+    assert f"{integration_test}::test_native_opengl_workgroup_limits" in opengl_step
+    assert (
+        f"{integration_test}::test_native_opengl_submission_error_is_not_success"
+        in opengl_step
+    )
 
 
 def test_mlx_project_porting_workflow_proves_initialized_read_write_execution():

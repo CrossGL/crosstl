@@ -213,15 +213,26 @@ class MetalComputeRuntime:
         except RuntimeAdapterSetupError as exc:
             raise RuntimeAdapterDispatchError(str(exc), details=exc.details) from exc
         if result.returncode:
+            details = {
+                "target": "metal",
+                "reasonKind": "worker-execution-failed",
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+            try:
+                native_error = json.loads(result.stdout).get("error")
+            except (ValueError, AttributeError):
+                native_error = None
+            if (
+                isinstance(native_error, dict)
+                and native_error.get("reasonKind") == "dispatch-limit-exceeded"
+            ):
+                details["reasonKind"] = "dispatch-limit-exceeded"
+                details["dispatchValidation"] = native_error
             raise RuntimeAdapterDispatchError(
                 "Metal worker execution failed.",
-                details={
-                    "target": "metal",
-                    "reasonKind": "worker-execution-failed",
-                    "returncode": result.returncode,
-                    "stdout": result.stdout,
-                    "stderr": result.stderr,
-                },
+                details=details,
             )
         try:
             response = json.loads(result.stdout)

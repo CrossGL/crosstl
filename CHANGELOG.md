@@ -6,6 +6,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Added
 
+- Native dispatch-limit checks for the Python DirectX, OpenGL and Vulkan drivers, structured Metal pipeline-limit diagnostics, and explicit OpenGL submission-error detection. Native regression tests cover valid readback and rejected requests without clamping or silently returning unchanged output.
 - Synchronous MLX host integration for five typed array-creation entries through native DirectX/OpenGL packages, with Metal/CUDA disabled, unchanged upstream tests, numerical readback, explicit unsupported-operation errors and bounded two-platform CI. Full primitive coverage and the complete upstream suite remain out of scope for this adapter increment.
 - Metal helper linkage survives the intermediate representation, preserving source-private and inline functions while making generated constructor and member helpers artifact-private. Required native checks link separate translated modules and execute private and exported functions; the MLX host gate now links all 15 selected complex-power entries into one library before upstream execution.
 - Pinned MLX Metal host integration with an explicit per-entry library adapter, unchanged upstream operations tests, native dispatch traces, multidimensional array-view parity and a required missing-library failure check. This redirects selected translated complex-power entries; unselected operations remain on the upstream backend.

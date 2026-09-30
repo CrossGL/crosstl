@@ -36,6 +36,31 @@ struct RuntimeFailure: Error, CustomStringConvertible {
   let description: String
   init(_ message: String) { description = message }
 }
+struct DispatchLimitFailure: Error, CustomStringConvertible {
+  let field: String
+  let axis: Int?
+  let requested: Int
+  let maximum: Int
+  let counts: [Int]
+  let size: [Int]
+  let maximumSize: [Int]
+  let maximumInvocations: Int
+
+  var description: String { "Unsupported group dimension or invocation count: \(field)." }
+  var details: [String: Any] {
+    var result: [String: Any] = [
+      "target": "metal", "reasonKind": "dispatch-limit-exceeded", "field": field,
+      "requested": requested, "maximum": maximum,
+      "workgroupCount": counts, "workgroupSize": size,
+      "limits": [
+        "maxWorkgroupCount": [Int](repeating: Int(UInt32.max), count: 3),
+        "maxWorkgroupSize": maximumSize, "maxWorkgroupInvocations": maximumInvocations,
+      ],
+    ]
+    if let axis = axis { result["axis"] = axis }
+    return result
+  }
+}
 
 func require(_ condition: Bool, _ message: String) throws {
   if !condition { throw RuntimeFailure(message) }
@@ -119,13 +144,24 @@ func run() throws {
     "Dispatch requires three dimensions.")
   let maximum = device.maxThreadsPerThreadgroup
   let limits = [maximum.width, maximum.height, maximum.depth]
+  func validateLimit(_ value: Int, _ maximum: Int, field: String, axis: Int? = nil) throws {
+    if value > maximum {
+      throw DispatchLimitFailure(
+        field: field, axis: axis, requested: value, maximum: maximum,
+        counts: request.workgroupCount, size: request.workgroupSize,
+        maximumSize: limits, maximumInvocations: pipeline.maxTotalThreadsPerThreadgroup)
+    }
+  }
   for axis in 0..<3 {
     try require(
-      request.workgroupCount[axis] > 0 && request.workgroupCount[axis] <= Int(UInt32.max),
+      request.workgroupCount[axis] > 0,
       "Invalid group count.")
+    try validateLimit(
+      request.workgroupCount[axis], Int(UInt32.max), field: "workgroupCount", axis: axis)
     try require(
-      request.workgroupSize[axis] > 0 && request.workgroupSize[axis] <= limits[axis],
+      request.workgroupSize[axis] > 0,
       "Unsupported group dimension.")
+    try validateLimit(request.workgroupSize[axis], limits[axis], field: "workgroupSize", axis: axis)
   }
   var total = 1
   for dimension in request.workgroupSize {
@@ -133,7 +169,7 @@ func run() throws {
     try require(!product.overflow, "Group size overflow.")
     total = product.partialValue
   }
-  try require(total <= pipeline.maxTotalThreadsPerThreadgroup, "Group size exceeds pipeline limit.")
+  try validateLimit(total, pipeline.maxTotalThreadsPerThreadgroup, field: "workgroupInvocations")
   var allocations: [String: MTLBuffer] = [:]
   for allocation in request.allocations {
     try require(
@@ -211,6 +247,9 @@ do {
     throw RuntimeFailure("Metal runtime requires macOS 13 or newer.")
   }
 } catch {
+  if let failure = error as? DispatchLimitFailure {
+    try? emit(["error": failure.details])
+  }
   FileHandle.standardError.write(Data("\(error)\n".utf8))
   exit(1)
 }

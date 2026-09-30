@@ -47,6 +47,7 @@ on:
       - "tests/fixtures/runtime_verification/**"
       - "tests/fixtures/project_porting/mlx/**"
       - "tests/test_translator/test_native_runtime_drivers.py"
+      - "tests/test_translator/test_native_dispatch_limits.py"
       - "tests/test_translator/test_initialized_read_write_runtime.py"
       - "tests/test_translator/test_shared_native_allocations_runtime.py"
       - "tests/test_translator/test_native_loader_dispatch_integration.py"
@@ -125,6 +126,7 @@ on:
       - "tests/fixtures/runtime_verification/**"
       - "tests/fixtures/project_porting/mlx/**"
       - "tests/test_translator/test_native_runtime_drivers.py"
+      - "tests/test_translator/test_native_dispatch_limits.py"
       - "tests/test_translator/test_initialized_read_write_runtime.py"
       - "tests/test_translator/test_shared_native_allocations_runtime.py"
       - "tests/test_translator/test_native_loader_dispatch_integration.py"
@@ -209,6 +211,9 @@ jobs:
 
       - name: Validate bounded MLX dispatch contracts
         run: python -m pytest -q -n auto tests/test_mlx_dispatch_contract_fixture.py tests/test_mlx_logsumexp_dispatch_contract_fixture.py
+
+      - name: Validate native dispatch limits
+        run: python -m pytest -q -n auto tests/test_translator/test_native_dispatch_limits.py
 
       - name: Install Linux SPIR-V tools
         if: runner.os == 'Linux'
@@ -965,6 +970,7 @@ jobs:
         run: >-
           python -m pytest -q -n auto
           tests/test_translator/test_native_loader_dispatch_integration.py::test_native_loader_descriptor_executes_directx_on_device
+          tests/test_translator/test_native_loader_dispatch_integration.py::test_native_directx_workgroup_limits
 
       - name: Prove initialized read-write Direct3D native execution
         if: runner.os == 'Windows'
@@ -1062,6 +1068,8 @@ jobs:
         run: >-
           python -m pytest -q -n auto
           tests/test_translator/test_native_loader_dispatch_integration.py::test_native_loader_descriptor_executes_opengl_on_device
+          tests/test_translator/test_native_loader_dispatch_integration.py::test_native_opengl_workgroup_limits
+          tests/test_translator/test_native_loader_dispatch_integration.py::test_native_opengl_submission_error_is_not_success
 
       - name: Prove initialized read-write OpenGL native execution
         if: runner.os == 'Linux'

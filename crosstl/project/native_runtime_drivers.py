@@ -430,6 +430,17 @@ class DirectXComputeRuntime:
         compushady = self._load_compushady()
         prepared_dispatches: list[_PreparedDirectXDispatch] = []
         for node_index, request in enumerate(sequence):
+            counts = _workgroup_count(request, target="DirectX")
+            # D3D12_CS_* limits apply to the DXIL compute pipeline.
+            _validate_dispatch_limits(
+                counts,
+                request.dispatch.workgroup_size,
+                target="directx",
+                max_count=(65535, 65535, 65535),
+                max_size=(1024, 1024, 64),
+                max_invocations=1024,
+                node_index=node_index,
+            )
             if (
                 request.dispatch is not None
                 and request.dispatch.entry_point is not None
@@ -459,7 +470,7 @@ class DirectXComputeRuntime:
                     request=request,
                     shader=self._shader_code(request),
                     buffers=prepared,
-                    workgroup_count=_workgroup_count(request, target="DirectX"),
+                    workgroup_count=counts,
                 )
             )
         allocation_plan, view_keys = _prepare_sequence_allocations(
@@ -1065,6 +1076,21 @@ class OpenGLComputeRuntime:
                     backend=backend,
                 )
 
+            limits = getattr(context, "info", {})
+            if not isinstance(limits, Mapping):
+                limits = {}
+            for node_index, prepared in enumerate(prepared_dispatches):
+                _validate_dispatch_limits(
+                    prepared.workgroup_count,
+                    prepared.request.dispatch.workgroup_size,
+                    target="opengl",
+                    max_count=limits.get("GL_MAX_COMPUTE_WORK_GROUP_COUNT"),
+                    max_size=limits.get("GL_MAX_COMPUTE_WORK_GROUP_SIZE"),
+                    max_invocations=limits.get("GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS"),
+                    node_index=node_index,
+                )
+            _check_opengl_error(context, phase="context")
+
             try:
                 for allocation in allocation_plan:
                     _validate_opengl_context_view_alignment(
@@ -1112,6 +1138,7 @@ class OpenGLComputeRuntime:
                 zip(prepared_dispatches, shaders, node_resources)
             ):
                 self._bind_sequence_buffer_views(resources, node_index=node_index)
+                _check_opengl_error(context, phase="prepare", node_index=node_index)
                 try:
                     shader.run(
                         group_x=prepared_dispatch.workgroup_count[0],
@@ -1129,6 +1156,7 @@ class OpenGLComputeRuntime:
                             "workgroupCount": list(prepared_dispatch.workgroup_count),
                         },
                     ) from exc
+                _check_opengl_error(context, phase="dispatch", node_index=node_index)
                 try:
                     context.memory_barrier()
                     finish = getattr(context, "finish", None)
@@ -1144,10 +1172,13 @@ class OpenGLComputeRuntime:
                             "nodeIndex": node_index,
                         },
                     ) from exc
+                _check_opengl_error(context, phase="synchronize", node_index=node_index)
             try:
-                return self._read_outputs(
+                outputs = self._read_outputs(
                     [resource for resources in node_resources for resource in resources]
                 )
+                _check_opengl_error(context, phase="readback")
+                return outputs
             except RuntimeAdapterDispatchError:
                 raise
             except Exception as exc:
@@ -1927,6 +1958,7 @@ class VulkanComputeRuntime:
             entry_point=request.entry_point or "main",
             buffers=prepared_buffers,
             workgroup_count=workgroup_count,
+            workgroup_size=request.dispatch.workgroup_size,
         )
         return context.run()
 
@@ -1988,6 +2020,7 @@ class _VulkanDispatchContext:
         entry_point: str,
         buffers: Sequence[_PreparedVulkanBuffer],
         workgroup_count: tuple[int, int, int],
+        workgroup_size: Sequence[int] | None = None,
     ):
         self.vk = vk
         self.runtime = runtime
@@ -1995,6 +2028,7 @@ class _VulkanDispatchContext:
         self.entry_point = entry_point
         self.buffers = tuple(buffers)
         self.workgroup_count = workgroup_count
+        self.workgroup_size = workgroup_size
         self.instance = None
         self.physical_device = None
         self.queue_family = None
@@ -2020,7 +2054,7 @@ class _VulkanDispatchContext:
             self._create_pipeline()
             self._record_and_submit()
             return self._read_outputs()
-        except RuntimeExecutorUnavailable:
+        except (RuntimeExecutorUnavailable, RuntimeAdapterSetupError):
             raise
         except RuntimeAdapterDispatchError:
             raise
@@ -2037,6 +2071,15 @@ class _VulkanDispatchContext:
         self.instance = self.runtime._create_instance(vk)
         self.physical_device, self.queue_family = self.runtime._select_compute_device(
             vk, self.instance
+        )
+        limits = vk.vkGetPhysicalDeviceProperties(self.physical_device).limits
+        _validate_dispatch_limits(
+            self.workgroup_count,
+            self.workgroup_size,
+            target="vulkan",
+            max_count=tuple(limits.maxComputeWorkGroupCount),
+            max_size=tuple(limits.maxComputeWorkGroupSize),
+            max_invocations=limits.maxComputeWorkGroupInvocations,
         )
         priority = [1.0]
         queue_info = vk.VkDeviceQueueCreateInfo(
@@ -4374,14 +4417,17 @@ def _workgroup_count(
             f"{target} compute runtime requires dispatch geometry."
         )
     if dispatch.workgroup_count:
-        values = tuple(int(value) for value in dispatch.workgroup_count)
+        values = dispatch.workgroup_count
     elif dispatch.global_size and dispatch.workgroup_size:
+        global_size = _pad3(
+            dispatch.global_size, field_name="globalSize", target=target
+        )
+        local_size = _pad3(
+            dispatch.workgroup_size, field_name="workgroupSize", target=target
+        )
         values = tuple(
-            max(1, math.ceil(int(global_value) / int(local_value)))
-            for global_value, local_value in zip(
-                dispatch.global_size,
-                dispatch.workgroup_size,
-            )
+            (global_value + local_value - 1) // local_value
+            for global_value, local_value in zip(global_size, local_size)
         )
     else:
         raise RuntimeExecutorUnavailable(
@@ -4397,12 +4443,127 @@ def _pad3(
     field_name: str,
     target: str = "Vulkan",
 ) -> tuple[int, int, int]:
-    if len(values) > 3:
-        raise RuntimeExecutorUnavailable(
-            f"{target} compute runtime {field_name} must have at most three dimensions."
+    if not 1 <= len(values) <= 3 or any(
+        not isinstance(value, int) or isinstance(value, bool) or value <= 0
+        for value in values
+    ):
+        raise RuntimeAdapterSetupError(
+            f"{target} compute runtime {field_name} requires one to three positive integers.",
+            details={
+                "target": target.lower(),
+                "reasonKind": "dispatch-dimensions-invalid",
+                "field": field_name,
+                "requested": list(values),
+            },
         )
-    padded = tuple(max(1, int(value)) for value in values) + (1,) * (3 - len(values))
+    padded = tuple(values) + (1,) * (3 - len(values))
     return padded[:3]
+
+
+def _validate_dispatch_limits(
+    counts: Sequence[int],
+    size: Sequence[int] | None,
+    *,
+    target: str,
+    max_count: Any,
+    max_size: Any,
+    max_invocations: Any,
+    node_index: int | None = None,
+) -> None:
+    limits = {
+        "maxWorkgroupCount": max_count,
+        "maxWorkgroupSize": max_size,
+        "maxWorkgroupInvocations": max_invocations,
+    }
+    for name, value in limits.items():
+        values = value if name != "maxWorkgroupInvocations" else (value,)
+        expected = 3 if name != "maxWorkgroupInvocations" else 1
+        if (
+            not isinstance(values, (tuple, list))
+            or len(values) != expected
+            or any(
+                not isinstance(item, int) or isinstance(item, bool) or item <= 0
+                for item in values
+            )
+        ):
+            raise RuntimeAdapterSetupError(
+                f"{target} compute dispatch limits are unavailable or invalid.",
+                details={
+                    "target": target,
+                    "reasonKind": "dispatch-limits-unavailable",
+                    "field": name,
+                },
+            )
+    counts = _pad3(counts, field_name="workgroupCount", target=target)
+    size = _pad3(size, field_name="workgroupSize", target=target) if size else None
+    details = {
+        "target": target,
+        "reasonKind": "dispatch-limit-exceeded",
+        "workgroupCount": list(counts),
+        "workgroupSize": list(size) if size else None,
+        "limits": {
+            name: list(value) if isinstance(value, (list, tuple)) else value
+            for name, value in limits.items()
+        },
+    }
+    if node_index is not None:
+        details["nodeIndex"] = node_index
+    for field, requested, maximum in (
+        ("workgroupCount", counts, max_count),
+        ("workgroupSize", size, max_size),
+    ):
+        if requested is None:
+            continue
+        for axis, (value, limit) in enumerate(zip(requested, maximum)):
+            if value > limit:
+                raise RuntimeAdapterSetupError(
+                    f"{target} {field}[{axis}] exceeds the native dispatch limit.",
+                    details={
+                        **details,
+                        "field": field,
+                        "axis": axis,
+                        "requested": value,
+                        "maximum": limit,
+                    },
+                )
+    if size and math.prod(size) > max_invocations:
+        raise RuntimeAdapterSetupError(
+            f"{target} workgroup invocation count exceeds the native dispatch limit.",
+            details={
+                **details,
+                "field": "workgroupInvocations",
+                "requested": math.prod(size),
+                "maximum": max_invocations,
+            },
+        )
+
+
+def _check_opengl_error(
+    context: Any, *, phase: str, node_index: int | None = None
+) -> None:
+    details = {"target": "opengl", "phase": phase}
+    if node_index is not None:
+        details["nodeIndex"] = node_index
+    try:
+        error = context.error
+    except Exception as exc:
+        raise RuntimeAdapterDispatchError(
+            "OpenGL error state could not be queried.",
+            details={
+                **details,
+                "reasonKind": "opengl-error-query-failed",
+                "error": str(exc),
+            },
+        ) from exc
+    if error != "GL_NO_ERROR":
+        raise RuntimeAdapterDispatchError(
+            f"OpenGL reported {error} during {phase}.",
+            details={
+                **details,
+                "reasonKind": "opengl-api-error",
+                "glError": str(error),
+            },
+        )
 
 
 def _int_field(value: Any, *, default: int | None = None) -> int:

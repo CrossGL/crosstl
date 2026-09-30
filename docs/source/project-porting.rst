@@ -1681,6 +1681,37 @@ not available. Their supported resource shapes are intentionally narrower than
 the translated shader languages; a successful translation does not imply that
 one of these reference drivers can execute the complete host workload.
 
+Native Dispatch Limits
+----------------------
+
+The Python native drivers reject invalid launch dimensions before submitting
+device work. Counts and local sizes must contain one to three positive integers;
+zero, negative, Boolean and fractional values are not clamped or coerced.
+Derived group counts use exact integer ceiling division.
+
+DirectX checks Direct3D 12 compute limits. OpenGL queries the current context's
+per-axis group-count and local-size limits and maximum invocations per group.
+Vulkan queries the selected physical device before creating a logical device.
+The Metal worker checks device local-size limits and the compiled pipeline's
+maximum threads per group. OpenGL and DirectX preflight every request in a
+sequence before allocating resources or executing the first node.
+
+An exceeded limit reports ``dispatch-limit-exceeded`` with ``field``,
+``requested``, ``maximum``, the requested geometry and the applicable ``limits``.
+Per-axis failures include ``axis`` (zero-based); aggregate invocation failures
+do not. Sequence diagnostics include ``nodeIndex``. Metal returns the detailed
+worker record under ``dispatchValidation`` while preserving its process logs.
+Missing or invalid capability information is an error, not an assumed limit.
+These checks do not tile an oversized workload, infer missing local sizes from
+shader binaries, or replace compiler validation of the actual shader layout.
+
+OpenGL also checks API error state after setup, resource binding, submission,
+synchronization and readback. A non-success state reports ``opengl-api-error``
+with ``phase`` and ``glError``; inability to read that state is a failure too.
+Unchanged output after a rejected submission cannot be reported as successful
+execution. These Python-driver checks do not add limit validation to generated
+C++ loader adapters or establish complete host-runtime integration.
+
 Shared Native Allocation Views
 ------------------------------
 

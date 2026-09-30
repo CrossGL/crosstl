@@ -591,7 +591,11 @@ def test_metal_package_native_alias_offset(tmp_path):
 
 @pytest.mark.parametrize(
     "defect,message",
-    [("missing-buffer", "Required Metal buffer"), ("group-limit", "group dimension")],
+    [
+        ("missing-buffer", "Required Metal buffer"),
+        ("group-limit", "group dimension"),
+        ("invocation-limit", "invocation count"),
+    ],
 )
 def test_metal_compiled_interface_rejects_invalid_native_dispatch(
     tmp_path, defect, message
@@ -608,8 +612,10 @@ def test_metal_compiled_interface_rejects_invalid_native_dispatch(
             if b["binding"] != "offset"
         ]
         del inputs["offset"]
-    else:
+    elif defect == "group-limit":
         geometry["workgroupSize"] = [65536, 1, 1]
+    else:
+        geometry["workgroupSize"] = [32, 32, 2]
     request = build_native_loader_dispatch_request(
         descriptor, package, inputs, outputs, geometry, expected_target="metal"
     )
@@ -618,6 +624,15 @@ def test_metal_compiled_interface_rejects_invalid_native_dispatch(
     with pytest.raises(RuntimeExecutionError) as caught:
         _execute_native(request, tmp_path)
     assert message in caught.value.details["stderr"]
+    if defect != "missing-buffer":
+        validation = caught.value.details["dispatchValidation"]
+        assert validation["target"] == "metal"
+        assert validation["reasonKind"] == "dispatch-limit-exceeded"
+        assert validation["workgroupSize"] == geometry["workgroupSize"]
+        assert validation["requested"] > validation["maximum"]
+        assert validation["field"] == (
+            "workgroupSize" if defect == "group-limit" else "workgroupInvocations"
+        )
     (tmp_path / "rejection.json").write_text(
         json.dumps(caught.value.details, indent=2), encoding="utf-8"
     )
