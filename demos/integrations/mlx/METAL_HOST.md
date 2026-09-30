@@ -40,6 +40,25 @@ Other operations still use the upstream backend. This is partial Metal host
 redirection, not a fully translated MLX backend or execution of the entire
 upstream suite. DirectX and OpenGL host integration remain separate work.
 
+## Backward Kernel Checks
+
+Before the MLX host build, a separate required step executes selected unchanged
+`seq_gated_delta_vjp` entries as both original and translated Metal. It uses the
+upstream `(32, 4, 1)` workgroup shape and checks all six gradient buffers against
+an independent NumPy reference. Cases cover all six declared key/value-head
+layouts, multiple batches, checkpoint intervals 1, 4, 8 and 16, partial checkpoint
+segments, and float32 and float16 inputs. An exact uniform case checks every
+output bit; seeded cases retain the upstream sequential gradient tolerances of
+`rtol=atol=1e-5`. Forward-loss finite differences check the reference separately.
+
+Every input buffer must remain unchanged, and guard bytes after all allocations
+must survive the dispatch. Evidence includes the pinned source identity,
+translation report, compiler commands, actual libraries, inputs, expected
+gradients and complete binary readbacks. These tests invoke native kernels
+directly. They do not redirect gated-delta through MLX's host runtime, execute
+the entire upstream suite, cover every specialization or prove portable-backend
+gradient execution.
+
 ## Full-Suite Baseline
 
 A separate local discovery run at this revision executed 899 upstream Python

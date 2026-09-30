@@ -20,7 +20,7 @@ ENTRY = "seq_gated_delta_vjp_float_128_128_24_24_1"
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_GATED_DELTA_METAL"
 
 
-def _translate_pinned(tmp_path, target):
+def _translate_pinned(tmp_path, target, *, entry=ENTRY, workgroup_size=(32, 1, 1)):
     root_value = os.environ.get("CROSTL_MLX_CURRENT_ROOT")
     assert root_value, "Set CROSTL_MLX_CURRENT_ROOT to the pinned checkout"
     root = Path(root_value).resolve()
@@ -59,8 +59,8 @@ def _translate_pinned(tmp_path, target):
                 include_patterns=(SOURCE,),
                 include_dirs=(".",),
                 targets=(target,),
-                entry_points={SOURCE: (ENTRY,)},
-                entry_workgroup_size_rules={SOURCE: {ENTRY: (32, 1, 1)}},
+                entry_points={SOURCE: (entry,)},
+                entry_workgroup_size_rules={SOURCE: {entry: workgroup_size}},
                 source_options={
                     "metal": {
                         "max_template_specializations": 128,
@@ -78,7 +78,7 @@ def _translate_pinned(tmp_path, target):
         assert payload["summary"]["translatedCount"] == 1
         record = payload["artifacts"][0]
         assert record["entryPoint"]["target"] == (
-            ENTRY if target == "metal" else "CSMain"
+            entry if target == "metal" else "CSMain"
         )
         generated = (
             tmp_path / "translated" / (root / record["path"]).relative_to(output)

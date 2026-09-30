@@ -14,6 +14,9 @@ on:
       - "tests/test_translator/test_metal_float_atomics.py"
       - "tests/test_translator/test_directx_float_atomics.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
+      - "tests/test_translator/test_mlx_gated_delta_runtime.py"
+      - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
+      - "tests/fixtures/runtime_verification/metal_raw_buffers.swift"
       - "tests/fixtures/runtime_verification/metal_uint32_buffers.swift"
       - "tools/run_bounded_command.py"
       - "pyproject.toml"
@@ -30,6 +33,9 @@ on:
       - "tests/test_translator/test_metal_float_atomics.py"
       - "tests/test_translator/test_directx_float_atomics.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
+      - "tests/test_translator/test_mlx_gated_delta_runtime.py"
+      - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
+      - "tests/fixtures/runtime_verification/metal_raw_buffers.swift"
       - "tests/fixtures/runtime_verification/metal_uint32_buffers.swift"
       - "tools/run_bounded_command.py"
       - "pyproject.toml"
@@ -52,7 +58,7 @@ jobs:
   metal-host:
     name: MLX translated Metal host execution
     runs-on: macos-26
-    timeout-minutes: 100
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,7 +67,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install CrossTL and test dependencies
-        run: python -m pip install -e . pytest pytest-xdist
+        run: python -m pip install -e . pytest pytest-xdist numpy
       - name: Validate host harness contracts
         env:
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
@@ -113,6 +119,20 @@ jobs:
               --junitxml=.mlx-metal-host/gated-delta/results.xml \
               tests/test_translator/test_mlx_gated_delta_metal.py \
               2>&1 | tee .mlx-metal-host/gated-delta.log
+      - name: Execute pinned MLX gated-delta gradients
+        env:
+          CROSTL_REQUIRE_MLX_GATED_DELTA_RUNTIME: "1"
+          CROSTL_MLX_CURRENT_ROOT: mlx-upstream
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/gated-delta-runtime
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX gated-delta gradients" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/gated-delta-runtime/pytest \
+              --junitxml=.mlx-metal-host/gated-delta-runtime/results.xml \
+              tests/test_translator/test_mlx_gated_delta_runtime.py \
+              2>&1 | tee .mlx-metal-host/gated-delta-runtime.log
       - name: Prepare isolated MLX build
         run: |
           python -m venv mlx-env

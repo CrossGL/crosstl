@@ -291,6 +291,46 @@ def test_ci_requires_pinned_native_host_execution():
     assert "continue-on-error" not in workflow
 
 
+def test_ci_requires_pinned_backward_numerical_execution():
+    from tools import ci_coverage
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/mlx-metal-host.yml").read_text()
+    step = ci_coverage.workflow_job_step_section(
+        workflow, "metal-host", "Execute pinned MLX gated-delta gradients"
+    )
+    assert "if:" not in step and "continue-on-error" not in step
+    assert 'CROSTL_REQUIRE_MLX_GATED_DELTA_RUNTIME: "1"' in step
+    assert "CROSTL_MLX_CURRENT_ROOT: mlx-upstream" in step
+    assert 'PYTEST_XDIST_AUTO_NUM_WORKERS: "2"' in step
+    assert "set -euo pipefail" in step
+    assert "--timeout-seconds 600" in step
+    assert "pytest -q -n auto" in step
+    assert "--basetemp=.mlx-metal-host/gated-delta-runtime/pytest" in step
+    assert "--junitxml=.mlx-metal-host/gated-delta-runtime/results.xml" in step
+    assert "tee .mlx-metal-host/gated-delta-runtime.log" in step
+    assert "tests/test_translator/test_mlx_gated_delta_runtime.py" in step
+    dependencies = ci_coverage.workflow_job_step_section(
+        workflow, "metal-host", "Install CrossTL and test dependencies"
+    )
+    assert "numpy" in dependencies
+    assert ci_coverage.workflow_job_step_after(
+        workflow,
+        "metal-host",
+        "Execute pinned MLX gated-delta gradients",
+        "Checkout pinned upstream MLX",
+    )
+    for event in ("pull_request", "push"):
+        paths = ci_coverage.workflow_event_path_filters(workflow, event)
+        for path in (
+            "tests/test_translator/test_mlx_gated_delta_runtime.py",
+            "tests/test_translator/test_mlx_gated_delta_metal.py",
+            "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py",
+            "tests/fixtures/runtime_verification/metal_raw_buffers.swift",
+        ):
+            assert path in paths
+
+
 @pytest.mark.parametrize("patched", [False, True])
 def test_checkout_identity(tmp_path, monkeypatch, patched):
     path = tmp_path / "device.cpp"
