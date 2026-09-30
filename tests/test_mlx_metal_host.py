@@ -1,4 +1,6 @@
 import json
+import math
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,6 +8,120 @@ from types import SimpleNamespace
 import pytest
 
 from demos.integrations.mlx import run_mlx_metal_host as host
+
+
+def workload_records(dataset):
+    base = complex(2, 1)
+    if dataset != "ordinary":
+        base = complex(-4, -0.0 if dataset == "negative-zero" else 0.0)
+    exponent = complex(0.5, 0)
+    expected = base**exponent
+    return [
+        {
+            "dataset": dataset,
+            "shape": shape,
+            "arrayShape": layout,
+            "dtype": "complex64",
+            "outputs": math.prod(layout),
+            "matched": True,
+            **{
+                key: [[value.real, value.imag] for _ in range(math.prod(layout))]
+                for key, value in (
+                    ("base", base),
+                    ("exponent", exponent),
+                    ("expected", expected),
+                    ("actual", expected),
+                )
+            },
+        }
+        for shape, layout in host.HOST_LAYOUTS.items()
+    ]
+
+
+def workload_dispatches():
+    return [{"entry": f"{shape}_Powercomplex64"} for shape in host.HOST_LAYOUTS]
+
+
+@pytest.mark.parametrize("dataset", host.HOST_DATASETS)
+def test_host_numerical_evidence_checks_every_readback(dataset):
+    records = workload_records(dataset)
+    host.verify_host_workloads(records, workload_dispatches(), dataset)
+    assert sum(item["outputs"] for item in records) == 134
+    records[-1]["actual"][-1][1] += 1
+    with pytest.raises(ValueError, match="readback does not match"):
+        host.verify_host_workloads(records, workload_dispatches(), dataset)
+
+
+@pytest.mark.parametrize("field", ["base", "exponent", "expected", "actual"])
+@pytest.mark.parametrize("bad_value", [[], [1], [0, float("nan")], [True, 0]])
+def test_host_numerical_evidence_rejects_invalid_complex_values(field, bad_value):
+    records = workload_records("ordinary")
+    records[0][field][0] = bad_value
+    with pytest.raises(ValueError, match="finite complex readbacks"):
+        host.verify_host_workloads(records, workload_dispatches(), "ordinary")
+
+
+@pytest.mark.parametrize("field", ["base", "exponent", "expected", "actual"])
+def test_host_numerical_evidence_requires_complete_buffers(field):
+    records = workload_records("ordinary")
+    records[-1][field].pop()
+    with pytest.raises(ValueError, match="readback count"):
+        host.verify_host_workloads(records, workload_dispatches(), "ordinary")
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("dataset", "missing"),
+        ("arrayShape", [1]),
+        ("dtype", "float32"),
+        ("outputs", True),
+        ("outputs", 2),
+        ("matched", False),
+    ],
+)
+def test_host_numerical_evidence_requires_exact_layouts(field, value):
+    records = workload_records("ordinary")
+    records[0][field] = value
+    with pytest.raises(ValueError, match="layout or numerical"):
+        host.verify_host_workloads(records, workload_dispatches(), "ordinary")
+
+
+@pytest.mark.parametrize("dataset", host.HOST_DATASETS[1:])
+def test_host_numerical_evidence_requires_signed_zero_inputs(dataset):
+    records = workload_records(dataset)
+    records[0]["base"][0][1] *= -1
+    with pytest.raises(ValueError, match="signed-zero inputs"):
+        host.verify_host_workloads(records, workload_dispatches(), dataset)
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_host_numerical_evidence_requires_exact_case_accounting(duplicate):
+    records = workload_records("ordinary")
+    if duplicate:
+        records.append(records[0])
+    else:
+        records.pop()
+    with pytest.raises(ValueError, match="evidence is incomplete"):
+        host.verify_host_workloads(records, workload_dispatches(), "ordinary")
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_host_numerical_evidence_requires_one_dispatch_per_case(duplicate):
+    dispatches = workload_dispatches()
+    if duplicate:
+        dispatches.append(dispatches[0])
+    else:
+        dispatches.pop()
+    with pytest.raises(ValueError, match="dispatch each expected entry once"):
+        host.verify_host_workloads(workload_records("ordinary"), dispatches, "ordinary")
+
+
+def test_host_numerical_evidence_recomputes_expected_values():
+    records = workload_records("ordinary")
+    records[0]["actual"][0] = records[0]["expected"][0] = [0, 0]
+    with pytest.raises(ValueError, match="readback does not match"):
+        host.verify_host_workloads(records, workload_dispatches(), "ordinary")
 
 
 @pytest.mark.parametrize("count,skipped", [(1, 0), (287, 0), (287, 3)])
@@ -73,6 +189,23 @@ def test_native_command_preserves_failure_evidence(tmp_path):
     )
     assert result["returncode"] == 3
     assert json.loads((tmp_path / "failure.json").read_text()) == result
+
+
+def test_native_command_records_only_explicit_runtime_controls(tmp_path):
+    controls = {
+        "DEVICE": "gpu",
+        "CROSTL_METAL_LIBRARY_OVERRIDES": str(tmp_path / "combined-libraries"),
+        "CROSTL_METAL_LIBRARY_TRACE": str(tmp_path / "trace.tsv"),
+    }
+    result = host.run(
+        [sys.executable, "-c", "pass"],
+        tmp_path,
+        "controls",
+        env={**os.environ, **controls, "UNRELATED_SECRET": "must-not-be-recorded"},
+    )
+    assert result["runtimeEnvironment"] == controls
+    assert "must-not-be-recorded" not in (tmp_path / "controls.json").read_text()
+    assert json.loads((tmp_path / "controls.json").read_text()) == result
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX native Metal worker")
@@ -180,8 +313,9 @@ def test_checkout_rejects_wrong_pin_or_unrelated_edits(
         host.verify_checkout(tmp_path, patched=False)
 
 
-def test_complete_host_evidence_keeps_command_and_numerical_records_separate(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("corruption", [None, "readback", "trace"])
+def test_host_evidence_requires_complete_command_and_numerical_records(
+    tmp_path, monkeypatch, corruption
 ):
     root, output = tmp_path / "mlx", tmp_path / "proof"
     test_source = root / "python/tests/test_ops.py"
@@ -189,13 +323,16 @@ def test_complete_host_evidence_keeps_command_and_numerical_records_separate(
     test_source.write_text("unchanged upstream test")
     monkeypatch.setattr(host, "verify_checkout", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        host, "compile_libraries", lambda *args: (output / "libraries", [])
+        host, "compile_libraries", lambda *args: (output / "combined-libraries", [])
     )
-    shapes = ("ss", "sv", "vs", "vv", "g1", "g2", "g3", "gn2")
+    shapes = tuple(host.HOST_LAYOUTS)
 
     def fake_run(command, directory, name, **kwargs):
         result = {"returncode": 0, "command": list(map(str, command))}
         env = kwargs["env"]
+        if name in {"runtime-identity", "upstream-original"}:
+            assert "CROSTL_METAL_LIBRARY_OVERRIDES" not in env
+            assert "CROSTL_METAL_LIBRARY_TRACE" not in env
         if name == "runtime-identity":
             host.save_json(
                 directory / f"{name}.stdout",
@@ -207,18 +344,30 @@ def test_complete_host_evidence_keeps_command_and_numerical_records_separate(
             )
         if name.startswith("upstream-"):
             (directory / f"{name}.stderr").write_text("Ran 163 tests in 1.0s\nOK\n")
-        if name == "upstream-translated" or name == "execute-host-workloads":
+        if name == "upstream-translated" or name.startswith("execute-host-workloads-"):
+            assert env["CROSTL_METAL_LIBRARY_OVERRIDES"] == str(
+                output / "combined-libraries"
+            )
             selected = ("ss",) if name == "upstream-translated" else shapes
+            if corruption == "trace" and name.endswith("negative-zero"):
+                selected = (*selected, "ss")
             Path(env["CROSTL_METAL_LIBRARY_TRACE"]).write_text(
                 "".join(
                     f"library\t{s}_Powercomplex64\ndispatch\t{s}_Powercomplex64\tthreads\t1,1,1\t1,1,1\n"
                     for s in selected
                 )
             )
-        if name == "execute-host-workloads":
+        if name.startswith("execute-host-workloads-"):
             assert command[-1] != directory / (name + ".json")
-            host.save_json(command[-1], [{"shape": s, "matched": True} for s in shapes])
+            assert command[-3] == "--dataset"
+            records = workload_records(command[-2])
+            if corruption == "readback" and name.endswith("negative-zero"):
+                records[-1]["actual"][-1][1] *= -1
+            host.save_json(command[-1], records)
         if name == "missing-required-library":
+            assert env["CROSTL_METAL_LIBRARY_OVERRIDES"] == str(
+                output / "missing-library"
+            )
             result["returncode"] = 1
             (directory / f"{name}.stderr").write_text(
                 "Cannot load required translated Metal library"
@@ -227,9 +376,21 @@ def test_complete_host_evidence_keeps_command_and_numerical_records_separate(
         return result
 
     monkeypatch.setattr(host, "run", fake_run)
+    if corruption:
+        with pytest.raises(ValueError):
+            host.verify(root, Path(sys.executable), output)
+        assert not (output / "evidence.json").exists()
+        assert (output / "host-workloads-negative-zero.json").exists()
+        return
     host.verify(root, Path(sys.executable), output)
     evidence = json.loads((output / "evidence.json").read_text())
-    assert len(evidence["hostWorkloads"]) == 8
+    assert evidence["schemaVersion"] == 2
+    assert len(evidence["hostWorkloads"]) == 24
+    assert sum(item["outputs"] for item in evidence["hostWorkloads"]) == 402
+    assert len(evidence["hostWorkloadDispatches"]) == 24
+    assert {item["dataset"] for item in evidence["hostWorkloadDispatches"]} == set(
+        host.HOST_DATASETS
+    )
     assert evidence["missingRequiredLibraryRejected"] is True
     assert evidence["fullTranslatedBackend"] is False
 

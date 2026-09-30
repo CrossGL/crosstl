@@ -18,8 +18,21 @@ kernel. Source, compiled-library, runtime and numerical-test evidence is retaine
 Additional MLX array workloads require actual dispatch of eight shapes: `ss`,
 `sv`, `vs`, `vv`, `g1`, `g2`, `g3` and `gn2`. They cover broadcasting,
 non-contiguous views, zero strides and multidimensional host launch geometry,
-with independent NumPy references. The large-index variants remain compile-only
-in this host integration check.
+with independent NumPy references. Each layout runs ordinary complex inputs and
+both signed-zero sides of the negative-real branch cut, totaling 402 complex
+outputs. Each dataset has its own process and dispatch trace, requiring exactly
+one translated dispatch per layout. The evidence retains every input, reference
+and readback; the verifier independently recomputes complex powers and checks the
+unchanged `5e-5 * max(1, abs(reference))` bound. The large-index variants remain
+compile-only in this host integration check.
+
+The original MLX JIT path is not a signed-zero reference. On the local Apple M2
+Max build, `(-4-0i) ** (0.5+0i)` returns `+2i` with overrides disabled, whereas the
+precisely compiled translated entry and independent references return `-2i`.
+This baseline difference is recorded, not treated as translator parity or hidden
+by a wider tolerance. Both unchanged upstream `test_ops` runs must still pass;
+the additional branch-cut workloads require the translated path to match the
+independent reference, not the original JIT result.
 
 Only entries actually present in the dispatch trace have host-execution coverage.
 Building all 15 libraries does not prove all 15 were selected by upstream tests.
@@ -72,9 +85,19 @@ Both individual and combined libraries are retained. The host uses copies of
 the combined library under each required entry name, matching the adapter's
 per-entry lookup contract; every copy has the same verified hash. This exercises
 cross-artifact linkage rather than relying on independent libraries to hide
-duplicate symbols. Source-private and generated helper linkage is preserved by
+duplicate symbols. Execution records retain the explicitly selected device,
+override directory and trace path without copying unrelated environment values.
+Source-private and generated helper linkage is preserved by
 the translator, without rewriting emitted shader text. This covers the selected
-15 entries, not every translation unit in MLX.
+15 entries and all 402 retained host readbacks, not every translation unit in MLX.
+
+External free-function declarations whose definitions live in other source files
+are not yet preserved by the Metal frontend, tracked in
+[#1978](https://github.com/CrossGL/crosstl/issues/1978). A reduced original
+provider/consumer pair links and executes correctly, while its translated caller
+fails native compilation because the declaration was dropped. The selected
+complex-power entries do not depend on this missing capability; their combined
+library proof does not establish arbitrary cross-file callable support.
 
 ## Run Locally
 
@@ -95,6 +118,8 @@ python demos/integrations/mlx/run_mlx_metal_host.py verify \
 ```
 
 Use a fresh execution directory for each run. The final `evidence.json` is written
-only after both upstream runs, dispatch verification, library integrity checks
-and the missing-library negative test succeed. Intermediate logs and translation
-reports remain available when a step fails.
+only after both upstream runs, all three host datasets, dispatch verification,
+library integrity checks and the missing-library negative test succeed. The
+schema-version-2 report includes per-dataset readbacks and dispatch records.
+Intermediate logs, partial numerical records and translation reports remain
+available when a step fails.

@@ -17,13 +17,17 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "Canonical Metal fabs/fmin/fmax lower to native HLSL intrinsics; Boolean scalar/vector select preserves argument order and eager evaluation. Source helper names avoid the HLSL select intrinsic. Unsupported condition types, alias target shadowing, and unresolved HLSL source select overload ownership fail closed. Bounded Windows numerical tests are required by CI; this is not whole-repository runtime coverage.",
+          "notes": "Canonical Metal fabs/fmin/fmax lower to native HLSL intrinsics; Boolean scalar/vector select preserves argument order and eager evaluation. Canonical atan2 preserves signed-zero quadrants, infinity angles and NaN classification through typed helpers; native HLSL atan2 round trips remain native. Source helpers retain their ownership. Unsupported operand types, alias target shadowing, and unresolved HLSL source select overload ownership fail closed. Bounded Windows numerical tests and original precise Metal atan2 controls are required by CI; this is not whole-repository runtime coverage.",
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_",
             "tests/test_translator/test_directx_metal_math.py::def test_metal_math_translates_and_compiles_for_directx",
             "tests/test_translator/test_directx_metal_math.py::def test_directx_metal_math_executes",
             "tests/test_translator/test_directx_metal_math.py::def test_directx_metal_math_rejects_shadowed_target",
-            "tests/test_translator/test_directx_metal_math.py::def test_hlsl_select_roundtrip_retains_hlsl_argument_order"
+            "tests/test_translator/test_directx_metal_math.py::def test_hlsl_select_roundtrip_retains_hlsl_argument_order",
+            "tests/test_translator/test_directx_atan2.py::def test_directx_atan2_executes",
+            "tests/test_translator/test_directx_atan2.py::def test_original_metal_atan2_executes",
+            "tests/test_translator/test_directx_atan2.py::def test_hlsl_atan2_roundtrip_keeps_native_intrinsic",
+            "tests/test_translator/test_directx_atan2.py::def test_atan2_rejects_unproven_contracts"
           ]
         },
         "opengl": {
@@ -7669,6 +7673,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7679,6 +7686,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7689,6 +7699,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7699,6 +7712,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7709,6 +7725,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7719,6 +7738,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7729,6 +7751,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7739,6 +7764,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7749,6 +7777,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7759,6 +7790,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -7769,6 +7803,9 @@
           "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -11101,6 +11138,7 @@
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_buffer_native_readback",
             "tests/test_translator/test_mlx_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
             "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
             "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
@@ -11124,6 +11162,7 @@
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_buffer_native_readback",
             "tests/test_translator/test_mlx_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
             "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
             "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
@@ -11904,6 +11943,9 @@
           "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. DirectX native runtime parity adapters add reusable adapter-backed execution with HLSL validation/compilation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable. The Python DirectX driver preflights every sequence node against Direct3D 12 per-axis group counts, local sizes and total invocations before device allocation. Invalid dimensions fail without clamping; dispatch-limit-exceeded diagnostics retain requested values, effective maxima and the failing axis or aggregate field. Required Windows tests execute bounded native readback and reject above-limit counts.",
           "evidence": [
             "tests/test_translator/test_native_dispatch_limits.py::def test_directx_rejects_over_limit_before_allocating_or_dispatching",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_malformed_dimensions_cannot_fall_back_to_other_metadata",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_malformed_sequence_geometry_prevents_all_device_work",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_omitted_dimensions_keep_geometry_defaults",
             "tests/test_translator/test_native_loader_dispatch_integration.py::def test_native_directx_workgroup_limits",
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
@@ -11926,6 +11968,9 @@
           "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. OpenGL native runtime parity adapters add reusable adapter-backed execution with GLSL validation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Specialization-bearing OpenGL compute artifacts compile to OpenGL SPIR-V, require OpenGL 4.6 or GL_ARB_gl_spirv plus the shader-binary and specialization entry points, apply bool and 32-bit signed, unsigned, or floating scalar values by numeric ID, keep ordinary uniforms on a separate binding path, and report applied values with provenance; artifacts without deferred specialization retain the GLSL source path. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable. The Python OpenGL driver queries actual context compute limits and preflights all sequence nodes before device allocation. Missing limits, invalid dimensions and above-limit requests fail with structured diagnostics. API error checks after context setup, binding, submission, synchronization and readback prevent failed submissions from returning successful unchanged output. Required Linux tests exercise bounded native readback, excessive counts on each axis and an actual invalid-program submission.",
           "evidence": [
             "tests/test_translator/test_native_dispatch_limits.py::def test_opengl_preflights_entire_sequence_before_any_device_work",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_malformed_dimensions_cannot_fall_back_to_other_metadata",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_malformed_sequence_geometry_prevents_all_device_work",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_omitted_dimensions_keep_geometry_defaults",
             "tests/test_translator/test_native_dispatch_limits.py::def test_opengl_api_errors_cannot_be_reported_as_success",
             "tests/test_translator/test_native_loader_dispatch_integration.py::def test_native_opengl_workgroup_limits",
             "tests/test_translator/test_native_loader_dispatch_integration.py::def test_native_opengl_submission_error_is_not_success",
@@ -12010,6 +12055,8 @@
           "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Vulkan native runtime parity adapters add reusable adapter-backed execution with SPIR-V assembly/validation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable. The Python Vulkan driver queries the selected physical device's per-axis compute group counts, local sizes and maximum invocations before creating a logical device. Invalid or excessive geometry reports structured setup diagnostics rather than being clamped or submitted. Native vector-add coverage includes rejection above the selected device's count limit on each axis.",
           "evidence": [
             "tests/test_translator/test_native_dispatch_limits.py::def test_vulkan_checks_selected_physical_device_before_logical_device_creation",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_malformed_local_size_cannot_bypass_native_limit_validation",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_omitted_dimensions_keep_geometry_defaults",
             "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_vulkan_compute_runtime_executes_vector_add_on_device",
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
