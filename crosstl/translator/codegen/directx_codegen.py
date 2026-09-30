@@ -58,6 +58,7 @@ from ..ast import (
     WhileNode,
 )
 from ..cooperative_matrix import get_cooperative_matrix_fragment_mapping
+from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
 from ..structure_conversions import (
     StructureConversionKind,
@@ -3543,6 +3544,7 @@ class HLSLCodeGen:
         }
         self.validate_explicit_sampler_role_conflicts(ast)
         code = "\n"
+        code += source_license_comments(ast, "directx")
         preprocessors = getattr(ast, "preprocessors", []) or []
         for directive in preprocessors:
             line = self.generate_preprocessor_directive(directive)

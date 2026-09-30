@@ -24,6 +24,7 @@ on:
       - "tests/test_translator/test_directx_reduction_primitives.py"
       - "tests/test_translator/test_directx_metal_math.py"
       - "tests/test_translator/test_opengl_metal_math.py"
+      - "tests/test_translator/test_metal_precise_asin.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tests/test_translator/test_struct_buffer_layouts.py"
       - "tests/test_translator/test_buffer_requirements.py"
@@ -103,6 +104,7 @@ on:
       - "tests/test_translator/test_directx_reduction_primitives.py"
       - "tests/test_translator/test_directx_metal_math.py"
       - "tests/test_translator/test_opengl_metal_math.py"
+      - "tests/test_translator/test_metal_precise_asin.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tests/test_translator/test_struct_buffer_layouts.py"
       - "tests/test_translator/test_buffer_requirements.py"
@@ -427,6 +429,7 @@ jobs:
         shell: bash
         env:
           CROSTL_REQUIRE_METAL_BUILTIN_OWNERSHIP: "1"
+          CROSTL_REQUIRE_METAL_PRECISE_ASIN: "1"
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER: llvmpipe
           EGL_PLATFORM: surfaceless
@@ -438,7 +441,8 @@ jobs:
             python -m pytest -q -n auto \
               --basetemp="metal-ownership-results/pytest" \
               --junitxml="metal-ownership-results/results.xml" \
-              tests/test_translator/test_metal_builtin_ownership.py
+              tests/test_translator/test_metal_builtin_ownership.py \
+              tests/test_translator/test_metal_precise_asin.py
 
       - name: Upload Metal builtin ownership evidence
         if: always()

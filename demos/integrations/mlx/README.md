@@ -89,7 +89,7 @@ The current harness verifies:
   `unary.metal` entries to OpenGL. The schema-v2
   `contracts/unary.opengl-translation.json` contract pins every standalone
   `main` artifact across the same five shapes, 37 operators, 20 type pairs,
-  1,243 materializations, and 3,363 reflected resources, totaling 4,060,696
+  1,243 materializations, and 3,363 reflected resources, totaling 4,119,841
   generated GLSL bytes. Translation requires three explicit host/runtime
   index-range preconditions for `offset + i`, `out_idx++`, and `idx`; these are
   portability promises rather than inferred or runtime-enforced bounds. The

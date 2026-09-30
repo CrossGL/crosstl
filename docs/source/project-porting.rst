@@ -603,7 +603,7 @@ The same entry-scoped pipeline now translates all 877 current-pinned unary
 entries to standalone OpenGL ``main`` artifacts. The schema-v2
 ``unary.opengl-translation.json`` contract preserves the same five-shape,
 37-operator, 20-type-pair classification and all 1,243 exact materializations,
-while pinning 4,060,696 generated GLSL bytes and all 3,363 target-reflected
+while pinning 4,119,841 generated GLSL bytes and all 3,363 target-reflected
 resources. Vector artifacts expose read-only input, read-write output, and an
 entry-scoped size uniform block. Gather artifacts expose input, output, shape,
 stride, and the read-only ``ndimBuffer`` storage resource; scalar uses of the

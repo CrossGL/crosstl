@@ -6968,7 +6968,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 new_params = f"{self_param}, {params}"
             else:
                 new_params = self_param
-        return f"static {return_type} {method.free_name}({new_params}) {{{rewritten_body}}}"
+        return f"static inline {return_type} {method.free_name}({new_params}) {{{rewritten_body}}}"
 
     def _rewrite_explicit_conversion_operator_calls(
         self,
@@ -11644,7 +11644,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 parts.append(params)
             new_params = ", ".join(parts)
         return (
-            f"static {return_type} {method.free_name}({new_params}) "
+            f"static inline {return_type} {method.free_name}({new_params}) "
             f"{{{rewritten_body}}}"
         )
 
@@ -14340,7 +14340,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             body = f"{{ {struct_name} self; {call}; }}"
         else:
             body = f"{{ {struct_name} self; return {call}; }}"
-        return f"static {return_type} {wrapper_name}({wrapper_parameter_text}) {body}"
+        return f"static inline {return_type} {wrapper_name}({wrapper_parameter_text}) {body}"
 
     def _instantiate_template_member_call(
         self,

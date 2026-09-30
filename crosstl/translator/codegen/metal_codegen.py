@@ -49,6 +49,7 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
 )
+from ..source_licenses import source_license_comments
 from ..structure_conversions import (
     StructureConversionKind,
     StructureFieldValue,
@@ -2286,6 +2287,7 @@ class MetalCodeGen:
             self.collect_metal_stage_io_member_lowerings(structs)
         )
         code = "\n"
+        code += source_license_comments(ast, "metal")
         preprocessors = getattr(ast, "preprocessors", []) or []
         pre_lines = []
         for directive in preprocessors:
@@ -5542,6 +5544,11 @@ class MetalCodeGen:
             semantic = self.semantic_from_node(func)
             function_name = entry_name or func.name
             semantic_attr = self.map_non_stage_function_semantic(semantic)
+            # Lowered class overloads may be retained without a call in this unit.
+            if getattr(func, "linkage", None) == "internal" and getattr(
+                func, "is_inline", False
+            ):
+                code += "__attribute__((unused))\n"
             code += (
                 f"{self.metal_function_linkage_prefix(func)}"
                 f"{return_type} {function_name}({params_str}){semantic_attr} {{\n"

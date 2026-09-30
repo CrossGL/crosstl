@@ -167,11 +167,16 @@ def test_private_helpers_and_exported_functions_keep_distinct_linkage(tmp_path):
         "transform",
         "hidden",
         "crosstl_ctor_Offset_1",
+    ):
+        assert re.search(rf"^static \w+ {name}\(", generated, re.MULTILINE), generated
+    for name in (
         "Offset__apply",
         "Op__operator_call",
         "Op__operator_call__temporary",
     ):
-        assert re.search(rf"^static \w+ {name}\(", generated, re.MULTILINE), generated
+        assert re.search(
+            rf"^static inline \w+ {name}\(", generated, re.MULTILINE
+        ), generated
     assert "inline float shared(" in generated
     assert "inline float twice_float(" in generated
     assert "static inline float local_transform_float(" in generated
@@ -207,6 +212,39 @@ def test_generated_wide_vector_helpers_have_internal_linkage(tmp_path):
     ast = Parser(Lexer(intermediate).get_tokens()).parse()
     assert len(ast.functions) == 4
     assert all(function.linkage == "internal" for function in ast.functions)
+
+
+def test_unused_member_overload_keeps_implicit_inline(tmp_path):
+    source = """
+    struct Sign {
+        uint operator()(uint x) thread { return x != 0; }
+        float operator()(float x) thread { return x > 0.0f ? 1.0f : -1.0f; }
+    };
+    kernel void first(device float* output [[buffer(0)]]) {
+        output[0] = Sign{}(2.0f);
+    }
+    """
+    generated = _translate(tmp_path, source)
+    assert "static inline uint Sign__operator_call(" in generated
+    assert "static inline float Sign__operator_call(" in generated
+    if sys.platform == "darwin":
+        path = tmp_path / "unused-overload.metal"
+        path.write_text(generated, encoding="utf-8")
+        _run(
+            [
+                "xcrun",
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(path),
+                "-o",
+                str(tmp_path / "unused-overload.air"),
+            ],
+            tmp_path,
+            "compile-unused-overload",
+        )
 
 
 def test_generated_native_support_helpers_have_internal_linkage():

@@ -1495,6 +1495,7 @@ class MetalToCrossGLConverter:
         self.wide_vector_reserved_names = set()
         self.metal_precise_math_helper_names = {}
         self.required_metal_precise_acos_widths = set()
+        self.required_metal_precise_asin_widths = set()
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
         self.cooperative_matrix_fragment_type_contracts = {}
@@ -2610,6 +2611,7 @@ class MetalToCrossGLConverter:
         self.wide_vector_reserved_names = set()
         self.metal_precise_math_helper_names = {}
         self.required_metal_precise_acos_widths = set()
+        self.required_metal_precise_asin_widths = set()
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
         self.cooperative_matrix_fragment_type_contracts = {}
@@ -13099,7 +13101,7 @@ class MetalToCrossGLConverter:
         if self.metal_math_builtin_namespace_mode(text) != "precise":
             return None
         operation = text.rsplit("::", 1)[-1]
-        if operation != "acos":
+        if operation not in {"acos", "asin"}:
             return None
         arguments = list(args or [])
         source_location = (
@@ -13126,7 +13128,7 @@ class MetalToCrossGLConverter:
             raise MetalPreciseMathLoweringError(
                 operation,
                 operand_type,
-                "only floating-point operands have a precise acos contract",
+                f"only floating-point operands have a precise {operation} contract",
                 source_location,
             )
         width = type_info["width"]
@@ -13138,6 +13140,9 @@ class MetalToCrossGLConverter:
                 source_location,
             )
 
+        if operation == "asin":
+            self.required_metal_precise_asin_widths.add(width)
+            return self.metal_precise_asin_helper_name(width)
         self.required_metal_precise_acos_widths.add(width)
         return self.metal_precise_acos_helper_name(width)
 
@@ -13176,9 +13181,64 @@ class MetalToCrossGLConverter:
             f"__crossgl_metal_precise_acos_float{width}",
         )
 
+    def metal_precise_asin_helper_name(self, width):
+        self.metal_precise_acos_helper_name(1)
+        scalar_name = self.metal_precise_math_unique_helper_name(
+            "asin-float", "__crossgl_metal_precise_asin_float"
+        )
+        if width == 1:
+            return scalar_name
+        return self.metal_precise_math_unique_helper_name(
+            f"asin-float{width}", f"__crossgl_metal_precise_asin_float{width}"
+        )
+
+    def generate_metal_precise_asin_support_code(self, indent=0):
+        if not self.required_metal_precise_asin_widths:
+            return ""
+        pad = "    " * indent
+        body_pad = "    " * (indent + 1)
+        nested_pad = "    " * (indent + 2)
+        scalar_name = self.metal_precise_asin_helper_name(1)
+        ratio_name = self.metal_precise_acos_ratio_helper_name()
+        acos_name = self.metal_precise_acos_helper_name(1)
+        # Near zero use the shared fdlibm rational correction; subtracting
+        # acos from pi/2 there would lose relative accuracy and signed zero.
+        code = f"{pad}// Portable float32 lowering for Metal precise::asin.\n"
+        code += f"{pad}@precise\n{pad}@metal_static\n"
+        code += f"{pad}float {scalar_name}(float value) {{\n"
+        code += f"{body_pad}uint bits = asuint(value);\n"
+        code += f"{body_pad}uint magnitude_bits = bits & 0x7fffffffu;\n"
+        code += f"{body_pad}if (magnitude_bits > 0x3f800000u) {{\n"
+        code += f"{nested_pad}return asfloat(0x7fc00000u);\n{body_pad}}}\n"
+        code += f"{body_pad}if (magnitude_bits < 0x39800000u) {{\n"
+        code += f"{nested_pad}return value;\n{body_pad}}}\n"
+        code += f"{body_pad}if (magnitude_bits < 0x3f000000u) {{\n"
+        code += f"{nested_pad}float squared @precise = value * value;\n"
+        code += f"{nested_pad}float correction @precise = {ratio_name}(squared);\n"
+        code += f"{nested_pad}return value + value * correction;\n{body_pad}}}\n"
+        code += f"{body_pad}float magnitude = asfloat(magnitude_bits);\n"
+        code += f"{body_pad}float result @precise = 1.5707962513 - (\n"
+        code += f"{nested_pad}{acos_name}(magnitude) - 0.000000075497894159\n"
+        code += f"{body_pad});\n"
+        code += f"{body_pad}return (bits >> 31u) != 0u ? -result : result;\n"
+        code += f"{pad}}}\n\n"
+        for width in sorted(self.required_metal_precise_asin_widths):
+            if width == 1:
+                continue
+            vector_name = self.metal_precise_asin_helper_name(width)
+            arguments = ",\n".join(
+                f"{nested_pad}{scalar_name}(value.{component})"
+                for component in "xyzw"[:width]
+            )
+            code += f"{pad}@precise\n{pad}@metal_static\n"
+            code += f"{pad}vec{width} {vector_name}(vec{width} value) {{\n"
+            code += f"{body_pad}return vec{width}(\n{arguments}\n{body_pad});\n"
+            code += f"{pad}}}\n\n"
+        return code
+
     def generate_metal_precise_math_support_code(self, indent=0):
         widths = sorted(self.required_metal_precise_acos_widths)
-        if not widths:
+        if not widths and not self.required_metal_precise_asin_widths:
             return ""
 
         ratio_name = self.metal_precise_acos_ratio_helper_name()
@@ -13198,6 +13258,7 @@ class MetalToCrossGLConverter:
         code += f"{pad}// SunPro. Permission to use, copy, modify, and distribute\n"
         code += f"{pad}// this software is freely granted, provided this notice\n"
         code += f"{pad}// is preserved.\n"
+        code += f"{pad}@source_license(fdlibm)\n"
         code += f"{pad}@precise\n"
         code += f"{pad}@metal_static\n"
         code += f"{pad}float {ratio_name}(float value) {{\n"
@@ -13281,7 +13342,7 @@ class MetalToCrossGLConverter:
             code += f"{pad}vec{width} {vector_name}(vec{width} value) {{\n"
             code += f"{body_pad}return vec{width}(\n{arguments}\n{body_pad});\n"
             code += f"{pad}}}\n\n"
-        return code
+        return code + self.generate_metal_precise_asin_support_code(indent)
 
     @staticmethod
     def metal_math_source_overload_is_stdlib_extension(function):
