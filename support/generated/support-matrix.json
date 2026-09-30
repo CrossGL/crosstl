@@ -625,7 +625,7 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1868
+        "test_count": 1874
       },
       "translator_codegen": {
         "exists": true,
@@ -9440,6 +9440,9 @@
         "cuda": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9450,6 +9453,9 @@
         "directx": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9460,6 +9466,9 @@
         "hip": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9470,6 +9479,9 @@
         "metal": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9480,6 +9492,9 @@
         "mojo": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9490,6 +9505,9 @@
         "opengl": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9500,6 +9518,9 @@
         "rust": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9510,6 +9531,9 @@
         "slang": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9520,6 +9544,9 @@
         "vulkan": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9530,6 +9557,9 @@
         "webgl": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9540,6 +9570,9 @@
         "wgsl": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
