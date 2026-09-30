@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 from demos.integrations.mlx.portable_host.packages import ENTRIES
-from demos.integrations.mlx.portable_host.prepare import COMMIT
+from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
 
 UPSTREAM_TESTS = (
@@ -20,6 +20,13 @@ UPSTREAM_TESTS = (
     "test_ops.TestOps.test_arange_inferred_dtype",
     "test_ops.TestOps.test_arange_corner_cases_cast",
 )
+DTYPES = ("float32", "int32", "uint32", "int64", "uint64")
+COUNTS = (0, 1, 7, 257)
+NEGATIVE_CHECKS = {
+    "unsupported": "no GPU implementation",
+    "over-limit": "65535",
+    "missing": "artifact",
+}
 
 
 def save(path, payload):
@@ -57,11 +64,7 @@ def worker(args):
             mx.eval(value)
         except (ValueError, RuntimeError) as error:
             message = str(error)
-            expected = {
-                "unsupported": "no GPU implementation",
-                "over-limit": "65535",
-                "missing": "artifact",
-            }[args.worker]
+            expected = NEGATIVE_CHECKS[args.worker]
             if expected not in message:
                 raise
             save(output / "result.json", {"rejected": True, "message": message})
@@ -69,8 +72,8 @@ def worker(args):
         raise RuntimeError(f"{args.worker} unexpectedly executed")
 
     records = []
-    for dtype in ("float32", "int32", "uint32", "int64", "uint64"):
-        for count in (0, 1, 7, 257):
+    for dtype in DTYPES:
+        for count in COUNTS:
             expected = np.arange(2, 2 + 3 * count, 3, dtype=dtype)
             value = mx.arange(2, 2 + 3 * count, 3, dtype=getattr(mx, dtype))
             actual = np.array(value)
@@ -98,14 +101,32 @@ def worker(args):
     )
 
 
+def verify_results(result):
+    if (
+        type(result.get("tests")) is not int
+        or result["tests"] != len(UPSTREAM_TESTS)
+        or type(result.get("skipped")) is not int
+        or result["skipped"] != 0
+    ):
+        raise RuntimeError("Incomplete upstream test results")
+    expected = [
+        {"dtype": dtype, "count": count, "values": [2 + 3 * i for i in range(count)]}
+        for dtype in DTYPES
+        for count in COUNTS
+    ]
+    if result.get("arrays") != expected or any(
+        type(record["count"]) is not int
+        or any(type(value) not in {int, float} for value in record["values"])
+        for record in result["arrays"]
+    ):
+        raise RuntimeError("Incomplete or incorrect array readbacks")
+
+
 def verify(args):
     output = args.output_dir.resolve()
     output.mkdir(parents=True)
-    head = subprocess.check_output(
-        ["git", "-C", str(args.mlx_root), "rev-parse", "HEAD"], text=True, timeout=30
-    ).strip()
-    if head != COMMIT:
-        raise ValueError(f"Expected MLX {COMMIT}, got {head}")
+    adaptation = verify_prepared(args.mlx_root)
+    save(output / "adaptation-before.json", adaptation)
     test_path = args.mlx_root / "python/tests/test_ops.py"
     pristine = subprocess.check_output(
         ["git", "-C", str(args.mlx_root), "show", "HEAD:python/tests/test_ops.py"],
@@ -150,17 +171,42 @@ def verify(args):
         results[mode] = json.loads((output / mode / "result.json").read_text())
     if results["cpu"] != results["native"]:
         raise RuntimeError("Original CPU and translated GPU host results differ")
+    verify_results(results["cpu"])
+    verify_results(results["native"])
+    for mode, expected in NEGATIVE_CHECKS.items():
+        if (
+            results[mode].get("rejected") is not True
+            or not isinstance(results[mode].get("message"), str)
+            or expected not in results[mode]["message"]
+        ):
+            raise RuntimeError(f"Missing required rejection evidence: {mode}")
     trace = [
         json.loads(line)
         for line in (output / "native/dispatch.jsonl").read_text().splitlines()
     ]
     if {record["entry"] for record in trace} != set(ENTRIES):
         raise RuntimeError("Native trace does not cover every translated entry")
+    expected_dispatches = [
+        (f"arange{dtype}", count) for dtype in DTYPES for count in COUNTS if count
+    ]
+    if [(record["entry"], record.get("threads")) for record in trace][
+        : len(expected_dispatches)
+    ] != expected_dispatches or any(
+        type(record.get("threads")) is not int or not 1 <= record["threads"] <= 65535
+        for record in trace
+    ):
+        raise RuntimeError("Native trace has incomplete or invalid dispatch sizes")
     index = json.loads((args.packages / "index.json").read_text())
     if any(record["target"] != index["target"] for record in trace):
         raise RuntimeError("Native trace used an unexpected target")
+    after = verify_prepared(args.mlx_root)
+    save(output / "adaptation-after.json", after)
+    if after != adaptation or test_path.read_bytes() != pristine:
+        raise ValueError("MLX sources changed during execution")
     evidence = {
+        "schemaVersion": 2,
         "commit": COMMIT,
+        "adaptation": adaptation,
         "target": index["target"],
         "upstreamTestSha256": hashlib.sha256(pristine).hexdigest(),
         "upstreamTests": list(UPSTREAM_TESTS),

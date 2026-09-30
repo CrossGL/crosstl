@@ -20,11 +20,18 @@ def checkout(root, monkeypatch):
         "void Event::wait(Stream stream) {\n  cpu_wait();\n}\n"
         "void Event::signal(Stream stream) {\n  cpu_signal();\n}\n"
     )
-    monkeypatch.setattr(
-        prepare.subprocess,
-        "check_output",
-        lambda command, **kwargs: prepare.COMMIT if "rev-parse" in command else "",
-    )
+    originals = {path.name: path.read_bytes() for path in backend.iterdir()}
+
+    def git(command, **kwargs):
+        if "rev-parse" in command:
+            return prepare.COMMIT
+        if "show" in command:
+            return originals[command[-1].rsplit("/", 1)[-1]]
+        if "diff" in command:
+            return b"mlx/backend/no_gpu/CMakeLists.txt\0"
+        return ""
+
+    monkeypatch.setattr(prepare.subprocess, "check_output", git)
     return backend
 
 
@@ -47,6 +54,39 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
         assert (
             prepare.hashlib.sha256((tmp_path / name).read_bytes()).hexdigest() == digest
         )
+    assert prepare.verify_prepared(tmp_path) == record
+
+
+@pytest.mark.parametrize(
+    "fault", ["revision", "unrelated", "missing", "modified", "symlink"]
+)
+def test_prepared_verifier_rejects_source_changes(tmp_path, monkeypatch, fault):
+    backend = checkout(tmp_path, monkeypatch)
+    prepare.prepare(tmp_path, tmp_path / "adaptation.json")
+    original_git = prepare.subprocess.check_output
+
+    def git(command, **kwargs):
+        if fault == "revision" and "rev-parse" in command:
+            return "wrong"
+        if fault == "unrelated" and "diff" in command:
+            return (
+                b"mlx/backend/no_gpu/CMakeLists.txt\0mlx/backend/cpu/primitives.cpp\0"
+            )
+        return original_git(command, **kwargs)
+
+    monkeypatch.setattr(prepare.subprocess, "check_output", git)
+    source = backend / "crosstl_backend.cpp"
+    if fault == "missing":
+        source.unlink()
+    elif fault == "modified":
+        source.write_bytes(source.read_bytes() + b"\n// changed\n")
+    elif fault == "symlink":
+        is_symlink = Path.is_symlink
+        monkeypatch.setattr(
+            Path, "is_symlink", lambda path: path == source or is_symlink(path)
+        )
+    with pytest.raises(ValueError):
+        prepare.verify_prepared(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -288,7 +328,29 @@ def test_registration_retains_callback_and_uses_platform_library(
         host.install()
 
 
-@pytest.mark.parametrize("fault", [None, "command", "values", "trace", "target"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "command",
+        "values",
+        "trace",
+        "target",
+        "arrays",
+        "same-wrong-values",
+        "truncated-readback",
+        "wrong-dtype",
+        "boolean-count",
+        "tests",
+        "skipped",
+        "negative",
+        "negative-message",
+        "threads",
+        "duplicate",
+        "source-before",
+        "source-after",
+    ],
+)
 def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
     tmp_path, monkeypatch, fault
 ):
@@ -306,6 +368,17 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         ),
     )
     calls = []
+    identities = []
+
+    def prepared(root):
+        identities.append(root)
+        if fault == "source-before" or (
+            fault == "source-after" and len(identities) == 2
+        ):
+            raise ValueError("Prepared MLX source does not match")
+        return {"commit": prepare.COMMIT, "files": {"adapter": "unchanged"}}
+
+    monkeypatch.setattr(verify, "verify_prepared", prepared)
 
     def run(command, **kwargs):
         calls.append(command)
@@ -313,25 +386,62 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         mode = command[command.index("--worker") + 1]
         output = Path(command[-1])
         output.mkdir(parents=True)
-        result = {"tests": 3, "skipped": 0, "arrays": [1, 2, 3]}
+        arrays = [
+            {
+                "dtype": dtype,
+                "count": count,
+                "values": [2 + 3 * i for i in range(count)],
+            }
+            for dtype in verify.DTYPES
+            for count in verify.COUNTS
+        ]
+        result = {"tests": 3, "skipped": 0, "arrays": arrays}
+        if fault == "arrays":
+            result["arrays"] = arrays[:-1]
+        if fault == "same-wrong-values":
+            arrays[1]["values"] = [4]
+        if fault == "truncated-readback":
+            arrays[2]["values"].pop()
+        if fault == "wrong-dtype":
+            arrays[1]["dtype"] = "uint8"
+        if fault == "boolean-count":
+            arrays[1]["count"] = True
+        if fault == "tests":
+            result["tests"] = 0
+        if fault == "skipped":
+            result["skipped"] = 1
         if mode == "native":
             if fault == "values":
-                result["arrays"] = [1, 2, 4]
+                result["arrays"][1]["values"] = [4]
             entries = packages.ENTRIES[:-1] if fault == "trace" else packages.ENTRIES
-            (output / "dispatch.jsonl").write_text(
-                "\n".join(
-                    json.dumps(
-                        {
-                            "entry": entry,
-                            "target": "directx" if fault == "target" else "opengl",
-                        }
-                    )
-                    for entry in entries
-                )
-            )
+            trace = [
+                {
+                    "entry": entry,
+                    "target": "directx" if fault == "target" else "opengl",
+                    "threads": count,
+                }
+                for entry in entries
+                for count in (1, 7, 257)
+            ]
+            if fault == "threads":
+                trace[0]["threads"] = 0
+            if fault == "duplicate":
+                trace.insert(1, trace[0])
+            (output / "dispatch.jsonl").write_text("\n".join(map(json.dumps, trace)))
         verify.save(
             output / "result.json",
-            result if mode in {"cpu", "native"} else {"rejected": True},
+            (
+                result
+                if mode in {"cpu", "native"}
+                else {
+                    "rejected": fault != "negative",
+                    "message": (
+                        "unexpected"
+                        if fault == "negative-message"
+                        else verify.NEGATIVE_CHECKS[mode]
+                    ),
+                }
+            ),
         )
         return SimpleNamespace(returncode=124 if fault == "command" else 0)
 
@@ -342,9 +452,11 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         output_dir=tmp_path / "evidence",
     )
     if fault:
-        with pytest.raises(RuntimeError):
+        with pytest.raises((RuntimeError, ValueError)):
             verify.verify(args)
         assert not (args.output_dir / "evidence.json").exists()
+        if fault == "source-before":
+            assert calls == []
         if fault == "command":
             assert (
                 json.loads((args.output_dir / "cpu.command.json").read_text())[
@@ -354,7 +466,10 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             )
     else:
         evidence = verify.verify(args)
-        assert len(calls) == 5 and evidence["dispatchCount"] == 5
+        assert len(calls) == 5 and evidence["dispatchCount"] == 15
+        assert len(identities) == 2
+        assert evidence["schemaVersion"] == 2
+        assert evidence["adaptation"]["files"] == {"adapter": "unchanged"}
         assert evidence["fullUpstreamSuite"] is False
         assert evidence["fullTranslatedBackend"] is False
         assert evidence["original"] == evidence["translated"]
