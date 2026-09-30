@@ -131,7 +131,7 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1583
+        "test_count": 1585
       },
       "translator_codegen": {
         "exists": true,
@@ -263,7 +263,7 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1817
+        "test_count": 1819
       },
       "translator_codegen": {
         "exists": true,
@@ -541,7 +541,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 589,
+        "unsupported_marker_count": 590,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -640,7 +640,7 @@
           "tests/test_translator/test_mlx_current_unary_fma.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1937
+        "test_count": 1951
       },
       "translator_codegen": {
         "exists": true,

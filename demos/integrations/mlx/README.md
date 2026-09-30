@@ -854,15 +854,23 @@ the MLX host runtime, or run the upstream MLX test suite on OpenGL.
 
 ## Current Translator Gaps
 
-The current-pin gated-delta backward kernels remain blocked by constrained
-aggregate selection ([#1985](https://github.com/CrossGL/crosstl/issues/1985)) and
-floating-point atomic lowering ([#1986](https://github.com/CrossGL/crosstl/issues/1986)).
-The `mlx_atomic<float>` specialization must retain floating-point atomic storage;
-selecting its unsigned-integer primary can produce HLSL that compiles but performs
-the wrong operation. Translation rejects an unproven constrained specialization
-rather than treating compilation as correctness. Parameter inference and named
-Boolean free-function constraints are covered separately by native regression
-tests; they do not establish complete gated-delta execution.
+The current-pin gated-delta backward kernels remain blocked by floating-point
+atomic lowering ([#1986](https://github.com/CrossGL/crosstl/issues/1986)). Struct
+selection now preserves anonymous type-parameter defaults and evaluates supported
+`enable_if` partial specializations ([#1985](https://github.com/CrossGL/crosstl/issues/1985)).
+The selected `seq_gated_delta_vjp_float_128_128_24_24_1` entry retains the floating
+field in `mlx_atomic<float>`, but its generated atomic operations still fail native
+compilation. This is not an executable gated-delta port.
+
+Unknown predicates, unresolved constraint result types and multiple viable
+constrained partials produce diagnostics instead of selecting a primary
+declaration with a different layout. Ordering multiple viable partials remains
+tracked in [#1987](https://github.com/CrossGL/crosstl/issues/1987). Native
+regression tests require 194 exact readback words distinguishing fractional and
+integer fields; the same tests run on Windows/DirectX, Linux/OpenGL and
+macOS/Metal, with original-source controls on macOS. Parameter inference and named
+Boolean free-function constraints have separate native checks. These reduced
+tests do not establish complete gated-delta execution or full MLX backend support.
 
 The latest full-corpus scout at MLX commit
 `4367c73b60541ddd5a266ce4644fd93d20223b6e` discovered 40 Metal units, 841

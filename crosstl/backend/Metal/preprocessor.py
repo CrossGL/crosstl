@@ -21300,8 +21300,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                 re.DOTALL,
             )
             parameter_text = code[angle_start + 1 : angle_end]
-            parameters = self._template_parameter_names(parameter_text)
-            if header_match is None or not parameters:
+            parameter_records = self._parse_template_parameter_list(parameter_text)
+            if header_match is None or not parameter_records:
                 pos = declaration_start
                 continue
 
@@ -21315,27 +21315,42 @@ class MetalPreprocessor(HLSLPreprocessor):
                 pos = body_start + 1
                 continue
 
+            parameters = []
+            defaults = {}
+            declared_types = {}
+            variadic_parameters = set()
+            used_names = set(IDENTIFIER_RE.findall(code[angle_start + 1 : body_end]))
+            for index, parameter in enumerate(parameter_records):
+                name = parameter.name
+                if name is None and parameter.is_type_parameter:
+                    # Anonymous type parameters still occupy an argument slot.
+                    # Give only the materializer an identity for their defaults.
+                    name = f"crosstl_unnamed_type_{index}"
+                    while name in used_names:
+                        name += "_"
+                    used_names.add(name)
+                if name is None:
+                    continue
+                parameters.append(name)
+                if parameter.default is not None:
+                    defaults[name] = parameter.default
+                if parameter.declared_type is not None:
+                    declared_types[name] = parameter.declared_type
+                if parameter.is_variadic:
+                    variadic_parameters.add(name)
+            if not parameters:
+                pos = declaration_start
+                continue
+
             structs.append(
                 _MetalTemplateStruct(
                     name=header_match.group("name").split("::")[-1],
                     template_parameters=parameters,
                     span=(start, body_end),
                     source=code[declaration_start:body_end],
-                    variadic_template_parameters=(
-                        self._variadic_template_parameter_names(parameter_text)
-                    ),
-                    template_parameter_defaults=(
-                        self._template_parameter_defaults(parameter_text)
-                    ),
-                    template_parameter_types={
-                        parameter.name: parameter.declared_type
-                        for parameter in self._parse_template_parameter_list(
-                            parameter_text
-                        )
-                        if parameter.name is not None
-                        and not parameter.is_type_parameter
-                        and parameter.declared_type is not None
-                    },
+                    variadic_template_parameters=variadic_parameters,
+                    template_parameter_defaults=defaults,
+                    template_parameter_types=declared_types,
                     template_type_traits=template_type_traits,
                     namespace=self._namespace_at(namespace_spans, start),
                 )
@@ -22546,6 +22561,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                         partial_match_type_aliases,
                         concrete_structs,
                         i,
+                        source_code=code,
                         allow_unqualified_remove_cv_t=(allow_unqualified_remove_cv_t),
                     )
                     for argument in template_arguments
@@ -22608,18 +22624,34 @@ class MetalPreprocessor(HLSLPreprocessor):
                         partial_template,
                         canonical_specialization_arguments,
                         partial_match_arguments,
+                        code=code,
+                        position=i,
                     ):
                         continue
                     bindings = self._partial_struct_specialization_bindings(
                         partial_template,
                         canonical_specialization_arguments,
                         partial_match_arguments,
+                        code=code,
+                        position=i,
                     )
                     if bindings is None:
                         has_unmaterializable_partial = True
                     else:
                         matching_partials.append((partial_template, bindings))
+                self._require_unique_constrained_struct_partial(
+                    ident, resolved_arguments, matching_partials
+                )
                 if matching_partials or has_unmaterializable_partial:
+                    resolved_constraint = len(matching_partials) == 1 and any(
+                        re.search(r"\benable_if(?:_t)?\s*<", argument)
+                        for argument in (
+                            self._template_struct_specialization_arguments(
+                                matching_partials[0][0]
+                            )
+                            or []
+                        )
+                    )
                     qualified_start = angle_end + 1
                     while (
                         qualified_start < len(code) and code[qualified_start].isspace()
@@ -22630,6 +22662,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                         (
                             not qualified_member_owner
                             and not allow_partial_object_specializations
+                            and not resolved_constraint
                         )
                         or has_unmaterializable_partial
                         or len(matching_partials) != 1
@@ -22675,6 +22708,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         concrete_structs: List[_MetalStructDefinition],
         source_position: int,
         *,
+        source_code: str,
         allow_unqualified_remove_cv_t: bool = False,
     ) -> str:
         resolved = self._normalize_template_argument_text(type_text)
@@ -22758,17 +22792,24 @@ class MetalPreprocessor(HLSLPreprocessor):
                         partial_template,
                         canonical_specialization_arguments,
                         partial_match_arguments,
+                        code=source_code,
+                        position=source_position,
                     ):
                         continue
                     bindings = self._partial_struct_specialization_bindings(
                         partial_template,
                         canonical_specialization_arguments,
                         partial_match_arguments,
+                        code=source_code,
+                        position=source_position,
                     )
                     if bindings is None:
                         has_unmaterializable_partial = True
                     else:
                         matching_partials.append((partial_template, bindings))
+                self._require_unique_constrained_struct_partial(
+                    name, arguments, matching_partials
+                )
                 if has_unmaterializable_partial or len(matching_partials) > 1:
                     position = angle_start + 1
                     continue
@@ -22972,6 +23013,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         template: _MetalTemplateStruct,
         specialization_arguments: List[str],
         concrete_arguments: List[str],
+        *,
+        code: str,
+        position: int,
     ) -> bool:
         parameter_names = set(template.template_parameters)
         if template.variadic_template_parameters:
@@ -22986,6 +23030,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                 template,
                 specialization_arguments,
                 concrete_arguments,
+                code=code,
+                position=position,
             )
             is not None
         )
@@ -23017,6 +23063,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         template: _MetalTemplateStruct,
         specialization_arguments: List[str],
         concrete_arguments: List[str],
+        *,
+        code: str,
+        position: int,
     ) -> Optional[Dict[str, str]]:
         if template.variadic_template_parameters:
             return None
@@ -23069,7 +23118,26 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
             ):
                 return None
-        if constrained_arguments:
+        for pattern, argument in constrained_arguments:
+            try:
+                result_type = self._constrained_partial_struct_argument(
+                    pattern, bindings, template, code, position
+                )
+            except self._UnrecognizedConstraint:
+                pass
+            else:
+                if result_type is None:
+                    return None
+                normalized_result = (
+                    self._canonicalize_partial_struct_specialization_argument(
+                        result_type
+                    )
+                )
+                if normalized_result != (
+                    self._canonicalize_partial_struct_specialization_argument(argument)
+                ):
+                    return None
+                continue
             signature = self._template_specialization_signature(
                 template.name, concrete_arguments
             )
@@ -23081,13 +23149,103 @@ class MetalPreprocessor(HLSLPreprocessor):
                 requested_arguments=tuple(concrete_arguments),
                 callee_template=template.name,
                 suggested_action=(
-                    "provide an explicit concrete struct specialization until "
-                    "constrained partial struct selection is supported"
+                    "use a supported enable_if predicate and concrete result type, "
+                    "or provide an explicit concrete struct specialization"
                 ),
             )
         if not parameter_names <= set(bindings):
             return None
         return bindings
+
+    def _require_unique_constrained_struct_partial(
+        self,
+        name: str,
+        arguments: List[str],
+        matches: List[Tuple[_MetalTemplateStruct, Dict[str, str]]],
+    ) -> None:
+        if len(matches) < 2 or not any(
+            re.search(r"\benable_if(?:_t)?\s*<", argument)
+            for template, _bindings in matches
+            for argument in (
+                self._template_struct_specialization_arguments(template) or []
+            )
+        ):
+            return
+        signature = self._template_specialization_signature(name, arguments)
+        raise MetalTemplateSpecializationError(
+            f"Metal struct specialization '{signature}' has multiple viable partial "
+            "specializations whose ordering is not supported. Selecting its primary "
+            "declaration could change the field types or storage layout.",
+            requested_signature=signature,
+            requested_arguments=tuple(arguments),
+            callee_template=name,
+            suggested_action=(
+                "provide an explicit concrete specialization until partial "
+                "specialization ordering is supported"
+            ),
+        )
+
+    def _constrained_partial_struct_argument(
+        self,
+        pattern: str,
+        bindings: Dict[str, str],
+        template: _MetalTemplateStruct,
+        code: str,
+        position: int,
+    ) -> Optional[str]:
+        match = re.match(
+            r"^\s*(?:typename\s+)?(?:metal\s*::\s*)?enable_if(?P<alias>_t)?\s*<",
+            pattern,
+        )
+        if match is None:
+            raise self._UnrecognizedConstraint(pattern)
+        start = match.end() - 1
+        end = self._find_matching_template_param_angle(pattern, start)
+        if end is None:
+            raise self._UnrecognizedConstraint(pattern)
+        suffix = pattern[end + 1 :].strip()
+        if (match.group("alias") and suffix) or (
+            not match.group("alias") and not re.fullmatch(r"::\s*type", suffix)
+        ):
+            raise self._UnrecognizedConstraint(pattern)
+        arguments = self._split_template_parameter_list(pattern[start + 1 : end])
+        if not 1 <= len(arguments) <= 2:
+            raise self._UnrecognizedConstraint(pattern)
+        aliases = self._collect_local_type_alias_bindings(
+            code,
+            [(0, len(code))],
+            skip_spans=self._find_template_declaration_spans(code),
+        )
+        structs = self._find_concrete_struct_definitions(code)
+        if not self._evaluate_boolean_constraint(
+            arguments[0],
+            bindings,
+            structs=structs,
+            type_aliases=aliases,
+            position=position,
+            boolean_templates=self._find_boolean_variable_templates(code),
+            namespace_visibility=self._metal_namespace_visibility(code),
+            lookup_position=template.span[0],
+        ):
+            return None
+        result = self._replace_identifiers(
+            arguments[1] if len(arguments) == 2 else "void", bindings
+        )
+        result = self._resolve_type_aliases_at(result, aliases, template.span[0])
+        result = self._canonicalize_qualified_struct_type_aliases(result, structs)
+        result = self._canonicalize_metal_standard_type_aliases(
+            result,
+            allow_unqualified_remove_cv_t=self._metal_unqualified_remove_cv_t_available(
+                code
+            ),
+        )
+        if not self._type_trait_operand_is_concrete(
+            result,
+            self._concrete_type_trait_names(code, structs),
+            allow_unknown_named_types=False,
+        ):
+            raise self._UnrecognizedConstraint(pattern)
+        return result
 
     def _canonicalize_partial_struct_specialization_argument(
         self,
@@ -25321,17 +25479,16 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             if tokens[0] in {"typename", "class"}:
                 # `typename T` / `class T` (optionally `typename...`). A trailing
-                # name is the bindable parameter; a bare `typename` with no name
-                # is anonymous and unbindable (skip — nothing to bind).
-                if len(tokens) >= 2:
-                    records.append(
-                        _TemplateParameter(
-                            name=tokens[-1],
-                            is_type_parameter=True,
-                            is_variadic=is_variadic,
-                            default=default,
-                        )
+                # name is bindable. Retain anonymous parameters so struct
+                # specialization can preserve their position and default.
+                records.append(
+                    _TemplateParameter(
+                        name=tokens[-1] if len(tokens) >= 2 else None,
+                        is_type_parameter=True,
+                        is_variadic=is_variadic,
+                        default=default,
                     )
+                )
                 continue
             # A non-type parameter. If its declarator ends in a bindable name
             # (`int N`) keep it as a (non-type) bindable parameter; otherwise it

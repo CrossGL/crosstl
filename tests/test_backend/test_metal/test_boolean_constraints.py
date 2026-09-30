@@ -232,7 +232,7 @@ def test_named_boolean_predicate_resolves_alias_at_its_declaration():
 
 
 @pytest.mark.parametrize(
-    "pattern", ["enable_if_t<accepts<T>>", "enable_if_t<is_same_v<T, float>>"]
+    "pattern", ["enable_if_t<missing<T>>", "enable_if_t<unknown(T(0))>"]
 )
 def test_unproven_constrained_struct_specialization_does_not_select_primary(pattern):
     source = f"""
@@ -248,7 +248,7 @@ def test_unproven_constrained_struct_specialization_does_not_select_primary(patt
     ) as error:
         MetalPreprocessor().preprocess(source)
     assert error.value.callee_template == "Cell"
-    assert error.value.requested_arguments == ("float",)
+    assert error.value.requested_arguments == ("float", "void")
     assert error.value.suggested_action
 
 

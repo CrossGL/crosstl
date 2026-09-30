@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import struct
 import sys
 from contextlib import contextmanager
 from dataclasses import replace
@@ -18,6 +19,97 @@ from tests.test_translator.test_fused_math import _dispatch
 from tests.test_translator.test_metal_builtin_ownership import _compile
 
 REQUIRE_ENV = "CROSTL_REQUIRE_METAL_ARGUMENT_INFERENCE"
+
+
+def constrained_struct_source():
+    return """#include <metal_stdlib>
+    using namespace metal;
+    template <typename T> constexpr constant bool accepts = is_same_v<T, float>;
+    template <typename T, typename = void> struct Cell { uint value; };
+    template <typename T> struct Cell<T, enable_if_t<accepts<T>>> { float value; };
+    kernel void select_storage(device const uint* values [[buffer(0)]],
+                               device uint* results [[buffer(1)]],
+                               uint tid [[thread_position_in_grid]]) {
+        Cell<float> fractional;
+        fractional.value = float(values[tid * 3]) + 0.5f;
+        Cell<uint> integral;
+        integral.value = values[tid * 3] + 2u;
+        results[tid * 2] = as_type<uint>(fractional.value);
+        results[tid * 2 + 1] = integral.value;
+    }
+    """
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl", "metal"])
+def test_project_constrained_struct_preserves_both_storage_types(tmp_path, target):
+    path = tmp_path / "kernel.metal"
+    path.write_text(constrained_struct_source(), encoding="utf-8")
+    report = translate_project(
+        ProjectConfig(
+            root=tmp_path,
+            targets=(target,),
+            include_patterns=(path.name,),
+            entry_points={path.name: ("select_storage",)},
+            workgroup_size=(1, 1, 1),
+            output_dir="out",
+        ),
+        format_output=False,
+    ).to_json()
+    assert report["diagnostics"] == []
+    assert report["summary"]["translatedCount"] == 1
+    generated = (tmp_path / report["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert "struct Cell_float_void {\n    float value;" in generated
+    assert "struct Cell_uint {\n    uint value;" in generated
+
+
+@pytest.mark.parametrize("original", [False, True])
+def test_constrained_structs_execute_with_selected_storage(tmp_path, original):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for native argument inference checks")
+    if original and sys.platform != "darwin":
+        pytest.skip("The original Metal control requires macOS")
+    target = {"win32": "directx", "linux": "opengl", "darwin": "metal"}[sys.platform]
+    source = constrained_struct_source()
+    path = tmp_path / "kernel.metal"
+    path.write_text(source, encoding="utf-8")
+    if not original:
+        report = translate_project(
+            ProjectConfig(
+                root=tmp_path,
+                targets=(target,),
+                include_patterns=(path.name,),
+                entry_points={path.name: ("select_storage",)},
+                workgroup_size=(1, 1, 1),
+                output_dir="out",
+            ),
+            format_output=False,
+        )
+        report.write_json(tmp_path / "report.json")
+        payload = report.to_json()
+        assert payload["diagnostics"] == []
+        assert payload["summary"]["translatedCount"] == 1
+        source = (tmp_path / payload["artifacts"][0]["path"]).read_text(
+            encoding="utf-8"
+        )
+    inputs = [(value, 0, 0) for value in range(97)]
+    expected = [
+        word
+        for value in range(97)
+        for word in (struct.unpack("<I", struct.pack("<f", value + 0.5))[0], value + 2)
+    ]
+    actual, evidence = _dispatch(
+        tmp_path,
+        target,
+        source,
+        inputs,
+        len(expected),
+        entry="select_storage" if target == "metal" else None,
+    )
+    evidence.update(original=original, expected=expected, actual=actual)
+    (tmp_path / "evidence.json").write_text(
+        json.dumps(evidence, indent=2), encoding="utf-8"
+    )
+    assert actual == expected
 
 
 @pytest.mark.parametrize("original", [False, True])
