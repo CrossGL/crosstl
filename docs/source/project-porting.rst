@@ -702,6 +702,32 @@ close complete discovered-unary translation, reflection, and native compiler
 coverage on both targets; they do not claim numerical execution, MLX host
 runtime redirection, or MLX test-suite parity.
 
+**Fused arithmetic reference.**
+
+``crosstl.translator.fused_math`` provides an internal binary32 fused
+multiply-add helper expressed with pairs of 32-bit unsigned words. It rounds
+the exact product plus addend once, to nearest with ties to even, without
+requiring 64-bit integers or double precision. It supports gradual underflow
+or explicit signed-zero flushing of subnormal inputs and results before
+rounding. NaNs are canonicalized; payloads and floating-point exception flags
+are not represented. Generated artifacts retain the Berkeley SoftFloat license
+for the adapted arithmetic.
+
+Required Windows/DirectX, Linux/OpenGL and macOS/Metal checks execute both
+policies against an independent integer oracle. Evidence includes the input
+bits, expected bits, readbacks, generated source, native modules and runtime
+diagnostics. The macOS source control separately compares default and precise
+Metal ``fma`` against the flush-before-rounding policy. This is a selected
+profile check, not a claim that every Metal device or compilation mode uses
+that policy: the Metal language permits different rounding and subnormal
+behavior.
+
+This helper does not yet replace translated source ``fma`` calls. Enabling it
+requires native Windows evidence, source-profile selection and refreshed
+affected artifact contracts. In particular, the numerical failures tracked in
+`issue #1962 <https://github.com/CrossGL/crosstl/issues/1962>`_ remain open;
+compiler acceptance alone does not establish fused rounding or MLX parity.
+
 The legacy MLX copy reference at
 ``846d176227a0ac13d2667e58d2bb68b322109ab0`` proves all 2,496 discovered entries
 from ``copy.metal`` through Metal-to-CrossGL-to-Metal translation. The family

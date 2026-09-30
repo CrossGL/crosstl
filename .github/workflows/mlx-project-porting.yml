@@ -28,6 +28,7 @@ on:
       - "tests/test_translator/test_opengl_metal_math.py"
       - "tests/test_translator/test_metal_precise_asin.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
+      - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_struct_buffer_layouts.py"
       - "tests/test_translator/test_buffer_requirements.py"
       - "tests/test_translator/test_mlx_current_complex_power.py"
@@ -110,6 +111,7 @@ on:
       - "tests/test_translator/test_opengl_metal_math.py"
       - "tests/test_translator/test_metal_precise_asin.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
+      - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_struct_buffer_layouts.py"
       - "tests/test_translator/test_buffer_requirements.py"
       - "tests/test_translator/test_mlx_current_complex_power.py"
@@ -487,6 +489,32 @@ jobs:
           git -C mlx-upstream sparse-checkout init --cone
           git -C mlx-upstream sparse-checkout set mlx/backend/metal/kernels
           git -C mlx-upstream checkout "$MLX_COMMIT"
+
+      - name: Validate binary32 fused arithmetic
+        shell: bash
+        env:
+          CROSTL_REQUIRE_FUSED_MATH: "1"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+          EGL_PLATFORM: surfaceless
+        run: |
+          set -euo pipefail
+          mkdir -p fused-math-results
+          python tools/run_bounded_command.py \
+            --label "binary32 fused arithmetic" --timeout-seconds 120 -- \
+            python -m pytest -q -n auto \
+              --basetemp="fused-math-results/pytest" \
+              --junitxml="fused-math-results/results.xml" \
+              tests/test_translator/test_fused_math.py
+
+      - name: Upload binary32 fused arithmetic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary32-fused-arithmetic-${{ runner.os }}
+          path: fused-math-results
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Checkout current MLX runtime proof corpus
         shell: bash
