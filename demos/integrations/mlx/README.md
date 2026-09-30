@@ -23,11 +23,15 @@ This is a 24/17,478 deterministic translation and native-compiler increment with
 test-suite execution, or MLX host-runtime redirection.
 
 A separate native gate exercises all 15 discovered `Powercomplex64` entry
-shapes at the same `d9add9d` pin. Its 291 complex outputs cover scalar/vector
+shapes at the same `d9add9d` pin. Its 873 complex outputs cover scalar/vector
 broadcasting, multidimensional grids, non-contiguous inputs, zero strides,
 32/64-bit index variants, and partial final tiles in four-dimensional gathers.
+Every shape retains its random cases and tests both signed-zero sides of the
+negative-real branch cut with a half exponent, using the same error bound.
+Inputs and readbacks are retained separately for all three datasets.
 DirectX and OpenGL use the public runtime-package and native-loader APIs.
-Metal executes both the original source and generated kernels. Each output is
+Metal executes the original source, generated kernels and public runtime package
+for every dataset, retaining 873 comparisons on each path. Each output is
 checked against an independently indexed CPU reference; required CI retains
 the compiler logs, packages, bindings and numerical results. The OpenGL
 index-range assertions are bounded fixture preconditions, not general runtime

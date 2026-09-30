@@ -377,6 +377,13 @@ dynamic host names are not converted into entries. Locations currently use
 the ``preprocessed-source`` coordinate space, which is recorded explicitly in
 the report.
 
+Comment and literal exclusions use the preprocessor's bounded interval index,
+shared within a discovery call. Repeated candidate lookups do not rescan the
+entire exclusion list. Each call creates its own preprocessor, so changed
+includes, defines and source options cannot reuse indexes from an earlier
+discovery. Entry metadata and unresolved-name diagnostics retain the same
+half-open source-range semantics.
+
 The public ``ProjectScan.discovered_entry_points()`` method returns a
 repository-relative mapping compatible with ``ProjectConfig.entry_points``:
 
@@ -664,6 +671,33 @@ calls when a same-named source overload makes ownership unresolved. A bounded Wi
 requires DXC compilation and Direct3D readbacks for finite values, NaNs,
 infinities, vector selection, and eager evaluation. This isolated arithmetic
 check does not establish whole-MLX numerical or host-runtime coverage.
+
+Canonical ``atan2(y, x)`` uses typed HLSL helpers to retain the sign of zero
+when selecting a quadrant. The helpers also handle both-infinite operands,
+signed axis angles, and NaNs explicitly; ordinary finite values still use the
+native HLSL approximation. Float scalar/vector operands are supported, with
+explicit promotion and narrowing for half/minimum-precision forms and the
+existing scalar bfloat decode/encode path. Arguments are evaluated once.
+Unknown, mismatched or unsupported operand types and shadowed target intrinsics
+fail closed. Source-defined overloads retain their behavior, and HLSL-to-HLSL
+``atan2`` round trips remain native. This is not a general subnormal or
+transcendental-accuracy contract.
+
+A bounded Windows readback test checks 209 operand pairs through scalar and
+vector calls, including raw-bit and float-upload echoes, signed zeros,
+infinities and NaNs. macOS executes the unchanged Metal source with fast math
+disabled as a control; fast-math compilation may ignore signed zeros and
+non-finite values. The pinned MLX complex-power test separately retains its
+existing numerical reference and error bound; passing an isolated angular
+test does not replace that end-to-end proof.
+
+The frozen binary and unary HLSL contracts at MLX revision
+``846d176227a0ac13d2667e58d2bb68b322109ab0`` retain their source pins,
+entry classifications, materialization counts and interfaces. The angular
+lowering changes 84 binary and 28 complex-unary artifact identities; each
+changed entry is recompiled with DXC and warnings fatal before refreshing its
+fingerprint. The other 4,887 identities remain unchanged. This historical
+contract refresh is separate from current-revision MLX runtime coverage.
 
 OpenGL also lowers canonical ``fabs``, ``fmin``, ``fmax``, and Boolean
 ``select`` for desktop GLSL 4.00 and later. Floating min/max helpers explicitly
@@ -2112,15 +2146,22 @@ missed writes. This proves the selected kernel and layout path, not full binary
 family coverage, upstream MLX-suite execution, or MLX host-runtime redirection.
 
 The separate binary-shape gate discovers and executes every one of the 15
-``Powercomplex64`` entry shapes at that pin. Its 291 complex outputs exercise
+``Powercomplex64`` entry shapes at that pin. Its 873 complex outputs exercise
 scalar/vector broadcasting, two- and three-dimensional dispatch, non-contiguous
 storage, zero strides, 32/64-bit index paths and partial final tiles in
-four-dimensional gathers. Expected input locations are enumerated from logical
+four-dimensional gathers. Each shape retains its random workload and adds two
+branch-cut workloads: negative-real bases with positive or negative imaginary
+zero, raised to the power one half. Each dataset retains its own inputs and
+readback evidence, without weakening the complex-error bound above.
+Expected input locations are enumerated from logical
 coordinates and strides independently of the shader's index helpers. Metal
 executes original and translated kernels and separately consumes the public
-runtime package, as DirectX and OpenGL do. DirectX also compiles with warnings
-fatal, and OpenGL
-validates a generated SPIR-V 1.3 module before native GLSL execution.
+runtime package, as DirectX and OpenGL do. All three Metal paths execute each
+dataset, retaining 873 comparisons per path. Package construction happens once
+per entry; each dataset still receives fresh buffers, artifact identity checks,
+native compilation and its own device/library/dispatch evidence. DirectX also
+compiles with warnings fatal, and OpenGL validates a generated SPIR-V 1.3 module
+before native GLSL execution.
 
 The gate rejects a changed source census, missing native tools, missing entry
 outputs and numerical mismatches. OpenGL's explicit ``[0, 511]`` index-range
