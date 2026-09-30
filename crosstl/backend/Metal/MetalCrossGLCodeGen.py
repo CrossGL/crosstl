@@ -7,6 +7,7 @@ from ...translator.cooperative_matrix import (
     get_cooperative_matrix_fragment_mapping,
     has_cooperative_matrix_fragment_mapping,
 )
+from ...translator.fused_math import FMA_HELPER_KEYS, binary32_fma_support
 from ...translator.standard_constants import standard_math_constant
 from .MetalAst import *
 from .MetalLexer import *
@@ -1102,7 +1103,13 @@ class MetalToCrossGLConverter:
         cooperative_matrix_fragment_mapping_provenance=None,
         preserve_pointer_pointee_const=True,
         resolve_standard_remove_cv_aliases=True,
+        binary32_fma_profile=None,
     ):
+        if binary32_fma_profile not in (None, "rne-gradual", "rne-flush"):
+            raise ValueError(
+                "binary32_fma_profile must be 'rne-gradual', 'rne-flush', or None"
+            )
+        self.binary32_fma_profile = binary32_fma_profile
         if not isinstance(preserve_pointer_pointee_const, bool):
             raise ValueError("preserve_pointer_pointee_const must be a boolean")
         self.preserve_pointer_pointee_const = preserve_pointer_pointee_const
@@ -1496,6 +1503,7 @@ class MetalToCrossGLConverter:
         self.metal_precise_math_helper_names = {}
         self.required_metal_precise_acos_widths = set()
         self.required_metal_precise_asin_widths = set()
+        self.required_metal_fma_widths = set()
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
         self.cooperative_matrix_fragment_type_contracts = {}
@@ -2612,6 +2620,7 @@ class MetalToCrossGLConverter:
         self.metal_precise_math_helper_names = {}
         self.required_metal_precise_acos_widths = set()
         self.required_metal_precise_asin_widths = set()
+        self.required_metal_fma_widths = set()
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
         self.cooperative_matrix_fragment_type_contracts = {}
@@ -3039,7 +3048,8 @@ class MetalToCrossGLConverter:
         )
         code = code.replace(
             precise_math_support_marker,
-            self.generate_metal_precise_math_support_code(indent=1),
+            self.generate_metal_fma_support_code(indent=1)
+            + self.generate_metal_precise_math_support_code(indent=1),
             1,
         )
         code = code.replace(
@@ -10492,6 +10502,9 @@ class MetalToCrossGLConverter:
             )
             if materialized_wave_call is not None:
                 return materialized_wave_call
+            fused_call = self.generate_metal_fma_call(expr, is_main)
+            if fused_call is not None:
+                return fused_call
             if self.resolve_metal_math_builtin_name(expr.name, expr.args) == "copysign":
                 self.metal_math_builtin_result_type(expr)
             materialized_name = self.transported_metal_source_overload_name(
@@ -13145,6 +13158,67 @@ class MetalToCrossGLConverter:
             return self.metal_precise_asin_helper_name(width)
         self.required_metal_precise_acos_widths.add(width)
         return self.metal_precise_acos_helper_name(width)
+
+    def generate_metal_fma_call(self, expression, is_main=False):
+        if (
+            self.binary32_fma_profile is None
+            or self.metal_math_builtin_namespace_mode(expression.name) == "fast"
+            or self.resolve_metal_math_builtin_name(expression.name, expression.args)
+            != "fma"
+        ):
+            return None
+        result_type = self.metal_math_builtin_result_type(expression)
+        info = self.metal_math_builtin_type_info(result_type)
+        if (
+            info is None
+            or self.normalized_metal_type(info["element_type"]) != "float"
+            or info["width"] not in {1, 2, 3, 4}
+        ):
+            return None
+        width = info["width"]
+        self.required_metal_fma_widths.add(width)
+        mapped_type = "float" if width == 1 else f"vec{width}"
+        arguments = ", ".join(
+            f"{mapped_type}({self.generate_expression(argument, is_main)})"
+            for argument in expression.args
+        )
+        return f"{self.metal_fma_helper_name(width)}({arguments})"
+
+    def metal_fma_helper_name(self, width):
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            f"fma-float{suffix}", f"__crossgl_metal_fma_float{suffix}"
+        )
+
+    def generate_metal_fma_support_code(self, indent=0):
+        if not self.required_metal_fma_widths:
+            return ""
+        names = {
+            key: self.metal_precise_math_unique_helper_name(
+                f"fma-{key}", f"__crossgl_fma_{key}"
+            )
+            for key in FMA_HELPER_KEYS
+        }
+        scalar = self.metal_fma_helper_name(1)
+        flush = "true" if self.binary32_fma_profile == "rne-flush" else "false"
+        code = binary32_fma_support(names)
+        code += (
+            f"@metal_static\nfloat {scalar}(float a, float b, float c) {{\n"
+            f"    return asfloat({names['bits']}(asuint(a), asuint(b), asuint(c), {flush}));\n"
+            "}\n"
+        )
+        for width in sorted(self.required_metal_fma_widths - {1}):
+            vector = self.metal_fma_helper_name(width)
+            arguments = ", ".join(
+                f"{scalar}(a.{lane}, b.{lane}, c.{lane})" for lane in "xyzw"[:width]
+            )
+            code += (
+                f"@metal_static\nvec{width} {vector}(vec{width} a, vec{width} b, vec{width} c) {{\n"
+                f"    return vec{width}({arguments});\n"
+                "}\n"
+            )
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
 
     def metal_precise_math_unique_helper_name(self, key, base_name):
         existing = self.metal_precise_math_helper_names.get(key)

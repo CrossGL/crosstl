@@ -377,6 +377,13 @@ dynamic host names are not converted into entries. Locations currently use
 the ``preprocessed-source`` coordinate space, which is recorded explicitly in
 the report.
 
+Comment and literal exclusions use the preprocessor's bounded interval index,
+shared within a discovery call. Repeated candidate lookups do not rescan the
+entire exclusion list. Each call creates its own preprocessor, so changed
+includes, defines and source options cannot reuse indexes from an earlier
+discovery. Entry metadata and unresolved-name diagnostics retain the same
+half-open source-range semantics.
+
 The public ``ProjectScan.discovered_entry_points()`` method returns a
 repository-relative mapping compatible with ``ProjectConfig.entry_points``:
 
@@ -665,6 +672,38 @@ requires DXC compilation and Direct3D readbacks for finite values, NaNs,
 infinities, vector selection, and eager evaluation. This isolated arithmetic
 check does not establish whole-MLX numerical or host-runtime coverage.
 
+Canonical ``atan2(y, x)`` uses typed HLSL helpers to retain the sign of zero
+when selecting a quadrant. The helpers also handle both-infinite operands,
+signed axis angles, and NaNs explicitly. Finite angles use exponent-scaled
+significands and a range-reduced polynomial instead of the target intrinsic;
+``precise`` intermediates preserve the polynomial evaluation order. Float
+scalar/vector operands are supported, with
+explicit promotion and narrowing for half/minimum-precision forms and the
+existing scalar bfloat decode/encode path. Arguments are evaluated once.
+Unknown, mismatched or unsupported operand types and shadowed target intrinsics
+fail closed. Source-defined overloads retain their behavior, and HLSL-to-HLSL
+``atan2`` round trips remain native. This is not a general subnormal or
+transcendental-accuracy contract.
+
+A bounded Windows readback test checks 1,121 operand pairs through scalar and
+vector calls, including raw-bit and float-upload echoes, signed zeros,
+infinities, NaNs, extreme normal exponents, all quadrants and range-reduction
+boundaries. Finite results must stay within the unchanged absolute error
+bound of ``2e-6``; signed axis and infinite angles retain exact bit checks.
+macOS executes the unchanged Metal source with fast math
+disabled as a control; fast-math compilation may ignore signed zeros and
+non-finite values. The pinned MLX complex-power test separately retains its
+existing numerical reference and error bound; passing an isolated angular
+test does not replace that end-to-end proof.
+
+The frozen binary and unary HLSL contracts at MLX revision
+``846d176227a0ac13d2667e58d2bb68b322109ab0`` retain their source pins,
+entry classifications, materialization counts and interfaces. The angular
+lowering changes 84 binary and 28 complex-unary artifact identities; each
+changed entry is recompiled with DXC and warnings fatal before refreshing its
+fingerprint. The other 4,887 identities remain unchanged. This historical
+contract refresh is separate from current-revision MLX runtime coverage.
+
 OpenGL also lowers canonical ``fabs``, ``fmin``, ``fmax``, and Boolean
 ``select`` for desktop GLSL 4.00 and later. Floating min/max helpers explicitly
 return the numeric operand when the other operand is NaN, in either argument
@@ -702,7 +741,7 @@ close complete discovered-unary translation, reflection, and native compiler
 coverage on both targets; they do not claim numerical execution, MLX host
 runtime redirection, or MLX test-suite parity.
 
-**Fused arithmetic reference.**
+**Fused arithmetic profiles.**
 
 ``crosstl.translator.fused_math`` provides an internal binary32 fused
 multiply-add helper expressed with pairs of 32-bit unsigned words. It rounds
@@ -722,11 +761,43 @@ profile check, not a claim that every Metal device or compilation mode uses
 that policy: the Metal language permits different rounding and subnormal
 behavior.
 
-This helper does not yet replace translated source ``fma`` calls. Enabling it
-requires native Windows evidence, source-profile selection and refreshed
-affected artifact contracts. In particular, the numerical failures tracked in
-`issue #1962 <https://github.com/CrossGL/crosstl/issues/1962>`_ remain open;
-compiler acceptance alone does not establish fused rounding or MLX parity.
+Set ``source_options={"binary32_fma_profile": "rne-flush"}`` in the single-file
+API, or select a profile in the project configuration:
+
+.. code-block:: toml
+
+   [project.source_options.metal]
+   binary32_fma_profile = "rne-flush"
+
+``rne-flush`` selects nearest-even rounding with signed-zero flushing of
+subnormal operands and results before rounding. ``rne-gradual`` selects
+nearest-even rounding with gradual underflow. The option lowers resolved
+binary32 ``fma`` and ``precise::fma`` calls for scalars and two- to four-lane
+vectors. Arguments are evaluated once. Helpers have translation-unit-private
+Metal linkage so independently translated modules can share a library.
+User-defined overloads, explicit ``fast::fma`` and non-binary32 operations
+retain their existing lowering; this option does not configure other arithmetic.
+
+The default is unset and preserves existing artifact identities. The selected
+profile is an explicit source-environment assumption, not inferred from the
+destination backend. Verify it against the original source environment before
+enabling it for a repository: the
+`Metal numerical contract <https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf>`_
+allows multiple rounding and subnormal behaviors. Round-toward-zero arithmetic
+is not implemented by these profiles. Existing corpus identities must be
+regenerated and compiler-validated when a profile changes emitted code.
+
+Required native CI tests source-call lowering as well as the integer helper;
+macOS additionally links independently translated modules. This does not by
+itself establish MLX host integration or complete upstream-suite parity.
+The pinned ``d9add9d`` native package gate translates the unchanged
+``v_Erffloat32float32`` and ``v_Expm1float32float32`` entries with ``rne-flush``.
+It checks the upstream numerical regression inputs and a dense neighborhood
+of zero against independent references, including signed zero, normal/subnormal
+boundaries and Expm1 overflow. No upstream kernel is edited; this gate is
+separate from running the upstream Python tests through an adapted MLX host.
+`Issue #1962 <https://github.com/CrossGL/crosstl/issues/1962>`_ remains the
+integration tracker for the MLX Expm1/Erf failures.
 
 The legacy MLX copy reference at
 ``846d176227a0ac13d2667e58d2bb68b322109ab0`` proves all 2,496 discovered entries
@@ -1720,7 +1791,12 @@ Native Dispatch Limits
 The Python native drivers reject invalid launch dimensions before submitting
 device work. Counts and local sizes must contain one to three positive integers;
 zero, negative, Boolean and fractional values are not clamped or coerced.
-Derived group counts use exact integer ceiling division.
+Dimension fields must be sequences, not scalar values, mappings, sets, strings
+or byte strings. False-valued malformed metadata cannot select a fallback or
+bypass local-size checks. The existing empty-sequence/``None`` convention for
+omitted dimensions is preserved. Derived group counts use exact integer ceiling
+division. Malformed dimensions report ``dispatch-dimensions-invalid``, identifying
+the field and, for a sequence, the failing node before any device work.
 
 DirectX checks Direct3D 12 compute limits. OpenGL queries the current context's
 per-axis group-count and local-size limits and maximum invocations per group.
@@ -2093,8 +2169,33 @@ definitions and implicit template instantiations retain repeatable linkage, and
 generated constructors and lowered member helpers remain artifact-private.
 Required native tests also link unrelated modules with identical private helper
 names, verify their distinct results and exercise exported visible callables.
+Declaration-only external functions remain a separate limitation: the Metal
+frontend currently drops those declarations, so a translated caller cannot link
+against a definition in another source file. This is tracked in
+`issue #1978 <https://github.com/CrossGL/crosstl/issues/1978>`_; the selected MLX
+library proof does not exercise or establish that capability.
+Eight array layouts execute three datasets with 402 retained complex readbacks,
+including both signed-zero branch cuts. Per-dataset traces must account for each
+selected entry exactly once, and the verifier recomputes references independently
+of the workload's success flags. Original MLX JIT signed-zero behavior is documented
+separately and is not used as the numerical reference for these additional cases.
 Other operations remain on the original backend; this is partial, explicit host
 integration, not automatic C++ runtime translation or full upstream-suite parity.
+
+The `portable MLX host adapter
+<https://github.com/CrossGL/crosstl/blob/main/demos/integrations/mlx/portable_host/README.md>`_
+instead builds MLX with Metal and CUDA disabled. Its synchronous callback connects
+``Arange`` for five scalar types to public DirectX/OpenGL runtime packages; other
+primitives retain upstream unsupported-GPU errors. Linux/OpenGL and
+Windows/Direct3D 12 CI build the adapted library, run three unchanged upstream
+tests against CPU and translated GPU execution, and compare 20 array readbacks.
+The verifier reconstructs the five allowed source adaptations from the pin,
+requires exact bytes before and after execution, and rejects unrelated tracked
+changes. It independently checks complete numerical records, the initial 15
+nonempty dispatches, and required unsupported-operation, oversized-dispatch and
+missing-artifact failures before publishing a schema-version-2 summary. Source
+checks do not attest to a separately supplied binary; CI retains its build log.
+This is selected host-staging coverage, not a complete translated MLX backend.
 
 Exact Scalar Physical Resource Layouts
 --------------------------------------
@@ -2191,15 +2292,22 @@ missed writes. This proves the selected kernel and layout path, not full binary
 family coverage, upstream MLX-suite execution, or MLX host-runtime redirection.
 
 The separate binary-shape gate discovers and executes every one of the 15
-``Powercomplex64`` entry shapes at that pin. Its 291 complex outputs exercise
+``Powercomplex64`` entry shapes at that pin. Its 873 complex outputs exercise
 scalar/vector broadcasting, two- and three-dimensional dispatch, non-contiguous
 storage, zero strides, 32/64-bit index paths and partial final tiles in
-four-dimensional gathers. Expected input locations are enumerated from logical
+four-dimensional gathers. Each shape retains its random workload and adds two
+branch-cut workloads: negative-real bases with positive or negative imaginary
+zero, raised to the power one half. Each dataset retains its own inputs and
+readback evidence, without weakening the complex-error bound above.
+Expected input locations are enumerated from logical
 coordinates and strides independently of the shader's index helpers. Metal
 executes original and translated kernels and separately consumes the public
-runtime package, as DirectX and OpenGL do. DirectX also compiles with warnings
-fatal, and OpenGL
-validates a generated SPIR-V 1.3 module before native GLSL execution.
+runtime package, as DirectX and OpenGL do. All three Metal paths execute each
+dataset, retaining 873 comparisons per path. Package construction happens once
+per entry; each dataset still receives fresh buffers, artifact identity checks,
+native compilation and its own device/library/dispatch evidence. DirectX also
+compiles with warnings fatal, and OpenGL validates a generated SPIR-V 1.3 module
+before native GLSL execution.
 
 The gate rejects a changed source census, missing native tools, missing entry
 outputs and numerical mismatches. OpenGL's explicit ``[0, 511]`` index-range

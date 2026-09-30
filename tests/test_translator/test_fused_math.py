@@ -186,10 +186,12 @@ def test_fma_oracle_rounding_boundaries(a, b, c, expected):
     assert _oracle(a, b, c) == expected
 
 
-def test_ci_requires_native_fma_on_all_three_platforms():
+@pytest.mark.parametrize(
+    "filename", ["mlx-project-porting.yml", "mlx-portable-host.yml"]
+)
+def test_ci_requires_native_fma_on_all_three_platforms(filename):
     workflow = (
-        Path(__file__).resolve().parents[2]
-        / ".github/workflows/mlx-project-porting.yml"
+        Path(__file__).resolve().parents[2] / ".github/workflows" / filename
     ).read_text()
     step = workflow.split("      - name: Validate binary32 fused arithmetic\n", 1)[
         1
@@ -197,6 +199,10 @@ def test_ci_requires_native_fma_on_all_three_platforms():
     assert "if:" not in step
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_fused_math.py" in step
+    assert "tests/test_translator/test_metal_fma.py" in step
+    assert "mkdir -p" in step
+    assert "--basetemp=" in step
+    assert "--junitxml=" in step
     assert "--timeout-seconds 120" in step
     assert "pytest -q -n auto" in step
 

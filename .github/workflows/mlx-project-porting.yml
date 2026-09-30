@@ -25,10 +25,14 @@ on:
       - "tests/test_run_directx_diagnostics.py"
       - "tests/test_translator/test_directx_reduction_primitives.py"
       - "tests/test_translator/test_directx_metal_math.py"
+      - "tests/test_translator/test_directx_atan2.py"
+      - "tests/fixtures/runtime_verification/metal_uint32_buffers.swift"
       - "tests/test_translator/test_opengl_metal_math.py"
       - "tests/test_translator/test_metal_precise_asin.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tests/test_translator/test_fused_math.py"
+      - "tests/test_translator/test_metal_fma.py"
+      - "tests/test_translator/test_mlx_current_unary_fma.py"
       - "tests/test_translator/test_struct_buffer_layouts.py"
       - "tests/test_translator/test_buffer_requirements.py"
       - "tests/test_translator/test_mlx_current_complex_power.py"
@@ -108,10 +112,14 @@ on:
       - "tests/test_run_directx_diagnostics.py"
       - "tests/test_translator/test_directx_reduction_primitives.py"
       - "tests/test_translator/test_directx_metal_math.py"
+      - "tests/test_translator/test_directx_atan2.py"
+      - "tests/fixtures/runtime_verification/metal_uint32_buffers.swift"
       - "tests/test_translator/test_opengl_metal_math.py"
       - "tests/test_translator/test_metal_precise_asin.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tests/test_translator/test_fused_math.py"
+      - "tests/test_translator/test_metal_fma.py"
+      - "tests/test_translator/test_mlx_current_unary_fma.py"
       - "tests/test_translator/test_struct_buffer_layouts.py"
       - "tests/test_translator/test_buffer_requirements.py"
       - "tests/test_translator/test_mlx_current_complex_power.py"
@@ -277,7 +285,7 @@ jobs:
           CROSTL_REQUIRE_ARTIFACT_REFRESH_COMPILER: "1"
         run: >-
           python -m pytest -q -n auto
-          tests/test_artifact_contract_refresh.py::test_native_compiler_creates_candidate
+          tests/test_artifact_contract_refresh.py
           --basetemp support/generated/artifact-refresh-native
           --junitxml support/generated/artifact-refresh-native.xml
 
@@ -395,6 +403,32 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Validate atan2 signed-zero semantics
+        if: runner.os == 'Windows' || runner.os == 'macOS'
+        shell: bash
+        env:
+          CROSTL_REQUIRE_DIRECTX_ATAN2: ${{ runner.os == 'Windows' && '1' || '0' }}
+          CROSTL_REQUIRE_METAL_ATAN2: ${{ runner.os == 'macOS' && '1' || '0' }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p atan2-results
+          python tools/run_bounded_command.py \
+            --label "atan2 signed-zero semantics" --timeout-seconds 120 -- \
+            python -m pytest -q -n auto \
+              --basetemp="atan2-results/pytest" \
+              --junitxml="atan2-results/results.xml" \
+              tests/test_translator/test_directx_atan2.py
+
+      - name: Upload atan2 signed-zero evidence
+        if: always() && (runner.os == 'Windows' || runner.os == 'macOS')
+        uses: actions/upload-artifact@v4
+        with:
+          name: atan2-signed-zero-${{ runner.os }}
+          path: atan2-results
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Install Linux runtime dependencies
         if: runner.os == 'Linux'
         run: |
@@ -505,7 +539,8 @@ jobs:
             python -m pytest -q -n auto \
               --basetemp="fused-math-results/pytest" \
               --junitxml="fused-math-results/results.xml" \
-              tests/test_translator/test_fused_math.py
+              tests/test_translator/test_fused_math.py \
+              tests/test_translator/test_metal_fma.py
 
       - name: Upload binary32 fused arithmetic evidence
         if: always()
@@ -550,6 +585,39 @@ jobs:
             --expected-commit "$MLX_CURRENT_TREE_COMMIT" \
             --expected-unit-count 42 \
             --expected-entry-count 17478
+
+      - name: Validate pinned unary fused arithmetic
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_FMA: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-unary-fma-results
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Pinned unary fused arithmetic" -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-unary-fma-results/pytest \
+              --junitxml=mlx-unary-fma-results/results.xml \
+              tests/test_translator/test_mlx_current_unary_fma.py
+
+      - name: Upload pinned unary fused arithmetic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-unary-fma-${{ runner.os }}
+          path: mlx-unary-fma-results
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Prove current MLX complex-power native dispatch
         shell: bash

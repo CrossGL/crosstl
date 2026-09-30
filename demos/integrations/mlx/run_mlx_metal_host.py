@@ -6,12 +6,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
 import signal
 import subprocess
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 MLX_COMMIT = "d9add9d11f3154111a4c85f267ec2fd307ecd18e"
@@ -35,6 +37,17 @@ SHAPES = (
     "gn4large",
 )
 ENTRIES = {f"{shape}_Powercomplex64" for shape in SHAPES}
+HOST_DATASETS = ("ordinary", "positive-zero", "negative-zero")
+HOST_LAYOUTS = {
+    "ss": [],
+    "sv": [7],
+    "vs": [7],
+    "vv": [7],
+    "g1": [7],
+    "g2": [3, 5],
+    "g3": [2, 3, 5],
+    "gn2": [2, 2, 3, 5],
+}
 SOURCE_HASHES = {
     "mlx/backend/metal/device.cpp": (
         "008b67e599f5508ab670a91f2ea80372162a8767b5226fbbeb9f3d23c85cdb7c",
@@ -61,6 +74,16 @@ def run(command, output, name, *, cwd=None, env=None, timeout=120, check=True):
     output.mkdir(parents=True, exist_ok=True)
     command = [str(item) for item in command]
     record = {"command": command, "timeoutSeconds": timeout, "cwd": str(cwd)}
+    if env is not None:
+        record["runtimeEnvironment"] = {
+            name: env[name]
+            for name in (
+                "DEVICE",
+                "CROSTL_METAL_LIBRARY_OVERRIDES",
+                "CROSTL_METAL_LIBRARY_TRACE",
+            )
+            if name in env
+        }
     save_json(output / f"{name}.json", record)
     with (output / f"{name}.stdout").open("w") as stdout, (
         output / f"{name}.stderr"
@@ -281,6 +304,60 @@ def unittest_counts(path):
     return {"total": int(totals[0]), "skipped": int(successful[0] or 0)}
 
 
+def verify_host_workloads(results, dispatches, dataset):
+    """Check retained values independently of the workload's pass flags."""
+    if dataset not in HOST_DATASETS:
+        raise ValueError("Unknown host workload dataset")
+    if Counter(item["entry"] for item in dispatches) != Counter(
+        {f"{shape}_Powercomplex64": 1 for shape in HOST_LAYOUTS}
+    ):
+        raise ValueError("Host workloads did not dispatch each expected entry once")
+    if Counter(item["shape"] for item in results) != Counter(
+        {shape: 1 for shape in HOST_LAYOUTS}
+    ):
+        raise ValueError("Host workload numerical evidence is incomplete")
+
+    def complex_value(pair):
+        if (
+            not isinstance(pair, list)
+            or len(pair) != 2
+            or any(type(v) not in (int, float) or not math.isfinite(v) for v in pair)
+        ):
+            raise ValueError("Host workload requires finite complex readbacks")
+        return complex(*pair)
+
+    for item in results:
+        layout = HOST_LAYOUTS[item["shape"]]
+        count = math.prod(layout)
+        if (
+            item["dataset"] != dataset
+            or item["arrayShape"] != layout
+            or item["dtype"] != "complex64"
+            or type(item["outputs"]) is not int
+            or item["outputs"] != count
+            or item["matched"] is not True
+        ):
+            raise ValueError("Host workload layout or numerical evidence is invalid")
+        values = [item[key] for key in ("base", "exponent", "expected", "actual")]
+        if any(not isinstance(v, list) or len(v) != count for v in values):
+            raise ValueError("Host workload readback count is incomplete")
+        for pairs in zip(*values):
+            base, exponent, expected, actual = map(complex_value, pairs)
+            if dataset != "ordinary" and (
+                base.real >= 0
+                or base.imag != 0
+                or math.copysign(1, base.imag)
+                != (-1 if dataset == "negative-zero" else 1)
+                or not 0 < exponent.real < 1
+                or exponent.imag != 0
+            ):
+                raise ValueError("Host workload lost its signed-zero inputs")
+            reference = base**exponent
+            bound = 5e-5 * max(1.0, abs(reference))
+            if abs(expected - reference) > bound or abs(actual - reference) > bound:
+                raise ValueError("Host workload readback does not match the reference")
+
+
 def verify(root, python, output):
     verify_checkout(root, patched=True)
     output.mkdir(parents=True, exist_ok=True)
@@ -318,30 +395,29 @@ def verify(root, python, output):
     dispatches = parse_trace(trace)
     if "ss_Powercomplex64" not in {item["entry"] for item in dispatches}:
         raise ValueError("Upstream complex-power test did not use translated code")
-    workload_trace = output / "host-workloads.tsv"
-    workload_trace.touch(exist_ok=False)
-    env["CROSTL_METAL_LIBRARY_TRACE"] = str(workload_trace)
-    run(
-        [python, HERE / "metal_host_workloads.py", output / "host-workloads.json"],
-        output,
-        "execute-host-workloads",
-        env=env,
-    )
-    host_dispatches = parse_trace(workload_trace)
-    expected_shapes = {"ss", "sv", "vs", "vv", "g1", "g2", "g3", "gn2"}
-    if {item["entry"] for item in host_dispatches} != {
-        f"{shape}_Powercomplex64" for shape in expected_shapes
-    }:
-        raise ValueError(
-            "Host workloads did not dispatch the expected translated entries"
+    host_results, host_dispatches = [], []
+    for dataset in HOST_DATASETS:
+        workload_trace = output / f"host-workloads-{dataset}.tsv"
+        workload_trace.touch(exist_ok=False)
+        env["CROSTL_METAL_LIBRARY_TRACE"] = str(workload_trace)
+        workload_values = output / f"host-workloads-{dataset}.json"
+        run(
+            [
+                python,
+                HERE / "metal_host_workloads.py",
+                "--dataset",
+                dataset,
+                workload_values,
+            ],
+            output,
+            f"execute-host-workloads-{dataset}",
+            env=env,
         )
-    host_results = json.loads((output / "host-workloads.json").read_text())
-    if (
-        {item["shape"] for item in host_results} != expected_shapes
-        or len(host_results) != len(expected_shapes)
-        or not all(item["matched"] is True for item in host_results)
-    ):
-        raise ValueError("Host workload numerical evidence is incomplete")
+        records = json.loads(workload_values.read_text())
+        dispatch_records = parse_trace(workload_trace)
+        verify_host_workloads(records, dispatch_records, dataset)
+        host_results.extend(records)
+        host_dispatches.extend(dict(item, dataset=dataset) for item in dispatch_records)
     missing = output / "missing-library"
     missing.mkdir()
     (missing / "libraries.txt").write_text("ss_Powercomplex64\n", encoding="utf-8")
@@ -371,7 +447,7 @@ def verify(root, python, output):
         output / "evidence.json",
         {
             "kind": "mlx-selected-metal-host-redirection",
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "commit": MLX_COMMIT,
             "upstreamModule": "test_ops",
             "runtime": identity,

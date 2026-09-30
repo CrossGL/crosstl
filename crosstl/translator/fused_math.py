@@ -15,13 +15,16 @@ FMA_HELPER_KEYS = (
 
 _FMA_SUPPORT = """
 @source_license(softfloat)
+@metal_static
 uvec2 $add(uvec2 a, uvec2 b) {
     uint low = a.x + b.x;
     return uvec2(low, a.y + b.y + uint(low < a.x));
 }
+@metal_static
 uvec2 $subtract(uvec2 a, uvec2 b) {
     return uvec2(a.x - b.x, a.y - b.y - uint(a.x < b.x));
 }
+@metal_static
 uvec2 $shift_left(uvec2 value, int distance) {
     if (distance == 0) { return value; }
     if (distance < 32) {
@@ -31,6 +34,7 @@ uvec2 $shift_left(uvec2 value, int distance) {
     if (distance < 64) { return uvec2(0u, value.x << uint(distance - 32)); }
     return uvec2(0u, 0u);
 }
+@metal_static
 uvec2 $shift_jam(uvec2 value, int distance) {
     if (distance == 0) { return value; }
     if (distance < 32) {
@@ -45,6 +49,7 @@ uvec2 $shift_jam(uvec2 value, int distance) {
     }
     return uvec2(uint(value.x != 0u || value.y != 0u), 0u);
 }
+@metal_static
 int $leading_zeros(uvec2 value) {
     uint word = value.y;
     int count = 0;
@@ -53,6 +58,7 @@ int $leading_zeros(uvec2 value) {
     while ((word & 2147483648u) == 0u) { word <<= 1u; count += 1; }
     return count;
 }
+@metal_static
 uint $round_pack(uint sign, int exponent, uint significand, bool flush_denormals) {
     if (exponent < 0) {
         if (flush_denormals) { return sign; }
@@ -70,6 +76,7 @@ uint $round_pack(uint sign, int exponent, uint significand, bool flush_denormals
     if (flush_denormals && (result & 2139095040u) == 0u) { return sign; }
     return result;
 }
+@metal_static
 uint $bits(uint a, uint b, uint c, bool flush_denormals) {
     if (flush_denormals) {
         if ((a & 2139095040u) == 0u) { a &= 2147483648u; }

@@ -8,6 +8,19 @@ on:
       - "crosstl/**"
       - "demos/integrations/mlx/portable_host/**"
       - "tests/test_mlx_portable_host.py"
+      - "tests/test_translator/test_directx_atan2.py"
+      - "tests/test_translator/test_fused_math.py"
+      - "tests/test_translator/test_metal_fma.py"
+      - "tests/test_translator/test_mlx_current_unary_fma.py"
+      - "tests/test_translator/test_metal_precise_asin.py"
+      - "tests/test_translator/test_metal_builtin_ownership.py"
+      - "tests/test_translator/test_mlx_current_complex_power.py"
+      - "tests/test_translator/test_mlx_current_binary_shapes.py"
+      - "tests/test_translator/test_mlx_current_arg_reduce.py"
+      - "tests/test_translator/test_native_loader_dispatch_integration.py"
+      - "tests/test_translator/test_native_dispatch_limits.py"
+      - "tests/test_translator/test_struct_buffer_layouts.py"
+      - "tests/test_translator/test_buffer_requirements.py"
       - "tools/run_bounded_command.py"
       - "pyproject.toml"
   push:
@@ -17,6 +30,19 @@ on:
       - "crosstl/**"
       - "demos/integrations/mlx/portable_host/**"
       - "tests/test_mlx_portable_host.py"
+      - "tests/test_translator/test_directx_atan2.py"
+      - "tests/test_translator/test_fused_math.py"
+      - "tests/test_translator/test_metal_fma.py"
+      - "tests/test_translator/test_mlx_current_unary_fma.py"
+      - "tests/test_translator/test_metal_precise_asin.py"
+      - "tests/test_translator/test_metal_builtin_ownership.py"
+      - "tests/test_translator/test_mlx_current_complex_power.py"
+      - "tests/test_translator/test_mlx_current_binary_shapes.py"
+      - "tests/test_translator/test_mlx_current_arg_reduce.py"
+      - "tests/test_translator/test_native_loader_dispatch_integration.py"
+      - "tests/test_translator/test_native_dispatch_limits.py"
+      - "tests/test_translator/test_struct_buffer_layouts.py"
+      - "tests/test_translator/test_buffer_requirements.py"
       - "tools/run_bounded_command.py"
       - "pyproject.toml"
   workflow_dispatch:
@@ -40,7 +66,7 @@ jobs:
   portable-host:
     name: MLX native host (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 80
     strategy:
       fail-fast: false
       matrix:
@@ -105,6 +131,39 @@ jobs:
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Validate portable host contracts
         run: python -m pytest -q -n auto tests/test_mlx_portable_host.py
+      - name: Validate native scalar math
+        env:
+          CROSTL_REQUIRE_DIRECTX_ATAN2: ${{ runner.os == 'Windows' && '1' || '0' }}
+          CROSTL_REQUIRE_METAL_PRECISE_ASIN: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/scalar-math
+          python tools/run_bounded_command.py --timeout-seconds 120 --label "Native scalar math" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/scalar-math/pytest \
+              --junitxml=.mlx-portable-host/scalar-math/results.xml \
+              tests/test_translator/test_directx_atan2.py \
+              tests/test_translator/test_metal_precise_asin.py \
+              2>&1 | tee .mlx-portable-host/scalar-math.log
+      - name: Validate binary32 fused arithmetic
+        env:
+          CROSTL_REQUIRE_FUSED_MATH: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/fused-math
+          python tools/run_bounded_command.py --timeout-seconds 120 --label "Native fused arithmetic" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/fused-math/pytest \
+              --junitxml=.mlx-portable-host/fused-math/results.xml \
+              tests/test_translator/test_fused_math.py \
+              tests/test_translator/test_metal_fma.py \
+              2>&1 | tee .mlx-portable-host/fused-math.log
       - name: Checkout and prepare pinned upstream MLX
         run: |
           set -euo pipefail
@@ -115,6 +174,49 @@ jobs:
           git -C mlx-upstream checkout --detach FETCH_HEAD
           mkdir -p .mlx-portable-host
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-host/adaptation.json
+      - name: Validate pinned unary fused arithmetic
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_FMA: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/unary-fma
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Pinned unary fused arithmetic" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/unary-fma/pytest \
+              --junitxml=.mlx-portable-host/unary-fma/results.xml \
+              tests/test_translator/test_mlx_current_unary_fma.py \
+              2>&1 | tee .mlx-portable-host/unary-fma.log
+      - name: Validate pinned native binary math
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
+          CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_POWER: "1"
+          CROSTL_REQUIRE_MLX_CURRENT_BINARY_SHAPES: "1"
+          CROSTL_REQUIRE_STRUCT_BUFFER_RUNTIME: "1"
+          CROSTL_RUN_NATIVE_LOADER_DIRECTX_DEVICE_TEST: ${{ runner.os == 'Windows' && '1' || '0' }}
+          CROSTL_RUN_NATIVE_LOADER_OPENGL_DEVICE_TEST: ${{ runner.os == 'Linux' && '1' || '0' }}
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/binary-math
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "Pinned native binary math" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/binary-math/pytest \
+              --junitxml=.mlx-portable-host/binary-math/results.xml \
+              tests/test_translator/test_struct_buffer_layouts.py \
+              tests/test_translator/test_buffer_requirements.py \
+              tests/test_translator/test_native_dispatch_limits.py \
+              tests/test_translator/test_native_loader_dispatch_integration.py \
+              tests/test_translator/test_mlx_current_complex_power.py \
+              tests/test_translator/test_mlx_current_binary_shapes.py \
+              2>&1 | tee .mlx-portable-host/binary-math.log
       - name: Build adapted upstream MLX
         run: |
           set -euo pipefail

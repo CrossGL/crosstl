@@ -71,11 +71,23 @@ options set in `CMAKE_ARGS`. The complete platform setup is in
 [`mlx-portable-host.yml`](../../../../.github/workflows/mlx-portable-host.yml).
 Output directories must be new so evidence from different runs cannot mix.
 
+The host workflow first runs required native scalar-math and fused-arithmetic
+checks, including precise arcsine, Windows signed-zero angle selection and
+explicit binary32 FMA profiles. After checking out MLX, it checks
+complex power, binary dispatch shapes, buffer layouts and native dispatch limits
+before building the adapted library. These bounded checks retain their generated
+artifacts, readbacks and test reports even if a later build or host test fails.
+They also remain in the project-porting workflow; the focused host checks do not
+replace corpus-wide or upstream-suite validation.
+
 ## Required Evidence
 
-The verifier checks the pin and unchanged upstream test source, then runs isolated
-CPU-reference and translated-GPU processes. Both must pass these upstream tests
-without skips:
+The verifier checks the pin, reconstructs the five adapted files from the pinned
+originals and current templates, and compares their exact bytes before and after
+execution. Missing, changed or symlinked adapter files and unrelated tracked
+source changes are rejected. It also verifies the unchanged upstream test source,
+then runs isolated CPU-reference and translated-GPU processes. Both must pass
+these upstream tests without skips:
 
 - `test_arange_overload_dispatch`
 - `test_arange_inferred_dtype`
@@ -85,12 +97,19 @@ The CPU reference uses the unchanged CPU backend in the same adapted MLX build;
 it is not a separately rebuilt pristine binary or a Metal comparison.
 
 It also checks 20 array cases spanning all five types and lengths 0, 1, 7 and 257
-against NumPy and the explicit MLX CPU baseline. Native traces must include every
-selected entry, actual artifact identities and runtime/device details. Separate
+against NumPy and the explicit MLX CPU baseline. The parent process independently
+requires all 20 complete readbacks, recomputes their values and checks the test and
+skip counts. Native traces must start with the exact 15 nonempty array dispatches,
+include every selected entry, and retain actual artifact identities and
+runtime/device details. Separate
 negative processes must reject an unsupported primitive, an oversized dispatch
 and a missing artifact. Each process has a hard process-tree deadline.
 
-The evidence directory retains command status, stdout/stderr, upstream test logs,
-dispatch traces and numerical results. `fullUpstreamSuite` and
+The evidence directory retains before/after adaptation hashes, command status,
+stdout/stderr, upstream test logs, dispatch traces and numerical results. The
+schema-version-2 summary is written only after source and result checks pass,
+including explicit rejection messages from all three negative cases. Source
+identity checks do not attest to a separately supplied binary; CI builds MLX from
+the verified sources and retains its build log. `fullUpstreamSuite` and
 `fullTranslatedBackend` remain `false`: extending primitive coverage and then
 running the entire suite is the next stage, not an implicit property of this proof.

@@ -388,6 +388,7 @@ def refresh(
         "target": contract["target"],
         "configSha256": _sha256(config_path),
         "compilerCommand": compiler_command,
+        "defaultToolchainDiagnostics": [],
         "portabilityReport": str(work / "portability-report.json"),
         "numericalExecution": False,
         "fullUpstreamSuite": False,
@@ -409,12 +410,21 @@ def refresh(
         )
         report.write_json(work / "portability-report.json")
         payload = report.to_json()
+        # Default discovery does not describe the explicit compiler command below.
+        # Keep its availability warnings; the command must still compile each entry.
+        audit["defaultToolchainDiagnostics"] = [
+            diagnostic
+            for diagnostic in payload["diagnostics"]
+            if diagnostic.get("code") == "project.validate.toolchain-unavailable"
+            and diagnostic.get("severity") == "warning"
+            and diagnostic.get("target") == contract["target"]
+            and diagnostic.get("missingCapabilities") == ["toolchain.validation"]
+        ]
+        counts = payload["summary"]["diagnosticCounts"]
         _require(
             payload["summary"]["failedCount"] == 0
-            and not any(
-                payload["summary"]["diagnosticCounts"].get(level, 0)
-                for level in ("warning", "error")
-            ),
+            and counts.get("error", 0) == 0
+            and counts.get("warning", 0) == len(audit["defaultToolchainDiagnostics"]),
             "Translation reported warnings or failures",
         )
         artifacts = payload["artifacts"]
