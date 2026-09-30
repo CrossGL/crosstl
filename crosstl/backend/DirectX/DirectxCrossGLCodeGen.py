@@ -18,12 +18,27 @@ from .DirectxLexer import *
 from .DirectxParser import *
 
 
+class HLSLSelectOverloadError(ValueError):
+    """Reject select calls whose source overload ownership is unresolved."""
+
+    project_diagnostic_code = "project.translate.hlsl-select-overload-unresolved"
+    missing_capabilities = ("hlsl.select-overload-resolution",)
+
+    def __init__(self):
+        super().__init__(
+            "Cannot resolve a three-argument HLSL select call in the presence "
+            "of a source-defined select overload"
+        )
+        self.reason = "select-overload-ownership-unresolved"
+
+
 class HLSLToCrossGLConverter:
     """Serialize DirectX backend AST nodes back into CrossGL source."""
 
     crossgl_reserved_identifiers = frozenset(CROSSGL_KEYWORDS)
 
     def __init__(self):
+        self.source_function_names = set()
         self.structured_buffer_types = {
             "Buffer",
             "ConstantBuffer",
@@ -3083,6 +3098,7 @@ class HLSLToCrossGLConverter:
         return self.generate_expression(node)
 
     def generate(self, ast):
+        self.source_function_names = {function.name for function in ast.functions}
         self.struct_member_types = self.collect_struct_member_types(ast.structs)
         self.struct_member_array_dims = self.collect_struct_member_array_dims(
             ast.structs
@@ -4585,6 +4601,11 @@ class HLSLToCrossGLConverter:
             )
             if bitcast_call is not None:
                 return bitcast_call
+            if func_name == "select" and len(rendered_args) == 3:
+                if func_name in self.source_function_names:
+                    raise HLSLSelectOverloadError()
+                condition, true_value, false_value = rendered_args
+                return f"select({false_value}, {true_value}, {condition})"
             args = ", ".join(rendered_args)
             if func_name == "mul" and len(expr.args) == 2:
                 left = self.maybe_parenthesize(expr.args[0], rendered_args[0])
