@@ -134,6 +134,7 @@ jobs:
           PYOPENGL_PLATFORM: egl
         run: |
           set -euo pipefail
+          mkdir -p .mlx-portable-host/scalar-math
           python tools/run_bounded_command.py --timeout-seconds 120 --label "Native scalar math" -- \
             python -m pytest -q -n auto \
               --basetemp=.mlx-portable-host/scalar-math/pytest \
@@ -165,6 +166,7 @@ jobs:
           PYOPENGL_PLATFORM: egl
         run: |
           set -euo pipefail
+          mkdir -p .mlx-portable-host/binary-math
           python tools/run_bounded_command.py --timeout-seconds 900 --label "Pinned native binary math" -- \
             python -m pytest -q -n auto \
               --basetemp=.mlx-portable-host/binary-math/pytest \

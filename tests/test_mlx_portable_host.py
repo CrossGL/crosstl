@@ -527,16 +527,18 @@ def test_ci_requires_native_math_before_building_mlx():
         assert ci_coverage.workflow_job_step_after(
             workflow, "portable-host", later, earlier
         )
-    for name, seconds, modules, flags in (
+    for name, seconds, evidence_directory, modules, flags in (
         (
             "Validate native scalar math",
             120,
+            "scalar-math",
             ("test_directx_atan2.py", "test_metal_precise_asin.py"),
             ("CROSTL_REQUIRE_METAL_PRECISE_ASIN",),
         ),
         (
             "Validate pinned native binary math",
             900,
+            "binary-math",
             (
                 "test_struct_buffer_layouts.py",
                 "test_buffer_requirements.py",
@@ -559,6 +561,9 @@ def test_ci_requires_native_math_before_building_mlx():
         assert "set -euo pipefail" in step
         assert "--junitxml=.mlx-portable-host/" in step
         assert "--basetemp=.mlx-portable-host/" in step
+        assert step.index(f"mkdir -p .mlx-portable-host/{evidence_directory}") < (
+            step.index("python tools/run_bounded_command.py")
+        )
         for module in modules:
             path = f"tests/test_translator/{module}"
             assert path in step
