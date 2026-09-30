@@ -60205,3 +60205,53 @@ def test_metal_project_default_overload_does_not_duplicate_inferred_definition(
         tmp_path,
         warnings_as_errors=True,
     )
+
+
+def test_translate_project_metal_free_function_sfinae_preserves_native_overload(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "sfinae.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <
+                typename T,
+                metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+            inline bool isnan(T value) {
+              return false;
+            }
+
+            kernel void classify(
+                device bool* out [[buffer(0)]],
+                device float* values [[buffer(1)]]) {
+              int integral = 7;
+              out[0] = isnan(integral);
+              out[1] = isnan(values[0]);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["metal"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    generated = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert "bool isnan_int(int value)" in generated
+    assert "isnan_int(integral)" in generated
+    assert "isnan(values[0])" in generated
+    assert "isnan_float" not in generated
+    assert_metal_validates_if_available(
+        generated,
+        tmp_path,
+        warnings_as_errors=True,
+    )

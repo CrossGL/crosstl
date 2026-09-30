@@ -3908,6 +3908,88 @@ kernel void native_width_probe(uint lid [[thread_index_in_threadgroup]]) {
     compile_with_metal_if_available(generated_code)
 
 
+def test_metal_private_fixed_arrays_preserve_native_width_for_pointer_decay(
+    tmp_path,
+):
+    shader_path = tmp_path / "private-native-widths.metal"
+    shader_path.write_text(
+        """
+#include <metal_stdlib>
+using namespace metal;
+
+void consume_i8(thread int8_t* values) { values[0] = int8_t(1); }
+void consume_u8(thread uint8_t* values) { values[0] = uint8_t(1); }
+void consume_i16(thread int16_t* values) { values[0] = int16_t(1); }
+void consume_u16(thread uint16_t* values) { values[0] = uint16_t(1); }
+
+kernel void native_width_probe() {
+  int8_t i8_values[4];
+  uint8_t u8_values[4];
+  int16_t i16_values[4];
+  uint16_t u16_values[4];
+  consume_i8(i8_values);
+  consume_u8(u8_values);
+  consume_i16(i16_values);
+  consume_u16(u16_values);
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+    )
+
+    for declaration in (
+        "char i8_values[4];",
+        "uchar u8_values[4];",
+        "short i16_values[4];",
+        "ushort u16_values[4];",
+    ):
+        assert declaration in generated_code
+    for widened_declaration in (
+        "int i8_values[4];",
+        "uint u8_values[4];",
+        "int i16_values[4];",
+        "uint u16_values[4];",
+    ):
+        assert widened_declaration not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_private_fixed_array_matches_widened_array_parameter(tmp_path):
+    shader_path = tmp_path / "private-widened-array-parameter.metal"
+    shader_path.write_text(
+        """
+#include <metal_stdlib>
+using namespace metal;
+
+void consume_array(thread int8_t values[4]) {
+  values[0] = int8_t(1);
+}
+
+kernel void widened_array_parameter_probe() {
+  int8_t values[4];
+  consume_array(values);
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+    )
+
+    assert "void consume_array(thread int values[4])" in generated_code
+    assert "\n    int values[4];" in generated_code
+    assert "\n    char values[4];" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_stage_local_shared_variables_emit_inside_kernel():
     shader = """
     shader StageLocalSharedStorage {
@@ -8424,6 +8506,63 @@ def test_tail_expression_returns_struct_constructor_and_vector():
     assert "float4 make_color(float3 color)" in generated_code
     assert "return float4(color, 1.0);" in generated_code
     assert "ConstructorNode(" not in generated_code
+
+
+def test_function_style_plain_struct_call_emits_metal_aggregate_braces():
+    shader = """
+    shader FunctionStyleAggregateConstructor {
+        struct Pair {
+            uint index;
+            float value;
+        }
+
+        Pair make_pair(uint index, float value) {
+            return Pair(index, value);
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Pair make_pair(uint index, float value)" in generated_code
+    assert "return Pair{index, value};" in generated_code
+    assert "return Pair(index, value);" not in generated_code
+
+
+def test_function_style_plain_struct_call_rejects_excess_arguments():
+    shader = """
+    shader InvalidFunctionStyleAggregateConstructor {
+        struct Pair {
+            uint index;
+            float value;
+        }
+
+        Pair make_pair(uint index, float value) {
+            return Pair(index, value, 1.0);
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"Struct constructor Pair expects at most 2 arguments, got 3",
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_function_named_like_struct_is_not_rewritten_as_aggregate_constructor():
+    codegen = MetalCodeGen()
+    codegen.struct_member_types["Pair"] = {
+        "index": "uint",
+        "value": "float",
+    }
+    codegen.user_function_names.add("Pair")
+    codegen.function_return_types["Pair"] = "float"
+    codegen.local_variable_types["value"] = "float"
+    call = FunctionCallNode(IdentifierNode("Pair"), [IdentifierNode("value")])
+
+    assert codegen.expression_result_type(call) == "float"
+    assert codegen.generate_expression(call) == "Pair(value)"
 
 
 def test_stage_tail_struct_constructor_returns_stage_output():
@@ -14587,6 +14726,51 @@ def test_metal_mixed_address_space_ternary_pointer_alias_emits_diagnostic():
         "requires threadgroup */;"
     ) in generated
     assert "bumpThreadgroup(useShared ? scratch" not in generated
+
+
+@pytest.mark.parametrize("stride_type", ["int", "uint", "int64", "uint64"])
+@pytest.mark.parametrize("operator", ["+=", "-="])
+def test_metal_pointer_offset_accepts_integer_reference_values(stride_type, operator):
+    code = f"""
+    shader ReferencePointerOffset {{
+        compute {{
+            void main(
+                device float* values @buffer(0),
+                constant {stride_type}& stride @buffer(1)
+            ) {{
+                device float* cursor = values;
+                cursor {operator} stride;
+                values[0] = *cursor;
+            }}
+        }}
+    }}
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert f"cursor {operator} stride;" in generated
+    assert "unsupported Metal pointer offset assignment" not in generated
+    assert "values[0] = *cursor;" in generated
+
+
+@pytest.mark.parametrize("stride_type", ["float", "bool", "int2", "int*"])
+def test_metal_pointer_offset_rejects_noninteger_scalar_references(stride_type):
+    code = f"""
+    shader InvalidReferencePointerOffset {{
+        compute {{
+            void main(
+                device float* values @buffer(0),
+                constant {stride_type}& stride @buffer(1)
+            ) {{
+                device float* cursor = values;
+                cursor += stride;
+            }}
+        }}
+    }}
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "unsupported Metal pointer offset assignment" in generated
+    assert "cursor += stride;" not in generated
 
 
 def test_metal_mixed_address_space_pointer_assignment_emits_diagnostic():

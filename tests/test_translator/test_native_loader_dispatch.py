@@ -1375,6 +1375,36 @@ def test_rejects_runtime_values_incompatible_with_declared_dtype(tmp_path, value
     assert caught.value.code.endswith(".value-data-invalid")
 
 
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_accepts_json_safe_nonfinite_float32_runtime_inputs(tmp_path, target):
+    special_values = ["nan", "+infinity", "-infinity", 1.25]
+    inputs = {
+        "input_values": {
+            "dtype": "float32",
+            "shape": [4],
+            "values": special_values,
+        }
+    }
+
+    request = _build(tmp_path, target, input_values=inputs)
+
+    runtime_input = next(
+        value for value in request.fixture.inputs if value.name == "input_values"
+    )
+    assert runtime_input.values == special_values
+
+    outputs = {
+        "output_values": {
+            "dtype": "float32",
+            "shape": [4],
+            "values": special_values,
+        }
+    }
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(tmp_path / "output-rejection", target, output_values=outputs)
+    assert caught.value.code.endswith(".value-data-invalid")
+
+
 def test_rejects_unrepresentable_output_tolerance_with_structured_diagnostic(
     tmp_path,
 ):

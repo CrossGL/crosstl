@@ -12717,3 +12717,362 @@ def test_preprocessor_resolves_unqualified_remove_cv_in_concrete_trait_result():
         )
         == "bfloat"
     )
+
+
+def test_preprocessor_materializes_enabled_free_function_sfinae_fallback():
+    code = """
+    template <
+        typename T,
+        metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    inline bool isnan(T value) {
+      return false;
+    }
+
+    [[kernel]] void k(device bool* out [[buffer(0)]]) {
+      int value = 1;
+      out[0] = isnan(value);
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    (template,) = preprocessor._find_template_functions(code)
+    assert template.template_constraints == [
+        "metal::enable_if_t<metal::is_integral_v<T>, bool>"
+    ]
+
+    output = preprocessor.preprocess(code)
+
+    assert "template <" not in output
+    assert "inline bool isnan_int(int value)" in output
+    assert "out[0] = isnan_int(value);" in output
+
+
+def test_preprocessor_rejects_disabled_free_function_sfinae_for_native_overload():
+    code = """
+    template <
+        typename T,
+        metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    inline bool isnan(T value) {
+      return false;
+    }
+
+    [[kernel]] void k(device bool* out [[buffer(0)]]) {
+      float value = 1.0f;
+      out[0] = isnan(value);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "template <" not in output
+    assert "isnan_float" not in output
+    assert "return false" not in output
+    assert "out[0] = isnan(value);" in output
+
+
+def test_preprocessor_rejects_unknown_free_function_sfinae_constraint():
+    code = """
+    template <typename T, metal::enable_if_t<is_supported_v<T>, bool> = true>
+    inline bool classify(T value) {
+      return true;
+    }
+
+    [[kernel]] void k(device bool* out [[buffer(0)]]) {
+      float value = 1.0f;
+      out[0] = classify(value);
+    }
+    """
+
+    with pytest.raises(
+        MetalTemplateSpecializationError,
+        match="viable SFINAE constraint is not recognized",
+    ) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    assert excinfo.value.callee_template == "classify"
+    assert excinfo.value.requested_signature == "classify(value)"
+
+
+def test_preprocessor_selects_unique_free_function_sfinae_overload_and_fails_ambiguous():
+    code = """
+    template <
+        typename T,
+        metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    inline bool classify(T value) {
+      return true;
+    }
+
+    template <
+        typename T,
+        metal::enable_if_t<!metal::is_integral_v<T>, bool> = true>
+    inline bool classify(T value) {
+      return false;
+    }
+
+    [[kernel]] void k(device bool* out [[buffer(0)]]) {
+      float value = 1.0f;
+      out[0] = classify(value);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+    assert "inline bool classify_float(float value)" in output
+    assert "out[0] = classify_float(value);" in output
+    assert "return false;" in output
+    assert "return true;" not in output
+
+    ambiguous = code.replace(
+        "metal::enable_if_t<!metal::is_integral_v<T>, bool>",
+        "metal::enable_if_t<true, bool>",
+    ).replace(
+        "metal::enable_if_t<metal::is_integral_v<T>, bool>",
+        "metal::enable_if_t<true, bool>",
+    )
+    with pytest.raises(
+        MetalTemplateSpecializationError,
+        match="multiple constrained overloads are enabled",
+    ):
+        MetalPreprocessor().preprocess(ambiguous)
+
+
+@pytest.mark.parametrize(
+    "competitor",
+    [
+        "int select_value(int value) { return 2; }",
+        "int select_value(int value);",
+        "int select_value(float value);",
+        "int select_value(int value, int other = 0);",
+        "int select_value(int value, ...);",
+        "template <typename T> int select_value(T value) { return 2; }",
+        "template <typename T> int select_value(T value);",
+        "namespace other { int select_value(int value); } using namespace other;",
+    ],
+)
+def test_preprocessor_diagnoses_competing_free_function_sfinae_overloads(competitor):
+    code = f"""
+    template <typename T,
+              metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    int select_value(T value) {{ return 1; }}
+    {competitor}
+    [[kernel]] void k(device int* out [[buffer(0)]]) {{
+      int value = 1;
+      out[0] = select_value(value);
+    }}
+    """
+
+    with pytest.raises(
+        MetalTemplateSpecializationError,
+        match="competing free-function overload has unproven precedence",
+    ) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    assert excinfo.value.callee_template == "select_value"
+    assert excinfo.value.requested_signature == "select_value(value)"
+    assert "distinct name" in excinfo.value.suggested_action
+
+
+@pytest.mark.parametrize(
+    "unrelated",
+    [
+        "int select_value(int value, int other);",
+        "int select_value();",
+        "namespace other { int select_value(int value); }",
+        "struct Other { int select_value(int value) { return 2; } };",
+        "template <typename T> int select_value(T value, int other);",
+        "int other(int value) { return select_value(value); }",
+        "int initial = select_value(1);",
+    ],
+)
+def test_preprocessor_excludes_unrelated_sfinae_overload_references(unrelated):
+    code = f"""
+    template <typename T,
+              metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    int select_value(T value) {{ return 1; }}
+    {unrelated}
+    [[kernel]] void k(device int* out [[buffer(0)]]) {{
+      int value = 1;
+      out[0] = select_value(value);
+    }}
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "out[0] = select_value_int(value);" in output
+    assert "int select_value_int(int value)" in output
+
+
+def test_preprocessor_excludes_later_overload_from_sfinae_resolution():
+    code = """
+    template <typename T,
+              metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    int select_value(T value) { return 1; }
+    [[kernel]] void k(device int* out [[buffer(0)]]) {
+      int value = 1;
+      out[0] = select_value(value);
+    }
+    int select_value(int value) { return 2; }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "out[0] = select_value_int(value);" in output
+
+
+def test_preprocessor_preserves_ordinary_overload_when_sfinae_is_disabled():
+    code = """
+    template <typename T,
+              metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    int select_value(T value) { return 1; }
+    int select_value(float value) { return 2; }
+    [[kernel]] void k(device int* out [[buffer(0)]]) {
+      float value = 1.0f;
+      out[0] = select_value(value);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "out[0] = select_value(value);" in output
+    assert "int select_value(float value)" in output
+    assert "return 1;" not in output
+
+
+def test_preprocessor_excludes_ordinary_overload_from_explicit_template_call():
+    code = """
+    template <typename T,
+              metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    int select_value(T value) { return 1; }
+    int select_value(int value) { return 2; }
+    [[kernel]] void k(device int* out [[buffer(0)]]) {
+      int value = 1;
+      out[0] = select_value<int>(value);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "out[0] = select_value_int(value);" in output
+    assert "int select_value_int(int value)" in output
+
+
+@pytest.mark.parametrize(
+    ("declaration", "parameter", "local", "expected_name"),
+    [
+        pytest.param(
+            "int select_value_int(int value) { return 2; }",
+            "",
+            "",
+            "select_value_int_1",
+            id="function",
+        ),
+        pytest.param(
+            "int select_value_int(int value);",
+            "",
+            "",
+            "select_value_int_1",
+            id="prototype",
+        ),
+        pytest.param(
+            "",
+            ", uint select_value_int [[thread_position_in_grid]]",
+            "",
+            "select_value_int_1",
+            id="parameter",
+        ),
+        pytest.param(
+            "",
+            "",
+            "int select_value_int = 2;",
+            "select_value_int_1",
+            id="local",
+        ),
+        pytest.param(
+            "int select_value_int(int value) { return 2; }",
+            "",
+            "int select_value_int_1 = 3;",
+            "select_value_int_2",
+            id="occupied-suffix",
+        ),
+        pytest.param(
+            "// select_value_int\n/* select_value_int_1 */",
+            "",
+            "",
+            "select_value_int",
+            id="comments-do-not-reserve-names",
+        ),
+    ],
+)
+def test_preprocessor_reserves_source_identifiers_for_inferred_sfinae_helpers(
+    declaration, parameter, local, expected_name
+):
+    code = f"""
+    template <typename T,
+              metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    int select_value(T value) {{ return 1; }}
+    {declaration}
+    kernel void k(device int* out [[buffer(0)]]{parameter}) {{
+      int value = 7;
+      {local}
+      out[0] = select_value(value);
+      out[1] = select_value(value);
+    }}
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert output == MetalPreprocessor().preprocess(code)
+    assert output.count(f"int {expected_name}(int value) {{ return 1; }}") == 1
+    assert f"out[0] = {expected_name}(value);" in output
+    assert f"out[1] = {expected_name}(value);" in output
+    if local:
+        assert local in output
+    if parameter:
+        assert parameter in output
+    if declaration and not declaration.startswith("//"):
+        assert declaration in output
+
+
+@pytest.mark.parametrize("backend", ["metal", "directx", "opengl"])
+def test_inferred_sfinae_helper_collision_preserves_target_call_identity(
+    tmp_path, backend
+):
+    from crosstl import translate
+
+    source = tmp_path / "helper-collision.metal"
+    source.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template <typename T,
+                  metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+        int select_value(T value) { return 1; }
+
+        int select_value_int(int value) { return 2; }
+
+        kernel void k(device int* result [[buffer(0)]]) {
+            int value = 7;
+            result[0] = select_value(value);
+            result[1] = select_value_int(value);
+            result[2] = select_value(value);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = translate(str(source), backend=backend, format_output=False)
+
+    assert re.search(
+        r"int select_value_int\(int value\)\s*\{\s*return 2;\s*\}", generated
+    )
+    assert (
+        len(
+            re.findall(
+                r"int select_value_int_1\(int value\)\s*\{\s*return 1;\s*\}", generated
+            )
+        )
+        == 1
+    )
+    assert "result[0] = select_value_int_1(value);" in generated
+    assert "result[1] = select_value_int(value);" in generated
+    assert "result[2] = select_value_int_1(value);" in generated

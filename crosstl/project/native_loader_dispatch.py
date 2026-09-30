@@ -673,6 +673,7 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             dtype=dtype,
             path=f"{path}.values",
             name=runtime_value.name,
+            role=role,
         )
     return RuntimeValue(
         name=runtime_value.name,
@@ -771,7 +772,7 @@ def _flatten_values(value: Any) -> list[Any]:
 
 
 def _validate_buffer_values(
-    values: Sequence[Any], *, dtype: str, path: str, name: str
+    values: Sequence[Any], *, dtype: str, path: str, name: str, role: str
 ) -> None:
     for index, value in enumerate(values):
         valid = False
@@ -790,8 +791,18 @@ def _validate_buffer_values(
                 and 0 <= value <= maximum
             )
         elif dtype == "float32":
-            valid = isinstance(value, (int, float)) and not isinstance(value, bool)
-            if valid:
+            if isinstance(value, str):
+                # Strict JSON cannot carry NaN or infinities as numeric values.
+                # Runtime inputs may use these exact portable tokens; expected
+                # outputs remain finite so comparison reports stay canonical.
+                valid = role == "input" and value in {
+                    "nan",
+                    "+infinity",
+                    "-infinity",
+                }
+            else:
+                valid = isinstance(value, (int, float)) and not isinstance(value, bool)
+            if valid and not isinstance(value, str):
                 try:
                     numeric_value = float(value)
                     valid = math.isfinite(numeric_value)

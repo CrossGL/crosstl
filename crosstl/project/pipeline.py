@@ -22920,6 +22920,11 @@ def _project_template_materialization_for_artifact(
         )
         recorded_specializations.add(record_key)
 
+    materialized = (
+        preprocessor._materialize_inferred_constrained_template_function_calls(
+            materialized
+        )
+    )
     try:
         implicit_materialization = _materialize_implicit_template_function_calls(
             preprocessor=preprocessor,
@@ -22977,6 +22982,11 @@ def _project_template_materialization_for_artifact(
         },
     )
 
+    materialized = (
+        preprocessor._materialize_inferred_constrained_template_function_calls(
+            materialized
+        )
+    )
     (
         materialized,
         inferred_plain_specializations,
@@ -23027,6 +23037,11 @@ def _project_template_materialization_for_artifact(
             materialized,
             work_budget=explicit_work_budget,
             rematerialize=True,
+        )
+        materialized = (
+            preprocessor._materialize_inferred_constrained_template_function_calls(
+                materialized
+            )
         )
         (
             materialized,

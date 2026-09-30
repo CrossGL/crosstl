@@ -37,6 +37,39 @@ def assert_crossgl_parses(source):
     CrossGLParser(CrossGLLexer(source).get_tokens()).parse()
 
 
+def test_plain_aggregate_brace_round_trips_back_to_metal_brace(tmp_path):
+    source = """
+    struct Pair {
+      uint index;
+      float value;
+    };
+
+    Pair make_pair(uint index, float value) {
+      return Pair{index, value};
+    }
+
+    kernel void compute(device uint* output [[buffer(0)]]) {
+      Pair pair = make_pair(7, 2.0f);
+      output[0] = pair.index;
+    }
+    """
+
+    _preprocessed, crossgl = convert(source, "aggregate-braces.metal")
+    assert "return Pair(index, value);" in crossgl
+    assert_crossgl_parses(crossgl)
+
+    source_path = tmp_path / "aggregate-braces.metal"
+    source_path.write_text(source, encoding="utf-8")
+    round_trip = crosstl.translate(
+        str(source_path),
+        backend="metal",
+        format_output=False,
+    )
+
+    assert "return Pair{index, value};" in round_trip
+    assert "return Pair(index, value);" not in round_trip
+
+
 def test_parser_retains_templated_constructor_contract_and_initializers():
     source = """
     struct Pair {

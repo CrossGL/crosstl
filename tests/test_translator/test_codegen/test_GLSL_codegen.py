@@ -27180,6 +27180,184 @@ def test_glsl_software_subgroup_rejects_indirect_helper_calls():
     assert raised.value.operation == "WaveActiveMin"
 
 
+def test_glsl_software_subgroup_accepts_exact_nested_overload_identity(tmp_path):
+    code = """
+    shader GLSLSoftwareSubgroupNestedOverload {
+        struct Pair {
+            uint index;
+            float value;
+        }
+
+        float shuffleValue(float value, uint offset) {
+            return WaveShuffleDown(value, offset);
+        }
+
+        uint shuffleValue(uint value, uint offset) {
+            return WaveShuffleDown(value, offset);
+        }
+
+        Pair shufflePair(Pair value, uint offset) {
+            Pair result;
+            result.index = WaveShuffleDown(value.index, offset);
+            result.value = shuffleValue(value.value, offset);
+            return result;
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                Pair value;
+                value.index = gl_LocalInvocationID.x;
+                value.value = float(gl_LocalInvocationID.x);
+                for (uint offset = 16u; offset > 0u; offset /= 2u) {
+                    Pair neighbor = shufflePair(value, offset);
+                    value = neighbor;
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "float shuffleValue(float value, uint offset)" in generated
+    assert "uint shuffleValue(uint value, uint offset)" not in generated
+    assert "result.value = shuffleValue(value.value, offset);" in generated
+    assert "result.index = crossglSoftwareSubgroupShuffleDownUint(" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_nested_overload_identity",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_software_subgroup_retains_generic_helper_source_identity(tmp_path):
+    code = """
+    shader GLSLSoftwareSubgroupGenericHelper {
+        generic<T> fn shuffleValue(value: T, offset: uint) -> T {
+            return WaveShuffleDown(value, offset);
+        }
+
+        float shuffleRoot(float value, uint offset) {
+            float direct = WaveShuffleDown(value, offset);
+            return shuffleValue(direct, offset);
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float value = shuffleRoot(float(gl_LocalInvocationID.x), 1u);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "float shuffleValue_float(float value, uint offset)" in generated
+    assert (
+        "return crossglSoftwareSubgroupShuffleDownFloat(value, uint(offset));"
+        in generated
+    )
+    assert "return shuffleValue_float(direct, offset);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_generic_helper_source_identity",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_software_subgroup_decomposes_exact_uvec2_shuffle(tmp_path):
+    code = """
+    shader GLSLSoftwareSubgroupUvec2Shuffle {
+        uvec2 shuffleBits(uvec2 value, uint offset) {
+            return WaveShuffleDown(value, offset);
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uvec2 value = uvec2(gl_LocalInvocationID.x, 7u);
+                uvec2 neighbor = shuffleBits(value, 1u);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert (
+        "uvec2 crossglSoftwareSubgroupShuffleDownUvec2("
+        "uvec2 value, uint delta)" in generated
+    )
+    assert (
+        "return uvec2(crossglSoftwareSubgroupShuffleDownUint(value.x, delta), "
+        "crossglSoftwareSubgroupShuffleDownUint(value.y, delta));" in generated
+    )
+    assert (
+        "return crossglSoftwareSubgroupShuffleDownUvec2(value, uint(offset));"
+        in generated
+    )
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_uvec2_shuffle",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_software_subgroup_rejects_conditional_nested_overload_call():
+    code = """
+    shader GLSLSoftwareSubgroupConditionalNestedOverload {
+        struct Pair {
+            uint index;
+            float value;
+        }
+
+        float shuffleValue(float value, uint offset) {
+            return WaveShuffleDown(value, offset);
+        }
+
+        uint shuffleValue(uint value, uint offset) {
+            return WaveShuffleDown(value, offset);
+        }
+
+        Pair shufflePair(Pair value, uint offset) {
+            Pair result;
+            result.index = WaveShuffleDown(value.index, offset);
+            if (value.value > 0.0) {
+                result.value = shuffleValue(value.value, offset);
+            }
+            return result;
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                Pair value;
+                Pair neighbor = shufflePair(value, 1u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "helper-call-not-uniform"
+    assert raised.value.operation == "WaveShuffleDown"
+
+
 def test_glsl_software_subgroup_rejects_overloaded_helper_identity():
     code = """
     shader GLSLSoftwareSubgroupOverloadedHelper {

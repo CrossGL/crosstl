@@ -1769,6 +1769,7 @@ class GLSLCodeGen:
         "float": "Float",
         "int": "Int",
         "uint": "Uint",
+        "uvec2": "Uvec2",
     }
     GLSL_CLANG_TRAILING_ZERO_BUILTINS = frozenset(
         {"__builtin_ctz", "__builtin_ctzl", "__builtin_ctzll"}
@@ -2273,6 +2274,9 @@ class GLSLCodeGen:
         self.required_glsl_software_subgroup_helpers = set()
         self.glsl_software_subgroup_entry_function_id = None
         self.glsl_software_subgroup_entry_function_name = None
+        self.glsl_software_subgroup_helper_function_ids = set()
+        self.glsl_software_subgroup_candidate_helper_function_ids = set()
+        self.glsl_software_subgroup_omitted_helper_function_ids = set()
         self.glsl_software_subgroup_uniform_for_node_ids = set()
         self.glsl_software_subgroup_zero_trip_for_node_ids = set()
         self.glsl_software_subgroup_workgroup_size = None
@@ -2341,6 +2345,7 @@ class GLSLCodeGen:
         self.glsl_function_overloads_by_name = {}
         self.glsl_function_target_names = {}
         self.current_glsl_function_key = None
+        self.current_glsl_source_function_id = None
         self.current_glsl_source_function_name = None
         self.glsl_function_stage_contexts = {}
         self.glsl_function_call_graph = {}
@@ -4291,17 +4296,20 @@ class GLSLCodeGen:
         workgroup_size,
     ):
         self.glsl_software_subgroup_helper_function_names = set()
+        self.glsl_software_subgroup_helper_function_ids = set()
+        self.glsl_software_subgroup_omitted_helper_function_ids = set()
         if not helper_records:
             return
 
         functions = self.glsl_software_subgroup_functions(ast)
+        functions_by_id = {id(function): function for function in functions}
         functions_by_name = {}
         for function in functions:
             name = getattr(function, "name", None)
             if name:
                 functions_by_name.setdefault(name, []).append(function)
 
-        helpers = {}
+        direct_records = {}
         for operation, node, function in helper_records:
             name = getattr(function, "name", None)
             if not name:
@@ -4313,64 +4321,249 @@ class GLSLCodeGen:
                     reason="helper-identity-invalid",
                     source_location=getattr(node, "source_location", None),
                 )
-            if len(functions_by_name.get(name, ())) != 1:
-                raise self.glsl_software_subgroup_error(
-                    "OpenGL software subgroup helpers cannot use overloaded "
-                    f"source function name '{name}'",
-                    workgroup_size=workgroup_size,
-                    operation=operation,
-                    reason="helper-identity-ambiguous",
-                    source_location=getattr(node, "source_location", None),
-                )
-            helpers.setdefault(name, (function, operation, node))
+            direct_records.setdefault(id(function), []).append((operation, node))
 
-        helper_names = set(helpers)
-        uniform_entry_call_ids = self.glsl_software_subgroup_uniform_top_level_call_ids(
-            getattr(entry_function, "body", None)
-        )
+        def source_overload_count(name):
+            return len(
+                {
+                    self.glsl_source_function_signature(function)
+                    for function in functions_by_name.get(name, ())
+                }
+            )
 
-        call_counts = {name: 0 for name in helper_names}
+        def resolve_call(call):
+            name = self.function_call_name(call)
+            if name not in functions_by_name:
+                return None
+            arguments = list(
+                getattr(call, "arguments", getattr(call, "args", [])) or []
+            )
+            resolved = self.resolve_glsl_function_overload(
+                name,
+                arguments,
+                call_node=call,
+            )
+            if resolved is not None:
+                return resolved
+            candidates = [
+                function
+                for function in functions_by_name[name]
+                if getattr(function, "body", None) is not None
+            ]
+            signatures = {
+                self.glsl_source_function_signature(function) for function in candidates
+            }
+            if len(signatures) == 1 and candidates:
+                return candidates[0]
+            return None
+
+        edges = {id(function): [] for function in functions}
+        unresolved_edges = {id(function): [] for function in functions}
         for function in functions:
             body = getattr(function, "body", None)
             for node in self.glsl_software_subgroup_reachable_nodes(body):
                 if not isinstance(node, FunctionCallNode):
                     continue
-                name = self.function_call_name(node)
-                if name not in helper_names:
+                try:
+                    target = resolve_call(node)
+                except OpenGLMappedOverloadError as error:
+                    unresolved_edges[id(function)].append((node, error))
                     continue
-                _helper, operation, operation_node = helpers[name]
-                if (
-                    id(function) != id(entry_function)
-                    or id(node) not in uniform_entry_call_ids
-                ):
-                    raise self.glsl_software_subgroup_error(
-                        "OpenGL software subgroup helper "
-                        f"'{name}' must be called directly from the compute "
-                        "entry point as a statically uniform top-level statement",
-                        workgroup_size=workgroup_size,
-                        operation=operation,
-                        reason="helper-call-not-uniform",
-                        source_location=getattr(node, "source_location", None)
-                        or getattr(operation_node, "source_location", None),
-                    )
-                call_counts[name] += 1
+                if target is not None and id(target) in functions_by_id:
+                    edges[id(function)].append((node, id(target)))
 
-        missing = next(
-            (name for name, count in call_counts.items() if count == 0), None
+        reaches_operation = set(direct_records)
+        changed = True
+        while changed:
+            changed = False
+            for function_id, call_edges in edges.items():
+                if function_id in reaches_operation:
+                    continue
+                if any(
+                    target_id in reaches_operation for _call, target_id in call_edges
+                ):
+                    reaches_operation.add(function_id)
+                    changed = True
+
+        def first_operation(function_id):
+            pending = [function_id]
+            visited = set()
+            while pending:
+                current_id = pending.pop(0)
+                if current_id in visited:
+                    continue
+                visited.add(current_id)
+                records = direct_records.get(current_id)
+                if records:
+                    return records[0]
+                pending.extend(
+                    target_id
+                    for _call, target_id in edges.get(current_id, ())
+                    if target_id in reaches_operation
+                )
+            operation, node, _function = helper_records[0]
+            return operation, node
+
+        def ambiguous_edge_error(call, error):
+            name = self.function_call_name(call)
+            candidate_ids = {
+                id(function) for function in functions_by_name.get(name, ())
+            }
+            relevant_ids = candidate_ids & reaches_operation
+            if not relevant_ids:
+                return None
+            operation, operation_node = first_operation(next(iter(relevant_ids)))
+            return self.glsl_software_subgroup_error(
+                "OpenGL software subgroup helper call cannot resolve one exact "
+                f"source overload for '{name}'",
+                workgroup_size=workgroup_size,
+                operation=operation,
+                reason="helper-identity-ambiguous",
+                source_location=getattr(call, "source_location", None)
+                or getattr(operation_node, "source_location", None)
+                or getattr(error, "source_location", None),
+            )
+
+        def call_is_unconditional(body, call):
+            call_id = id(call)
+            control_flow_types = (
+                IfNode,
+                ForNode,
+                ForInNode,
+                WhileNode,
+                DoWhileNode,
+                LoopNode,
+                SwitchNode,
+                MatchNode,
+            )
+            for node in self.walk_ast(body):
+                guarded = (
+                    isinstance(node, control_flow_types)
+                    or (
+                        isinstance(node, BinaryOpNode)
+                        and self.map_operator(
+                            getattr(node, "op", getattr(node, "operator", None))
+                        )
+                        in {"&&", "||"}
+                    )
+                    or isinstance(node, TernaryOpNode)
+                )
+                if not guarded:
+                    continue
+                if any(id(child) == call_id for child in self.walk_ast(node)):
+                    return False
+            return True
+
+        uniform_entry_call_ids = self.glsl_software_subgroup_uniform_top_level_call_ids(
+            getattr(entry_function, "body", None)
         )
-        if missing is not None:
-            _helper, operation, node = helpers[missing]
+        entry_id = id(entry_function)
+
+        for call, error in unresolved_edges.get(entry_id, ()):
+            relevant = ambiguous_edge_error(call, error)
+            if relevant is not None:
+                raise relevant
+
+        roots = set()
+        for call, target_id in edges.get(entry_id, ()):
+            if target_id not in reaches_operation:
+                continue
+            operation, operation_node = first_operation(target_id)
+            target = functions_by_id[target_id]
+            name = getattr(target, "name", None)
+            if target_id not in direct_records:
+                raise self.glsl_software_subgroup_error(
+                    "OpenGL software subgroup helpers must be called directly "
+                    "from the compute entry point rather than through an "
+                    "operation-free wrapper",
+                    workgroup_size=workgroup_size,
+                    operation=operation,
+                    reason="helper-call-not-uniform",
+                    source_location=getattr(call, "source_location", None)
+                    or getattr(operation_node, "source_location", None),
+                )
+            if source_overload_count(name) != 1:
+                raise self.glsl_software_subgroup_error(
+                    "OpenGL software subgroup root helpers cannot use overloaded "
+                    f"source function name '{name}'",
+                    workgroup_size=workgroup_size,
+                    operation=operation,
+                    reason="helper-identity-ambiguous",
+                    source_location=getattr(call, "source_location", None)
+                    or getattr(operation_node, "source_location", None),
+                )
+            if id(call) not in uniform_entry_call_ids:
+                raise self.glsl_software_subgroup_error(
+                    "OpenGL software subgroup helper "
+                    f"'{name}' must be called directly from the compute entry "
+                    "point as a statically uniform top-level statement",
+                    workgroup_size=workgroup_size,
+                    operation=operation,
+                    reason="helper-call-not-uniform",
+                    source_location=getattr(call, "source_location", None)
+                    or getattr(operation_node, "source_location", None),
+                )
+            roots.add(target_id)
+
+        if not roots and not self.glsl_software_subgroup_operation_records(
+            getattr(entry_function, "body", None)
+        ):
+            operation, node, function = helper_records[0]
             raise self.glsl_software_subgroup_error(
                 "OpenGL software subgroup helper "
-                f"'{missing}' is not reached by a statically uniform top-level "
-                "entry-point call",
+                f"'{getattr(function, 'name', '<unknown>')}' is not reached by "
+                "a statically uniform top-level entry-point call",
                 workgroup_size=workgroup_size,
                 operation=operation,
                 reason="helper-call-unproven",
                 source_location=getattr(node, "source_location", None),
             )
 
-        self.glsl_software_subgroup_helper_function_names = helper_names
+        approved = set(roots)
+        pending = list(roots)
+        while pending:
+            function_id = pending.pop(0)
+            function = functions_by_id[function_id]
+            operation, operation_node = first_operation(function_id)
+            for call, error in unresolved_edges.get(function_id, ()):
+                relevant = ambiguous_edge_error(call, error)
+                if relevant is not None:
+                    raise relevant
+            for call, target_id in edges.get(function_id, ()):
+                if target_id not in reaches_operation:
+                    continue
+                target = functions_by_id[target_id]
+                target_name = getattr(target, "name", None)
+                if target_id not in direct_records or not call_is_unconditional(
+                    getattr(function, "body", None), call
+                ):
+                    raise self.glsl_software_subgroup_error(
+                        "OpenGL nested software subgroup helper "
+                        f"'{target_name}' must be reached by an unconditional, "
+                        "statically uniform call",
+                        workgroup_size=workgroup_size,
+                        operation=operation,
+                        reason="helper-call-not-uniform",
+                        source_location=getattr(call, "source_location", None)
+                        or getattr(operation_node, "source_location", None),
+                    )
+                if target_id not in approved:
+                    approved.add(target_id)
+                    pending.append(target_id)
+
+        self.glsl_software_subgroup_helper_function_ids = approved
+        self.glsl_software_subgroup_helper_function_names = {
+            getattr(functions_by_id[function_id], "name", None)
+            for function_id in approved
+            if source_overload_count(
+                getattr(functions_by_id[function_id], "name", None)
+            )
+            == 1
+        }
+        self.glsl_software_subgroup_helper_function_names.discard(None)
+        self.glsl_software_subgroup_omitted_helper_function_ids = (
+            reaches_operation - approved - {entry_id}
+        )
 
     def glsl_software_subgroup_direct_operation(self, expression):
         if isinstance(expression, WaveOpNode):
@@ -4704,7 +4897,9 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_entry_function_id = None
         self.glsl_software_subgroup_entry_function_name = None
         self.glsl_software_subgroup_helper_function_names = set()
-        self.glsl_software_subgroup_candidate_helper_function_names = set()
+        self.glsl_software_subgroup_helper_function_ids = set()
+        self.glsl_software_subgroup_candidate_helper_function_ids = set()
+        self.glsl_software_subgroup_omitted_helper_function_ids = set()
         self.glsl_software_subgroup_uniform_for_node_ids = set()
         self.glsl_software_subgroup_zero_trip_for_node_ids = set()
         self.glsl_software_subgroup_workgroup_size = None
@@ -4820,10 +5015,8 @@ class GLSLCodeGen:
             ):
                 if id(node) not in entry_node_ids:
                     helper_records.append((operation, node, function))
-        self.glsl_software_subgroup_candidate_helper_function_names = {
-            getattr(function, "name", None)
-            for _operation, _node, function in helper_records
-            if getattr(function, "name", None)
+        self.glsl_software_subgroup_candidate_helper_function_ids = {
+            id(function) for _operation, _node, function in helper_records
         }
 
         for node in self.walk_ast(ast):
@@ -5075,8 +5268,7 @@ class GLSLCodeGen:
                 self.glsl_software_subgroup_first_operation(statement)
             ) or any(
                 isinstance(child, FunctionCallNode)
-                and self.function_call_name(child)
-                in self.glsl_software_subgroup_candidate_helper_function_names
+                and self.glsl_software_subgroup_candidate_helper_call(child)
                 for child in self.walk_ast(getattr(statement, "body", None))
             )
             if is_uniform and contains_subgroup_work:
@@ -5108,6 +5300,25 @@ class GLSLCodeGen:
             )
             return names - observed
         return names
+
+    def glsl_software_subgroup_candidate_helper_call(self, call):
+        name = self.function_call_name(call)
+        if name not in self.glsl_function_overloads_by_name:
+            return False
+        arguments = list(getattr(call, "arguments", getattr(call, "args", [])) or [])
+        try:
+            target = self.resolve_glsl_function_overload(
+                name,
+                arguments,
+                call_node=call,
+            )
+        except OpenGLMappedOverloadError:
+            return False
+        return target is not None and id(target) in getattr(
+            self,
+            "glsl_software_subgroup_candidate_helper_function_ids",
+            set(),
+        )
 
     def glsl_software_subgroup_analyze_uniform_statements(
         self,
@@ -6183,6 +6394,7 @@ class GLSLCodeGen:
         self.glsl_function_overloads_by_name = {}
         self.glsl_function_target_names = {}
         self.current_glsl_function_key = None
+        self.current_glsl_source_function_id = None
         self.current_glsl_source_function_name = None
         self.glsl_function_stage_contexts = {}
         self.glsl_function_call_graph = {}
@@ -6331,6 +6543,9 @@ class GLSLCodeGen:
         self.required_glsl_software_subgroup_helpers = set()
         self.glsl_software_subgroup_entry_function_id = None
         self.glsl_software_subgroup_entry_function_name = None
+        self.glsl_software_subgroup_helper_function_ids = set()
+        self.glsl_software_subgroup_candidate_helper_function_ids = set()
+        self.glsl_software_subgroup_omitted_helper_function_ids = set()
         self.glsl_software_subgroup_uniform_for_node_ids = set()
         self.glsl_software_subgroup_zero_trip_for_node_ids = set()
         self.glsl_software_subgroup_workgroup_size = None
@@ -9400,7 +9615,11 @@ class GLSLCodeGen:
 
     def generate_glsl_resource_function_declarations(self):
         specializations = sorted(
-            self.glsl_resource_function_specializations.values(),
+            (
+                function
+                for function in self.glsl_resource_function_specializations.values()
+                if not self.should_elide_glsl_function(function)
+            ),
             key=lambda func: self.glsl_function_declaration_name(func),
         )
         return self.generate_glsl_function_declarations(specializations)
@@ -9415,7 +9634,8 @@ class GLSLCodeGen:
             concrete.extend(
                 candidate
                 for candidate in candidates
-                if not self.glsl_function_has_target_pointer_parameter(candidate)
+                if not self.should_elide_glsl_function(candidate)
+                and not self.glsl_function_has_target_pointer_parameter(candidate)
             )
         return concrete
 
@@ -13096,6 +13316,11 @@ class GLSLCodeGen:
                 "resource_root": False,
             }
         clone._glsl_resource_source_name = func_name
+        clone._glsl_resource_source_function_id = (
+            getattr(source_func, "_glsl_resource_source_function_id", None)
+            or getattr(source_func, "_generic_source_function_id", None)
+            or id(source_func)
+        )
         clone._glsl_resource_specialization_key = key
         clone._glsl_resource_bound_indices = set(bindings)
         clone._glsl_resource_dynamic_call_arguments = dynamic_call_arguments
@@ -16233,6 +16458,8 @@ class GLSLCodeGen:
         _private_pointer_variant=None,
     ):
         """Render a function or GLSL ``main`` stage entry point."""
+        if shader_type is None and self.should_elide_glsl_function(func):
+            return ""
         function_key = self.glsl_function_declaration_name(func)
         variants = self.function_private_pointer_backing_variants.get(function_key)
         if _private_pointer_variant is None and variants and shader_type is None:
@@ -16617,6 +16844,7 @@ class GLSLCodeGen:
             "ray_callable",
         }
         previous_glsl_function_key = self.current_glsl_function_key
+        previous_glsl_source_function_id = self.current_glsl_source_function_id
         previous_glsl_source_function_name = self.current_glsl_source_function_name
         emitted_function_name = (
             (entry_name or "main")
@@ -16631,6 +16859,11 @@ class GLSLCodeGen:
             func,
             emitted_function_name,
             stage_context=stage_context,
+        )
+        self.current_glsl_source_function_id = (
+            getattr(func, "_glsl_resource_source_function_id", None)
+            or getattr(func, "_generic_source_function_id", None)
+            or id(func)
         )
         self.current_glsl_source_function_name = (
             getattr(func, "_glsl_resource_source_name", None)
@@ -16897,6 +17130,7 @@ class GLSLCodeGen:
             previous_structured_buffer_access_parameters
         )
         self.current_glsl_function_key = previous_glsl_function_key
+        self.current_glsl_source_function_id = previous_glsl_source_function_id
         self.current_glsl_source_function_name = previous_glsl_source_function_name
         self.current_glsl_private_pointer_function_name = (
             previous_private_pointer_function_name
@@ -33692,10 +33926,26 @@ complex64_t crossgl_complex64_mod_assign(
             set(),
         )
 
+    def should_elide_glsl_software_subgroup_helper(self, func):
+        omitted = getattr(
+            self,
+            "glsl_software_subgroup_omitted_helper_function_ids",
+            set(),
+        )
+        source_function_ids = {
+            id(func),
+            getattr(func, "_glsl_resource_source_function_id", None),
+            getattr(func, "_generic_source_function_id", None),
+        }
+        source_function_ids.discard(None)
+        return bool(source_function_ids & omitted)
+
     def should_elide_glsl_function(self, func):
-        return self.should_elide_metal_simd_group_placeholder_function(
-            func
-        ) or self.should_elide_glsl_fixed_array_vector_pointer_view_helper(func)
+        return (
+            self.should_elide_metal_simd_group_placeholder_function(func)
+            or self.should_elide_glsl_fixed_array_vector_pointer_view_helper(func)
+            or self.should_elide_glsl_software_subgroup_helper(func)
+        )
 
     def is_empty_function_body(self, body):
         if body is None:
@@ -34613,6 +34863,7 @@ complex64_t crossgl_complex64_mod_assign(
                 for _operation, value_type in (
                     self.required_glsl_software_subgroup_helpers
                 )
+                if value_type in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
             },
             key=lambda value_type: self.GLSL_SOFTWARE_SUBGROUP_TYPE_SUFFIXES[
                 value_type
@@ -34638,6 +34889,17 @@ complex64_t crossgl_complex64_mod_assign(
             ),
         ):
             helper = self.glsl_software_subgroup_helper_name(operation, value_type)
+            if operation == "WaveShuffleDown" and value_type == "uvec2":
+                component_helper = self.glsl_software_subgroup_helper_name(
+                    operation, "uint"
+                )
+                code += (
+                    f"uvec2 {helper}(uvec2 value, uint delta) {{\n"
+                    f"    return uvec2({component_helper}(value.x, delta), "
+                    f"{component_helper}(value.y, delta));\n"
+                    "}\n\n"
+                )
+                continue
             scratch = self.glsl_software_subgroup_scratch_name(value_type)
             if invocation_count == self.software_subgroup_width:
                 lane_setup = "    uint lane = gl_LocalInvocationIndex;\n"
@@ -34829,16 +35091,21 @@ complex64_t crossgl_complex64_mod_assign(
                 source_location=source_location,
             )
         current_function_name = self.current_glsl_source_function_name
+        current_function_id = self.current_glsl_source_function_id
+        approved_function_ids = self.glsl_software_subgroup_helper_function_ids
         approved_function = (
-            current_function_name == self.glsl_software_subgroup_entry_function_name
-            or current_function_name
-            in self.glsl_software_subgroup_helper_function_names
+            current_function_id == self.glsl_software_subgroup_entry_function_id
+            or current_function_id in approved_function_ids
         )
         if not approved_function:
             approved_function = any(
                 getattr(specialization, "name", None) == current_function_name
-                and getattr(specialization, "_glsl_resource_source_name", None)
-                in self.glsl_software_subgroup_helper_function_names
+                and getattr(
+                    specialization,
+                    "_glsl_resource_source_function_id",
+                    None,
+                )
+                in approved_function_ids
                 for specialization in (
                     self.glsl_resource_function_specializations.values()
                 )
@@ -34865,10 +35132,19 @@ complex64_t crossgl_complex64_mod_assign(
         mapped_value_type = (
             self.map_type(value_type) if value_type is not None else None
         )
-        if mapped_value_type not in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES:
+        vector_shuffle_type = (
+            mapped_value_type
+            if operation == "WaveShuffleDown" and mapped_value_type == "uvec2"
+            else None
+        )
+        if (
+            mapped_value_type not in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
+            and vector_shuffle_type is None
+        ):
             raise self.glsl_software_subgroup_error(
                 f"OpenGL software subgroup operation '{operation}' requires a "
-                "32-bit numeric scalar payload",
+                "32-bit numeric scalar payload or an exact two-component "
+                "uint shuffle payload",
                 operation=operation,
                 reason="value-type-unsupported",
                 source_location=source_location,
@@ -34887,6 +35163,8 @@ complex64_t crossgl_complex64_mod_assign(
                     source_location=source_location,
                 )
 
+        if vector_shuffle_type is not None:
+            self.required_glsl_software_subgroup_helpers.add((operation, "uint"))
         self.required_glsl_software_subgroup_helpers.add((operation, mapped_value_type))
         helper = self.glsl_software_subgroup_helper_name(operation, mapped_value_type)
         value = self.generate_expression_with_expected(arguments[0], mapped_value_type)

@@ -494,6 +494,79 @@ Entry selection scopes shader or kernel translation; it does not infer host
 dispatch dimensions, runtime bindings, or backend integration. Record those
 requirements through the corresponding dispatch and runtime contracts.
 
+The next MLX kernel-tree increment is pinned independently at
+``d9add9d11f3154111a4c85f267ec2fd307ecd18e``. Entry discovery must report
+exactly 42 Metal units, 17,478 entries, and zero diagnostics. The compact
+``arg_reduce.current-tree.translation.json`` contract pins all 24 discovered
+``arg_reduce.metal`` entries and 72 deterministic Metal, OpenGL, and DirectX
+artifacts. Required macOS, Linux, and Windows CI compiles all 24 entries with
+the native Metal compiler, ``glslangValidator``/``spirv-val``, and DXC,
+respectively. Numerical runtime parity remains an explicit representative
+float32 subset: ``argmin_float32`` and ``argmax_float32`` must execute on Metal,
+Mesa EGL, and Direct3D 12 WARP over two rows, axis sizes 32 and 129, strides 1
+and 2, ordinary values, and NaN/Infinity values; the Metal path also executes
+the exact upstream metallib for parity. This is a 24/17,478 deterministic
+translation and native-compiler increment with 2/17,478 numerical runtime
+coverage, not full-tree coverage. The contract explicitly records that the
+upstream MLX test suite and MLX host-runtime redirection have not yet been
+implemented. Strict JSON runtime requests encode non-finite float32 inputs with
+the exact strings ``nan``, ``+infinity``, and ``-infinity`` before
+deterministic IEEE-754 packing.
+
+Constrained Metal free-function fallbacks are materialized only when their
+recognized constraints select a unique implementation. A visible ordinary or
+unconstrained-template overload with compatible argument count causes a
+structured specialization diagnostic when precedence cannot be proven;
+forward declarations participate even without a definition. General C++
+conversion ranking and template partial ordering are not implemented by this
+path. Use a distinct helper name or an explicit specialization to remove the
+unresolved competition rather than relying on a guessed overload.
+Generated helper names reserve existing source identifiers, including local
+variables and parameters. A deterministic suffix avoids name collisions while
+repeated calls to the same specialization reuse one helper.
+
+The two current-tree DirectX float32 entries explicitly select
+``software_subgroup_width = 32``. Their shuffle helpers use shared storage and
+workgroup barriers instead of hardware wave instructions. A private
+per-invocation index initialized by the entry point preserves lane identity
+through helper calls. Early returns are accepted only under proven
+workgroup-uniform control flow; a subgroup-ID condition is uniform only when
+the workgroup contains one logical subgroup. Writes, shadowing, and mutable
+helper arguments invalidate the corresponding uniformity assumptions.
+Other DirectX entries retain the native-wave compiler path. Both paths still
+require DXC validation, and the numerical entries retain every existing case
+and the required Windows WARP execution gate. Compilation alone does not
+establish numerical parity or resolve a native-runtime timeout.
+
+The bounded Windows test also records live Direct3D 12 debug-layer messages
+through ``tools/run_directx_diagnostics.py``. Each entry's JSON-lines log is
+stored outside pytest's temporary directory and uploaded with the runtime
+evidence, including on timeout. Missing debug-layer tooling is reported
+explicitly and does not skip or replace the numerical test. The wrapper
+preserves the wrapped Python module's arguments and exit status.
+After device creation it records the loaded Direct3D and WARP DLL paths and
+SHA-256 hashes, independently of the runtime installation log. The Windows
+project-porting job pins WARP 1.0.21 with an archive checksum. Its
+`release notes <https://www.nuget.org/packages/Microsoft.Direct3D.WARP/1.0.21>`_
+describe revised uniform and divergent control-flow handling; numerical tests
+remain the acceptance gate for the runtime update.
+The current DirectX kernel test additionally saves the actual runtime-loaded
+DXIL and the final packed register payloads immediately before each dispatch in
+``native-dispatches``. This distinguishes the executed module and bindings from
+the standalone compiler check's artifacts, including when dispatch never returns.
+
+Before the full kernels, Windows also executes eight small translated reduction
+checks: sparse-register metadata reads, signed 64-bit index division, helper-level
+software shuffles, their combination with a bounded input loop, NaN-aware pair
+comparisons, non-finite inputs, a second shared-memory reduction stage, and
+private-array accumulation. Each runs in a separate process with a two-minute
+deadline and exact readback comparisons.
+The diagnostic logs, CrossGL input, generated HLSL, DXIL, and completed readbacks
+are retained under ``mlx-current-results`` and uploaded before the full kernels
+run. All eight checks are attempted and any failure fails the step. These isolate
+runtime failures; they neither replace the MLX numerical cases nor establish
+whole-kernel parity.
+
 The current-pinned MLX integration exercises entry-scoped translation for all
 877 discovered entries from the include-expanded ``unary.metal`` source. The
 finite split is 183 each for ``v_``, ``v2_``, ``gn1_``, and ``gn4large_``, plus

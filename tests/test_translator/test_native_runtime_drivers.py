@@ -497,6 +497,24 @@ def _opengl_dispatch_request(tmp_path: Path) -> NativeRuntimeDispatchRequest:
     )
 
 
+def test_runtime_buffer_packing_accepts_json_safe_nonfinite_float32_tokens():
+    from crosstl.project.native_runtime_drivers import _pack_values
+
+    payload = _pack_values(
+        ["nan", "+infinity", "-infinity", 1.25],
+        "float32",
+        expected_count=4,
+        target="test",
+    )
+
+    assert struct.unpack("<4I", payload) == (
+        0x7FC00000,
+        0x7F800000,
+        0xFF800000,
+        0x3FA00000,
+    )
+
+
 def _scalar_block_layout(storage_layout: str, **overrides):
     layout = {
         "physicalType": "uint",
