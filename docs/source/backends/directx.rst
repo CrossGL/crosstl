@@ -77,6 +77,13 @@ added. Source-visible scalar or vector IDs retain their original values and
 ordinary assignment semantics; modifying them cannot change subgroup partners
 or shared-memory offsets.
 
+Convergence analysis follows immutable integer and Boolean locals in lexical
+scope, including nested counted-loop bounds derived from constant parameters.
+Primitive constructors and unshadowed ``min``, ``max`` and ``clamp`` calls preserve
+uniformity only when their operands are workgroup-uniform. Writes, reference
+aliases, address escapes and possibly mutating calls invalidate these facts.
+Lane-dependent bounds and unproven early exits remain translation errors.
+
 Payloads are limited to 32-bit ``float``, ``int`` and ``uint`` scalars. Floating
 sums use a precise, increasing-lane-order fold; different native reduction
 orders can round differently. Integer sums retain 32-bit wraparound. Floating

@@ -647,8 +647,12 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
         workflow, "portable-host", "Validate DirectX software reductions"
     )
     assert "tests/test_translator/test_directx_subgroup_identity.py" in reductions
+    assert "tests/test_translator/test_directx_subgroup_uniformity.py" in reductions
     for event in ("push", "pull_request"):
         assert "tests/test_translator/test_directx_subgroup_identity.py" in (
+            ci_coverage.workflow_event_path_filters(workflow, event)
+        )
+        assert "tests/test_translator/test_directx_subgroup_uniformity.py" in (
             ci_coverage.workflow_event_path_filters(workflow, event)
         )
     control = ci_coverage.workflow_job_step_section(

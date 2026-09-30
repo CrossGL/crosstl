@@ -4563,16 +4563,28 @@ class HLSLCodeGen:
     def hlsl_software_subgroup_uniform_expression(self, expression, uniform_names):
         if expression is None:
             return False
+        callees = {
+            id(node.function)
+            for node in self.walk_ast(expression)
+            if isinstance(node, FunctionCallNode)
+            and id(node) in self.hlsl_software_subgroup_uniform_calls
+        }
         for node in self.walk_ast(expression):
-            if isinstance(
-                node, (AssignmentNode, FunctionCallNode, WaveOpNode, ArrayAccessNode)
+            if isinstance(node, (AssignmentNode, WaveOpNode, ArrayAccessNode)):
+                return False
+            if isinstance(node, FunctionCallNode) and (
+                id(node) not in self.hlsl_software_subgroup_uniform_calls
             ):
                 return False
             if isinstance(node, UnaryOpNode) and self.map_operator(
                 getattr(node, "op", getattr(node, "operator", None))
             ) in {"++", "--"}:
                 return False
-            if isinstance(node, IdentifierNode) and node.name not in uniform_names:
+            if (
+                isinstance(node, IdentifierNode)
+                and id(node) not in callees
+                and node.name not in uniform_names
+            ):
                 return False
         return True
 
@@ -4714,7 +4726,7 @@ class HLSLCodeGen:
         )
 
     def validate_hlsl_software_subgroup_control_flow(
-        self, function, dependent_names, uniform_names, call_mutations
+        self, function, dependent_names, uniform_names, call_mutations, mutable_names
     ):
         body = getattr(function, "body", None)
         operation_records = self.hlsl_software_subgroup_operation_records(body)
@@ -4727,6 +4739,27 @@ class HLSLCodeGen:
 
         def validate_statements(statements, names):
             for statement in self.hlsl_software_subgroup_statement_list(statements):
+                if isinstance(statement, VariableNode):
+                    # Facts are lexical and apply only to locals never written
+                    # or passed to a possibly mutating call in this function.
+                    names.discard(statement.name)
+                    if (
+                        statement.name not in mutable_names
+                        and self.map_type(statement.var_type)
+                        in {
+                            "bool",
+                            "int",
+                            "uint",
+                            "int16_t",
+                            "uint16_t",
+                            "min16int",
+                            "min16uint",
+                        }
+                        and self.hlsl_software_subgroup_uniform_expression(
+                            statement.initial_value, names
+                        )
+                    ):
+                        names.add(statement.name)
                 has_return = any(
                     isinstance(node, ReturnNode) for node in self.walk_ast(statement)
                 )
@@ -4856,6 +4889,7 @@ class HLSLCodeGen:
         self.hlsl_software_subgroup_function_names = set()
         self.hlsl_software_subgroup_invocation_expressions = {}
         self.hlsl_software_subgroup_invocation_variable = None
+        self.hlsl_software_subgroup_uniform_calls = set()
         if self.software_subgroup_width is None:
             return
 
@@ -5018,6 +5052,17 @@ class HLSLCodeGen:
             call_name = self.function_call_name(node)
             arguments = list(getattr(node, "arguments", []) or [])
             callee = functions_by_name.get(call_name)
+            pure_call = (
+                callee is None
+                and isinstance(node.function, (str, IdentifierNode))
+                and (
+                    (call_name in {"min", "max"} and len(arguments) == 2)
+                    or (call_name == "clamp" and len(arguments) == 3)
+                    or self.directx_compile_time_constructor_type(call_name) is not None
+                )
+            )
+            if pure_call:
+                self.hlsl_software_subgroup_uniform_calls.add(id(node))
             if callee is not None and call_name not in duplicate_names:
                 parameters = getattr(callee, "parameters", []) or []
                 mutations = [
@@ -5030,7 +5075,7 @@ class HLSLCodeGen:
             elif callee is None and (
                 call_name in self.HLSL_WAVE_INTRINSIC_ARITIES
                 or self.hlsl_metal_simd_shuffle_name(call_name) is not None
-                or self.directx_compile_time_constructor_type(call_name) is not None
+                or pure_call
             ):
                 mutations = []
             else:
@@ -5068,23 +5113,31 @@ class HLSLCodeGen:
                 )
             # A name alone is not a uniformity proof after writes, shadowing,
             # or a call that could receive it through an output parameter.
+            mutable_names = set()
             for node in self.walk_ast(getattr(function, "body", None)):
                 if isinstance(node, VariableNode):
                     uniform_names.discard(node.name)
+                    if isinstance(node.var_type, ReferenceType):
+                        mutable_names.update(
+                            self.hlsl_software_subgroup_expression_identifier_names(
+                                node.initial_value
+                            )
+                        )
                 elif isinstance(node, AssignmentNode):
-                    uniform_names.discard(
+                    mutable_names.add(
                         self.hlsl_software_subgroup_assignment_target_name(node)
                     )
                 elif isinstance(node, UnaryOpNode) and self.map_operator(
                     getattr(node, "op", getattr(node, "operator", None))
-                ) in {"++", "--"}:
-                    uniform_names.discard(
+                ) in {"++", "--", "&"}:
+                    mutable_names.add(
                         self.hlsl_texture_offset_write_root_name(node.operand)
                     )
                 elif isinstance(node, FunctionCallNode):
-                    uniform_names.difference_update(call_mutations[id(node)])
+                    mutable_names.update(call_mutations[id(node)])
+            uniform_names.difference_update(mutable_names)
             self.validate_hlsl_software_subgroup_control_flow(
-                function, dependent_names, uniform_names, call_mutations
+                function, dependent_names, uniform_names, call_mutations, mutable_names
             )
 
     def hlsl_software_subgroup_identifier(self, key, base_name):
