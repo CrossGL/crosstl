@@ -47,13 +47,17 @@ is no CPU computation fallback. The element cap is deliberate pending general
 
 ## Run
 
-Use Python 3.12 or 3.13, a C++20 toolchain, CMake, Ninja and the relevant runtime.
+Use Python 3.12, a C++20 toolchain, CMake, Ninja and the relevant runtime.
 Linux additionally needs OpenBLAS, LAPACK/LAPACKE and Mesa EGL development/runtime
 packages. Windows needs Visual Studio C++ build tools and DXC; the workflow pins
 DXC and WARP archives with SHA-256 checks. Run from the CrossTL repository root:
 
+Python 3.13 also works for the Linux build, but the Windows graphics dependency
+currently requires the published Python 3.12 wheel. CI uses 3.12 on both platforms
+and retains dependency-install output even when setup fails.
+
 ```sh
-python -m pip install -e '.[opengl-runtime]' setuptools wheel cmake ninja nanobind numpy packaging
+python -m pip install -e . moderngl PyOpenGL setuptools wheel cmake ninja nanobind numpy packaging
 git clone https://github.com/ml-explore/mlx.git mlx-upstream
 git -C mlx-upstream checkout d9add9d11f3154111a4c85f267ec2fd307ecd18e
 python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output adaptation.json

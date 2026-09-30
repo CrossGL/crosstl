@@ -367,6 +367,11 @@ def test_ci_requires_both_native_platforms_and_retains_evidence():
         prepare.COMMIT,
         "ubuntu-24.04",
         "windows-2025",
+        'python-version: "3.12"',
+        "Initialize execution evidence",
+        "tee .mlx-portable-host/dependencies.log",
+        "python -m pip install moderngl PyOpenGL",
+        'pip install -e ".[directx-runtime]"',
         "target: opengl",
         "target: directx",
         "-DMLX_BUILD_METAL=OFF",
@@ -385,4 +390,5 @@ def test_ci_requires_both_native_platforms_and_retains_evidence():
     ):
         assert required in workflow
     assert "continue-on-error" not in workflow
+    assert "opengl-runtime" not in workflow
     assert len(verify.UPSTREAM_TESTS) == 3

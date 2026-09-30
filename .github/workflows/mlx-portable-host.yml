@@ -58,14 +58,27 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"
+      - name: Initialize execution evidence
+        run: |
+          mkdir -p .mlx-portable-host
+          python --version > .mlx-portable-host/python-version.txt
       - name: Install Linux build and graphics dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
       - name: Install CrossTL and MLX build dependencies
-        run: python -m pip install -e ".[${{ matrix.target }}-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging \
+            2>&1 | tee .mlx-portable-host/dependencies.log
+      - name: Install OpenGL runtime dependencies
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          python -m pip install moderngl PyOpenGL 2>&1 | tee -a .mlx-portable-host/dependencies.log
+          python -c "import moderngl, OpenGL; print(moderngl.__version__, OpenGL.__version__)"
       - name: Install pinned DirectX tools
         if: runner.os == 'Windows'
         shell: pwsh
