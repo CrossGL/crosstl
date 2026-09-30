@@ -2394,6 +2394,10 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         assert "tests/test_run_bounded_command.py" in trigger_paths
         assert "tools/run_directx_diagnostics.py" in trigger_paths
         assert "tests/test_run_directx_diagnostics.py" in trigger_paths
+        assert (
+            "tests/test_translator/test_directx_reduction_primitives.py"
+            in trigger_paths
+        )
     assert "demos/integrations/mlx/run_mlx_porting.py" in mlx_porting
     assert f'MLX_COMMIT: "{mlx_reference_commit}"' in mlx_porting
     assert f'MLX_CORPUS_COMMIT: "{mlx_corpus_commit}"' in mlx_porting
@@ -2435,6 +2439,19 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert '--expected-commit "$MLX_CURRENT_TREE_COMMIT"' in current_census
     assert "--expected-unit-count 42" in current_census
     assert "--expected-entry-count 17478" in current_census
+    primitive_checks = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Validate Direct3D reduction primitives"
+    )
+    assert "if: runner.os == 'Windows'" in primitive_checks
+    assert 'CROSTL_REQUIRE_DIRECTX_REDUCTION_PRIMITIVES: "1"' in primitive_checks
+    assert "for case in metadata division shuffle combined; do" in primitive_checks
+    assert "--timeout-seconds 120 --" in primitive_checks
+    assert "test_directx_reduction_primitives_execute[$case]" in primitive_checks
+    assert "|| failed=1" in primitive_checks
+    assert 'exit "$failed"' in primitive_checks
+    assert mlx_porting.index(
+        "Validate Direct3D reduction primitives"
+    ) < mlx_porting.index("Prove current MLX arg-reduce native validation")
     current_arg_reduce = _load_ci_coverage_module().workflow_step_section(
         mlx_porting,
         "Prove current MLX arg-reduce native validation",

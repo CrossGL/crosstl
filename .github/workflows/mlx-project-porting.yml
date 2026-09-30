@@ -21,6 +21,7 @@ on:
       - "tests/test_ci_workflows.py"
       - "tests/test_run_bounded_command.py"
       - "tests/test_run_directx_diagnostics.py"
+      - "tests/test_translator/test_directx_reduction_primitives.py"
       - "tests/test_mlx_current_runtime_diagnostics.py"
       - "tests/test_mlx_copy_opengl_proof.py"
       - "tests/test_mlx_copy_directx_proof.py"
@@ -89,6 +90,7 @@ on:
       - "tests/test_ci_workflows.py"
       - "tests/test_run_bounded_command.py"
       - "tests/test_run_directx_diagnostics.py"
+      - "tests/test_translator/test_directx_reduction_primitives.py"
       - "tests/test_mlx_current_runtime_diagnostics.py"
       - "tests/test_mlx_copy_opengl_proof.py"
       - "tests/test_mlx_copy_directx_proof.py"
@@ -277,6 +279,31 @@ jobs:
           $pythonWarp = Join-Path $env:pythonLocation "d3d10warp.dll"
           Copy-Item -Path $warp -Destination $pythonWarp -Force
           Write-Host "Installed WARP $((Get-Item $pythonWarp).VersionInfo.FileVersion) beside python.exe."
+
+      - name: Validate Direct3D reduction primitives
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          CROSTL_REQUIRE_DIRECTX_REDUCTION_PRIMITIVES: "1"
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p mlx-current-results
+          failed=0
+          for case in metadata division shuffle combined; do
+            python tools/run_bounded_command.py \
+              --label "Direct3D reduction primitive $case" \
+              --timeout-seconds 120 -- \
+              python tools/run_directx_diagnostics.py \
+                --output "mlx-current-results/primitive-$case-directx.jsonl" \
+                --module pytest -- \
+                -vv -s --tb=long -o faulthandler_timeout=60 \
+                --basetemp="mlx-current-results/primitive-$case" \
+                --junitxml="mlx-current-results/primitive-$case.xml" \
+                "tests/test_translator/test_directx_reduction_primitives.py::test_directx_reduction_primitives_execute[$case]" \
+                || failed=1
+          done
+          exit "$failed"
 
       - name: Install Linux runtime dependencies
         if: runner.os == 'Linux'

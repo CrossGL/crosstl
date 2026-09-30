@@ -542,6 +542,15 @@ evidence, including on timeout. Missing debug-layer tooling is reported
 explicitly and does not skip or replace the numerical test. The wrapper
 preserves the wrapped Python module's arguments and exit status.
 
+Before the full kernels, Windows also executes four small translated reduction
+checks: sparse-register metadata reads, signed 64-bit index division, helper-level
+software shuffles, and their combination with a bounded input loop. Each runs in
+a separate process with a two-minute deadline and exact readback comparisons.
+The diagnostic logs, CrossGL input, generated HLSL, DXIL, and completed readbacks
+are retained under ``mlx-current-results``. All four checks are attempted and
+any failure fails the step. These isolate runtime failures; they neither replace
+the MLX numerical cases nor establish whole-kernel parity.
+
 The current-pinned MLX integration exercises entry-scoped translation for all
 877 discovered entries from the include-expanded ``unary.metal`` source. The
 finite split is 183 each for ``v_``, ``v2_``, ``gn1_``, and ``gn4large_``, plus
