@@ -213,7 +213,30 @@ max_template_materialization_work = 4096
         "".join(entry + "\n" for entry in sorted(ENTRIES)), encoding="utf-8"
     )
     save_json(output / "libraries.json", records)
-    return libraries, records
+    combined = output / "combined.metallib"
+    run(
+        [
+            "xcrun",
+            "--sdk",
+            "macosx",
+            "metallib",
+            *[libraries / f"{entry}.air" for entry in sorted(ENTRIES)],
+            "-o",
+            combined,
+        ],
+        output / "logs",
+        "link-combined",
+    )
+    combined_libraries = output / "combined-libraries"
+    combined_libraries.mkdir()
+    shutil.copyfile(libraries / "libraries.txt", combined_libraries / "libraries.txt")
+    combined_hash = digest(combined)
+    combined_records = []
+    for record in records:
+        shutil.copyfile(combined, combined_libraries / f"{record['entry']}.metallib")
+        combined_records.append({**record, "librarySha256": combined_hash})
+    save_json(output / "combined-libraries.json", combined_records)
+    return combined_libraries, combined_records
 
 
 def parse_trace(path):

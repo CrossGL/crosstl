@@ -2022,6 +2022,13 @@ A separate `MLX Metal host integration harness
 builds the pinned upstream runtime with a documented per-entry library resolver.
 It runs the unchanged upstream operations module with selected translated
 complex-power entries and records dispatches from MLX's own command encoder.
+All 15 independently emitted entries must compile and link into one Metal
+library before host execution. Source ``static`` and anonymous-namespace helpers
+retain internal linkage, including materialized template helpers. Inline
+definitions and implicit template instantiations retain repeatable linkage, and
+generated constructors and lowered member helpers remain artifact-private.
+Required native tests also link unrelated modules with identical private helper
+names, verify their distinct results and exercise exported visible callables.
 Other operations remain on the original backend; this is partial, explicit host
 integration, not automatic C++ runtime translation or full upstream-suite parity.
 

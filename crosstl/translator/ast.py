@@ -706,6 +706,8 @@ class FunctionNode(ASTNode):
         qualifiers: List[str] = None,
         is_unsafe: bool = False,
         is_async: bool = False,
+        linkage: str = "external",
+        is_inline: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -719,6 +721,9 @@ class FunctionNode(ASTNode):
         self.qualifiers = qualifiers or []
         self.is_unsafe = is_unsafe
         self.is_async = is_async
+        # Linkage does not select a shader stage.
+        self.linkage = linkage
+        self.is_inline = is_inline
 
     def __repr__(self):
         return f"FunctionNode(name={self.name}, return_type={self.return_type})"

@@ -8,7 +8,8 @@ and dispatch geometry. No Python implementation substitutes for GPU computation.
 ## Verified Scope
 
 The required macOS workflow translates and compiles all 15 `Powercomplex64`
-entry shapes. It runs the unchanged upstream `python/tests/test_ops.py` module
+entry shapes, then links their AIR modules into one Metal library. It runs the
+unchanged upstream `python/tests/test_ops.py` module
 twice: once using upstream kernels and once with these entries redirected. The
 test and skip counts must match, native dispatch records must identify translated
 entries, and a missing required library must fail rather than use an original
@@ -67,10 +68,13 @@ library is not the pipeline source for a listed entry. The negative missing-libr
 test verifies this distinction. This adapter is an explicit MLX integration
 change, not automatic translation of its C++ runtime.
 
-Libraries remain independent, matching CrossTL's per-entry artifacts. Linking
-several artifacts into one Metal library currently exposes lost private helper
-linkage, tracked in [#1956](https://github.com/CrossGL/crosstl/issues/1956).
-The harness does not rewrite generated shaders to avoid that defect.
+Both individual and combined libraries are retained. The host uses copies of
+the combined library under each required entry name, matching the adapter's
+per-entry lookup contract; every copy has the same verified hash. This exercises
+cross-artifact linkage rather than relying on independent libraries to hide
+duplicate symbols. Source-private and generated helper linkage is preserved by
+the translator, without rewriting emitted shader text. This covers the selected
+15 entries, not every translation unit in MLX.
 
 ## Run Locally
 

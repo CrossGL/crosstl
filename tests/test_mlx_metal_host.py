@@ -1,6 +1,7 @@
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -231,3 +232,66 @@ def test_complete_host_evidence_keeps_command_and_numerical_records_separate(
     assert len(evidence["hostWorkloads"]) == 8
     assert evidence["missingRequiredLibraryRejected"] is True
     assert evidence["fullTranslatedBackend"] is False
+
+
+@pytest.mark.parametrize("link_failure", [False, True])
+def test_host_uses_combined_library_and_rejects_link_failure(
+    tmp_path, monkeypatch, link_failure
+):
+    import crosstl.project
+
+    entries = {"first", "second"}
+    monkeypatch.setattr(host, "ENTRIES", entries)
+    monkeypatch.setattr(
+        crosstl.project, "load_project_config", lambda root, path: path.parent
+    )
+
+    def translate_project(directory, **kwargs):
+        artifacts = []
+        for entry in sorted(entries):
+            source = directory / f"{entry}.metal"
+            source.write_text(f"kernel void {entry}() {{}}")
+            artifacts.append(
+                {
+                    "entryPoint": {"source": entry},
+                    "path": str(source.relative_to(tmp_path)),
+                }
+            )
+        payload = {"summary": {"failedCount": 0}, "artifacts": artifacts}
+        return SimpleNamespace(
+            to_json=lambda: payload,
+            write_json=lambda path: host.save_json(path, payload),
+        )
+
+    monkeypatch.setattr(crosstl.project, "translate_project", translate_project)
+    combined_inputs = []
+
+    def run(command, output, name, **kwargs):
+        if name == "link-combined":
+            combined_inputs.extend(Path(item).stem for item in command[4:-2])
+            if link_failure:
+                raise RuntimeError("duplicate helper")
+        Path(command[-1]).write_bytes(name.encode())
+
+    monkeypatch.setattr(host, "run", run)
+    output = tmp_path / "proof"
+    if link_failure:
+        with pytest.raises(RuntimeError, match="duplicate helper"):
+            host.compile_libraries(tmp_path, output)
+        assert not (output / "combined-libraries").exists()
+    else:
+        directory, records = host.compile_libraries(tmp_path, output)
+        assert directory.name == "combined-libraries"
+        combined = output / "combined.metallib"
+        assert {record["librarySha256"] for record in records} == {
+            host.digest(combined)
+        }
+        assert {record["entry"] for record in records} == entries
+        for entry in entries:
+            assert (
+                directory / f"{entry}.metallib"
+            ).read_bytes() == combined.read_bytes()
+            assert (
+                output / "libraries" / f"{entry}.metallib"
+            ).read_bytes() != combined.read_bytes()
+    assert set(combined_inputs) == entries

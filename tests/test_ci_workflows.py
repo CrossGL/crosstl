@@ -2473,6 +2473,11 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         mlx_porting, "Validate native Metal package execution"
     )
     assert 'CROSTL_REQUIRE_METAL_PACKAGE_RUNTIME: "1"' in metal_package
+    assert 'CROSTL_REQUIRE_METAL_HELPER_LINKAGE: "1"' in metal_package
+    assert "test_metal_helper_linkage.py" in metal_package
+    assert (
+        mlx_porting.count('"tests/test_translator/test_metal_helper_linkage.py"') == 2
+    )
     assert "if: runner.os == 'macOS'" in metal_package
     assert "--timeout-seconds 180 --" in metal_package
     assert "pytest -q -n auto" in metal_package
