@@ -2442,6 +2442,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     math_checks = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate Direct3D Metal math semantics"
     )
+    assert mlx_porting.count('"tests/test_translator/test_directx_metal_math.py"') == 2
     assert "if: runner.os == 'Windows'" in math_checks
     assert 'CROSTL_REQUIRE_DIRECTX_METAL_MATH: "1"' in math_checks
     assert "--timeout-seconds 120 --" in math_checks
