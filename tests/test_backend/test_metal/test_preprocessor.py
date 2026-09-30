@@ -12833,3 +12833,123 @@ def test_preprocessor_selects_unique_free_function_sfinae_overload_and_fails_amb
         match="multiple constrained overloads are enabled",
     ):
         MetalPreprocessor().preprocess(ambiguous)
+
+
+@pytest.mark.parametrize(
+    "competitor",
+    [
+        "int select_value(int value) { return 2; }",
+        "int select_value(int value);",
+        "int select_value(float value);",
+        "int select_value(int value, int other = 0);",
+        "int select_value(int value, ...);",
+        "template <typename T> int select_value(T value) { return 2; }",
+        "template <typename T> int select_value(T value);",
+        "namespace other { int select_value(int value); } using namespace other;",
+    ],
+)
+def test_preprocessor_diagnoses_competing_free_function_sfinae_overloads(competitor):
+    code = f"""
+    template <typename T,
+              metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    int select_value(T value) {{ return 1; }}
+    {competitor}
+    [[kernel]] void k(device int* out [[buffer(0)]]) {{
+      int value = 1;
+      out[0] = select_value(value);
+    }}
+    """
+
+    with pytest.raises(
+        MetalTemplateSpecializationError,
+        match="competing free-function overload has unproven precedence",
+    ) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    assert excinfo.value.callee_template == "select_value"
+    assert excinfo.value.requested_signature == "select_value(value)"
+    assert "distinct name" in excinfo.value.suggested_action
+
+
+@pytest.mark.parametrize(
+    "unrelated",
+    [
+        "int select_value(int value, int other);",
+        "int select_value();",
+        "namespace other { int select_value(int value); }",
+        "struct Other { int select_value(int value) { return 2; } };",
+        "template <typename T> int select_value(T value, int other);",
+        "int other(int value) { return select_value(value); }",
+        "int initial = select_value(1);",
+    ],
+)
+def test_preprocessor_excludes_unrelated_sfinae_overload_references(unrelated):
+    code = f"""
+    template <typename T,
+              metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    int select_value(T value) {{ return 1; }}
+    {unrelated}
+    [[kernel]] void k(device int* out [[buffer(0)]]) {{
+      int value = 1;
+      out[0] = select_value(value);
+    }}
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "out[0] = select_value_int(value);" in output
+    assert "int select_value_int(int value)" in output
+
+
+def test_preprocessor_excludes_later_overload_from_sfinae_resolution():
+    code = """
+    template <typename T,
+              metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    int select_value(T value) { return 1; }
+    [[kernel]] void k(device int* out [[buffer(0)]]) {
+      int value = 1;
+      out[0] = select_value(value);
+    }
+    int select_value(int value) { return 2; }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "out[0] = select_value_int(value);" in output
+
+
+def test_preprocessor_preserves_ordinary_overload_when_sfinae_is_disabled():
+    code = """
+    template <typename T,
+              metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    int select_value(T value) { return 1; }
+    int select_value(float value) { return 2; }
+    [[kernel]] void k(device int* out [[buffer(0)]]) {
+      float value = 1.0f;
+      out[0] = select_value(value);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "out[0] = select_value(value);" in output
+    assert "int select_value(float value)" in output
+    assert "return 1;" not in output
+
+
+def test_preprocessor_excludes_ordinary_overload_from_explicit_template_call():
+    code = """
+    template <typename T,
+              metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    int select_value(T value) { return 1; }
+    int select_value(int value) { return 2; }
+    [[kernel]] void k(device int* out [[buffer(0)]]) {
+      int value = 1;
+      out[0] = select_value<int>(value);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "out[0] = select_value_int(value);" in output
+    assert "int select_value_int(int value)" in output

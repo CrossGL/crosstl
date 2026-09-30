@@ -1248,7 +1248,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         enabled constrained candidate is materialized and the call is renamed;
         when every viable constrained candidate is disabled, the original call
         remains for native overload resolution.  Unknown argument types,
-        unrecognized constraints, and multiple enabled candidates fail closed.
+        unrecognized constraints, multiple enabled candidates, and competing
+        overloads whose precedence is not proven fail closed.
         Residual template declarations that participated in this resolution are
         removed so a target generic specializer cannot later discard the SFINAE
         contract.
@@ -1281,6 +1282,7 @@ class MetalPreprocessor(HLSLPreprocessor):
 
         template_spans = self._find_template_declaration_spans(code)
         functions = self._find_non_template_function_definitions(code, template_spans)
+        all_body_spans = [function.body_span for function in functions]
         reachable_spans = self._reachable_function_spans(code, template_spans)
         if reachable_spans is not None:
             reachable_set = set(reachable_spans)
@@ -1291,9 +1293,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         if not body_spans:
             return code
 
+        references = self._find_static_constexpr_calls(code, set(by_name))
         calls = [
             call
-            for call in self._find_static_constexpr_calls(code, set(by_name))
+            for call in references
             if self._containing_span(call.span[0], body_spans) is not None
             and not self._function_reference_is_member_call(code, call.span[0], set())
         ]
@@ -1303,6 +1306,18 @@ class MetalPreprocessor(HLSLPreprocessor):
         structs = self._find_concrete_struct_definitions(code)
         context = self._reachability_type_context(code, template_spans, structs)
         namespace_visibility = self._metal_namespace_visibility(code)
+        competing_declarations = self._find_free_function_overload_declarations(
+            code,
+            references,
+            excluded_spans=sorted(
+                aggregate_spans
+                + all_body_spans
+                + [(template.body_start, template.span[1]) for template in templates]
+                + [template.span for template in constrained]
+            ),
+            template_spans=template_spans,
+            namespace_visibility=namespace_visibility,
+        )
         replacements: List[Tuple[int, int, str]] = []
         materializations: List[str] = []
         materialized_names: Dict[Tuple[Tuple[int, int], Tuple[str, ...]], str] = {}
@@ -1435,6 +1450,49 @@ class MetalPreprocessor(HLSLPreprocessor):
                 # resolve it after the fallback declaration is removed.
                 continue
 
+            for declaration in competing_declarations.get(call.name, []):
+                if declaration.span[0] > call.span[0]:
+                    continue
+                if (
+                    call.template_arguments is not None
+                    and self._containing_span(declaration.span[0], template_spans)
+                    is None
+                ):
+                    continue
+                if not self._callable_accepts_argument_count(
+                    ", ".join(declaration.arguments), len(call.arguments)
+                ):
+                    continue
+                declaration_namespace = self._metal_call_reference_namespace(
+                    declaration.qualified_name
+                )
+                lexical_namespace = self._namespace_at(
+                    list(namespace_visibility.namespace_spans), declaration.span[0]
+                )
+                namespaces = (
+                    self._metal_namespace_reference_candidates(
+                        declaration_namespace,
+                        lexical_namespace,
+                        globally_qualified=declaration_namespace.startswith("::"),
+                    )
+                    if declaration_namespace is not None
+                    else [lexical_namespace]
+                )
+                if any(
+                    self._metal_namespace_declaration_visible(
+                        namespace,
+                        self._metal_call_reference_namespace(call.qualified_name),
+                        call.span[0],
+                        namespace_visibility,
+                    )
+                    for namespace in namespaces
+                ):
+                    self._raise_constrained_free_function_error(
+                        code,
+                        call,
+                        "a competing free-function overload has unproven precedence",
+                    )
+
             template, bindings = enabled[0]
             ordered_arguments = tuple(
                 bindings[name] for name in template.template_parameters
@@ -1481,6 +1539,53 @@ class MetalPreprocessor(HLSLPreprocessor):
                 resolved += "\n"
         return resolved
 
+    def _find_free_function_overload_declarations(
+        self,
+        code: str,
+        references: List[_MetalConstexprCall],
+        *,
+        excluded_spans: List[Tuple[int, int]],
+        template_spans: List[Tuple[int, int]],
+        namespace_visibility: _MetalNamespaceVisibility,
+    ) -> Dict[str, List[_MetalConstexprCall]]:
+        """Index signatures, including prototypes, outside the selected templates.
+
+        The balanced call scanner also recognizes declaration parameter lists.
+        Distinguish those from initializers and nested calls before using them to
+        guard overload resolution; a missing definition does not remove an
+        otherwise visible overload from the source language's candidate set.
+        """
+        declarations: Dict[str, List[_MetalConstexprCall]] = {}
+        for reference in references:
+            if self._containing_span(reference.span[0], excluded_spans) is not None:
+                continue
+            template_span = self._containing_span(reference.span[0], template_spans)
+            if template_span is not None:
+                angle_start = code.find("<", template_span[0])
+                angle_end = self._find_matching_template_param_angle(code, angle_start)
+                if angle_end is None or reference.span[0] <= angle_end:
+                    continue
+                declaration_start = angle_end + 1
+            else:
+                declaration_start = self._function_declaration_start(
+                    code, reference.span[0]
+                )
+                for start, end, _namespace in namespace_visibility.namespace_spans:
+                    if start <= reference.span[0] < end:
+                        declaration_start = max(declaration_start, start)
+            header = code[declaration_start : reference.span[1]]
+            if self._function_parameter_start(header) != (
+                reference.argument_open - declaration_start
+            ):
+                continue
+            prefix = self._mask_comments_and_literals(
+                code[declaration_start : reference.span[0]]
+            ).strip()
+            if not prefix or self._split_top_level_assignment(prefix)[1] is not None:
+                continue
+            declarations.setdefault(reference.name, []).append(reference)
+        return declarations
+
     def _template_function_parameter_text(
         self, template: _MetalTemplateFunction
     ) -> Optional[str]:
@@ -1504,7 +1609,8 @@ class MetalPreprocessor(HLSLPreprocessor):
     ) -> None:
         requested = re.sub(r"\s+", " ", code[call.span[0] : call.span[1]]).strip()
         suggested_action = (
-            "specialize the free function explicitly, or restrict the overload "
+            "give the intended overload a distinct name, specialize the free "
+            "function explicitly, or restrict the overload "
             "set to recognized enable_if_t constraints and inferable argument types"
         )
         raise MetalTemplateSpecializationError(

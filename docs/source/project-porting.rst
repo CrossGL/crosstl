@@ -513,6 +513,15 @@ implemented. Strict JSON runtime requests encode non-finite float32 inputs with
 the exact strings ``nan``, ``+infinity``, and ``-infinity`` before
 deterministic IEEE-754 packing.
 
+Constrained Metal free-function fallbacks are materialized only when their
+recognized constraints select a unique implementation. A visible ordinary or
+unconstrained-template overload with compatible argument count causes a
+structured specialization diagnostic when precedence cannot be proven;
+forward declarations participate even without a definition. General C++
+conversion ranking and template partial ordering are not implemented by this
+path. Use a distinct helper name or an explicit specialization to remove the
+unresolved competition rather than relying on a guessed overload.
+
 The two current-tree DirectX float32 entries explicitly select
 ``software_subgroup_width = 32``. Their shuffle helpers use shared storage and
 workgroup barriers instead of hardware wave instructions. A private
