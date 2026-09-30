@@ -637,7 +637,7 @@
           "tests/test_translator/test_mlx_current_unary_fma.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1898
+        "test_count": 1905
       },
       "translator_codegen": {
         "exists": true,

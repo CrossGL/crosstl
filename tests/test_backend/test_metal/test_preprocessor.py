@@ -294,6 +294,179 @@ def test_alias_free_struct_families_skip_detailed_scope_scans(monkeypatch):
     assert scan_counts == {"comments": 1, "scopes": 1}
 
 
+def test_discovery_records_reuse_content_without_sharing_mutations(monkeypatch):
+    preprocessor = MetalPreprocessor()
+    source = """
+    namespace example {
+    template <typename T> struct Scalar { using type = T; };
+    template <typename T> T identity(T value) { return value; }
+    template [[host_name("identity_float")]] float identity<float>(float);
+    float plain(float value) { return value; }
+    }
+    """
+    equal_source = source.encode().decode()
+    assert equal_source == source and equal_source is not source
+    scans = (
+        "_scan_template_functions",
+        "_scan_non_template_function_definitions",
+        "_scan_template_type_traits",
+    )
+    counts = dict.fromkeys(scans, 0)
+    for name in scans:
+        original = getattr(preprocessor, name)
+
+        def counted(*args, _name=name, _original=original):
+            counts[_name] += 1
+            return _original(*args)
+
+        monkeypatch.setattr(preprocessor, name, counted)
+
+    templates = preprocessor._find_template_functions(source)
+    assert len(templates) == 1 and templates[0].name == "identity"
+    templates[0].materializations.append("unrelated")
+    templates[0].template_parameters.append("Unexpected")
+    templates[0].template_type_traits["example::Scalar"]["parameters"].clear()
+    instantiations = preprocessor._find_project_template_instantiations(source)
+    assert len(instantiations) == 1
+    instantiations[0].template_arguments.append("Unexpected")
+    excluded = preprocessor._find_template_declaration_spans(source)
+    definitions = preprocessor._find_non_template_function_definitions(source, excluded)
+    assert [item.name for item in definitions] == ["plain"]
+    definitions.clear()
+    traits = preprocessor._find_template_type_traits(source)
+    traits["example::Scalar"]["parameters"].clear()
+
+    fresh_templates = preprocessor._find_template_functions(equal_source)
+    assert fresh_templates[0].materializations == []
+    assert fresh_templates[0].template_parameters == ["T"]
+    assert fresh_templates[0].template_type_traits["example::Scalar"]["parameters"] == [
+        "T"
+    ]
+    fresh_instantiations = preprocessor._find_project_template_instantiations(
+        equal_source
+    )
+    assert fresh_instantiations[0].template_arguments == ["float"]
+    assert [
+        item.name
+        for item in preprocessor._find_non_template_function_definitions(
+            equal_source, list(excluded)
+        )
+    ] == ["plain"]
+    assert preprocessor._find_template_type_traits(equal_source)["example::Scalar"][
+        "parameters"
+    ] == ["T"]
+    assert counts == dict.fromkeys(scans, 1)
+
+
+@pytest.mark.parametrize(
+    "finder,scanner,args",
+    [
+        ("_find_template_functions", "_scan_template_functions", ()),
+        (
+            "_find_non_template_function_definitions",
+            "_scan_non_template_function_definitions",
+            ([],),
+        ),
+        ("_find_template_type_traits", "_scan_template_type_traits", ()),
+    ],
+)
+def test_discovery_caches_empty_results_and_changed_source(
+    monkeypatch, finder, scanner, args
+):
+    preprocessor = MetalPreprocessor()
+    scans = []
+    original = getattr(preprocessor, scanner)
+
+    def counted(code, *other):
+        scans.append(code)
+        return original(code, *other)
+
+    monkeypatch.setattr(preprocessor, scanner, counted)
+    find = getattr(preprocessor, finder)
+    assert not find("int x;", *args)
+    assert not find("int x;", *args)
+    assert not find("int y;", *args)
+    assert scans == ["int x;", "int y;"]
+
+
+def test_function_discovery_keys_every_excluded_span_and_bounds_retention():
+    preprocessor = MetalPreprocessor()
+    source = "float first() { return 1; } float second() { return 2; }"
+    second = source.index("float second")
+    spans = [(-2, -1), (0, second), (len(source), len(source) + 1)]
+    assert [
+        item.name
+        for item in preprocessor._find_non_template_function_definitions(source, spans)
+    ] == ["second"]
+    spans[1] = (second, len(source))
+    assert [
+        item.name
+        for item in preprocessor._find_non_template_function_definitions(source, spans)
+    ] == ["first"]
+    for offset in range(SOURCE_ANALYSIS_CACHE_LIMIT + 2):
+        preprocessor._find_non_template_function_definitions(source, [(0, offset)])
+    cache = preprocessor._source_analysis(source).function_definitions
+    assert len(cache) == SOURCE_ANALYSIS_CACHE_LIMIT
+    assert ((0, 0),) not in cache
+
+
+def test_type_trait_discovery_keys_namespace_content_and_bounds_retention():
+    preprocessor = MetalPreprocessor()
+    source = "template <typename T> struct Scalar { using type = T; };"
+    spans = [(0, len(source), "first")]
+    assert "first::Scalar" in preprocessor._find_template_type_traits(source, spans)
+    spans[0] = (0, len(source), "second")
+    assert "second::Scalar" in preprocessor._find_template_type_traits(source, spans)
+    for index in range(SOURCE_ANALYSIS_CACHE_LIMIT + 2):
+        preprocessor._find_template_type_traits(
+            source, [(0, len(source), f"ns{index}")]
+        )
+    cache = preprocessor._source_analysis(source).template_type_traits
+    assert len(cache) == SOURCE_ANALYSIS_CACHE_LIMIT
+    assert ((0, len(source), "first"),) not in cache
+
+
+def test_discovery_records_are_evicted_with_source_snapshots():
+    preprocessor = MetalPreprocessor()
+    first = "template <typename T> T identity(T x) { return x; }"
+    preprocessor._find_template_functions(first)
+    for index in range(SOURCE_ANALYSIS_CACHE_LIMIT + 2):
+        preprocessor._find_template_functions(first + f"\nint value{index};")
+    assert len(preprocessor._source_analysis_cache) == SOURCE_ANALYSIS_CACHE_LIMIT
+    assert first not in preprocessor._source_analysis_cache
+
+
+def test_entry_discovery_observes_new_struct_specializations():
+    preprocessor = MetalPreprocessor()
+    source = (
+        "template <typename T> void consume(Box<T> value) {}\n"
+        "template void consume(Box_float value);\n"
+    )
+    assert preprocessor._find_project_template_instantiations(source) == []
+    preprocessor._materialized_struct_specializations["Box_float"] = (
+        "Box",
+        ("float",),
+    )
+    entries = preprocessor._find_project_template_instantiations(source)
+    assert len(entries) == 1
+    assert entries[0].template_arguments == ["float"]
+    preprocessor._materialized_struct_specializations.clear()
+    assert preprocessor._find_project_template_instantiations(source) == []
+
+
+@pytest.mark.parametrize("entry_discovery", [False, True])
+def test_preprocessing_resets_discovery_records(entry_discovery):
+    preprocessor = MetalPreprocessor()
+    source = "template <typename T> T identity(T x) { return x; }"
+    preprocessor._find_template_functions(source)
+    assert source in preprocessor._source_analysis_cache
+    if entry_discovery:
+        preprocessor.preprocess_for_entry_discovery("float value;")
+    else:
+        preprocessor.preprocess("float value;")
+    assert source not in preprocessor._source_analysis_cache
+
+
 def test_preprocessor_conditional_expansion():
     code = """
     #define ENABLED 1

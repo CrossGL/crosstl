@@ -6,6 +6,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Added
 
+- Bounded reuse of Metal template, type-trait and function discovery records within each preprocessing run, with isolated mutable records and regression checks for unchanged artifacts, include/define changes, materialization limits, parallel translation and checkpoint resume.
 - Binary32 fused multiply-add support with exact integer-word arithmetic, explicit source rounding/subnormal profiles, private Metal helper linkage, retained source licensing and required native DirectX/OpenGL/Metal reference checks. Profiles are opt-in; complete MLX host integration remains separate.
 - Native dispatch-limit checks for the Python DirectX, OpenGL and Vulkan drivers, structured Metal pipeline-limit diagnostics, and explicit OpenGL submission-error detection. Native regression tests cover valid readback and rejected requests without clamping or silently returning unchanged output.
 - Synchronous MLX host integration for five typed array-creation entries through native DirectX/OpenGL packages, with Metal/CUDA disabled, unchanged upstream tests, numerical readback, explicit unsupported-operation errors and bounded two-platform CI. Verification requires exact adapted source identities before and after execution, complete numerical records and explicit negative-case evidence. Full primitive coverage and the complete upstream suite remain out of scope for this adapter increment.

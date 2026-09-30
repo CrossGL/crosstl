@@ -7,6 +7,7 @@ import os
 import re
 import struct as binary_struct
 from bisect import bisect_right
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from heapq import heappop, heappush
 from typing import (
@@ -408,6 +409,13 @@ class _MetalSourceAnalysis:
     namespace_spans: Optional[List[Tuple[int, int, str]]] = None
     anonymous_namespace_spans: List[Tuple[int, int]] = field(default_factory=list)
     receiver_declarations: Optional[Dict[str, List[_MetalReceiverDeclaration]]] = None
+    template_functions: Optional[List[_MetalTemplateFunction]] = None
+    function_definitions: Dict[
+        Tuple[Tuple[int, int], ...], Tuple[_MetalFunctionDefinition, ...]
+    ] = field(default_factory=dict)
+    template_type_traits: Dict[
+        Tuple[Tuple[int, int, str], ...], Dict[str, Dict[str, object]]
+    ] = field(default_factory=dict)
 
 
 @dataclass
@@ -20965,6 +20973,15 @@ class MetalPreprocessor(HLSLPreprocessor):
         return instantiations
 
     def _find_template_functions(self, code: str) -> List[_MetalTemplateFunction]:
+        cached = self._source_analysis(code).template_functions
+        if cached is not None:
+            return deepcopy(cached)
+        templates = self._scan_template_functions(code)
+        # Materialization appends to these records; discovery owns a separate copy.
+        self._source_analysis(code).template_functions = deepcopy(templates)
+        return templates
+
+    def _scan_template_functions(self, code: str) -> List[_MetalTemplateFunction]:
         templates: List[_MetalTemplateFunction] = []
         namespace_spans = self._find_namespace_spans(code)
         anonymous_namespace_spans = self._source_analysis(
@@ -24034,6 +24051,24 @@ class MetalPreprocessor(HLSLPreprocessor):
         code: str,
         excluded_spans: List[Tuple[int, int]],
     ) -> List[_MetalFunctionDefinition]:
+        key = tuple(excluded_spans)
+        cache = self._source_analysis(code).function_definitions
+        cached = cache.pop(key, None)
+        if cached is None:
+            cached = tuple(
+                self._scan_non_template_function_definitions(code, list(key))
+            )
+            cache = self._source_analysis(code).function_definitions
+        cache[key] = cached
+        if len(cache) > SOURCE_ANALYSIS_CACHE_LIMIT:
+            del cache[next(iter(cache))]
+        return list(cached)
+
+    def _scan_non_template_function_definitions(
+        self,
+        code: str,
+        excluded_spans: List[Tuple[int, int]],
+    ) -> List[_MetalFunctionDefinition]:
         functions: List[_MetalFunctionDefinition] = []
         namespace_body_starts = {
             start - 1 for start, _end, _name in self._find_namespace_spans(code)
@@ -25837,9 +25872,25 @@ class MetalPreprocessor(HLSLPreprocessor):
         code: str,
         namespace_spans: Optional[List[Tuple[int, int, str]]] = None,
     ) -> Dict[str, Dict[str, object]]:
-        traits: Dict[str, Dict[str, object]] = {}
         if namespace_spans is None:
             namespace_spans = self._find_namespace_spans(code)
+        key = tuple(namespace_spans)
+        cache = self._source_analysis(code).template_type_traits
+        cached = cache.pop(key, None)
+        if cached is None:
+            cached = self._scan_template_type_traits(code, list(key))
+            cache = self._source_analysis(code).template_type_traits
+        cache[key] = cached
+        if len(cache) > SOURCE_ANALYSIS_CACHE_LIMIT:
+            del cache[next(iter(cache))]
+        return deepcopy(cached)
+
+    def _scan_template_type_traits(
+        self,
+        code: str,
+        namespace_spans: List[Tuple[int, int, str]],
+    ) -> Dict[str, Dict[str, object]]:
+        traits: Dict[str, Dict[str, object]] = {}
         pos = 0
         while True:
             match = re.search(r"\btemplate\s*<", code[pos:])
