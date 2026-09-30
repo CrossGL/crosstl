@@ -377,6 +377,13 @@ dynamic host names are not converted into entries. Locations currently use
 the ``preprocessed-source`` coordinate space, which is recorded explicitly in
 the report.
 
+Comment and literal exclusions use the preprocessor's bounded interval index,
+shared within a discovery call. Repeated candidate lookups do not rescan the
+entire exclusion list. Each call creates its own preprocessor, so changed
+includes, defines and source options cannot reuse indexes from an earlier
+discovery. Entry metadata and unresolved-name diagnostics retain the same
+half-open source-range semantics.
+
 The public ``ProjectScan.discovered_entry_points()`` method returns a
 repository-relative mapping compatible with ``ProjectConfig.entry_points``:
 
