@@ -6,6 +6,8 @@ All notable changes to CrossTL are documented in this file.
 
 ### Added
 
+- Preserve canonical `atan2` signed-zero quadrants and special angles in HLSL, with scalar/vector helpers, single argument evaluation, narrow-type conversions, native HLSL round-trip preservation, and required Windows readback and precise Metal controls. Existing MLX complex-power tolerances are unchanged.
+
 - Exact runtime layouts for flat homogeneous struct storage buffers in DirectX and OpenGL, preserving member names, scalar types, offsets, alignment and stride through packaging and dispatch. Required CI executes the pinned MLX `g1_Powercomplex64` artifact on Windows, Linux and macOS against 256 finite/zero-base reference cases; macOS also runs the original Metal source. This does not establish whole-MLX runtime integration.
 - Pinned MLX kernel-tree coverage at `d9add9d11f3154111a4c85f267ec2fd307ecd18e`: discovery of 42 Metal units and 17,478 entries without diagnostics, plus deterministic translation and native compilation of all 24 `arg_reduce.metal` entries to Metal, OpenGL, and DirectX. Numerical execution covers `argmin_float32` and `argmax_float32` on the corresponding CI platforms, including upstream Metal parity, axis sizes 32/129, strides 1/2, and ordinary plus NaN/Infinity inputs. Strict JSON runtime requests encode non-finite float32 inputs as `nan`, `+infinity`, or `-infinity` before IEEE-754 packing. This provides 24/17,478 translation and compiler coverage and 2/17,478 numerical coverage; upstream MLX-suite execution and host-runtime redirection remain incomplete.
 
