@@ -21,6 +21,99 @@ REQUIRE_ENV = "CROSTL_REQUIRE_METAL_ARGUMENT_INFERENCE"
 
 
 @pytest.mark.parametrize("original", [False, True])
+@pytest.mark.parametrize(
+    "predicate_kind", ["disjunction", "specialization", "namespace-alias"]
+)
+def test_named_boolean_constraints_execute_both_overloads(
+    tmp_path, original, predicate_kind
+):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for native argument inference checks")
+    if original and sys.platform != "darwin":
+        pytest.skip("The original Metal control requires macOS")
+    target = {"win32": "directx", "linux": "opengl", "darwin": "metal"}[sys.platform]
+    predicates = {
+        "disjunction": (
+            """
+    #pragma METAL internals : enable
+    template <typename T> constexpr constant bool accepts =
+        _disjunction<is_same<T, int>, is_same<T, uint>>::value;
+    #pragma METAL internals : disable
+        """
+        ),
+        "specialization": (
+            """
+    template <typename T> constexpr constant bool accepts = false;
+    template <> constexpr constant bool accepts<uint> = true;
+        """
+        ),
+        "namespace-alias": (
+            """
+    namespace traits {
+      using Index = uint;
+      template <typename T> constexpr constant bool accepts = is_same_v<T, Index>;
+    }
+        """
+        ),
+    }
+    source = """#include <metal_stdlib>
+    using namespace metal;
+    PREDICATE
+    template <typename T, enable_if_t<accepts<T>, bool> = true>
+    T choose(T value) { return value + T(1); }
+    template <typename T, enable_if_t<!accepts<T>, bool> = true>
+    T choose(T value) { return value + T(2); }
+    kernel void select_values(device const uint* values [[buffer(0)]],
+                              device uint* results [[buffer(1)]],
+                              uint tid [[thread_position_in_grid]]) {
+        uint value = values[tid * 3];
+        results[tid * 2] = choose(value);
+        results[tid * 2 + 1] = uint(choose(float(value)));
+    }
+    """.replace("PREDICATE", predicates[predicate_kind])
+    if predicate_kind == "namespace-alias":
+        source = source.replace(
+            "enable_if_t<accepts<T>", "enable_if_t<traits::accepts<T>"
+        ).replace("enable_if_t<!accepts<T>", "enable_if_t<!traits::accepts<T>")
+    path = tmp_path / "kernel.metal"
+    path.write_text(source, encoding="utf-8")
+    if not original:
+        report = translate_project(
+            ProjectConfig(
+                root=tmp_path,
+                targets=(target,),
+                include_patterns=(path.name,),
+                entry_points={path.name: ("select_values",)},
+                workgroup_size=(1, 1, 1),
+                output_dir="out",
+            ),
+            format_output=False,
+        )
+        report.write_json(tmp_path / "report.json")
+        payload = report.to_json()
+        assert payload["diagnostics"] == []
+        assert payload["summary"]["translatedCount"] == 1
+        source = (tmp_path / payload["artifacts"][0]["path"]).read_text(
+            encoding="utf-8"
+        )
+    inputs = [(value, 0, 0) for value in range(97)]
+    expected = [value + increment for value in range(97) for increment in (1, 2)]
+    actual, evidence = _dispatch(
+        tmp_path,
+        target,
+        source,
+        inputs,
+        len(expected),
+        entry="select_values" if target == "metal" else None,
+    )
+    evidence.update(original=original, expected=expected, actual=actual)
+    (tmp_path / "evidence.json").write_text(
+        json.dumps(evidence, indent=2), encoding="utf-8"
+    )
+    assert actual == expected
+
+
+@pytest.mark.parametrize("original", [False, True])
 def test_inferred_pointer_offsets_execute(tmp_path, original):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for native argument inference checks")

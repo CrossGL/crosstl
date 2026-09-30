@@ -854,6 +854,16 @@ the MLX host runtime, or run the upstream MLX test suite on OpenGL.
 
 ## Current Translator Gaps
 
+The current-pin gated-delta backward kernels remain blocked by constrained
+aggregate selection ([#1985](https://github.com/CrossGL/crosstl/issues/1985)) and
+floating-point atomic lowering ([#1986](https://github.com/CrossGL/crosstl/issues/1986)).
+The `mlx_atomic<float>` specialization must retain floating-point atomic storage;
+selecting its unsigned-integer primary can produce HLSL that compiles but performs
+the wrong operation. Translation rejects an unproven constrained specialization
+rather than treating compilation as correctness. Parameter inference and named
+Boolean free-function constraints are covered separately by native regression
+tests; they do not establish complete gated-delta execution.
+
 The latest full-corpus scout at MLX commit
 `4367c73b60541ddd5a266ce4644fd93d20223b6e` discovered 40 Metal units, 841
 include dependencies, and 120 planned target artifacts. It emitted `arange.metal`

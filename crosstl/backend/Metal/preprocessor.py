@@ -331,6 +331,8 @@ class _MetalBooleanVariableTemplate:
     argument_patterns: Tuple[str, ...]
     expression: str
     is_partial_specialization: bool
+    span: Tuple[int, int]
+    namespace: str
 
 
 @dataclass(frozen=True)
@@ -1317,6 +1319,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         structs = self._find_concrete_struct_definitions(code)
         context = self._reachability_type_context(code, template_spans, structs)
         namespace_visibility = self._metal_namespace_visibility(code)
+        boolean_templates = self._find_boolean_variable_templates(code)
         competing_declarations = self._find_free_function_overload_declarations(
             code,
             references,
@@ -1436,6 +1439,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                             structs=structs,
                             type_aliases=context.source_type_aliases,
                             position=call.span[0],
+                            boolean_templates=boolean_templates,
+                            namespace_visibility=namespace_visibility,
+                            lookup_position=template.span[0],
                         )
                         for constraint in template.template_constraints
                     )
@@ -6220,6 +6226,11 @@ class MetalPreprocessor(HLSLPreprocessor):
         structs: Optional[Sequence[_MetalStructDefinition]] = None,
         type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
         position: int = 0,
+        boolean_templates: Optional[
+            Dict[str, List[_MetalBooleanVariableTemplate]]
+        ] = None,
+        namespace_visibility: Optional[_MetalNamespaceVisibility] = None,
+        lookup_position: Optional[int] = None,
     ) -> bool:
         # Evaluate a single SFINAE constraint for the concrete `bindings` and
         # return whether the overload is ENABLED. Raises _UnrecognizedConstraint
@@ -6251,6 +6262,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                 structs=structs,
                 type_aliases=type_aliases,
                 position=position,
+                boolean_templates=boolean_templates,
+                namespace_visibility=namespace_visibility,
+                lookup_position=lookup_position,
             )
         return self._evaluate_boolean_constraint(
             text,
@@ -6258,6 +6272,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             structs=structs,
             type_aliases=type_aliases,
             position=position,
+            boolean_templates=boolean_templates,
+            namespace_visibility=namespace_visibility,
+            lookup_position=lookup_position,
         )
 
     def _evaluate_boolean_constraint(
@@ -6268,8 +6285,14 @@ class MetalPreprocessor(HLSLPreprocessor):
         structs: Optional[Sequence[_MetalStructDefinition]] = None,
         type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
         position: int = 0,
+        boolean_templates: Optional[
+            Dict[str, List[_MetalBooleanVariableTemplate]]
+        ] = None,
+        namespace_visibility: Optional[_MetalNamespaceVisibility] = None,
+        lookup_position: Optional[int] = None,
+        variable_stack: Tuple[Tuple[str, Tuple[str, ...]], ...] = (),
     ) -> bool:
-        expr = expression.strip()
+        expr = self._replace_identifiers(expression, bindings).strip()
         if not expr:
             raise self._UnrecognizedConstraint(expression)
 
@@ -6280,15 +6303,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 structs=structs,
                 type_aliases=type_aliases,
                 position=position,
+                boolean_templates=boolean_templates,
+                namespace_visibility=namespace_visibility,
+                lookup_position=lookup_position,
+                variable_stack=variable_stack,
             )
 
-        if expr == "true":
-            return True
-        if expr == "false":
-            return False
-        # Leading negation.
-        if expr.startswith("!"):
-            return not evaluate(expr[1:])
         # Strip a single fully-enclosing paren group.
         while (
             expr.startswith("(")
@@ -6297,8 +6317,11 @@ class MetalPreprocessor(HLSLPreprocessor):
             expr = expr[1:-1].strip()
             if not expr:
                 raise self._UnrecognizedConstraint(expression)
-            if expr.startswith("!"):
-                return not evaluate(expr[1:])
+
+        if expr == "true":
+            return True
+        if expr == "false":
+            return False
 
         disjunction = self._split_top_level_boolean_constraint(expr, ("||", "|"))
         if disjunction is not None:
@@ -6307,15 +6330,61 @@ class MetalPreprocessor(HLSLPreprocessor):
         if conjunction is not None:
             return all(evaluate(part) for part in conjunction)
 
+        if expr.startswith("!"):
+            return not evaluate(expr[1:])
+
+        combinator = re.match(
+            r"^(?:metal\s*::\s*)?(_disjunction|_conjunction)\s*<", expr
+        )
+        if combinator is not None:
+            angle_start = expr.find("<", combinator.start())
+            angle_end = self._find_matching_angle(expr, angle_start)
+            if angle_end is None or not re.fullmatch(
+                r"\s*::\s*value", expr[angle_end + 1 :]
+            ):
+                raise self._UnrecognizedConstraint(expression)
+            arguments = self._split_top_level_commas(expr[angle_start + 1 : angle_end])
+
+            # These internal Metal combinators consume trait classes, not Boolean
+            # values. Their lazy evaluation must retain the source operand order.
+            def trait_value(argument: str) -> bool:
+                return evaluate(f"{argument.strip()}::value")
+
+            if combinator.group(1) == "_disjunction":
+                return any(trait_value(argument) for argument in arguments)
+            return all(trait_value(argument) for argument in arguments)
+
+        named = re.match(r"^(?P<name>(?:::)?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s*<", expr)
+        if named is not None and boolean_templates:
+            name = named.group("name")
+            if name.rsplit("::", 1)[-1] in boolean_templates:
+                angle_start = expr.find("<", named.start())
+                angle_end = self._find_matching_angle(expr, angle_start)
+                if angle_end is None or expr[angle_end + 1 :].strip():
+                    raise self._UnrecognizedConstraint(expression)
+                return self._evaluate_boolean_variable_template(
+                    name,
+                    self._split_top_level_commas(expr[angle_start + 1 : angle_end]),
+                    bindings,
+                    boolean_templates,
+                    variable_stack,
+                    structs=structs,
+                    type_aliases=type_aliases,
+                    position=position,
+                    namespace_visibility=namespace_visibility,
+                    lookup_position=lookup_position,
+                )
+
         parsed_trait = self._parse_metal_type_trait_expression(expr)
         if parsed_trait is not None:
             trait, operands = parsed_trait
             result, _resolved_operands, _reason = self._evaluate_metal_type_trait(
                 trait,
                 operands,
-                resolver=lambda operand: self._resolve_constraint_type(
-                    operand,
-                    bindings,
+                resolver=lambda operand: self._canonicalize_type_aliases_at(
+                    self._resolve_constraint_type(operand, bindings),
+                    type_aliases or {},
+                    position if lookup_position is None else lookup_position,
                 ),
                 known_type_names=set(),
                 allow_unknown_named_types=True,
@@ -8497,6 +8566,11 @@ class MetalPreprocessor(HLSLPreprocessor):
     ) -> Dict[str, List[_MetalBooleanVariableTemplate]]:
         definitions: Dict[str, List[_MetalBooleanVariableTemplate]] = {}
         ignored = self._find_comment_and_literal_spans(code)
+        namespace_spans = self._find_namespace_spans(code)
+        aggregate_spans = sorted(
+            [struct.span for struct in self._find_concrete_struct_definitions(code)]
+            + [struct.span for struct in self._find_template_structs(code)]
+        )
         cursor = 0
         while True:
             match = re.search(r"\btemplate\s*<", code[cursor:])
@@ -8505,6 +8579,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             template_start = cursor + match.start()
             cursor = template_start + len("template")
             if self._containing_span(template_start, ignored) is not None:
+                continue
+            if self._containing_span(template_start, aggregate_spans) is not None:
                 continue
             angle_start = code.find("<", template_start, cursor + 4)
             angle_end = self._find_matching_template_param_angle(code, angle_start)
@@ -8543,7 +8619,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 cursor = position
                 continue
             prefix = code[position:equals]
-            if "{" in prefix or ";" in prefix:
+            if prefix.strip():
                 cursor = position
                 continue
             expression = code[equals + 1 : semicolon].strip()
@@ -8558,6 +8634,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                         argument_patterns=argument_patterns,
                         expression=expression,
                         is_partial_specialization=is_partial,
+                        span=(template_start, semicolon + 1),
+                        namespace=self._namespace_at(namespace_spans, template_start),
                     )
                 )
             cursor = semicolon + 1
@@ -8570,23 +8648,47 @@ class MetalPreprocessor(HLSLPreprocessor):
         bindings: Dict[str, str],
         definitions: Dict[str, List[_MetalBooleanVariableTemplate]],
         stack: Tuple[Tuple[str, Tuple[str, ...]], ...],
+        *,
+        structs: Optional[Sequence[_MetalStructDefinition]] = None,
+        type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
+        position: int = 0,
+        namespace_visibility: Optional[_MetalNamespaceVisibility] = None,
+        lookup_position: Optional[int] = None,
     ) -> bool:
-        concrete_arguments = tuple(
-            self._normalize_template_argument_text(
-                self._replace_identifiers(argument, bindings)
+        visible = self._visible_boolean_variable_templates(
+            name, definitions, position, namespace_visibility, lookup_position
+        )
+
+        def canonical(argument: str, at: int) -> str:
+            normalized = self._canonical_type_trait_operand(
+                argument,
+                lambda operand: self._canonicalize_type_aliases_at(
+                    operand, type_aliases or {}, at
+                ),
             )
+            if normalized is None:
+                raise self._UnrecognizedConstraint(name)
+            return normalized
+
+        concrete_arguments = tuple(
+            canonical(self._replace_identifiers(argument, bindings), position)
             for argument in arguments
         )
-        key = (name, concrete_arguments)
-        if key in stack:
+        qualified_name = f"{visible[0].namespace}::{visible[0].name}"
+        key = (qualified_name, concrete_arguments)
+        if key in stack or len(stack) >= 64:
             raise self._UnrecognizedConstraint(name)
         candidates = []
-        for definition in definitions.get(name, []):
+        for definition in visible:
             if len(definition.argument_patterns) != len(concrete_arguments):
                 continue
             local_bindings: Dict[str, str] = {}
             matched = True
-            score = 1 if definition.is_partial_specialization else 0
+            score = (
+                2
+                if not definition.template_parameters
+                else 1 if definition.is_partial_specialization else 0
+            )
             for pattern, concrete in zip(
                 definition.argument_patterns, concrete_arguments
             ):
@@ -8604,14 +8706,21 @@ class MetalPreprocessor(HLSLPreprocessor):
                     set(definition.template_parameters),
                     local_bindings,
                 )
-                if not any(
-                    parameter in local_bindings
-                    for parameter in definition.template_parameters
-                    if re.search(rf"\b{re.escape(parameter)}\b", normalized_pattern)
-                ):
+                instantiated = canonical(
+                    self._replace_identifiers(normalized_pattern, local_bindings),
+                    definition.span[0],
+                )
+                source_specialization = self._materialized_struct_specializations.get(
+                    concrete
+                )
+                source_concrete = (
+                    f"{source_specialization[0]}<{', '.join(source_specialization[1])}>"
+                    if source_specialization
+                    else concrete
+                )
+                if instantiated != canonical(source_concrete, position):
                     matched = False
                     break
-                score += 1
             if matched and all(
                 parameter in local_bindings
                 for parameter in definition.template_parameters
@@ -8624,53 +8733,77 @@ class MetalPreprocessor(HLSLPreprocessor):
         if len(winners) != 1:
             raise self._UnrecognizedConstraint(name)
         _score, definition, local_bindings = winners[0]
-        return self._evaluate_boolean_constraint_with_variable_templates(
+        return self._evaluate_boolean_constraint(
             definition.expression,
             local_bindings,
-            definitions,
-            stack=(*stack, key),
+            boolean_templates=definitions,
+            variable_stack=(*stack, key),
+            structs=structs,
+            type_aliases=type_aliases,
+            position=position,
+            namespace_visibility=namespace_visibility,
+            lookup_position=definition.span[0],
         )
 
-    def _expand_boolean_variable_templates(
+    def _visible_boolean_variable_templates(
         self,
-        expression: str,
-        bindings: Dict[str, str],
+        name: str,
         definitions: Dict[str, List[_MetalBooleanVariableTemplate]],
-        stack: Tuple[Tuple[str, Tuple[str, ...]], ...] = (),
-    ) -> str:
-        if not definitions:
-            return expression
-        names = sorted(definitions, key=len, reverse=True)
-        start_re = re.compile(
-            r"(?<![A-Za-z0-9_:])(?P<name>"
-            + "|".join(re.escape(name) for name in names)
-            + r")\s*<"
+        position: int,
+        visibility: Optional[_MetalNamespaceVisibility],
+        lookup_position: Optional[int],
+    ) -> List[_MetalBooleanVariableTemplate]:
+        lookup = position if lookup_position is None else lookup_position
+        reference_namespace = self._metal_call_reference_namespace(name)
+        declarations = definitions.get(name.rsplit("::", 1)[-1], [])
+        primaries = [
+            definition
+            for definition in declarations
+            if not definition.is_partial_specialization
+            and definition.span[0] <= lookup
+            and self._metal_namespace_declaration_visible(
+                definition.namespace, reference_namespace, lookup, visibility
+            )
+        ]
+        context = (
+            self._namespace_at(list(visibility.namespace_spans), lookup)
+            if visibility
+            else ""
         )
-        expanded = expression
-        for _ in range(64):
-            match = start_re.search(expanded)
-            if match is None:
-                return expanded
-            angle_start = expanded.find("<", match.start("name"), match.end())
-            angle_end = self._find_matching_angle(expanded, angle_start)
-            if angle_end is None:
-                raise self._UnrecognizedConstraint(expression)
-            arguments = self._split_top_level_commas(
-                expanded[angle_start + 1 : angle_end]
+        namespaces = (
+            self._metal_namespace_reference_candidates(
+                reference_namespace,
+                context,
+                globally_qualified=reference_namespace.startswith("::"),
             )
-            value = self._evaluate_boolean_variable_template(
-                match.group("name"),
-                arguments,
-                bindings,
-                definitions,
-                stack,
-            )
-            expanded = (
-                expanded[: match.start()]
-                + ("true" if value else "false")
-                + expanded[angle_end + 1 :]
-            )
-        raise self._UnrecognizedConstraint(expression)
+            if reference_namespace is not None
+            else self._metal_enclosing_namespaces(context)
+        )
+        for namespace in namespaces:
+            local = [
+                definition
+                for definition in primaries
+                if definition.namespace == namespace
+            ]
+            if local:
+                # An imported competing name has no proven precedence here.
+                imported = [
+                    definition
+                    for definition in primaries
+                    if definition.namespace not in namespaces
+                ]
+                primaries = local + imported
+                break
+        if len(primaries) != 1:
+            raise self._UnrecognizedConstraint(name)
+        primary = primaries[0]
+        return [primary] + [
+            definition
+            for definition in declarations
+            if definition.is_partial_specialization
+            and definition.namespace == primary.namespace
+            and definition.span[0] <= position
+        ]
 
     def _evaluate_boolean_constraint_with_variable_templates(
         self,
@@ -8679,20 +8812,29 @@ class MetalPreprocessor(HLSLPreprocessor):
         definitions: Dict[str, List[_MetalBooleanVariableTemplate]],
         *,
         stack: Tuple[Tuple[str, Tuple[str, ...]], ...] = (),
+        position: int = 0,
+        namespace_visibility: Optional[_MetalNamespaceVisibility] = None,
+        lookup_position: Optional[int] = None,
     ) -> bool:
-        expanded = self._expand_boolean_variable_templates(
+        return self._evaluate_boolean_constraint(
             expression,
             bindings,
-            definitions,
-            stack,
+            boolean_templates=definitions,
+            variable_stack=stack,
+            position=position,
+            namespace_visibility=namespace_visibility,
+            lookup_position=lookup_position,
         )
-        return self._evaluate_boolean_constraint(expanded, bindings)
 
     def _free_operator_constraint_enabled(
         self,
         constraint: str,
         bindings: Dict[str, str],
         definitions: Dict[str, List[_MetalBooleanVariableTemplate]],
+        *,
+        position: int = 0,
+        namespace_visibility: Optional[_MetalNamespaceVisibility] = None,
+        lookup_position: Optional[int] = None,
     ) -> bool:
         text = constraint.strip()
         enable_match = re.match(
@@ -8713,6 +8855,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             text,
             bindings,
             definitions,
+            position=position,
+            namespace_visibility=namespace_visibility,
+            lookup_position=lookup_position,
         )
 
     def _find_free_operator_definitions(
@@ -8932,6 +9077,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         if not operators:
             return code
         boolean_templates = self._find_boolean_variable_templates(code)
+        namespace_visibility = self._metal_namespace_visibility(code)
         replacements = []
         emitted_names: Set[str] = set()
         template_spans = self._find_template_declaration_spans(code)
@@ -9028,6 +9174,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                             constraint,
                             bindings,
                             boolean_templates,
+                            position=len(code),
+                            namespace_visibility=namespace_visibility,
+                            lookup_position=definition.span[0],
                         )
                         for constraint in definition.template_constraints
                     ):
@@ -22824,8 +22973,6 @@ class MetalPreprocessor(HLSLPreprocessor):
         specialization_arguments: List[str],
         concrete_arguments: List[str],
     ) -> bool:
-        if len(specialization_arguments) != len(concrete_arguments):
-            return False
         parameter_names = set(template.template_parameters)
         if template.variadic_template_parameters:
             return self._template_trait_variadic_specialization_may_match(
@@ -22871,17 +23018,25 @@ class MetalPreprocessor(HLSLPreprocessor):
         specialization_arguments: List[str],
         concrete_arguments: List[str],
     ) -> Optional[Dict[str, str]]:
-        if (
-            len(specialization_arguments) != len(concrete_arguments)
-            or template.variadic_template_parameters
+        if template.variadic_template_parameters:
+            return None
+        omitted = specialization_arguments[len(concrete_arguments) :]
+        if len(specialization_arguments) < len(concrete_arguments) or any(
+            not re.search(r"\benable_if(?:_t)?\s*<", argument) for argument in omitted
         ):
             return None
         bindings: Dict[str, str] = {}
         parameter_names = set(template.template_parameters)
-        for specialization_argument, concrete_argument in zip(
-            specialization_arguments,
-            concrete_arguments,
-        ):
+        arguments = list(zip(specialization_arguments, concrete_arguments))
+        arguments.extend((argument, "") for argument in omitted)
+        constrained_arguments = [
+            pair for pair in arguments if re.search(r"\benable_if(?:_t)?\s*<", pair[0])
+        ]
+        # Establish structural non-viability before considering a dependent
+        # enabler. An unevaluated enabler is not proof that the primary applies.
+        for specialization_argument, concrete_argument in [
+            pair for pair in arguments if pair not in constrained_arguments
+        ]:
             normalized_pattern = (
                 self._canonicalize_partial_struct_specialization_argument(
                     specialization_argument
@@ -22914,6 +23069,22 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
             ):
                 return None
+        if constrained_arguments:
+            signature = self._template_specialization_signature(
+                template.name, concrete_arguments
+            )
+            raise MetalTemplateSpecializationError(
+                f"Metal struct specialization '{signature}' has a potentially viable "
+                "enable_if constraint that has not been evaluated. Selecting its "
+                "primary declaration could change the field types or storage layout.",
+                requested_signature=signature,
+                requested_arguments=tuple(concrete_arguments),
+                callee_template=template.name,
+                suggested_action=(
+                    "provide an explicit concrete struct specialization until "
+                    "constrained partial struct selection is supported"
+                ),
+            )
         if not parameter_names <= set(bindings):
             return None
         return bindings
