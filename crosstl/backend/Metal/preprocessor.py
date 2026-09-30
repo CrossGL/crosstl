@@ -320,6 +320,7 @@ class _MetalFreeOperatorDefinition:
     parameter_types: Tuple[str, ...]
     body: str
     span: Tuple[int, int]
+    internal_linkage: bool = False
 
 
 @dataclass(frozen=True)
@@ -8711,6 +8712,10 @@ class MetalPreprocessor(HLSLPreprocessor):
     ) -> List[_MetalFreeOperatorDefinition]:
         definitions: List[_MetalFreeOperatorDefinition] = []
         ignored = self._find_comment_and_literal_spans(code)
+        self._find_namespace_spans(code)
+        anonymous_namespace_spans = self._source_analysis(
+            code
+        ).anonymous_namespace_spans
         operator_re = re.compile(
             r"\boperator\s*(?P<operator>==|!=|<=|>=|[+\-*/%<>])\s*\("
         )
@@ -8792,6 +8797,16 @@ class MetalPreprocessor(HLSLPreprocessor):
                     parameter_types=parameter_types,
                     body=code[body_open + 1 : body_end - 1],
                     span=(template_start, body_end),
+                    internal_linkage=bool(
+                        re.search(
+                            r"\bstatic\b",
+                            self._mask_comments_and_literals(declaration_prefix),
+                        )
+                    )
+                    or any(
+                        start <= template_start < end
+                        for start, end in anonymous_namespace_spans
+                    ),
                 )
             )
             cursor = body_end
@@ -9041,8 +9056,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if helper_name in emitted_names:
                     continue
                 emitted_names.add(helper_name)
+                # Template instantiations can recur in separately translated units;
+                # private definitions must not coalesce across those units.
+                linkage = "static inline" if definition.internal_linkage else "inline"
                 generated.append(
-                    f"{return_type} {helper_name}({parameters}) {{" f"{body}}}\n"
+                    f"{linkage} {return_type} {helper_name}({parameters}) {{"
+                    f"{body}}}\n"
                 )
             if generated:
                 replacements.append(

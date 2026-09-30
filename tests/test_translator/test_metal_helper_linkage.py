@@ -118,6 +118,75 @@ def test_materialized_template_entry_remains_exported(tmp_path):
     assert "static kernel" not in generated
 
 
+def _operator_source(entry, qualifier="", scope="BODY", operation="+"):
+    operator = f"""
+    template <typename T> {qualifier} Pair<T> operator+(Pair<T> a, Pair<T> b) {{
+        return {{a.real {operation} b.real, a.imag {operation} b.imag}};
+    }}
+    """
+    return (
+        """#include <metal_stdlib>
+    using namespace metal;
+    template <typename T> struct Pair { T real; T imag; };
+    """
+        + scope.replace("BODY", operator)
+        + f"""
+    [[visible]] float exported_{entry}(float x) {{ return x + 10.0f; }}
+    kernel void {entry}(device float* output [[buffer(0)]]) {{
+        Pair<float> a = {{1.0f, 2.0f}};
+        Pair<float> b = {{3.0f, 4.0f}};
+        Pair<float> result = a + b;
+        output[0] = result.real;
+        output[1] = result.imag;
+        output[2] = exported_{entry}(2.0f);
+    }}
+    """
+    )
+
+
+@pytest.mark.parametrize("qualifier", ["", "inline", "constexpr", "static"])
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "BODY",
+        "namespace { BODY }",
+        "namespace named { namespace { BODY } } using namespace named;",
+    ],
+)
+def test_materialized_free_operators_keep_template_linkage(tmp_path, qualifier, scope):
+    source = _operator_source("first", qualifier, scope)
+    intermediate = _translate(tmp_path, source, "crossgl")
+    ast = Parser(Lexer(intermediate).get_tokens()).parse()
+    operator = next(
+        function
+        for function in ast.functions
+        if function.name.startswith("crosstl_metal_operator_add__")
+    )
+    private = qualifier == "static" or scope != "BODY"
+    assert operator.linkage == ("internal" if private else "external")
+    assert operator.is_inline
+    generated = _translate(tmp_path, source)
+    prefix = "static inline" if private else "inline"
+    assert f"{prefix} Pair_float {operator.name}(" in generated
+    assert "float exported_first(float x) [[visible]]" in generated
+    assert "static float exported_first" not in generated
+    assert "kernel void first(" in generated
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_template_operator_linkage_remains_metal_metadata(tmp_path, target):
+    from tests.test_translator.test_metal_builtin_ownership import _compile
+
+    generated = _translate(tmp_path, _operator_source("first", "static"), target)
+    helper = "crosstl_metal_operator_add__Pair_float__Pair_float"
+    if target == "opengl":
+        helper = helper.replace("__", "_")
+    assert helper in generated
+    assert "metal_static" not in generated
+    assert "metal_inline" not in generated
+    _compile(generated, target, tmp_path)
+
+
 @pytest.mark.parametrize(
     "scope, call",
     [
@@ -356,6 +425,89 @@ def test_independent_metal_modules_link_and_execute_distinct_helpers(tmp_path):
             assert result["values"][8] == 6.0
             assert result["values"][9] == expected
             evidence[mode][name] = result
+    (tmp_path / "outputs.json").write_text(
+        json.dumps(evidence, indent=2), encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize(
+    "qualifier,scope",
+    [
+        ("", "BODY"),
+        ("inline", "BODY"),
+        ("constexpr", "BODY"),
+        ("static", "BODY"),
+        ("", "namespace { BODY }"),
+        ("", "namespace named { namespace { BODY } } using namespace named;"),
+    ],
+)
+def test_independent_template_operator_modules_link_and_execute(
+    tmp_path, qualifier, scope
+):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required native Metal linking")
+    assert sys.platform == "darwin", "Native Metal linking requires macOS"
+    runner = tmp_path / "readback"
+    _run(
+        [
+            "swiftc",
+            str(
+                ROOT / "tests/fixtures/runtime_verification/metal_float_readback.swift"
+            ),
+            "-o",
+            str(runner),
+        ],
+        tmp_path,
+        "build-readback",
+    )
+    private = qualifier == "static" or scope != "BODY"
+    operations = (("first", "+"), ("second", "*" if private else "+"))
+    evidence = {}
+    for mode in ("original", "translated"):
+        objects = []
+        for entry, operation in operations:
+            source = _operator_source(entry, qualifier, scope, operation)
+            path = tmp_path / f"{mode}-{entry}.metal"
+            path.write_text(
+                _translate(tmp_path, source) if mode == "translated" else source,
+                encoding="utf-8",
+            )
+            air = path.with_suffix(".air")
+            _run(
+                [
+                    "xcrun",
+                    "--sdk",
+                    "macosx",
+                    "metal",
+                    "-Werror",
+                    "-fno-fast-math",
+                    "-c",
+                    str(path),
+                    "-o",
+                    str(air),
+                ],
+                tmp_path,
+                f"compile-{mode}-{entry}",
+            )
+            objects.append(str(air))
+        library = tmp_path / f"{mode}.metallib"
+        _run(
+            ["xcrun", "--sdk", "macosx", "metallib", *objects, "-o", str(library)],
+            tmp_path,
+            f"link-{mode}",
+        )
+        evidence[mode] = {}
+        for entry, operation in operations:
+            result = json.loads(
+                _run(
+                    [str(runner), str(library), entry, "3", f"exported_{entry}"],
+                    tmp_path,
+                    f"execute-{mode}-{entry}",
+                )
+            )
+            expected = [4.0, 6.0, 12.0] if operation == "+" else [3.0, 8.0, 12.0]
+            assert result["values"] == expected
+            evidence[mode][entry] = result
     (tmp_path / "outputs.json").write_text(
         json.dumps(evidence, indent=2), encoding="utf-8"
     )

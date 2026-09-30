@@ -11,6 +11,13 @@ unit. This does not change overload resolution, remove implementations or
 disable compiler warnings. Exported functions and kernel entries remain
 externally visible.
 
+Materialized free-template operators retain inline linkage so identical
+instantiations can occur in separate modules. Explicitly static operators and
+operators from anonymous namespaces remain private; different private bodies
+must not be merged during library linking. Native regressions compile and link
+original and translated module pairs, then execute both entries and check their
+individual results.
+
 Precise Inverse Trigonometry
 ---------------------------
 
