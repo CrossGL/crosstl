@@ -122,8 +122,13 @@
         },
         "metal": {
           "status": "supported",
+          "notes": "Qualified Metal math builtins retain ownership across colliding source helpers, explicit global calls, imported names, and source-owned namespace extensions through collision-safe overload transport. Required bounded numerical CI executes the reduced fixture on DirectX, OpenGL, and Metal, with original-source Metal parity; this does not establish general C++ namespace conformance or whole-repository runtime coverage.",
           "evidence": [
-            "tests/test_backend/test_metal/test_parser.py::def test_"
+            "tests/test_backend/test_metal/test_parser.py::def test_",
+            "tests/test_translator/test_metal_builtin_ownership.py::def test_qualified_metal_builtin_and_source_overloads_compile",
+            "tests/test_translator/test_metal_builtin_ownership.py::def test_imported_builtin_does_not_bind_unrelated_namespace_helper",
+            "tests/test_translator/test_metal_builtin_ownership.py::def test_builtin_transport_avoids_source_identifiers",
+            "tests/test_translator/test_metal_builtin_ownership.py::def test_metal_builtin_ownership_executes"
           ]
         },
         "vulkan": {

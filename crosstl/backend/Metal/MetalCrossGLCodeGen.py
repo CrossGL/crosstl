@@ -2675,7 +2675,7 @@ class MetalToCrossGLConverter:
                 ).append(function)
         self.prepare_value_template_materializations(ast, effective_functions)
         self.prepare_alias_template_resolution(ast, typedefs)
-        self.prepare_metal_source_overload_transport()
+        self.prepare_metal_source_overload_transport(ast)
         self.prepare_metal_atomic_fence_transport_constants(ast)
         code = ""
         includes = getattr(ast, "includes", []) or []
@@ -11778,6 +11778,7 @@ class MetalToCrossGLConverter:
         return f"{function_name}({', '.join(arguments)})"
 
     def map_function_call_name(self, name, args=None):
+        name = str(name).lstrip(":")
         match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", name)
         if not match:
             if str(name).rsplit("::", 1)[-1] == "copysign":
@@ -12191,10 +12192,41 @@ class MetalToCrossGLConverter:
                     return True
         return False
 
-    def prepare_metal_source_overload_transport(self):
+    def qualified_metal_math_operation(self, name):
+        name = str(name).lstrip(":")
+        for prefix in self.metal_math_namespace_prefixes:
+            if name.startswith(prefix):
+                operation = name[len(prefix) :]
+                return operation if operation in self.metal_math_intrinsics else None
+        return None
+
+    def metal_qualified_math_call_names(self, root):
+        calls = set()
+        seen = set()
+
+        def visit(node):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if id(node) in seen:
+                return
+            seen.add(id(node))
+            if isinstance(node, FunctionCallNode):
+                name = str(node.name).lstrip(":")
+                operation = self.qualified_metal_math_operation(name)
+                if operation is not None:
+                    calls.add(operation)
+            for child in self.iter_ast_children(node):
+                visit(child)
+
+        visit(root)
+        return calls
+
+    def prepare_metal_source_overload_transport(self, ast):
         """Assign internal names where portable target ABIs erase source identity."""
         self.metal_source_overload_groups = {}
         self.metal_source_overload_output_names = {}
+        self.metal_builtin_name_collision_groups = set()
+        qualified_math_calls = self.metal_qualified_math_call_names(ast)
         used_names = set(self.wide_vector_reserved_names)
         used_names.update(
             self.sanitize_identifier(name)
@@ -12202,17 +12234,32 @@ class MetalToCrossGLConverter:
         )
 
         for function_name, overloads in self.user_function_overloads_by_name.items():
+            builtin_collision = function_name in qualified_math_calls and any(
+                not self.is_materialized_metal_stdlib_wrapper(function)
+                for function in overloads
+            )
+            if builtin_collision:
+                self.metal_builtin_name_collision_groups.add(function_name)
             signature_groups = {}
             for function in overloads:
-                signature_groups.setdefault(
-                    self.metal_source_overload_declaration_signature(function), []
-                ).append(function)
-            if len(signature_groups) < 2:
+                signature = self.metal_source_overload_declaration_signature(function)
+                if builtin_collision:
+                    signature = (
+                        str(getattr(function, "qualified_name", function.name)),
+                        signature,
+                    )
+                signature_groups.setdefault(signature, []).append(function)
+            if len(signature_groups) < 2 and not builtin_collision:
                 continue
             portable_collision = self.metal_source_overload_set_has_portable_collision(
                 signature_groups
             )
-            if not self.metal_source_overload_set_requires_transport(signature_groups):
+            if (
+                not builtin_collision
+                and not self.metal_source_overload_set_requires_transport(
+                    signature_groups
+                )
+            ):
                 continue
 
             self.metal_source_overload_groups[function_name] = signature_groups
@@ -12224,7 +12271,7 @@ class MetalToCrossGLConverter:
             for ordinal, (_signature, declarations) in enumerate(
                 ordered_groups, start=1
             ):
-                if ordinal == 1 and not portable_collision:
+                if ordinal == 1 and not portable_collision and not builtin_collision:
                     output_name = function_name
                 else:
                     base = (
@@ -12667,7 +12714,36 @@ class MetalToCrossGLConverter:
         return f"{function_name}({rendered_arguments})"
 
     def metal_source_overload_groups_for_name(self, function_name):
+        explicitly_global = str(function_name).startswith("::")
+        function_name = str(function_name).lstrip(":")
         signature_groups = self.metal_source_overload_groups.get(function_name)
+        if signature_groups and function_name in getattr(
+            self, "metal_builtin_name_collision_groups", set()
+        ):
+            namespace = (
+                ""
+                if explicitly_global
+                else str(getattr(self.current_function, "namespace", ""))
+            )
+            for scope in self.namespace_lookup_scopes(namespace):
+                qualified_name = f"{scope}::{function_name}" if scope else function_name
+                visible_names = {qualified_name}
+                if not explicitly_global:
+                    visible_names.update(
+                        f"{target}::{function_name}"
+                        for target in self.visible_using_namespace_targets(scope)
+                    )
+                scoped = {
+                    signature: declarations
+                    for signature, declarations in signature_groups.items()
+                    if str(
+                        getattr(declarations[0], "qualified_name", declarations[0].name)
+                    )
+                    in visible_names
+                }
+                if scoped:
+                    return scoped
+            return None
         if signature_groups or "::" not in str(function_name):
             return signature_groups
         unscoped_name = str(function_name).rsplit("::", 1)[-1]
@@ -12688,6 +12764,17 @@ class MetalToCrossGLConverter:
     def resolve_transported_metal_source_overload(
         self, function_name, arguments, source_location=None
     ):
+        if self.qualified_metal_math_operation(function_name) in getattr(
+            self, "metal_builtin_name_collision_groups", set()
+        ):
+            binding, function = self.resolve_metal_user_function_overload(
+                function_name, arguments
+            )
+            if binding == "none" or (
+                binding == "user"
+                and self.is_materialized_metal_stdlib_wrapper(function)
+            ):
+                return None
         signature_groups = self.metal_source_overload_groups_for_name(function_name)
         if not signature_groups:
             return None
@@ -12805,6 +12892,15 @@ class MetalToCrossGLConverter:
         return self.metal_source_overload_output_names[id(selected)]
 
     def metal_user_function_overloads(self, function_name):
+        unscoped_name = str(function_name).lstrip(":")
+        if unscoped_name in getattr(self, "metal_builtin_name_collision_groups", set()):
+            groups = self.metal_source_overload_groups_for_name(function_name)
+            return [
+                declaration
+                for declarations in (groups or {}).values()
+                for declaration in declarations
+            ]
+        function_name = str(function_name).lstrip(":")
         direct = list(self.user_function_overloads_by_name.get(function_name, []))
         if direct or "::" not in str(function_name):
             return direct
@@ -12958,6 +13054,7 @@ class MetalToCrossGLConverter:
         return None
 
     def map_metal_math_function_name(self, name, args=None):
+        name = str(name).lstrip(":")
         for prefix in self.metal_math_namespace_prefixes:
             if not str(name).startswith(prefix):
                 continue
@@ -13294,17 +13391,17 @@ class MetalToCrossGLConverter:
         return f"{result_type}({public_operation}({', '.join(arguments)}))"
 
     def resolve_metal_math_builtin_name(self, name, arguments):
-        text = str(name)
+        text = str(name).lstrip(":")
         builtin_name = self.map_metal_math_function_name(text, arguments)
         if builtin_name is None:
             if "::" in text or text not in self.metal_math_intrinsics:
                 return None
             builtin_name = text
 
-        source_overloads = self.metal_user_function_overloads(text)
+        source_overloads = self.metal_user_function_overloads(name)
         if source_overloads:
             binding, _function = self.resolve_metal_user_function_overload(
-                text, arguments
+                name, arguments
             )
             if binding in {"user", "unknown"}:
                 return None
@@ -13321,7 +13418,7 @@ class MetalToCrossGLConverter:
 
     @staticmethod
     def metal_math_builtin_namespace_mode(name):
-        text = str(name)
+        text = str(name).lstrip(":")
         if text.startswith(("metal::fast::", "fast::")):
             return "fast"
         if text.startswith(("metal::precise::", "precise::")):
