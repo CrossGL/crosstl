@@ -1323,6 +1323,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         materialized_names: Dict[Tuple[Tuple[int, int], Tuple[str, ...]], str] = {}
         generated_name_owners: Dict[str, Tuple[Tuple[int, int], Tuple[str, ...]]] = {}
         handled_template_spans: Set[Tuple[int, int]] = set()
+        reserved_identifiers = set(
+            IDENTIFIER_RE.findall(self._mask_comments_and_literals(code))
+        )
 
         for call in calls:
             visible_candidates = [
@@ -1500,10 +1503,10 @@ class MetalPreprocessor(HLSLPreprocessor):
             key = (template.span, ordered_arguments)
             specialized_name = materialized_names.get(key)
             if specialized_name is None:
-                specialized_name = self._template_specialization_identifier(
+                preferred_name = self._template_specialization_identifier(
                     template.name, list(ordered_arguments)
                 )
-                prior_owner = generated_name_owners.get(specialized_name)
+                prior_owner = generated_name_owners.get(preferred_name)
                 if prior_owner is not None and prior_owner != key:
                     self._raise_constrained_free_function_error(
                         code,
@@ -1511,6 +1514,11 @@ class MetalPreprocessor(HLSLPreprocessor):
                         "enabled specializations would produce the same concrete "
                         "helper name",
                     )
+                specialized_name = preferred_name
+                suffix = 1
+                while specialized_name in reserved_identifiers:
+                    specialized_name = f"{preferred_name}_{suffix}"
+                    suffix += 1
                 materialized = self._materialize_template_function_with_name(
                     template,
                     list(ordered_arguments),
@@ -1523,7 +1531,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                         call,
                         "the uniquely enabled overload could not be materialized",
                     )
-                generated_name_owners[specialized_name] = key
+                reserved_identifiers.add(specialized_name)
+                generated_name_owners[preferred_name] = key
                 materialized_names[key] = specialized_name
                 materializations.append(materialized.rstrip())
 

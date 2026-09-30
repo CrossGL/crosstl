@@ -521,6 +521,9 @@ forward declarations participate even without a definition. General C++
 conversion ranking and template partial ordering are not implemented by this
 path. Use a distinct helper name or an explicit specialization to remove the
 unresolved competition rather than relying on a guessed overload.
+Generated helper names reserve existing source identifiers, including local
+variables and parameters. A deterministic suffix avoids name collisions while
+repeated calls to the same specialization reuse one helper.
 
 The two current-tree DirectX float32 entries explicitly select
 ``software_subgroup_width = 32``. Their shuffle helpers use shared storage and

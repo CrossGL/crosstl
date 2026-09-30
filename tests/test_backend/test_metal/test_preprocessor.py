@@ -12953,3 +12953,126 @@ def test_preprocessor_excludes_ordinary_overload_from_explicit_template_call():
 
     assert "out[0] = select_value_int(value);" in output
     assert "int select_value_int(int value)" in output
+
+
+@pytest.mark.parametrize(
+    ("declaration", "parameter", "local", "expected_name"),
+    [
+        pytest.param(
+            "int select_value_int(int value) { return 2; }",
+            "",
+            "",
+            "select_value_int_1",
+            id="function",
+        ),
+        pytest.param(
+            "int select_value_int(int value);",
+            "",
+            "",
+            "select_value_int_1",
+            id="prototype",
+        ),
+        pytest.param(
+            "",
+            ", uint select_value_int [[thread_position_in_grid]]",
+            "",
+            "select_value_int_1",
+            id="parameter",
+        ),
+        pytest.param(
+            "",
+            "",
+            "int select_value_int = 2;",
+            "select_value_int_1",
+            id="local",
+        ),
+        pytest.param(
+            "int select_value_int(int value) { return 2; }",
+            "",
+            "int select_value_int_1 = 3;",
+            "select_value_int_2",
+            id="occupied-suffix",
+        ),
+        pytest.param(
+            "// select_value_int\n/* select_value_int_1 */",
+            "",
+            "",
+            "select_value_int",
+            id="comments-do-not-reserve-names",
+        ),
+    ],
+)
+def test_preprocessor_reserves_source_identifiers_for_inferred_sfinae_helpers(
+    declaration, parameter, local, expected_name
+):
+    code = f"""
+    template <typename T,
+              metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    int select_value(T value) {{ return 1; }}
+    {declaration}
+    kernel void k(device int* out [[buffer(0)]]{parameter}) {{
+      int value = 7;
+      {local}
+      out[0] = select_value(value);
+      out[1] = select_value(value);
+    }}
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert output == MetalPreprocessor().preprocess(code)
+    assert output.count(f"int {expected_name}(int value) {{ return 1; }}") == 1
+    assert f"out[0] = {expected_name}(value);" in output
+    assert f"out[1] = {expected_name}(value);" in output
+    if local:
+        assert local in output
+    if parameter:
+        assert parameter in output
+    if declaration and not declaration.startswith("//"):
+        assert declaration in output
+
+
+@pytest.mark.parametrize("backend", ["metal", "directx", "opengl"])
+def test_inferred_sfinae_helper_collision_preserves_target_call_identity(
+    tmp_path, backend
+):
+    from crosstl import translate
+
+    source = tmp_path / "helper-collision.metal"
+    source.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template <typename T,
+                  metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+        int select_value(T value) { return 1; }
+
+        int select_value_int(int value) { return 2; }
+
+        kernel void k(device int* result [[buffer(0)]]) {
+            int value = 7;
+            result[0] = select_value(value);
+            result[1] = select_value_int(value);
+            result[2] = select_value(value);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = translate(str(source), backend=backend, format_output=False)
+
+    assert re.search(
+        r"int select_value_int\(int value\)\s*\{\s*return 2;\s*\}", generated
+    )
+    assert (
+        len(
+            re.findall(
+                r"int select_value_int_1\(int value\)\s*\{\s*return 1;\s*\}", generated
+            )
+        )
+        == 1
+    )
+    assert "result[0] = select_value_int_1(value);" in generated
+    assert "result[1] = select_value_int(value);" in generated
+    assert "result[2] = select_value_int_1(value);" in generated
