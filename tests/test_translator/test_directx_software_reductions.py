@@ -257,16 +257,29 @@ def _expected(words, value_type):
     return output
 
 
-@pytest.mark.parametrize("value_type", ["float", "int", "uint"])
-def test_software_reductions_execute(tmp_path, monkeypatch, value_type):
+@pytest.fixture
+def directx_runtime(monkeypatch):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for DirectX numerical execution")
     assert sys.platform == "win32", "DirectX execution requires Windows"
     monkeypatch.setenv("CROSTL_REQUIRE_DIRECTX_FLOAT_ATOMICS", "1")
+
+
+@pytest.mark.parametrize("value_type", ["float", "int", "uint"])
+def test_software_reductions_execute(tmp_path, directx_runtime, value_type):
     generated = _codegen().generate_stage(parse(_source(value_type)), "compute")
-    artifact, module = _compile(generated, tmp_path)
     words = _inputs(value_type)
     expected = _expected(words, value_type)
+    actual = _execute_words(tmp_path, generated, words, expected, value_type=value_type)
+    for index, (got, want) in enumerate(zip(actual, expected)):
+        if value_type == "float" and want & 0x7FFFFFFF > 0x7F800000:
+            assert got & 0x7FFFFFFF > 0x7F800000, (index, got, want)
+        else:
+            assert got == want, (index, got, want)
+
+
+def _execute_words(tmp_path, generated, words, expected, *, value_type="uint"):
+    artifact, module = _compile(generated, tmp_path)
     guard = [0x6A15BEEF] * 32
     inputs = {
         "inputWords": words + guard,
@@ -326,11 +339,7 @@ def test_software_reductions_execute(tmp_path, monkeypatch, value_type):
     actual = outputs["outputWords"]["values"]
     assert actual[len(expected) :] == guard
     assert len(actual) == len(expected) + len(guard)
-    for index, (got, want) in enumerate(zip(actual, expected)):
-        if value_type == "float" and want & 0x7FFFFFFF > 0x7F800000:
-            assert got & 0x7FFFFFFF > 0x7F800000, (index, got, want)
-        else:
-            assert got == want, (index, got, want)
+    return actual[: len(expected)]
 
 
 def test_software_reduction_oracle_checks_special_values():

@@ -69,6 +69,14 @@ width. Multiple logical groups share an allocation but never read each other's
 values. Every invocation participates in both barriers around a collective;
 unproven divergent control flow remains a structured translation error.
 
+The entry captures ``SV_GroupIndex`` in private per-invocation storage before
+executing source statements. All dependent helpers use that captured identity,
+including helpers with invocation-like parameter annotations. If the source
+does not expose a complete local index, a collision-safe internal parameter is
+added. Source-visible scalar or vector IDs retain their original values and
+ordinary assignment semantics; modifying them cannot change subgroup partners
+or shared-memory offsets.
+
 Payloads are limited to 32-bit ``float``, ``int`` and ``uint`` scalars. Floating
 sums use a precise, increasing-lane-order fold; different native reduction
 orders can round differently. Integer sums retain 32-bit wraparound. Floating

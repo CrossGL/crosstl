@@ -11,6 +11,7 @@ on:
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_directx_float_atomics.py"
       - "tests/test_translator/test_directx_software_reductions.py"
+      - "tests/test_translator/test_directx_subgroup_identity.py"
       - "tests/test_translator/test_metal_float_atomics.py"
       - "tests/test_translator/test_mlx_gated_delta_directx.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
@@ -39,6 +40,7 @@ on:
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_directx_float_atomics.py"
       - "tests/test_translator/test_directx_software_reductions.py"
+      - "tests/test_translator/test_directx_subgroup_identity.py"
       - "tests/test_translator/test_metal_float_atomics.py"
       - "tests/test_translator/test_mlx_gated_delta_directx.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
@@ -200,6 +202,7 @@ jobs:
               --basetemp=.mlx-portable-host/software-reductions/pytest \
               --junitxml=.mlx-portable-host/software-reductions/results.xml \
               tests/test_translator/test_directx_software_reductions.py \
+              tests/test_translator/test_directx_subgroup_identity.py \
               2>&1 | tee .mlx-portable-host/software-reductions.log
       - name: Validate binary32 fused arithmetic
         env:

@@ -50056,12 +50056,6 @@ def test_hlsl_software_subgroup_helper_identity_avoids_local_names():
     "entry_parameter, helper_body, call, reason",
     [
         (
-            "uint index @SV_DispatchThreadID",
-            "return WaveShuffleDown(value, 1u);",
-            "output[index] = shuffled(index);",
-            "invocation-index-unavailable",
-        ),
-        (
             "uint index @gl_LocalInvocationIndex",
             "return WaveShuffleDown(value, 1u);",
             "if (index < 16u) { output[index] = shuffled(index); }",

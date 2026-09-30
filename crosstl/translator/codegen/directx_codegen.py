@@ -4549,44 +4549,6 @@ class HLSLCodeGen:
             )
         return entries
 
-    def hlsl_software_subgroup_parameter_expression(self, function):
-        local_index = None
-        local_id = None
-        subgroup_id = None
-        subgroup_lane = None
-        for parameter in (
-            getattr(function, "parameters", getattr(function, "params", [])) or []
-        ):
-            name = getattr(parameter, "name", None)
-            if not name:
-                continue
-            name = self.hlsl_declaration_identifier_name(name)
-            semantic = self.semantic_from_node(parameter)
-            canonical = self.hlsl_canonical_semantic(semantic)
-            if semantic == "gl_LocalInvocationIndex" or canonical == "SV_GroupIndex":
-                local_index = name
-            elif semantic == "gl_LocalInvocationID" or canonical == "SV_GroupThreadID":
-                local_id = name
-            elif semantic == "gl_SubgroupID":
-                subgroup_id = name
-            elif semantic == "gl_SubgroupInvocationID":
-                subgroup_lane = name
-
-        if local_index is not None:
-            return f"uint({local_index})"
-        if local_id is not None:
-            x, y, _z = self.hlsl_software_subgroup_workgroup_size
-            return (
-                f"(uint({local_id}.x) + {x}u * "
-                f"(uint({local_id}.y) + {y}u * uint({local_id}.z)))"
-            )
-        if subgroup_id is not None and subgroup_lane is not None:
-            return (
-                f"(uint({subgroup_id}) * {self.software_subgroup_width}u + "
-                f"uint({subgroup_lane}))"
-            )
-        return None
-
     def hlsl_software_subgroup_expression_identifier_names(self, expression):
         return {
             node.name
@@ -5040,38 +5002,14 @@ class HLSLCodeGen:
             )
 
         self.hlsl_software_subgroup_function_names = dependent_names
-        entry_expression = self.hlsl_software_subgroup_parameter_expression(
-            entry_function
-        )
         reserved_names = self.hlsl_helper_reserved_names(functions)
         self.hlsl_software_subgroup_reserved_names = reserved_names
+        variable = "__crossgl_software_subgroup_invocation"
+        while variable in reserved_names:
+            variable += "_"
+        self.hlsl_software_subgroup_invocation_variable = variable
         for name in direct_names:
-            function = functions_by_name[name]
-            expression = self.hlsl_software_subgroup_parameter_expression(function)
-            if (
-                expression is None
-                and function is not entry_function
-                and entry_expression
-            ):
-                if self.hlsl_software_subgroup_invocation_variable is None:
-                    variable = "__crossgl_software_subgroup_invocation"
-                    while variable in reserved_names:
-                        variable += "_"
-                    self.hlsl_software_subgroup_invocation_variable = variable
-                expression = self.hlsl_software_subgroup_invocation_variable
-            if expression is None:
-                records = self.hlsl_software_subgroup_operation_records(
-                    getattr(function, "body", None)
-                )
-                raise self.hlsl_software_subgroup_error(
-                    "DirectX software subgroup helpers require a local-invocation "
-                    "index, local-invocation ID, or logical subgroup ID/lane pair",
-                    workgroup_size=concrete_workgroup_size,
-                    operation=records[0][0],
-                    reason="invocation-index-unavailable",
-                    source_location=getattr(records[0][1], "source_location", None),
-                )
-            self.hlsl_software_subgroup_invocation_expressions[name] = expression
+            self.hlsl_software_subgroup_invocation_expressions[name] = variable
 
         call_mutations = {}
         for node in self.walk_ast(ast):
@@ -10150,6 +10088,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     sampler_parameters.add(query_sampler_name)
 
         params_str = ", ".join(params)
+        software_subgroup_entry_index = None
         if effective_shader_type is None:
             params_str = self.append_required_hlsl_stage_parameter_parameters(
                 params_str, getattr(func, "name", None), param_names
@@ -10200,9 +10139,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 param_names.add(name)
                 self.local_variable_types[name] = param_type
-            # An explicit @gl_SubgroupID compute parameter (handled as a body-local
-            # prologue above) requires an SV_GroupIndex parameter in scope; inject
-            # it here if no SV_GroupIndex parameter was already emitted.
+            if self.hlsl_software_subgroup_invocation_variable is not None:
+                software_subgroup_entry_index = (
+                    self.hlsl_compute_group_index_dependency_name(param_list)
+                )
+            # Logical subgroup derivations require SV_GroupIndex even when the
+            # source exposes only a partial local ID or no local ID at all.
             group_index_param = self.current_hlsl_compute_group_index_param
             if group_index_param and group_index_param not in param_names:
                 params_str = self.append_hlsl_parameter_declaration(
@@ -10573,8 +10515,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ):
                 # HLSL static globals are private to each shader invocation.
                 variable = self.hlsl_software_subgroup_invocation_variable
-                expression = self.hlsl_software_subgroup_parameter_expression(func)
-                code += f"{'    ' * (indent + 1)}{variable} = {expression};\n"
+                code += (
+                    f"{'    ' * (indent + 1)}{variable} = "
+                    f"uint({software_subgroup_entry_index});\n"
+                )
             if self.current_hlsl_tail_recursive_call_ids:
                 code += f"{'    ' * (indent + 1)}while (true) {{\n"
                 code += self.generate_statement_body(body, indent + 2)

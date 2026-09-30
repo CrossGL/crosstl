@@ -643,6 +643,14 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
             assert "tests/test_translator/test_metal_float_atomics.py" in paths
             assert "tests/test_translator/test_mlx_gated_delta_metal.py" in paths
     metal = (root / ".github/workflows/mlx-metal-host.yml").read_text()
+    reductions = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Validate DirectX software reductions"
+    )
+    assert "tests/test_translator/test_directx_subgroup_identity.py" in reductions
+    for event in ("push", "pull_request"):
+        assert "tests/test_translator/test_directx_subgroup_identity.py" in (
+            ci_coverage.workflow_event_path_filters(workflow, event)
+        )
     control = ci_coverage.workflow_job_step_section(
         metal, "metal-host", "Validate native float atomics"
     )
