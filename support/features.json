@@ -28,13 +28,17 @@
         },
         "opengl": {
           "status": "supported",
-          "notes": "OpenGL target output applies deterministic, collision-free GLSL identifier remapping to user and generated symbols, including target-reserved gl_ and consecutive-underscore spellings, while preserving declared builtin interface names and source provenance, with warning-fatal glslang and SPIR-V validation coverage.",
+          "notes": "OpenGL target output applies deterministic, collision-free GLSL identifier remapping to user and generated symbols, including target-reserved gl_ and consecutive-underscore spellings, while preserving declared builtin interface names and source provenance, with warning-fatal glslang and SPIR-V validation coverage. Canonical Metal floating math and eager Boolean selection have typed lowering, explicit min/max NaN handling, source-helper ownership checks, and required bounded Linux numerical execution; this is not whole-repository runtime coverage.",
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_reserved_identifiers_are_sanitized_consistently",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_reserved_identifier_mapping_preserves_scope_and_source_names",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_builtin_interface_block_members_preserve_builtin_names",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_reserved_identifiers_validate_without_warnings"
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_reserved_identifiers_validate_without_warnings",
+            "tests/test_translator/test_opengl_metal_math.py::def test_metal_math_translates_and_compiles_for_opengl",
+            "tests/test_translator/test_opengl_metal_math.py::def test_opengl_metal_math_executes",
+            "tests/test_translator/test_opengl_metal_math.py::def test_opengl_metal_math_diagnostics",
+            "tests/test_translator/test_opengl_metal_math.py::def test_opengl_metal_math_preserves_source_helpers"
           ]
         },
         "metal": {
