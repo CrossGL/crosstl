@@ -2162,6 +2162,8 @@ class HLSLCodeGen:
         self.hlsl_trailing_zero_helper_names = {}
         self.required_hlsl_inverse_hyperbolic_helpers = set()
         self.hlsl_inverse_hyperbolic_helper_names = {}
+        self.required_hlsl_atan2_helpers = set()
+        self.hlsl_atan2_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
         self.hlsl_defined_relative_wave_shuffle_helper_names = {}
@@ -3111,6 +3113,8 @@ class HLSLCodeGen:
         self.hlsl_trailing_zero_helper_names = {}
         self.required_hlsl_inverse_hyperbolic_helpers = set()
         self.hlsl_inverse_hyperbolic_helper_names = {}
+        self.required_hlsl_atan2_helpers = set()
+        self.hlsl_atan2_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
         self.hlsl_defined_relative_wave_shuffle_helper_names = {}
@@ -3306,6 +3310,7 @@ class HLSLCodeGen:
         )
         self.prepare_hlsl_trailing_zero_helper_names(functions)
         self.prepare_hlsl_inverse_hyperbolic_helper_names(functions)
+        self.prepare_hlsl_atan2_helper_names(functions)
         self.prepare_hlsl_physical_subgroup_id_helper_names(functions)
         self.vertex_entry_output_struct_names = (
             self.collect_hlsl_vertex_entry_output_struct_names(ast, target_stage)
@@ -4383,6 +4388,7 @@ class HLSLCodeGen:
         code += self.generate_hlsl_wave_shuffle_and_fill_up_helpers()
         code += self.generate_hlsl_trailing_zero_helpers()
         code += self.generate_hlsl_inverse_hyperbolic_helpers()
+        code += self.generate_hlsl_atan2_helpers()
         code += self.generate_hlsl_complex64_helpers()
         code += self.generate_hlsl_software_subgroup_helpers()
         code += self.generate_hlsl_defined_relative_wave_shuffle_helpers()
@@ -5308,6 +5314,128 @@ uint {helper_name}(uint groupIndex) {{
 }}
 """)
         return "\n".join(helpers) + ("\n" if helpers else "")
+
+    def prepare_hlsl_atan2_helper_names(self, functions):
+        used_names = self.hlsl_helper_reserved_names(functions)
+        self.hlsl_atan2_helper_names = {}
+        for width in range(1, 5):
+            value_type = "float" if width == 1 else f"float{width}"
+            name = f"__crossgl_atan2_{value_type}"
+            while name in used_names:
+                name += "_"
+            self.hlsl_atan2_helper_names[value_type] = name
+            used_names.add(name)
+
+    def generate_hlsl_atan2_helpers(self):
+        if not self.required_hlsl_atan2_helpers:
+            return ""
+        scalar = self.hlsl_atan2_helper_names["float"]
+        code = f"""float {scalar}(float y, float x) {{
+    uint yBits = asuint(y);
+    uint xBits = asuint(x);
+    uint yMagnitude = yBits & 0x7fffffffu;
+    uint xMagnitude = xBits & 0x7fffffffu;
+    uint sign = yBits & 0x80000000u;
+    bool negativeX = (xBits & 0x80000000u) != 0u;
+    if (yMagnitude > 0x7f800000u || xMagnitude > 0x7f800000u) {{
+        return asfloat(0x7fc00000u);
+    }}
+    // HLSL atan2 uses numeric comparisons, which do not distinguish signed zero.
+    if (yMagnitude == 0u) {{
+        return asfloat(sign | (negativeX ? 0x40490fdbu : 0u));
+    }}
+    if (xMagnitude == 0u) {{ return asfloat(sign | 0x3fc90fdbu); }}
+    if (yMagnitude == 0x7f800000u) {{
+        uint angle = xMagnitude == 0x7f800000u
+            ? (negativeX ? 0x4016cbe4u : 0x3f490fdbu) : 0x3fc90fdbu;
+        return asfloat(sign | angle);
+    }}
+    if (xMagnitude == 0x7f800000u) {{
+        return asfloat(sign | (negativeX ? 0x40490fdbu : 0u));
+    }}
+    uint result = asuint(atan2(y, x));
+    return asfloat((result & 0x7fffffffu) | sign);
+}}
+"""
+        for value_type in sorted(self.required_hlsl_atan2_helpers - {"float"}):
+            name = self.hlsl_atan2_helper_names[value_type]
+            width = int(value_type[-1])
+            lanes = ", ".join(
+                f"{scalar}(y.{lane}, x.{lane})" for lane in "xyzw"[:width]
+            )
+            code += (
+                f"{value_type} {name}({value_type} y, {value_type} x) {{\n"
+                f"    return {value_type}({lanes});\n}}\n"
+            )
+        return code + "\n"
+
+    def generate_hlsl_atan2_call(self, func_name, args, *, call_node=None):
+        if func_name != "atan2":
+            return None
+        if (
+            self.resolve_hlsl_function_overload(func_name, args, call_node=call_node)
+            is not None
+        ):
+            return None
+        source_types = [self.hlsl_source_expression_type(argument) for argument in args]
+        mapped_types = [
+            self.map_type(value) if value is not None else None
+            for value in source_types
+        ]
+        source_location = getattr(call_node, "source_location", None)
+
+        if any(self.is_hlsl_bfloat16_type(value) for value in source_types) and (
+            self.hlsl_bfloat16_builtin_result_type(func_name, source_types, len(args))
+            is None
+        ):
+            return self.generate_hlsl_bfloat16_builtin_call(
+                func_name, args, source_types, source_location=source_location
+            )
+
+        def unsupported(reason):
+            return DirectXContextualConversionError(
+                "DirectX canonical atan2 requires two matching floating scalar or vector operands",
+                source_type=", ".join(str(value) for value in source_types),
+                target_type="float or floating vector",
+                reason=reason,
+                source_location=source_location,
+            )
+
+        if len(args) != 2:
+            raise unsupported("atan2-invalid-arity")
+        if any(value is None for value in source_types):
+            raise unsupported("atan2-operand-unresolved")
+        bfloat = all(self.is_hlsl_bfloat16_type(value) for value in source_types)
+        if mapped_types[0] != mapped_types[1]:
+            raise unsupported("atan2-operand-shape-mismatch")
+        shape = re.fullmatch(
+            r"(float|float16_t|half|min16float)([234]?)", mapped_types[0]
+        )
+        if not bfloat and shape is None:
+            raise unsupported("atan2-operand-type-unsupported")
+        for intrinsic in ("atan2", "asuint", "asfloat"):
+            if intrinsic in self.global_variable_types or (
+                intrinsic in self.function_return_types
+                and intrinsic not in self.hlsl_function_name_aliases
+            ):
+                raise unsupported("atan2-target-intrinsic-shadowed")
+        value_type = "float" + (shape.group(2) if shape else "")
+        self.required_hlsl_atan2_helpers.add(value_type)
+        name = self.hlsl_atan2_helper_names[value_type]
+        arguments = [self.generate_expression(argument) for argument in args]
+        if bfloat:
+            arguments = [
+                self.hlsl_bfloat16_to_float_expression(argument)
+                for argument in arguments
+            ]
+        elif mapped_types[0] != value_type:
+            arguments = [f"{value_type}({argument})" for argument in arguments]
+        call = f"{name}({', '.join(arguments)})"
+        if bfloat:
+            return self.hlsl_float_to_bfloat16_expression(call)
+        if mapped_types[0] != value_type:
+            return f"{mapped_types[0]}({call})"
+        return call
 
     def prepare_hlsl_inverse_hyperbolic_helper_names(self, functions):
         used_names = self.hlsl_helper_reserved_names(functions)
@@ -13852,6 +13980,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     "fmax",
                     "fmin",
                     "select",
+                    "atan2",
                 }
                 and args
                 and func_name not in getattr(self, "function_return_types", {})
@@ -21191,6 +21320,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if inverse_hyperbolic_call is not None:
                 return inverse_hyperbolic_call
+
+            atan2_call = self.generate_hlsl_atan2_call(func_name, args, call_node=expr)
+            if atan2_call is not None:
+                return atan2_call
 
             bitcast_call = self.generate_hlsl_bitcast_call(func_name, args)
             if bitcast_call is not None:

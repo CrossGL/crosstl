@@ -430,7 +430,7 @@ class DirectXComputeRuntime:
         compushady = self._load_compushady()
         prepared_dispatches: list[_PreparedDirectXDispatch] = []
         for node_index, request in enumerate(sequence):
-            counts = _workgroup_count(request, target="DirectX")
+            counts = _workgroup_count(request, target="DirectX", node_index=node_index)
             # D3D12_CS_* limits apply to the DXIL compute pipeline.
             _validate_dispatch_limits(
                 counts,
@@ -989,7 +989,7 @@ class OpenGLComputeRuntime:
         sequence = _validate_dispatch_sequence_requests(requests, target="opengl")
         moderngl = self._load_moderngl()
         prepared_dispatches: list[_PreparedOpenGLDispatch] = []
-        for request in sequence:
+        for node_index, request in enumerate(sequence):
             if request.entry_point not in (None, "main"):
                 raise RuntimeExecutorUnavailable(
                     "OpenGL compute artifacts expose the selected entry point as main; "
@@ -1013,7 +1013,9 @@ class OpenGLComputeRuntime:
                     specializations=_prepare_opengl_specializations(
                         specialization_bindings
                     ),
-                    workgroup_count=_workgroup_count(request, target="OpenGL"),
+                    workgroup_count=_workgroup_count(
+                        request, target="OpenGL", node_index=node_index
+                    ),
                 )
             )
         required_subgroup_widths = sorted(
@@ -4410,51 +4412,80 @@ def _workgroup_count(
     request: NativeRuntimeDispatchRequest,
     *,
     target: str = "Vulkan",
+    node_index: int | None = None,
 ) -> tuple[int, int, int]:
     dispatch = request.dispatch
     if dispatch is None:
         raise RuntimeExecutorUnavailable(
             f"{target} compute runtime requires dispatch geometry."
         )
-    if dispatch.workgroup_count:
-        values = dispatch.workgroup_count
-    elif dispatch.global_size and dispatch.workgroup_size:
-        global_size = _pad3(
-            dispatch.global_size, field_name="globalSize", target=target
-        )
-        local_size = _pad3(
-            dispatch.workgroup_size, field_name="workgroupSize", target=target
-        )
-        values = tuple(
-            (global_value + local_value - 1) // local_value
-            for global_value, local_value in zip(global_size, local_size)
-        )
-    else:
+    counts = _pad3(
+        dispatch.workgroup_count,
+        field_name="workgroupCount",
+        target=target,
+        allow_empty=True,
+        node_index=node_index,
+    )
+    if counts:
+        return counts
+    global_size = _pad3(
+        dispatch.global_size,
+        field_name="globalSize",
+        target=target,
+        allow_empty=True,
+        node_index=node_index,
+    )
+    local_size = _pad3(
+        dispatch.workgroup_size,
+        field_name="workgroupSize",
+        target=target,
+        allow_empty=True,
+        node_index=node_index,
+    )
+    if not global_size or not local_size:
         raise RuntimeExecutorUnavailable(
             f"{target} compute runtime requires workgroupCount or "
             "globalSize/workgroupSize."
         )
-    return _pad3(values, field_name="workgroupCount", target=target)
+    return tuple(
+        (global_value + local_value - 1) // local_value
+        for global_value, local_value in zip(global_size, local_size)
+    )
 
 
 def _pad3(
-    values: Sequence[int],
+    values: Sequence[int] | None,
     *,
     field_name: str,
     target: str = "Vulkan",
-) -> tuple[int, int, int]:
-    if not 1 <= len(values) <= 3 or any(
-        not isinstance(value, int) or isinstance(value, bool) or value <= 0
-        for value in values
+    allow_empty: bool = False,
+    node_index: int | None = None,
+) -> tuple[int, ...]:
+    sequence = isinstance(values, Sequence) and not isinstance(
+        values, (str, bytes, bytearray)
+    )
+    # RuntimeDispatchGeometry uses an empty tuple for omitted metadata.
+    if allow_empty and (values is None or (sequence and len(values) == 0)):
+        return ()
+    if (
+        not sequence
+        or not 1 <= len(values) <= 3
+        or any(
+            not isinstance(value, int) or isinstance(value, bool) or value <= 0
+            for value in values
+        )
     ):
+        details = {
+            "target": target.lower(),
+            "reasonKind": "dispatch-dimensions-invalid",
+            "field": field_name,
+            "requested": list(values) if sequence else repr(values),
+        }
+        if node_index is not None:
+            details["nodeIndex"] = node_index
         raise RuntimeAdapterSetupError(
             f"{target} compute runtime {field_name} requires one to three positive integers.",
-            details={
-                "target": target.lower(),
-                "reasonKind": "dispatch-dimensions-invalid",
-                "field": field_name,
-                "requested": list(values),
-            },
+            details=details,
         )
     padded = tuple(values) + (1,) * (3 - len(values))
     return padded[:3]
@@ -4494,8 +4525,19 @@ def _validate_dispatch_limits(
                     "field": name,
                 },
             )
-    counts = _pad3(counts, field_name="workgroupCount", target=target)
-    size = _pad3(size, field_name="workgroupSize", target=target) if size else None
+    counts = _pad3(
+        counts, field_name="workgroupCount", target=target, node_index=node_index
+    )
+    size = (
+        _pad3(
+            size,
+            field_name="workgroupSize",
+            target=target,
+            allow_empty=True,
+            node_index=node_index,
+        )
+        or None
+    )
     details = {
         "target": target,
         "reasonKind": "dispatch-limit-exceeded",

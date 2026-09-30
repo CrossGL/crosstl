@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 502,
+        "unsupported_marker_count": 509,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -123,10 +123,11 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_translator/test_directx_metal_math.py",
           "tests/test_translator/test_metal_precise_asin.py",
+          "tests/test_translator/test_directx_atan2.py",
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1547
+        "test_count": 1556
       },
       "translator_codegen": {
         "exists": true,
@@ -627,7 +628,7 @@
           "tests/test_translator/test_metal_precise_asin.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1876
+        "test_count": 1882
       },
       "translator_codegen": {
         "exists": true,
@@ -1712,9 +1713,13 @@
             "tests/test_translator/test_directx_metal_math.py::def test_metal_math_translates_and_compiles_for_directx",
             "tests/test_translator/test_directx_metal_math.py::def test_directx_metal_math_executes",
             "tests/test_translator/test_directx_metal_math.py::def test_directx_metal_math_rejects_shadowed_target",
-            "tests/test_translator/test_directx_metal_math.py::def test_hlsl_select_roundtrip_retains_hlsl_argument_order"
+            "tests/test_translator/test_directx_metal_math.py::def test_hlsl_select_roundtrip_retains_hlsl_argument_order",
+            "tests/test_translator/test_directx_atan2.py::def test_directx_atan2_executes",
+            "tests/test_translator/test_directx_atan2.py::def test_original_metal_atan2_executes",
+            "tests/test_translator/test_directx_atan2.py::def test_hlsl_atan2_roundtrip_keeps_native_intrinsic",
+            "tests/test_translator/test_directx_atan2.py::def test_atan2_rejects_unproven_contracts"
           ],
-          "notes": "Canonical Metal fabs/fmin/fmax lower to native HLSL intrinsics; Boolean scalar/vector select preserves argument order and eager evaluation. Source helper names avoid the HLSL select intrinsic. Unsupported condition types, alias target shadowing, and unresolved HLSL source select overload ownership fail closed. Bounded Windows numerical tests are required by CI; this is not whole-repository runtime coverage.",
+          "notes": "Canonical Metal fabs/fmin/fmax lower to native HLSL intrinsics; Boolean scalar/vector select preserves argument order and eager evaluation. Canonical atan2 preserves signed-zero quadrants, infinity angles and NaN classification through typed helpers; native HLSL atan2 round trips remain native. Source helpers retain their ownership. Unsupported operand types, alias target shadowing, and unresolved HLSL source select overload ownership fail closed. Bounded Windows numerical tests and original precise Metal atan2 controls are required by CI; this is not whole-repository runtime coverage.",
           "status": "supported"
         },
         "hip": {
@@ -9442,6 +9447,9 @@
         "cuda": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9452,6 +9460,9 @@
         "directx": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9462,6 +9473,9 @@
         "hip": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9472,6 +9486,9 @@
         "metal": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9482,6 +9499,9 @@
         "mojo": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9492,6 +9512,9 @@
         "opengl": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9502,6 +9525,9 @@
         "rust": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9512,6 +9538,9 @@
         "slang": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9522,6 +9551,9 @@
         "vulkan": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9532,6 +9564,9 @@
         "webgl": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -9542,6 +9577,9 @@
         "wgsl": {
           "evidence": [
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_indexes_large_exclusion_lists_once",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
             "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
@@ -12881,6 +12919,7 @@
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_buffer_native_readback",
             "tests/test_translator/test_mlx_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
             "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
             "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
@@ -12931,6 +12970,7 @@
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_buffer_native_readback",
             "tests/test_translator/test_mlx_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
             "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
             "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
@@ -13693,6 +13733,9 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_native_dispatch_limits.py::def test_directx_rejects_over_limit_before_allocating_or_dispatching",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_malformed_dimensions_cannot_fall_back_to_other_metadata",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_malformed_sequence_geometry_prevents_all_device_work",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_omitted_dimensions_keep_geometry_defaults",
             "tests/test_translator/test_native_loader_dispatch_integration.py::def test_native_directx_workgroup_limits",
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
@@ -13764,6 +13807,9 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_native_dispatch_limits.py::def test_opengl_preflights_entire_sequence_before_any_device_work",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_malformed_dimensions_cannot_fall_back_to_other_metadata",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_malformed_sequence_geometry_prevents_all_device_work",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_omitted_dimensions_keep_geometry_defaults",
             "tests/test_translator/test_native_dispatch_limits.py::def test_opengl_api_errors_cannot_be_reported_as_success",
             "tests/test_translator/test_native_loader_dispatch_integration.py::def test_native_opengl_workgroup_limits",
             "tests/test_translator/test_native_loader_dispatch_integration.py::def test_native_opengl_submission_error_is_not_success",
@@ -13831,6 +13877,8 @@
         "vulkan": {
           "evidence": [
             "tests/test_translator/test_native_dispatch_limits.py::def test_vulkan_checks_selected_physical_device_before_logical_device_creation",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_malformed_local_size_cannot_bypass_native_limit_validation",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_omitted_dimensions_keep_geometry_defaults",
             "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_vulkan_compute_runtime_executes_vector_add_on_device",
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
