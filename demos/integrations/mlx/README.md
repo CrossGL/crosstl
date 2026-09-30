@@ -47,6 +47,12 @@ complex-power kernels through MLX's own runtime and runs its unchanged upstream
 operations tests. Its dispatch trace distinguishes actual host execution from
 compile-only coverage; unselected operations still use upstream kernels.
 
+The [portable host adapter](portable_host/README.md) connects MLX's C++ GPU
+evaluation to native DirectX/OpenGL packages with Metal and CUDA disabled. It
+covers five typed array-creation entries, unchanged upstream arange tests and
+explicit unsupported-operation failures. This synchronous adapter does not yet
+implement a complete MLX backend.
+
 The current harness verifies:
 
 - the [pinned native MLX Metal reference baseline](NATIVE_METAL.md) for exact

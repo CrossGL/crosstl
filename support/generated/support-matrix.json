@@ -12868,6 +12868,8 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_host_reflection.py::def test_hlsl_reflection_preserves_entry_points_resources_and_constants",
+            "tests/test_mlx_portable_host.py::def test_translated_binding_contract_and_typed_readback",
+            "tests/test_mlx_portable_host.py::def test_invalid_dispatch_never_reaches_executor",
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_reflection_retains_exact_members",
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_dispatch_rejects_forged_layout",
             "tests/test_translator/test_buffer_requirements.py::def test_package_dispatch_enforces_minimum_not_exact_extent",
@@ -12916,6 +12918,8 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_host_reflection.py::def test_glsl_reflection_records_exact_mlx_scalar_block_layouts",
+            "tests/test_mlx_portable_host.py::def test_translated_binding_contract_and_typed_readback",
+            "tests/test_mlx_portable_host.py::def test_invalid_dispatch_never_reaches_executor",
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_reflection_retains_exact_members",
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_dispatch_rejects_forged_layout",
             "tests/test_translator/test_buffer_requirements.py::def test_package_dispatch_enforces_minimum_not_exact_extent",

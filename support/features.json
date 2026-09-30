@@ -11091,6 +11091,8 @@
           "notes": "HLSL host reflection records exact supported scalar and vector structured-buffer layouts and one-member constant blocks. Flat homogeneous structs with 1-64 float, int, uint, int64_t or uint64_t members retain their actual type, member names, offsets, scalar alignment and stride through packaging and dispatch. Allocation sizing uses complete struct elements, and request validation rejects mixed, nested, padded or malformed layouts rather than treating structs as native vectors. Windows CI requires generic struct-buffer readback and the current-pinned MLX complex-power kernel through the public native-loader path. Existing MLX arange scalar execution remains covered. This is bounded layout and kernel execution support, not whole-repository runtime redirection.",
           "evidence": [
             "tests/test_translator/test_host_reflection.py::def test_hlsl_reflection_preserves_entry_points_resources_and_constants",
+            "tests/test_mlx_portable_host.py::def test_translated_binding_contract_and_typed_readback",
+            "tests/test_mlx_portable_host.py::def test_invalid_dispatch_never_reaches_executor",
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_reflection_retains_exact_members",
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_dispatch_rejects_forged_layout",
             "tests/test_translator/test_buffer_requirements.py::def test_package_dispatch_enforces_minimum_not_exact_extent",
@@ -11112,6 +11114,8 @@
           "notes": "GLSL host reflection records explicit std430 scalar/vector storage arrays and std140 single-value uniform blocks. Flat homogeneous structs with 1-64 float, int, uint, int64_t or uint64_t members retain their actual type, member names, offsets, scalar alignment and stride through packaging and dispatch. Allocation sizing uses complete struct elements, and request validation rejects mixed, nested, padded or malformed layouts rather than treating structs as native vectors. Linux EGL CI requires generic struct-buffer readback and the current-pinned MLX complex-power kernel through the public native-loader path. Existing MLX arange scalar execution remains covered. Implicit layouts are not inferred, and whole-repository runtime redirection remains separate.",
           "evidence": [
             "tests/test_translator/test_host_reflection.py::def test_glsl_reflection_records_exact_mlx_scalar_block_layouts",
+            "tests/test_mlx_portable_host.py::def test_translated_binding_contract_and_typed_readback",
+            "tests/test_mlx_portable_host.py::def test_invalid_dispatch_never_reaches_executor",
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_reflection_retains_exact_members",
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_dispatch_rejects_forged_layout",
             "tests/test_translator/test_buffer_requirements.py::def test_package_dispatch_enforces_minimum_not_exact_extent",
