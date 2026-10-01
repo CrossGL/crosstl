@@ -155,7 +155,7 @@ def test_reduction_dispatch_contract(packages, tmp_path, monkeypatch, fault):
     host = runtime.HostRuntime.__new__(runtime.HostRuntime)
     host.target = index["target"]
     host.descriptors = {}
-    host.reduction_directory = directory
+    host.reduction_directories = {key: directory for key in index["descriptors"]}
     host.reduction_descriptors = index["descriptors"].copy()
     host.trace = tmp_path / "trace.jsonl"
     memory = [

@@ -10,6 +10,7 @@ on:
       - "tests/test_mlx_portable_host.py"
       - "tests/test_mlx_portable_reductions.py"
       - "tests/test_mlx_portable_rows.py"
+      - "tests/test_mlx_portable_mixed_reductions.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
       - "tests/test_translator/test_directx_half_conversion.py"
@@ -72,6 +73,7 @@ on:
       - "tests/test_mlx_portable_host.py"
       - "tests/test_mlx_portable_reductions.py"
       - "tests/test_mlx_portable_rows.py"
+      - "tests/test_mlx_portable_mixed_reductions.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
       - "tests/test_translator/test_directx_half_conversion.py"
@@ -223,7 +225,7 @@ jobs:
           Expand-Archive $warpArchive -DestinationPath $warpRoot
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Validate portable host contracts
-        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py tests/test_mlx_portable_rows.py
+        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py tests/test_mlx_portable_rows.py tests/test_mlx_portable_mixed_reductions.py
       - name: Validate software subgroup votes
         env:
           CROSTL_REQUIRE_SOFTWARE_SUBGROUP_VOTES: "1"
@@ -696,14 +698,17 @@ jobs:
             target: opengl
             family: row
             verifier: verify_rows
+            companion_args: --all-reductions .mlx-portable-reductions/companions
           - os: windows-2025
             target: directx
             family: row
             verifier: verify_rows
+            companion_args: --all-reductions .mlx-portable-reductions/companions
           - os: macos-26
             target: metal
             family: row
             verifier: verify_rows
+            companion_args: --all-reductions .mlx-portable-reductions/companions
     defaults:
       run:
         shell: bash
@@ -803,6 +808,14 @@ jobs:
           python tools/run_bounded_command.py --timeout-seconds 12000 --label "MLX reduction packages" -- \
             python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
               --target ${{ matrix.target }} --family ${{ matrix.family }} --jobs 2 --output-dir .mlx-portable-reductions/packages 2>&1 | tee .mlx-portable-reductions/translation.log
+      - name: Translate whole-array companions for mixed workloads
+        if: matrix.family == 'row'
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX mixed reduction packages" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target ${{ matrix.target }} --family all --width 32 --jobs 2 \
+              --output-dir .mlx-portable-reductions/companions 2>&1 | tee .mlx-portable-reductions/companion-translation.log
       - name: Execute MLX reductions
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -811,7 +824,7 @@ jobs:
           python tools/run_bounded_command.py --timeout-seconds 5400 --label "MLX reduction host verification" -- \
             python -m demos.integrations.mlx.portable_host.${{ matrix.verifier }} --mlx-root mlx-upstream \
               --packages .mlx-portable-reductions/base/packages --reductions .mlx-portable-reductions/packages \
-              --output-dir .mlx-portable-reductions/evidence 2>&1 | tee .mlx-portable-reductions/verification.log
+              ${{ matrix.companion_args }} --output-dir .mlx-portable-reductions/evidence 2>&1 | tee .mlx-portable-reductions/verification.log
       - name: Retain reduction execution evidence
         if: always()
         uses: actions/upload-artifact@v4

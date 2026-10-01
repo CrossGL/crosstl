@@ -213,6 +213,21 @@ entry/width pair is executable within the current 65,535-element host limit;
 the retained case list identifies precisely which combinations execute.
 These workloads supplement, rather than replace, unchanged upstream tests.
 
+One `HostRuntime` can load multiple reduction directories with
+`reductions=[all_packages, row_packages]`. Each entry/width pair retains its
+own package directory; duplicate variants and mismatched targets fail before
+runtime initialization. Passing a single directory remains supported.
+
+Use `verify_rows --all-reductions reduction-packages` with the row command above
+to also verify mixed graphs in the same runtime. The additional 28 cases cover
+row-to-scalar reduction and scalar-to-broadcast-copy-to-row-to-scalar reduction
+for every integrated operation and storage type. Their 84 native dispatches
+must preserve dependency order, intermediate values, launch geometry and output
+guards. Artifact hashes are checked against the base, row or whole-array package
+that supplied each dispatch. CI requires these cases in each row job, using
+whole-array companion packages at width 32; the separate whole-array jobs
+continue to build and execute all 32 widths.
+
 Small-row launches are not implemented yet. Preserving their partial-workgroup
 semantics on software subgroups is tracked in
 [#2011](https://github.com/CrossGL/crosstl/issues/2011). Negative-stride row views,

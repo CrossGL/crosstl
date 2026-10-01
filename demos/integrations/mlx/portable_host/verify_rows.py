@@ -7,19 +7,27 @@ import subprocess
 import sys
 from pathlib import Path
 
-from demos.integrations.mlx.portable_host import row_workloads
+from demos.integrations.mlx.portable_host import (
+    mixed_reduction_workloads,
+    row_workloads,
+)
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.reduction_packages import (
+    ENTRIES,
     ROW_ENTRIES,
     load_index,
 )
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
 
 
-def verify_artifacts(trace, directory, index):
+def verify_artifacts(trace, directory, index, *, variants=True):
     checked = set()
     for record in trace:
-        key = f'w{record["workgroupSize"][0]}/{record["entry"]}'
+        key = (
+            f'w{record["workgroupSize"][0]}/{record["entry"]}'
+            if variants
+            else record["entry"]
+        )
         artifact = index["descriptors"][key]["artifact"]
         if (
             record.get("artifact") != artifact
@@ -50,7 +58,13 @@ def worker(args):
     runtime = None
     if args.worker == "native":
         runtime = HostRuntime(
-            args.packages, output / "dispatch.jsonl", reductions=args.reductions
+            args.packages,
+            output / "dispatch.jsonl",
+            reductions=(
+                [args.reductions, args.all_reductions]
+                if args.all_reductions is not None
+                else args.reductions
+            ),
         )
         runtime.install()
         mx.set_default_device(mx.gpu)
@@ -72,13 +86,34 @@ def worker(args):
     )
     row_workloads.validate(records, index["widths"])
     (output / "result.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
+    if args.all_reductions is not None:
+
+        def observe_mixed(record):
+            with (output / "mixed-readbacks.jsonl").open(
+                "a", encoding="utf-8"
+            ) as handle:
+                handle.write(json.dumps(record, allow_nan=False) + "\n")
+
+        mixed = mixed_reduction_workloads.collect(
+            mx,
+            np,
+            observe=observe_mixed,
+            dispatch_count=(
+                (lambda: runtime.dispatch_count) if runtime is not None else None
+            ),
+        )
+        mixed_reduction_workloads.validate(mixed)
+        (output / "mixed.json").write_text(
+            json.dumps(mixed, indent=2), encoding="utf-8"
+        )
 
 
 def verify(args):
     output = args.output_dir.resolve()
     output.mkdir(parents=True)
     before = verify_prepared(args.mlx_root)
-    target = json.loads((args.packages / "index.json").read_text())["target"]
+    base_index = json.loads((args.packages / "index.json").read_text())
+    target = base_index["target"]
     index = load_index(args.reductions, target)
     if (
         index.get("family") != "row"
@@ -86,6 +121,15 @@ def verify(args):
         or not {32, 128}.issubset(index["widths"])
     ):
         raise ValueError("Row proof requires every row entry and both threshold widths")
+    all_index = None
+    if args.all_reductions is not None:
+        all_index = load_index(args.all_reductions, target)
+        if (
+            all_index.get("family", "all") != "all"
+            or set(all_index["entries"]) != set(ENTRIES)
+            or 32 not in all_index["widths"]
+        ):
+            raise ValueError("Mixed proof requires every whole-array entry at width 32")
     results = {}
     for mode in ("cpu", "native"):
         command = [
@@ -110,6 +154,8 @@ def verify(args):
             "--output-dir",
             str(output / mode),
         ]
+        if all_index is not None:
+            command.extend(["--all-reductions", str(args.all_reductions.resolve())])
         with (output / f"{mode}.stdout").open("w") as stdout, (
             output / f"{mode}.stderr"
         ).open("w") as stderr:
@@ -125,9 +171,41 @@ def verify(args):
         for line in (output / "native/dispatch.jsonl").read_text().splitlines()
     ]
     row_workloads.validate(results["cpu"], index["widths"])
-    row_workloads.validate(results["native"], index["widths"], trace=trace)
-    verify_artifacts(trace, args.reductions, index)
-    if len(trace) != len(results["native"]) or any(
+    row_count = len(results["native"])
+    row_workloads.validate(results["native"], index["widths"], trace=trace[:row_count])
+    verify_artifacts(trace[:row_count], args.reductions, index)
+    mixed_results = {}
+    if all_index is not None:
+        mixed_results = {
+            mode: json.loads((output / mode / "mixed.json").read_text())
+            for mode in ("cpu", "native")
+        }
+        mixed_reduction_workloads.validate(mixed_results["cpu"])
+        mixed_reduction_workloads.validate(
+            mixed_results["native"], trace=trace, offset=row_count
+        )
+        mixed_trace = trace[row_count:]
+        verify_artifacts(
+            [record for record in mixed_trace if record["entry"] in ROW_ENTRIES],
+            args.reductions,
+            index,
+        )
+        verify_artifacts(
+            [record for record in mixed_trace if record["entry"] in ENTRIES],
+            args.all_reductions,
+            all_index,
+        )
+        verify_artifacts(
+            [
+                record
+                for record in mixed_trace
+                if record["entry"] in base_index["descriptors"]
+            ],
+            args.packages,
+            base_index,
+            variants=False,
+        )
+    if (all_index is None and len(trace) != row_count) or any(
         record["target"] != target for record in trace
     ):
         raise ValueError("Row trace contains missing or unexpected dispatches")
@@ -148,6 +226,8 @@ def verify(args):
         "fullTranslatedBackend": False,
         "fullUpstreamSuite": False,
         "results": results,
+        "mixedCasesPerPath": len(mixed_results.get("native", [])),
+        "mixedResults": mixed_results,
     }
     (output / "evidence.json").write_text(
         json.dumps(evidence, indent=2), encoding="utf-8"
@@ -160,6 +240,7 @@ if __name__ == "__main__":
     parser.add_argument("--mlx-root", type=Path, required=True)
     parser.add_argument("--packages", type=Path, required=True)
     parser.add_argument("--reductions", type=Path, required=True)
+    parser.add_argument("--all-reductions", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--worker", choices=("cpu", "native"))
     args = parser.parse_args()

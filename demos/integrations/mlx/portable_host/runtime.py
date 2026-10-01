@@ -127,22 +127,28 @@ class HostRuntime:
         self.descriptors = index["descriptors"]
         if set(self.descriptors) != set(ENTRIES):
             raise ValueError("Packages must contain the exact supported entry set")
-        self.reduction_directory = (
-            Path(reductions).resolve()
-            if reductions is not None
-            else self.directory / "reductions"
+        directories = (
+            [self.directory / "reductions"]
+            if reductions is None
+            else reductions if isinstance(reductions, (list, tuple)) else [reductions]
         )
-        reduction_index = self.reduction_directory / "index.json"
+        if not directories:
+            raise ValueError("At least one reduction package directory is required")
         self.reduction_descriptors = {}
-        self.reduction_index = None
+        self.reduction_directories = {}
         self.dispatch_count = 0
-        if reductions is not None and not reduction_index.is_file():
-            raise ValueError("Reduction package index is missing")
-        if reduction_index.is_file():
-            self.reduction_index = load_reduction_index(
-                self.reduction_directory, self.target
-            )
-            self.reduction_descriptors = self.reduction_index["descriptors"]
+        for directory in directories:
+            directory = Path(directory).resolve()
+            if not (directory / "index.json").is_file():
+                if reductions is None:
+                    continue
+                raise ValueError("Reduction package index is missing")
+            reduction_index = load_reduction_index(directory, self.target)
+            descriptors = reduction_index["descriptors"]
+            if self.reduction_descriptors.keys() & descriptors.keys():
+                raise ValueError("Reduction packages contain duplicate variants")
+            self.reduction_descriptors.update(descriptors)
+            self.reduction_directories.update({key: directory for key in descriptors})
         self.trace.parent.mkdir(parents=True, exist_ok=True)
         if self.target == "opengl":
             adapter = OpenGLRuntimeParityAdapter(
@@ -233,7 +239,7 @@ class HostRuntime:
             if key not in self.reduction_descriptors:
                 raise ValueError(f"No translated reduction variant for {key}")
             descriptor = self.reduction_descriptors[key]
-            package_directory = self.reduction_directory / "package"
+            package_directory = self.reduction_directories[key] / "package"
         else:
             descriptor = self.descriptors[entry]
             package_directory = self.directory / "package"

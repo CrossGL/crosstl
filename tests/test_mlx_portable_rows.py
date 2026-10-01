@@ -421,7 +421,8 @@ def test_row_host_dispatch_checks_metadata_before_native_execution(
     buffers = (runtime.Buffer * len(supplied))(*supplied.values())
     host = runtime.HostRuntime.__new__(runtime.HostRuntime)
     host.target, host.descriptors = target, {}
-    host.reduction_directory, host.trace = tmp_path, tmp_path / "trace.jsonl"
+    host.reduction_directories = {f"w32/{entry}": tmp_path}
+    host.trace = tmp_path / "trace.jsonl"
     bindings = []
     for name, buffer in supplied.items():
         member = {"in": "in_", "out": "out_"}.get(name, name)
@@ -447,6 +448,7 @@ def test_row_host_dispatch_checks_metadata_before_native_execution(
     calls = []
 
     def request(descriptor, directory, inputs, outputs, launch, **kwargs):
+        assert directory == tmp_path / "package"
         assert launch == execution
         assert inputs["in"]["shape"] == [logical]
         return outputs
