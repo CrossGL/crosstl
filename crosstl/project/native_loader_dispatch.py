@@ -14,6 +14,7 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+from crosstl.project.buffer_requirements import valid_minimum_binding_size
 from crosstl.project.native_loader_abi import (
     NativeLoaderABIError,
     _validate_descriptor,
@@ -1137,6 +1138,23 @@ def _validated_scalar_layout(
             path=path,
             details={"binding": runtime_value.name},
         )
+    if "minimumBindingSizeBytes" in layout and not valid_minimum_binding_size(
+        layout["minimumBindingSizeBytes"]
+    ):
+        raise NativeLoaderDispatchError(
+            "resource-minimum-binding-size-invalid",
+            "Minimum binding size must be a positive signed 64-bit byte count.",
+            path=f"{path}.minimumBindingSizeBytes",
+            details={"binding": runtime_value.name},
+        )
+    if "structMembers" in layout or "componentCount" in layout:
+        return _validated_struct_layout(
+            layout,
+            runtime_value=runtime_value,
+            target=target,
+            resource_kind=resource_kind,
+            path=path,
+        )
     element_type = _buffer_dtype(layout.get("elementType"), path=f"{path}.elementType")
     element_size = layout.get("elementSizeBytes")
     element_stride = layout.get("elementStrideBytes")
@@ -1269,6 +1287,86 @@ def _validated_scalar_layout(
                     "elementSizeBytes": element_size,
                 },
             )
+    return copy.deepcopy(dict(layout))
+
+
+def _validated_struct_layout(
+    layout: Mapping[str, Any],
+    *,
+    runtime_value: RuntimeValue,
+    target: str,
+    resource_kind: str,
+    path: str,
+) -> dict[str, Any]:
+    members = layout.get("structMembers")
+    count = layout.get("componentCount")
+    scalar_type = _PHYSICAL_TYPES[runtime_value.dtype]
+    scalar_size = _DTYPE_SIZES[runtime_value.dtype]
+    type_name = layout.get("physicalType")
+    valid = (
+        resource_kind == "buffer"
+        and isinstance(members, list)
+        and isinstance(count, int)
+        and not isinstance(count, bool)
+        and 1 <= count <= 64
+        and len(members) == count
+        and isinstance(type_name, str)
+        and re.fullmatch(r"[A-Za-z_]\w*", type_name) is not None
+        and type_name not in _PHYSICAL_TYPES.values()
+        and "vectorWidth" not in layout
+        and layout.get("elementType") == runtime_value.dtype
+        and layout.get("storageLayout")
+        == _TARGET_STORAGE_LAYOUTS[target][resource_kind]
+        and layout.get("runtimeSized") is True
+    )
+    if valid:
+        expected_sizes = {
+            "elementSizeBytes": scalar_size * count,
+            "elementStrideBytes": scalar_size * count,
+            "alignmentBytes": scalar_size,
+            "memberOffsetBytes": 0,
+        }
+        valid = all(
+            type(layout.get(key)) is int and layout[key] == value
+            for key, value in expected_sizes.items()
+        )
+    if valid:
+        names = set()
+        for index, member in enumerate(members):
+            if not isinstance(member, Mapping):
+                valid = False
+                break
+            name = member.get("name")
+            if (
+                set(member) != {"name", "physicalType", "offsetBytes"}
+                or not isinstance(name, str)
+                or re.fullmatch(r"[A-Za-z_]\w*", name) is None
+                or name in names
+                or member.get("physicalType") != scalar_type
+                or type(member.get("offsetBytes")) is not int
+                or member["offsetBytes"] != index * scalar_size
+            ):
+                valid = False
+                break
+            names.add(name)
+    if not valid:
+        raise NativeLoaderDispatchError(
+            "resource-layout-unsupported",
+            "Native struct buffers require exact tightly packed homogeneous scalar members.",
+            path=path,
+            details={"binding": runtime_value.name},
+        )
+    if math.prod(runtime_value.shape) % count:
+        raise NativeLoaderDispatchError(
+            "resource-layout-mismatch",
+            "Runtime value shape does not contain complete reflected struct elements.",
+            path=path,
+            details={
+                "binding": runtime_value.name,
+                "componentCount": count,
+                "shape": list(runtime_value.shape),
+            },
+        )
     return copy.deepcopy(dict(layout))
 
 
