@@ -31,6 +31,7 @@
         "tests/test_translator/test_project_metal_discovery.py",
         "tests/test_translator/test_mlx_current_unary_fma.py",
         "tests/test_translator/test_directx_atan2.py",
+        "tests/test_translator/test_directx_half_conversion.py",
         "tests/test_translator/test_metal_builtin_ownership.py",
         "tests/test_backend/test_directx"
       ],

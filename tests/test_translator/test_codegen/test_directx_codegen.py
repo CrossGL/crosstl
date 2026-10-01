@@ -4377,11 +4377,14 @@ def test_hlsl_codegen_emits_contextual_floating_narrowing_for_native_16_targets(
         parse_code(tokenize_code(shader))
     )
 
-    assert "return float16_t(wideScalar(value));" in generated
-    assert "return float16_t2(widePair(value));" in generated
-    assert "float16_t localValue = float16_t(wideScalar(2.0));" in generated
-    assert "float16_t2 localPair = float16_t2(widePair(float2(3.0, 4.0)));" in generated
-    assert "localValue = float16_t(wideScalar(5.0));" in generated
+    assert "return __crossgl_round_half1(wideScalar(value));" in generated
+    assert "return __crossgl_round_half2(widePair(value));" in generated
+    assert "float16_t localValue = __crossgl_round_half1(wideScalar(2.0));" in generated
+    assert (
+        "float16_t2 localPair = __crossgl_round_half2(widePair(float2(3.0, 4.0)));"
+        in generated
+    )
+    assert "localValue = __crossgl_round_half1(wideScalar(5.0));" in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
 
@@ -6793,8 +6796,8 @@ def test_hlsl_native_16_bit_arithmetic_applies_metal_promotions(tmp_path):
         parse_code(tokenize_code(shader))
     )
 
-    assert "return (start + (float16_t(index) * step));" in generated
-    assert "return (start + (step * float16_t(index)));" in generated
+    assert "return (start + (__crossgl_round_half1(float(index)) * step));" in generated
+    assert "return (start + (step * __crossgl_round_half1(float(index))));" in generated
     assert generated.count("return (int(lhs) + int(rhs));") == 2
     assert "return (uint(lhs) + rhs);" in generated
     assert "return (int(lhs) + rhs);" in generated
@@ -6803,10 +6806,12 @@ def test_hlsl_native_16_bit_arithmetic_applies_metal_promotions(tmp_path):
     assert "return (int2(lhs) << int2(rhs));" in generated
     assert "return (int2(lhs) >> rhs);" in generated
     assert "return (uint(lhs) << rhs);" not in generated
-    assert "return (float16_t(index) * step);" in generated
+    assert "return (__crossgl_round_half1(float(index)) * step);" in generated
     assert "return (lhs + int16_t(rhs));" in generated
     assert "return (lhs + uint16_t(rhs));" in generated
-    assert "return (float16_t(nextIndex(calls)) * step);" in generated
+    assert (
+        "return (__crossgl_round_half1(float(nextIndex(calls))) * step);" in generated
+    )
     assert generated.count("nextIndex(calls)") == 1
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
@@ -9091,7 +9096,10 @@ def test_hlsl_metal_native_half_constant_params_promote_to_cbuffers(tmp_path):
     assert "void CSMain(uint3 index_dispatchThreadID : SV_DispatchThreadID)" in (
         generated_code
     )
-    assert "half_step_start + (float16_t(index) * half_step_step)" in generated_code
+    assert (
+        "half_step_start + (__crossgl_round_half1(float(index)) * half_step_step)"
+        in generated_code
+    )
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
     assert_directx_native_16_bit_compute_validates_if_available(
         generated_code,
@@ -18883,7 +18891,7 @@ def test_hlsl_mapped_overload_names_avoid_existing_declarations(tmp_path):
     assert "uint adjust(uint value)" in generated_code
     assert "float16_t value = adjust(float16_t(1.0));" in generated_code
     assert (
-        "float16_t narrowValue = float16_t(__crossgl_bfloat16_to_float"
+        "float16_t narrowValue = __crossgl_round_half1(__crossgl_bfloat16_to_float"
         in generated_code
     )
     assert_directx_native_16_bit_compute_validates_if_available(
@@ -18942,7 +18950,8 @@ def test_hlsl_resolves_call_after_bfloat_payload_types_remain_distinct():
     assert "float16_t select(float16_t value)" in generated
     assert "uint select(uint value)" in generated
     assert (
-        "return float16_t(__crossgl_bfloat16_to_float(uint(select(1))));" in generated
+        "return __crossgl_round_half1(__crossgl_bfloat16_to_float(uint(select(1))));"
+        in generated
     )
 
 
@@ -18977,7 +18986,8 @@ def test_hlsl_distinct_bfloat_payload_overload_reaches_project_artifact(tmp_path
     assert "float16_t select(float16_t value)" in generated
     assert "uint select(uint value)" in generated
     assert (
-        "return float16_t(__crossgl_bfloat16_to_float(uint(select(1))));" in generated
+        "return __crossgl_round_half1(__crossgl_bfloat16_to_float(uint(select(1))));"
+        in generated
     )
 
 
@@ -19799,7 +19809,7 @@ def test_hlsl_native_binary16_compound_assignment_promotes_exact_payload(tmp_pat
 
     assert "float16_t value = asfloat16(bits);" in generated
     assert (
-        "value = float16_t((__crossgl_binary16_to_float("
+        "value = __crossgl_round_half1((__crossgl_binary16_to_float("
         "uint(asuint16(value))) * 16384.0));" in generated
     )
     assert (

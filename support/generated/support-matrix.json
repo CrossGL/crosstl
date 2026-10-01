@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 509,
+        "unsupported_marker_count": 512,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -128,10 +128,11 @@
           "tests/test_translator/test_project_metal_discovery.py",
           "tests/test_translator/test_mlx_current_unary_fma.py",
           "tests/test_translator/test_directx_atan2.py",
+          "tests/test_translator/test_directx_half_conversion.py",
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1585
+        "test_count": 1597
       },
       "translator_codegen": {
         "exists": true,
@@ -1730,7 +1731,10 @@
             "tests/test_translator/test_directx_atan2.py::def test_directx_atan2_executes",
             "tests/test_translator/test_directx_atan2.py::def test_original_metal_atan2_executes",
             "tests/test_translator/test_directx_atan2.py::def test_hlsl_atan2_roundtrip_keeps_native_intrinsic",
-            "tests/test_translator/test_directx_atan2.py::def test_atan2_rejects_unproven_contracts"
+            "tests/test_translator/test_directx_atan2.py::def test_atan2_rejects_unproven_contracts",
+            "tests/test_translator/test_directx_half_conversion.py::def test_public_metal_half_conversion",
+            "tests/test_translator/test_directx_half_conversion.py::def test_directx_half_rounding_native",
+            "tests/test_translator/test_directx_half_conversion.py::def test_half_double_rounding_is_rejected"
           ],
           "notes": "Canonical Metal fabs/fmin/fmax lower to native HLSL intrinsics; Boolean scalar/vector select preserves argument order and eager evaluation. Canonical atan2 preserves signed-zero quadrants, infinity angles and NaN classification through typed helpers; finite angles use exponent-scaled, range-reduced arithmetic with precise intermediates. Native HLSL atan2 round trips remain native. Source helpers retain their ownership. Unsupported operand types, alias target shadowing, and unresolved HLSL source select overload ownership fail closed. Bounded Windows numerical tests and original precise Metal atan2 controls are required by CI; this is not whole-repository runtime coverage.",
           "status": "supported"

@@ -2173,6 +2173,8 @@ class HLSLCodeGen:
         self.hlsl_inverse_hyperbolic_helper_names = {}
         self.required_hlsl_atan2_helpers = set()
         self.hlsl_atan2_helper_names = {}
+        self.required_hlsl_half_helpers = set()
+        self.hlsl_half_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
         self.hlsl_defined_relative_wave_shuffle_helper_names = {}
@@ -3126,6 +3128,8 @@ class HLSLCodeGen:
         self.hlsl_inverse_hyperbolic_helper_names = {}
         self.required_hlsl_atan2_helpers = set()
         self.hlsl_atan2_helper_names = {}
+        self.required_hlsl_half_helpers = set()
+        self.hlsl_half_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
         self.hlsl_defined_relative_wave_shuffle_helper_names = {}
@@ -3322,6 +3326,7 @@ class HLSLCodeGen:
         self.prepare_hlsl_trailing_zero_helper_names(functions)
         self.prepare_hlsl_inverse_hyperbolic_helper_names(functions)
         self.prepare_hlsl_atan2_helper_names(functions)
+        self.prepare_hlsl_half_helper_names(functions)
         self.prepare_hlsl_physical_subgroup_id_helper_names(functions)
         self.hlsl_float_atomic_reserved_names = self.hlsl_helper_reserved_names(
             functions
@@ -3571,6 +3576,7 @@ class HLSLCodeGen:
                 code += f"{line}\n"
         if self.hlsl_requires_rwtexture_cube_alias(global_vars):
             code += "#define RWTextureCube RWTexture2DArray\n"
+        half_helper_offset = len(code)
 
         code += generate_enum_constants(
             self, self.plain_enums + self.struct_payload_enums
@@ -4409,7 +4415,6 @@ class HLSLCodeGen:
         code += self.generate_hlsl_defined_relative_wave_shuffle_helpers()
         code += self.generate_hlsl_physical_subgroup_id_helper()
         code += self.generate_hlsl_bfloat16_helpers()
-        code += self.generate_hlsl_explicit_bitcast_helpers()
         code += self.generate_hlsl_union_storage_helpers()
         code += self.generate_hlsl_fixed_array_return_helpers()
         code += self.generate_hlsl_private_pointer_word_view_helpers()
@@ -4417,7 +4422,12 @@ class HLSLCodeGen:
         code += function_declarations_code
         code += functions_code
 
-        return code
+        return (
+            code[:half_helper_offset]
+            + self.generate_hlsl_explicit_bitcast_helpers()
+            + self.generate_hlsl_half_helpers()
+            + code[half_helper_offset:]
+        )
 
     def generate_hlsl_function_declarations(self, functions):
         declarations = ""
@@ -5448,6 +5458,90 @@ uint {helper_name}(uint groupIndex) {{
 }}
 """)
         return "\n".join(helpers) + ("\n" if helpers else "")
+
+    def prepare_hlsl_half_helper_names(self, functions):
+        used_names = self.hlsl_helper_reserved_names(functions)
+        self.hlsl_half_helper_names = {}
+        for width in range(1, 5):
+            name = f"__crossgl_round_half{width}"
+            while name in used_names:
+                name += "_"
+            self.hlsl_half_helper_names[width] = name
+            used_names.add(name)
+
+    def generate_hlsl_half_helpers(self):
+        if not self.required_hlsl_half_helpers:
+            return ""
+        scalar = self.hlsl_half_helper_names[1]
+        code = f"""float16_t {scalar}(float value) {{
+    uint bits = asuint(value);
+    uint sign = (bits >> 16u) & 0x8000u;
+    uint magnitude = bits & 0x7fffffffu;
+    uint result;
+    if (magnitude >= 0x7f800000u) {{
+        result = magnitude == 0x7f800000u ? 0x7c00u : 0x7e00u;
+    }} else if (magnitude >= 0x477ff000u) {{
+        result = 0x7c00u;
+    }} else if (magnitude >= 0x38800000u) {{
+        result = (magnitude - 0x38000000u + 0xfffu + ((magnitude >> 13u) & 1u)) >> 13u;
+    }} else if (magnitude < 0x33000000u) {{
+        result = 0u;
+    }} else {{
+        // Round the subnormal significand, including the smallest normal carry.
+        uint shift = 126u - (magnitude >> 23u);
+        uint significand = (magnitude & 0x7fffffu) | 0x800000u;
+        result = significand >> shift;
+        uint remainder = significand & ((1u << shift) - 1u);
+        uint midpoint = 1u << (shift - 1u);
+        if (remainder > midpoint || (remainder == midpoint && (result & 1u) != 0u)) {{
+            result += 1u;
+        }}
+    }}
+    return asfloat16(uint16_t(sign | result));
+}}
+"""
+        for width in sorted(self.required_hlsl_half_helpers - {1}):
+            name = self.hlsl_half_helper_names[width]
+            values = ", ".join(f"{scalar}(value.{c})" for c in "xyzw"[:width])
+            code += (
+                f"float16_t{width} {name}(float{width} value) {{\n"
+                f"    return float16_t{width}({values});\n}}\n"
+            )
+        return code + "\n"
+
+    def hlsl_half_conversion_expression(
+        self, rendered, width, source_types, *, source_location=None
+    ):
+        target = "float16_t" + (str(width) if width > 1 else "")
+
+        def unsupported(reason, detail):
+            return DirectXContextualConversionError(
+                f"DirectX cannot preserve binary16 rounding: {detail}",
+                source_type=", ".join(str(value) for value in source_types),
+                target_type=target,
+                reason=reason,
+                source_location=source_location,
+            )
+
+        for source in source_types:
+            info = self.hlsl_floating_arithmetic_type_info(source)
+            if info is not None and info["base_type"] == "double":
+                raise unsupported(
+                    "half-double-rounding",
+                    "double-to-half conversion cannot pass through float32",
+                )
+        for intrinsic in ("asuint", "asfloat16"):
+            if intrinsic in self.global_variable_types or (
+                intrinsic in self.function_return_types
+                and intrinsic not in self.hlsl_function_name_aliases
+            ):
+                raise unsupported(
+                    "half-target-intrinsic-shadowed", f"'{intrinsic}' is shadowed"
+                )
+        self.required_hlsl_half_helpers.add(width)
+        if not self.hlsl_half_helper_names:
+            self.prepare_hlsl_half_helper_names([])
+        return f"{self.hlsl_half_helper_names[width]}({rendered})"
 
     def prepare_hlsl_atan2_helper_names(self, functions):
         used_names = self.hlsl_helper_reserved_names(functions)
@@ -11795,6 +11889,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if mapped_expected == "bool":
             return f"({decoded} != 0.0)"
         if self.is_scalar_value_type(mapped_expected):
+            if mapped_expected == "float16_t":
+                return self.hlsl_half_conversion_expression(
+                    decoded, 1, ("float",), source_location=source_location
+                )
             return f"{mapped_expected}({decoded})"
         raise self.directx_bfloat16_unsupported(
             "DirectX exact bfloat16 conversion requires a scalar numeric target, "
@@ -11863,12 +11961,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         rendered,
         expected_type,
         source_type,
+        *,
+        source_location=None,
     ):
         """Render an explicit source-defined floating narrowing conversion.
 
         DXC diagnoses implicit float/double to native or minimum-precision
-        assignments under ``-Wconversion``. HLSL constructors preserve the
-        source conversion while making that narrowing intentional. Limit this
+        assignments under ``-Wconversion``. Native binary16 uses explicit
+        nearest-even rounding; minimum-precision types retain HLSL casts. Limit this
         lowering to identical scalar/vector shapes; shape conversion remains a
         separate constructor or semantic-analysis contract.
         """
@@ -11894,6 +11994,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             or expected_info["width"] != source_info["width"]
         ):
             return None
+        if expected_info["base_type"] == "float16_t":
+            return self.hlsl_half_conversion_expression(
+                rendered,
+                expected_info["width"],
+                (source_type,),
+                source_location=source_location,
+            )
         return f"{expected_info['mapped_type']}({rendered})"
 
     def hlsl_contextual_wide_integer_to_float_expression(
@@ -11958,6 +12065,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         source = self.map_type(source_name)
         if not expected or not source or expected == source:
             return rendered
+        expected_info = self.hlsl_floating_arithmetic_type_info(expected)
+        source_info = self.hlsl_floating_arithmetic_type_info(source)
+        if (
+            expected_info is not None
+            and expected_info["base_type"] in {"float", "double"}
+            and source_info is not None
+            and source_info["base_type"] == "float16_t"
+            and expected_info["width"] == source_info["width"]
+        ):
+            return self.hlsl_native_16_bit_arithmetic_operand(
+                rendered, source_info, expected_info["base_type"]
+            )
         if expected == "complex64_t" and self.is_scalar_value_type(source):
             self.required_hlsl_complex64_helpers.add("__crossgl_complex64_make")
             return f"__crossgl_complex64_make({rendered}, 0.0)"
@@ -11965,6 +12084,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             rendered,
             expected,
             source,
+            source_location=source_location,
         )
         if floating_narrowing is not None:
             return floating_narrowing
@@ -11978,6 +12098,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return wide_integer_to_float
         expected_integer = self.hlsl_integer_arithmetic_type_info(expected)
         source_integer = self.hlsl_integer_arithmetic_type_info(source)
+        expected_floating = self.hlsl_floating_arithmetic_type_info(expected)
+        if (
+            expected_floating is not None
+            and expected_floating["base_type"] == "float16_t"
+            and source_integer is not None
+            and expected_floating["width"] == source_integer["width"]
+        ):
+            width = expected_floating["width"]
+            floating_type = "float" + (str(width) if width > 1 else "")
+            return self.hlsl_half_conversion_expression(
+                f"{floating_type}({rendered})",
+                width,
+                (source,),
+                source_location=source_location,
+            )
         integer_narrowing = self.hlsl_contextual_integer_narrowing_expression(
             rendered,
             expected,
@@ -12521,10 +12656,31 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         target_type = operation_base if width == 1 else f"{operation_base}{width}"
         if type_info["mapped_type"] == target_type:
             return rendered
+        if operation_base == "float16_t":
+            floating_type = "float" + (str(width) if width > 1 else "")
+            return self.hlsl_half_conversion_expression(
+                f"{floating_type}({rendered})", width, (type_info["mapped_type"],)
+            )
         if type_info["base_type"] == "float16_t" and operation_base in {
             "float",
             "double",
         }:
+            for name in (
+                "asuint16",
+                "asuint",
+                "asfloat",
+                "__crossgl_binary16_to_float",
+            ):
+                if name in self.global_variable_types or (
+                    name in self.function_return_types
+                    and name not in self.hlsl_function_name_aliases
+                ):
+                    raise DirectXContextualConversionError(
+                        f"DirectX cannot preserve binary16 widening: '{name}' is shadowed",
+                        source_type=type_info["mapped_type"],
+                        target_type=target_type,
+                        reason="half-widening-intrinsic-shadowed",
+                    )
             uint_type = "uint" if width == 1 else f"uint{width}"
             self.require_hlsl_explicit_bitcast_helper("binary16_to_float")
             decoded = (
@@ -12613,6 +12769,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             contract["right_operation_base"],
         )
         operation = f"({left} {binary_operator} {right})"
+        narrowing = self.hlsl_contextual_floating_narrowing_expression(
+            operation,
+            target_type,
+            contract["operation_type"],
+            source_location=getattr(node, "source_location", None),
+        )
+        if narrowing is not None:
+            return f"{lhs} = {narrowing}"
         return f"{lhs} = {target_info['mapped_type']}({operation})"
 
     def hlsl_native_16_bit_binary_expression(
@@ -14272,6 +14436,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "min16float",
                 "min10float",
                 "double",
+                "double2",
+                "double3",
+                "double4",
+                "dvec2",
+                "dvec3",
+                "dvec4",
                 "f16",
                 "f32",
                 "f64",
@@ -39817,10 +39987,61 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_scalar_splat_cast(self, constructor_type, rendered_arg):
         return f"(({self.map_type(constructor_type)})({rendered_arg}))"
 
+    def hlsl_half_literal_is_exact(self, expression):
+        if isinstance(expression, UnaryOpNode) and self.map_operator(expression.op) in {
+            "+",
+            "-",
+        }:
+            return self.hlsl_half_literal_is_exact(expression.operand)
+        if not isinstance(expression, LiteralNode):
+            return False
+        value = expression.value
+        if not isinstance(value, (int, float)):
+            return False
+        try:
+            return struct.unpack("<e", struct.pack("<e", value))[0] == value
+        except (OverflowError, struct.error):
+            return False
+
     def hlsl_constructor_expression_from_rendered_args(
         self, constructor_type, args, rendered_args
     ):
         mapped_type = self.map_type(constructor_type)
+        info = self.hlsl_floating_arithmetic_type_info(constructor_type)
+        if info is not None and info["base_type"] in {"float", "double"}:
+            rendered_args = list(rendered_args)
+            for index, arg in enumerate(args):
+                source_info = self.hlsl_floating_arithmetic_type_info(
+                    self.expression_result_type(arg)
+                )
+                if source_info is not None and source_info["base_type"] == "float16_t":
+                    rendered_args[index] = self.hlsl_native_16_bit_arithmetic_operand(
+                        rendered_args[index], source_info, info["base_type"]
+                    )
+                    if len(args) == 1 and source_info["width"] == info["width"]:
+                        return rendered_args[index]
+        if info is not None and info["base_type"] == "float16_t":
+            source_types = [self.expression_result_type(arg) for arg in args]
+            if not all(
+                self.hlsl_half_literal_is_exact(arg)
+                or (source_info := self.hlsl_floating_arithmetic_type_info(source))
+                and source_info["base_type"] == "float16_t"
+                for source, arg in zip(source_types, args)
+            ):
+                width = info["width"]
+                # Construct at binary32 precision before rounding, not after a
+                # native narrowing cast has already discarded the low bits.
+                widened = self.hlsl_constructor_expression_from_rendered_args(
+                    "float" + (str(width) if width > 1 else ""), args, rendered_args
+                )
+                return self.hlsl_half_conversion_expression(
+                    widened,
+                    width,
+                    source_types,
+                    source_location=(
+                        getattr(args[0], "source_location", None) if args else None
+                    ),
+                )
         component_count = self.value_component_count(constructor_type)
         if component_count and component_count > 1 and len(args) == 1:
             arg_component_count = self.expression_component_count(args[0])

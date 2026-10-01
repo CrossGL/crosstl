@@ -15,7 +15,10 @@ import pytest
 
 from crosstl import translate
 from crosstl.project import ProjectConfig, translate_project
-from crosstl.project.native_runtime_drivers import OpenGLComputeRuntime
+from crosstl.project.native_runtime_drivers import (
+    DirectXComputeRuntime,
+    OpenGLComputeRuntime,
+)
 from crosstl.project.runtime_verification import (
     NativeRuntimeBufferBinding,
     NativeRuntimeDispatchRequest,
@@ -29,6 +32,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLScalarConversionError,
 )
 from demos.integrations.mlx.run_mlx_metal_host import run
+from tests.test_translator.test_directx_float_atomics import _compile as compile_directx
 from tests.test_translator.test_mlx_gated_delta_runtime import _compile as compile_metal
 
 REQUIRE_ENV = "CROSTL_REQUIRE_HALF_CONVERSION_RUNTIME"
@@ -278,13 +282,19 @@ def test_half_verifier_rejects_corruption(corruption):
         _check(data, [1.0, -0.0])
 
 
-@pytest.mark.parametrize("mode", ["rounding", "boundaries"])
-def test_half_rounding_native(tmp_path, mode):
-    if os.environ.get(REQUIRE_ENV) != "1":
+@pytest.mark.parametrize("mode", ["rounding", "boundaries", "vectors"])
+def test_half_rounding_native(tmp_path, mode, *, compile_only=False):
+    if not compile_only and os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for native half conversion checks")
     target = os.environ.get(TARGET_ENV, "opengl")
-    assert target in {"opengl", "metal"}
-    assert sys.platform == ("darwin" if target == "metal" else "linux")
+    assert target in {"opengl", "metal", "directx"}
+    if compile_only:
+        assert target == "directx"
+    else:
+        assert (
+            sys.platform
+            == {"metal": "darwin", "opengl": "linux", "directx": "win32"}[target]
+        )
     words = _rounding_words()
     expected = [_half(_float(word)) for word in words]
     body = f"if (i < {len(words)}u) output[i] = float(half(input[i]));"
@@ -334,6 +344,33 @@ kernel void""",
         output[9 * i + 7] = float(pair.y);
         output[9 * i + 8] = calls;
         """
+    if mode == "vectors":
+        values = [
+            2**-24,
+            2**-25,
+            3 * 2**-25,
+            2**-14,
+            1.00048828125,
+            1.00146484375,
+            -0.0,
+            65519.0,
+            65520.0,
+            math.inf,
+            math.nan,
+        ]
+        words = [_word(value) for value in values]
+        expected = [
+            lane for value in values for lane in [_half(value), _half(-value)] * 2
+        ]
+        body = f"""
+        if (i >= {len(words)}u) return;
+        half4 narrowed = half4(input[i], -input[i], input[i], -input[i]);
+        float4 widened = float4(float2(narrowed.xy), float(narrowed.z), float(narrowed.w));
+        output[4 * i] = widened.x;
+        output[4 * i + 1] = widened.y;
+        output[4 * i + 2] = widened.z;
+        output[4 * i + 3] = widened.w;
+        """
     source = tmp_path / "kernel.metal"
     source.write_text(text.replace("BODY", body), encoding="utf-8")
     report = translate_project(
@@ -356,9 +393,8 @@ kernel void""",
         struct.pack(f"<{len(expected)}f", *expected)
     )
     groups = [(len(words) + 63) // 64, 1, 1]
-    generated = next(
-        (tmp_path / "translated").rglob("*.metal" if target == "metal" else "*.glsl")
-    )
+    extension = {"metal": "metal", "opengl": "glsl", "directx": "hlsl"}[target]
+    generated = next((tmp_path / "translated").rglob(f"*.{extension}"))
     records = []
     if target == "metal":
         executable = tmp_path / "readback"
@@ -406,7 +442,22 @@ kernel void""",
                 }
             )
     else:
-        artifact, module = _compile(generated.read_text(encoding="utf-8"), tmp_path)
+        if target == "directx":
+            assert shutil.which("dxc"), "DXC is required"
+            artifact, module = compile_directx(
+                generated.read_text(encoding="utf-8"),
+                tmp_path,
+                profile="cs_6_2",
+                flags=("-enable-16bit-types",),
+            )
+            if compile_only:
+                (tmp_path / "evidence.json").write_text(
+                    json.dumps({"execution": "not-tested", "compilation": "passed"}),
+                    encoding="utf-8",
+                )
+                return
+        else:
+            artifact, module = _compile(generated.read_text(encoding="utf-8"), tmp_path)
         buffers = {}
         for slot, (name, data) in enumerate((("input", inputs), ("output", initial))):
             payload = [word for (word,) in struct.iter_unpack("<I", data)]
@@ -417,14 +468,20 @@ kernel void""",
                     kind="buffer",
                     set=0,
                     binding=slot,
-                    type_name="float",
+                    type_name=(
+                        f"{'RW' if slot else ''}StructuredBuffer<float>"
+                        if target == "directx"
+                        else "float"
+                    ),
                     access="read" if slot == 0 else "read_write",
+                    metadata={"byteStride": 4},
                 ),
                 dtype="uint32",
                 shape=(len(payload),),
                 value=payload,
                 source="input" if slot == 0 else "expectedOutput",
             )
+        entry = "CSMain" if target == "directx" else "main"
         request = NativeRuntimeDispatchRequest(
             target=target,
             artifact={"target": target},
@@ -433,16 +490,19 @@ kernel void""",
             loaded_artifact=artifact.read_text(encoding="utf-8"),
             buffers=buffers,
             constants={},
-            entry_point="main",
+            entry_point=entry,
             dispatch=RuntimeDispatchGeometry(
-                entry_point="main",
+                entry_point=entry,
                 workgroup_size=(64, 1, 1),
                 workgroup_count=tuple(groups),
             ),
         )
-        outputs = OpenGLComputeRuntime(context_backends=("egl",)).dispatch(
-            None, None, request
+        runtime = (
+            DirectXComputeRuntime()
+            if target == "directx"
+            else OpenGLComputeRuntime(context_backends=("egl",))
         )
+        outputs = runtime.dispatch(None, None, request)
         assert set(outputs) == {"output"}
         data = struct.pack(
             f"<{len(outputs['output']['values'])}I", *outputs["output"]["values"]

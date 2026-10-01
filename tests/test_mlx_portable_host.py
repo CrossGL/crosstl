@@ -594,6 +594,23 @@ def test_ci_requires_native_math_before_building_mlx():
         assert "tests/test_translator/test_opengl_half_conversion.py" in (
             ci_coverage.workflow_event_path_filters(workflow, event)
         )
+    directx_half = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Validate DirectX half conversions"
+    )
+    assert "if: runner.os == 'Windows'" in directx_half
+    assert "continue-on-error" not in directx_half
+    assert 'CROSTL_REQUIRE_HALF_CONVERSION_RUNTIME: "1"' in directx_half
+    assert "CROSTL_HALF_CONVERSION_TARGET: directx" in directx_half
+    assert "--timeout-seconds 180" in directx_half
+    assert "pytest -q -n auto" in directx_half
+    assert "--basetemp=.mlx-portable-host/half-conversions/pytest" in directx_half
+    assert "--junitxml=.mlx-portable-host/half-conversions/results.xml" in directx_half
+    assert "tee .mlx-portable-host/half-conversions.log" in directx_half
+    assert "tests/test_translator/test_directx_half_conversion.py" in directx_half
+    for event in ("pull_request", "push"):
+        assert "tests/test_translator/test_directx_half_conversion.py" in (
+            ci_coverage.workflow_event_path_filters(workflow, event)
+        )
     binary = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Validate pinned native binary math"
     )

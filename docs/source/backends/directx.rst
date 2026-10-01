@@ -57,6 +57,26 @@ actionable diagnostic instead of silently substituting a minimum-precision
 type. Explicit ``min16float``, ``min16int``, and ``min16uint`` types retain
 their HLSL minimum-precision semantics.
 
+Scalar and vector binary32-to-binary16 conversions use explicit round-to-nearest,
+ties-to-even arithmetic on the representation bits. This preserves source
+rounding at casts, initializers, stores, helper arguments and returns, including
+compound assignments computed in binary32. The final bit reinterpretation keeps
+native 16-bit storage; an ordinary HLSL narrowing cast would truncate instead.
+Integer operands are converted through binary32, which exactly represents every
+integer within the finite binary16 range. Binary16-to-binary32 widening decodes
+the payload explicitly to retain subnormal values. Minimum-precision types and
+explicit bit reinterpretations remain separate contracts.
+
+The conversion preserves signed zeros, gradual underflow, overflow to infinity
+and NaN classification, but does not promise NaN payload preservation for numeric
+casts. Vector arguments are evaluated once. Double-to-half conversions fail
+with a structured diagnostic rather than introducing double rounding. Native
+half matrix arithmetic is outside this scalar/vector conversion contract.
+Required Windows execution checks the same 258,052-value corpus as original and
+generated Metal, with midpoint neighbors, both signs and boundary values, plus
+conversion sites and side-effect counts. Compiler checks alone do not establish
+numerical correctness.
+
 Software Subgroup Reductions
 ----------------------------
 

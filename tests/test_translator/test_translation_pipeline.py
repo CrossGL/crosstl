@@ -671,7 +671,7 @@ def test_metal_vertex_struct_return_preserves_view_dir_outputs(tmp_path):
 
     _assert_generated_output_is_usable(directx)
     assert "float16_t3 viewDir: TEXCOORD0;" in directx
-    assert "out_.viewDir = float16_t3(normalize" in directx
+    assert "out_.viewDir = __crossgl_round_half3(float3(normalize" in directx
     assert "return out_;" in directx
     assert "return Output(float16_t3(0));" not in directx
 

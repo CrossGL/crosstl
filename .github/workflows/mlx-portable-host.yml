@@ -10,6 +10,7 @@ on:
       - "tests/test_mlx_portable_host.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
+      - "tests/test_translator/test_directx_half_conversion.py"
       - "tests/test_translator/test_directx_float_atomics.py"
       - "tests/test_translator/test_directx_software_reductions.py"
       - "tests/test_translator/test_directx_subgroup_identity.py"
@@ -47,6 +48,7 @@ on:
       - "tests/test_mlx_portable_host.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
+      - "tests/test_translator/test_directx_half_conversion.py"
       - "tests/test_translator/test_directx_float_atomics.py"
       - "tests/test_translator/test_directx_software_reductions.py"
       - "tests/test_translator/test_directx_subgroup_identity.py"
@@ -208,6 +210,20 @@ jobs:
               --basetemp=.mlx-portable-host/half-conversions/pytest \
               --junitxml=.mlx-portable-host/half-conversions/results.xml \
               tests/test_translator/test_opengl_half_conversion.py \
+              2>&1 | tee .mlx-portable-host/half-conversions.log
+      - name: Validate DirectX half conversions
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_REQUIRE_HALF_CONVERSION_RUNTIME: "1"
+          CROSTL_HALF_CONVERSION_TARGET: directx
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/half-conversions
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "DirectX half conversions" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/half-conversions/pytest \
+              --junitxml=.mlx-portable-host/half-conversions/results.xml \
+              tests/test_translator/test_directx_half_conversion.py \
               2>&1 | tee .mlx-portable-host/half-conversions.log
       - name: Validate DirectX float atomics
         if: runner.os == 'Windows'

@@ -904,6 +904,18 @@ attention backward or upstream host redirection. OpenGL execution of this
 stage remains blocked by the aggregate uniform-buffer contract in
 [issue #1991](https://github.com/CrossGL/crosstl/issues/1991).
 
+DirectX also requires a reduced native binary16 conversion gate. It shares
+258,052 input words with the OpenGL and original/generated Metal controls,
+including midpoint neighbors, subnormal boundaries, overflow and signed zeros.
+Separate cases exercise implicit and explicit conversion, helper boundaries,
+structure fields, vector components and single evaluation. Generated HLSL rounds
+the representation bits to nearest-even before constructing a native half value;
+the attention derivative buffers retain their two-byte element strides. This
+addresses the truncating native-cast behavior tracked in
+[issue #1993](https://github.com/CrossGL/crosstl/issues/1993), without changing the
+24 derivative configurations or their tolerances. Passing the reduced gate is
+not a substitute for passing those MLX cases or the full upstream suite.
+
 Reduced Metal roundtrip tests execute float atomic addition and exchange on
 scalar buffers and aggregate fields. They check 513 competing updates, returned
 values, final storage and single evaluation of address/value operands. Separate
