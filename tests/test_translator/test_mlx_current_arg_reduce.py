@@ -741,6 +741,24 @@ def _metal_library(source, output, root, *, upstream=False):
     return output
 
 
+@pytest.mark.parametrize("upstream", [False, True])
+def test_metal_reference_warning_policy(monkeypatch, tmp_path, upstream):
+    commands = []
+
+    def record(command, directory, label):
+        commands.append(command)
+        Path(command[command.index("-o") + 1]).write_bytes(b"compiled")
+
+    monkeypatch.setitem(_metal_library.__globals__, "_run", record)
+    source = tmp_path / "input.metal"
+    output = tmp_path / "output.metallib"
+    assert _metal_library(source, output, tmp_path, upstream=upstream) == output
+    assert ("-Werror" in commands[0]) is not upstream
+    assert "-fno-fast-math" in commands[0]
+    assert commands[0][commands[0].index("-c") + 1] == source
+    assert commands[1][:2] == ["xcrun", "metallib"]
+
+
 @pytest.fixture(scope="module")
 def metal_reference(current_mlx, tmp_path_factory):
     root, target = current_mlx

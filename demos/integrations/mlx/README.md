@@ -22,6 +22,13 @@ This is a 24/17,832 deterministic translation and native-compiler increment with
 2/17,832 numerical runtime coverage, not full-tree coverage, upstream MLX
 test-suite execution, or MLX host-runtime redirection.
 
+Original Metal reference libraries use the unchanged upstream sources with
+compiler warnings retained but not promoted to errors. The pinned headers use
+C++17 constructs that some Metal 3.1 toolchains diagnose as extensions.
+Generated Metal libraries still compile with `-Werror`; both paths retain
+`-fno-fast-math` and the same numerical assertions. No upstream headers are
+modified to accommodate the reference compiler.
+
 The current pin adds cross-entropy, gated-delta forward and backward kernels
 (including NAX variants), matrix-multiplication gather offsets, and attention
 backward kernels. These files are included in discovery; they are not covered by

@@ -210,7 +210,9 @@ def _metal(root, work, artifact, pairs):
         ("source", root / SOURCE, ENTRY),
         ("translated", root / artifact["path"], artifact["entryPoint"]["target"]),
     ):
-        library = _metal_library(path, work / f"{label}.metallib", root)
+        library = _metal_library(
+            path, work / f"{label}.metallib", root, upstream=label == "source"
+        )
         values = json.loads(
             _run([runner, library, entry, request], work, f"{label}-execute")
         )

@@ -287,7 +287,9 @@ def metal_reference(current_binary_source, tmp_path_factory):
         work,
         "build-runner",
     )
-    return runner, _metal_library(root / SOURCE, work / "upstream.metallib", root)
+    return runner, _metal_library(
+        root / SOURCE, work / "upstream.metallib", root, upstream=True
+    )
 
 
 @pytest.fixture(scope="module")

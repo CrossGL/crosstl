@@ -270,7 +270,7 @@ def current_copy_source(tmp_path_factory):
             "build-runner",
         )
         reference = runner, _metal_library(
-            root / SOURCE, work / "upstream.metallib", root
+            root / SOURCE, work / "upstream.metallib", root, upstream=True
         )
     return root, target, reference
 
