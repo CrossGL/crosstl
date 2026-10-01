@@ -32123,10 +32123,28 @@ def _runtime_manifest_reflected_host_interface(
 
 
 def _runtime_manifest_host_interface(
-    root_path: Path | None, artifact: Mapping[str, Any]
+    root_path: Path | None,
+    artifact: Mapping[str, Any],
+    *,
+    source_interfaces: dict[tuple[Any, ...], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any] | None:
     reflected = _runtime_manifest_reflected_host_interface(root_path, artifact)
-    source_interface = _runtime_manifest_source_host_interface(root_path, artifact)
+    if source_interfaces is None:
+        source_interface = _runtime_manifest_source_host_interface(root_path, artifact)
+    else:
+        # Source reflection is source-wide; entry and execution metadata are
+        # merged separately for each artifact. Keep failed parses cached too.
+        key = (
+            root_path,
+            artifact.get("source"),
+            artifact.get("sourceBackend"),
+            artifact.get("target"),
+        )
+        if key not in source_interfaces:
+            source_interfaces[key] = _runtime_manifest_source_host_interface(
+                root_path, artifact
+            )
+        source_interface = copy.deepcopy(source_interfaces[key])
     base = reflected if isinstance(reflected, Mapping) else source_interface
     if not isinstance(base, Mapping):
         return None
@@ -32960,8 +32978,11 @@ def _runtime_manifest_artifact(
     validation_artifacts: Mapping[tuple[Any, ...], Mapping[str, Any]] | None = None,
     toolchains: Mapping[str, Mapping[str, Any]] | None = None,
     toolchain_runs: Mapping[tuple[Any, ...], Sequence[Mapping[str, Any]]] | None = None,
+    source_interfaces: dict[tuple[Any, ...], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
-    host_interface = _runtime_manifest_host_interface(root_path, artifact)
+    host_interface = _runtime_manifest_host_interface(
+        root_path, artifact, source_interfaces=source_interfaces
+    )
     host_interface = _runtime_manifest_execution_host_interface(
         artifact, host_interface
     )
@@ -33199,6 +33220,7 @@ def build_runtime_artifact_manifest(
     validation_artifacts = _runtime_manifest_validation_artifacts(validation_report)
     toolchains = _runtime_manifest_toolchains(validation_report)
     toolchain_runs = _runtime_manifest_toolchain_runs(validation_report)
+    source_interfaces: dict[tuple[Any, ...], dict[str, Any] | None] = {}
     manifest_artifacts = [
         _runtime_manifest_artifact(
             artifact,
@@ -33206,6 +33228,7 @@ def build_runtime_artifact_manifest(
             validation_artifacts=validation_artifacts,
             toolchains=toolchains,
             toolchain_runs=toolchain_runs,
+            source_interfaces=source_interfaces,
         )
         for artifact in translated_artifacts
     ]

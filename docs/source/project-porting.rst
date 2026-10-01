@@ -1604,6 +1604,12 @@ produce diagnostic-only failed manifests. The manifest is a handoff contract;
 it does not generate runtime framework code, execute device code, or rewrite
 host application code.
 
+Within one artifact-manifest build, variants of the same source/backend/target
+reuse source-wide reflection, including unavailable results. Generated artifacts
+are still validated and reflected individually, and entry-specific execution
+and specialization metadata is merged separately. Source results are not cached
+across manifest builds.
+
 Build a backend-neutral runtime binding manifest for host integrations:
 
 .. code-block:: bash
