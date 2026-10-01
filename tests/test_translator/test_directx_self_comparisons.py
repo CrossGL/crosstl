@@ -109,21 +109,21 @@ def test_global_storage_is_not_collapsed_to_one_read():
     assert "(value != value)" in generated and "0x7fffffffu" not in generated
 
 
-def _native_source(width):
+def _native_source(width, aggregate=False):
     kind = "float" + (str(width) if width > 1 else "")
-    boolean = "bool" + (str(width) if width > 1 else "")
+    boolean = "bool" + (str(width) if width > 1 and not aggregate else "")
     values = ", ".join(
         f"as_type<float>(inputWords[tid * {width}u + {i}u])" for i in range(width)
     )
     writes = "\n".join(
-        f"outputWords[(tid * {width}u + {i}u) * 2u] = uint(equal{'.' + 'xyzw'[i] if width > 1 else ''}); "
-        f"outputWords[(tid * {width}u + {i}u) * 2u + 1u] = uint(unequal{'.' + 'xyzw'[i] if width > 1 else ''});"
+        f"outputWords[(tid * {width}u + {i}u) * 2u] = uint(equal{'.' + 'xyzw'[i] if width > 1 and not aggregate else ''}); "
+        f"outputWords[(tid * {width}u + {i}u) * 2u + 1u] = uint(unequal{'.' + 'xyzw'[i] if width > 1 and not aggregate else ''});"
         for i in range(width)
     )
     return f"""#include <metal_stdlib>
 using namespace metal;
-{boolean} same({kind} value) {{ return value == value; }}
-{boolean} different({kind} value) {{ return value != value; }}
+{boolean} same({kind} value) {{ return {"all(value == value)" if aggregate else "value == value"}; }}
+{boolean} different({kind} value) {{ return {"any(value != value)" if aggregate else "value != value"}; }}
 kernel void products(device uint* inputWords [[buffer(0)]],
                      device uint* outputWords [[buffer(1)]],
                      uint tid [[thread_position_in_grid]]) {{
@@ -135,8 +135,11 @@ kernel void products(device uint* inputWords [[buffer(0)]],
 """
 
 
-@pytest.mark.parametrize("width", [1, 2, 3, 4])
-def test_self_comparisons_execute_with_raw_float_payloads(tmp_path, width):
+@pytest.mark.parametrize(
+    "width,aggregate",
+    [(1, False), (2, False), (3, False), (4, False), (2, True), (3, True), (4, True)],
+)
+def test_self_comparisons_execute_with_raw_float_payloads(tmp_path, width, aggregate):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required native floating classification")
     target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
@@ -145,7 +148,7 @@ def test_self_comparisons_execute_with_raw_float_payloads(tmp_path, width):
         target,
         "uint",
         (1, 1, 1),
-        source=_native_source(width),
+        source=_native_source(width, aggregate),
         software_subgroups=False,
     )
     words = [
@@ -170,6 +173,14 @@ def test_self_comparisons_execute_with_raw_float_payloads(tmp_path, width):
     for word in words:
         nan = (word & 0x7FFFFFFF) > 0x7F800000
         wanted.extend((int(not nan), int(nan)))
+    if aggregate:
+        wanted = []
+        for start in range(0, len(words), width):
+            nan = any(
+                (word & 0x7FFFFFFF) > 0x7F800000
+                for word in words[start : start + width]
+            )
+            wanted.extend([int(not nan), int(nan)] * width)
     guards = [0xBAD00000 + i for i in range(17)]
 
     def payload(values):
@@ -234,6 +245,7 @@ def test_self_comparisons_execute_with_raw_float_payloads(tmp_path, width):
                 {
                     "target": target,
                     "width": width,
+                    "aggregate": aggregate,
                     "inputs": inputs,
                     "expected": expected,
                     "descriptor": descriptor,

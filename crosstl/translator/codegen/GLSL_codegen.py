@@ -2018,6 +2018,8 @@ class GLSLCodeGen:
         **GLSL_METAL_SIMD_GROUP_PLAIN_HELPER_OPERATIONS,
     }
     GLSL_VECTOR_RELATIONAL_FUNCTIONS = {
+        "==": "equal",
+        "!=": "notEqual",
         "<": "lessThan",
         "<=": "lessThanEqual",
         ">": "greaterThan",
@@ -31065,7 +31067,7 @@ complex64_t crossgl_complex64_mod_assign(
                 if vector_type is not None:
                     return self.glsl_bool_vector_type(vector_type)
                 return "bool"
-            if operator in {"==", "!=", "&&", "||"}:
+            if operator in {"&&", "||"}:
                 return "bool"
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
@@ -31457,10 +31459,6 @@ complex64_t crossgl_complex64_mod_assign(
         self, left_expr, operator, right_expr, *, source_node=None
     ):
         function_name = self.GLSL_VECTOR_RELATIONAL_FUNCTIONS.get(operator)
-        if operator in {"==", "!="} and self.map_type(
-            self.current_expression_expected_type
-        ) in {"bvec2", "bvec3", "bvec4"}:
-            function_name = "equal" if operator == "==" else "notEqual"
         if function_name is None:
             return None
 

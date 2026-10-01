@@ -1,4 +1,4 @@
-"""Vector equality retains explicit lane-wise Boolean result contexts."""
+"""Vector equality retains lane-wise Boolean results in nested expressions."""
 
 import pytest
 
@@ -52,3 +52,37 @@ def test_comparison_operands_are_evaluated_once():
     }"""
     generated = GLSLCodeGen().generate(parse(source))
     assert "equal(next_value(count), next_value(count))" in generated
+
+
+@pytest.mark.parametrize("width", [2, 3, 4])
+@pytest.mark.parametrize("operator,intrinsic", [("==", "equal"), ("!=", "notEqual")])
+@pytest.mark.parametrize("kind", ["float", "int", "uint", "bool"])
+@pytest.mark.parametrize("reduction", ["any", "all"])
+def test_nested_vector_equality_compiles(
+    tmp_path, width, operator, intrinsic, kind, reduction
+):
+    source = f"""shader Comparison {{
+        bool compare({kind}{width} left, {kind}{width} right) {{
+            return {reduction}(left {operator} right);
+        }}
+        compute {{ @numthreads(1, 1, 1) void main() {{
+            bool result = compare({kind}{width}(1), {kind}{width}(0));
+        }} }}
+    }}"""
+    generated = GLSLCodeGen().generate_stage(parse(source), "compute")
+    assert f"{reduction}({intrinsic}(left, right))" in generated
+    _compile(generated, "opengl", tmp_path)
+
+
+def test_nested_boolean_vector_comparisons_compile(tmp_path):
+    source = """shader Comparison {
+        bool compare(float3 left, float3 right, float3 third) {
+            return !any((left == right) != (right == third));
+        }
+        compute { @numthreads(1, 1, 1) void main() {
+            bool result = compare(float3(1), float3(0), float3(2));
+        } }
+    }"""
+    generated = GLSLCodeGen().generate_stage(parse(source), "compute")
+    assert "any(notEqual(equal(left, right), equal(right, third)))" in generated
+    _compile(generated, "opengl", tmp_path)
