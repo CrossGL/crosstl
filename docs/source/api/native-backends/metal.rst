@@ -43,6 +43,31 @@ metadata in the intermediate representation. License notices are emitted into
 target source, including entry-scoped artifacts, rather than relying on source
 comments surviving parsing.
 
+Precise Sine and Cosine
+----------------------
+
+``metal::precise::sin`` and ``metal::precise::cos`` use portable binary32
+helpers for scalar and two- to four-component vectors. Large finite arguments
+are reduced with a 192-bit table and pairs of unsigned 32-bit words, retaining
+the fractional remainder before conversion to float. No double-precision
+shader capability is required. Small arguments use a split-pi/2 reduction or
+the original value; sine preserves signed zero and subnormals. Nonfinite
+arguments return a quiet NaN. Default/fast calls and user overloads retain
+their existing behavior; unsupported precise operand types are diagnosed.
+
+The reduction and polynomial coefficients are adapted from Arm
+``optimized-routines`` revision ``375f32ed2f7098090f41795ad363822752a25a65``
+(``math/sincosf.h`` and ``math/sincosf_data.c``). The MIT notice travels with
+``@source_license(arm_optimized)`` metadata into generated target source.
+The adaptation uses binary32 polynomial arithmetic instead of upstream
+double arithmetic; it does not inherit the upstream implementation's error
+bound. Required native tests enforce a four-ULP bound against an independent
+160-digit reference, with exact zero signs, NaN classification, vector lanes,
+single evaluation, large-exponent axis neighbors and buffer guards. They
+execute HLSL on Windows, GLSL on Linux and original/generated Metal on macOS.
+NaN payload identity, exception flags and other precise transcendental
+operations are not covered by this contract.
+
 .. automodule:: crosstl.backend.Metal
 
 .. automodule:: crosstl.backend.Metal.MetalAst

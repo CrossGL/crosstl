@@ -8,6 +8,7 @@ from ...translator.cooperative_matrix import (
     has_cooperative_matrix_fragment_mapping,
 )
 from ...translator.fused_math import FMA_HELPER_KEYS, binary32_fma_support
+from ...translator.precise_trig import TRIG_HELPER_KEYS, binary32_trig_support
 from ...translator.standard_constants import standard_math_constant
 from .MetalAst import *
 from .MetalLexer import *
@@ -1503,6 +1504,7 @@ class MetalToCrossGLConverter:
         self.metal_precise_math_helper_names = {}
         self.required_metal_precise_acos_widths = set()
         self.required_metal_precise_asin_widths = set()
+        self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
@@ -2620,6 +2622,7 @@ class MetalToCrossGLConverter:
         self.metal_precise_math_helper_names = {}
         self.required_metal_precise_acos_widths = set()
         self.required_metal_precise_asin_widths = set()
+        self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
@@ -13114,7 +13117,7 @@ class MetalToCrossGLConverter:
         if self.metal_math_builtin_namespace_mode(text) != "precise":
             return None
         operation = text.rsplit("::", 1)[-1]
-        if operation not in {"acos", "asin"}:
+        if operation not in {"acos", "asin", "sin", "cos"}:
             return None
         arguments = list(args or [])
         source_location = (
@@ -13153,6 +13156,16 @@ class MetalToCrossGLConverter:
                 source_location,
             )
 
+        if operation in {"sin", "cos"}:
+            if self.normalized_metal_type(type_info["element_type"]) != "float":
+                raise MetalPreciseMathLoweringError(
+                    operation,
+                    operand_type,
+                    "precise trigonometric range reduction requires binary32 operands",
+                    source_location,
+                )
+            self.required_metal_precise_trig_widths[operation].add(width)
+            return self.metal_precise_trig_helper_name(operation, width)
         if operation == "asin":
             self.required_metal_precise_asin_widths.add(width)
             return self.metal_precise_asin_helper_name(width)
@@ -13311,9 +13324,10 @@ class MetalToCrossGLConverter:
         return code
 
     def generate_metal_precise_math_support_code(self, indent=0):
+        trig_code = self.generate_metal_precise_trig_support_code(indent)
         widths = sorted(self.required_metal_precise_acos_widths)
         if not widths and not self.required_metal_precise_asin_widths:
-            return ""
+            return trig_code
 
         ratio_name = self.metal_precise_acos_ratio_helper_name()
         scalar_name = self.metal_precise_acos_helper_name(1)
@@ -13416,7 +13430,45 @@ class MetalToCrossGLConverter:
             code += f"{pad}vec{width} {vector_name}(vec{width} value) {{\n"
             code += f"{body_pad}return vec{width}(\n{arguments}\n{body_pad});\n"
             code += f"{pad}}}\n\n"
-        return code + self.generate_metal_precise_asin_support_code(indent)
+        return trig_code + code + self.generate_metal_precise_asin_support_code(indent)
+
+    def metal_precise_trig_helper_name(self, operation, width):
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            f"{operation}-float{suffix}",
+            f"__crossgl_metal_precise_{operation}_float{suffix}",
+        )
+
+    def generate_metal_precise_trig_support_code(self, indent=0):
+        if not any(self.required_metal_precise_trig_widths.values()):
+            return ""
+        names = {
+            key: self.metal_precise_math_unique_helper_name(
+                f"trig-{key}", f"__crossgl_metal_trig_{key}"
+            )
+            for key in TRIG_HELPER_KEYS
+        }
+        code = binary32_trig_support(names)
+        for operation, widths in self.required_metal_precise_trig_widths.items():
+            if not widths:
+                continue
+            scalar = self.metal_precise_trig_helper_name(operation, 1)
+            cosine = "true" if operation == "cos" else "false"
+            code += (
+                f"@precise\n@metal_static\nfloat {scalar}(float value) {{\n"
+                f"    return {names['evaluate']}(value, {cosine});\n}}\n"
+            )
+            for width in sorted(widths - {1}):
+                vector = self.metal_precise_trig_helper_name(operation, width)
+                arguments = ", ".join(
+                    f"{scalar}(value.{lane})" for lane in "xyzw"[:width]
+                )
+                code += (
+                    f"@precise\n@metal_static\nvec{width} {vector}(vec{width} value) {{\n"
+                    f"    return vec{width}({arguments});\n}}\n"
+                )
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
 
     @staticmethod
     def metal_math_source_overload_is_stdlib_extension(function):

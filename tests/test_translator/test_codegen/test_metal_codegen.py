@@ -5193,6 +5193,9 @@ def test_metal_precise_functions_and_locals_disable_contraction():
 
     assert generated_code.count("#pragma clang fp contract(off)") == 2
     assert generated_code.count("#pragma clang fp contract(fast)") == 2
+    assert generated_code.count("#pragma clang fp reassociate(off)") == 2
+    assert "#pragma clang fp reassociate(on)" not in generated_code
+    assert "{\n    #pragma clang fp reassociate(off)\n" in generated_code
     assert (
         "#pragma clang fp contract(off)\n"
         "float stableProduct(float left, float right)"

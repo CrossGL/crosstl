@@ -5554,6 +5554,9 @@ class MetalCodeGen:
                 f"{return_type} {function_name}({params_str}){semantic_attr} {{\n"
             )
 
+        if precise_arithmetic:
+            code += "    #pragma clang fp reassociate(off)\n"
+
         previous_sampler_parameters = self.current_sampler_parameters
         previous_sampler_parameter_array_sizes = (
             self.current_sampler_parameter_array_sizes

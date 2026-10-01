@@ -64,6 +64,23 @@ def test_ci_requires_current_unary_execution(filename):
 def test_current_mlx_unary_fma_native_loader(tmp_path, operation):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for pinned unary execution")
+    values = (
+        [-5, 0, 0.5, 1, 2, 10]
+        if operation == "Erf"
+        else [-88, -87, 0, 0.5, -0.5, 5, 87, 88, 89, 90]
+    )
+    values += [index / 64 for index in range(-256, 257)]
+    values += [-0.0, _f32(2**-126), _f32(-(2**-126))]
+    values = [_f32(value) for value in values]
+    reference = math.erf if operation == "Erf" else math.expm1
+    expected = [_f32(reference(value)) for value in values]
+    rtol, atol = (1e-5, 1e-8) if operation == "Erf" else (1e-3, 1e-4)
+    _run_current_unary(
+        tmp_path, operation, values, expected, rtol, atol, "metal_fma_float"
+    )
+
+
+def _run_current_unary(tmp_path, operation, values, expected, rtol, atol, helper):
     root = Path(os.environ["CROSTL_MLX_CURRENT_ROOT"]).resolve()
     target = os.environ["CROSTL_MLX_CURRENT_TARGET"]
     assert target in {"directx", "opengl", "metal"}
@@ -87,17 +104,6 @@ def test_current_mlx_unary_fma_native_loader(tmp_path, operation):
         timeout=30,
     )
     entry = f"v_{operation}float32float32"
-    values = (
-        [-5, 0, 0.5, 1, 2, 10]
-        if operation == "Erf"
-        else [-88, -87, 0, 0.5, -0.5, 5, 87, 88, 89, 90]
-    )
-    values += [index / 64 for index in range(-256, 257)]
-    values += [-0.0, _f32(2**-126), _f32(-(2**-126))]
-    values = [_f32(value) for value in values]
-    reference = math.erf if operation == "Erf" else math.expm1
-    expected = [_f32(reference(value)) for value in values]
-    rtol, atol = (1e-5, 1e-8) if operation == "Erf" else (1e-3, 1e-4)
     with tempfile.TemporaryDirectory(
         prefix=".current-unary-fma-", dir=root
     ) as directory:
@@ -132,7 +138,7 @@ binary32_fma_profile = "rne-flush"
             assert len(payload["artifacts"]) == 1
             artifact = payload["artifacts"][0]
             assert artifact["entryPoint"]["source"] == entry
-            assert "metal_fma_float" in (root / artifact["path"]).read_text()
+            assert helper in (root / artifact["path"]).read_text()
             manifest = build_runtime_artifact_manifest(work / "report.json")
             assert manifest["success"], manifest
             (work / "artifacts.json").write_text(json.dumps(manifest))
@@ -199,6 +205,7 @@ binary32_fma_profile = "rne-flush"
                     "actual": wire_value(got),
                     "matched": (
                         got == want
+                        or (math.isnan(got) and math.isnan(want))
                         or (
                             math.isfinite(got)
                             and math.isfinite(want)
@@ -229,3 +236,4 @@ binary32_fma_profile = "rne-flush"
             ]
         finally:
             shutil.copytree(work, tmp_path / "evidence", dirs_exist_ok=True)
+    return actual
