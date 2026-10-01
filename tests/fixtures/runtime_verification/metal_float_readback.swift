@@ -6,7 +6,7 @@ enum ExecutionError: Error {
 }
 
 func run() throws {
-    guard CommandLine.arguments.count == 4,
+    guard (4...5).contains(CommandLine.arguments.count),
           let count = Int(CommandLine.arguments[3]), count > 0,
           let device = MTLCreateSystemDefaultDevice(),
           let queue = device.makeCommandQueue() else {
@@ -16,7 +16,22 @@ func run() throws {
     guard let function = library.makeFunction(name: CommandLine.arguments[2]) else {
         throw ExecutionError.unavailable("Kernel entry point is missing")
     }
-    let pipeline = try device.makeComputePipelineState(function: function)
+    let pipeline: MTLComputePipelineState
+    if CommandLine.arguments.count == 5 {
+        let linked = MTLLinkedFunctions()
+        linked.functions = try CommandLine.arguments[4].split(separator: ",").map { name in
+            guard let callable = library.makeFunction(name: String(name)) else {
+                throw ExecutionError.unavailable("Visible function is missing: \(name)")
+            }
+            return callable
+        }
+        let descriptor = MTLComputePipelineDescriptor()
+        descriptor.computeFunction = function
+        descriptor.linkedFunctions = linked
+        pipeline = try device.makeComputePipelineState(descriptor: descriptor, options: [], reflection: nil)
+    } else {
+        pipeline = try device.makeComputePipelineState(function: function)
+    }
     guard let buffer = device.makeBuffer(length: count * MemoryLayout<Float>.stride,
                                         options: .storageModeShared),
           let command = queue.makeCommandBuffer(),

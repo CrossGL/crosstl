@@ -68,9 +68,13 @@
             "tests/test_translator/test_directx_metal_math.py::def test_metal_math_translates_and_compiles_for_directx",
             "tests/test_translator/test_directx_metal_math.py::def test_directx_metal_math_executes",
             "tests/test_translator/test_directx_metal_math.py::def test_directx_metal_math_rejects_shadowed_target",
-            "tests/test_translator/test_directx_metal_math.py::def test_hlsl_select_roundtrip_retains_hlsl_argument_order"
+            "tests/test_translator/test_directx_metal_math.py::def test_hlsl_select_roundtrip_retains_hlsl_argument_order",
+            "tests/test_translator/test_directx_atan2.py::def test_directx_atan2_executes",
+            "tests/test_translator/test_directx_atan2.py::def test_original_metal_atan2_executes",
+            "tests/test_translator/test_directx_atan2.py::def test_hlsl_atan2_roundtrip_keeps_native_intrinsic",
+            "tests/test_translator/test_directx_atan2.py::def test_atan2_rejects_unproven_contracts"
           ],
-          "notes": "Canonical Metal fabs/fmin/fmax lower to native HLSL intrinsics; Boolean scalar/vector select preserves argument order and eager evaluation. Source helper names avoid the HLSL select intrinsic. Unsupported condition types, alias target shadowing, and unresolved HLSL source select overload ownership fail closed. Bounded Windows numerical tests are required by CI; this is not whole-repository runtime coverage.",
+          "notes": "Canonical Metal fabs/fmin/fmax lower to native HLSL intrinsics; Boolean scalar/vector select preserves argument order and eager evaluation. Canonical atan2 preserves signed-zero quadrants, infinity angles and NaN classification through typed helpers; native HLSL atan2 round trips remain native. Source helpers retain their ownership. Unsupported operand types, alias target shadowing, and unresolved HLSL source select overload ownership fail closed. Bounded Windows numerical tests and original precise Metal atan2 controls are required by CI; this is not whole-repository runtime coverage.",
           "status": "supported"
         },
         "metal": {
@@ -1502,9 +1506,13 @@
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_function_call"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_function_call",
+            "tests/test_translator/test_metal_helper_linkage.py::def test_source_function_qualifiers_survive_intermediate_ir",
+            "tests/test_translator/test_metal_helper_linkage.py::def test_materialized_anonymous_template_remains_private",
+            "tests/test_translator/test_metal_helper_linkage.py::def test_private_helpers_and_exported_functions_keep_distinct_linkage",
+            "tests/test_translator/test_metal_helper_linkage.py::def test_independent_metal_modules_link_and_execute_distinct_helpers"
           ],
-          "notes": "",
+          "notes": "Metal roundtrips preserve static and anonymous-namespace helper linkage, including materialized templates. Inline definitions and implicit template instantiations retain repeatable linkage. Generated constructor and lowered member helpers are artifact-private. Required macOS coverage links independent translated units with colliding private names and executes distinct computations while retaining visible callable functions and kernel names. The MLX host gate links all 15 selected complex-power entries into one library; this is not whole-repository link coverage.",
           "status": "supported"
         },
         "opengl": {
@@ -3605,6 +3613,17 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_host_reflection.py::def test_hlsl_reflection_preserves_entry_points_resources_and_constants",
+            "tests/test_mlx_portable_host.py::def test_translated_binding_contract_and_typed_readback",
+            "tests/test_mlx_portable_host.py::def test_invalid_dispatch_never_reaches_executor",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_reflection_retains_exact_members",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_dispatch_rejects_forged_layout",
+            "tests/test_translator/test_buffer_requirements.py::def test_package_dispatch_enforces_minimum_not_exact_extent",
+            "tests/test_translator/test_buffer_requirements.py::def test_minimum_applies_to_view_not_larger_allocation",
+            "tests/test_translator/test_buffer_requirements.py::def test_minimum_footprint_native_readback",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_buffer_native_readback",
+            "tests/test_translator/test_mlx_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
             "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
@@ -3612,19 +3631,36 @@
             "tests/test_translator/test_native_runtime_drivers.py::def test_prepare_directx_buffers_uses_reflected_block_size_as_allocation_minimum",
             "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_directx_native_loader"
           ],
-          "notes": "HLSL host reflection emits scalarLayout for float, int, and uint StructuredBuffer/RWStructuredBuffer resources and one-member scalar cbuffer declarations. The contract records physicalType, elementType, elementSizeBytes, elementStrideBytes, alignmentBytes, memberOffsetBytes, storageLayout, runtimeSized, optional memberName, and blockSizeBytes for fixed blocks. Native loader ABI packaging preserves these fields, request construction rejects missing or mismatched layouts, and DirectX CBV preparation validates the fixed block before allocating at least blockSizeBytes with 256-byte API alignment. Windows Direct3D CI translates, reflects, packages, dispatches, and executes pinned MLX arangeuint32 with exact output [3, 5, 7, 9]. Vectors, matrices, fixed arrays, aggregates, packed or widened types, arbitrary offsets, and multi-member blocks are not inferred.",
+          "notes": "HLSL host reflection records exact supported scalar and vector structured-buffer layouts and one-member constant blocks. Flat homogeneous structs with 1-64 float, int, uint, int64_t or uint64_t members retain their actual type, member names, offsets, scalar alignment and stride through packaging and dispatch. Allocation sizing uses complete struct elements, and request validation rejects mixed, nested, padded or malformed layouts rather than treating structs as native vectors. Windows CI requires generic struct-buffer readback and the current-pinned MLX complex-power kernel through the public native-loader path. Existing MLX arange scalar execution remains covered. This is bounded layout and kernel execution support, not whole-repository runtime redirection.",
           "status": "supported"
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_scalar_layouts",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_vector_alignment",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_homogeneous_struct_is_not_a_vector",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_unproven_layouts_remain_unavailable",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_preserves_layouts_and_single_buffer_namespace",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_native_readback",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity"
           ],
-          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX and OpenGL. Native loader request construction rejects Metal descriptors with a structured target-unsupported diagnostic; no Metal physical-layout allocation or execution support is claimed.",
-          "status": "validated_rejection"
+          "notes": "Metal reflection preserves exact scalar, tightly packed 32-bit vector and flat homogeneous struct buffer layouts through package inspection, loader descriptors and native dispatch. Constant pointers remain read-only runtime buffers, while supported constant scalar/vector references are fixed values. Native execution validates compiled argument presence, alignment, allocation views and device threadgroup limits. Required macOS CI exercises public package readback and all 15 current MLX complex-power shapes. Unsupported physical layouts remain fail-closed; this does not establish MLX host redirection or full-suite parity.",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [
             "tests/test_translator/test_host_reflection.py::def test_glsl_reflection_records_exact_mlx_scalar_block_layouts",
+            "tests/test_mlx_portable_host.py::def test_translated_binding_contract_and_typed_readback",
+            "tests/test_mlx_portable_host.py::def test_invalid_dispatch_never_reaches_executor",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_reflection_retains_exact_members",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_dispatch_rejects_forged_layout",
+            "tests/test_translator/test_buffer_requirements.py::def test_package_dispatch_enforces_minimum_not_exact_extent",
+            "tests/test_translator/test_buffer_requirements.py::def test_minimum_applies_to_view_not_larger_allocation",
+            "tests/test_translator/test_buffer_requirements.py::def test_minimum_footprint_native_readback",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_buffer_native_readback",
+            "tests/test_translator/test_mlx_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
             "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
@@ -3632,7 +3668,7 @@
             "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_zero_pads_scalar_uniform_block_allocation",
             "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_opengl_native_loader"
           ],
-          "notes": "GLSL host reflection emits scalarLayout for explicit std430 one-member float, int, and uint runtime-array buffer blocks and explicit std140 one-member scalar uniform blocks. The contract records physicalType, elementType, elementSizeBytes, elementStrideBytes, alignmentBytes, memberOffsetBytes, storageLayout, runtimeSized, optional memberName, and blockSizeBytes for fixed blocks. Native loader ABI packaging preserves these fields, request construction rejects missing or mismatched layouts, and OpenGL UBO preparation zero-pads scalar uploads to blockSizeBytes while storage-buffer readback retains its logical payload size. Linux EGL CI translates, reflects, packages, dispatches, and executes pinned MLX arangeuint32 with exact output [3, 5, 7, 9]. Implicit layouts and unsupported aggregate shapes are not inferred.",
+          "notes": "GLSL host reflection records explicit std430 scalar/vector storage arrays and std140 single-value uniform blocks. Flat homogeneous structs with 1-64 float, int, uint, int64_t or uint64_t members retain their actual type, member names, offsets, scalar alignment and stride through packaging and dispatch. Allocation sizing uses complete struct elements, and request validation rejects mixed, nested, padded or malformed layouts rather than treating structs as native vectors. Linux EGL CI requires generic struct-buffer readback and the current-pinned MLX complex-power kernel through the public native-loader path. Existing MLX arange scalar execution remains covered. Implicit layouts are not inferred, and whole-repository runtime redirection remains separate.",
           "status": "supported"
         }
       }
@@ -3889,10 +3925,17 @@
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_preserves_layouts_and_single_buffer_namespace",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_loader_requires_workgroup_size",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_operation_deadline_terminates_process",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_alias_views_share_storage_and_reject_conflicting_uploads",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_function_constant_types_and_ids",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_native_readback",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_native_function_constants",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity"
           ],
-          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
-          "status": "validated_rejection"
+          "notes": "The Metal descriptor-to-request bridge verifies packaged source identity, exact buffer names and physical layouts, the shared buffer namespace, explicit dispatch geometry and scalar function-constant values. MetalRuntimeParityAdapter compiles an identity-checked source snapshot and MetalComputeRuntime executes it through a bounded Swift/Metal worker on macOS 13 or newer. The worker checks compiled bindings and native pipeline limits before execution and returns exact typed byte readbacks. Native CI requires multidimensional struct-buffer execution, both function-constant branches and current MLX complex-power package parity. The runtime is process-isolated and does not rewrite MLX host code or provide persistent streams or full-suite parity.",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [
@@ -5451,10 +5494,10 @@
       "metal": {
         "diagnostic": 4,
         "partial": 1,
-        "supported": 71,
+        "supported": 73,
         "unknown": 0,
         "unsupported": 3,
-        "validated_rejection": 8
+        "validated_rejection": 6
       },
       "opengl": {
         "diagnostic": 2,

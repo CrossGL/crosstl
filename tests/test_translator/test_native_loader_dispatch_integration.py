@@ -182,7 +182,11 @@ def _build_request(tmp_path: Path, target: str):
 
 
 def _executor(target: str) -> RuntimeParityExecutor:
-    if target == "directx":
+    if target == "metal":
+        from crosstl.project import MetalRuntimeParityAdapter
+
+        runtime_adapter = MetalRuntimeParityAdapter()
+    elif target == "directx":
         runtime_adapter = DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime())
     else:
         runtime_adapter = OpenGLRuntimeParityAdapter(
