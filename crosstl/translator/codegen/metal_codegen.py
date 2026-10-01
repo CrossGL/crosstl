@@ -49,6 +49,7 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
 )
+from ..source_licenses import source_license_comments
 from ..structure_conversions import (
     StructureConversionKind,
     StructureFieldValue,
@@ -2286,6 +2287,7 @@ class MetalCodeGen:
             self.collect_metal_stage_io_member_lowerings(structs)
         )
         code = "\n"
+        code += source_license_comments(ast, "metal")
         preprocessors = getattr(ast, "preprocessors", []) or []
         pre_lines = []
         for directive in preprocessors:
@@ -3258,6 +3260,22 @@ class MetalCodeGen:
             "static",
             "volatile",
         }
+
+    def metal_function_linkage_prefix(self, func):
+        qualifiers = set(getattr(func, "qualifiers", ()) or ())
+        if getattr(func, "linkage", None) == "internal":
+            qualifiers.add("static")
+        if getattr(func, "is_inline", False):
+            qualifiers.add("inline")
+        qualifiers.update(
+            self.normalized_metal_abi_attribute_name(attribute)
+            for attribute in getattr(func, "attributes", ()) or ()
+        )
+        return "".join(
+            qualifier + " "
+            for qualifier in ("static", "inline")
+            if qualifier in qualifiers
+        )
 
     def is_metal_struct_member_abi_attribute(self, attr):
         return self.normalized_metal_abi_attribute_name(attr) == "id"
@@ -5222,7 +5240,10 @@ class MetalCodeGen:
             semantic = self.semantic_from_node(func)
             function_name = entry_name or func.name
             semantic_attr = self.map_non_stage_function_semantic(semantic)
-            code += f"{return_type} {function_name}({params_str}){semantic_attr};\n\n"
+            code += (
+                f"{self.metal_function_linkage_prefix(func)}"
+                f"{return_type} {function_name}({params_str}){semantic_attr};\n\n"
+            )
             self.current_function_name = previous_function_name
             self.current_function_return_type = previous_function_return_type
             self.current_function_return_wrapper = previous_function_return_wrapper
@@ -5523,7 +5544,15 @@ class MetalCodeGen:
             semantic = self.semantic_from_node(func)
             function_name = entry_name or func.name
             semantic_attr = self.map_non_stage_function_semantic(semantic)
-            code += f"{return_type} {function_name}({params_str}){semantic_attr} {{\n"
+            # Lowered class overloads may be retained without a call in this unit.
+            if getattr(func, "linkage", None) == "internal" and getattr(
+                func, "is_inline", False
+            ):
+                code += "__attribute__((unused))\n"
+            code += (
+                f"{self.metal_function_linkage_prefix(func)}"
+                f"{return_type} {function_name}({params_str}){semantic_attr} {{\n"
+            )
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_sampler_parameter_array_sizes = (
@@ -12103,7 +12132,7 @@ class MetalCodeGen:
         code = ""
         if self.required_metal_wave_ballot_helper:
             code += (
-                "uint4 __crossgl_metal_wave_ballot(bool predicate) {\n"
+                "static uint4 __crossgl_metal_wave_ballot(bool predicate) {\n"
                 "    simd_vote::vote_t mask = simd_vote::vote_t(simd_ballot(predicate));\n"
                 "    return uint4(\n"
                 "        uint(mask & simd_vote::vote_t(0xffffffffu)),\n"
@@ -12116,7 +12145,7 @@ class MetalCodeGen:
         if self.required_metal_wave_match_helper:
             code += (
                 "template <typename T>\n"
-                "uint4 __crossgl_metal_wave_match(T value, uint laneCount) {\n"
+                "static uint4 __crossgl_metal_wave_match(T value, uint laneCount) {\n"
                 "    uint4 mask = uint4(0u);\n"
                 "    for (uint lane = 0u; lane < laneCount; ++lane) {\n"
                 "        if (simd_broadcast(value, ushort(lane)) == value) {\n"
@@ -12136,7 +12165,7 @@ class MetalCodeGen:
             )
         if self.required_metal_wave_mask_contains_helper:
             code += (
-                "bool __crossgl_metal_wave_mask_contains(uint4 mask, uint lane) {\n"
+                "static bool __crossgl_metal_wave_mask_contains(uint4 mask, uint lane) {\n"
                 "    if (lane < 32u) {\n"
                 "        return (mask.x & (1u << lane)) != 0u;\n"
                 "    }\n"
@@ -12155,7 +12184,7 @@ class MetalCodeGen:
             helper_name = self.METAL_WAVE_MULTI_PREFIX_HELPERS[operation]
             if operation == "WaveMultiPrefixCountBits":
                 code += (
-                    f"uint {helper_name}(bool value, uint4 mask, uint laneIndex, "
+                    f"static uint {helper_name}(bool value, uint4 mask, uint laneIndex, "
                     "uint laneCount) {\n"
                     "    uint laneValue = value ? 1u : 0u;\n"
                     "    uint result = 0u;\n"
@@ -12188,7 +12217,7 @@ class MetalCodeGen:
                 assignment = "^="
             code += (
                 "template <typename T>\n"
-                f"T {helper_name}(T value, uint4 mask, uint laneIndex, "
+                f"static T {helper_name}(T value, uint4 mask, uint laneIndex, "
                 "uint laneCount) {\n"
                 f"    T result = {identity};\n"
                 "    uint4 activeMask = __crossgl_metal_wave_ballot(true);\n"
@@ -21101,7 +21130,7 @@ class MetalCodeGen:
             self.required_glsl_buffer_aggregate_load_helpers.items()
         ):
             lines = [
-                f"{access['metal_type']} {helper_name}(const device uchar* buffer, uint offset) {{",
+                f"static {access['metal_type']} {helper_name}(const device uchar* buffer, uint offset) {{",
                 f"    {access['metal_type']} result;",
             ]
             assignments = self.metal_aggregate_load_assignments(
@@ -24727,7 +24756,7 @@ class MetalCodeGen:
             ):
                 continue
             helpers.append(
-                f"{return_type} {helper_name}({texture_type} image, {coord_type} coord, {return_type} compareValue, {return_type} value) {{\n"
+                f"static {return_type} {helper_name}({texture_type} image, {coord_type} coord, {return_type} compareValue, {return_type} value) {{\n"
                 f"    {vector_type} original;\n"
                 "    do {\n"
                 "        original.x = compareValue;\n"
@@ -24750,7 +24779,7 @@ class MetalCodeGen:
             atomic_type = f"atomic_{component_type}"
             helper_name = self.buffer_atomic_compare_helper_name(component_type)
             helpers.append(
-                f"{value_type} {helper_name}(device uchar* buffer, uint offset, {value_type} compareValue, {value_type} value) {{\n"
+                f"static {value_type} {helper_name}(device uchar* buffer, uint offset, {value_type} compareValue, {value_type} value) {{\n"
                 f"    device {atomic_type}* target = reinterpret_cast<device {atomic_type}*>(buffer + offset);\n"
                 f"    {value_type} original;\n"
                 "    do {\n"

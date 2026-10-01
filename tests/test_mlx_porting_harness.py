@@ -11678,7 +11678,7 @@ def test_unary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "a99ca6fbe0a4cc1462b7f9e0c85cd17206c5ebed0ea02f75b4166f879ad3ad91",
+        "sha256": "2afe13af9db007c1fedde5d43c4f55d394481c90ff5ce85cf4021502dd70fce5",
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -11877,7 +11877,7 @@ def test_unary_opengl_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.opengl-translation.json",
         "schema_version": 2,
-        "sha256": "9708dd97ea36d14cb6bcf167a0153fc89b8e61d01698130722eac3733669758f",
+        "sha256": "b11c1400b7d6fbea41eb1b4d9a08c86822c5922a5bbd6e5153a576c798504d7f",
         "size_bytes": 317614,
         "entry_identity_fields": [
             "entryPoint",
@@ -11985,7 +11985,7 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 4060696,
+        "generated_size_bytes_total": 4119841,
         "generated_size_range": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3568},
             "maximum": {
@@ -12033,7 +12033,7 @@ def test_unary_opengl_translation_evidence_records_complete_family():
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
     assert "all 877 discovered current-pinned `unary.metal` entries to OpenGL" in readme
-    assert "4,060,696 generated GLSL bytes" in readme
+    assert "4,119,841 generated GLSL bytes" in readme
     assert "three explicit host/runtime index-range preconditions" in readme
     assert "requires 877 non-empty SPIR-V 1.3 modules" in readme
     guide = " ".join(
@@ -12042,7 +12042,7 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         .split()
     )
     assert "all 877 current-pinned unary entries to standalone OpenGL" in guide
-    assert "4,060,696 generated GLSL bytes" in guide
+    assert "4,119,841 generated GLSL bytes" in guide
     assert "five disjoint Linux shards" in guide
 
 
@@ -12081,8 +12081,8 @@ def test_unary_directx_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
         "schema_version": 2,
-        "sha256": "cceab0e1a2add8af3f96307ed09ae9630e795fc92f8cf29a2d58775405bcaccd",
-        "size_bytes": 318158,
+        "sha256": "2f7617926d5b5f2d9798b49d26aaa9c55139f5b56c50b1e8f5f91200deffb0cc",
+        "size_bytes": 318602,
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12198,12 +12198,12 @@ def test_unary_directx_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 3033764,
+        "generated_size_bytes_total": 3182068,
         "generated_size_range": {
             "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 2252},
             "maximum": {
                 "entryPoint": "gn4large_ArcTancomplex64complex64",
-                "sizeBytes": 7332,
+                "sizeBytes": 10930,
             },
         },
     }
