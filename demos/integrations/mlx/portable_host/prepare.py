@@ -8,6 +8,8 @@ import json
 import subprocess
 from pathlib import Path
 
+from demos.integrations.mlx.portable_host.packages import UNARY_OPERATIONS
+
 COMMIT = "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 HERE = Path(__file__).resolve().parent
 
@@ -20,11 +22,14 @@ def replace_once(text, before, after):
 
 def adapted_sources(original, primitives, events):
     """Render the complete adaptation without changing the source tree."""
-    primitives = replace_once(
-        primitives,
-        "NO_GPU(Arange)",
-        "// Arange is implemented by the registered native dispatch backend.",
-    )
+    for primitive in ("Arange", *UNARY_OPERATIONS):
+        if primitive in {"Log2", "Log10", "Rsqrt"}:
+            continue
+        primitives = replace_once(
+            primitives,
+            f"NO_GPU({primitive})",
+            f"// {primitive} is implemented by the registered native dispatch backend.",
+        )
     events = replace_once(
         events,
         "void Event::wait(Stream stream) {",

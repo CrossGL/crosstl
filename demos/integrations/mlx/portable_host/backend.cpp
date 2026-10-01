@@ -6,6 +6,7 @@
 #include <type_traits>
 
 #include "mlx/allocator.h"
+#include "mlx/backend/common/unary.h"
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/gpu/eval.h"
 #include "mlx/backend/no_gpu/crosstl_dispatch.h"
@@ -72,6 +73,47 @@ void dispatch_arange(
         std::string("CrossTL native dispatch failed: ") + error);
   }
 }
+
+void dispatch_unary(
+    const std::vector<mlx::core::array>& inputs,
+    mlx::core::array& out,
+    const char* operation) {
+  require_runtime();
+  if (inputs.size() != 1 || inputs[0].dtype() != mlx::core::float32 ||
+      out.dtype() != mlx::core::float32) {
+    throw std::invalid_argument(
+        "CrossTL unary dispatch requires float32 arrays.");
+  }
+  const auto& in = inputs[0];
+  if (in.size() == 0) {
+    mlx::core::set_unary_output_data(in, out);
+    return;
+  }
+  if (!in.flags().contiguous || in.shape() != out.shape()) {
+    throw std::invalid_argument(
+        "CrossTL unary dispatch requires contiguous input.");
+  }
+  if (in.data_size() > 65535) {
+    throw std::invalid_argument(
+        "CrossTL unary dispatch supports at most 65535 stored elements.");
+  }
+  mlx::core::set_unary_output_data(in, out);
+  uint32_t size = static_cast<uint32_t>(in.data_size());
+  std::string entry = std::string("v_") + operation + "float32float32";
+  CrosstlMlxBuffer buffers[] = {
+      {"in", "float32", const_cast<float*>(in.data<float>()), size, 0},
+      {"out", "float32", out.data<float>(), size, 1},
+      {"size", "uint32", &size, 1, 0},
+  };
+  char error[2048] = {};
+  int status = dispatch_callback.load()(
+      entry.c_str(), buffers, 3, size, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(
+        std::string("CrossTL native dispatch failed: ") + error);
+  }
+}
 } // namespace
 
 extern "C" MLX_API int crosstl_mlx_register_dispatch(
@@ -129,6 +171,41 @@ void synchronize(Stream) {
 } // namespace mlx::core::gpu
 
 namespace mlx::core {
+#define CROSSTL_UNARY_GPU(Primitive)                                       \
+  void Primitive::eval_gpu(const std::vector<array>& inputs, array& out) { \
+    dispatch_unary(inputs, out, name());                                   \
+  }
+
+CROSSTL_UNARY_GPU(Abs)
+CROSSTL_UNARY_GPU(ArcCos)
+CROSSTL_UNARY_GPU(ArcCosh)
+CROSSTL_UNARY_GPU(ArcSin)
+CROSSTL_UNARY_GPU(ArcSinh)
+CROSSTL_UNARY_GPU(ArcTan)
+CROSSTL_UNARY_GPU(ArcTanh)
+CROSSTL_UNARY_GPU(Ceil)
+CROSSTL_UNARY_GPU(Cos)
+CROSSTL_UNARY_GPU(Cosh)
+CROSSTL_UNARY_GPU(Exp)
+CROSSTL_UNARY_GPU(Expm1)
+CROSSTL_UNARY_GPU(Floor)
+CROSSTL_UNARY_GPU(Log)
+CROSSTL_UNARY_GPU(Log1p)
+CROSSTL_UNARY_GPU(Negative)
+CROSSTL_UNARY_GPU(Sigmoid)
+CROSSTL_UNARY_GPU(Erf)
+CROSSTL_UNARY_GPU(ErfInv)
+CROSSTL_UNARY_GPU(Sign)
+CROSSTL_UNARY_GPU(Sin)
+CROSSTL_UNARY_GPU(Sinh)
+CROSSTL_UNARY_GPU(Square)
+CROSSTL_UNARY_GPU(Sqrt)
+CROSSTL_UNARY_GPU(Tan)
+CROSSTL_UNARY_GPU(Tanh)
+CROSSTL_UNARY_GPU(Round)
+
+#undef CROSSTL_UNARY_GPU
+
 void Arange::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   if (!inputs.empty()) {

@@ -60,8 +60,9 @@ use upstream kernels.
 
 The [portable host adapter](portable_host/README.md) connects MLX's C++ GPU
 evaluation to native DirectX/OpenGL packages with Metal and CUDA disabled. It
-covers five typed array-creation entries, unchanged upstream arange tests and
-explicit unsupported-operation failures. This synchronous adapter does not yet
+covers five typed array-creation entries and 30 float32 unary entries, with
+15 unchanged upstream tests and explicit unsupported-operation failures.
+This synchronous adapter does not yet
 implement a complete MLX backend.
 
 The current harness verifies:

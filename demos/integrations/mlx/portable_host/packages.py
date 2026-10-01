@@ -19,13 +19,48 @@ from crosstl.project import (
 )
 
 SOURCE = "mlx/backend/metal/kernels/arange.metal"
-ENTRIES = (
+ARANGE_ENTRIES = (
     "arangefloat32",
     "arangeint32",
     "arangeuint32",
     "arangeint64",
     "arangeuint64",
 )
+UNARY_SOURCE = "mlx/backend/metal/kernels/unary.metal"
+UNARY_OPERATIONS = (
+    "Abs",
+    "ArcCos",
+    "ArcCosh",
+    "ArcSin",
+    "ArcSinh",
+    "ArcTan",
+    "ArcTanh",
+    "Ceil",
+    "Cos",
+    "Cosh",
+    "Exp",
+    "Expm1",
+    "Floor",
+    "Log",
+    "Log2",
+    "Log10",
+    "Log1p",
+    "Negative",
+    "Sigmoid",
+    "Erf",
+    "ErfInv",
+    "Sign",
+    "Sin",
+    "Sinh",
+    "Square",
+    "Sqrt",
+    "Rsqrt",
+    "Tan",
+    "Tanh",
+    "Round",
+)
+UNARY_ENTRIES = tuple(f"v_{op}float32float32" for op in UNARY_OPERATIONS)
+ENTRIES = ARANGE_ENTRIES + UNARY_ENTRIES
 
 
 def build_packages(root, output, target):
@@ -60,14 +95,19 @@ def build_packages(root, output, target):
         config.write_text(
             f"""[project]
 source_roots = ["mlx/backend/metal/kernels"]
-include = ["{SOURCE}"]
+include = {json.dumps([SOURCE, UNARY_SOURCE])}
 include_dirs = ["."]
 targets = ["{target}"]
 output_dir = "{work.name}/out"
 [project.entry_points]
-"{SOURCE}" = {json.dumps(ENTRIES)}
+"{SOURCE}" = {json.dumps(ARANGE_ENTRIES)}
+"{UNARY_SOURCE}" = {json.dumps(UNARY_ENTRIES)}
 [project.entry_workgroup_size_rules."{SOURCE}"]
 "arange*" = [1, 1, 1]
+[project.entry_workgroup_size_rules."{UNARY_SOURCE}"]
+"v_*" = [1, 1, 1]
+[project.source_options.metal]
+binary32_fma_profile = "rne-flush"
 """,
             encoding="utf-8",
         )

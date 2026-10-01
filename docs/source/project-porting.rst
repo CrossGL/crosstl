@@ -2185,15 +2185,18 @@ integration, not automatic C++ runtime translation or full upstream-suite parity
 The `portable MLX host adapter
 <https://github.com/CrossGL/crosstl/blob/main/demos/integrations/mlx/portable_host/README.md>`_
 instead builds MLX with Metal and CUDA disabled. Its synchronous callback connects
-``Arange`` for five scalar types to public DirectX/OpenGL runtime packages; other
-primitives retain upstream unsupported-GPU errors. Linux/OpenGL and
-Windows/Direct3D 12 CI build the adapted library, run three unchanged upstream
-tests against CPU and translated GPU execution, and compare 20 array readbacks.
+``Arange`` for five scalar types and 30 float32 unary entries to public
+DirectX/OpenGL runtime packages; other primitives retain upstream unsupported-GPU
+errors. Linux/OpenGL and Windows/Direct3D 12 CI build the adapted library, require
+15 unchanged upstream tests against CPU and translated GPU execution, and check
+20 array-creation records plus 129 unary records against independent references.
 The verifier reconstructs the five allowed source adaptations from the pin,
 requires exact bytes before and after execution, and rejects unrelated tracked
-changes. It independently checks complete numerical records, the initial 15
-nonempty dispatches, and required unsupported-operation, oversized-dispatch and
-missing-artifact failures before publishing a schema-version-2 summary. Source
+changes. It independently checks complete numerical records, the initial 117
+nonempty dispatches, and six required rejection cases, including unsupported
+unary dtypes, layouts and sizes, before publishing a schema-version-2 summary.
+Unary execution is limited to contiguous float32 inputs and 65,535 stored
+elements. Source
 checks do not attest to a separately supplied binary; CI retains its build log.
 This is selected host-staging coverage, not a complete translated MLX backend.
 

@@ -1,12 +1,20 @@
 import ctypes
 import json
+import math
+import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from demos.integrations.mlx.portable_host import packages, prepare, runtime, verify
+from demos.integrations.mlx.portable_host import (
+    packages,
+    prepare,
+    runtime,
+    unary_workloads,
+    verify,
+)
 
 
 def checkout(root, monkeypatch, newline=b"\n"):
@@ -14,7 +22,14 @@ def checkout(root, monkeypatch, newline=b"\n"):
     backend.mkdir(parents=True)
     originals = {
         "CMakeLists.txt": b"target_sources(mlx PRIVATE primitives.cpp)\n",
-        "primitives.cpp": b"NO_GPU(Arange)\nNO_GPU(Abs)\n",
+        "primitives.cpp": (
+            "\n".join(
+                f"NO_GPU({name})"
+                for name in ("Arange", "Add", *packages.UNARY_OPERATIONS)
+                if name not in {"Log2", "Log10", "Rsqrt"}
+            ).encode()
+            + b"\n"
+        ),
         "event.cpp": (
             b"void Event::wait(Stream stream) {\n  cpu_wait();\n}\n"
             b"void Event::signal(Stream stream) {\n  cpu_signal();\n}\n"
@@ -45,7 +60,8 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     record = prepare.prepare(tmp_path, tmp_path / "adaptation.json")
     assert record["commit"] == prepare.COMMIT and len(record["files"]) == 5
     assert "NO_GPU(Arange)" not in (backend / "crosstl_primitives.cpp").read_text()
-    assert "NO_GPU(Abs)" in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(Abs)" not in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(Add)" in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(Arange)" in (backend / "primitives.cpp").read_text()
     events = (backend / "crosstl_event.cpp").read_text()
     assert events.count("stream.device == Device::gpu") == 2
@@ -120,8 +136,9 @@ def test_prepare_rejects_invalid_checkout_before_edits(tmp_path, monkeypatch, fa
     assert not (backend / "crosstl_backend.cpp").exists()
 
 
-@pytest.fixture(params=["opengl", "directx"])
-def translated_packages(tmp_path, monkeypatch, request):
+@pytest.fixture(scope="module", params=["opengl", "directx"])
+def package_templates(tmp_path_factory, request):
+    tmp_path = tmp_path_factory.mktemp(request.param)
     root = tmp_path / "mlx"
     source = root / packages.SOURCE
     source.parent.mkdir(parents=True)
@@ -144,16 +161,36 @@ def translated_packages(tmp_path, monkeypatch, request):
             for dtype, metal in types.items()
         )
     )
-    monkeypatch.setattr(
-        packages.subprocess,
-        "check_output",
-        lambda command, **kwargs: prepare.COMMIT if "rev-parse" in command else "",
+    (root / packages.UNARY_SOURCE).write_text(
+        "template <int op> kernel void unary(device const float* in [[buffer(0)]], "
+        "device float* out [[buffer(1)]], constant uint& size [[buffer(2)]], "
+        "uint index [[thread_position_in_grid]]) { if (index < size) out[index] = in[index]; }\n"
+        + "\n".join(
+            f'template [[host_name("{entry}")]] [[kernel]] '
+            f"decltype(unary<{index}>) unary<{index}>;"
+            for index, entry in enumerate(packages.UNARY_ENTRIES)
+        )
     )
     output = tmp_path / "packages"
-    index = packages.build_packages(root, output, request.param)
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            packages.subprocess,
+            "check_output",
+            lambda command, **kwargs: prepare.COMMIT if "rev-parse" in command else "",
+        )
+        index = packages.build_packages(root, output, request.param)
     assert set(index["descriptors"]) == set(packages.ENTRIES)
     assert (output / "translation/report.json").is_file()
+    assert (
+        'binary32_fma_profile = "rne-flush"'
+        in (output / "translation/crosstl.toml").read_text()
+    )
     return output
+
+
+@pytest.fixture
+def translated_packages(tmp_path, package_templates):
+    return Path(shutil.copytree(package_templates, tmp_path / "packages"))
 
 
 def native_buffers(dtype="float32", count=3):
@@ -172,6 +209,169 @@ def native_buffers(dtype="float32", count=3):
         )
     )
     return buffers, memory
+
+
+def unary_buffers(values=(-2.0, 0.0, 3.0)):
+    memory = [
+        (ctypes.c_float * len(values))(*values),
+        (ctypes.c_float * len(values))(),
+        ctypes.c_uint32(len(values)),
+    ]
+    buffers = (runtime.Buffer * 3)(
+        *[
+            runtime.Buffer(
+                name.encode(),
+                b"uint32" if name == "size" else b"float32",
+                ctypes.addressof(value),
+                1 if name == "size" else len(values),
+                int(name == "out"),
+            )
+            for name, value in zip(("in", "out", "size"), memory)
+        ]
+    )
+    return buffers, memory
+
+
+@pytest.mark.parametrize("fault", [None, "size", "input-count", "dtype", "direction"])
+def test_unary_dispatch_contract(translated_packages, tmp_path, monkeypatch, fault):
+    host = runtime.HostRuntime(translated_packages, tmp_path / "trace")
+    buffers, memory = unary_buffers()
+    if fault == "size":
+        memory[2].value = 2
+    elif fault == "input-count":
+        buffers[0].count = 2
+    elif fault == "dtype":
+        buffers[0].dtype = b"int32"
+    elif fault == "direction":
+        buffers[0].output = 1
+    calls = []
+
+    def execute(request):
+        calls.append(request)
+        output = next(
+            binding["name"]
+            for binding in host.descriptors["v_Absfloat32float32"]["bindings"]
+            if binding["access"] == "read_write"
+        )
+        return SimpleNamespace(
+            status="ok",
+            outputs={output: {"dtype": "float32", "shape": [3], "values": [2, 0, 3]}},
+            details={},
+        )
+
+    monkeypatch.setattr(host.executor, "run", execute)
+    if fault:
+        with pytest.raises(ValueError):
+            host.dispatch("v_Absfloat32float32", buffers, 3, 3)
+        assert calls == [] and not host.trace.exists()
+    else:
+        host.dispatch("v_Absfloat32float32", buffers, 3, 3)
+        assert list(memory[1]) == [2, 0, 3] and len(calls) == 1
+
+
+@pytest.mark.parametrize("donated", [False, True])
+def test_unary_nonfinite_transport(translated_packages, tmp_path, monkeypatch, donated):
+    host = runtime.HostRuntime(translated_packages, tmp_path / "trace")
+    buffers, memory = unary_buffers((math.nan, math.inf, -math.inf))
+    if donated:
+        buffers[1].data = buffers[0].data
+    original_request = runtime.build_native_loader_dispatch_request
+    requests = []
+
+    def build(descriptor, package, inputs, outputs, *args, **kwargs):
+        assert any(
+            value["values"] == ["nan", "+infinity", "-infinity"]
+            for value in inputs.values()
+        )
+        requests.append(inputs)
+        return original_request(descriptor, package, inputs, outputs, *args, **kwargs)
+
+    def execute(request):
+        output = next(
+            binding["name"]
+            for binding in host.descriptors["v_Absfloat32float32"]["bindings"]
+            if binding["access"] == "read_write"
+        )
+        return SimpleNamespace(
+            status="ok",
+            outputs={
+                output: {
+                    "dtype": "float32",
+                    "shape": [3],
+                    "values": ["nan", "+infinity", "+infinity"],
+                }
+            },
+            details={},
+        )
+
+    monkeypatch.setattr(runtime, "build_native_loader_dispatch_request", build)
+    monkeypatch.setattr(host.executor, "run", execute)
+    host.dispatch("v_Absfloat32float32", buffers, 3, 3)
+    output = memory[0 if donated else 1]
+    assert len(requests) == 1 and math.isnan(output[0])
+    assert list(output)[1:] == [math.inf, math.inf]
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "missing",
+        "identity",
+        "value",
+        "same-wrong",
+        "zero-sign",
+        "zero-value",
+        "nonfinite",
+        "raw-nan",
+        "boolean",
+        "nested",
+    ],
+)
+def test_unary_verifier_requires_complete_independent_results(fault):
+    original = unary_workloads.expected_records(cpu=True)
+    translated = unary_workloads.expected_records()
+    assert len(translated) == 129
+    assert sum(record["count"] for record in translated) == 8009
+    assert len(unary_workloads.dispatches()) == 102
+    if fault == "missing":
+        original.clear()
+        translated.clear()
+    elif fault == "identity":
+        translated[1]["inputs"] = [-3.0]
+    elif fault in {"value", "same-wrong"}:
+        translated[1]["values"] = [17.0]
+        if fault == "same-wrong":
+            original[1]["values"] = [17.0]
+    elif fault in {"zero-sign", "zero-value"}:
+        next(
+            record
+            for record in translated
+            if record["operation"] == "Negative" and record["count"] == 7
+        )["values"][3] = (0.0 if fault == "zero-sign" else -1e-8)
+    elif fault == "nonfinite":
+        next(record for record in translated if record.get("case") == "nonfinite")[
+            "values"
+        ][-1] = 0.0
+    elif fault in {"raw-nan", "boolean", "nested"}:
+        translated[1]["values"] = [
+            {"raw-nan": math.nan, "boolean": True, "nested": []}[fault]
+        ]
+    if fault:
+        with pytest.raises((RuntimeError, AssertionError)):
+            unary_workloads.compare(original, translated)
+    else:
+        unary_workloads.compare(original, translated)
+
+
+def test_unary_adapter_definitions_match_packages():
+    source = (prepare.HERE / "backend.cpp").read_text()
+    for operation in packages.UNARY_OPERATIONS:
+        if operation not in {"Log2", "Log10", "Rsqrt"}:
+            assert f"CROSSTL_UNARY_GPU({operation})" in source
+    assert "set_unary_output_data(in, out)" in source
+    assert "in.data_size() > 65535" in source
+    assert "!in.flags().contiguous" in source
 
 
 @pytest.mark.parametrize("dtype", list(runtime.TYPES))
@@ -352,6 +552,10 @@ def test_registration_retains_callback_and_uses_platform_library(
         "duplicate",
         "source-before",
         "source-after",
+        "unary-missing",
+        "unary-values",
+        "unary-identity",
+        "upstream-failure",
     ],
 )
 def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
@@ -398,7 +602,22 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             for dtype in verify.DTYPES
             for count in verify.COUNTS
         ]
-        result = {"tests": 3, "skipped": 0, "arrays": arrays}
+        result = {
+            "tests": len(verify.UPSTREAM_TESTS),
+            "skipped": 0,
+            "failures": 0,
+            "errors": 0,
+            "arrays": arrays,
+            "unary": unary_workloads.expected_records(cpu=mode == "cpu"),
+        }
+        if fault == "unary-missing":
+            result["unary"] = []
+        if fault == "unary-values":
+            result["unary"][1]["values"] = [123.0]
+        if fault == "unary-identity":
+            result["unary"][1]["inputs"] = [123.0]
+        if fault == "upstream-failure":
+            result["failures"] = 1
         if fault == "arrays":
             result["arrays"] = arrays[:-1]
         if fault == "same-wrong-values":
@@ -416,15 +635,19 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         if mode == "native":
             if fault == "values":
                 result["arrays"][1]["values"] = [4]
-            entries = packages.ENTRIES[:-1] if fault == "trace" else packages.ENTRIES
+            dispatches = [
+                (entry, count)
+                for entry in packages.ARANGE_ENTRIES
+                for count in (1, 7, 257)
+            ] + unary_workloads.dispatches()
             trace = [
                 {
                     "entry": entry,
                     "target": "directx" if fault == "target" else "opengl",
                     "threads": count,
                 }
-                for entry in entries
-                for count in (1, 7, 257)
+                for entry, count in dispatches
+                if fault != "trace" or entry != packages.UNARY_ENTRIES[-1]
             ]
             if fault == "threads":
                 trace[0]["threads"] = 0
@@ -455,12 +678,13 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         output_dir=tmp_path / "evidence",
     )
     if fault:
-        with pytest.raises((RuntimeError, ValueError)):
+        with pytest.raises((RuntimeError, ValueError, AssertionError)):
             verify.verify(args)
         assert not (args.output_dir / "evidence.json").exists()
         if fault == "source-before":
             assert calls == []
         if fault == "command":
+            assert len(calls) == 8
             assert (
                 json.loads((args.output_dir / "cpu.command.json").read_text())[
                     "returncode"
@@ -469,7 +693,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             )
     else:
         evidence = verify.verify(args)
-        assert len(calls) == 5 and evidence["dispatchCount"] == 15
+        assert len(calls) == 8 and evidence["dispatchCount"] == 117
         assert len(identities) == 2
         assert evidence["schemaVersion"] == 2
         assert evidence["adaptation"]["files"] == {"adapter": "unchanged"}
@@ -500,7 +724,7 @@ def test_ci_requires_both_native_platforms_and_retains_evidence():
         "portable_host.verify",
         "pytest -q -n auto tests/test_mlx_portable_host.py",
         "liblapacke-dev",
-        "--timeout-seconds 1000",
+        "--timeout-seconds 1600",
         "if: always()",
         "include-hidden-files: true",
         "Get-FileHash",
@@ -509,7 +733,7 @@ def test_ci_requires_both_native_platforms_and_retains_evidence():
         assert required in workflow
     assert "continue-on-error" not in workflow
     assert "opengl-runtime" not in workflow
-    assert len(verify.UPSTREAM_TESTS) == 3
+    assert len(verify.UPSTREAM_TESTS) == 15
 
 
 def test_ci_requires_native_math_before_building_mlx():
@@ -665,7 +889,7 @@ def test_ci_requires_native_math_before_building_mlx():
     )
     assert "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream" in binary
     timeout = ci_coverage.workflow_job_timeout_minutes(workflow, "portable-host")
-    assert timeout * 60 > 120 + 900 + 1800 + 300 + 1000
+    assert timeout * 60 > 120 + 900 + 1800 + 900 + 1600
 
 
 def test_ci_requires_resident_attention_reductions():

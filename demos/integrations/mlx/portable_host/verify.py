@@ -1,4 +1,4 @@
-"""Require real MLX evaluation through translated native array-creation kernels."""
+"""Require real MLX evaluation through translated native compute kernels."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import sys
 import unittest
 from pathlib import Path
 
+from demos.integrations.mlx.portable_host import unary_workloads
 from demos.integrations.mlx.portable_host.packages import ENTRIES
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
@@ -19,6 +20,18 @@ UPSTREAM_TESTS = (
     "test_ops.TestOps.test_arange_overload_dispatch",
     "test_ops.TestOps.test_arange_inferred_dtype",
     "test_ops.TestOps.test_arange_corner_cases_cast",
+    "test_ops.TestOps.test_abs",
+    "test_ops.TestOps.test_negative",
+    "test_ops.TestOps.test_floor",
+    "test_ops.TestOps.test_ceil",
+    "test_ops.TestOps.test_square",
+    "test_ops.TestOps.test_sqrt",
+    "test_ops.TestOps.test_rsqrt",
+    "test_ops.TestOps.test_exp",
+    "test_ops.TestOps.test_expm1",
+    "test_ops.TestOps.test_erf",
+    "test_ops.TestOps.test_sin",
+    "test_ops.TestOps.test_cos",
 )
 DTYPES = ("float32", "int32", "uint32", "int64", "uint64")
 COUNTS = (0, 1, 7, 257)
@@ -26,6 +39,9 @@ NEGATIVE_CHECKS = {
     "unsupported": "no GPU implementation",
     "over-limit": "65535",
     "missing": "artifact",
+    "unary-dtype": "float32",
+    "unary-layout": "contiguous",
+    "unary-over-limit": "65535",
 }
 
 
@@ -51,12 +67,25 @@ def worker(args):
     else:
         mx.set_default_device(mx.cpu)
     os.environ["DEVICE"] = "cpu" if args.worker == "cpu" else "gpu"
-    if args.worker in {"unsupported", "over-limit", "missing"}:
+    if args.worker in NEGATIVE_CHECKS:
         try:
             if args.worker == "unsupported":
-                value = mx.abs(mx.array([-3.0, 2.0]), stream=mx.gpu)
+                value = mx.add(
+                    mx.array([-3.0, 2.0]), mx.array([1.0, 1.0]), stream=mx.gpu
+                )
             elif args.worker == "over-limit":
                 value = mx.arange(65536, stream=mx.gpu)
+            elif args.worker == "unary-dtype":
+                value = mx.abs(mx.array([-3, 2], dtype=mx.int32), stream=mx.gpu)
+            elif args.worker == "unary-layout":
+                source = mx.as_strided(
+                    mx.array(np.arange(8, dtype=np.float32)), (4,), (2,), stream=mx.cpu
+                )
+                value = mx.abs(source, stream=mx.gpu)
+            elif args.worker == "unary-over-limit":
+                value = mx.abs(
+                    mx.array(np.ones(65536, dtype=np.float32)), stream=mx.gpu
+                )
             else:
                 descriptor = runtime.descriptors["arangefloat32"]
                 descriptor["artifact"]["packagePath"] = "artifacts/missing.glsl"
@@ -81,12 +110,24 @@ def worker(args):
             if str(actual.dtype) != dtype:
                 raise RuntimeError("MLX readback dtype changed")
             records.append({"dtype": dtype, "count": count, "values": actual.tolist()})
+    unary = unary_workloads.run(mx, np)
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
     suite = unittest.TestSuite(
         unittest.defaultTestLoader.loadTestsFromName(name) for name in UPSTREAM_TESTS
     )
     with (output / "upstream-tests.log").open("w", encoding="utf-8") as log:
         result = unittest.TextTestRunner(stream=log, verbosity=2).run(suite)
+    save(
+        output / "result.json",
+        {
+            "tests": result.testsRun,
+            "skipped": len(result.skipped),
+            "failures": len(result.failures),
+            "errors": len(result.errors),
+            "arrays": records,
+            "unary": unary,
+        },
+    )
     if (
         not result.wasSuccessful()
         or result.testsRun != len(UPSTREAM_TESTS)
@@ -95,18 +136,18 @@ def worker(args):
         raise RuntimeError(
             f"Unchanged upstream tests failed; inspect {output / 'upstream-tests.log'}"
         )
-    save(
-        output / "result.json",
-        {"tests": result.testsRun, "skipped": len(result.skipped), "arrays": records},
-    )
 
 
-def verify_results(result):
+def verify_results(result, *, cpu=False):
     if (
         type(result.get("tests")) is not int
         or result["tests"] != len(UPSTREAM_TESTS)
         or type(result.get("skipped")) is not int
         or result["skipped"] != 0
+        or any(
+            type(result.get(key)) is not int or result[key] != 0
+            for key in ("failures", "errors")
+        )
     ):
         raise RuntimeError("Incomplete upstream test results")
     expected = [
@@ -120,6 +161,7 @@ def verify_results(result):
         for record in result["arrays"]
     ):
         raise RuntimeError("Incomplete or incorrect array readbacks")
+    unary_workloads.validate(result.get("unary"), cpu=cpu)
 
 
 def verify(args):
@@ -135,7 +177,8 @@ def verify(args):
     if test_path.read_bytes() != pristine:
         raise ValueError("Upstream operation tests were modified")
     results = {}
-    for mode in ("cpu", "native", "unsupported", "over-limit", "missing"):
+    failed = []
+    for mode in ("cpu", "native", *NEGATIVE_CHECKS):
         command = [
             sys.executable,
             str(Path(__file__).resolve().parents[4] / "tools/run_bounded_command.py"),
@@ -165,13 +208,16 @@ def verify(args):
             {"command": command, "returncode": result.returncode},
         )
         if result.returncode:
-            raise RuntimeError(
-                f"Host proof {mode} failed; inspect {output / (mode + '.stderr')}"
-            )
-        results[mode] = json.loads((output / mode / "result.json").read_text())
-    if results["cpu"] != results["native"]:
+            failed.append(mode)
+        else:
+            results[mode] = json.loads((output / mode / "result.json").read_text())
+    if failed:
+        raise RuntimeError(
+            f"Host proof workers failed: {', '.join(failed)}; inspect {output}"
+        )
+    if results["cpu"]["arrays"] != results["native"]["arrays"]:
         raise RuntimeError("Original CPU and translated GPU host results differ")
-    verify_results(results["cpu"])
+    verify_results(results["cpu"], cpu=True)
     verify_results(results["native"])
     for mode, expected in NEGATIVE_CHECKS.items():
         if (
@@ -188,7 +234,7 @@ def verify(args):
         raise RuntimeError("Native trace does not cover every translated entry")
     expected_dispatches = [
         (f"arange{dtype}", count) for dtype in DTYPES for count in COUNTS if count
-    ]
+    ] + unary_workloads.dispatches()
     if [(record["entry"], record.get("threads")) for record in trace][
         : len(expected_dispatches)
     ] != expected_dispatches or any(
@@ -214,9 +260,7 @@ def verify(args):
         "translated": results["native"],
         "dispatchCount": len(trace),
         "entries": sorted({record["entry"] for record in trace}),
-        "negativeChecks": {
-            mode: results[mode] for mode in ("unsupported", "over-limit", "missing")
-        },
+        "negativeChecks": {mode: results[mode] for mode in NEGATIVE_CHECKS},
         "fullUpstreamSuite": False,
         "fullTranslatedBackend": False,
     }
@@ -229,9 +273,7 @@ if __name__ == "__main__":
     parser.add_argument("--mlx-root", type=Path, required=True)
     parser.add_argument("--packages", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument(
-        "--worker", choices=["cpu", "native", "unsupported", "over-limit", "missing"]
-    )
+    parser.add_argument("--worker", choices=["cpu", "native", *NEGATIVE_CHECKS])
     args = parser.parse_args()
     if args.worker:
         worker(args)

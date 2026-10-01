@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from crosstl.project.runtime_verification import (
     RuntimeParityExecutor,
     RuntimeTestAdapterSpec,
 )
-from demos.integrations.mlx.portable_host.packages import ENTRIES
+from demos.integrations.mlx.portable_host.packages import ENTRIES, UNARY_ENTRIES
 
 
 class Buffer(ctypes.Structure):
@@ -48,6 +49,12 @@ TYPES = {
     "uint64": ctypes.c_uint64,
 }
 _installed_runtime = None
+
+
+def wire_value(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        return "nan" if math.isnan(value) else "+infinity" if value > 0 else "-infinity"
+    return value
 
 
 class HostRuntime:
@@ -120,6 +127,8 @@ class HostRuntime:
         if count != 3 or not buffers or not 0 < threads <= 65535:
             raise ValueError("Invalid or unsupported native dispatch dimensions")
         descriptor = self.descriptors[entry]
+        unary = entry in UNARY_ENTRIES
+        names = {"in", "size", "out"} if unary else {"start", "step", "out"}
         supplied = {}
         for index in range(count):
             buffer = buffers[index]
@@ -129,12 +138,20 @@ class HostRuntime:
             dtype = buffer.dtype.decode("ascii")
             if name in supplied or dtype not in TYPES or not buffer.data:
                 raise ValueError("Invalid native buffer")
-            expected = threads if name == "out" else 1
+            expected = threads if name == "out" or (unary and name == "in") else 1
             if buffer.count != expected or buffer.output != int(name == "out"):
                 raise ValueError("Native buffer shape or direction does not match")
+            if unary and dtype != ("uint32" if name == "size" else "float32"):
+                raise ValueError("Native unary buffer dtype does not match")
             supplied[name] = buffer
-        if set(supplied) != {"start", "step", "out"}:
+        if set(supplied) != names:
             raise ValueError("Native buffer names do not match the operation")
+        if (
+            unary
+            and ctypes.cast(supplied["size"].data, ctypes.POINTER(ctypes.c_uint32))[0]
+            != threads
+        ):
+            raise ValueError("Native unary size does not match the launch")
         inputs, outputs, destinations = {}, {}, {}
         matched = set()
         binding_names = set()
@@ -143,7 +160,7 @@ class HostRuntime:
             member = layout.get("memberName", binding["name"])
             if self.target == "directx":
                 member = member.removeprefix(entry + "_")
-            name = "out" if member == "out_" else member
+            name = {"out_": "out", "in_": "in"}.get(member, member)
             if (
                 name not in supplied
                 or name in matched
@@ -167,7 +184,11 @@ class HostRuntime:
             value = {
                 "dtype": dtype,
                 "shape": [buffer.count],
-                "values": [0] * buffer.count if buffer.output else list(view),
+                "values": (
+                    [0] * buffer.count
+                    if buffer.output
+                    else [wire_value(value) for value in view]
+                ),
             }
             if buffer.output:
                 outputs[binding["name"]] = value
@@ -195,7 +216,12 @@ class HostRuntime:
                 raise RuntimeError("Native readback layout does not match the output")
             if len(output["values"]) != buffer.count:
                 raise RuntimeError("Native readback size does not match the output")
-            values = (ctype * buffer.count)(*output["values"])
+            values = (ctype * buffer.count)(
+                *(
+                    float(value) if ctype is ctypes.c_float else value
+                    for value in output["values"]
+                )
+            )
             ctypes.memmove(buffer.data, values, ctypes.sizeof(values))
         with self.trace.open("a", encoding="utf-8") as handle:
             handle.write(

@@ -9,9 +9,14 @@ upstream tests are not replaced.
 ## Scope
 
 The current adapter implements `Arange` for `float32`, `int32`, `uint32`, `int64`
-and `uint64`. Other primitives retain MLX's explicit unsupported-GPU errors.
+and `uint64`, plus 30 float32 unary operations from the pinned `unary.metal`:
+absolute value, negation, sign, square, square root, reciprocal square root,
+floor, ceil, round, exponential, expm1, logarithms, log1p, sigmoid, erf, inverse
+erf, trigonometric functions and their hyperbolic and inverse forms. The exact
+entry list is in `packages.py`. Other primitives retain MLX's explicit
+unsupported-GPU errors. Unary inputs must be contiguous and float32.
 Dispatch is synchronous, uses host staging buffers and supports at most 65,535
-elements with one thread per workgroup. Empty arrays do not dispatch. This is a
+stored elements with one thread per workgroup. Empty arrays do not dispatch. This is a
 host integration proof, not a complete MLX backend or a performance benchmark.
 
 The pin is `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. CI builds and runs the same
@@ -26,10 +31,12 @@ selection, and the complete MLX suite are not covered here.
 no-GPU backend build definition and adds four explicitly named backend files:
 
 - `crosstl_backend.cpp` registers a versioned synchronous dispatch callback,
-  implements device/stream hooks and `Arange::eval_gpu`, and stages output storage.
+  implements device/stream hooks, `Arange::eval_gpu` and 27 unary primitive hooks,
+  and stages output storage. MLX's Log and Sqrt primitives select their log-base
+  and reciprocal variants, yielding 30 unary kernel entries.
 - `crosstl_dispatch.h` defines the typed C buffer/callback ABI.
 - `crosstl_primitives.cpp` copies upstream unsupported primitive definitions,
-  removing only the `Arange` stub.
+  removing only the implemented primitive stubs.
 - `crosstl_event.cpp` copies upstream events and adds synchronous GPU wait/signal
   handling. CPU scheduling behavior remains unchanged.
 
@@ -38,6 +45,11 @@ every adapted file. Integer argument conversion explicitly implements truncation
 and modular wrapping; it does not depend on undefined out-of-range C++ casts.
 The host adapter is repository-specific; package generation, reflection, artifact
 verification and native execution use the public CrossTL project interfaces.
+Unary output allocation uses MLX's existing `set_unary_output_data` helper,
+including its contiguous strides and buffer-donation behavior. It performs no
+CPU calculation. Host inputs are copied before output readback, including when
+MLX donates the input allocation. Translation explicitly selects the
+`rne-flush` binary32 FMA profile required by the pinned Erf and Expm1 bodies.
 
 `runtime.py` retains the callback for the process lifetime and permits one
 registration. It verifies argument names, direction, counts and physical layouts
@@ -107,23 +119,38 @@ these upstream tests without skips:
 - `test_arange_overload_dispatch`
 - `test_arange_inferred_dtype`
 - `test_arange_corner_cases_cast`
+- `test_abs`, `test_negative`, `test_floor`, `test_ceil`
+- `test_square`, `test_sqrt`, `test_rsqrt`
+- `test_exp`, `test_expm1`, `test_erf`, `test_sin`, `test_cos`
 
 The CPU reference uses the unchanged CPU backend in the same adapted MLX build;
 it is not a separately rebuilt pristine binary or a Metal comparison.
 
-It also checks 20 array cases spanning all five types and lengths 0, 1, 7 and 257
-against NumPy and the explicit MLX CPU baseline. The parent process independently
-requires all 20 complete readbacks, recomputes their values and checks the test and
-skip counts. Native traces must start with the exact 15 nonempty array dispatches,
-include every selected entry, and retain actual artifact identities and
-runtime/device details. Separate
-negative processes must reject an unsupported primitive, an oversized dispatch
-and a missing artifact. Each process has a hard process-tree deadline.
+It also checks 20 array-creation cases spanning all five types and lengths 0, 1,
+7 and 257. The 129 unary records cover the same lengths for all 30 operations,
+six special-value cases, two large-angle cases and an arange/abs/negative/square
+chain, totaling 8,009 unary output values. Independent Python math references
+check both CPU and native results, not just agreement between them. Readbacks
+must have complete values and unchanged case identities; finite comparisons
+use `rtol=2e-5, atol=1e-6`, with exact zero values/signs and nonfinite
+classification. Upstream tests and their tolerances are unchanged.
+
+The pinned CPU Erf approximation returns negative zero for both zero input
+signs. Its reference records this behavior explicitly; generated GPU Erf must
+preserve the input sign as the source Metal implementation does. No readback is
+corrected to make the two paths agree.
+
+Native traces must start with the exact 117 nonempty workload dispatches, cover
+all 35 entries, and retain artifact identities and runtime/device details.
+Separate negative processes reject an unsupported primitive, oversized arange,
+a missing artifact, and unary inputs with unsupported dtype, layout or size.
+Each of the eight processes has a hard 180-second process-tree deadline; all
+are attempted so a failure does not discard the other diagnostic results.
 
 The evidence directory retains before/after adaptation hashes, command status,
 stdout/stderr, upstream test logs, dispatch traces and numerical results. The
 schema-version-2 summary is written only after source and result checks pass,
-including explicit rejection messages from all three negative cases. Source
+including explicit rejection messages from all six negative cases. Source
 identity checks do not attest to a separately supplied binary; CI builds MLX from
 the verified sources and retains its build log. `fullUpstreamSuite` and
 `fullTranslatedBackend` remain `false`: extending primitive coverage and then
