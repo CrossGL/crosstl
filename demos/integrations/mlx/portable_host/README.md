@@ -13,8 +13,14 @@ and `uint64`, plus 30 float32 unary operations from the pinned `unary.metal`:
 absolute value, negation, sign, square, square root, reciprocal square root,
 floor, ceil, round, exponential, expm1, logarithms, log1p, sigmoid, erf, inverse
 erf, trigonometric functions and their hyperbolic and inverse forms. The exact
-entry list is in `packages.py`. Other primitives retain MLX's explicit
-unsupported-GPU errors. Unary inputs must be contiguous and float32.
+entry list is in `packages.py`. Shared-buffer views reuse upstream MLX's
+shape, stride and ownership logic: strided views, broadcasts, copy aliases,
+dimension insertion/removal, transpose, split, dependency/custom-transform
+outputs and stop-gradient. Reshape and unflatten support layouts that do not
+require copying; other layouts report the missing translated copy explicitly.
+Other primitives retain MLX's explicit unsupported-GPU errors. Unary inputs
+must be contiguous and float32, including stored-contiguous broadcast and
+column-major views.
 Dispatch is synchronous, uses host staging buffers and supports at most 65,535
 stored elements with one thread per workgroup. Empty arrays do not dispatch. This is a
 host integration proof, not a complete MLX backend or a performance benchmark.
@@ -33,7 +39,8 @@ no-GPU backend build definition and adds four explicitly named backend files:
 - `crosstl_backend.cpp` registers a versioned synchronous dispatch callback,
   implements device/stream hooks, `Arange::eval_gpu` and 27 unary primitive hooks,
   and stages output storage. MLX's Log and Sqrt primitives select their log-base
-  and reciprocal variants, yielding 30 unary kernel entries.
+  and reciprocal variants, yielding 30 unary kernel entries. View hooks reuse
+  upstream shared implementations and perform no CPU elementwise computation.
 - `crosstl_dispatch.h` defines the typed C buffer/callback ABI.
 - `crosstl_primitives.cpp` copies upstream unsupported primitive definitions,
   removing only the implemented primitive stubs.
@@ -122,6 +129,7 @@ these upstream tests without skips:
 - `test_abs`, `test_negative`, `test_floor`, `test_ceil`
 - `test_square`, `test_sqrt`, `test_rsqrt`
 - `test_exp`, `test_expm1`, `test_erf`, `test_sin`, `test_cos`
+- `test_transpose_noargs`, `test_transpose_axis`, `test_broadcast`, `test_split`
 
 The CPU reference uses the unchanged CPU backend in the same adapted MLX build;
 it is not a separately rebuilt pristine binary or a Metal comparison.
@@ -142,17 +150,26 @@ signs. Its reference records this behavior explicitly; generated GPU Erf must
 preserve the input sign as the source Metal implementation does. No readback is
 corrected to make the two paths agree.
 
-Native traces must start with the exact 118 nonempty workload dispatches, cover
+Another 40 records check 365 view and chained-unary values against independently
+constructed NumPy arrays, including offsets, reversed/gapped strides, zero-stride
+broadcasts, split outputs, empty shapes, source preservation and exact 64-bit
+integers. Sixteen generated square dispatches and one dependency negation check
+execution through views. Broadcast dispatch sizes use stored elements rather
+than the larger logical shape. Views that only change metadata do not count as
+kernel execution; reversed/gapped unary execution is still rejected.
+
+Native traces must start with the exact 135 nonempty workload dispatches, cover
 all 35 entries, and retain artifact identities and runtime/device details.
 Separate negative processes reject an unsupported primitive, oversized arange,
-a missing artifact, and unary inputs with unsupported dtype, layout or size.
-Each of the eight processes has a hard 180-second process-tree deadline; all
+a missing artifact, unary inputs with unsupported dtype, layout or size, and a
+reshape requiring a copy.
+Each of the nine processes has a hard 180-second process-tree deadline; all
 are attempted so a failure does not discard the other diagnostic results.
 
 The evidence directory retains before/after adaptation hashes, command status,
 stdout/stderr, upstream test logs, dispatch traces and numerical results. The
 schema-version-2 summary is written only after source and result checks pass,
-including explicit rejection messages from all six negative cases. Source
+including explicit rejection messages from all seven negative cases. Source
 identity checks do not attest to a separately supplied binary; CI builds MLX from
 the verified sources and retains its build log. `fullUpstreamSuite` and
 `fullTranslatedBackend` remain `false`: extending primitive coverage and then

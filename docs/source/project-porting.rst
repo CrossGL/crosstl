@@ -2186,17 +2186,21 @@ The `portable MLX host adapter
 <https://github.com/CrossGL/crosstl/blob/main/demos/integrations/mlx/portable_host/README.md>`_
 instead builds MLX with Metal and CUDA disabled. Its synchronous callback connects
 ``Arange`` for five scalar types and 30 float32 unary entries to public
-DirectX/OpenGL runtime packages; other primitives retain upstream unsupported-GPU
-errors. Linux/OpenGL and Windows/Direct3D 12 CI build the adapted library, require
-15 unchanged upstream tests against CPU and translated GPU execution, and check
+DirectX/OpenGL runtime packages. Shared-buffer view primitives reuse upstream
+shape, stride and ownership logic, including broadcasts, transposes, splits and
+non-copying reshapes; other primitives retain upstream unsupported-GPU errors.
+Linux/OpenGL and Windows/Direct3D 12 CI build the adapted library, require
+19 unchanged upstream tests against CPU and translated GPU execution, and check
 20 array-creation records plus 130 unary records against independent references,
 including 8,193 consecutive binary32 inputs at and above one for inverse
 hyperbolic cosine at unchanged upstream tolerances.
 The verifier reconstructs the five allowed source adaptations from the pin,
 requires exact bytes before and after execution, and rejects unrelated tracked
-changes. It independently checks complete numerical records, the initial 118
-nonempty dispatches, and six required rejection cases, including unsupported
-unary dtypes, layouts and sizes, before publishing a schema-version-2 summary.
+changes. Forty additional records cover view layouts, chained unary dispatch,
+source preservation and exact 64-bit values. The verifier independently checks
+complete numerical records, the initial 135 nonempty dispatches, and seven
+required rejection cases, including unsupported unary dtypes, layouts and sizes
+and reshapes requiring a translated copy, before publishing a schema-version-2 summary.
 Unary execution is limited to contiguous float32 inputs and 65,535 stored
 elements. Source
 checks do not attest to a separately supplied binary; CI retains its build log.

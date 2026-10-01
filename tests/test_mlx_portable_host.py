@@ -14,6 +14,7 @@ from demos.integrations.mlx.portable_host import (
     runtime,
     unary_workloads,
     verify,
+    view_workloads,
 )
 
 
@@ -24,8 +25,13 @@ def checkout(root, monkeypatch, newline=b"\n"):
         "CMakeLists.txt": b"target_sources(mlx PRIVATE primitives.cpp)\n",
         "primitives.cpp": (
             "\n".join(
-                f"NO_GPU({name})"
-                for name in ("Arange", "Add", *packages.UNARY_OPERATIONS)
+                f"{'NO_GPU_MULTI' if name in prepare.MULTI_OUTPUT_VIEWS else 'NO_GPU'}({name})"
+                for name in (
+                    "Arange",
+                    "Add",
+                    *packages.UNARY_OPERATIONS,
+                    *prepare.VIEW_PRIMITIVES,
+                )
                 if name not in {"Log2", "Log10", "Rsqrt"}
             ).encode()
             + b"\n"
@@ -61,6 +67,12 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     assert record["commit"] == prepare.COMMIT and len(record["files"]) == 5
     assert "NO_GPU(Arange)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(Abs)" not in (backend / "crosstl_primitives.cpp").read_text()
+    for name in prepare.VIEW_PRIMITIVES:
+        macro = "NO_GPU_MULTI" if name in prepare.MULTI_OUTPUT_VIEWS else "NO_GPU"
+        assert (
+            f"{macro}({name})" not in (backend / "crosstl_primitives.cpp").read_text()
+        )
+        assert f"{macro}({name})" in (backend / "primitives.cpp").read_text()
     assert "NO_GPU(Add)" in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(Arange)" in (backend / "primitives.cpp").read_text()
     events = (backend / "crosstl_event.cpp").read_text()
@@ -382,6 +394,76 @@ def test_unary_adapter_definitions_match_packages():
     assert "!in.flags().contiguous" in source
 
 
+def test_view_adapter_preserves_upstream_shared_buffer_operations():
+    source = (prepare.HERE / "backend.cpp").read_text()
+    for name in prepare.VIEW_PRIMITIVES:
+        if name in {"Reshape", "Unflatten"}:
+            assert f"void {name}::eval_gpu(" in source
+        else:
+            macro = (
+                "CROSSTL_SHARED_OUTPUTS_GPU"
+                if name in prepare.MULTI_OUTPUT_VIEWS
+                else "CROSSTL_SHARED_VIEW_GPU"
+            )
+            assert f"{macro}({name})" in source
+    assert "prepare_reshape(in, out)" in source
+    assert "shared_buffer_reshape(in, strides, out)" in source
+    assert "requires a translated copy" in source
+    assert "eval_cpu" not in source
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "missing",
+        "value",
+        "shape",
+        "dtype",
+        "identity",
+        "duplicate",
+        "source",
+        "int64",
+        "nonfinite",
+    ],
+)
+def test_view_verifier_requires_complete_independent_results(fault):
+    records = view_workloads.expected_records()
+    assert len(records) == 40
+    assert len(view_workloads.dispatches()) == 17
+    assert view_workloads.dispatches()[8:11] == [
+        ("v_Squarefloat32float32", 4),
+        ("v_Squarefloat32float32", 1),
+        ("v_Squarefloat32float32", 6),
+    ]
+    if fault == "missing":
+        records.pop()
+    elif fault == "value":
+        records[1]["values"][0] += 1
+    elif fault == "shape":
+        records[0]["shape"] = [12]
+    elif fault == "dtype":
+        records[0]["dtype"] = "float64"
+    elif fault == "identity":
+        records[0]["case"] = "other"
+    elif fault == "duplicate":
+        records[1] = records[0]
+    elif fault == "source":
+        records[-1]["values"][0] += 1
+    elif fault == "int64":
+        record = next(
+            record for record in records if record["case"] == "int64-transpose"
+        )
+        record["values"] = [float(value) for value in record["values"]]
+    elif fault == "nonfinite":
+        records[0]["values"][0] = math.nan
+    if fault:
+        with pytest.raises((RuntimeError, ValueError)):
+            view_workloads.validate(records)
+    else:
+        view_workloads.validate(records)
+
+
 @pytest.mark.parametrize("dtype", list(runtime.TYPES))
 def test_translated_binding_contract_and_typed_readback(
     translated_packages, tmp_path, monkeypatch, dtype
@@ -563,6 +645,9 @@ def test_registration_retains_callback_and_uses_platform_library(
         "unary-missing",
         "unary-values",
         "unary-identity",
+        "views-missing",
+        "views-values",
+        "views-shape",
         "upstream-failure",
     ],
 )
@@ -617,6 +702,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             "errors": 0,
             "arrays": arrays,
             "unary": unary_workloads.expected_records(cpu=mode == "cpu"),
+            "views": view_workloads.expected_records(),
         }
         if fault == "unary-missing":
             result["unary"] = []
@@ -624,6 +710,12 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             result["unary"][1]["values"] = [123.0]
         if fault == "unary-identity":
             result["unary"][1]["inputs"] = [123.0]
+        if fault == "views-missing":
+            result["views"] = []
+        if fault == "views-values":
+            result["views"][1]["values"][0] += 1
+        if fault == "views-shape":
+            result["views"][0]["shape"] = [12]
         if fault == "upstream-failure":
             result["failures"] = 1
         if fault == "arrays":
@@ -643,11 +735,15 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         if mode == "native":
             if fault == "values":
                 result["arrays"][1]["values"] = [4]
-            dispatches = [
-                (entry, count)
-                for entry in packages.ARANGE_ENTRIES
-                for count in (1, 7, 257)
-            ] + unary_workloads.dispatches()
+            dispatches = (
+                [
+                    (entry, count)
+                    for entry in packages.ARANGE_ENTRIES
+                    for count in (1, 7, 257)
+                ]
+                + unary_workloads.dispatches()
+                + view_workloads.dispatches()
+            )
             trace = [
                 {
                     "entry": entry,
@@ -692,7 +788,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         if fault == "source-before":
             assert calls == []
         if fault == "command":
-            assert len(calls) == 8
+            assert len(calls) == 9
             assert (
                 json.loads((args.output_dir / "cpu.command.json").read_text())[
                     "returncode"
@@ -701,7 +797,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             )
     else:
         evidence = verify.verify(args)
-        assert len(calls) == 8 and evidence["dispatchCount"] == 118
+        assert len(calls) == 9 and evidence["dispatchCount"] == 135
         assert len(identities) == 2
         assert evidence["schemaVersion"] == 2
         assert evidence["adaptation"]["files"] == {"adapter": "unchanged"}
@@ -732,7 +828,7 @@ def test_ci_requires_both_native_platforms_and_retains_evidence():
         "portable_host.verify",
         "pytest -q -n auto tests/test_mlx_portable_host.py",
         "liblapacke-dev",
-        "--timeout-seconds 1600",
+        "--timeout-seconds 1800",
         "if: always()",
         "include-hidden-files: true",
         "Get-FileHash",
@@ -741,7 +837,7 @@ def test_ci_requires_both_native_platforms_and_retains_evidence():
         assert required in workflow
     assert "continue-on-error" not in workflow
     assert "opengl-runtime" not in workflow
-    assert len(verify.UPSTREAM_TESTS) == 15
+    assert len(verify.UPSTREAM_TESTS) == 19
 
 
 def test_ci_requires_native_math_before_building_mlx():
@@ -897,7 +993,7 @@ def test_ci_requires_native_math_before_building_mlx():
     )
     assert "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream" in binary
     timeout = ci_coverage.workflow_job_timeout_minutes(workflow, "portable-host")
-    assert timeout * 60 > 120 + 900 + 1800 + 900 + 1600
+    assert timeout * 60 > 120 + 900 + 1800 + 900 + 1800
 
 
 def test_ci_requires_resident_attention_reductions():

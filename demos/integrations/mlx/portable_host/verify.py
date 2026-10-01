@@ -11,7 +11,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from demos.integrations.mlx.portable_host import unary_workloads
+from demos.integrations.mlx.portable_host import unary_workloads, view_workloads
 from demos.integrations.mlx.portable_host.packages import ENTRIES
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
@@ -32,6 +32,10 @@ UPSTREAM_TESTS = (
     "test_ops.TestOps.test_erf",
     "test_ops.TestOps.test_sin",
     "test_ops.TestOps.test_cos",
+    "test_ops.TestOps.test_transpose_noargs",
+    "test_ops.TestOps.test_transpose_axis",
+    "test_ops.TestOps.test_broadcast",
+    "test_ops.TestOps.test_split",
 )
 DTYPES = ("float32", "int32", "uint32", "int64", "uint64")
 COUNTS = (0, 1, 7, 257)
@@ -42,6 +46,7 @@ NEGATIVE_CHECKS = {
     "unary-dtype": "float32",
     "unary-layout": "contiguous",
     "unary-over-limit": "65535",
+    "reshape-copy": "requires a translated copy",
 }
 
 
@@ -79,13 +84,16 @@ def worker(args):
                 value = mx.abs(mx.array([-3, 2], dtype=mx.int32), stream=mx.gpu)
             elif args.worker == "unary-layout":
                 source = mx.as_strided(
-                    mx.array(np.arange(8, dtype=np.float32)), (4,), (2,), stream=mx.cpu
+                    mx.array(np.arange(8, dtype=np.float32)), (4,), (2,), stream=mx.gpu
                 )
                 value = mx.abs(source, stream=mx.gpu)
             elif args.worker == "unary-over-limit":
                 value = mx.abs(
                     mx.array(np.ones(65536, dtype=np.float32)), stream=mx.gpu
                 )
+            elif args.worker == "reshape-copy":
+                source = mx.array(np.arange(12, dtype=np.float32).reshape(3, 4))
+                value = mx.reshape(mx.transpose(source), (12,), stream=mx.gpu)
             else:
                 descriptor = runtime.descriptors["arangefloat32"]
                 descriptor["artifact"]["packagePath"] = "artifacts/missing.glsl"
@@ -111,6 +119,7 @@ def worker(args):
                 raise RuntimeError("MLX readback dtype changed")
             records.append({"dtype": dtype, "count": count, "values": actual.tolist()})
     unary = unary_workloads.run(mx, np)
+    views = view_workloads.run(mx, np)
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
     suite = unittest.TestSuite(
         unittest.defaultTestLoader.loadTestsFromName(name) for name in UPSTREAM_TESTS
@@ -126,6 +135,7 @@ def worker(args):
             "errors": len(result.errors),
             "arrays": records,
             "unary": unary,
+            "views": views,
         },
     )
     if (
@@ -162,6 +172,7 @@ def verify_results(result, *, cpu=False):
     ):
         raise RuntimeError("Incomplete or incorrect array readbacks")
     unary_workloads.validate(result.get("unary"), cpu=cpu)
+    view_workloads.validate(result.get("views"))
 
 
 def verify(args):
@@ -232,9 +243,11 @@ def verify(args):
     ]
     if {record["entry"] for record in trace} != set(ENTRIES):
         raise RuntimeError("Native trace does not cover every translated entry")
-    expected_dispatches = [
-        (f"arange{dtype}", count) for dtype in DTYPES for count in COUNTS if count
-    ] + unary_workloads.dispatches()
+    expected_dispatches = (
+        [(f"arange{dtype}", count) for dtype in DTYPES for count in COUNTS if count]
+        + unary_workloads.dispatches()
+        + view_workloads.dispatches()
+    )
     if [(record["entry"], record.get("threads")) for record in trace][
         : len(expected_dispatches)
     ] != expected_dispatches or any(

@@ -7,6 +7,7 @@
 
 #include "mlx/allocator.h"
 #include "mlx/backend/common/unary.h"
+#include "mlx/backend/common/utils.h"
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/gpu/eval.h"
 #include "mlx/backend/no_gpu/crosstl_dispatch.h"
@@ -114,6 +115,22 @@ void dispatch_unary(
         std::string("CrossTL native dispatch failed: ") + error);
   }
 }
+
+void reshape_view(
+    const std::vector<mlx::core::array>& inputs,
+    mlx::core::array& out) {
+  require_runtime();
+  if (inputs.size() != 1) {
+    throw std::invalid_argument("CrossTL reshape requires one input.");
+  }
+  const auto& in = inputs[0];
+  auto [copy_required, strides] = mlx::core::prepare_reshape(in, out);
+  if (copy_required) {
+    throw std::invalid_argument(
+        "CrossTL reshape requires a translated copy for this layout.");
+  }
+  mlx::core::shared_buffer_reshape(in, strides, out);
+}
 } // namespace
 
 extern "C" MLX_API int crosstl_mlx_register_dispatch(
@@ -171,6 +188,45 @@ void synchronize(Stream) {
 } // namespace mlx::core::gpu
 
 namespace mlx::core {
+#define CROSSTL_SHARED_VIEW_GPU(Primitive)                                 \
+  void Primitive::eval_gpu(const std::vector<array>& inputs, array& out) { \
+    require_runtime();                                                    \
+    eval(inputs, out);                                                     \
+  }
+
+CROSSTL_SHARED_VIEW_GPU(AsStrided)
+CROSSTL_SHARED_VIEW_GPU(Broadcast)
+CROSSTL_SHARED_VIEW_GPU(BroadcastAxes)
+CROSSTL_SHARED_VIEW_GPU(Copy)
+CROSSTL_SHARED_VIEW_GPU(ExpandDims)
+CROSSTL_SHARED_VIEW_GPU(Squeeze)
+CROSSTL_SHARED_VIEW_GPU(StopGradient)
+CROSSTL_SHARED_VIEW_GPU(Transpose)
+
+#undef CROSSTL_SHARED_VIEW_GPU
+
+#define CROSSTL_SHARED_OUTPUTS_GPU(Primitive)        \
+  void Primitive::eval_gpu(                         \
+      const std::vector<array>& inputs,             \
+      std::vector<array>& outputs) {                \
+    require_runtime();                             \
+    eval(inputs, outputs);                         \
+  }
+
+CROSSTL_SHARED_OUTPUTS_GPU(CustomTransforms)
+CROSSTL_SHARED_OUTPUTS_GPU(Depends)
+CROSSTL_SHARED_OUTPUTS_GPU(Split)
+
+#undef CROSSTL_SHARED_OUTPUTS_GPU
+
+void Reshape::eval_gpu(const std::vector<array>& inputs, array& out) {
+  reshape_view(inputs, out);
+}
+
+void Unflatten::eval_gpu(const std::vector<array>& inputs, array& out) {
+  reshape_view(inputs, out);
+}
+
 #define CROSSTL_UNARY_GPU(Primitive)                                       \
   void Primitive::eval_gpu(const std::vector<array>& inputs, array& out) { \
     dispatch_unary(inputs, out, name());                                   \
