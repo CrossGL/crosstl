@@ -565,6 +565,7 @@ class MetalParser:
             return node
         namespace = self.current_namespace()
         node.namespace = namespace
+        node.internal_linkage = any(not scope for scope in self.namespace_scope_stack)
         name = getattr(node, "name", None)
         if name:
             node.qualified_name = f"{namespace}::{name}" if namespace else name

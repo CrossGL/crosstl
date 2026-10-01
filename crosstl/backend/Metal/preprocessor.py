@@ -293,6 +293,7 @@ class _MetalTemplateFunction:
     template_constraints: List[str] = field(default_factory=list)
     namespace: str = ""
     materializations: List[str] = field(default_factory=list)
+    internal_linkage: bool = False
 
 
 @dataclass
@@ -319,6 +320,7 @@ class _MetalFreeOperatorDefinition:
     parameter_types: Tuple[str, ...]
     body: str
     span: Tuple[int, int]
+    internal_linkage: bool = False
 
 
 @dataclass(frozen=True)
@@ -404,6 +406,7 @@ class _MetalSourceAnalysis:
     lexical_brace_scopes: Optional[List[Tuple[int, int]]] = None
     template_declaration_spans: Optional[List[Tuple[int, int]]] = None
     namespace_spans: Optional[List[Tuple[int, int, str]]] = None
+    anonymous_namespace_spans: List[Tuple[int, int]] = field(default_factory=list)
     receiver_declarations: Optional[Dict[str, List[_MetalReceiverDeclaration]]] = None
 
 
@@ -6966,7 +6969,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 new_params = f"{self_param}, {params}"
             else:
                 new_params = self_param
-        return f"{return_type} {method.free_name}({new_params}) {{{rewritten_body}}}"
+        return f"static inline {return_type} {method.free_name}({new_params}) {{{rewritten_body}}}"
 
     def _rewrite_explicit_conversion_operator_calls(
         self,
@@ -8709,6 +8712,10 @@ class MetalPreprocessor(HLSLPreprocessor):
     ) -> List[_MetalFreeOperatorDefinition]:
         definitions: List[_MetalFreeOperatorDefinition] = []
         ignored = self._find_comment_and_literal_spans(code)
+        self._find_namespace_spans(code)
+        anonymous_namespace_spans = self._source_analysis(
+            code
+        ).anonymous_namespace_spans
         operator_re = re.compile(
             r"\boperator\s*(?P<operator>==|!=|<=|>=|[+\-*/%<>])\s*\("
         )
@@ -8790,6 +8797,16 @@ class MetalPreprocessor(HLSLPreprocessor):
                     parameter_types=parameter_types,
                     body=code[body_open + 1 : body_end - 1],
                     span=(template_start, body_end),
+                    internal_linkage=bool(
+                        re.search(
+                            r"\bstatic\b",
+                            self._mask_comments_and_literals(declaration_prefix),
+                        )
+                    )
+                    or any(
+                        start <= template_start < end
+                        for start, end in anonymous_namespace_spans
+                    ),
                 )
             )
             cursor = body_end
@@ -9039,8 +9056,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if helper_name in emitted_names:
                     continue
                 emitted_names.add(helper_name)
+                # Template instantiations can recur in separately translated units;
+                # private definitions must not coalesce across those units.
+                linkage = "static inline" if definition.internal_linkage else "inline"
                 generated.append(
-                    f"{return_type} {helper_name}({parameters}) {{" f"{body}}}\n"
+                    f"{linkage} {return_type} {helper_name}({parameters}) {{"
+                    f"{body}}}\n"
                 )
             if generated:
                 replacements.append(
@@ -11642,7 +11663,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                 parts.append(params)
             new_params = ", ".join(parts)
         return (
-            f"{return_type} {method.free_name}({new_params}) " f"{{{rewritten_body}}}"
+            f"static inline {return_type} {method.free_name}({new_params}) "
+            f"{{{rewritten_body}}}"
         )
 
     def _rewrite_promoted_internal_method_calls(
@@ -14311,7 +14333,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         helper_source: str,
     ) -> Optional[str]:
         match = re.match(
-            rf"\s*(?P<return>.*?)\s+{re.escape(free_name)}\s*"
+            rf"\s*(?:static\s+)?(?P<return>.*?)\s+{re.escape(free_name)}\s*"
             r"\((?P<params>.*?)\)\s*\{",
             helper_source,
             re.DOTALL,
@@ -14337,7 +14359,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             body = f"{{ {struct_name} self; {call}; }}"
         else:
             body = f"{{ {struct_name} self; return {call}; }}"
-        return f"{return_type} {wrapper_name}({wrapper_parameter_text}) {body}"
+        return f"static inline {return_type} {wrapper_name}({wrapper_parameter_text}) {body}"
 
     def _instantiate_template_member_call(
         self,
@@ -20945,6 +20967,9 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _find_template_functions(self, code: str) -> List[_MetalTemplateFunction]:
         templates: List[_MetalTemplateFunction] = []
         namespace_spans = self._find_namespace_spans(code)
+        anonymous_namespace_spans = self._source_analysis(
+            code
+        ).anonymous_namespace_spans
         template_type_traits = self._find_template_type_traits(code, namespace_spans)
         constructor_template_spans = sorted(
             constructor.span
@@ -21021,6 +21046,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                         parameter_text
                     ),
                     namespace=self._namespace_at(namespace_spans, start),
+                    internal_linkage=any(
+                        scope_start <= start < scope_end
+                        for scope_start, scope_end in anonymous_namespace_spans
+                    ),
                 )
             )
             pos = body_end
@@ -21171,6 +21200,17 @@ class MetalPreprocessor(HLSLPreprocessor):
         if host_name is not None:
             insertion = f'[[host_name("{host_name}")]]\n'
             materialized = insertion + materialized.lstrip()
+        else:
+            body_start = self._find_next_top_level_char(materialized, 0, "{")
+            declaration = materialized[:body_start]
+            if _metal_entry_stage(self, declaration) is None:
+                masked = self._mask_comments_and_literals(declaration)
+                if template.internal_linkage and not re.search(r"\bstatic\b", masked):
+                    materialized = "static " + materialized.lstrip()
+                if not re.search(r"\b(?:inline|constexpr)\b", masked):
+                    # Implicit instantiations may appear in multiple modules;
+                    # anonymous-namespace ownership must remain private as well.
+                    materialized = "inline " + materialized.lstrip()
         if not materialized.endswith("\n"):
             materialized += "\n"
         self._materialized_function_names.add(function_identifier)
@@ -25725,6 +25765,7 @@ class MetalPreprocessor(HLSLPreprocessor):
 
     def _scan_namespace_spans(self, code: str) -> List[Tuple[int, int, str]]:
         spans: List[Tuple[int, int, str]] = []
+        anonymous_spans: List[Tuple[int, int]] = []
         brace_stack: List[Tuple[int, Optional[Tuple[str, ...]], str]] = []
         active_namespace: List[str] = []
         i = 0
@@ -25775,7 +25816,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                     spans.append((open_brace + 1, i, full_namespace))
                     if components:
                         del active_namespace[-len(components) :]
+                    else:
+                        anonymous_spans.append((open_brace + 1, i))
             i += 1
+        self._source_analysis(code).anonymous_namespace_spans = anonymous_spans
         return spans
 
     @staticmethod

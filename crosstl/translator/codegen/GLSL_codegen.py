@@ -73,6 +73,7 @@ from ..cooperative_matrix import (
     get_cooperative_matrix_fragment_mapping,
     has_cooperative_matrix_fragment_mapping,
 )
+from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
 from ..structure_conversions import (
     ScalarKind,
@@ -6821,6 +6822,7 @@ class GLSLCodeGen:
         exact_subgroup_width = self.glsl_stage_exact_subgroup_width(ast, target_stage)
         self.current_glsl_exact_subgroup_width = exact_subgroup_width
         code += f"{version_line}\n"
+        code += source_license_comments(ast, "opengl")
         for line in self.glsl_stage_extension_lines(ast, target_stage):
             if line not in extra_lines:
                 code += f"{line}\n"

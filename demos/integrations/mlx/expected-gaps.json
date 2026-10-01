@@ -1093,7 +1093,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "a99ca6fbe0a4cc1462b7f9e0c85cd17206c5ebed0ea02f75b4166f879ad3ad91",
+      "sha256": "e05dee4143cc3ccaa68841fab43a08756e4d7c9d73bbe370fa383bd50b110dc4",
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -1237,15 +1237,15 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 1321996,
+      "generated_size_bytes_total": 1444855,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "v_Absint8int8",
-          "sizeBytes": 974
+          "sizeBytes": 1050
         },
         "maximum": {
           "entryPoint": "gn4large_ArcTancomplex64complex64",
-          "sizeBytes": 4468
+          "sizeBytes": 4745
         }
       }
     },
@@ -1303,7 +1303,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/unary.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "9708dd97ea36d14cb6bcf167a0153fc89b8e61d01698130722eac3733669758f",
+      "sha256": "b11c1400b7d6fbea41eb1b4d9a08c86822c5922a5bbd6e5153a576c798504d7f",
       "size_bytes": 317614,
       "entry_identity_fields": [
         "entryPoint",
@@ -1434,7 +1434,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 4060696,
+      "generated_size_bytes_total": 4119841,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "v_Absint32int32",
@@ -1498,8 +1498,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
       "schema_version": 2,
-      "sha256": "cceab0e1a2add8af3f96307ed09ae9630e795fc92f8cf29a2d58775405bcaccd",
-      "size_bytes": 318158,
+      "sha256": "2f7617926d5b5f2d9798b49d26aaa9c55139f5b56c50b1e8f5f91200deffb0cc",
+      "size_bytes": 318602,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -1668,7 +1668,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 3033764,
+      "generated_size_bytes_total": 3182068,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "v_Absint8int8",
@@ -1676,7 +1676,7 @@
         },
         "maximum": {
           "entryPoint": "gn4large_ArcTancomplex64complex64",
-          "sizeBytes": 7332
+          "sizeBytes": 10930
         }
       }
     },
@@ -2250,8 +2250,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.directx-translation.json",
       "schema_version": 2,
-      "sha256": "2645dbde8b1ed36875c941b9ea7ba8bb6152fb0d1956d1de42fc0ee161731cbf",
-      "size_bytes": 1469277,
+      "sha256": "7f8faa377f44812c6964bfdf6d578bb47b226372a69f9116dff9b1a744750cfa",
+      "size_bytes": 1469717,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -2380,7 +2380,7 @@
       "dispatch_metadata_shape_count": 9
     },
     "artifacts": {
-      "generated_size_bytes_total": 11321166,
+      "generated_size_bytes_total": 11623848,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "ss_Addint8",
@@ -2388,7 +2388,7 @@
         },
         "maximum": {
           "entryPoint": "gn4large_LogAddExpcomplex64",
-          "sizeBytes": 7570
+          "sizeBytes": 11168
         }
       }
     },
