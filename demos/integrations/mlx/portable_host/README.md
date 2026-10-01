@@ -123,6 +123,11 @@ intrinsic, and loss of negative values when subtracting comparison results.
 The gates execute reduced kernels and the unchanged pinned ArcTan/Sign entries
 through public translation and native-loader interfaces. The host verifier
 continues to check the original inputs and tolerances independently.
+Arctangent controls construct signed lane inputs by bit reinterpretation so
+the check measures the function on the intended binary32 values. Loss of
+subnormal payloads in HLSL input negation is tracked separately in
+[#1997](https://github.com/CrossGL/crosstl/issues/1997); it is not accepted as a
+passing arctangent result or a completed expression-lowering contract.
 
 The copy-layout gate executes eight unchanged float32 copy entries on eleven layouts:
 vector/scalar copies, strided and broadcast one-dimensional inputs, transposes,

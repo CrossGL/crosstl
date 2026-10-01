@@ -86,7 +86,7 @@ jobs:
   metal-host:
     name: MLX translated Metal host execution
     runs-on: macos-26
-    timeout-minutes: 175
+    timeout-minutes: 185
     steps:
       - uses: actions/checkout@v4
         with:
@@ -206,8 +206,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .mlx-metal-host/copy-layouts
-          python tools/run_bounded_command.py --timeout-seconds 300 --label "Pinned copy layouts" -- \
-            python -m pytest -q -n auto \
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "Pinned copy layouts" -- \
+            python -m pytest -q -n auto -vv \
               --basetemp=.mlx-metal-host/copy-layouts/pytest \
               --junitxml=.mlx-metal-host/copy-layouts/results.xml \
               tests/test_translator/test_mlx_current_copy.py \

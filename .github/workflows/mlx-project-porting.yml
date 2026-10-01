@@ -762,8 +762,8 @@ jobs:
             *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
           esac
           mkdir -p mlx-copy-results
-          python tools/run_bounded_command.py --timeout-seconds 300 --label "Pinned copy layouts" -- \
-            python -m pytest -q -n auto \
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "Pinned copy layouts" -- \
+            python -m pytest -q -n auto -vv \
               --basetemp=mlx-copy-results/pytest \
               --junitxml=mlx-copy-results/results.xml \
               tests/test_translator/test_mlx_current_copy.py

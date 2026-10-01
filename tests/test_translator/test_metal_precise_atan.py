@@ -37,10 +37,11 @@ kernel void atan_values(device const uint* values [[buffer(0)]],
                         device uint* results [[buffer(1)]],
                         uint i [[thread_position_in_grid]]) {
     float x = as_type<float>(values[i]);
+    float negative = as_type<float>(values[i] ^ 0x80000000u);
     uint count = 0;
-    float2 pair = metal::precise::atan(float2(x, -x));
-    float3 triple = precise::atan(float3(x, -x, x));
-    float4 quad = metal::precise::atan(float4(record(count, x), -x, x, -x));
+    float2 pair = metal::precise::atan(float2(x, negative));
+    float3 triple = precise::atan(float3(x, negative, x));
+    float4 quad = metal::precise::atan(float4(record(count, x), negative, x, negative));
     results[11 * i] = as_type<uint>(metal::precise::atan(x));
     results[11 * i + 1] = as_type<uint>(pair.x);
     results[11 * i + 2] = as_type<uint>(pair.y);

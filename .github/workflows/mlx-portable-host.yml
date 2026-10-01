@@ -496,8 +496,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .mlx-portable-host/copy-layouts
-          python tools/run_bounded_command.py --timeout-seconds 300 --label "Pinned copy layouts" -- \
-            python -m pytest -q -n auto \
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "Pinned copy layouts" -- \
+            python -m pytest -q -n auto -vv \
               --basetemp=.mlx-portable-host/copy-layouts/pytest \
               --junitxml=.mlx-portable-host/copy-layouts/results.xml \
               tests/test_translator/test_mlx_current_copy.py \

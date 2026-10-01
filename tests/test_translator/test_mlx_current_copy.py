@@ -212,7 +212,7 @@ def test_ci_requires_native_copy_parity(filename):
         f'{REQUIRE_ENV}: "1"',
         "CROSTL_MLX_CURRENT_ROOT",
         "CROSTL_MLX_CURRENT_TARGET",
-        "--timeout-seconds 300",
+        "--timeout-seconds 600",
         "pytest -q -n auto",
         "--basetemp=",
         "--junitxml=",
