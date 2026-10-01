@@ -82,6 +82,53 @@ def test_uniform_helper_loop_arguments_compile(tmp_path, target):
     _compile(generated, target, tmp_path)
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "{ result = reduce_twice(float(invocation), groups); }",
+        "{ { result = reduce_twice(float(invocation), groups); } }",
+        "if (groups > 0u) { { result = reduce_twice(float(invocation), groups); } }",
+        "{ for (uint i = 0u; i < groups; ++i) { { result = reduce_twice(float(invocation), i); } } }",
+        "{ uint bound = groups; { result = reduce_twice(float(invocation), bound); } }",
+    ],
+)
+def test_uniform_lexical_blocks_compile(tmp_path, body, target):
+    generated = _generate(
+        "float result = 0.0; " + body + " results[invocation] = asuint(result);",
+        _helper(),
+        target,
+    )
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "if (invocation == 0u) { { result = reduce_twice(1.0, groups); } }",
+        "{ if (invocation == 0u) { result = reduce_twice(1.0, groups); } }",
+        "for (uint i = 0u; i < invocation; ++i) { { result = reduce_twice(1.0, groups); } }",
+        "{ if (invocation == 0u) { return; } } { result = reduce_twice(1.0, groups); }",
+        "{ uint bound = groups; { uint bound = invocation; result = reduce_twice(1.0, bound); } }",
+        "{ uint bound = groups; mutate(bound, invocation); result = reduce_twice(1.0, bound); }",
+        "{ uint bound = groups; uint& alias = bound; alias = invocation; result = reduce_twice(1.0, bound); }",
+        "{ result = invocation > 0u ? reduce_twice(1.0, groups) : 0.0; }",
+        "{ bool condition = invocation > 0u && reduce_twice(1.0, groups) > 0.0; }",
+    ],
+)
+def test_lexical_blocks_do_not_hide_divergence(body, target):
+    error = (
+        DirectXSoftwareSubgroupError
+        if target == "directx"
+        else OpenGLSoftwareSubgroupError
+    )
+    with pytest.raises(error):
+        _generate(
+            "float result = 0.0; " + body,
+            "void mutate(inout uint x, uint lane) { x = lane; }" + _helper(),
+            target,
+        )
+
+
 @pytest.mark.parametrize("second", ["groups + 1u", "1u"])
 def test_every_call_can_supply_different_uniform_values(tmp_path, second, target):
     generated = _generate(
@@ -239,7 +286,7 @@ def _native_source(size, depth, mode):
         if (count > 1u) { result = simd_sum(result); }
         return result;
     }"""
-    if mode == "loop":
+    if mode in {"loop", "block-loop"}:
         helpers = """uint reduce_twice(uint value, uint count) {
             for (uint i = 0u; i < count; ++i) { value = simd_sum(value); }
             return value;
@@ -252,7 +299,17 @@ def _native_source(size, depth, mode):
             f"if (count > 0u) {{ return {callee}(value, count); }} return value; }}"
         )
         callee = name
-    count = "groups" if mode in {"groups", "loop"} else "gid.x % 2u + 1u"
+    count = "gid.x % 2u + 1u" if mode == "parity" else "groups"
+    calls = (
+        f"uint first = {callee}(value + counter++, 1u);\n"
+        f"uint second = {callee}(value + counter++, {count});"
+    )
+    if mode in {"block", "block-loop"}:
+        calls = (
+            "uint first = 0u; uint second = 0u;\n"
+            f"{{ first = {callee}(value + counter++, 1u);\n"
+            f"  {{ second = {callee}(value + counter++, {count}); }} }}"
+        )
     return f"""#include <metal_stdlib>
 using namespace metal;
 {helpers}
@@ -264,8 +321,7 @@ kernel void products(device uint* inputWords [[buffer(0)]],
     uint index = gid.x * {size}u + tid;
     uint value = inputWords[index];
     uint counter = 0u;
-    uint first = {callee}(value + counter++, 1u);
-    uint second = {callee}(value + counter++, {count});
+    {calls}
     outputWords[index * 3u] = first;
     outputWords[index * 3u + 1u] = second;
     outputWords[index * 3u + 2u] = counter;
@@ -275,7 +331,7 @@ kernel void products(device uint* inputWords [[buffer(0)]],
 
 @pytest.mark.parametrize("shape", [(32, 1, 1), (64, 1, 1), (32, 4, 1)])
 @pytest.mark.parametrize("depth", [0, 2])
-@pytest.mark.parametrize("mode", ["groups", "parity", "loop"])
+@pytest.mark.parametrize("mode", ["groups", "parity", "loop", "block", "block-loop"])
 def test_uniform_arguments_execute_across_helper_calls(tmp_path, shape, depth, mode):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required native helper argument checks")
@@ -288,8 +344,8 @@ def test_uniform_arguments_execute_across_helper_calls(tmp_path, shape, depth, m
     wanted = []
     for start in range(0, len(words), 32):
         first = sum(words[start : start + 32])
-        count = size // 32 if mode in {"groups", "loop"} else (start // size) % 2 + 1
-        repeats = count - 1 if mode == "loop" else int(count > 1)
+        count = (start // size) % 2 + 1 if mode == "parity" else size // 32
+        repeats = count - 1 if mode in {"loop", "block-loop"} else int(count > 1)
         second = (first + 32) * 32**repeats
         wanted.extend([first, second, 2] * 32)
     guards = [0xBAD00000 + index for index in range(17)]

@@ -4320,6 +4320,10 @@ class GLSLCodeGen:
             call = self.glsl_software_subgroup_top_level_call(statement)
             if call is not None:
                 call_ids.add(id(call))
+            if isinstance(statement, BlockNode):
+                call_ids.update(
+                    self.glsl_software_subgroup_uniform_top_level_call_ids(statement)
+                )
             if (
                 isinstance(statement, ForNode)
                 and id(statement) in self.glsl_software_subgroup_uniform_for_node_ids
