@@ -20,7 +20,11 @@ from crosstl.project.runtime_verification import (
     RuntimeParityExecutor,
     RuntimeTestAdapterSpec,
 )
-from demos.integrations.mlx.portable_host import copy_layout, reduction_layout
+from demos.integrations.mlx.portable_host import (
+    copy_layout,
+    reduction_layout,
+    row_reduction_layout,
+)
 from demos.integrations.mlx.portable_host.packages import (
     BINARY_ENTRIES,
     BOOLEAN_CAST_ENTRIES,
@@ -35,6 +39,7 @@ from demos.integrations.mlx.portable_host.packages import (
 from demos.integrations.mlx.portable_host.reduction_packages import (
     ENTRIES as REDUCTION_ENTRIES,
 )
+from demos.integrations.mlx.portable_host.reduction_packages import ROW_ENTRIES
 from demos.integrations.mlx.portable_host.reduction_packages import (
     load_index as load_reduction_index,
 )
@@ -200,7 +205,8 @@ class HostRuntime:
             return 1
 
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
-        reduction = entry in REDUCTION_ENTRIES
+        row_reduction = entry in ROW_ENTRIES
+        reduction = entry in REDUCTION_ENTRIES or row_reduction
         if entry not in self.descriptors and not reduction:
             raise ValueError(f"No translated package for {entry}")
         if reduction and launch is None:
@@ -211,7 +217,12 @@ class HostRuntime:
         binary_operation = binary or comparison
         cast = entry in ALL_CAST_ENTRIES
         if (
-            count != (8 if copy else 4 if binary_operation or reduction else 3)
+            count
+            != (
+                len(row_reduction_layout.signature(entry))
+                if row_reduction
+                else 8 if copy else 4 if binary_operation or reduction else 3
+            )
             or not buffers
             or not 0 < threads <= 65535
         ):
@@ -228,7 +239,9 @@ class HostRuntime:
             package_directory = self.directory / "package"
         logical_not = entry == LOGICAL_NOT_ENTRY
         unary = entry in UNARY_ENTRIES or logical_not
-        if reduction:
+        if row_reduction:
+            names = set(row_reduction_layout.signature(entry))
+        elif reduction:
             names = {"in", "out", "in_size", "row_size"}
         elif copy:
             names = set(copy_layout.DTYPES)
@@ -266,9 +279,9 @@ class HostRuntime:
                     or (cast and name == "src")
                     else 1
                 )
-            if (not copy and buffer.count != expected) or buffer.output != int(
-                name == output_name
-            ):
+            if (
+                not copy and not row_reduction and buffer.count != expected
+            ) or buffer.output != int(name == output_name):
                 raise ValueError("Native buffer shape or direction does not match")
             if unary and dtype != (
                 "uint32" if name == "size" else "bool_" if logical_not else "float32"
@@ -290,16 +303,26 @@ class HostRuntime:
                 else ALL_CAST_ENTRIES[entry][0 if name == "src" else 1]
             ):
                 raise ValueError("Native cast buffer dtype does not match")
-            if reduction and dtype != (
-                "uint64"
-                if name in {"in_size", "row_size"}
-                else REDUCTION_ENTRIES[entry]
+            if (
+                reduction
+                and not row_reduction
+                and dtype
+                != (
+                    "uint64"
+                    if name in {"in_size", "row_size"}
+                    else REDUCTION_ENTRIES[entry]
+                )
             ):
                 raise ValueError("Native reduction buffer dtype does not match")
             supplied[name] = buffer
         if set(supplied) != names:
             raise ValueError("Native buffer names do not match the operation")
-        if reduction:
+        row_metadata = None
+        if row_reduction:
+            row_metadata = row_reduction_layout.validate(
+                entry, supplied, threads, execution
+            )
+        elif reduction:
             reduction_layout.validate(supplied, threads, execution)
         grid = (
             execution["workgroupCount"]
@@ -338,7 +361,7 @@ class HostRuntime:
                 else [int(value) for value in BOOLEAN_GUARD]
             )
         if (
-            (reduction and REDUCTION_ENTRIES[entry] == "float32")
+            (reduction and output_dtype == "float32")
             or (binary and BINARY_ENTRIES[entry] == "float32")
             or (cast and ALL_CAST_ENTRIES[entry][1] == "float32")
         ):
@@ -458,13 +481,17 @@ class HostRuntime:
                                     buffer.count :
                                 ],
                                 "reductionValues": output["values"][: buffer.count],
-                                "reductionMetadata": {
-                                    name: ctypes.cast(
-                                        supplied[name].data,
-                                        ctypes.POINTER(ctypes.c_uint64),
-                                    )[0]
-                                    for name in ("in_size", "row_size")
-                                },
+                                "reductionMetadata": (
+                                    row_metadata
+                                    if row_reduction
+                                    else {
+                                        name: ctypes.cast(
+                                            supplied[name].data,
+                                            ctypes.POINTER(ctypes.c_uint64),
+                                        )[0]
+                                        for name in ("in_size", "row_size")
+                                    }
+                                ),
                             }
                             if reduction
                             else {}

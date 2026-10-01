@@ -9,6 +9,7 @@ on:
       - "demos/integrations/mlx/portable_host/**"
       - "tests/test_mlx_portable_host.py"
       - "tests/test_mlx_portable_reductions.py"
+      - "tests/test_mlx_portable_rows.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
       - "tests/test_translator/test_directx_half_conversion.py"
@@ -70,6 +71,7 @@ on:
       - "demos/integrations/mlx/portable_host/**"
       - "tests/test_mlx_portable_host.py"
       - "tests/test_mlx_portable_reductions.py"
+      - "tests/test_mlx_portable_rows.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
       - "tests/test_translator/test_directx_half_conversion.py"
@@ -221,7 +223,7 @@ jobs:
           Expand-Archive $warpArchive -DestinationPath $warpRoot
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Validate portable host contracts
-        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py
+        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py tests/test_mlx_portable_rows.py
       - name: Validate software subgroup votes
         env:
           CROSTL_REQUIRE_SOFTWARE_SUBGROUP_VOTES: "1"
@@ -670,20 +672,38 @@ jobs:
           retention-days: 14
 
   reductions:
-    name: MLX whole-array reductions (${{ matrix.target }})
+    name: MLX ${{ matrix.family }} reductions (${{ matrix.target }})
     needs: portable-host
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 270
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
             target: opengl
+            family: all
+            verifier: verify
           - os: windows-2025
             target: directx
+            family: all
+            verifier: verify
           - os: macos-26
             target: metal
+            family: all
+            verifier: verify
+          - os: ubuntu-24.04
+            target: opengl
+            family: row
+            verifier: verify_rows
+          - os: windows-2025
+            target: directx
+            family: row
+            verifier: verify_rows
+          - os: macos-26
+            target: metal
+            family: row
+            verifier: verify_rows
     defaults:
       run:
         shell: bash
@@ -777,26 +797,26 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX reduction host build" -- \
             python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-reductions/build.log
-      - name: Translate whole-array reduction launch variants
+      - name: Translate reduction launch variants
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 7200 --label "MLX reduction packages" -- \
+          python tools/run_bounded_command.py --timeout-seconds 12000 --label "MLX reduction packages" -- \
             python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
-              --target ${{ matrix.target }} --jobs 2 --output-dir .mlx-portable-reductions/packages 2>&1 | tee .mlx-portable-reductions/translation.log
-      - name: Execute MLX whole-array reductions
+              --target ${{ matrix.target }} --family ${{ matrix.family }} --jobs 2 --output-dir .mlx-portable-reductions/packages 2>&1 | tee .mlx-portable-reductions/translation.log
+      - name: Execute MLX reductions
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 5400 --label "MLX reduction host verification" -- \
-            python -m demos.integrations.mlx.portable_host.verify --mlx-root mlx-upstream \
+            python -m demos.integrations.mlx.portable_host.${{ matrix.verifier }} --mlx-root mlx-upstream \
               --packages .mlx-portable-reductions/base/packages --reductions .mlx-portable-reductions/packages \
               --output-dir .mlx-portable-reductions/evidence 2>&1 | tee .mlx-portable-reductions/verification.log
       - name: Retain reduction execution evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mlx-portable-reductions-${{ matrix.target }}-${{ github.run_attempt }}
+          name: mlx-portable-${{ matrix.family }}-reductions-${{ matrix.target }}-${{ github.run_attempt }}
           path: .mlx-portable-reductions
           include-hidden-files: true
           if-no-files-found: error

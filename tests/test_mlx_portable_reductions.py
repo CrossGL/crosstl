@@ -446,10 +446,10 @@ def test_reduction_host_ci_requires_every_variant_and_retains_failures():
             in ci_coverage.workflow_event_path_filters(workflow, event)
         )
     translation = ci_coverage.workflow_job_step_section(
-        workflow, "reductions", "Translate whole-array reduction launch variants"
+        workflow, "reductions", "Translate reduction launch variants"
     )
     execution = ci_coverage.workflow_job_step_section(
-        workflow, "reductions", "Execute MLX whole-array reductions"
+        workflow, "reductions", "Execute MLX reductions"
     )
     for step in (translation, execution):
         assert "continue-on-error" not in step and "if:" not in step
@@ -461,8 +461,8 @@ def test_reduction_host_ci_requires_every_variant_and_retains_failures():
     assert ci_coverage.workflow_job_step_after(
         workflow,
         "reductions",
-        "Execute MLX whole-array reductions",
-        "Translate whole-array reduction launch variants",
+        "Execute MLX reductions",
+        "Translate reduction launch variants",
     )
     job = ci_coverage.workflow_job_text(workflow, "reductions")
     assert "needs: portable-host" in job

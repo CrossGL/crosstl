@@ -289,6 +289,92 @@ void dispatch_all_reduce(
   }
 }
 
+void dispatch_row_reduce(
+    const mlx::core::array& in,
+    mlx::core::array& out,
+    const mlx::core::ReductionPlan& plan,
+    const std::vector<int>& axes,
+    const std::string& operation,
+    const char* dtype) {
+  using namespace mlx::core;
+  int64_t row_size = plan.shape.back();
+  if (row_size <= 64) {
+    throw std::invalid_argument("CrossTL small-row and column reduction plans are not implemented.");
+  }
+  uint32_t width = row_size <= 512 ? 32 : row_size <= 1024 ? 128 :
+      static_cast<uint32_t>(std::min<int64_t>(1024, ((row_size + 127) / 128) * 32));
+  auto reduce_shape = plan.shape;
+  auto reduce_strides = plan.strides;
+  reduce_shape.pop_back();
+  reduce_strides.pop_back();
+  int32_t reduce_ndim = static_cast<int32_t>(reduce_shape.size());
+  auto [shape, strides] = shapes_without_reduction_axes(in, axes);
+  std::tie(shape, strides) = collapse_contiguous_dims(shape, strides);
+  int32_t ndim = static_cast<int32_t>(shape.size());
+  int64_t non_rows = 1;
+  for (auto size : reduce_shape) {
+    non_rows *= size;
+  }
+  int64_t span = row_size;
+  auto accumulate_span = [&](const auto& sizes, const auto& steps) {
+    for (size_t axis = 0; axis < sizes.size(); ++axis) {
+      if (sizes[axis] < 1 || sizes[axis] > 65535 || steps[axis] < 0 || steps[axis] > 65535) {
+        throw std::invalid_argument("CrossTL row reduction shape or stride exceeds its bounds.");
+      }
+      span += (int64_t(sizes[axis]) - 1) * steps[axis];
+    }
+  };
+  accumulate_span(shape, strides);
+  accumulate_span(reduce_shape, reduce_strides);
+  if (ndim > 64 || reduce_ndim > 64 || span < 1 || span > 65535 ||
+      in.offset() < 0 || uint64_t(in.offset()) > in.buffer_size() ||
+      uint64_t(span) * in.itemsize() > in.buffer_size() - uint64_t(in.offset()) ||
+      uint64_t(row_size * non_rows) * out.size() != in.size()) {
+    throw std::invalid_argument("CrossTL row reduction source view exceeds its bounds.");
+  }
+  const bool simple = plan.type == ContiguousReduce && reduce_ndim == 0 &&
+      in.size() / row_size >= 32;
+  out.set_data(allocator::malloc(std::max<size_t>(out.nbytes(), 4)));
+  char error[2048] = {};
+  int status;
+  if (simple) {
+    uint64_t reduction_size = row_size;
+    int64_t out_size = out.size();
+    std::string entry = "row_reduce_simple_" + operation + dtype;
+    CrosstlMlxBuffer buffers[] = {
+        {"in", dtype, const_cast<void*>(in.data<void>()), uint64_t(span), 0},
+        {"out", dtype, out.data<void>(), out.size(), 1},
+        {"reduction_size", "uint64", &reduction_size, 1, 0},
+        {"out_size", "int64", &out_size, 1, 0},
+    };
+    const CrosstlMlxLaunch launch{{1, uint32_t((out_size + 3) / 4), 1}, {width, 1, 1}};
+    status = dispatch_callback.load()(entry.c_str(), buffers, 4, in.size(), &launch, error, sizeof(error));
+  } else {
+    const int dimension = reduce_ndim <= 1 ? 1 : reduce_ndim == 2 ? 2 : 5;
+    std::string entry = "row_reduce_looped_" + std::to_string(dimension) + "_reduce_" + operation + dtype;
+    if (ndim == 0) { shape.push_back(0); strides.push_back(0); }
+    if (reduce_ndim == 0) { reduce_shape.push_back(0); reduce_strides.push_back(0); }
+    CrosstlMlxBuffer buffers[] = {
+        {"in", dtype, const_cast<void*>(in.data<void>()), uint64_t(span), 0},
+        {"out", dtype, out.data<void>(), out.size(), 1},
+        {"row_size", "int64", &row_size, 1, 0},
+        {"non_row_reductions", "int64", &non_rows, 1, 0},
+        {"shape", "int32", shape.data(), shape.size(), 0},
+        {"strides", "int64", strides.data(), strides.size(), 0},
+        {"ndim", "int32", &ndim, 1, 0},
+        {"reduce_shape", "int32", reduce_shape.data(), reduce_shape.size(), 0},
+        {"reduce_strides", "int64", reduce_strides.data(), reduce_strides.size(), 0},
+        {"reduce_ndim", "int32", &reduce_ndim, 1, 0},
+    };
+    const CrosstlMlxLaunch launch{{1, uint32_t(out.size()), 1}, {width, 1, 1}};
+    status = dispatch_callback.load()(entry.c_str(), buffers, 10, in.size(), &launch, error, sizeof(error));
+  }
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native row reduction failed: ") + error);
+  }
+}
+
 const char* storage_type(mlx::core::Dtype dtype) {
   if (dtype == mlx::core::bool_) {
     return "bool_";
@@ -523,12 +609,9 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
     throw std::invalid_argument("CrossTL empty reduction initialization is not implemented.");
   }
   auto plan = get_reduction_plan(in, axes_);
-  if (plan.type == GeneralReduce && axes_.size() == size_t(in.ndim())) {
+  if (plan.type == GeneralReduce) {
     in = dense_input(in);
     plan = get_reduction_plan(in, axes_);
-  }
-  if (plan.type != ContiguousAllReduce) {
-    throw std::invalid_argument("CrossTL row and column reduction plans are not implemented.");
   }
   const char* operation = nullptr;
   switch (reduce_type_) {
@@ -538,6 +621,13 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
     case Prod: operation = "prod"; break;
     case Min: operation = boolean ? "and" : "min"; break;
     case Max: operation = boolean ? "or" : "max"; break;
+  }
+  if (plan.type == ContiguousReduce || plan.type == GeneralContiguousReduce) {
+    dispatch_row_reduce(in, out, plan, axes_, operation, dtype);
+    return;
+  }
+  if (plan.type != ContiguousAllReduce) {
+    throw std::invalid_argument("CrossTL small-row and column reduction plans are not implemented.");
   }
   if (in.size() <= 4096) {
     dispatch_all_reduce(in, out, operation, dtype);

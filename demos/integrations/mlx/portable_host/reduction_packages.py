@@ -26,21 +26,42 @@ ENTRIES = {
     for dtype in ("float32", "int32", "uint32")
 }
 ENTRIES.update({"all_reduce_andbool_": "bool_", "all_reduce_orbool_": "bool_"})
+ROW_ENTRIES = {
+    prefix + entry.removeprefix("all_reduce_"): dtype
+    for prefix in (
+        "row_reduce_simple_",
+        "row_reduce_looped_1_reduce_",
+        "row_reduce_looped_2_reduce_",
+        "row_reduce_looped_5_reduce_",
+    )
+    for entry, dtype in ENTRIES.items()
+}
+ENTRY_GROUPS = {"all": ENTRIES, "row": ROW_ENTRIES}
 WIDTHS = tuple(range(32, 1025, 32))
+ROW_WIDTHS = (32, 128, *range(288, 1025, 32))
 
 
 def load_index(directory, target):
     index = json.loads((Path(directory) / "index.json").read_text(encoding="utf-8"))
     widths, entries = index.get("widths"), index.get("entries")
+    family = index.get("family", "all")
+    if not isinstance(family, str) or family not in ENTRY_GROUPS:
+        raise ValueError("Invalid reduction package family")
+    supported = ENTRY_GROUPS[family]
+    allowed_widths = ROW_WIDTHS if family == "row" else WIDTHS
     if (
         index.get("target") != target
         or not isinstance(widths, list)
         or not widths
-        or any(type(width) is not int or width not in WIDTHS for width in widths)
+        or any(
+            type(width) is not int or width not in allowed_widths for width in widths
+        )
         or len(set(widths)) != len(widths)
         or not isinstance(entries, list)
         or not entries
-        or any(not isinstance(entry, str) or entry not in ENTRIES for entry in entries)
+        or any(
+            not isinstance(entry, str) or entry not in supported for entry in entries
+        )
         or len(set(entries)) != len(entries)
     ):
         raise ValueError("Invalid reduction package target, widths or entries")
@@ -56,24 +77,32 @@ def load_index(directory, target):
     return index
 
 
-def build_packages(root, output, target, *, widths=WIDTHS, entries=None, jobs=1):
+def build_packages(
+    root, output, target, *, widths=None, entries=None, jobs=1, family="all"
+):
     root, output = Path(root).resolve(), Path(output).resolve()
     if target not in {"metal", "opengl", "directx"}:
         raise ValueError(f"Unsupported reduction target: {target}")
     if type(jobs) is not int or jobs < 1:
         raise ValueError("Reduction translation jobs must be a positive integer")
-    widths = tuple(widths)
-    entries = tuple(ENTRIES if entries is None else entries)
+    if not isinstance(family, str) or family not in ENTRY_GROUPS:
+        raise ValueError("Unknown reduction package family")
+    supported = ENTRY_GROUPS[family]
+    allowed_widths = ROW_WIDTHS if family == "row" else WIDTHS
+    widths = tuple(allowed_widths if widths is None else widths)
+    entries = tuple(supported if entries is None else entries)
     if (
         not widths
         or len(set(widths)) != len(widths)
-        or any(type(width) is not int or width not in WIDTHS for width in widths)
+        or any(
+            type(width) is not int or width not in allowed_widths for width in widths
+        )
     ):
         raise ValueError("Reduction widths must be unique multiples of 32 up to 1024")
     if (
         not entries
         or len(set(entries)) != len(entries)
-        or set(entries) - ENTRIES.keys()
+        or set(entries) - supported.keys()
     ):
         raise ValueError("Unknown or duplicate reduction entries")
     require_revision(root)
@@ -108,6 +137,13 @@ def build_packages(root, output, target, *, widths=WIDTHS, entries=None, jobs=1)
             )
         if target == "directx":
             options += 'relative_wave_shuffle_out_of_range = "self"\n'
+        if family == "row" and target == "opengl":
+            options += (
+                "[[project.index_range_assertions]]\n"
+                f'source = "{SOURCE}"\n'
+                'expression = "inputs_offsets[(i - 1)] + reduction_size"\n'
+                "minimum = 0\nmaximum = 131071\n"
+            )
         config.write_text(
             '[project]\nsource_roots = ["mlx/backend/metal/kernels"]\n'
             f'include = ["{SOURCE}"]\ninclude_dirs = ["."]\ntargets = ["{target}"]\n'
@@ -165,6 +201,7 @@ def build_packages(root, output, target, *, widths=WIDTHS, entries=None, jobs=1)
                 raise RuntimeError("Missing reduction loader variants")
             index = {
                 "target": target,
+                "family": family,
                 "widths": list(widths),
                 "entries": list(entries),
                 "descriptors": descriptors,
@@ -187,12 +224,14 @@ if __name__ == "__main__":
     parser.add_argument("--width", type=int, action="append")
     parser.add_argument("--entry", action="append")
     parser.add_argument("--jobs", type=int, default=2)
+    parser.add_argument("--family", choices=tuple(ENTRY_GROUPS), default="all")
     args = parser.parse_args()
     build_packages(
         args.mlx_root,
         args.output_dir,
         args.target,
-        widths=args.width or WIDTHS,
+        widths=args.width,
         entries=args.entry,
         jobs=args.jobs,
+        family=args.family,
     )

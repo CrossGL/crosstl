@@ -151,7 +151,7 @@ are materialized with translated copies when required. Arrays up to 4,096
 elements use the exact source launch width, rounded to a multiple of 32. Larger
 bounded arrays retain the two source passes: 128 partial rows followed by a
 32-thread final reduction. Intermediate values are staged synchronously, not
-kept in persistent GPU allocations. Row/column plans and empty-reduction
+kept in persistent GPU allocations. Column plans and empty-reduction
 initialization still produce explicit errors. No reduction arithmetic is
 performed on the CPU by the adapter.
 
@@ -178,6 +178,45 @@ retain intermediate readbacks, size metadata, dispatch dimensions and output
 guards. The verifier requires every source pass and retains readbacks before
 comparison. These are additional host workloads, not replacements for upstream
 tests or evidence that the full upstream reduction suite passes.
+
+## Row Reductions
+
+The row package family implements the same numeric and Boolean operations for
+rows larger than 64 elements. It follows MLX's selection between the four-row
+`row_reduce_simple` kernel and `row_reduce_looped` specializations with one, two
+or five reduction dimensions. Simple launches require at least 32 input rows;
+the final workgroup retains upstream's overlapping output tile. Looped launches
+retain output strides, non-row reduction strides and source allocation offsets.
+General plans use translated copies only when upstream's planner requires them.
+
+The source width is 32 for rows through 512 elements, 128 through 1,024, and
+then a multiple of 32 capped at 1,024. The default row build includes all 26
+reachable widths and all 56 entries, producing 1,456 packages per target.
+Runtime checks reject invalid ranks, mismatched metadata arrays, out-of-range
+source spans and incorrect launch dimensions before device execution. The GLSL
+simple-row index assertion covers 0 through 131,071; every dispatch checks the
+source span plus four values per lane against that bound. This assertion does
+not enlarge an allocation or permit an out-of-bounds memory access.
+
+```sh
+python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream --target opengl --family row --jobs 2 --output-dir row-packages
+python -m demos.integrations.mlx.portable_host.verify_rows --mlx-root mlx-upstream --packages host-packages --reductions row-packages --output-dir row-evidence
+```
+
+The separate row CI matrix runs on all three operating systems. Workloads cover
+every integrated entry, reachable launch boundaries, multidimensional axes,
+slices and transposes. CPU and generated-native results are compared with NumPy
+references. The verifier requires the exact source entry, launch geometry,
+one native reduction per case and intact output guards. Not every packaged
+entry/width pair is executable within the current 65,535-element host limit;
+the retained case list identifies precisely which combinations execute.
+These workloads supplement, rather than replace, unchanged upstream tests.
+
+Small-row launches are not implemented yet. Preserving their partial-workgroup
+semantics on software subgroups is tracked in
+[#2011](https://github.com/CrossGL/crosstl/issues/2011). Negative-stride row views,
+column reductions, additional storage types and full upstream-suite parity
+remain outside the current row integration.
 
 ## Run
 
