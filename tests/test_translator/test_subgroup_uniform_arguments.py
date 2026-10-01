@@ -554,7 +554,7 @@ def test_uniform_argument_native_gate_is_required_on_every_target():
     assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in step
     assert "PYOPENGL_PLATFORM: egl" in step
     assert "-n auto" in step and "continue-on-error" not in step
-    assert "--timeout-seconds 180" in step
+    assert "--timeout-seconds 360" in step
     assert "--basetemp=" in step and "--junitxml=" in step
     for event in ("pull_request", "push"):
         assert (

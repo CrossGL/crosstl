@@ -294,7 +294,7 @@ def test_workgroup_range_gate_is_required_on_every_target():
     assert "test_software_subgroup_workgroup_ranges.py" in step
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "if:" not in step and "continue-on-error" not in step
-    assert "-n auto" in step and "--timeout-seconds 180" in step
+    assert "-n auto" in step and "--timeout-seconds 360" in step
     assert "--basetemp=" in step and "--junitxml=" in step
     for event in ("pull_request", "push"):
         assert (

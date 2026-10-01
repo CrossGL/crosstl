@@ -1054,6 +1054,15 @@ class MetalToCrossGLConverter:
         "__metal_simd_prefix_inclusive_product": "WavePrefixInclusiveProduct",
     }
 
+    metal_wave_ushort_arguments = {
+        "simd_broadcast": (1,),
+        "simd_shuffle": (1,),
+        "simd_shuffle_down": (1,),
+        "simd_shuffle_up": (1,),
+        "simd_shuffle_xor": (1,),
+        "simd_shuffle_and_fill_up": (2, 3),
+    }
+
     # Metal device/threadgroup atomics -> canonical CrossGL atomic intrinsics.
     # Each Metal call carries a trailing memory_order argument that the CrossGL
     # intrinsics (and the DirectX/GLSL/SPIR-V backends) do not take; it is dropped
@@ -5108,8 +5117,9 @@ class MetalToCrossGLConverter:
         parts = [part for part in str(namespace or "").split("::") if part]
         return ["::".join(parts[:index]) for index in range(len(parts), -1, -1)]
 
-    def visible_using_namespace_targets(self, scope):
-        use_offset = self.alias_resolution_offset()
+    def visible_using_namespace_targets(self, scope, *, use_offset=None):
+        if use_offset is None:
+            use_offset = self.alias_resolution_offset()
         context = self.current_type_resolution_context
         context_labels = set()
         if isinstance(context, FunctionNode):
@@ -10544,7 +10554,11 @@ class MetalToCrossGLConverter:
                 expr.args,
                 getattr(expr, "source_location", None),
             )
-            function_name = self.map_function_call_name(materialized_name, expr.args)
+            function_name = self.map_function_call_name(
+                materialized_name,
+                expr.args,
+                source_offset=self.alias_source_offset(expr),
+            )
             if function_name == "sampler":
                 args = ", ".join(
                     self.generate_sampler_constructor_arg(arg, is_main)
@@ -10552,7 +10566,10 @@ class MetalToCrossGLConverter:
                 )
             else:
                 args = ", ".join(
-                    self.generate_expression(arg, is_main) for arg in expr.args
+                    self.generate_metal_wave_argument(
+                        materialized_name, function_name, expr, index, is_main
+                    )
+                    for index in range(len(expr.args))
                 )
             return f"{function_name}({args})"
         elif isinstance(expr, LambdaNode):
@@ -11843,7 +11860,8 @@ class MetalToCrossGLConverter:
         function_name = self.sanitize_identifier(self.function_output_name(selected))
         return f"{function_name}({', '.join(arguments)})"
 
-    def map_function_call_name(self, name, args=None):
+    def map_function_call_name(self, name, args=None, *, source_offset=None):
+        source_name = name
         name = str(name).lstrip(":")
         match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", name)
         if not match:
@@ -11864,7 +11882,9 @@ class MetalToCrossGLConverter:
             metal_math_name = self.map_metal_math_function_name(name, args)
             if metal_math_name is not None:
                 return metal_math_name
-            metal_wave_name = self.map_metal_wave_function_name(name, args)
+            metal_wave_name = self.map_metal_wave_function_name(
+                source_name, args, source_offset=source_offset
+            )
             if metal_wave_name is not None:
                 return metal_wave_name
             return self.sanitize_identifier(name)
@@ -11999,17 +12019,52 @@ class MetalToCrossGLConverter:
             return None
         return self.metal_bit_intrinsics.get(text)
 
-    def map_metal_wave_function_name(self, name, args=None):
-        text = str(name)
+    def generate_metal_wave_argument(
+        self, source_name, mapped_name, expression, index, is_main=False
+    ):
+        argument = expression.args[index]
+        rendered = self.generate_expression(argument, is_main)
+        source_name = str(source_name).lstrip(":")
+        if source_name.startswith("metal::"):
+            source_name = source_name[len("metal::") :]
+        if mapped_name != self.metal_wave_intrinsics.get(
+            source_name
+        ) or index not in self.metal_wave_ushort_arguments.get(source_name, ()):
+            return rendered
+        argument_type = self.metal_source_overload_value_type(
+            self.expression_metal_type(argument)
+        )
+        descriptor = self.metal_source_overload_type_descriptor(argument_type)
+        if (
+            self.metal_scalar_arithmetic_type_info(argument_type) is None
+            or descriptor is None
+            or descriptor[0] in {"pointer", "vector"}
+        ):
+            raise MetalSourceOverloadResolutionError(
+                str(expression.name),
+                [
+                    self.expression_metal_type(arg) or "<unknown>"
+                    for arg in expression.args
+                ],
+                (),
+                f"builtin argument {index + 1} requires scalar conversion to ushort",
+                getattr(expression, "source_location", None),
+            )
+        # Retain the source conversion even on targets that widen ushort storage.
+        return f"(uint({rendered}) & 65535u)"
+
+    def map_metal_wave_function_name(self, name, args=None, *, source_offset=None):
+        text = str(name).lstrip(":")
         if text.startswith("metal::"):
             return self.metal_wave_intrinsics.get(text.split("::")[-1])
         mapped = self.metal_wave_intrinsics.get(text)
         if mapped is None:
             return None
         binding, function = self.resolve_metal_user_function_overload(
-            text,
+            name,
             args or [],
             allow_wave_lane_conversion=True,
+            source_offset=source_offset,
         )
         if binding == "user" and self.is_materialized_metal_stdlib_wrapper(function):
             return mapped
@@ -12957,7 +13012,8 @@ class MetalToCrossGLConverter:
                 argument._metal_source_overload_expected_type = parameter_type
         return self.metal_source_overload_output_names[id(selected)]
 
-    def metal_user_function_overloads(self, function_name):
+    def metal_user_function_overloads(self, function_name, *, source_offset=None):
+        explicitly_global = str(function_name).startswith("::")
         unscoped_name = str(function_name).lstrip(":")
         if unscoped_name in getattr(self, "metal_builtin_name_collision_groups", set()):
             groups = self.metal_source_overload_groups_for_name(function_name)
@@ -12968,6 +13024,30 @@ class MetalToCrossGLConverter:
             ]
         function_name = str(function_name).lstrip(":")
         direct = list(self.user_function_overloads_by_name.get(function_name, []))
+        if direct and function_name in self.metal_wave_intrinsics:
+            namespace = (
+                ""
+                if explicitly_global
+                else str(getattr(self.current_function, "namespace", "") or "")
+            )
+            for scope in self.namespace_lookup_scopes(namespace):
+                visible = {f"{scope}::{function_name}" if scope else function_name}
+                if not explicitly_global:
+                    visible.update(
+                        f"{target}::{function_name}"
+                        for target in self.visible_using_namespace_targets(
+                            scope, use_offset=source_offset
+                        )
+                    )
+                matching = [
+                    function
+                    for function in direct
+                    if str(getattr(function, "qualified_name", None) or function.name)
+                    in visible
+                ]
+                if matching:
+                    return matching
+            return []
         if direct or "::" not in str(function_name):
             return direct
         unscoped_name = str(function_name).rsplit("::", 1)[-1]
@@ -12983,10 +13063,23 @@ class MetalToCrossGLConverter:
         args,
         *,
         allow_wave_lane_conversion=False,
+        source_offset=None,
     ):
+        if source_offset is None:
+            source_offset = next(
+                (
+                    offset
+                    for argument in args
+                    if (offset := self.alias_source_offset(argument)) is not None
+                ),
+                None,
+            )
         candidates = [
             function
-            for function in self.metal_user_function_overloads(function_name)
+            for function in self.metal_user_function_overloads(
+                function_name,
+                source_offset=source_offset,
+            )
             if len(getattr(function, "params", []) or []) == len(args)
         ]
         if not candidates:
@@ -13766,8 +13859,10 @@ float {scalar}(float value) {{
             )
 
         arguments = []
-        for parameter, argument in zip(parameters, expression.args):
-            rendered = self.generate_expression(argument, is_main)
+        for index, (parameter, argument) in enumerate(zip(parameters, expression.args)):
+            rendered = self.generate_metal_wave_argument(
+                public_name, public_operation, expression, index, is_main
+            )
             parameter_type = self.metal_source_overload_parameter_type(parameter)
             normalized_parameter_type = self.normalized_metal_type(
                 self.resolve_type_alias(parameter_type)

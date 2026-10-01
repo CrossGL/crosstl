@@ -5193,6 +5193,9 @@ class GLSLCodeGen:
             target_stage,
         )
         immutable_names = set(uniform_names)
+        uniform_builtins = set(self.GLSL_SOFTWARE_SUBGROUP_WORKGROUP_UNIFORM_BUILTINS)
+        if self.glsl_software_subgroup_count == 1:
+            uniform_builtins.add("gl_SubgroupID")
         for parameter in getattr(entry_function, "parameters", []) or []:
             semantic = self.semantic_from_node(parameter)
             mapped_semantic = self.map_semantic(semantic) if semantic else None
@@ -5201,10 +5204,7 @@ class GLSLCodeGen:
                 for qualifier in getattr(parameter, "qualifiers", []) or []
             }
             if mapped_semantic is not None:
-                if (
-                    mapped_semantic
-                    not in self.GLSL_SOFTWARE_SUBGROUP_WORKGROUP_UNIFORM_BUILTINS
-                ):
+                if mapped_semantic not in uniform_builtins:
                     immutable_names.discard(getattr(parameter, "name", None))
             elif not qualifiers & {"constant", "uniform"}:
                 immutable_names.discard(getattr(parameter, "name", None))
@@ -5219,14 +5219,21 @@ class GLSLCodeGen:
                 ):
                     invalidated = getattr(node, "initial_value", None)
             elif isinstance(node, AssignmentNode):
-                invalidated = getattr(node, "target", getattr(node, "left", None))
+                target = getattr(node, "target", getattr(node, "left", None))
+                written = self.glsl_mutation_target_names(target)
+                if written:
+                    immutable_names.difference_update(written)
+                    continue
+                invalidated = target
             elif isinstance(node, UnaryOpNode) and self.map_operator(node.op) in {
                 "++",
                 "--",
                 "&",
             }:
                 invalidated = node.operand
-            elif isinstance(node, FunctionCallNode):
+            elif isinstance(
+                node, FunctionCallNode
+            ) and not self.glsl_software_subgroup_exit_constructor(node):
                 invalidated = getattr(node, "arguments", [])
             if invalidated is not None:
                 immutable_names.difference_update(
@@ -5363,7 +5370,12 @@ class GLSLCodeGen:
                 if "&" in (self.type_name_string(node.var_type) or ""):
                     invalidated = node.initial_value
             elif isinstance(node, AssignmentNode):
-                invalidated = getattr(node, "target", getattr(node, "left", None))
+                target = getattr(node, "target", getattr(node, "left", None))
+                written = self.glsl_mutation_target_names(target)
+                if written:
+                    mutable.update(written)
+                    continue
+                invalidated = target
             elif isinstance(node, UnaryOpNode) and self.map_operator(node.operator) in {
                 "++",
                 "--",

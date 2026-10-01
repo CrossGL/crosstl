@@ -87,3 +87,51 @@ def test_helper_parameter_cannot_impersonate_uniform_builtin():
     )
     with pytest.raises(OpenGLSoftwareSubgroupError):
         GLSLCodeGen(software_subgroup_width=32).generate_stage(parse(code), "compute")
+
+
+@pytest.mark.parametrize("index", ["grid.y", "uint(grid.y)", "grid.y + 1u"])
+def test_storage_write_does_not_mutate_a_uniform_index(tmp_path, index):
+    code = _source(
+        f"results[{index}] = float(invocation); if (grid.y >= uint(limit)) {{ return; }}"
+    )
+    generated = GLSLCodeGen(software_subgroup_width=32).generate_stage(
+        parse(code), "compute"
+    )
+    assert "return;" in generated and "barrier();" in generated
+    _compile(generated, "opengl", tmp_path)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["grid.y++", "++grid.y", "rewrite(grid.y, invocation)"]
+)
+def test_side_effects_in_storage_indices_invalidate_uniformity(mutation):
+    code = _source(
+        f"results[{mutation}] = 1.0; if (grid.y >= uint(limit)) {{ return; }}",
+        helpers="uint rewrite(inout uint value, uint lane) { value = lane; return value; }",
+    )
+    with pytest.raises(OpenGLSoftwareSubgroupError):
+        GLSLCodeGen(software_subgroup_width=32).generate_stage(parse(code), "compute")
+
+
+@pytest.mark.parametrize("width", [32, 64])
+def test_subgroup_index_write_preserves_only_single_subgroup_exit(tmp_path, width):
+    code = f"""shader IndexedExit {{
+        RWStructuredBuffer<float> output @register(u0);
+        compute {{
+            @numthreads({width}, 1, 1)
+            void main(uint lane @gl_LocalInvocationIndex, uint group @gl_SubgroupID) {{
+                threadgroup float scratch[2];
+                if (lane % 32u == 0u) {{ scratch[group] = float(lane); }}
+                barrier();
+                if (group != 0u) {{ return; }}
+                output[lane] = WaveActiveSum(float(lane));
+            }}
+        }}
+    }}"""
+    generator = GLSLCodeGen(software_subgroup_width=32)
+    if width == 64:
+        with pytest.raises(OpenGLSoftwareSubgroupError):
+            generator.generate_stage(parse(code), "compute")
+    else:
+        generated = generator.generate_stage(parse(code), "compute")
+        _compile(generated, "opengl", tmp_path)

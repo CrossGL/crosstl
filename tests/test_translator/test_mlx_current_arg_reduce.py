@@ -74,439 +74,439 @@ ARTIFACTS = {
     "directx": {
         "argmin_bool_": {
             "sha256": (
-                "9b6eca3aa715896d7cdf4ce3465c96777a5b20d089862ef01baf07f223fc2676"
+                "c6932272720f21d524037b58c0c9936725befe9f95a49d55d7bd867c1d8d1209"
             ),
-            "sizeBytes": 8741,
+            "sizeBytes": 8843,
         },
         "argmax_bool_": {
             "sha256": (
-                "a4320903ca7fc56c363946695ac43f2ffb45d0ad85acaee09f0e507639b20b2e"
+                "89b2289c06d7b912ba94b672d02246960122847b3a5705e2a4b380265e99689c"
             ),
-            "sizeBytes": 8743,
+            "sizeBytes": 8845,
         },
         "argmin_uint8": {
             "sha256": (
-                "42ed837ee36b995b138e18b61251083fbd4401ea777c37b54b3beb33ea77e0de"
+                "0fbfff4754ee43a3e32c4fac51f1d0b4678ea4fe24d66d8597620017dd726727"
             ),
-            "sizeBytes": 6690,
+            "sizeBytes": 6724,
         },
         "argmax_uint8": {
             "sha256": (
-                "b072c5bef3c99e82f7e8b58183e2d814991d179687cbed711fa1e29ee129cc6a"
+                "ad7814b422225f031fd8e054682562ef5e95792c08b0dee8a7faa28b74f8ef13"
             ),
-            "sizeBytes": 6686,
+            "sizeBytes": 6720,
         },
         "argmin_uint16": {
             "sha256": (
-                "66068689426dffad2564eda40ba11467c269401fc892c2d4743fdcf5efed31b4"
+                "6164192e3984e7f3c7e72a32ad6459e1add1204ce867ba543446bfb31296509f"
             ),
-            "sizeBytes": 7126,
+            "sizeBytes": 7160,
         },
         "argmax_uint16": {
             "sha256": (
-                "d41655607b8bc651f4b3a391011cb8f023ca4dd242710a7bcd118685d37e10b9"
+                "9e17503d06077f5f024edf6f182a7876e9d273e7a114df51f389a678421f2753"
             ),
-            "sizeBytes": 7118,
+            "sizeBytes": 7152,
         },
         "argmin_uint32": {
             "sha256": (
-                "85f52e6cc3f8ae8b3428e7e7460b1a3fdc3a69cf1a55d033984d5d24a94ca6df"
+                "d373ca56f3fe1b1db9acb5d45c8930990cdf2b8c92f31ae35268e6e8c8339ce3"
             ),
-            "sizeBytes": 6709,
+            "sizeBytes": 6743,
         },
         "argmax_uint32": {
             "sha256": (
-                "5245ebe5b423e586e866036ace1d8ddab6951d8e7ebf1f0f0ded470cf586db62"
+                "73c46188d0dc9e85123cc9aba217f1715c5e3f256e7c597b84f5ffbde58b1cbd"
             ),
-            "sizeBytes": 6689,
+            "sizeBytes": 6723,
         },
         "argmin_uint64": {
             "sha256": (
-                "a9603d8967aebdb67920f2c25c7cfa1a36b0e663ef0f8db7a3a9b543e6f3897a"
+                "12df94acb201919585920dc28443b9ce0af054322ca8408984432b7b57555084"
             ),
-            "sizeBytes": 9034,
+            "sizeBytes": 9136,
         },
         "argmax_uint64": {
             "sha256": (
-                "1d00bf4e89e0a5e3e50708ea92edcd410f45d73e0ea43b9109d6d487b5a001f6"
+                "4151f3b38978eda9333af8377fb6961ab22da5c3fe2a9862f0c593942dc82d75"
             ),
-            "sizeBytes": 8990,
+            "sizeBytes": 9092,
         },
         "argmin_int8": {
             "sha256": (
-                "871d0bd231fd4a844ffb047cbcb649246a5067c122e88b86bc1d21ce3d251012"
+                "522b446519c207f1c22381974e45e6880441b029d205065002d2af26eae1f71b"
             ),
-            "sizeBytes": 6978,
+            "sizeBytes": 7012,
         },
         "argmax_int8": {
             "sha256": (
-                "a5edb61ee04828f255a755f7d8e8b9fe4a37197f01b375cf6b0db6445519cbd4"
+                "9605f1e40982e58476a27d3790394fdf24a8f93396ee95965131f4986c231be1"
             ),
-            "sizeBytes": 6980,
+            "sizeBytes": 7014,
         },
         "argmin_int16": {
             "sha256": (
-                "352632c957c26bed94e9adfe1d3c2cea4470852b80d589b6bfce24e2570f6186"
+                "7a6a9bfaf57c20c9998231bc05e9d4f61df220cf3bc4ec2c4e915dea50acd6f1"
             ),
-            "sizeBytes": 7052,
+            "sizeBytes": 7086,
         },
         "argmax_int16": {
             "sha256": (
-                "664a0b39119a171fd06988d9d180424c9c311ff1f776da4726b9fa954975b03a"
+                "a99be0c7060a989c59c6a5642a226cf2f5a8f23b9ad01d113de3ba2234c2812f"
             ),
-            "sizeBytes": 7054,
+            "sizeBytes": 7088,
         },
         "argmin_int32": {
             "sha256": (
-                "7afcc44299a8526a95b8a68f075289d0d391e2f3eaa60b604083358b79fb0e07"
+                "7d24677eb8a526dc4ad3ee76cfdd25f443d98980f9dac3c91fe8f8fc760f3e23"
             ),
-            "sizeBytes": 6972,
+            "sizeBytes": 7006,
         },
         "argmax_int32": {
             "sha256": (
-                "249f5e5dca802869f6842bb8b5d9b0a8f814c9628b041e963d472fda9165db6c"
+                "e78c42e0b34dabaf5a706789820adfbe5d66c325453dd2fd8d711538af87c38e"
             ),
-            "sizeBytes": 6976,
+            "sizeBytes": 7010,
         },
         "argmin_int64": {
             "sha256": (
-                "86cb622d330f427f449a8fc4e7c5d9dc232322859aa410160db34d864f918916"
+                "4b806f4fe9641f86ff2977f917421788b721771d8e5a447c0f2a4d69e9963f0d"
             ),
-            "sizeBytes": 8963,
+            "sizeBytes": 9065,
         },
         "argmax_int64": {
             "sha256": (
-                "8a575b4cccdf65f9fd52cf068505cae387f1f726edf6a3ac4ac7be9d1b03b6c7"
+                "14090b8956251750431e03d21b520950f3d763ab4eedc78c1852d5cda29b9986"
             ),
-            "sizeBytes": 8965,
+            "sizeBytes": 9067,
         },
         "argmin_float16": {
             "sha256": (
-                "94219f02373811fcf39fe3062c3e624d332019673b29f2d15b69458fcb59933e"
+                "32694370fdfde0225f394ea8cc9cbda45b0f75326a69f128ba26f96df0458a84"
             ),
-            "sizeBytes": 6842,
+            "sizeBytes": 7981,
         },
         "argmax_float16": {
             "sha256": (
-                "30891177b7a79922c54e08803cf8af7104de900ed2918c6f10355e1f228da857"
+                "689d3136de6087e31e6b7c507a89856b91db82692d4eded9325d004e7fe7d50c"
             ),
-            "sizeBytes": 6844,
+            "sizeBytes": 7983,
         },
         "argmin_float32": {
             "sha256": (
-                "643a353928f419ba880394c08e1c7645f86667e94c3d975019ac8b4544f03669"
+                "7b7be4e0680d7ad3e94b39943655f7d5375b839b2b51ce187c5f8bbfaa0d2cd4"
             ),
-            "sizeBytes": 7587,
+            "sizeBytes": 7621,
         },
         "argmax_float32": {
             "sha256": (
-                "a53d03c5a825f9aaf1ebb6f6520e11fd072c3fce96e106b293060bcbca6db227"
+                "3779b83c2d8f3b8a9cf6e25e95709277b4f099be51c3b1cb1059274ee4ce3eff"
             ),
-            "sizeBytes": 7589,
+            "sizeBytes": 7623,
         },
         "argmin_bfloat16": {
             "sha256": (
-                "fc486b3bcbbcaaa07f4b86794b15107bf71c8c82a7bd6bdf26e4139d84b56f9b"
+                "24e468f45cb9a02689692ec0cd58a47e87019c64033dfaf08a48327e26e54f9a"
             ),
-            "sizeBytes": 8144,
+            "sizeBytes": 8178,
         },
         "argmax_bfloat16": {
             "sha256": (
-                "454b48d309341a7e2e6a333cc24f9b2b3d98fe3f6e72276140bad6b4da80da88"
+                "70c700b2ef81ccca01caff5a447fd200b866be3535c1e91a4565f395f0873a67"
             ),
-            "sizeBytes": 8204,
+            "sizeBytes": 8238,
         },
     },
     "opengl": {
         "argmin_bool_": {
             "sha256": (
-                "8fcc570c24a8fc3692b2df1324a2897839992e311a909da9c9349fa4f750b756"
+                "2f85b68ce0ae0b8270cc881ef224fd9b064db6376b10608c66b4f1835141188a"
             ),
-            "sizeBytes": 7843,
+            "sizeBytes": 7992,
         },
         "argmax_bool_": {
             "sha256": (
-                "1c782526027fe46a22e4b27c7517748ffd2c8447f86fbb2a87c24db2648b6905"
+                "471db471200b4c9e992d674d1755c49f4c53039173a131e90189bf65d4f1a10f"
             ),
-            "sizeBytes": 7845,
+            "sizeBytes": 7994,
         },
         "argmin_uint8": {
             "sha256": (
-                "3789491c0fe6b0c60e6b16e8ae565d547ab5b416146a9feeb881c1a99bbf4c0a"
+                "0940733a6a2c9b0e5410f3b11162251d5d7848fa9fe3c535aca1e6998c201096"
             ),
-            "sizeBytes": 7634,
+            "sizeBytes": 7783,
         },
         "argmax_uint8": {
             "sha256": (
-                "61784ed7517b40bab351bad20407454fc661a51fd81c360f88de0f9d0f7a9874"
+                "6b3aab58f2d2e3cda99c60267094f97e861794ac81a95cad1a4589390e0ff057"
             ),
-            "sizeBytes": 7630,
+            "sizeBytes": 7779,
         },
         "argmin_uint16": {
             "sha256": (
-                "e1f1f2e95903d13c32bf2513d1430f6fce23a618a482352d2bb30da3e838bb5c"
+                "bae374d8a713410eaafa1c22678a364787446cb3f726a9e281b82e117ff9881f"
             ),
-            "sizeBytes": 7693,
+            "sizeBytes": 7842,
         },
         "argmax_uint16": {
             "sha256": (
-                "1d8b2b9a3f579ad9a9acaede3888fae2b29458aacf2d2e0e6c62953f9662ea3e"
+                "dd0d61d0986a86097bb65218cb42246f11f81ec00f7e10ab55cb461f515ccb36"
             ),
-            "sizeBytes": 7685,
+            "sizeBytes": 7834,
         },
         "argmin_uint32": {
             "sha256": (
-                "ae710523b1692c8d7be6d48311d07f388e1f8af0989da495440e14024a7ae5f4"
+                "51147ac6941209a204e1391653b9380e1fee2a98af9ba0fa37d35f6c1c67639d"
             ),
-            "sizeBytes": 7579,
+            "sizeBytes": 7728,
         },
         "argmax_uint32": {
             "sha256": (
-                "816dd8c8b95018f364f6ac7b6c9aef86b4459fb4240ca2a78b501739a1bacba0"
+                "0b6566b0566e2cd2362fed85342f285b5726404775aa0ba8b5e1123013f4a0ae"
             ),
-            "sizeBytes": 7559,
+            "sizeBytes": 7708,
         },
         "argmin_uint64": {
             "sha256": (
-                "3d437ae9d74ee1c52f605f5b9be0c576b8d2a241656b9e0943dd62e48822bf68"
+                "fa5ca7edb1c38009611fcea2543bf62a014e746a1a0c6831b7fad6e853189840"
             ),
-            "sizeBytes": 8342,
+            "sizeBytes": 8491,
         },
         "argmax_uint64": {
             "sha256": (
-                "052cd1ae53122aa96bd95d94cf589236eaeef8c5afff6abb3e394a1aa0467872"
+                "47b39dc66d59a9b582691863ab88449840f241c81f8c10166dee7f070f967328"
             ),
-            "sizeBytes": 8300,
+            "sizeBytes": 8449,
         },
         "argmin_int8": {
             "sha256": (
-                "6f36dfdfbd74cce02181e87d430b3d0ce424b3bd557b59c34eb5e0990092a8ae"
+                "b2c600b8714722baf887c49879c629080be1af100333869fe53b3fcd48ace19b"
             ),
-            "sizeBytes": 7932,
+            "sizeBytes": 8196,
         },
         "argmax_int8": {
             "sha256": (
-                "15b8b1864587ca8291e6f0f40b1dc768cbac3ffcbb84b36fb4d7fe05edb4c587"
+                "60de637a64abfe2dc65aa55ca9c096455ce6806bb69b33d45abe40e7a784ff23"
             ),
-            "sizeBytes": 7938,
+            "sizeBytes": 8202,
         },
         "argmin_int16": {
             "sha256": (
-                "b1e740224e5104c6bb5f31a52eccc733a1964d62ea44ee9a78750f6a37e21231"
+                "7f8c3a1e13e2b9fc62d906b54933e1f2454a6c5238f438750c1fa89c05e24315"
             ),
-            "sizeBytes": 7991,
+            "sizeBytes": 8255,
         },
         "argmax_int16": {
             "sha256": (
-                "5745a484cd5f934b16fa77001beae46e5b5b6c3ed768444765316643a15127de"
+                "f0903658329658f4b9afdea5d7d76940f1681a675135b36c88932883ccaf204c"
             ),
-            "sizeBytes": 7997,
+            "sizeBytes": 8261,
         },
         "argmin_int32": {
             "sha256": (
-                "bcd8f70148f40e1025cd8e87d99c8b2d574bc05e4072f1a2f85168aa67db33d1"
+                "a833f05973e6284cf2cddcf78352ce21dc20fe46de372fc5fcf9ae4ed8e43bfe"
             ),
-            "sizeBytes": 7905,
+            "sizeBytes": 8169,
         },
         "argmax_int32": {
             "sha256": (
-                "57d6879c5247587652ff99732a2b0ac5b848f471cfc0c015ca6806b8a3edaaff"
+                "632226571a93c10ff3ed00c057f4f9f470d3f971725836f19a34923ec0274407"
             ),
-            "sizeBytes": 7913,
+            "sizeBytes": 8177,
         },
         "argmin_int64": {
             "sha256": (
-                "7ad3a1b4001ceec958a7e572f9f5c54efcfc420b23a955893a71e5c1264c87cb"
+                "2e4da4dbbb358132f5fd284c82f589d6ae1fa17199623a1fd784cdd1a020d005"
             ),
-            "sizeBytes": 8287,
+            "sizeBytes": 8436,
         },
         "argmax_int64": {
             "sha256": (
-                "449ec891dfd9c355e9806cc42b72bf478f293651e3d8e3fab922c2e55be23a6d"
+                "6dba1e2e63ba2686dff16c91519ed4f7ac1fa88f9d6c481d97419e32a3f1907b"
             ),
-            "sizeBytes": 8293,
+            "sizeBytes": 8442,
         },
         "argmin_float16": {
             "sha256": (
-                "5591f0d48daf2a1cf546b0f82bf047da9472acdb1e8252530088eba7b760293f"
+                "a790706f99b8f55159a6f83e2544df1cf85db1a4beef325f47f7895707a74967"
             ),
-            "sizeBytes": 7726,
+            "sizeBytes": 9403,
         },
         "argmax_float16": {
             "sha256": (
-                "9aa80e7436b4d4253f72e206a536250ae7b76144e37b7970fac7fe0f0a8a0e1a"
+                "5eff78a5d24194fdcdd9a8f518fe09196e303b99d72a1fe021154adba26c0130"
             ),
-            "sizeBytes": 7732,
+            "sizeBytes": 9409,
         },
         "argmin_float32": {
             "sha256": (
-                "14fcee01e9c7f5b5bb05a32262e6c3932cf80ea8bdd50582f26ae77f8976d320"
+                "9eea8e0f829c42e0c9923e11d54c56f641a7092eece1f21972296a32c7519f7b"
             ),
-            "sizeBytes": 7750,
+            "sizeBytes": 8014,
         },
         "argmax_float32": {
             "sha256": (
-                "4b0595da819da2efaa81672604182e87f870b6fde30cb255bbcf434d2ddc7e21"
+                "89dfa0d662fea2f4f4ea4b8c5d1d1671c88c51b2959fec97de31b9af83db51a5"
             ),
-            "sizeBytes": 7756,
+            "sizeBytes": 8020,
         },
         "argmin_bfloat16": {
             "sha256": (
-                "77104705bd5981225d23ed627bf62d239fef60a6d74ea8d27684e52043ac1e1e"
+                "667b5a117917153ec33513ee711292314d3ecff497d9d868cfb4e1636eab9b43"
             ),
-            "sizeBytes": 7974,
+            "sizeBytes": 8238,
         },
         "argmax_bfloat16": {
             "sha256": (
-                "ec1977efd5fb41e24de63817977c6f386bd01a6296b288459d8f66775ac0c50f"
+                "d072606bad3ac289298de751f7c1bfc722aae590ed81a9532b0b1b6db9dce1bc"
             ),
-            "sizeBytes": 7980,
+            "sizeBytes": 8244,
         },
     },
     "metal": {
         "argmin_bool_": {
             "sha256": (
-                "d820a05afb49c704a71b2555f8bc22c88da65a5b5fb376ded05271b56438eb8b"
+                "2e3a402aaf2e524edb4574e18bd04f5b13fa3f9d13e7db88a3266c4d9fc2375d"
             ),
-            "sizeBytes": 5069,
+            "sizeBytes": 5159,
         },
         "argmax_bool_": {
             "sha256": (
-                "ce3fd10d927f235ec862ad9a74e5a82a45d54d6a4c9baa1874b017b8ca538e13"
+                "fdcb9df68b8cb77f220df8b5663fcf9cc622ff19927f3eaee49ab7d5cd40fe91"
             ),
-            "sizeBytes": 5071,
+            "sizeBytes": 5161,
         },
         "argmin_uint8": {
             "sha256": (
-                "080821cfc61c96fd0f661177f4afb3e94d7e5425e2ca2fa941149334df00a5f4"
+                "451cef5cc11bd2572715c1eff945fbab9ac9cca9a36aedeebf7ddf09548c1ebe"
             ),
-            "sizeBytes": 4228,
+            "sizeBytes": 4258,
         },
         "argmax_uint8": {
             "sha256": (
-                "ca0b1b1f3148b2ed9b7d4a442baae233f7ee2304a3b5cbbc185692fac1957a30"
+                "cbe5c59c3499531f4e4192263c17c083127d74955a85f3677b3c3a724207fece"
             ),
-            "sizeBytes": 4224,
+            "sizeBytes": 4254,
         },
         "argmin_uint16": {
             "sha256": (
-                "d3f2a47e83647ab77cba95946180f9ddb3502169b23a886cb7e64aa0d9cb3907"
+                "3e36f54049b75512ee2784955cab4a4e94cde38c8dac9268ae882f745444ceef"
             ),
-            "sizeBytes": 4269,
+            "sizeBytes": 4299,
         },
         "argmax_uint16": {
             "sha256": (
-                "d5bf4ae6c52a18ec0b8976a1febf7b37695f81e9d01d8c27109d83bad9388916"
+                "c42352f2b77b323cda5e3b1ef6411c70c40fd97097f6abbacc163b6b7a6a4bae"
             ),
-            "sizeBytes": 4261,
+            "sizeBytes": 4291,
         },
         "argmin_uint32": {
             "sha256": (
-                "d8f852504d9385b42802ef86e548da23e6667acd72b6d2573937a123ccd931d0"
+                "eecaaef0ce843c24cb76a32fdef26fd098a8f16f9b60e1b9fae5a6492c8eb443"
             ),
-            "sizeBytes": 4271,
+            "sizeBytes": 4301,
         },
         "argmax_uint32": {
             "sha256": (
-                "3929cd46176f75890a0673f591181ddfc12e7affbd67e6f3a33d84e8d8e5d72d"
+                "1ea64f4ebb09c8baf10409a3501f7e949009450117ce723e9891f2357eae906d"
             ),
-            "sizeBytes": 4253,
+            "sizeBytes": 4283,
         },
         "argmin_uint64": {
             "sha256": (
-                "de7ae7046ea1edf9a4ed4553957564d7752a0c038565a472782c56f9f6b12237"
+                "da2d79272fd1320b1c4fed503fa14848163581958651850ff44fea00bf4851b8"
             ),
-            "sizeBytes": 5258,
+            "sizeBytes": 5348,
         },
         "argmax_uint64": {
             "sha256": (
-                "99b7d9df7e416078eafffc79db5fd071705af44cab15cfc7a005b689e74600e7"
+                "84bcf7d986e9b5def16d252c0043557b5455dd9850b2aa58e7e0c6d4e0558cad"
             ),
-            "sizeBytes": 5220,
+            "sizeBytes": 5310,
         },
         "argmin_int8": {
             "sha256": (
-                "7a4a7b0529f678b08a0db7d578f72b95cf30c16450a1b6cf7ecd964b986921d8"
+                "3b6b71214a3573de424637d23de749dd39deb60ae706a2889c427cf6bbb9fc0f"
             ),
-            "sizeBytes": 4186,
+            "sizeBytes": 4216,
         },
         "argmax_int8": {
             "sha256": (
-                "acce7c72eeb9775116841487833b537753a925eac21be7059d0387557d509a53"
+                "1063c0ebe784587065e18ad6f025e9a9cd73046e2f5ab29b4526ecd17723a95a"
             ),
-            "sizeBytes": 4188,
+            "sizeBytes": 4218,
         },
         "argmin_int16": {
             "sha256": (
-                "8b915cc87e3bd20ca5c04f3a88b1b4ed32b9857663a0bcaa64277624858effb0"
+                "a2b798e83541462ec119186655081a0ea9cd077fb3c203a2dc881186e30d8660"
             ),
-            "sizeBytes": 4227,
+            "sizeBytes": 4257,
         },
         "argmax_int16": {
             "sha256": (
-                "7a3a0009bf6b51b2cf99999ef48f79ef8c333db04cf1cae59c7fcdae5d88f132"
+                "ec54bf919f083b5f87a43e75eebffa39076ef86d0e056fd90b01be958b1da26e"
             ),
-            "sizeBytes": 4229,
+            "sizeBytes": 4259,
         },
         "argmin_int32": {
             "sha256": (
-                "c3634a39c945a80e9048697975063dca41e0ac8b1c86a641168985550139ce6f"
+                "cb9938644ac23dd4d5c23fdd7d389ea0d9aa8cbfb01af83d8f27bae79cfed166"
             ),
-            "sizeBytes": 4229,
+            "sizeBytes": 4259,
         },
         "argmax_int32": {
             "sha256": (
-                "512f518434f119f07e08994e6d6ce381d3ae4200e3d923551a3a69a70bb05106"
+                "11e5ab4faeb5714b6f7fb67b90ef3d3bd5f983466449a6107583d3f6653bd5d7"
             ),
-            "sizeBytes": 4231,
+            "sizeBytes": 4261,
         },
         "argmin_int64": {
             "sha256": (
-                "68cf24a75d6462b52e557b1be9c7fa4d929ba9190ac5dbde5818410929a1bfdd"
+                "4a565e19d1b5efaba4af26a3f699964720a36045a9b12bcc1116e718f58714d3"
             ),
-            "sizeBytes": 5214,
+            "sizeBytes": 5304,
         },
         "argmax_int64": {
             "sha256": (
-                "f30d905e581d40957a044282b498147fd832b5cf48f01a5213fba2e1e08f9bcc"
+                "328ea0d98eb3b17d6726f859b8d45909c3be33cfdaaabbc1f5b1c89fad42a90a"
             ),
-            "sizeBytes": 5232,
+            "sizeBytes": 5322,
         },
         "argmin_float16": {
             "sha256": (
-                "f461b7828cf5ded828de6020956bf8f85cfdf399c510783eec0498908f3d9ec1"
+                "c7b7e0fb0cf16b820af3a8a55b8bb3592917064486614a35bff30b7bef932210"
             ),
-            "sizeBytes": 4084,
+            "sizeBytes": 4114,
         },
         "argmax_float16": {
             "sha256": (
-                "49abab8dbd2024736da98d432d0dbfb522e46d33d853b4f7beb0b7f7d5937fc8"
+                "56724e2ed446cc62a40dc74746b65d7383ee6f3c5d7703563c4f5974d4d8fdc5"
             ),
-            "sizeBytes": 4086,
+            "sizeBytes": 4116,
         },
         "argmin_float32": {
             "sha256": (
-                "84397184333d4b4a2240265917ad6200d4f6fec4d56643dac07ed9889addeef8"
+                "c91ed3700660707c003c828624ded5d9abfdcc4e7282051aed70959c49c551c6"
             ),
-            "sizeBytes": 4104,
+            "sizeBytes": 4134,
         },
         "argmax_float32": {
             "sha256": (
-                "e2d4f8755d8a4856af05eaaf9a430d758823ab25fefbfdba9c338d497f518ac2"
+                "7fc5d6a97d8a5aa4bee597c439185ff1d31c86d49395a13f63e1be854fa9c8e2"
             ),
-            "sizeBytes": 4106,
+            "sizeBytes": 4136,
         },
         "argmin_bfloat16": {
             "sha256": (
-                "256cd7a8ed81276fd8a72cb5c8a51a5be26019c8eefcc936d9e035d56ef09fee"
+                "42eb1fdd01354adb70cd422e13b7828568f19f86e93c5b90e6da7bff2461badd"
             ),
-            "sizeBytes": 4288,
+            "sizeBytes": 4318,
         },
         "argmax_bfloat16": {
             "sha256": (
-                "581b277142f347ce8835fac2f3b6b1fa31ef4f53e691936c45b3567ea0587071"
+                "b66521e976f8fbee6abce186c9e53515b21cbbea519f4a44f00a8ebd488933c8"
             ),
-            "sizeBytes": 4298,
+            "sizeBytes": 4328,
         },
     },
 }
@@ -715,7 +715,7 @@ maximum = 1
 """
 
 
-def _metal_library(source, output, root):
+def _metal_library(source, output, root, *, upstream=False):
     air = output.with_suffix(".air")
     _run(
         [
@@ -723,6 +723,7 @@ def _metal_library(source, output, root):
             "-sdk",
             "macosx",
             "metal",
+            *([] if upstream else ["-Werror"]),
             "-std=metal3.1",
             "-fno-fast-math",
             "-I",
@@ -758,7 +759,9 @@ def metal_reference(current_mlx, tmp_path_factory):
         work,
         "build-runner",
     )
-    library = _metal_library(root / SOURCE, work / "upstream.metallib", root)
+    library = _metal_library(
+        root / SOURCE, work / "upstream.metallib", root, upstream=True
+    )
     return runner, library
 
 

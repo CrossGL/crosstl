@@ -56953,7 +56953,10 @@ def test_metal_simd_shuffle_down_to_directx_lowers_to_wave_read(tmp_path):
         str(shader_path), backend="directx", source_backend="metal"
     )
     assert "simd_shuffle_down" not in generated_hlsl
-    assert "WaveReadLaneAt(v, (WaveGetLaneIndex() + uint(1)))" in generated_hlsl
+    assert (
+        "WaveReadLaneAt(v, (WaveGetLaneIndex() + uint((uint(1) & 65535u))))"
+        in generated_hlsl
+    )
 
     repo = _write_metal_directx_project(
         tmp_path / "repo", "reduce_kernel", METAL_SIMD_SHUFFLE_DOWN_KERNEL
@@ -57008,7 +57011,10 @@ def test_metal_relative_shuffle_self_policy_propagates_to_directx(tmp_path):
     assert "bool valid = delta < (laneCount - lane);" in generated
     assert "uint laneCount = WaveGetLaneCount();" in generated
     assert "WaveReadLaneAt(value, sourceLane);" in generated
-    assert "__crossgl_wave_shuffle_down_self_float(v, uint(1))" in generated
+    assert (
+        "__crossgl_wave_shuffle_down_self_float(v, uint((uint(1) & 65535u)))"
+        in generated
+    )
     assert "WaveReadLaneAt(v, (WaveGetLaneIndex() + uint(1)))" not in generated
     assert_directx_compute_validates_if_available(generated, tmp_path)
 

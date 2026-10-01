@@ -1239,6 +1239,13 @@ falls beyond the real lanes. Source shuffle results from inactive lanes are not
 portable; numerical controls select only results from active source lanes.
 Relative offsets are checked before adding the lane index, so unsigned overflow
 cannot wrap an out-of-range shuffle into another lane's value.
+Metal shuffle and broadcast lane parameters retain their source ``ushort``
+conversion before target lowering, including arguments passed through helpers.
+Canonical 32-bit wave arguments retain their own width. Unqualified source wave
+calls respect namespace visibility, including local ``using namespace``
+directives, before builtin argument conversion is applied.
+Writes through an indexed destination do not invalidate the index's uniformity;
+actual index mutations and divergent exits still prevent software lowering.
 All real invocations must still reach the same workgroup barriers. This does not
 provide dynamic nonuniform final dispatch groups: the runtime must preserve the
 selected workgroup shape rather than round a source thread grid up silently.

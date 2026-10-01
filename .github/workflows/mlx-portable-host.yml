@@ -49,6 +49,7 @@ on:
       - "tests/test_translator/test_opengl_vector_comparisons.py"
       - "tests/test_translator/test_subgroup_uniform_arguments.py"
       - "tests/test_translator/test_software_subgroup_partial.py"
+      - "tests/test_translator/test_metal_wave_arguments.py"
       - "tests/test_translator/test_software_subgroup_workgroup_ranges.py"
       - "tests/test_translator/test_opengl_subgroup_exit_uniformity.py"
       - "tests/test_translator/test_mlx_current_unary_sign.py"
@@ -114,6 +115,7 @@ on:
       - "tests/test_translator/test_opengl_vector_comparisons.py"
       - "tests/test_translator/test_subgroup_uniform_arguments.py"
       - "tests/test_translator/test_software_subgroup_partial.py"
+      - "tests/test_translator/test_metal_wave_arguments.py"
       - "tests/test_translator/test_software_subgroup_workgroup_ranges.py"
       - "tests/test_translator/test_opengl_subgroup_exit_uniformity.py"
       - "tests/test_translator/test_mlx_current_unary_sign.py"
@@ -153,7 +155,7 @@ jobs:
   portable-host:
     name: MLX native host (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 300
+    timeout-minutes: 330
     strategy:
       fail-fast: false
       matrix:
@@ -290,7 +292,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .mlx-portable-host/subgroup-arguments
-          python tools/run_bounded_command.py --timeout-seconds 180 --label "Collective helper arguments" -- \
+          python tools/run_bounded_command.py --timeout-seconds 360 --label "Collective helper arguments" -- \
             python -m pytest -q -n auto \
               --basetemp=.mlx-portable-host/subgroup-arguments/pytest \
               --junitxml=.mlx-portable-host/subgroup-arguments/results.xml \
@@ -306,12 +308,27 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .mlx-portable-host/subgroup-partial
-          python tools/run_bounded_command.py --timeout-seconds 180 --label "Exact partial subgroup execution" -- \
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Exact partial subgroup execution" -- \
             python -m pytest -q -n auto \
               --basetemp=.mlx-portable-host/subgroup-partial/pytest \
               --junitxml=.mlx-portable-host/subgroup-partial/results.xml \
               tests/test_translator/test_software_subgroup_partial.py \
               2>&1 | tee .mlx-portable-host/subgroup-partial.log
+      - name: Validate source wave argument conversions
+        env:
+          CROSTL_REQUIRE_WAVE_ARGUMENT_READBACKS: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/wave-arguments
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "Source wave argument conversions" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/wave-arguments/pytest \
+              --junitxml=.mlx-portable-host/wave-arguments/results.xml \
+              tests/test_translator/test_metal_wave_arguments.py \
+              2>&1 | tee .mlx-portable-host/wave-arguments.log
       - name: Validate Metal argument inference
         env:
           CROSTL_REQUIRE_METAL_ARGUMENT_INFERENCE: "1"

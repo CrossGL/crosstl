@@ -8718,7 +8718,7 @@ def test_codegen_lowers_metal_simd_group_intrinsics_to_crossgl_wave_ops():
         "WavePrefixProduct(v)",
         "WaveReadLaneFirst(v)",
         "WaveReadLaneAt(v",
-        "WaveShuffleAndFillUp(v, 0.0f, 1u)",
+        "WaveShuffleAndFillUp(v, 0.0f, (uint(1u) & 65535u))",
         "WaveActiveBitAnd(u)",
         "WaveActiveBitOr(u)",
         "WaveActiveBitXor(u)",
@@ -8794,22 +8794,22 @@ def test_codegen_binds_metal_simd_intrinsics_by_source_signature(tmp_path):
 
     generated = convert(code)
 
-    assert generated.count("WaveShuffleDown(data.real, delta)") == 1
-    assert generated.count("WaveShuffleDown(data.imag, delta)") == 1
-    assert "WaveShuffleDown(uint(data), delta)" in generated
-    assert "WaveShuffleDown(float(gid), delta)" in generated
+    assert generated.count("WaveShuffleDown(data.real, (uint(delta) & 65535u))") == 1
+    assert generated.count("WaveShuffleDown(data.imag, (uint(delta) & 65535u))") == 1
+    assert "WaveShuffleDown(uint(data), (uint(delta) & 65535u))" in generated
+    assert "WaveShuffleDown(float(gid), (uint(delta) & 65535u))" in generated
     assert "simd_shuffle_down(flag, delta)" in generated
     assert "simd_shuffle_down(wide, delta)" in generated
     assert "simd_shuffle(float(gid), delta)" in generated
-    assert "WaveReadLaneAt(float(gid), uint16(delta))" in generated
+    assert "WaveReadLaneAt(float(gid), (uint(uint16(delta)) & 65535u))" in generated
     ast = parse_crossgl(generated)
     assert ast is not None
 
     glsl = GLSLCodeGen().generate(ast)
-    assert "subgroupShuffleDown(data.real, delta)" in glsl
-    assert "subgroupShuffleDown(data.imag, delta)" in glsl
-    assert "subgroupShuffleDown(uint(data), delta)" in glsl
-    assert "subgroupShuffleDown(float(gid), delta)" in glsl
+    assert "subgroupShuffleDown(data.real, (uint(delta) & 65535u))" in glsl
+    assert "subgroupShuffleDown(data.imag, (uint(delta) & 65535u))" in glsl
+    assert "subgroupShuffleDown(uint(data), (uint(delta) & 65535u))" in glsl
+    assert "subgroupShuffleDown(float(gid), (uint(delta) & 65535u))" in glsl
     assert "simd_shuffle(float(gid), delta)" in glsl
     assert "subgroupShuffle(float(gid)," in glsl
 
@@ -8874,7 +8874,7 @@ def test_codegen_mlx_gemv_materialized_array_shuffle_uses_builtin_overload():
         "float shuffle_local_float(float value, uint index) @metal_inline { "
         "float[1] result = {value}; "
         "for (uint16 sn = 1; sn > 0; sn >>= 1) { "
-        "result[index] = WaveShuffleDown(result[index], sn); } "
+        "result[index] = WaveShuffleDown(result[index], (uint(sn) & 65535u)); } "
         "return result[index]; }"
     ) in normalized
     assert "flag = simd_shuffle_down(flag, delta);" in generated
@@ -8930,7 +8930,7 @@ def test_codegen_mlx_gemvt_materialized_lane_expression_uses_builtin_overload(
         "float shuffle_scaled_float_4(float value, uint index) @metal_inline { "
         "float[1] result = {value}; "
         "for (uint16 sm = 1; sm > 0; sm >>= 1) { "
-        "result[index] = WaveShuffleDown(result[index], 4 * sm); } "
+        "result[index] = WaveShuffleDown(result[index], (uint(4 * sm) & 65535u)); } "
         "return result[index]; }"
     ) in normalized
     assert (
@@ -8941,7 +8941,7 @@ def test_codegen_mlx_gemvt_materialized_lane_expression_uses_builtin_overload(
     assert ast is not None
 
     glsl = GLSLCodeGen().generate(ast)
-    assert "subgroupShuffleDown(result[index], (4 * int(sm)))" in glsl
+    assert "subgroupShuffleDown(result[index], (uint((4 * int(sm))) & 65535u))" in glsl
     assert "simd_shuffle_down(result[index]" not in glsl
     assert "return simd_shuffle_down(value" in glsl
 
