@@ -13,6 +13,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
 from .native_loader_dispatch import NativeLoaderDispatchError, _validated_scalar_layout
@@ -267,6 +268,7 @@ class MetalComputeRuntime:
             ),
             "workgroupCount": payload["workgroupCount"],
             "workgroupSize": payload["workgroupSize"],
+            "threadGridSize": payload["threadGridSize"],
             "bufferCount": len(payload["buffers"]),
         }
         return values
@@ -282,6 +284,20 @@ class MetalComputeRuntime:
         counts = _dimensions(request.dispatch.workgroup_count, "workgroupCount")
         size = _dimensions(request.dispatch.workgroup_size, "workgroupSize")
         grid = [count * width for count, width in zip(counts, size)]
+        thread_grid = None
+        if request.dispatch.thread_grid_size != ():
+            thread_grid = _dimensions(
+                request.dispatch.thread_grid_size, "threadGridSize"
+            )
+            if [
+                (extent + width - 1) // width
+                for extent, width in zip(thread_grid, size)
+            ] != counts:
+                raise _setup_error(
+                    "Metal thread grid does not match its covering threadgroups.",
+                    "dispatch-size-mismatch",
+                )
+            grid = thread_grid
         if any(value > (1 << 32) - 1 for value in grid):
             raise _setup_error(
                 "Metal grid exceeds uint32 invocation coordinates.",
@@ -290,7 +306,7 @@ class MetalComputeRuntime:
         for supplied in (request.dispatch.global_size, request.dispatch.grid_size):
             if supplied and _dimensions(supplied, "globalSize") != grid:
                 raise _setup_error(
-                    "Metal grid conflicts with its threadgroups.",
+                    "Metal grid conflicts with its dispatch dimensions.",
                     "dispatch-size-mismatch",
                 )
         allocations = {}
@@ -489,6 +505,7 @@ class MetalComputeRuntime:
             "entryPoint": request.entry_point,
             "workgroupCount": counts,
             "workgroupSize": size,
+            "threadGridSize": thread_grid,
             "allocations": list(allocations.values()),
             "buffers": buffers,
             "constants": constants,
@@ -496,8 +513,11 @@ class MetalComputeRuntime:
 
 
 def _dimensions(values, name):
-    if not 1 <= len(values) <= 3 or any(
-        type(n) is not int or not 0 < n <= (1 << 32) - 1 for n in values
+    if (
+        not isinstance(values, Sequence)
+        or isinstance(values, (str, bytes, bytearray))
+        or not 1 <= len(values) <= 3
+        or any(type(n) is not int or not 0 < n <= (1 << 32) - 1 for n in values)
     ):
         raise _setup_error(
             "Metal dispatch dimensions must be positive uint32 values.",

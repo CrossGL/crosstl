@@ -28,6 +28,7 @@ struct Request: Decodable {
   let entryPoint: String
   let workgroupCount: [Int]
   let workgroupSize: [Int]
+  let threadGridSize: [Int]?
   let allocations: [Allocation]
   let buffers: [Buffer]
   let constants: [Constant]
@@ -170,6 +171,20 @@ func run() throws {
     total = product.partialValue
   }
   try validateLimit(total, pipeline.maxTotalThreadsPerThreadgroup, field: "workgroupInvocations")
+  if let grid = request.threadGridSize {
+    try require(grid.count == 3, "Thread grid requires three dimensions.")
+    var supportsNonuniform = device.supportsFamily(.apple4)
+    if #unavailable(macOS 27.0) {
+      supportsNonuniform = supportsNonuniform || device.supportsFamily(.mac2)
+    }
+    try require(supportsNonuniform, "Device does not support nonuniform threadgroup sizes.")
+    for axis in 0..<3 {
+      try require(grid[axis] > 0, "Invalid thread grid extent.")
+      try validateLimit(grid[axis], Int(UInt32.max), field: "threadGridSize", axis: axis)
+      let count = 1 + (grid[axis] - 1) / request.workgroupSize[axis]
+      try require(count == request.workgroupCount[axis], "Thread grid conflicts with group count.")
+    }
+  }
   var allocations: [String: MTLBuffer] = [:]
   for allocation in request.allocations {
     try require(
@@ -217,9 +232,16 @@ func run() throws {
   }
   let groups = request.workgroupCount
   let size = request.workgroupSize
-  encoder.dispatchThreadgroups(
-    MTLSize(width: groups[0], height: groups[1], depth: groups[2]),
-    threadsPerThreadgroup: MTLSize(width: size[0], height: size[1], depth: size[2]))
+  let groupSize = MTLSize(width: size[0], height: size[1], depth: size[2])
+  if let grid = request.threadGridSize {
+    encoder.dispatchThreads(
+      MTLSize(width: grid[0], height: grid[1], depth: grid[2]),
+      threadsPerThreadgroup: groupSize)
+  } else {
+    encoder.dispatchThreadgroups(
+      MTLSize(width: groups[0], height: groups[1], depth: groups[2]),
+      threadsPerThreadgroup: groupSize)
+  }
   encoder.endEncoding()
   command.commit()
   command.waitUntilCompleted()

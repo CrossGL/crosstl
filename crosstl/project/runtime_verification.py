@@ -389,6 +389,7 @@ class RuntimeDispatchGeometry:
     global_size: tuple[int, ...] = field(default_factory=tuple)
     grid_size: tuple[int, ...] = field(default_factory=tuple)
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    thread_grid_size: tuple[int, ...] = field(default_factory=tuple)
 
     def to_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {}
@@ -402,6 +403,8 @@ class RuntimeDispatchGeometry:
             payload["globalSize"] = list(self.global_size)
         if self.grid_size:
             payload["gridSize"] = list(self.grid_size)
+        if self.thread_grid_size:
+            payload["threadGridSize"] = list(self.thread_grid_size)
         if self.metadata:
             payload["metadata"] = dict(self.metadata)
         return payload
@@ -4467,6 +4470,19 @@ def _parse_runtime_dispatch_geometry(
         return value
     if not isinstance(value, Mapping):
         raise RuntimeVerificationError(f"{field_name} must be an object.")
+    thread_grid_size = ()
+    if "threadGridSize" in value:
+        thread_grid_size = _parse_runtime_vector(
+            value["threadGridSize"],
+            field_name=f"{field_name}.threadGridSize",
+            integer_only=True,
+        )
+        if not 1 <= len(thread_grid_size) <= 3 or any(
+            extent == 0 for extent in thread_grid_size
+        ):
+            raise RuntimeVerificationError(
+                f"{field_name}.threadGridSize must contain one to three positive integers."
+            )
     return RuntimeDispatchGeometry(
         entry_point=_optional_string(
             value.get("entryPoint", value.get("entry_point")),
@@ -4492,6 +4508,7 @@ def _parse_runtime_dispatch_geometry(
             field_name=f"{field_name}.gridSize",
             integer_only=True,
         ),
+        thread_grid_size=thread_grid_size,
         metadata=_parse_runtime_metadata(
             value.get("metadata", {}), field_name=f"{field_name}.metadata"
         ),
@@ -5803,6 +5820,7 @@ def _runtime_dispatch_geometry_from_artifact(
             "workgroupCount",
             "globalSize",
             "gridSize",
+            "threadGridSize",
         )
     ):
         return _parse_runtime_dispatch_geometry(
@@ -5991,6 +6009,7 @@ def _merge_runtime_dispatch(
         workgroup_count=override.workgroup_count or base.workgroup_count,
         global_size=override.global_size or base.global_size,
         grid_size=override.grid_size or base.grid_size,
+        thread_grid_size=override.thread_grid_size or base.thread_grid_size,
         metadata={**dict(base.metadata), **dict(override.metadata)},
     )
 
@@ -6998,7 +7017,9 @@ def _complete_runtime_dispatch_geometry(
     workgroup_size = dispatch.workgroup_size
     if not workgroup_size and entry_point is not None:
         workgroup_size = entry_point.workgroup_size
-    global_size = dispatch.global_size or dispatch.grid_size
+    global_size = (
+        dispatch.global_size or dispatch.grid_size or dispatch.thread_grid_size
+    )
     workgroup_count = dispatch.workgroup_count
     if not workgroup_count and global_size and workgroup_size:
         workgroup_count = _runtime_workgroup_count(global_size, workgroup_size)
@@ -7010,6 +7031,7 @@ def _complete_runtime_dispatch_geometry(
         workgroup_count=workgroup_count,
         global_size=global_size,
         grid_size=dispatch.grid_size,
+        thread_grid_size=dispatch.thread_grid_size,
         metadata=dispatch.metadata,
     )
 

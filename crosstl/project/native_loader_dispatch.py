@@ -198,6 +198,13 @@ def build_native_loader_dispatch_request(
         entry_point=entry_point["name"],
         reflected_workgroup_size=_reflected_workgroup_size(entry_point),
     )
+    if dispatch.thread_grid_size and target != "metal":
+        raise NativeLoaderDispatchError(
+            "exact-thread-grid-unsupported",
+            "Exact thread-grid dispatch is not implemented for this native target.",
+            path="$.dispatchGeometry.threadGridSize",
+            details={"target": target},
+        )
     if target == "metal" and not dispatch.workgroup_size:
         raise NativeLoaderDispatchError(
             "workgroup-size-missing",
@@ -1771,6 +1778,7 @@ def _dispatch_geometry(
         supplied_workgroup_size = value.workgroup_size
         global_size = value.global_size
         grid_size = value.grid_size
+        thread_grid_size = value.thread_grid_size
         metadata = value.metadata
     elif isinstance(value, Mapping):
         allowed = {
@@ -1779,6 +1787,7 @@ def _dispatch_geometry(
             "workgroupSize",
             "globalSize",
             "gridSize",
+            "threadGridSize",
             "metadata",
         }
         unsupported = sorted(set(value) - allowed, key=str)
@@ -1794,6 +1803,7 @@ def _dispatch_geometry(
         supplied_workgroup_size = value.get("workgroupSize", ())
         global_size = value.get("globalSize", ())
         grid_size = value.get("gridSize", ())
+        thread_grid_size = value.get("threadGridSize", ())
         metadata = value.get("metadata", {})
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         dispatch_entry_point = None
@@ -1801,6 +1811,7 @@ def _dispatch_geometry(
         supplied_workgroup_size = ()
         global_size = ()
         grid_size = ()
+        thread_grid_size = ()
         metadata = {}
     else:
         raise NativeLoaderDispatchError(
@@ -1856,6 +1867,33 @@ def _dispatch_geometry(
         derived_global_size = tuple(
             count * size for count, size in zip(padded_counts, padded_size)
         )
+    exact_grid = ()
+    if thread_grid_size != ():
+        exact_grid = _positive_dimensions(
+            thread_grid_size,
+            path=f"{path}.threadGridSize",
+            label="thread grid size",
+        )
+        if not workgroup_size:
+            raise NativeLoaderDispatchError(
+                "workgroup-size-missing",
+                "Exact thread-grid dispatch requires a workgroup size.",
+                path=f"{path}.workgroupSize",
+            )
+        expected_counts = tuple(
+            (extent + width - 1) // width
+            for extent, width in zip(
+                _padded_dimensions(exact_grid), _padded_dimensions(workgroup_size)
+            )
+        )
+        if expected_counts != _padded_dimensions(counts):
+            raise NativeLoaderDispatchError(
+                "dispatch-size-mismatch",
+                "Thread grid does not match its covering workgroup count.",
+                path=f"{path}.threadGridSize",
+                details={"expectedWorkgroupCount": list(expected_counts)},
+            )
+        derived_global_size = _padded_dimensions(exact_grid)
     for field_name, candidate in (("globalSize", global_size), ("gridSize", grid_size)):
         if not candidate:
             continue
@@ -1880,6 +1918,7 @@ def _dispatch_geometry(
         workgroup_count=counts,
         global_size=derived_global_size,
         grid_size=derived_global_size,
+        thread_grid_size=exact_grid,
         metadata={
             **copy.deepcopy(dict(metadata)),
             "source": "native-loader-dispatch",

@@ -7134,7 +7134,7 @@
     },
     {
       "category": "project",
-      "description": "Construct and preflight one DirectX or OpenGL compute runtime request from a complete native loader ABI descriptor without scheduling or executing device work.",
+      "description": "Construct and preflight one DirectX, OpenGL or Metal compute runtime request from a complete native loader ABI descriptor without scheduling or executing device work.",
       "id": "project.native_loader_dispatch_request",
       "name": "Native loader dispatch request",
       "support": {
@@ -7180,6 +7180,10 @@
           "evidence": [
             "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_preserves_layouts_and_single_buffer_namespace",
             "tests/test_translator/test_metal_native_runtime.py::def test_metal_loader_requires_workgroup_size",
+            "tests/test_translator/test_exact_thread_grid_runtime.py::def test_metal_exact_grid_preflight",
+            "tests/test_translator/test_exact_thread_grid_runtime.py::def test_loader_rejects_conflicting_exact_grid",
+            "tests/test_translator/test_exact_thread_grid_runtime.py::def test_unimplemented_targets_never_round_up_exact_grid",
+            "tests/test_translator/test_exact_thread_grid_runtime.py::def test_metal_exact_thread_grid_native",
             "tests/test_translator/test_metal_native_runtime.py::def test_metal_operation_deadline_terminates_process",
             "tests/test_translator/test_metal_native_runtime.py::def test_metal_alias_views_share_storage_and_reject_conflicting_uploads",
             "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_function_constant_types_and_ids",
@@ -7187,7 +7191,7 @@
             "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_native_function_constants",
             "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity"
           ],
-          "notes": "The Metal descriptor-to-request bridge verifies packaged source identity, exact buffer names and physical layouts, the shared buffer namespace, explicit dispatch geometry and scalar function-constant values. MetalRuntimeParityAdapter compiles an identity-checked source snapshot and MetalComputeRuntime executes it through a bounded Swift/Metal worker on macOS 13 or newer. The worker checks compiled bindings and native pipeline limits before execution and returns exact typed byte readbacks. Native CI requires multidimensional struct-buffer execution, both function-constant branches and current MLX complex-power package parity. The runtime is process-isolated and does not rewrite MLX host code or provide persistent streams or full-suite parity.",
+          "notes": "The Metal descriptor-to-request bridge verifies packaged source identity, exact buffer names and physical layouts, the shared buffer namespace, explicit dispatch geometry and scalar function-constant values. MetalRuntimeParityAdapter compiles an identity-checked source snapshot and MetalComputeRuntime executes it through a bounded Swift/Metal worker on macOS 13 or newer. The worker checks compiled bindings and native pipeline limits before execution and returns exact typed byte readbacks. Native CI requires multidimensional struct-buffer execution, both function-constant branches and current MLX complex-power package parity. The runtime is process-isolated and does not rewrite MLX host code or provide persistent streams or full-suite parity. Explicit threadGridSize dispatch preserves nonuniform final groups through native dispatchThreads, validates covering counts and device capabilities, and retains exact source thread/grid coordinates and subgroup activity. DirectX and OpenGL reject this contract until equivalent lowering is implemented.",
           "status": "supported"
         },
         "mojo": {

@@ -4439,6 +4439,15 @@ def _workgroup_count(
         raise RuntimeExecutorUnavailable(
             f"{target} compute runtime requires dispatch geometry."
         )
+    if getattr(dispatch, "thread_grid_size", ()) != ():
+        raise RuntimeAdapterSetupError(
+            f"{target} runtime does not implement exact thread-grid dispatch.",
+            details={
+                "target": target.lower(),
+                "reasonKind": "exact-thread-grid-unsupported",
+                **({"nodeIndex": node_index} if node_index is not None else {}),
+            },
+        )
     counts = _pad3(
         dispatch.workgroup_count,
         field_name="workgroupCount",

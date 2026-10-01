@@ -1250,6 +1250,23 @@ All real invocations must still reach the same workgroup barriers. This does not
 provide dynamic nonuniform final dispatch groups: the runtime must preserve the
 selected workgroup shape rather than round a source thread grid up silently.
 
+Native loader requests can express an exact source thread grid with
+``threadGridSize``, in addition to ``workgroupSize`` and ``workgroupCount``.
+The group count must equal the component-wise ceiling of the thread grid divided
+by the workgroup size. For example, ``threadGridSize = [1025, 1, 1]`` with
+``workgroupSize = [1024, 1, 1]`` requires ``workgroupCount = [2, 1, 1]``.
+When supplied, ``globalSize`` and ``gridSize`` must describe the exact thread
+grid, not its padded bounds. Omitting ``threadGridSize`` retains full-group
+dispatch and its existing dimension checks.
+
+The Metal runtime implements this contract through native ``dispatchThreads``
+after checking device support and grid limits. Original and generated Metal
+controls check partial groups, source coordinates, subgroup sums and buffer
+guards across one-, two- and three-dimensional grids. DirectX and OpenGL reject
+this explicit contract with ``exact-thread-grid-unsupported`` until their
+lowering can preserve partial-group identities and active lanes. This contract
+does not yet enable the MLX small-row host plan on those targets.
+
 The bounded mode supports scalar ``float``, ``int``, or ``uint`` sum, minimum,
 maximum, and shuffle-down operations. Shared scratch spans the complete
 workgroup, while every helper derives a subgroup-local lane and base so reads
