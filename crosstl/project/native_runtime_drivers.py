@@ -4643,6 +4643,7 @@ def _int_field(value: Any, *, default: int | None = None) -> int:
 
 def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
     aliases = {
+        "boolean": "bool",
         "float": "float32",
         "f32": "float32",
         "float32_t": "float32",
@@ -4661,6 +4662,8 @@ def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
     }
     normalized = str(dtype or "").strip().lower()
     value = aliases.get(normalized, normalized)
+    if value == "bool" and target.lower() == "metal":
+        return value
     if value not in {"float32", "uint32", "int32", "uint64", "int64"}:
         raise RuntimeExecutorUnavailable(
             f"{target} compute runtime supports float32, uint32, int32, uint64, "
@@ -4671,6 +4674,7 @@ def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
 
 def _dtype_format(dtype: str) -> str:
     return {
+        "bool": "?",
         "float32": "f",
         "uint32": "I",
         "int32": "i",
@@ -4708,6 +4712,10 @@ def _pack_values(
         raise RuntimeExecutorUnavailable(
             f"{target} compute runtime buffer value count does not match shape."
         )
+    if dtype == "bool" and any(type(item) is not bool for item in values):
+        raise RuntimeExecutorUnavailable(
+            f"{target} boolean buffer values must be true or false."
+        )
     if dtype == "float32":
         special_bits = {
             "nan": 0x7FC00000,
@@ -4731,6 +4739,15 @@ def _unpack_values(
     target: str = "Vulkan",
 ) -> list[Any]:
     size = _dtype_size(dtype)
+    if dtype == "bool" and any(byte not in (0, 1) for byte in payload):
+        raise RuntimeAdapterDispatchError(
+            f"{target} boolean output contains a noncanonical storage byte.",
+            details={
+                "target": target.lower(),
+                "reasonKind": "output-layout-invalid",
+                "dtype": dtype,
+            },
+        )
     if len(payload) % size:
         raise RuntimeAdapterDispatchError(
             f"{target} runtime output byte length is not aligned to the dtype size.",

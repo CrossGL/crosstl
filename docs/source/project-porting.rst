@@ -2126,9 +2126,21 @@ resource set zero. Scalar buffers, tightly packed two-/four-component 32-bit
 vectors and flat homogeneous scalar structs retain their exact physical layout.
 ``constant T*`` parameters are read-only runtime buffers; supported
 ``constant T&`` scalar/vector parameters are fixed-size values. Metal ``long``
-and ``ulong`` scalar storage uses signed/unsigned 64-bit host values. Padded
-vectors, half/bool storage, nested or mixed structs, textures, samplers and
-dynamic threadgroup arguments are not supported by this buffer runtime.
+and ``ulong`` scalar storage uses signed/unsigned 64-bit host values. Scalar
+``bool`` buffers and constants use one-byte storage with Boolean host values;
+integer values are not implicitly converted. Readback rejects bytes other than
+zero and one. Padded vectors, half storage, Boolean vectors, nested or mixed
+structs, textures, samplers and dynamic threadgroup arguments are not supported
+by this buffer runtime.
+
+Dispatch values describe physical storage, not a target-independent tensor
+encoding. DirectX and OpenGL Boolean buffers retain their reflected
+``uint32`` representation with four-byte elements. Callers must use that
+representation rather than upload Metal's one-byte Boolean payloads. The
+loader rejects mismatched widths. Required native checks exercise translated
+comparison and mask kernels, guarded odd-sized buffers, read-modify-write
+values and offset views; macOS also executes the original Metal source.
+This storage support does not by itself implement MLX Boolean host operations.
 
 The worker specializes Boolean, float32, int32 and uint32 function constants
 by numeric ID, verifies required compiled buffer arguments and alignment,

@@ -646,7 +646,7 @@ def _metal_buffer_layout(
         return None
     type_name = match.group("type")
     scalar = re.fullmatch(
-        r"(float|int|uint|long|ulong|int64_t|uint64_t)([24]?)", type_name
+        r"(float|int|uint|long|ulong|int64_t|uint64_t|bool)([24]?)", type_name
     )
     if scalar is None:
         return (
@@ -659,9 +659,9 @@ def _metal_buffer_layout(
     base, width_text = scalar.groups()
     base = {"long": "int64_t", "ulong": "uint64_t"}.get(base, base)
     width = int(width_text or 1)
-    if base in {"int64_t", "uint64_t"} and width != 1:
+    if base in {"int64_t", "uint64_t", "bool"} and width != 1:
         return None
-    size = SCALAR_PHYSICAL_SIZES[base] * width
+    size = (1 if base == "bool" else SCALAR_PHYSICAL_SIZES[base]) * width
     return _physical_value_layout(
         base,
         vector_width=width,
@@ -1668,18 +1668,26 @@ def _physical_value_layout(
     element_stride_bytes: int | None = None,
 ) -> dict[str, Any]:
     normalized_type = physical_type.lower()
+    metal_boolean = normalized_type == "bool" and storage_layout in {
+        "metal-buffer",
+        "metal-constant",
+    }
     # HLSL and GLSL block-storage booleans occupy one 32-bit scalar slot.
     # Expose that physical representation to host loaders rather than a
     # language-level bool, which has no portable in-memory width.
-    if normalized_type == "bool":
+    if normalized_type == "bool" and not metal_boolean:
         normalized_type = "uint"
-    component_size_bytes = SCALAR_PHYSICAL_SIZES[normalized_type]
+    component_size_bytes = (
+        1 if metal_boolean else SCALAR_PHYSICAL_SIZES[normalized_type]
+    )
     element_size_bytes = component_size_bytes * vector_width
     layout: dict[str, Any] = {
         "physicalType": (
             normalized_type if vector_width == 1 else f"{normalized_type}{vector_width}"
         ),
-        "elementType": SCALAR_PHYSICAL_TYPES[normalized_type],
+        "elementType": (
+            "bool" if metal_boolean else SCALAR_PHYSICAL_TYPES[normalized_type]
+        ),
         "elementSizeBytes": element_size_bytes,
         "elementStrideBytes": (
             element_size_bytes if element_stride_bytes is None else element_stride_bytes

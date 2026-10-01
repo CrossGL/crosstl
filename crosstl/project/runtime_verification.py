@@ -7394,6 +7394,9 @@ def _flatten_values(value: Any) -> list[Any]:
 def _values_match(
     expected: Any, actual: Any, tolerance: RuntimeTolerance
 ) -> tuple[bool, float, float]:
+    if isinstance(expected, bool) or isinstance(actual, bool):
+        matches = type(expected) is bool and type(actual) is bool and expected == actual
+        return matches, 0.0 if matches else 1.0, 0.0
     if _is_number(expected) and _is_number(actual):
         expected_number = float(expected)
         actual_number = float(actual)

@@ -70,6 +70,8 @@ _BUFFER_KIND_ALIASES = {
     "uniform": "constant-buffer",
 }
 _BUFFER_DTYPE_ALIASES = {
+    "bool": "bool",
+    "boolean": "bool",
     "float": "float32",
     "f32": "float32",
     "float32": "float32",
@@ -98,6 +100,7 @@ _SPECIALIZATION_DTYPE_ALIASES = {
 }
 _SPECIALIZATION_DTYPE_ALIASES.update({"bool": "bool", "boolean": "bool"})
 _DTYPE_SIZES = {
+    "bool": 1,
     "float32": 4,
     "int32": 4,
     "uint32": 4,
@@ -105,6 +108,7 @@ _DTYPE_SIZES = {
     "uint64": 8,
 }
 _PHYSICAL_TYPES = {
+    "bool": "bool",
     "float32": "float",
     "int32": "int",
     "uint32": "uint",
@@ -769,7 +773,7 @@ def _buffer_dtype(value: Any, *, path: str) -> str:
         raise NativeLoaderDispatchError(
             "value-dtype-unsupported",
             "Native runtime buffers support float32, int32, uint32, int64, "
-            "and uint64 values only.",
+            "uint64, and Metal bool values only.",
             path=path,
             details={"dtype": value},
         )
@@ -794,7 +798,9 @@ def _validate_buffer_values(
 ) -> None:
     for index, value in enumerate(values):
         valid = False
-        if dtype in {"int32", "int64"}:
+        if dtype == "bool":
+            valid = type(value) is bool
+        elif dtype in {"int32", "int64"}:
             bit_width = _DTYPE_SIZES[dtype] * 8
             valid = (
                 isinstance(value, int)
@@ -1154,6 +1160,13 @@ def _validated_scalar_layout(
             "Native runtime buffer bindings require a concrete scalar or vector layout.",
             path=path,
             details={"binding": runtime_value.name},
+        )
+    if runtime_value.dtype == "bool" and target != "metal":
+        raise NativeLoaderDispatchError(
+            "resource-layout-mismatch",
+            "Byte-sized boolean values require Metal storage; other targets use their reflected physical representation.",
+            path=path,
+            details={"binding": runtime_value.name, "target": target},
         )
     # Metal's constant address space does not imply a fixed-size argument.
     if (

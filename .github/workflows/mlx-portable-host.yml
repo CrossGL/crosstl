@@ -36,6 +36,7 @@ on:
       - "tests/test_translator/test_metal_precise_atan.py"
       - "tests/test_translator/test_metal_boolean_promotion.py"
       - "tests/test_translator/test_metal_float_selection.py"
+      - "tests/test_translator/test_boolean_buffer_runtime.py"
       - "tests/test_translator/test_mlx_current_unary_sign.py"
       - "tests/test_translator/test_mlx_current_unary_atan.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
@@ -86,6 +87,7 @@ on:
       - "tests/test_translator/test_metal_precise_atan.py"
       - "tests/test_translator/test_metal_boolean_promotion.py"
       - "tests/test_translator/test_metal_float_selection.py"
+      - "tests/test_translator/test_boolean_buffer_runtime.py"
       - "tests/test_translator/test_mlx_current_unary_sign.py"
       - "tests/test_translator/test_mlx_current_unary_atan.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
@@ -473,6 +475,7 @@ jobs:
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_SIGN: "1"
           CROSTL_REQUIRE_METAL_BOOLEAN_PROMOTION: "1"
           CROSTL_REQUIRE_METAL_FLOAT_SELECTION: "1"
+          CROSTL_REQUIRE_BOOLEAN_BUFFER_RUNTIME: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -486,6 +489,7 @@ jobs:
               --junitxml=.mlx-portable-host/boolean-promotion/results.xml \
               tests/test_translator/test_metal_boolean_promotion.py \
               tests/test_translator/test_metal_float_selection.py \
+              tests/test_translator/test_boolean_buffer_runtime.py \
               tests/test_translator/test_mlx_current_unary_sign.py \
               2>&1 | tee .mlx-portable-host/boolean-promotion.log
       - name: Validate pinned copy layouts
