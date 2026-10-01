@@ -271,9 +271,11 @@ jobs:
               tests/test_translator/test_opengl_subgroup_exit_uniformity.py \
               2>&1 | tee .mlx-portable-host/subgroup-returns.log
       - name: Validate collective helper arguments
-        if: runner.os != 'Linux'
         env:
           CROSTL_REQUIRE_SUBGROUP_UNIFORM_ARGUMENTS: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
         run: |
           set -euo pipefail
           mkdir -p .mlx-portable-host/subgroup-arguments

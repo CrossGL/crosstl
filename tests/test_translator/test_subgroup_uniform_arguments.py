@@ -13,6 +13,7 @@ import pytest
 from crosstl.project import build_native_loader_dispatch_request
 from crosstl.translator import parse
 from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
+from crosstl.translator.codegen.GLSL_codegen import OpenGLSoftwareSubgroupError
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_native_runtime import _native_request
@@ -41,13 +42,18 @@ def _helper(body=None, parameters="float value, uint count"):
     return f"float reduce_twice({parameters}) {{ {body} }}"
 
 
-def _generate(body, helpers):
-    return _codegen("directx").generate_stage(parse(_source(body, helpers)), "compute")
+@pytest.fixture(params=["directx", "opengl"])
+def target(request):
+    return request.param
+
+
+def _generate(body, helpers, target):
+    return _codegen(target).generate_stage(parse(_source(body, helpers)), "compute")
 
 
 @pytest.mark.parametrize("argument", ["groups", "2u", "min(groups, 2u)"])
 @pytest.mark.parametrize("depth", [0, 2])
-def test_uniform_helper_arguments_compile(tmp_path, argument, depth):
+def test_uniform_helper_arguments_compile(tmp_path, argument, depth, target):
     helpers = _helper()
     callee = "reduce_twice"
     for index in range(depth):
@@ -58,30 +64,49 @@ def test_uniform_helper_arguments_compile(tmp_path, argument, depth):
         f"uint bound = {argument}; float result = {callee}(float(invocation), bound); results[invocation] = asuint(result);",
         helpers,
     )
-    generator = _codegen("directx")
+    generator = _codegen(target)
     ast = parse(source)
     generated = generator.generate_stage(ast, "compute")
     assert generated == generator.generate_stage(ast, "compute")
     assert "WaveActiveSum" not in generated
-    assert "if (count > 1u)" in generated
-    _compile(generated, "directx", tmp_path)
+    assert "count > 1u" in generated
+    _compile(generated, target, tmp_path)
 
 
-def test_uniform_helper_loop_arguments_compile(tmp_path):
+def test_uniform_helper_loop_arguments_compile(tmp_path, target):
     generated = _generate(
         "float result = 0.0; for (uint i = 0u; i < groups; ++i) { result += reduce_twice(float(invocation), i); } results[invocation] = asuint(result);",
         _helper(),
+        target,
     )
-    _compile(generated, "directx", tmp_path)
+    _compile(generated, target, tmp_path)
 
 
 @pytest.mark.parametrize("second", ["groups + 1u", "1u"])
-def test_every_call_can_supply_different_uniform_values(tmp_path, second):
+def test_every_call_can_supply_different_uniform_values(tmp_path, second, target):
     generated = _generate(
         f"float first = reduce_twice(float(invocation), groups); float second = reduce_twice(first, {second}); results[invocation] = asuint(second);",
         _helper(),
+        target,
     )
-    _compile(generated, "directx", tmp_path)
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "if (count > 1u) { return reduce_twice(value, count); } return reduce_twice(value, 1u);",
+        "for (uint i = 0u; i < count; ++i) { value = reduce_twice(value, i); } return value;",
+        "if (count == 0u) { return value; } return reduce_twice(value, count);",
+    ],
+)
+def test_uniform_wrapper_branches_loops_and_exits_compile(tmp_path, body, target):
+    generated = _generate(
+        "float result = outer(float(invocation), groups); results[invocation] = asuint(result);",
+        _helper() + f"float outer(float value, uint count) {{ {body} }}",
+        target,
+    )
+    _compile(generated, target, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -136,24 +161,76 @@ def test_every_call_can_supply_different_uniform_values(tmp_path, second):
             _helper()
             + "float outer(float value, uint count) { float x = reduce_twice(value, count); return reduce_twice(x, uint(value)); }",
         ),
+        (
+            "uint bound = groups; unknown(bound); float x = reduce_twice(1.0, bound);",
+            _helper(),
+        ),
+        (
+            "uint bound = groups; uint& alias = bound; float x = reduce_twice(1.0, bound);",
+            _helper(),
+        ),
+        (
+            "float x = outer(float(invocation), groups);",
+            _helper()
+            + "float outer(float value, uint count) { return count > 0u ? reduce_twice(value, count) : value; }",
+        ),
+        (
+            "float x = outer(float(invocation), groups);",
+            _helper()
+            + "float outer(float value, uint count) { return count > 0u && reduce_twice(value, count) > 0.0 ? value : 0.0; }",
+        ),
+        (
+            "float x = reduce_twice(float(invocation), min(groups, 2u));",
+            "uint min(uint x, uint y) { return gl_LocalInvocationIndex; }" + _helper(),
+        ),
     ],
 )
-def test_unproven_helper_arguments_remain_diagnostic(body, helpers):
-    with pytest.raises(DirectXSoftwareSubgroupError):
-        _generate(body, helpers)
+def test_unproven_helper_arguments_remain_diagnostic(body, helpers, target):
+    error = (
+        DirectXSoftwareSubgroupError
+        if target == "directx"
+        else OpenGLSoftwareSubgroupError
+    )
+    with pytest.raises(error):
+        _generate(body, helpers, target)
 
 
 @pytest.mark.parametrize("mutual", [False, True])
-def test_recursive_collective_arguments_are_rejected(mutual):
+def test_recursive_collective_arguments_are_rejected(mutual, target):
     helpers = _helper("float x = WaveActiveSum(value); return recurse(x, count);")
     helpers += (
         "float recurse(float value, uint count) { return reduce_twice(value, count); }"
         if mutual
         else "float recurse(float value, uint count) { float x = WaveActiveSum(value); return recurse(x, count); }"
     )
-    with pytest.raises(DirectXSoftwareSubgroupError) as raised:
-        _generate("float x = reduce_twice(float(invocation), groups);", helpers)
+    error = (
+        DirectXSoftwareSubgroupError
+        if target == "directx"
+        else OpenGLSoftwareSubgroupError
+    )
+    with pytest.raises(error) as raised:
+        _generate("float x = reduce_twice(float(invocation), groups);", helpers, target)
     assert raised.value.reason == "helper-call-recursive"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "mutate(i, invocation);",
+        "uint& alias = i; alias = invocation;",
+        "uint i = invocation;",
+        "mutate(groups, invocation);",
+    ],
+)
+def test_opengl_helper_loops_reject_mutable_controls(body):
+    with pytest.raises(OpenGLSoftwareSubgroupError):
+        _generate(
+            "for (uint i = 0u; i < groups; ++i) { "
+            + body
+            + " float value = reduce_twice(1.0, i); }",
+            "void mutate(inout uint value, uint lane) { value = lane; }" + _helper(),
+            "opengl",
+        )
 
 
 def _native_source(size, depth, mode):
@@ -162,14 +239,20 @@ def _native_source(size, depth, mode):
         if (count > 1u) { result = simd_sum(result); }
         return result;
     }"""
+    if mode == "loop":
+        helpers = """uint reduce_twice(uint value, uint count) {
+            for (uint i = 0u; i < count; ++i) { value = simd_sum(value); }
+            return value;
+        }"""
     callee = "reduce_twice"
     for index in range(depth):
         name = f"wrapper{index}"
         helpers += (
-            f"uint {name}(uint value, uint count) {{ return {callee}(value, count); }}"
+            f"uint {name}(uint value, uint count) {{ "
+            f"if (count > 0u) {{ return {callee}(value, count); }} return value; }}"
         )
         callee = name
-    count = "groups" if mode == "groups" else "gid.x % 2u + 1u"
+    count = "groups" if mode in {"groups", "loop"} else "gid.x % 2u + 1u"
     return f"""#include <metal_stdlib>
 using namespace metal;
 {helpers}
@@ -190,15 +273,13 @@ kernel void products(device uint* inputWords [[buffer(0)]],
 """
 
 
-@pytest.mark.parametrize("shape", [(32, 1, 1), (32, 4, 1)])
+@pytest.mark.parametrize("shape", [(32, 1, 1), (64, 1, 1), (32, 4, 1)])
 @pytest.mark.parametrize("depth", [0, 2])
-@pytest.mark.parametrize("mode", ["groups", "parity"])
+@pytest.mark.parametrize("mode", ["groups", "parity", "loop"])
 def test_uniform_arguments_execute_across_helper_calls(tmp_path, shape, depth, mode):
-    if sys.platform not in {"darwin", "win32"}:
-        pytest.skip("OpenGL helper argument propagation remains unsupported")
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required native helper argument checks")
-    target = "metal" if sys.platform == "darwin" else "directx"
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
     size = math.prod(shape)
     source, descriptor, package = _package(
         tmp_path, target, "uint", shape, source=_native_source(size, depth, mode)
@@ -207,8 +288,9 @@ def test_uniform_arguments_execute_across_helper_calls(tmp_path, shape, depth, m
     wanted = []
     for start in range(0, len(words), 32):
         first = sum(words[start : start + 32])
-        count = size // 32 if mode == "groups" else (start // size) % 2 + 1
-        second = (first + 32) * (32 if count > 1 else 1)
+        count = size // 32 if mode in {"groups", "loop"} else (start // size) % 2 + 1
+        repeats = count - 1 if mode == "loop" else int(count > 1)
+        second = (first + 32) * 32**repeats
         wanted.extend([first, second, 2] * 32)
     guards = [0xBAD00000 + index for index in range(17)]
 
@@ -295,7 +377,7 @@ def test_uniform_arguments_execute_across_helper_calls(tmp_path, shape, depth, m
             close()
 
 
-def test_uniform_argument_native_gate_is_required_on_windows_and_metal():
+def test_uniform_argument_native_gate_is_required_on_every_target():
     from tools import ci_coverage
 
     root = Path(__file__).resolve().parents[2]
@@ -303,9 +385,12 @@ def test_uniform_argument_native_gate_is_required_on_windows_and_metal():
     step = ci_coverage.workflow_step_section(
         workflow, "Validate collective helper arguments"
     )
-    assert "if: runner.os != 'Linux'" in step
+    assert "if:" not in step
     assert "test_subgroup_uniform_arguments.py" in step
     assert f'{REQUIRE_ENV}: "1"' in step
+    assert "EGL_PLATFORM: surfaceless" in step
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in step
+    assert "PYOPENGL_PLATFORM: egl" in step
     assert "-n auto" in step and "continue-on-error" not in step
     assert "--timeout-seconds 180" in step
     assert "--basetemp=" in step and "--junitxml=" in step

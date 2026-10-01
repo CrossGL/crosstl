@@ -68,9 +68,12 @@ runtime coverage.
 Software Subgroup Helpers
 -------------------------
 
-Explicit-width software subgroup operations can be reached through resolved,
-unconditional helper chains. Each call retains its source overload identity.
-Entry-point calls in immutable workgroup-uniform branches are supported;
+Explicit-width software subgroup operations can be reached through resolved
+helper chains. Each call retains its source overload identity. Immutable scalar
+arguments are propagated only when every reachable caller proves them uniform
+across the workgroup. Supported helper branches, bounded loops and early exits
+use those facts; output parameters, references, mutation and unknown calls do
+not establish uniformity. Entry-point calls in uniform branches are supported;
 lane-dependent branches, recursive call graphs and unproven early exits remain
 errors. Const qualification alone does not prove invocation uniformity.
 Raw hardware subgroup builtins are rejected in software mode; annotated
@@ -82,6 +85,11 @@ the tested Mesa runtime. The required native vote gate covers repeated calls,
 three wrapper levels, distinct even/odd-workgroup predicates, multiple logical
 subgroups and unchanged input/output guards. These are collective semantics
 checks, not complete MLX reduction or host-runtime coverage.
+
+The required native helper-argument gate checks nested conditional calls,
+workgroup-dependent bounds, repeated reductions and uniform loops on Windows,
+Linux and macOS, with original Metal controls on macOS. Input preservation,
+evaluation counters and output guards remain part of the numerical checks.
 
 Scalar float32, int32 and uint32 products combine adjacent lane pairs with
 strides 1, 2, 4, 8 and 16. Integer products retain 32-bit wraparound; floating

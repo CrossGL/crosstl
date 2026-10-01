@@ -4480,36 +4480,6 @@ class GLSLCodeGen:
                 or getattr(error, "source_location", None),
             )
 
-        def call_is_unconditional(body, call):
-            call_id = id(call)
-            control_flow_types = (
-                IfNode,
-                ForNode,
-                ForInNode,
-                WhileNode,
-                DoWhileNode,
-                LoopNode,
-                SwitchNode,
-                MatchNode,
-            )
-            for node in self.walk_ast(body):
-                guarded = (
-                    isinstance(node, control_flow_types)
-                    or (
-                        isinstance(node, BinaryOpNode)
-                        and self.map_operator(
-                            getattr(node, "op", getattr(node, "operator", None))
-                        )
-                        in {"&&", "||"}
-                    )
-                    or isinstance(node, TernaryOpNode)
-                )
-                if not guarded:
-                    continue
-                if any(id(child) == call_id for child in self.walk_ast(node)):
-                    return False
-            return True
-
         self.glsl_software_subgroup_candidate_helper_function_ids = (
             reaches_operation - {id(entry_function)}
         )
@@ -4518,6 +4488,52 @@ class GLSLCodeGen:
             for call_edges in edges.values()
             for call, target_id in call_edges
         }
+        for function in functions:
+            for call in self.walk_ast(getattr(function, "body", None)):
+                if not isinstance(call, FunctionCallNode):
+                    continue
+                name = self.function_call_name(call)
+                target = functions_by_id.get(
+                    self.glsl_software_subgroup_resolved_call_targets.get(id(call))
+                )
+                arguments = list(call.arguments or [])
+                pure = name not in functions_by_name and (
+                    self.glsl_software_subgroup_exit_constructor(call)
+                    or (name in {"min", "max"} and len(arguments) == 2)
+                    or (name == "clamp" and len(arguments) == 3)
+                )
+                if pure:
+                    self.glsl_software_subgroup_uniform_call_ids.add(id(call))
+                if target is not None:
+                    parameters = target.parameters or []
+                    mutations = [
+                        argument
+                        for index, argument in enumerate(arguments)
+                        if index >= len(parameters)
+                        or isinstance(
+                            parameters[index].param_type, (PointerType, ReferenceType)
+                        )
+                        or set(self.glsl_parameter_qualifiers(parameters[index]))
+                        & {"out", "inout"}
+                    ]
+                elif pure or (
+                    name not in functions_by_name
+                    and self.glsl_wave_operation_name(name)
+                    in self.GLSL_WAVE_INTRINSIC_ARITIES
+                ):
+                    mutations = []
+                else:
+                    mutations = arguments
+                self.glsl_software_subgroup_call_mutations[id(call)] = (
+                    self.glsl_software_subgroup_expression_identifier_names(mutations)
+                )
+
+        entry_seeds = self.glsl_software_subgroup_uniform_seed_names(
+            ast, entry_function
+        )
+        entry_arguments = self.glsl_software_subgroup_uniform_arguments(
+            entry_function, entry_seeds, entry=True
+        )
         # Uniform loop proofs must see transitive collective calls as well as leaves.
         self.glsl_software_subgroup_analyze_uniform_statements(
             getattr(entry_function, "body", None),
@@ -4550,7 +4566,10 @@ class GLSLCodeGen:
                     source_location=getattr(call, "source_location", None)
                     or getattr(operation_node, "source_location", None),
                 )
-            if id(call) not in uniform_entry_call_ids:
+            if (
+                id(call) not in uniform_entry_call_ids
+                or id(call) not in entry_arguments
+            ):
                 raise self.glsl_software_subgroup_error(
                     "OpenGL software subgroup helper "
                     f"'{name}' must be called directly from the compute entry "
@@ -4581,8 +4600,6 @@ class GLSLCodeGen:
         pending = list(roots)
         while pending:
             function_id = pending.pop(0)
-            function = functions_by_id[function_id]
-            operation, operation_node = first_operation(function_id)
             for call, error in unresolved_edges.get(function_id, ()):
                 relevant = ambiguous_edge_error(call, error)
                 if relevant is not None:
@@ -4590,19 +4607,6 @@ class GLSLCodeGen:
             for call, target_id in edges.get(function_id, ()):
                 if target_id not in reaches_operation:
                     continue
-                target = functions_by_id[target_id]
-                target_name = getattr(target, "name", None)
-                if not call_is_unconditional(getattr(function, "body", None), call):
-                    raise self.glsl_software_subgroup_error(
-                        "OpenGL nested software subgroup helper "
-                        f"'{target_name}' must be reached by an unconditional, "
-                        "statically uniform call",
-                        workgroup_size=workgroup_size,
-                        operation=operation,
-                        reason="helper-call-not-uniform",
-                        source_location=getattr(call, "source_location", None)
-                        or getattr(operation_node, "source_location", None),
-                    )
                 if target_id not in approved:
                     approved.add(target_id)
                     pending.append(target_id)
@@ -4614,9 +4618,11 @@ class GLSLCodeGen:
                     incoming[target_id] += 1
         pending = [function_id for function_id, count in incoming.items() if count == 0]
         visited = set()
+        ordered = []
         while pending:
             function_id = pending.pop()
             visited.add(function_id)
+            ordered.append(function_id)
             for _call, target_id in edges.get(function_id, ()):
                 if target_id not in incoming:
                     continue
@@ -4632,6 +4638,52 @@ class GLSLCodeGen:
                 reason="helper-call-recursive",
                 source_location=getattr(node, "source_location", None),
             )
+
+        # Intersect caller facts before inspecting a callee. A parameter is not
+        # uniform merely because one invocation supplies a constant argument.
+        uniform_parameters = {}
+
+        def propagate(function_id, arguments):
+            for call, target_id in edges.get(function_id, ()):
+                if target_id not in approved:
+                    continue
+                if id(call) not in arguments:
+                    operation, operation_node = first_operation(target_id)
+                    raise self.glsl_software_subgroup_error(
+                        "OpenGL software subgroup helpers require a statically "
+                        "uniform call",
+                        workgroup_size=workgroup_size,
+                        operation=operation,
+                        reason="helper-call-not-uniform",
+                        source_location=getattr(call, "source_location", None)
+                        or getattr(operation_node, "source_location", None),
+                    )
+                facts = arguments[id(call)]
+                if target_id not in uniform_parameters:
+                    uniform_parameters[target_id] = set(facts)
+                else:
+                    uniform_parameters[target_id].intersection_update(facts)
+
+        propagate(entry_id, entry_arguments)
+        for function_id in ordered:
+            function = functions_by_id[function_id]
+            seeds = self.glsl_software_subgroup_uniform_seed_names(ast, None)
+            seeds.difference_update(parameter.name for parameter in function.parameters)
+            seeds.update(
+                parameter.name
+                for index, parameter in enumerate(function.parameters)
+                if index in uniform_parameters.get(function_id, set())
+                and not isinstance(parameter.param_type, (PointerType, ReferenceType))
+                and not set(self.glsl_parameter_qualifiers(parameter))
+                & {"out", "inout"}
+                and self.map_type(parameter.param_type)
+                in {"bool", "int", "uint", "float", "int64_t", "uint64_t"}
+            )
+            self.glsl_software_subgroup_function_uniform_seeds[function_id] = seeds
+            arguments = self.glsl_software_subgroup_uniform_arguments(
+                function, seeds, entry=False
+            )
+            propagate(function_id, arguments)
 
         self.glsl_software_subgroup_helper_function_ids = approved
         self.glsl_software_subgroup_helper_function_names = {
@@ -4976,6 +5028,9 @@ class GLSLCodeGen:
 
     def validate_glsl_software_subgroup_contract(self, ast, target_stage=None):
         self.required_glsl_software_subgroup_helpers = set()
+        self.glsl_software_subgroup_call_mutations = {}
+        self.glsl_software_subgroup_uniform_call_ids = set()
+        self.glsl_software_subgroup_function_uniform_seeds = {}
         self.glsl_software_subgroup_resolved_call_targets = {}
         self.glsl_software_subgroup_uniform_if_node_ids = set()
         self.glsl_software_subgroup_immutable_uniform_names = set()
@@ -5200,7 +5255,13 @@ class GLSLCodeGen:
                     operation=all_records[0][0],
                     **self.glsl_software_subgroup_exit_facts(
                         function,
-                        immutable_names if function is entry_function else set(),
+                        (
+                            immutable_names
+                            if function is entry_function
+                            else self.glsl_software_subgroup_function_uniform_seeds.get(
+                                id(function), set()
+                            )
+                        ),
                         function is entry_function,
                     ),
                 )
@@ -5238,7 +5299,9 @@ class GLSLCodeGen:
                     positions.get(letter) in components[base.name] for letter in member
                 )
             children = [base]
-        elif self.glsl_software_subgroup_exit_constructor(node):
+        elif self.glsl_software_subgroup_exit_constructor(node) or id(node) in getattr(
+            self, "glsl_software_subgroup_uniform_call_ids", set()
+        ):
             children = node.arguments
         elif isinstance(node, ConstructorNode):
             children = [*node.arguments, *node.named_arguments.values()]
@@ -5277,7 +5340,7 @@ class GLSLCodeGen:
         for parameter in function.parameters or []:
             name = parameter.name
             declarations[name] = declarations.get(name, 0) + 1
-            if not entry or name not in seeds:
+            if name not in seeds:
                 names.discard(name)
             components.pop(name, None)
             semantic = self.map_semantic(self.semantic_from_node(parameter))
@@ -5306,6 +5369,10 @@ class GLSLCodeGen:
             elif isinstance(
                 node, FunctionCallNode
             ) and not self.glsl_software_subgroup_exit_constructor(node):
+                mutations = self.glsl_software_subgroup_call_mutations.get(id(node))
+                if mutations is not None:
+                    mutable.update(mutations)
+                    continue
                 invalidated = node.arguments
             if invalidated is not None:
                 mutable.update(
@@ -5327,6 +5394,96 @@ class GLSLCodeGen:
             "uniform_components": components,
             "mutable_names": mutable,
         }
+
+    def glsl_software_subgroup_uniform_arguments(self, function, seeds, *, entry):
+        facts = self.glsl_software_subgroup_exit_facts(function, seeds, entry)
+        arguments = {}
+
+        def visit(body, names, components):
+            for statement in self.glsl_software_subgroup_statement_list(body):
+                if isinstance(statement, VariableNode):
+                    names.discard(statement.name)
+                    components.pop(statement.name, None)
+                    if (
+                        statement.name not in facts["mutable_names"]
+                        and self.map_type(statement.var_type)
+                        in {"bool", "int", "uint", "float", "int64_t", "uint64_t"}
+                        and self.glsl_software_subgroup_exit_uniform_expression(
+                            statement.initial_value, names, components
+                        )
+                    ):
+                        names.add(statement.name)
+                if isinstance(statement, BlockNode) or hasattr(statement, "statements"):
+                    visit(statement, set(names), dict(components))
+                    continue
+                if isinstance(statement, IfNode):
+                    conditions = [
+                        statement.condition,
+                        *(getattr(statement, "else_if_conditions", []) or []),
+                    ]
+                    if all(
+                        self.glsl_software_subgroup_exit_uniform_expression(
+                            condition, names, components
+                        )
+                        for condition in conditions
+                    ):
+                        self.glsl_software_subgroup_uniform_if_node_ids.add(
+                            id(statement)
+                        )
+                        for branch in [
+                            statement.if_body,
+                            *(getattr(statement, "else_if_bodies", []) or []),
+                            getattr(statement, "else_body", None),
+                        ]:
+                            visit(branch, set(names), dict(components))
+                    continue
+                if isinstance(statement, ForNode):
+                    if self.glsl_software_subgroup_uniform_for(statement, names):
+                        self.glsl_software_subgroup_uniform_for_node_ids.add(
+                            id(statement)
+                        )
+                        nested_names = set(names) | {statement.init.name}
+                        nested_components = dict(components)
+                        nested_components.pop(statement.init.name, None)
+                        visit(statement.body, nested_names, nested_components)
+                    continue
+                if isinstance(
+                    statement,
+                    (
+                        WhileNode,
+                        DoWhileNode,
+                        ForInNode,
+                        LoopNode,
+                        SwitchNode,
+                        MatchNode,
+                    ),
+                ):
+                    continue
+                for call in self.walk_ast(statement):
+                    if not isinstance(call, FunctionCallNode):
+                        continue
+                    guarded = any(
+                        (
+                            isinstance(parent, TernaryOpNode)
+                            or (
+                                isinstance(parent, BinaryOpNode)
+                                and self.map_operator(parent.op) in {"&&", "||"}
+                            )
+                        )
+                        and any(child is call for child in self.walk_ast(parent))
+                        for parent in self.walk_ast(statement)
+                    )
+                    if not guarded:
+                        arguments[id(call)] = {
+                            index
+                            for index, argument in enumerate(call.arguments)
+                            if self.glsl_software_subgroup_exit_uniform_expression(
+                                argument, names, components
+                            )
+                        }
+
+        visit(function.body, facts["uniform_names"], facts["uniform_components"])
+        return arguments
 
     def validate_glsl_software_subgroup_exits(
         self,
@@ -5478,12 +5635,14 @@ class GLSLCodeGen:
             }
             semantic = self.semantic_from_node(parameter)
             mapped_semantic = self.map_semantic(semantic) if semantic else None
-            if qualifiers & {"const", "constant", "uniform"} or (
-                mapped_semantic in uniform_builtins
+            if mapped_semantic in uniform_builtins or (
+                mapped_semantic is None and qualifiers & {"constant", "uniform"}
             ):
                 names.add(name)
                 if mapped_semantic:
                     names.add(mapped_semantic)
+            else:
+                names.discard(name)
         return names
 
     def glsl_software_subgroup_uniform_expression(self, expression, uniform_names):
@@ -5854,24 +6013,43 @@ class GLSLCodeGen:
             return False
 
         bound_names = self.glsl_software_subgroup_expression_identifier_names(bound)
+        control_names = bound_names | {loop_name}
         for child in self.walk_ast(getattr(node, "body", None)):
             if isinstance(child, (BreakNode, ContinueNode, ReturnNode)):
                 return False
+            if isinstance(child, VariableNode):
+                if child.name in control_names:
+                    return False
+                if (
+                    isinstance(child.var_type, ReferenceType)
+                    and self.glsl_software_subgroup_expression_identifier_names(
+                        child.initial_value
+                    )
+                    & control_names
+                ):
+                    return False
             if isinstance(child, AssignmentNode):
                 target_name = self.glsl_software_subgroup_assignment_target_name(child)
                 if target_name == loop_name or target_name in bound_names:
                     return False
             if isinstance(child, UnaryOpNode) and self.map_operator(
                 getattr(child, "op", getattr(child, "operator", None))
-            ) in {"++", "--"}:
+            ) in {"++", "--", "&"}:
                 target_name = self.expression_name(getattr(child, "operand", None))
                 if target_name == loop_name or target_name in bound_names:
                     return False
             if isinstance(child, FunctionCallNode):
-                observed = self.glsl_software_subgroup_expression_identifier_names(
-                    child
+                observed = self.glsl_software_subgroup_call_mutations.get(
+                    id(child),
+                    (
+                        set()
+                        if self.glsl_software_subgroup_exit_constructor(child)
+                        else self.glsl_software_subgroup_expression_identifier_names(
+                            child
+                        )
+                    ),
                 )
-                if observed & bound_names:
+                if observed & control_names:
                     return False
         return True
 
@@ -32670,7 +32848,8 @@ complex64_t crossgl_complex64_mod_assign(
         if id(node) in self.glsl_software_subgroup_masked_if_plans:
             return self.generate_glsl_software_subgroup_masked_if(node, indent)
 
-        self.reject_glsl_software_subgroup_control_flow(node)
+        if id(node) not in self.glsl_software_subgroup_uniform_if_node_ids:
+            self.reject_glsl_software_subgroup_control_flow(node)
         condition = self.generate_glsl_boolean_context(
             node.condition if hasattr(node, "condition") else node.if_condition
         )
