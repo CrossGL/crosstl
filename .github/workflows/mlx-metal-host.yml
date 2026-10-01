@@ -11,6 +11,10 @@ on:
       - "tests/test_translator/test_project_metal_discovery.py"
       - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
+      - "tests/test_translator/test_metal_precise_acosh.py"
+      - "tests/test_translator/test_mlx_current_unary_acosh.py"
+      - "tests/test_translator/test_metal_precise_trig.py"
+      - "tests/test_translator/test_mlx_current_unary_fma.py"
       - "tests/test_translator/test_metal_float_atomics.py"
       - "tests/test_translator/test_directx_float_atomics.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
@@ -35,6 +39,10 @@ on:
       - "tests/test_translator/test_project_metal_discovery.py"
       - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
+      - "tests/test_translator/test_metal_precise_acosh.py"
+      - "tests/test_translator/test_mlx_current_unary_acosh.py"
+      - "tests/test_translator/test_metal_precise_trig.py"
+      - "tests/test_translator/test_mlx_current_unary_fma.py"
       - "tests/test_translator/test_metal_float_atomics.py"
       - "tests/test_translator/test_directx_float_atomics.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
@@ -128,6 +136,23 @@ jobs:
           git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
           git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
           git -C mlx-upstream checkout --detach FETCH_HEAD
+      - name: Validate pinned inverse hyperbolic cosine
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: metal
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_ACOSH: "1"
+          CROSTL_REQUIRE_METAL_PRECISE_ACOSH: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/acosh
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Pinned inverse hyperbolic cosine" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/acosh/pytest \
+              --junitxml=.mlx-metal-host/acosh/results.xml \
+              tests/test_translator/test_metal_precise_acosh.py \
+              tests/test_translator/test_mlx_current_unary_acosh.py \
+              2>&1 | tee .mlx-metal-host/acosh.log
       - name: Compile pinned MLX gated-delta backward entry
         env:
           CROSTL_REQUIRE_MLX_GATED_DELTA_METAL: "1"

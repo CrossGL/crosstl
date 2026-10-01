@@ -326,7 +326,16 @@ def test_precise_trig_verifier_rejects_corruption(corruption):
         _check(actual, expected)
 
 
-def _execute(directory, target, source, inputs, expected):
+def _execute(
+    directory,
+    target,
+    source,
+    inputs,
+    expected,
+    *,
+    metal_entry="trigonometry",
+    check_outputs=_check,
+):
     directory.mkdir()
     artifact, module = _compile(source, target, directory)
     assert module.is_file(), "native compiler required"
@@ -359,7 +368,7 @@ def _execute(directory, target, source, inputs, expected):
             shape=(len(words),),
             value=words,
         )
-    entry = {"directx": "CSMain", "opengl": "main", "metal": "trigonometry"}[target]
+    entry = {"directx": "CSMain", "opengl": "main", "metal": metal_entry}[target]
     request = NativeRuntimeDispatchRequest(
         target=target,
         artifact={"target": target},
@@ -389,7 +398,7 @@ def _execute(directory, target, source, inputs, expected):
             == hashlib.sha256(module.read_bytes()).hexdigest()
         )
     return {
-        "maxUlpError": _check(actual, expected),
+        "maxUlpError": check_outputs(actual, expected),
         "artifactSha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
         "moduleSha256": hashlib.sha256(module.read_bytes()).hexdigest(),
         "runtime": state.details,

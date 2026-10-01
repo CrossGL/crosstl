@@ -68,6 +68,27 @@ execute HLSL on Windows, GLSL on Linux and original/generated Metal on macOS.
 NaN payload identity, exception flags and other precise transcendental
 operations are not covered by this contract.
 
+Precise Inverse Hyperbolic Cosine
+--------------------------------
+
+``metal::precise::acosh`` uses a portable binary32 helper for scalar and two-
+to four-component vectors. A near-one series avoids cancellation, a stable
+logarithmic form handles intermediate inputs, and a large-input branch avoids
+squaring overflow. One returns positive zero, inputs below one return NaN,
+and positive infinity is preserved. Default and fast calls and user-defined
+overloads retain their existing behavior. Other precise operand types produce
+a structured diagnostic instead of silently widening or lowering precision.
+
+Required native tests compare generated HLSL, GLSL and roundtrip Metal with a
+90-digit reference, including every binary32 value from ``0x3f800000`` through
+``0x3f802000``, branch boundaries, large exponents and nonfinite values. The
+gate requires at most four ULPs, exact zero and infinity, NaN classification,
+single operand evaluation and intact buffer guards. The unchanged pinned MLX
+``v_ArcCoshfloat32float32`` entry runs through the public package and loader
+APIs on the same inputs. Host-integration tests additionally exercise the
+near-one region through ``mx.arccosh`` at unchanged upstream tolerances.
+These sampled execution checks are not an exhaustive binary32 error proof.
+
 .. automodule:: crosstl.backend.Metal
 
 .. automodule:: crosstl.backend.Metal.MetalAst

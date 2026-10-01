@@ -30,6 +30,8 @@ on:
       - "tests/test_translator/test_opengl_metal_math.py"
       - "tests/test_translator/test_metal_precise_asin.py"
       - "tests/test_translator/test_metal_precise_trig.py"
+      - "tests/test_translator/test_metal_precise_acosh.py"
+      - "tests/test_translator/test_mlx_current_unary_acosh.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_metal_fma.py"
@@ -119,6 +121,8 @@ on:
       - "tests/test_translator/test_opengl_metal_math.py"
       - "tests/test_translator/test_metal_precise_asin.py"
       - "tests/test_translator/test_metal_precise_trig.py"
+      - "tests/test_translator/test_metal_precise_acosh.py"
+      - "tests/test_translator/test_mlx_current_unary_acosh.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_metal_fma.py"
@@ -624,6 +628,41 @@ jobs:
         with:
           name: mlx-unary-fma-${{ runner.os }}
           path: mlx-unary-fma-results
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Validate pinned inverse hyperbolic cosine
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_ACOSH: "1"
+          CROSTL_REQUIRE_METAL_PRECISE_ACOSH: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-acosh-results
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Pinned inverse hyperbolic cosine" -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-acosh-results/pytest \
+              --junitxml=mlx-acosh-results/results.xml \
+              tests/test_translator/test_metal_precise_acosh.py \
+              tests/test_translator/test_mlx_current_unary_acosh.py
+
+      - name: Upload inverse hyperbolic cosine evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-acosh-${{ runner.os }}
+          path: mlx-acosh-results
           if-no-files-found: error
           retention-days: 14
 

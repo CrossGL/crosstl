@@ -1504,6 +1504,7 @@ class MetalToCrossGLConverter:
         self.metal_precise_math_helper_names = {}
         self.required_metal_precise_acos_widths = set()
         self.required_metal_precise_asin_widths = set()
+        self.required_metal_precise_acosh_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
         self.cooperative_matrix_fragment_helpers = {}
@@ -2622,6 +2623,7 @@ class MetalToCrossGLConverter:
         self.metal_precise_math_helper_names = {}
         self.required_metal_precise_acos_widths = set()
         self.required_metal_precise_asin_widths = set()
+        self.required_metal_precise_acosh_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
         self.cooperative_matrix_fragment_helpers = {}
@@ -13117,7 +13119,7 @@ class MetalToCrossGLConverter:
         if self.metal_math_builtin_namespace_mode(text) != "precise":
             return None
         operation = text.rsplit("::", 1)[-1]
-        if operation not in {"acos", "asin", "sin", "cos"}:
+        if operation not in {"acos", "asin", "acosh", "sin", "cos"}:
             return None
         arguments = list(args or [])
         source_location = (
@@ -13169,6 +13171,16 @@ class MetalToCrossGLConverter:
         if operation == "asin":
             self.required_metal_precise_asin_widths.add(width)
             return self.metal_precise_asin_helper_name(width)
+        if operation == "acosh":
+            if self.normalized_metal_type(type_info["element_type"]) != "float":
+                raise MetalPreciseMathLoweringError(
+                    operation,
+                    operand_type,
+                    "precise inverse hyperbolic lowering requires binary32 operands",
+                    source_location,
+                )
+            self.required_metal_precise_acosh_widths.add(width)
+            return self.metal_precise_acosh_helper_name(width)
         self.required_metal_precise_acos_widths.add(width)
         return self.metal_precise_acos_helper_name(width)
 
@@ -13324,10 +13336,11 @@ class MetalToCrossGLConverter:
         return code
 
     def generate_metal_precise_math_support_code(self, indent=0):
-        trig_code = self.generate_metal_precise_trig_support_code(indent)
+        independent_code = self.generate_metal_precise_trig_support_code(indent)
+        independent_code += self.generate_metal_precise_acosh_support_code(indent)
         widths = sorted(self.required_metal_precise_acos_widths)
         if not widths and not self.required_metal_precise_asin_widths:
-            return trig_code
+            return independent_code
 
         ratio_name = self.metal_precise_acos_ratio_helper_name()
         scalar_name = self.metal_precise_acos_helper_name(1)
@@ -13430,7 +13443,82 @@ class MetalToCrossGLConverter:
             code += f"{pad}vec{width} {vector_name}(vec{width} value) {{\n"
             code += f"{body_pad}return vec{width}(\n{arguments}\n{body_pad});\n"
             code += f"{pad}}}\n\n"
-        return trig_code + code + self.generate_metal_precise_asin_support_code(indent)
+        return (
+            independent_code
+            + code
+            + self.generate_metal_precise_asin_support_code(indent)
+        )
+
+    def metal_precise_acosh_helper_name(self, width):
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            f"acosh-float{suffix}", f"__crossgl_metal_precise_acosh_float{suffix}"
+        )
+
+    def generate_metal_precise_acosh_support_code(self, indent=0):
+        if not self.required_metal_precise_acosh_widths:
+            return ""
+        scalar = self.metal_precise_acosh_helper_name(1)
+        log1p = self.metal_precise_math_unique_helper_name(
+            "acosh-log1p", "__crossgl_metal_precise_acosh_log1p"
+        )
+        # The near-one series avoids cancellation in x*x - 1. The large
+        # branch avoids squaring overflow; the omitted tail is below one ULP.
+        code = f"""@precise
+@metal_static
+float {log1p}(float value) {{
+    if (value > 0.5) {{
+        return log(1.0 + value);
+    }}
+    float reduced @precise = value / (2.0 + value);
+    float squared @precise = reduced * reduced;
+    float series @precise = 1.0 + squared * (
+        0.33333333333333333333 + squared * (
+            0.2 + squared * (
+                0.14285714285714285714 + squared * (
+                    0.11111111111111111111 + squared * 0.09090909090909090909
+                )
+            )
+        )
+    );
+    return (2.0 * reduced) * series;
+}}
+@precise
+@metal_static
+float {scalar}(float value) {{
+    if (isnan(value)) {{
+        return value;
+    }}
+    if (value < 1.0) {{
+        return asfloat(0x7fc00000u);
+    }}
+    if (value == 1.0) {{
+        return 0.0;
+    }}
+    if (value > 4096.0) {{
+        return log(value) + 0.69314718055994530942;
+    }}
+    float offset @precise = value - 1.0;
+    if (offset <= 0.0625) {{
+        float series @precise = 0.00189887152777777778;
+        series = -0.00558035714285714286 + offset * series;
+        series = 0.01875 + offset * series;
+        series = -0.08333333333333333333 + offset * series;
+        series = 1.0 + offset * series;
+        return sqrt(2.0 * offset) * series;
+    }}
+    return {log1p}(offset + sqrt(offset * (value + 1.0)));
+}}
+"""
+        for width in sorted(self.required_metal_precise_acosh_widths - {1}):
+            vector = self.metal_precise_acosh_helper_name(width)
+            arguments = ", ".join(f"{scalar}(value.{lane})" for lane in "xyzw"[:width])
+            code += (
+                f"@precise\n@metal_static\nvec{width} {vector}(vec{width} value) {{\n"
+                f"    return vec{width}({arguments});\n}}\n"
+            )
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
 
     def metal_precise_trig_helper_name(self, operation, width):
         suffix = "" if width == 1 else str(width)

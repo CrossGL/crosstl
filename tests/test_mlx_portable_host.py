@@ -326,14 +326,15 @@ def test_unary_nonfinite_transport(translated_packages, tmp_path, monkeypatch, d
         "raw-nan",
         "boolean",
         "nested",
+        "acosh-near-one",
     ],
 )
 def test_unary_verifier_requires_complete_independent_results(fault):
     original = unary_workloads.expected_records(cpu=True)
     translated = unary_workloads.expected_records()
-    assert len(translated) == 129
-    assert sum(record["count"] for record in translated) == 8009
-    assert len(unary_workloads.dispatches()) == 102
+    assert len(translated) == 130
+    assert sum(record["count"] for record in translated) == 16202
+    assert len(unary_workloads.dispatches()) == 103
     if fault == "missing":
         original.clear()
         translated.clear()
@@ -357,6 +358,13 @@ def test_unary_verifier_requires_complete_independent_results(fault):
         translated[1]["values"] = [
             {"raw-nan": math.nan, "boolean": True, "nested": []}[fault]
         ]
+    elif fault == "acosh-near-one":
+        record = next(
+            record for record in translated if record.get("case") == "near-one"
+        )
+        assert record["count"] == 8193
+        assert record["inputs"][0x805] == 1.0002447366714478
+        record["values"][0x805] = 0.022124959155917168
     if fault:
         with pytest.raises((RuntimeError, AssertionError)):
             unary_workloads.compare(original, translated)
@@ -693,7 +701,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             )
     else:
         evidence = verify.verify(args)
-        assert len(calls) == 8 and evidence["dispatchCount"] == 117
+        assert len(calls) == 8 and evidence["dispatchCount"] == 118
         assert len(identities) == 2
         assert evidence["schemaVersion"] == 2
         assert evidence["adaptation"]["files"] == {"adapter": "unchanged"}

@@ -127,20 +127,22 @@ The CPU reference uses the unchanged CPU backend in the same adapted MLX build;
 it is not a separately rebuilt pristine binary or a Metal comparison.
 
 It also checks 20 array-creation cases spanning all five types and lengths 0, 1,
-7 and 257. The 129 unary records cover the same lengths for all 30 operations,
-six special-value cases, two large-angle cases and an arange/abs/negative/square
-chain, totaling 8,009 unary output values. Independent Python math references
+7 and 257. The 130 unary records cover the same lengths for all 30 operations,
+six special-value cases, two large-angle cases, 8,193 consecutive float32 inputs
+at and above one for inverse hyperbolic cosine, and an
+arange/abs/negative/square chain, totaling 16,202 unary output values. Independent Python math references
 check both CPU and native results, not just agreement between them. Readbacks
 must have complete values and unchanged case identities; finite comparisons
 use `rtol=2e-5, atol=1e-6`, with exact zero values/signs and nonfinite
-classification. Upstream tests and their tolerances are unchanged.
+classification. The near-one inverse hyperbolic cosine case uses the upstream
+`rtol=1e-5, atol=1e-6` limits. Upstream tests and their tolerances are unchanged.
 
 The pinned CPU Erf approximation returns negative zero for both zero input
 signs. Its reference records this behavior explicitly; generated GPU Erf must
 preserve the input sign as the source Metal implementation does. No readback is
 corrected to make the two paths agree.
 
-Native traces must start with the exact 117 nonempty workload dispatches, cover
+Native traces must start with the exact 118 nonempty workload dispatches, cover
 all 35 entries, and retain artifact identities and runtime/device details.
 Separate negative processes reject an unsupported primitive, oversized arange,
 a missing artifact, and unary inputs with unsupported dtype, layout or size.

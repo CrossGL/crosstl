@@ -68,6 +68,18 @@ def cases():
                 "inputs": [_f32(value) for value in (1e8, 1e9, 1e10, 1e20, 1e30)],
             }
         )
+    values = [
+        struct.unpack("<f", struct.pack("<I", word))[0]
+        for word in range(0x3F800000, 0x3F802001)
+    ]
+    records.append(
+        {
+            "operation": "ArcCosh",
+            "case": "near-one",
+            "count": len(values),
+            "inputs": values,
+        }
+    )
     return records
 
 
@@ -205,7 +217,12 @@ def validate(records, *, cpu=False):
         got = np.array([float(value) for value in values])
         want = np.array([float(value) for value in reference["values"]])
         np.testing.assert_allclose(
-            got, want, rtol=2e-5, atol=1e-6, equal_nan=True, err_msg=str(required)
+            got,
+            want,
+            rtol=1e-5 if reference.get("case") == "near-one" else 2e-5,
+            atol=1e-6,
+            equal_nan=True,
+            err_msg=str(required),
         )
         zeros = want == 0
         np.testing.assert_array_equal(

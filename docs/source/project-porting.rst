@@ -2189,10 +2189,12 @@ instead builds MLX with Metal and CUDA disabled. Its synchronous callback connec
 DirectX/OpenGL runtime packages; other primitives retain upstream unsupported-GPU
 errors. Linux/OpenGL and Windows/Direct3D 12 CI build the adapted library, require
 15 unchanged upstream tests against CPU and translated GPU execution, and check
-20 array-creation records plus 129 unary records against independent references.
+20 array-creation records plus 130 unary records against independent references,
+including 8,193 consecutive binary32 inputs at and above one for inverse
+hyperbolic cosine at unchanged upstream tolerances.
 The verifier reconstructs the five allowed source adaptations from the pin,
 requires exact bytes before and after execution, and rejects unrelated tracked
-changes. It independently checks complete numerical records, the initial 117
+changes. It independently checks complete numerical records, the initial 118
 nonempty dispatches, and six required rejection cases, including unsupported
 unary dtypes, layouts and sizes, before publishing a schema-version-2 summary.
 Unary execution is limited to contiguous float32 inputs and 65,535 stored
