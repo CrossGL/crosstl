@@ -13,10 +13,12 @@ on:
       - "tests/test_translator/test_directx_software_reductions.py"
       - "tests/test_translator/test_directx_subgroup_identity.py"
       - "tests/test_translator/test_directx_subgroup_uniformity.py"
+      - "tests/test_translator/test_directx_subgroup_components.py"
       - "tests/test_translator/test_metal_float_atomics.py"
       - "tests/test_translator/test_mlx_gated_delta_directx.py"
       - "tests/test_translator/test_mlx_gated_delta_directx_runtime.py"
       - "tests/test_translator/test_mlx_gated_delta_runtime.py"
+      - "tests/test_translator/test_mlx_attention_odo_runtime.py"
       - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
       - "tests/test_translator/test_fused_math.py"
@@ -46,10 +48,12 @@ on:
       - "tests/test_translator/test_directx_software_reductions.py"
       - "tests/test_translator/test_directx_subgroup_identity.py"
       - "tests/test_translator/test_directx_subgroup_uniformity.py"
+      - "tests/test_translator/test_directx_subgroup_components.py"
       - "tests/test_translator/test_metal_float_atomics.py"
       - "tests/test_translator/test_mlx_gated_delta_directx.py"
       - "tests/test_translator/test_mlx_gated_delta_directx_runtime.py"
       - "tests/test_translator/test_mlx_gated_delta_runtime.py"
+      - "tests/test_translator/test_mlx_attention_odo_runtime.py"
       - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
       - "tests/test_translator/test_fused_math.py"
@@ -88,7 +92,7 @@ jobs:
   portable-host:
     name: MLX native host (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
@@ -212,6 +216,7 @@ jobs:
               tests/test_translator/test_directx_software_reductions.py \
               tests/test_translator/test_directx_subgroup_identity.py \
               tests/test_translator/test_directx_subgroup_uniformity.py \
+              tests/test_translator/test_directx_subgroup_components.py \
               2>&1 | tee .mlx-portable-host/software-reductions.log
       - name: Validate binary32 fused arithmetic
         env:
@@ -267,6 +272,21 @@ jobs:
               --junitxml=.mlx-portable-host/gated-delta-runtime/results.xml \
               tests/test_translator/test_mlx_gated_delta_directx_runtime.py \
               2>&1 | tee .mlx-portable-host/gated-delta-runtime.log
+      - name: Execute pinned DirectX attention row dots
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_REQUIRE_MLX_ATTENTION_RUNTIME: "1"
+          CROSTL_MLX_ATTENTION_TARGET: directx
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/attention-odo
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX DirectX attention row dots" -- \
+            python -m pytest -q -n auto --dist loadscope \
+              --basetemp=.mlx-portable-host/attention-odo/pytest \
+              --junitxml=.mlx-portable-host/attention-odo/results.xml \
+              tests/test_translator/test_mlx_attention_odo_runtime.py \
+              2>&1 | tee .mlx-portable-host/attention-odo.log
       - name: Validate pinned unary fused arithmetic
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream

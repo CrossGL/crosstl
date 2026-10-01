@@ -854,7 +854,7 @@ the MLX host runtime, or run the upstream MLX test suite on OpenGL.
 
 ## Current Translator Gaps
 
-The current-pin gated-delta backward kernels still need portable floating-point
+The current-pin gated-delta backward kernels still need OpenGL floating-point
 atomic lowering ([#1986](https://github.com/CrossGL/crosstl/issues/1986)). Struct
 selection now preserves anonymous type-parameter defaults and evaluates supported
 `enable_if` partial specializations ([#1985](https://github.com/CrossGL/crosstl/issues/1985)).
@@ -862,8 +862,22 @@ The selected `seq_gated_delta_vjp_float_128_128_24_24_1` entry retains the float
 field in `mlx_atomic<float>`. Its generated Metal now compiles with warnings fatal;
 the macOS host workflow requires compilation of both the original source and the
 translated entry and retains their libraries, compiler logs and identities.
-DirectX and OpenGL floating atomic lowering remain incomplete. Compilation is
-not a numerical execution proof for this backward kernel.
+DirectX float buffer addition and exchange now have native execution coverage.
+Eight gated-delta backward configurations have required Windows DirectX and
+original/generated Metal numerical gates, checking all six gradients against an
+independent reference. This covers selected head layouts, checkpoint intervals,
+partial segments and float16/float32 storage, not complete MLX host integration.
+
+The attention backward row-dot stage has separate required Windows and macOS
+gates. They translate all 24 declared float32/float16/bfloat16 entries across
+dimensions 64, 72, 80, 96, 128, 192, 256 and 512. Exact dyadic cases distinguish
+storage interpretation, indexing and reduction behavior; additional fractional
+cases compare against decoded-input float64 dot products at `rtol=atol=1e-5`.
+Dispatches preserve the upstream `(32, 1, 1)` workgroup shape and add inactive
+rows to test whole-workgroup early returns. An empty-length case must preserve
+all output guards. Original and translated Metal read back every buffer;
+DirectX reads back the writable output. These checks cover the row-dot stage,
+not the remaining attention-gradient stages or full upstream attention tests.
 
 Reduced Metal roundtrip tests execute float atomic addition and exchange on
 scalar buffers and aggregate fields. They check 513 competing updates, returned

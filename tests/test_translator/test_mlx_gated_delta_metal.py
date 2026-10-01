@@ -21,7 +21,14 @@ REQUIRE_ENV = "CROSTL_REQUIRE_MLX_GATED_DELTA_METAL"
 
 
 def _translate_pinned(
-    tmp_path, target, *, entry=ENTRY, workgroup_size=(32, 1, 1), target_options=None
+    tmp_path,
+    target,
+    *,
+    entry=ENTRY,
+    workgroup_size=(32, 1, 1),
+    target_options=None,
+    source_path=SOURCE,
+    source_sha256=SOURCE_SHA256,
 ):
     root_value = os.environ.get("CROSTL_MLX_CURRENT_ROOT")
     assert root_value, "Set CROSTL_MLX_CURRENT_ROOT to the pinned checkout"
@@ -50,19 +57,19 @@ def _translate_pinned(
         text=True,
         timeout=30,
     )
-    source = root / SOURCE
-    assert hashlib.sha256(source.read_bytes()).hexdigest() == SOURCE_SHA256
+    source = root / source_path
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == source_sha256
     with tempfile.TemporaryDirectory(
         prefix=".crosstl-gated-delta-", dir=root
     ) as output:
         report = translate_project(
             ProjectConfig(
                 root=root,
-                include_patterns=(SOURCE,),
+                include_patterns=(source_path,),
                 include_dirs=(".",),
                 targets=(target,),
-                entry_points={SOURCE: (entry,)},
-                entry_workgroup_size_rules={SOURCE: {entry: workgroup_size}},
+                entry_points={source_path: (entry,)},
+                entry_workgroup_size_rules={source_path: {entry: workgroup_size}},
                 source_options={
                     "metal": {
                         "max_template_specializations": 128,

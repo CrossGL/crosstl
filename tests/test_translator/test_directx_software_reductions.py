@@ -278,7 +278,16 @@ def test_software_reductions_execute(tmp_path, directx_runtime, value_type):
             assert got == want, (index, got, want)
 
 
-def _execute_words(tmp_path, generated, words, expected, *, value_type="uint"):
+def _execute_words(
+    tmp_path,
+    generated,
+    words,
+    expected,
+    *,
+    value_type="uint",
+    workgroup_size=(32, 4, 1),
+    workgroup_count=(3, 1, 1),
+):
     artifact, module = _compile(generated, tmp_path)
     guard = [0x6A15BEEF] * 32
     inputs = {
@@ -314,7 +323,9 @@ def _execute_words(tmp_path, generated, words, expected, *, value_type="uint"):
         constants={},
         entry_point="CSMain",
         dispatch=RuntimeDispatchGeometry(
-            entry_point="CSMain", workgroup_size=(32, 4, 1), workgroup_count=(3, 1, 1)
+            entry_point="CSMain",
+            workgroup_size=workgroup_size,
+            workgroup_count=workgroup_count,
         ),
     )
     (tmp_path / "inputs.json").write_text(json.dumps(inputs))
@@ -327,8 +338,8 @@ def _execute_words(tmp_path, generated, words, expected, *, value_type="uint"):
             {
                 "type": value_type,
                 "logicalWidth": 32,
-                "workgroupSize": [32, 4, 1],
-                "workgroupCount": [3, 1, 1],
+                "workgroupSize": list(workgroup_size),
+                "workgroupCount": list(workgroup_count),
                 "runtime": state.details,
                 "artifactSha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
                 "moduleSha256": hashlib.sha256(module.read_bytes()).hexdigest(),

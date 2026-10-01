@@ -15,6 +15,7 @@ on:
       - "tests/test_translator/test_directx_float_atomics.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
       - "tests/test_translator/test_mlx_gated_delta_runtime.py"
+      - "tests/test_translator/test_mlx_attention_odo_runtime.py"
       - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
       - "tests/fixtures/runtime_verification/metal_raw_buffers.swift"
       - "tests/fixtures/runtime_verification/metal_uint32_buffers.swift"
@@ -34,6 +35,7 @@ on:
       - "tests/test_translator/test_directx_float_atomics.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
       - "tests/test_translator/test_mlx_gated_delta_runtime.py"
+      - "tests/test_translator/test_mlx_attention_odo_runtime.py"
       - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
       - "tests/fixtures/runtime_verification/metal_raw_buffers.swift"
       - "tests/fixtures/runtime_verification/metal_uint32_buffers.swift"
@@ -58,7 +60,7 @@ jobs:
   metal-host:
     name: MLX translated Metal host execution
     runs-on: macos-26
-    timeout-minutes: 110
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
         with:
@@ -133,6 +135,21 @@ jobs:
               --junitxml=.mlx-metal-host/gated-delta-runtime/results.xml \
               tests/test_translator/test_mlx_gated_delta_runtime.py \
               2>&1 | tee .mlx-metal-host/gated-delta-runtime.log
+      - name: Execute pinned MLX attention row dots
+        env:
+          CROSTL_REQUIRE_MLX_ATTENTION_RUNTIME: "1"
+          CROSTL_MLX_ATTENTION_TARGET: metal
+          CROSTL_MLX_CURRENT_ROOT: mlx-upstream
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/attention-odo
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX Metal attention row dots" -- \
+            python -m pytest -q -n auto --dist loadscope \
+              --basetemp=.mlx-metal-host/attention-odo/pytest \
+              --junitxml=.mlx-metal-host/attention-odo/results.xml \
+              tests/test_translator/test_mlx_attention_odo_runtime.py \
+              2>&1 | tee .mlx-metal-host/attention-odo.log
       - name: Prepare isolated MLX build
         run: |
           python -m venv mlx-env

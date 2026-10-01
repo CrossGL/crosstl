@@ -84,6 +84,15 @@ uniformity only when their operands are workgroup-uniform. Writes, reference
 aliases, address escapes and possibly mutating calls invalidate these facts.
 Lane-dependent bounds and unproven early exits remain translation errors.
 
+Invocation-vector components are proven separately. A global or local ID
+component is workgroup-uniform when its corresponding declared workgroup
+dimension is one. For example, global ``y`` can select an entire ``(32, 1, 1)``
+workgroup, but not a ``(32, 4, 1)`` workgroup. This fact does not make the whole
+vector uniform and is not inferred from helper-parameter annotations. Mutation,
+aliasing and lexical shadowing invalidate the component proof. Windows tests
+exercise whole-workgroup early returns and row-dependent loops across multiple
+three-dimensional dispatch shapes while checking inactive outputs and guards.
+
 Payloads are limited to 32-bit ``float``, ``int`` and ``uint`` scalars. Floating
 sums use a precise, increasing-lane-order fold; different native reduction
 orders can round differently. Integer sums retain 32-bit wraparound. Floating

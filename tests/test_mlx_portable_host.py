@@ -629,6 +629,13 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
             "CROSTL_REQUIRE_MLX_GATED_DELTA_DIRECTX_RUNTIME",
             "test_mlx_gated_delta_directx_runtime.py",
         ),
+        (
+            "Execute pinned DirectX attention row dots",
+            "attention-odo",
+            900,
+            "CROSTL_REQUIRE_MLX_ATTENTION_RUNTIME",
+            "test_mlx_attention_odo_runtime.py",
+        ),
     ):
         step = ci_coverage.workflow_job_step_section(workflow, "portable-host", name)
         assert "if: runner.os == 'Windows'" in step
@@ -655,16 +662,42 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
                 in paths
             )
     metal = (root / ".github/workflows/mlx-metal-host.yml").read_text()
+    attention = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Execute pinned DirectX attention row dots"
+    )
+    assert "CROSTL_MLX_ATTENTION_TARGET: directx" in attention
+    assert "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream" in attention
+    assert "--dist loadscope" in attention
+    assert ci_coverage.workflow_job_timeout_minutes(workflow, "portable-host") * 60 > (
+        120
+        + 120
+        + 180
+        + 180
+        + 120
+        + 300
+        + 900
+        + 900
+        + 300
+        + 900
+        + 1800
+        + 300
+        + 1000
+        + 600
+    )
     reductions = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Validate DirectX software reductions"
     )
     assert "tests/test_translator/test_directx_subgroup_identity.py" in reductions
     assert "tests/test_translator/test_directx_subgroup_uniformity.py" in reductions
+    assert "tests/test_translator/test_directx_subgroup_components.py" in reductions
     for event in ("push", "pull_request"):
         assert "tests/test_translator/test_directx_subgroup_identity.py" in (
             ci_coverage.workflow_event_path_filters(workflow, event)
         )
         assert "tests/test_translator/test_directx_subgroup_uniformity.py" in (
+            ci_coverage.workflow_event_path_filters(workflow, event)
+        )
+        assert "tests/test_translator/test_directx_subgroup_components.py" in (
             ci_coverage.workflow_event_path_filters(workflow, event)
         )
     control = ci_coverage.workflow_job_step_section(

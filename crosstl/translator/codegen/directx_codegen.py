@@ -4560,35 +4560,68 @@ class HLSLCodeGen:
         target = getattr(node, "target", getattr(node, "left", None))
         return self.hlsl_texture_offset_write_root_name(target)
 
-    def hlsl_software_subgroup_uniform_expression(self, expression, uniform_names):
-        if expression is None:
+    def hlsl_software_subgroup_uniform_expression(
+        self, expression, uniform_names, uniform_components
+    ):
+        if isinstance(expression, LiteralNode):
+            return True
+        if isinstance(expression, IdentifierNode):
+            return expression.name in uniform_names
+        if isinstance(expression, (MemberAccessNode, SwizzleNode)):
+            base = (
+                expression.object_expr
+                if isinstance(expression, MemberAccessNode)
+                else expression.vector_expr
+            )
+            member = (
+                expression.member
+                if isinstance(expression, MemberAccessNode)
+                else expression.components
+            )
+            if isinstance(base, IdentifierNode) and base.name in uniform_components:
+                # A uniform component does not make the rest of the vector uniform.
+                positions = {
+                    letter: index
+                    for alphabet in ("xyzw", "rgba")
+                    for index, letter in enumerate(alphabet)
+                }
+                return bool(member) and all(
+                    positions.get(letter) in uniform_components[base.name]
+                    for letter in member
+                )
+            children = [base]
+        elif isinstance(expression, FunctionCallNode):
+            if id(expression) not in self.hlsl_software_subgroup_uniform_calls:
+                return False
+            children = expression.arguments
+        elif isinstance(expression, ConstructorNode):
+            children = [*expression.arguments, *expression.named_arguments.values()]
+        elif isinstance(expression, CastNode):
+            children = [expression.expression]
+        elif isinstance(expression, BinaryOpNode):
+            children = [expression.left, expression.right]
+        elif isinstance(expression, UnaryOpNode):
+            if self.map_operator(expression.operator) not in {"+", "-", "!", "~"}:
+                return False
+            children = [expression.operand]
+        elif isinstance(expression, TernaryOpNode):
+            children = [
+                expression.condition,
+                expression.true_expr,
+                expression.false_expr,
+            ]
+        else:
             return False
-        callees = {
-            id(node.function)
-            for node in self.walk_ast(expression)
-            if isinstance(node, FunctionCallNode)
-            and id(node) in self.hlsl_software_subgroup_uniform_calls
-        }
-        for node in self.walk_ast(expression):
-            if isinstance(node, (AssignmentNode, WaveOpNode, ArrayAccessNode)):
-                return False
-            if isinstance(node, FunctionCallNode) and (
-                id(node) not in self.hlsl_software_subgroup_uniform_calls
-            ):
-                return False
-            if isinstance(node, UnaryOpNode) and self.map_operator(
-                getattr(node, "op", getattr(node, "operator", None))
-            ) in {"++", "--"}:
-                return False
-            if (
-                isinstance(node, IdentifierNode)
-                and id(node) not in callees
-                and node.name not in uniform_names
-            ):
-                return False
-        return True
+        return all(
+            self.hlsl_software_subgroup_uniform_expression(
+                child, uniform_names, uniform_components
+            )
+            for child in children
+        )
 
-    def hlsl_software_subgroup_uniform_for(self, node, uniform_names, call_mutations):
+    def hlsl_software_subgroup_uniform_for(
+        self, node, uniform_names, call_mutations, uniform_components
+    ):
         initializer = getattr(node, "init", None)
         if not isinstance(initializer, VariableNode):
             return False
@@ -4609,11 +4642,16 @@ class HLSLCodeGen:
             if name in uniform_names and name != loop_name
         }
         initial_expression = getattr(initializer, "initial_value", None)
+        uniform_components = {
+            name: components
+            for name, components in uniform_components.items()
+            if name != loop_name
+        }
         initial_value = evaluate_literal_int_expression(initial_expression, constants)
         if (
             initial_value is None
             and not self.hlsl_software_subgroup_uniform_expression(
-                initial_expression, uniform_names
+                initial_expression, set(uniform_names) - {loop_name}, uniform_components
             )
         ):
             return False
@@ -4640,7 +4678,7 @@ class HLSLCodeGen:
         if (
             literal_bound is None
             and not self.hlsl_software_subgroup_uniform_expression(
-                bound, set(uniform_names) | {loop_name}
+                bound, set(uniform_names) | {loop_name}, uniform_components
             )
         ):
             return False
@@ -4726,7 +4764,13 @@ class HLSLCodeGen:
         )
 
     def validate_hlsl_software_subgroup_control_flow(
-        self, function, dependent_names, uniform_names, call_mutations, mutable_names
+        self,
+        function,
+        dependent_names,
+        uniform_names,
+        call_mutations,
+        mutable_names,
+        uniform_components,
     ):
         body = getattr(function, "body", None)
         operation_records = self.hlsl_software_subgroup_operation_records(body)
@@ -4737,12 +4781,13 @@ class HLSLCodeGen:
             else getattr(function, "source_location", None)
         )
 
-        def validate_statements(statements, names):
+        def validate_statements(statements, names, components):
             for statement in self.hlsl_software_subgroup_statement_list(statements):
                 if isinstance(statement, VariableNode):
                     # Facts are lexical and apply only to locals never written
                     # or passed to a possibly mutating call in this function.
                     names.discard(statement.name)
+                    components.pop(statement.name, None)
                     if (
                         statement.name not in mutable_names
                         and self.map_type(statement.var_type)
@@ -4756,7 +4801,7 @@ class HLSLCodeGen:
                             "min16uint",
                         }
                         and self.hlsl_software_subgroup_uniform_expression(
-                            statement.initial_value, names
+                            statement.initial_value, names, components
                         )
                     ):
                         names.add(statement.name)
@@ -4771,14 +4816,16 @@ class HLSLCodeGen:
                 if isinstance(statement, (BlockNode,)) or hasattr(
                     statement, "statements"
                 ):
-                    validate_statements(statement, set(names))
+                    validate_statements(statement, set(names), dict(components))
                     continue
                 if isinstance(statement, IfNode):
                     conditions = [statement.condition] + list(
                         getattr(statement, "else_if_conditions", []) or []
                     )
                     if not all(
-                        self.hlsl_software_subgroup_uniform_expression(condition, names)
+                        self.hlsl_software_subgroup_uniform_expression(
+                            condition, names, components
+                        )
                         for condition in conditions
                     ):
                         raise self.hlsl_software_subgroup_error(
@@ -4800,11 +4847,11 @@ class HLSLCodeGen:
                         *(getattr(statement, "else_if_bodies", []) or []),
                         statement.else_branch,
                     ]:
-                        validate_statements(branch, set(names))
+                        validate_statements(branch, set(names), dict(components))
                     continue
                 if isinstance(statement, ForNode):
                     if not self.hlsl_software_subgroup_uniform_for(
-                        statement, names, call_mutations
+                        statement, names, call_mutations, components
                     ):
                         raise self.hlsl_software_subgroup_error(
                             "DirectX software subgroup barriers require a "
@@ -4818,9 +4865,15 @@ class HLSLCodeGen:
                         )
                     initializer = getattr(statement, "init", None)
                     nested_names = set(names)
+                    nested_components = dict(components)
                     if isinstance(initializer, VariableNode) and initializer.name:
                         nested_names.add(initializer.name)
-                    validate_statements(getattr(statement, "body", None), nested_names)
+                        nested_components.pop(initializer.name, None)
+                    validate_statements(
+                        getattr(statement, "body", None),
+                        nested_names,
+                        nested_components,
+                    )
                     continue
                 if isinstance(
                     statement,
@@ -4878,7 +4931,7 @@ class HLSLCodeGen:
                         source_location=source_location,
                     )
 
-        validate_statements(body, set(uniform_names))
+        validate_statements(body, set(uniform_names), dict(uniform_components))
 
     def prepare_hlsl_software_subgroup_contract(self, ast, target_stage=None):
         self.required_hlsl_software_subgroup_helpers = set()
@@ -5103,7 +5156,19 @@ class HLSLCodeGen:
             uniform_names = set(self.literal_int_constants) - {
                 parameter.name for parameter in parameters
             }
+            uniform_components = {}
             if function is entry_function:
+                unit_dimensions = {
+                    index
+                    for index, size in enumerate(concrete_workgroup_size)
+                    if size == 1
+                }
+                uniform_components = {
+                    parameter.name: unit_dimensions
+                    for parameter in parameters
+                    if self.hlsl_canonical_semantic(self.semantic_from_node(parameter))
+                    in {"SV_DispatchThreadID", "SV_GroupThreadID"}
+                }
                 uniform_names.update(
                     parameter.name
                     for parameter in parameters
@@ -5136,8 +5201,18 @@ class HLSLCodeGen:
                 elif isinstance(node, FunctionCallNode):
                     mutable_names.update(call_mutations[id(node)])
             uniform_names.difference_update(mutable_names)
+            uniform_components = {
+                name: components
+                for name, components in uniform_components.items()
+                if name not in mutable_names
+            }
             self.validate_hlsl_software_subgroup_control_flow(
-                function, dependent_names, uniform_names, call_mutations, mutable_names
+                function,
+                dependent_names,
+                uniform_names,
+                call_mutations,
+                mutable_names,
+                uniform_components,
             )
 
     def hlsl_software_subgroup_identifier(self, key, base_name):
