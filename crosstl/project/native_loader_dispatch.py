@@ -34,6 +34,7 @@ from crosstl.project.runtime_verification import (
     prepare_runtime_execution,
 )
 from crosstl.project.uniform_layout import validate_std140_block_layout
+from crosstl.translator.dispatch_regions import DispatchRegion
 
 _ERROR_PREFIX = "project.native-loader-dispatch"
 _COMPUTE_STAGE = "compute"
@@ -198,6 +199,20 @@ def build_native_loader_dispatch_request(
         entry_point=entry_point["name"],
         reflected_workgroup_size=_reflected_workgroup_size(entry_point),
     )
+    if "dispatchRegion" in normalized["provenance"]:
+        region = DispatchRegion.from_json(normalized["provenance"]["dispatchRegion"])
+        if (
+            _padded_dimensions(dispatch.workgroup_count) != region.workgroup_count
+            or _padded_dimensions(dispatch.workgroup_size) != region.workgroup_size
+            or dispatch.thread_grid_size
+        ):
+            raise NativeLoaderDispatchError(
+                "dispatch-region-geometry-mismatch",
+                "A specialized dispatch region requires its recorded physical "
+                "workgroup count and size, without a second thread-grid mapping.",
+                path="$.dispatchGeometry",
+                details={"dispatchRegion": region.to_json()},
+            )
     if dispatch.thread_grid_size and target != "metal":
         raise NativeLoaderDispatchError(
             "exact-thread-grid-unsupported",

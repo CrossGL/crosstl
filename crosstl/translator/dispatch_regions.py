@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 
 def _dimensions(
@@ -77,6 +77,21 @@ class DispatchRegion:
             "workgroupCount": list(self.workgroup_count),
             "workgroupSize": list(self.workgroup_size),
         }
+
+    @classmethod
+    def from_json(cls, value: Mapping[str, Any]) -> DispatchRegion:
+        fields = {
+            "threadGridSize": "thread_grid_size",
+            "sourceWorkgroupSize": "source_workgroup_size",
+            "workgroupOffset": "workgroup_offset",
+            "workgroupCount": "workgroup_count",
+            "workgroupSize": "workgroup_size",
+        }
+        if not isinstance(value, Mapping) or set(value) != set(fields):
+            raise ValueError(
+                "Dispatch region must contain exactly " + ", ".join(sorted(fields))
+            )
+        return cls(**{name: value[key] for key, name in fields.items()})
 
 
 def plan_dispatch_regions(

@@ -50,6 +50,7 @@ on:
       - "tests/test_translator/test_subgroup_uniform_arguments.py"
       - "tests/test_translator/test_software_subgroup_partial.py"
       - "tests/test_translator/test_dispatch_regions.py"
+      - "tests/test_translator/test_dispatch_region_project.py"
       - "tests/test_translator/test_exact_thread_grid_runtime.py"
       - "tests/test_translator/test_metal_wave_arguments.py"
       - "tests/test_translator/test_software_subgroup_workgroup_ranges.py"
@@ -118,6 +119,7 @@ on:
       - "tests/test_translator/test_subgroup_uniform_arguments.py"
       - "tests/test_translator/test_software_subgroup_partial.py"
       - "tests/test_translator/test_dispatch_regions.py"
+      - "tests/test_translator/test_dispatch_region_project.py"
       - "tests/test_translator/test_exact_thread_grid_runtime.py"
       - "tests/test_translator/test_metal_wave_arguments.py"
       - "tests/test_translator/test_software_subgroup_workgroup_ranges.py"
@@ -347,6 +349,7 @@ jobs:
               --basetemp=.mlx-portable-host/dispatch-regions/pytest \
               --junitxml=.mlx-portable-host/dispatch-regions/results.xml \
               tests/test_translator/test_dispatch_regions.py \
+              tests/test_translator/test_dispatch_region_project.py \
               2>&1 | tee .mlx-portable-host/dispatch-regions.log
       - name: Validate Metal argument inference
         env:

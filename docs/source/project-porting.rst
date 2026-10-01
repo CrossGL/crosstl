@@ -1279,8 +1279,33 @@ to each invocation, including when read by helper functions.
 Native tests execute these region artifacts through one shared-allocation
 dispatch sequence on DirectX and OpenGL, with original and roundtrip Metal
 controls. The caller must compile each specialization, submit its exact physical
-counts and share allocations across the complete plan. Automatic package
-selection, specialization caching and MLX host dispatch integration are not yet
+counts and share allocations across the complete plan.
+
+Project translation accepts a target-scoped ``dispatch_region`` source option
+for DirectX and OpenGL. Its fields match ``DispatchRegion.to_json()``; the
+configured ``workgroup_size`` must match the region's physical ``workgroupSize``.
+For the final five invocations of a 37-thread grid with nominal width 32:
+
+.. code-block:: toml
+
+   [project]
+   workgroup_size = [5, 1, 1]
+
+   [project.source_options.metal.target_options.opengl.dispatch_region]
+   threadGridSize = [37, 1, 1]
+   sourceWorkgroupSize = [32, 1, 1]
+   workgroupOffset = [1, 0, 0]
+   workgroupCount = [1, 1, 1]
+   workgroupSize = [5, 1, 1]
+
+The region is lowered after entry selection and retained in artifact, package
+and native-loader provenance as ``dispatchRegion``. The loader checks its
+physical size against the reflected entry and rejects a different launch count
+or a second thread-grid mapping. Each region needs its own output directory or
+otherwise distinct artifact identity; a grid or offset change changes the
+specialized program, even when the physical workgroup shape stays the same.
+
+Automatic package selection, specialization caching and MLX host dispatch integration are not yet
 wired to these APIs. The public DirectX/OpenGL ``threadGridSize`` rejection remains
 in place until those contracts are implemented; a geometry plan alone does not
 make an ordinary rounded dispatch correct.

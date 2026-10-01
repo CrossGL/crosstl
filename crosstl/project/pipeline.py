@@ -93,6 +93,8 @@ from crosstl.translator.codegen.workgroup_access_contracts import (
     parse_workgroup_access_assertions,
 )
 from crosstl.translator.default_arguments import lower_default_arguments
+from crosstl.translator.dispatch_region_lowering import specialize_dispatch_region
+from crosstl.translator.dispatch_regions import DispatchRegion
 from crosstl.translator.entry_discovery import (
     ENTRY_DISCOVERY_AVAILABLE,
     ENTRY_DISCOVERY_FAILED,
@@ -1529,6 +1531,7 @@ REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
 SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
 TARGET_SOURCE_OPTIONS_KEY = "target_options"
 SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION = "software_subgroup_width"
+DISPATCH_REGION_SOURCE_OPTION = "dispatch_region"
 COOPERATIVE_MATRIX_SOFTWARE_LOWERING_SOURCE_OPTION = (
     "cooperative_matrix_software_lowering"
 )
@@ -1811,7 +1814,9 @@ REPORT_ARTIFACT_INCLUDE_DEPENDENCY_PROCESSING_FIELDS = frozenset(
     )
 )
 REPORT_HASH_FIELDS = frozenset(("algorithm", "value"))
-REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(("pipeline", "intermediate"))
+REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(
+    ("pipeline", "intermediate", "dispatchRegion")
+)
 REPORT_ARTIFACT_ENTRY_POINT_FIELDS = frozenset(("source", "target", "stage"))
 REPORT_ARTIFACT_EXECUTION_FIELDS = frozenset(
     (
@@ -3500,6 +3505,14 @@ def _as_source_pattern_options(
         for per_source_name, per_source_value in per_source_options.items():
             if not isinstance(per_source_name, str) or not per_source_name.strip():
                 raise ValueError(f"{source_path} keys must be non-empty strings")
+            if per_source_name == DISPATCH_REGION_SOURCE_OPTION:
+                try:
+                    normalized_pattern_options[per_source_name] = (
+                        DispatchRegion.from_json(per_source_value).to_json()
+                    )
+                except ValueError as exc:
+                    raise ValueError(f"{source_path}.{per_source_name}: {exc}") from exc
+                continue
             if isinstance(per_source_value, bool):
                 normalized_pattern_options[per_source_name] = per_source_value
             elif isinstance(per_source_value, int):
@@ -3573,6 +3586,16 @@ def _as_source_option_table(
                     allow_target_options=False,
                 )
             normalized_options[name] = target_options
+            continue
+        if name == DISPATCH_REGION_SOURCE_OPTION:
+            try:
+                normalized_options[name] = DispatchRegion.from_json(
+                    option_value
+                ).to_json()
+            except ValueError as exc:
+                raise ValueError(
+                    f"{_mapping_key_path(option_path, name)}: {exc}"
+                ) from exc
             continue
         if isinstance(option_value, bool):
             normalized_options[name] = option_value
@@ -6185,6 +6208,7 @@ def _frontend_source_options(source_options: Mapping[str, Any]) -> dict[str, Any
             TEMPLATE_VARIANTS_SOURCE_OPTION,
             TARGET_SOURCE_OPTIONS_KEY,
             SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION,
+            DISPATCH_REGION_SOURCE_OPTION,
             COOPERATIVE_MATRIX_SOFTWARE_LOWERING_SOURCE_OPTION,
             PRIVATE_POINTER_OUT_OF_BOUNDS_READ_SOURCE_OPTION,
             DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION,
@@ -27655,6 +27679,40 @@ def _project_directx_widen_native_float16(
     return enabled
 
 
+def _project_dispatch_region(
+    target: str, source_options: Mapping[str, Any]
+) -> DispatchRegion | None:
+    if DISPATCH_REGION_SOURCE_OPTION not in source_options:
+        return None
+    if target not in {"directx", "opengl"}:
+        raise ValueError("dispatch_region is supported only by DirectX and OpenGL")
+    return DispatchRegion.from_json(source_options[DISPATCH_REGION_SOURCE_OPTION])
+
+
+def _validate_project_dispatch_region_execution(
+    region: DispatchRegion, execution: Mapping[str, Any] | None
+) -> None:
+    sizes = []
+    if isinstance(execution, Mapping):
+        if "workgroupSize" in execution:
+            sizes.append(execution["workgroupSize"])
+        if isinstance(execution.get("entryPoints"), list):
+            sizes.extend(
+                entry.get("workgroupSize") if isinstance(entry, Mapping) else None
+                for entry in execution["entryPoints"]
+            )
+    if not sizes or any(
+        not isinstance(size, (tuple, list))
+        or any(type(n) is not int for n in size)
+        or tuple(size) != region.workgroup_size
+        for size in sizes
+    ):
+        raise ValueError(
+            "dispatch_region requires a concrete workgroup_size matching its "
+            "physical workgroupSize"
+        )
+
+
 def _generate_project_target_from_crossgl_ast(
     *,
     ast: Any,
@@ -27669,6 +27727,7 @@ def _generate_project_target_from_crossgl_ast(
     private_pointer_out_of_bounds_read: str | None = None,
     directx_relative_wave_shuffle_out_of_range: Any | None = None,
     directx_widen_native_float16: Any | None = None,
+    dispatch_region: DispatchRegion | None = None,
 ) -> str:
     codegen = get_codegen(target)
     if cooperative_matrix_software_lowering is not None:
@@ -27749,6 +27808,8 @@ def _generate_project_target_from_crossgl_ast(
     selected_ast, remaining_entry_point = prepare_entry_scoped_target(
         codegen, ast, entry_point
     )
+    if dispatch_region is not None:
+        selected_ast = specialize_dispatch_region(selected_ast, dispatch_region)
     validate_pointer_reinterpretation_target(selected_ast, target)
     if remaining_entry_point is None:
         generated = codegen.generate(selected_ast)
@@ -28730,7 +28791,13 @@ def _translate_project_impl(
                 private_pointer_out_of_bounds_read = None
                 directx_relative_wave_shuffle_out_of_range = None
                 directx_widen_native_float16 = None
+                dispatch_region = None
                 try:
+                    dispatch_region = _project_dispatch_region(target, source_options)
+                    if dispatch_region is not None:
+                        artifact["provenance"][
+                            "dispatchRegion"
+                        ] = dispatch_region.to_json()
                     software_subgroup_width = _project_software_subgroup_width(
                         target,
                         source_options,
@@ -29061,6 +29128,7 @@ def _translate_project_impl(
                         or private_pointer_out_of_bounds_read is not None
                         or directx_relative_wave_shuffle_out_of_range is not None
                         or directx_widen_native_float16 is not None
+                        or dispatch_region is not None
                     ):
                         crossgl_ast = _crossgl_ast_for_project_target(
                             input_path=translation_input_path,
@@ -29144,6 +29212,10 @@ def _translate_project_impl(
                                 )
                             )
                         if execution is not None:
+                            if dispatch_region is not None:
+                                _validate_project_dispatch_region_execution(
+                                    dispatch_region, execution
+                                )
                             split_specs = (
                                 _opengl_workgroup_split_specs(
                                     execution,
@@ -29210,6 +29282,7 @@ def _translate_project_impl(
                                     split_artifact["execution"] = split_execution
                                     try:
                                         split_source = _generate_project_target_from_crossgl_ast(
+                                            dispatch_region=dispatch_region,
                                             ast=crossgl_ast,
                                             target=target,
                                             output_path=split_output_path,
@@ -29290,6 +29363,7 @@ def _translate_project_impl(
                                 artifact["execution"] = execution
                                 try:
                                     generated_source = _generate_project_target_from_crossgl_ast(
+                                        dispatch_region=dispatch_region,
                                         ast=crossgl_ast,
                                         target=target,
                                         output_path=output_path,
@@ -29343,6 +29417,7 @@ def _translate_project_impl(
                         or private_pointer_out_of_bounds_read is not None
                         or directx_relative_wave_shuffle_out_of_range is not None
                         or directx_widen_native_float16 is not None
+                        or dispatch_region is not None
                     ):
                         crossgl_ast = crossgl_ast or _crossgl_ast_for_project_target(
                             input_path=translation_input_path,
@@ -29356,7 +29431,12 @@ def _translate_project_impl(
                                 template_materialization is not None
                             ),
                         )
+                        if dispatch_region is not None:
+                            _validate_project_dispatch_region_execution(
+                                dispatch_region, artifact.get("execution")
+                            )
                         generated_source = _generate_project_target_from_crossgl_ast(
+                            dispatch_region=dispatch_region,
                             ast=crossgl_ast,
                             target=target,
                             output_path=output_path,
@@ -46657,6 +46737,7 @@ def _provenance_contract_reasons(
     *,
     required: bool = False,
     require_closed_fields: bool = False,
+    config: ProjectConfig | None = None,
 ) -> list[str]:
     if "provenance" not in artifact:
         if required:
@@ -46675,6 +46756,34 @@ def _provenance_contract_reasons(
         if require_closed_fields
         else []
     )
+    if "dispatchRegion" in provenance:
+        try:
+            region = DispatchRegion.from_json(provenance["dispatchRegion"])
+            if artifact.get("target") not in {"directx", "opengl"}:
+                raise ValueError("dispatch regions require DirectX or OpenGL")
+            if artifact.get("status") == "translated":
+                _validate_project_dispatch_region_execution(
+                    region, artifact.get("execution")
+                )
+        except ValueError as exc:
+            reasons.append(f"{prefix}.dispatchRegion: {exc}")
+    if (
+        config is not None
+        and artifact.get("status") == "translated"
+        and all(
+            _is_non_empty_string(artifact.get(key))
+            for key in ("sourceBackend", "source", "target")
+        )
+    ):
+        options = _source_options_for_unit(
+            config, artifact["sourceBackend"], artifact["source"], artifact["target"]
+        )
+        if provenance.get("dispatchRegion") != options.get(
+            DISPATCH_REGION_SOURCE_OPTION
+        ):
+            reasons.append(
+                f"{prefix}.dispatchRegion must match the resolved project source options"
+            )
     pipeline = provenance.get("pipeline")
     if not _is_non_empty_string(pipeline):
         reasons.append(f"{prefix}.pipeline must be a string")
@@ -51699,6 +51808,18 @@ def _subgroup_width_rule_mapping_contract_reasons(
     return reasons
 
 
+def _dispatch_region_options_contract_reasons(
+    prefix: str, options: Mapping[str, Any]
+) -> list[str]:
+    if DISPATCH_REGION_SOURCE_OPTION not in options:
+        return []
+    try:
+        DispatchRegion.from_json(options[DISPATCH_REGION_SOURCE_OPTION])
+    except ValueError as exc:
+        return [f"{prefix}.{DISPATCH_REGION_SOURCE_OPTION}: {exc}"]
+    return []
+
+
 def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
     if not isinstance(value, Mapping):
         return [f"{prefix} must be an object"]
@@ -51713,6 +51834,9 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
         if not isinstance(options, Mapping):
             reasons.append(f"{option_prefix} must be an object")
             continue
+        reasons.extend(
+            _dispatch_region_options_contract_reasons(option_prefix, options)
+        )
         for name, option_value in options.items():
             if not _is_non_empty_string(name):
                 reasons.append(f"{option_prefix} keys must be non-empty strings")
@@ -51739,12 +51863,18 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
                         )
                     if any(
                         not isinstance(pattern_value, (str, int, bool))
-                        for pattern_value in pattern_options.values()
+                        for pattern_key, pattern_value in pattern_options.items()
+                        if pattern_key != DISPATCH_REGION_SOURCE_OPTION
                     ):
                         reasons.append(
                             f"{pattern_prefix} values must be strings, "
                             "integers, or booleans"
                         )
+                    reasons.extend(
+                        _dispatch_region_options_contract_reasons(
+                            pattern_prefix, pattern_options
+                        )
+                    )
                 continue
             if name == TEMPLATE_VARIANTS_SOURCE_OPTION:
                 reasons.extend(
@@ -51767,6 +51897,11 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
                     if not isinstance(target_options, Mapping):
                         reasons.append(f"{target_prefix} must be an object")
                         continue
+                    reasons.extend(
+                        _dispatch_region_options_contract_reasons(
+                            target_prefix, target_options
+                        )
+                    )
                     for (
                         target_option_name,
                         target_option_value,
@@ -51812,18 +51947,30 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
                                     )
                                 if any(
                                     not isinstance(pattern_value, (str, int, bool))
-                                    for pattern_value in pattern_options.values()
+                                    for pattern_key, pattern_value in (
+                                        pattern_options.items()
+                                    )
+                                    if pattern_key != DISPATCH_REGION_SOURCE_OPTION
                                 ):
                                     reasons.append(
                                         f"{pattern_prefix} values must be strings, "
                                         "integers, or booleans"
                                     )
+                                reasons.extend(
+                                    _dispatch_region_options_contract_reasons(
+                                        pattern_prefix, pattern_options
+                                    )
+                                )
+                            continue
+                        if target_option_name == DISPATCH_REGION_SOURCE_OPTION:
                             continue
                         if not isinstance(target_option_value, (str, int, bool)):
                             reasons.append(
                                 f"{target_prefix} values must be strings, "
                                 "integers, booleans, or source_patterns objects"
                             )
+                continue
+            if name == DISPATCH_REGION_SOURCE_OPTION:
                 continue
             if not isinstance(option_value, (str, int, bool)):
                 reasons.append(
@@ -56113,6 +56260,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
     )
 
     artifacts = report.get("artifacts", [])
+    region_config = (
+        _project_config_for_scan_validation(
+            project if isinstance(project, Mapping) else None, root_path
+        )
+        if has_summary
+        else None
+    )
     if has_summary and "artifacts" not in report:
         reasons.append("artifacts must be a list")
     if not isinstance(artifacts, list):
@@ -56480,6 +56634,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     artifact,
                     required=has_summary,
                     require_closed_fields=has_summary,
+                    config=region_config,
                 )
             )
             reasons.extend(

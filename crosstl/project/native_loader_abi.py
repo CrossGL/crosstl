@@ -9,6 +9,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from crosstl.translator.dispatch_regions import DispatchRegion
+
 NATIVE_LOADER_ABI_KIND = "crosstl-native-loader-abi-descriptor"
 NATIVE_LOADER_ABI_VERSION = 1
 
@@ -109,6 +111,7 @@ def build_native_loader_abi_descriptor(
     artifact = _artifact_descriptor(unit)
     source = _source_descriptor(unit)
     provenance = _json_mapping(unit.get("provenance"), path="$.provenance")
+    _validate_dispatch_region(target, entry_point, provenance)
 
     descriptor = NativeLoaderABIDescriptor(
         unit_id=unit_id,
@@ -1674,7 +1677,39 @@ def _validate_descriptor(descriptor: Mapping[str, Any]) -> dict[str, Any]:
             "Native loader ABI provenance must be an object.",
             path="$.provenance",
         )
+    _validate_dispatch_region(
+        normalized["target"], entry_point, normalized["provenance"]
+    )
     return normalized
+
+
+def _validate_dispatch_region(
+    target: str, entry_point: Mapping[str, Any], provenance: Mapping[str, Any]
+) -> None:
+    if "dispatchRegion" not in provenance:
+        return
+    try:
+        region = DispatchRegion.from_json(provenance["dispatchRegion"])
+        if target not in {"directx", "opengl"} or entry_point.get("stage") != "compute":
+            raise ValueError(
+                "Dispatch regions require a DirectX or OpenGL compute entry"
+            )
+        key = "numthreads" if target == "directx" else "local_size"
+        size = entry_point["executionConfig"].get(key)
+        if size is None and target == "opengl":
+            size = [entry_point["executionConfig"].get(f"local_size_{axis}") for axis in "xyz"]
+        if (
+            not isinstance(size, list)
+            or any(type(n) is not int for n in size)
+            or tuple(size) != region.workgroup_size
+        ):
+            raise ValueError(
+                "Dispatch region workgroupSize differs from the reflected entry"
+            )
+    except (TypeError, ValueError) as exc:
+        raise NativeLoaderABIError(
+            "dispatch-region-invalid", str(exc), path="$.provenance.dispatchRegion"
+        ) from exc
 
 
 def _validate_descriptor_artifact(value: Any) -> None:

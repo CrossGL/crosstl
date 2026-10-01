@@ -7945,7 +7945,9 @@
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_entry_workgroup_rules_reject_unmatched_entry_pattern",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_compute_workgroup_size_projects_declared_source_shape",
             "tests/test_translator/test_dispatch_regions.py::def test_region_plan_exhaustively_covers_small_3d_grids",
-            "tests/test_translator/test_dispatch_regions.py::def test_region_specialization_compiles_without_changing_source_ast"
+            "tests/test_translator/test_dispatch_regions.py::def test_region_specialization_compiles_without_changing_source_ast",
+            "tests/test_translator/test_dispatch_region_project.py::def test_project_region_package_and_launch_contract",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_identity_includes_source_grid_and_offset"
           ]
         },
         "opengl": {
@@ -7963,7 +7965,9 @@
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_compute_workgroup_size_projects_declared_source_shape",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_keeps_only_selected_interface_and_helpers",
             "tests/test_translator/test_dispatch_regions.py::def test_region_plan_exhaustively_covers_small_3d_grids",
-            "tests/test_translator/test_dispatch_regions.py::def test_region_specialization_compiles_without_changing_source_ast"
+            "tests/test_translator/test_dispatch_regions.py::def test_region_specialization_compiles_without_changing_source_ast",
+            "tests/test_translator/test_dispatch_region_project.py::def test_project_region_package_and_launch_contract",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_identity_includes_source_grid_and_offset"
           ]
         },
         "metal": {
