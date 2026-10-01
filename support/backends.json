@@ -32,6 +32,7 @@
         "tests/test_translator/test_mlx_current_unary_fma.py",
         "tests/test_translator/test_directx_atan2.py",
         "tests/test_translator/test_directx_half_conversion.py",
+        "tests/test_translator/test_mlx_attention_reduce_runtime.py",
         "tests/test_translator/test_metal_builtin_ownership.py",
         "tests/test_backend/test_directx"
       ],
@@ -66,6 +67,7 @@
         "tests/test_translator/test_opengl_half_conversion.py",
         "tests/test_translator/test_uniform_block_layouts.py",
         "tests/test_translator/test_mlx_attention_ds_opengl.py",
+        "tests/test_translator/test_mlx_attention_reduce_runtime.py",
         "tests/test_translator/test_metal_precise_asin.py",
         "tests/test_translator/test_fused_math.py",
         "tests/test_translator/test_metal_fma.py",
@@ -147,6 +149,7 @@
       "native_backend": "crosstl/backend/Metal",
       "tests": [
         "tests/test_translator/test_codegen/test_metal_codegen.py",
+        "tests/test_translator/test_mlx_attention_reduce_runtime.py",
         "tests/test_translator/test_metal_builtin_ownership.py",
         "tests/test_translator/test_metal_precise_asin.py",
         "tests/test_translator/test_fused_math.py",

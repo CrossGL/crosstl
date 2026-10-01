@@ -129,10 +129,11 @@
           "tests/test_translator/test_mlx_current_unary_fma.py",
           "tests/test_translator/test_directx_atan2.py",
           "tests/test_translator/test_directx_half_conversion.py",
+          "tests/test_translator/test_mlx_attention_reduce_runtime.py",
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1597
+        "test_count": 1602
       },
       "translator_codegen": {
         "exists": true,
@@ -259,6 +260,7 @@
           "tests/test_translator/test_opengl_half_conversion.py",
           "tests/test_translator/test_uniform_block_layouts.py",
           "tests/test_translator/test_mlx_attention_ds_opengl.py",
+          "tests/test_translator/test_mlx_attention_reduce_runtime.py",
           "tests/test_translator/test_metal_precise_asin.py",
           "tests/test_translator/test_fused_math.py",
           "tests/test_translator/test_metal_fma.py",
@@ -267,7 +269,7 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1846
+        "test_count": 1851
       },
       "translator_codegen": {
         "exists": true,
@@ -636,6 +638,7 @@
       "tests": {
         "paths": [
           "tests/test_translator/test_codegen/test_metal_codegen.py",
+          "tests/test_translator/test_mlx_attention_reduce_runtime.py",
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_translator/test_metal_precise_asin.py",
           "tests/test_translator/test_fused_math.py",
@@ -644,7 +647,7 @@
           "tests/test_translator/test_mlx_current_unary_fma.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1951
+        "test_count": 1956
       },
       "translator_codegen": {
         "exists": true,
@@ -13183,7 +13186,9 @@
             "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_uses_dependency_order_and_preserves_temporary",
             "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic",
             "tests/test_translator/test_runtime_graph_device.py::def test_reduction_device_fixture_matches_runtime_graph_contract",
-            "tests/test_translator/test_runtime_graph_device.py::def test_directx_dispatch_sequence_executes_shared_temporary_on_device"
+            "tests/test_translator/test_runtime_graph_device.py::def test_directx_dispatch_sequence_executes_shared_temporary_on_device",
+            "tests/test_translator/test_mlx_attention_reduce_runtime.py::def test_pinned_resident_attention_reductions",
+            "tests/test_translator/test_mlx_attention_reduce_runtime.py::def test_resident_reduction_rejects_conflicting_accumulator_upload"
           ],
           "notes": "The versioned runtime execution graph contract parses and serializes deterministic resource, layout, lifetime, dispatch, copy, fill, barrier, dependency, and bounded-control records, then validates them with structured diagnostics. Runtime package inspection resolves artifact selectors and entry points and checks reflected binding name presence, uniqueness, and access compatibility before execution. The DirectX graph executor runs dependency-ordered dispatch and visibility-barrier paths through one native dispatch sequence, reuses one graph-scoped payload-free temporary allocation, and defers output readback until the sequence completes. A gated Windows device test compiles both stages with DXC and executes a two-stage reduction through Direct3D 12 from input shape [4] containing [0, 1, 7, 42], through temporary shape [2], to output shape [1] containing the exact result [50]. Copy, fill, and bounded-control nodes are modeled but native execution reports explicit unsupported-capability diagnostics. This contract does not rewrite host or framework code and does not claim that the full MLX runtime or test suite is ported.",
           "status": "supported"
@@ -13226,7 +13231,9 @@
             "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_uses_dependency_order_and_preserves_temporary",
             "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic",
             "tests/test_translator/test_runtime_graph_device.py::def test_reduction_device_fixture_matches_runtime_graph_contract",
-            "tests/test_translator/test_runtime_graph_device.py::def test_opengl_dispatch_sequence_executes_shared_temporary_on_device"
+            "tests/test_translator/test_runtime_graph_device.py::def test_opengl_dispatch_sequence_executes_shared_temporary_on_device",
+            "tests/test_translator/test_mlx_attention_reduce_runtime.py::def test_pinned_resident_attention_reductions",
+            "tests/test_translator/test_mlx_attention_reduce_runtime.py::def test_resident_reduction_rejects_conflicting_accumulator_upload"
           ],
           "notes": "The versioned runtime execution graph contract parses and serializes deterministic resource, layout, lifetime, dispatch, copy, fill, barrier, dependency, and bounded-control records, then validates them with structured diagnostics. Runtime package inspection resolves artifact selectors and entry points and checks reflected binding name presence, uniqueness, and access compatibility before execution. The OpenGL graph executor runs dependency-ordered dispatch and visibility-barrier paths through one native dispatch sequence, reuses one graph-scoped payload-free temporary allocation, and defers output readback until the sequence completes. A gated Linux device test executes a two-stage GLSL reduction through an OpenGL 4.3 compute context from input shape [4] containing [0, 1, 7, 42], through temporary shape [2], to output shape [1] containing the exact result [50]. Copy, fill, and bounded-control nodes are modeled but native execution reports explicit unsupported-capability diagnostics. This contract does not rewrite host or framework code and does not claim that the full MLX runtime or test suite is ported.",
           "status": "supported"

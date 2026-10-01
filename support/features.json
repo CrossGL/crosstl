@@ -11384,7 +11384,9 @@
             "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_uses_dependency_order_and_preserves_temporary",
             "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic",
             "tests/test_translator/test_runtime_graph_device.py::def test_reduction_device_fixture_matches_runtime_graph_contract",
-            "tests/test_translator/test_runtime_graph_device.py::def test_directx_dispatch_sequence_executes_shared_temporary_on_device"
+            "tests/test_translator/test_runtime_graph_device.py::def test_directx_dispatch_sequence_executes_shared_temporary_on_device",
+            "tests/test_translator/test_mlx_attention_reduce_runtime.py::def test_pinned_resident_attention_reductions",
+            "tests/test_translator/test_mlx_attention_reduce_runtime.py::def test_resident_reduction_rejects_conflicting_accumulator_upload"
           ]
         },
         "opengl": {
@@ -11400,7 +11402,9 @@
             "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_uses_dependency_order_and_preserves_temporary",
             "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic",
             "tests/test_translator/test_runtime_graph_device.py::def test_reduction_device_fixture_matches_runtime_graph_contract",
-            "tests/test_translator/test_runtime_graph_device.py::def test_opengl_dispatch_sequence_executes_shared_temporary_on_device"
+            "tests/test_translator/test_runtime_graph_device.py::def test_opengl_dispatch_sequence_executes_shared_temporary_on_device",
+            "tests/test_translator/test_mlx_attention_reduce_runtime.py::def test_pinned_resident_attention_reductions",
+            "tests/test_translator/test_mlx_attention_reduce_runtime.py::def test_resident_reduction_rejects_conflicting_accumulator_upload"
           ]
         },
         "webgl": {

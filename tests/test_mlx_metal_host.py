@@ -353,6 +353,46 @@ def test_ci_requires_half_conversion_reference():
         )
 
 
+def test_ci_requires_resident_attention_reductions():
+    import re
+
+    from tools import ci_coverage
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/mlx-metal-host.yml").read_text()
+    step = ci_coverage.workflow_job_step_section(
+        workflow, "metal-host", "Execute pinned resident attention reductions"
+    )
+    assert "if:" not in step and "continue-on-error" not in step
+    assert 'CROSTL_REQUIRE_MLX_ATTENTION_REDUCE_RUNTIME: "1"' in step
+    assert "CROSTL_MLX_ATTENTION_REDUCE_TARGET: metal" in step
+    assert "CROSTL_MLX_CURRENT_ROOT: mlx-upstream" in step
+    assert 'PYTEST_XDIST_AUTO_NUM_WORKERS: "2"' in step
+    assert "CROSTL_REQUIRE_MLX_ATTENTION_REDUCE_COMPILE" not in step
+    assert "set -euo pipefail" in step
+    assert "--timeout-seconds 300" in step
+    assert "pytest -q -n auto --dist loadscope" in step
+    assert "--basetemp=.mlx-metal-host/attention-reduce/pytest" in step
+    assert "--junitxml=.mlx-metal-host/attention-reduce/results.xml" in step
+    assert "tee .mlx-metal-host/attention-reduce.log" in step
+    assert "tests/test_translator/test_mlx_attention_reduce_runtime.py" in step
+    assert ci_coverage.workflow_job_step_after(
+        workflow,
+        "metal-host",
+        "Execute pinned resident attention reductions",
+        "Checkout pinned upstream MLX",
+    )
+    for event in ("push", "pull_request"):
+        for path in (
+            "tests/test_translator/test_mlx_attention_reduce_runtime.py",
+            "tests/fixtures/runtime_verification/metal_dispatch_sequence.swift",
+        ):
+            assert path in ci_coverage.workflow_event_path_filters(workflow, event)
+    assert ci_coverage.workflow_job_timeout_minutes(workflow, "metal-host") * 60 > sum(
+        int(value) for value in re.findall(r"--timeout-seconds (\d+)", workflow)
+    )
+
+
 def test_ci_requires_pinned_attention_derivative_execution():
     from tools import ci_coverage
 

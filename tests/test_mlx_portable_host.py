@@ -668,6 +668,48 @@ def test_ci_requires_native_math_before_building_mlx():
     assert timeout * 60 > 120 + 900 + 1800 + 300 + 1000
 
 
+def test_ci_requires_resident_attention_reductions():
+    import re
+
+    from tools import ci_coverage
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/mlx-portable-host.yml").read_text()
+    step = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Execute pinned resident attention reductions"
+    )
+    assert "if:" not in step and "continue-on-error" not in step
+    assert 'CROSTL_REQUIRE_MLX_ATTENTION_REDUCE_RUNTIME: "1"' in step
+    assert "CROSTL_MLX_ATTENTION_REDUCE_TARGET: ${{ matrix.target }}" in step
+    assert "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream" in step
+    assert "CROSTL_REQUIRE_MLX_ATTENTION_REDUCE_COMPILE" not in step
+    assert "EGL_PLATFORM: surfaceless" in step
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in step
+    assert "set -euo pipefail" in step
+    assert "--timeout-seconds 300" in step
+    assert "pytest -q -n auto --dist loadscope" in step
+    assert "--basetemp=.mlx-portable-host/attention-reduce/pytest" in step
+    assert "--junitxml=.mlx-portable-host/attention-reduce/results.xml" in step
+    assert "tee .mlx-portable-host/attention-reduce.log" in step
+    assert "tests/test_translator/test_mlx_attention_reduce_runtime.py" in step
+    assert ci_coverage.workflow_job_step_after(
+        workflow,
+        "portable-host",
+        "Execute pinned resident attention reductions",
+        "Checkout and prepare pinned upstream MLX",
+    )
+    for event in ("push", "pull_request"):
+        assert (
+            "tests/test_translator/test_mlx_attention_reduce_runtime.py"
+            in ci_coverage.workflow_event_path_filters(workflow, event)
+        )
+    assert ci_coverage.workflow_job_timeout_minutes(
+        workflow, "portable-host"
+    ) * 60 > sum(
+        int(value) for value in re.findall(r"--timeout-seconds (\d+)", workflow)
+    )
+
+
 def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
     from tools import ci_coverage
 

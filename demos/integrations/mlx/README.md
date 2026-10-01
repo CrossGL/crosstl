@@ -902,6 +902,25 @@ float64 references. Original/generated Metal also checks input preservation
 and allocation identity. These are kernel-stage checks, not end-to-end
 attention backward or upstream host redirection.
 
+The attention reduction stage has a separate resident-sequence gate on Windows,
+Linux and macOS. Each case executes a prefix of `set`, `add`, `add`, `set` with
+distinct source allocations and shared accumulator/output allocations. The
+accumulator is initialized once and is not read back or reuploaded between
+dispatches. Prefix checks distinguish accumulation from reset behavior and
+verify untouched rows, partial workgroups and buffer guards. Dyadic and
+fractional inputs use the source storage precision; all output comparisons
+are bitwise, including the float32 accumulator and rounded low-precision result.
+
+Windows and original/generated Metal cover float32, float16 and bfloat16.
+OpenGL covers float32 and float16, with explicit decoded float32 uploads and
+source-scoped bounds derived from the fixture dimensions. OpenGL bfloat16
+narrowing remains tracked in [#1488](https://github.com/CrossGL/crosstl/issues/1488).
+Metal submits the sequence in one command buffer and verifies every allocation
+after completion. Portable drivers perform only the final output readback;
+Windows retains native two-byte source/output storage. These are maintained
+reduction-stage tests, not a complete attention operation or automatic MLX
+host-runtime redirection. No upstream kernels are modified.
+
 The Linux gate executes the same eight derivative configurations for each of
 float32 and float16. The 32-byte parameter block uses reflected mixed-field
 layout metadata, preserved by the native runtime contract. The test uploads

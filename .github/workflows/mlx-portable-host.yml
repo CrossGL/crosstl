@@ -22,6 +22,7 @@ on:
       - "tests/test_translator/test_mlx_gated_delta_runtime.py"
       - "tests/test_translator/test_mlx_attention_odo_runtime.py"
       - "tests/test_translator/test_mlx_attention_ds_runtime.py"
+      - "tests/test_translator/test_mlx_attention_reduce_runtime.py"
       - "tests/test_translator/test_mlx_attention_ds_opengl.py"
       - "tests/test_translator/test_uniform_block_layouts.py"
       - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
@@ -62,6 +63,7 @@ on:
       - "tests/test_translator/test_mlx_gated_delta_runtime.py"
       - "tests/test_translator/test_mlx_attention_odo_runtime.py"
       - "tests/test_translator/test_mlx_attention_ds_runtime.py"
+      - "tests/test_translator/test_mlx_attention_reduce_runtime.py"
       - "tests/test_translator/test_mlx_attention_ds_opengl.py"
       - "tests/test_translator/test_uniform_block_layouts.py"
       - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
@@ -102,7 +104,7 @@ jobs:
   portable-host:
     name: MLX native host (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 150
+    timeout-minutes: 165
     strategy:
       fail-fast: false
       matrix:
@@ -418,6 +420,22 @@ jobs:
               tests/test_translator/test_mlx_current_complex_power.py \
               tests/test_translator/test_mlx_current_binary_shapes.py \
               2>&1 | tee .mlx-portable-host/binary-math.log
+      - name: Execute pinned resident attention reductions
+        env:
+          CROSTL_REQUIRE_MLX_ATTENTION_REDUCE_RUNTIME: "1"
+          CROSTL_MLX_ATTENTION_REDUCE_TARGET: ${{ matrix.target }}
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/attention-reduce
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Resident attention reductions" -- \
+            python -m pytest -q -n auto --dist loadscope \
+              --basetemp=.mlx-portable-host/attention-reduce/pytest \
+              --junitxml=.mlx-portable-host/attention-reduce/results.xml \
+              tests/test_translator/test_mlx_attention_reduce_runtime.py \
+              2>&1 | tee .mlx-portable-host/attention-reduce.log
       - name: Build adapted upstream MLX
         run: |
           set -euo pipefail
