@@ -68,7 +68,9 @@ def test_partial_collectives_compile_with_exact_storage(tmp_path, shape, target)
     if count % 32:
         assert "activeCount" in generated
         assert "lane + stride < activeCount" in generated
-        assert "delta < (activeCount - lane)" in generated
+    active = "activeCount" if count % 32 else "32u"
+    assert f"delta < ({active} - lane)" in generated
+    assert "sourceValid ? lane + delta : lane" in generated
     _compile(generated, target, tmp_path)
 
 
@@ -98,7 +100,7 @@ def test_partial_layout_state_is_reset_between_generations(target):
         ).generate_stage(ast, "compute")
 
 
-def _source(size, kind):
+def _source(size, kind, distant="65535"):
     read = (
         "inputWords[index]" if kind == "uint" else f"as_type<{kind}>(inputWords[index])"
     )
@@ -127,7 +129,7 @@ kernel void products(device uint* inputWords [[buffer(0)]],
     {kind} shifted = simd_shuffle_down(value, 1);
     uint active = min(32u, {size}u - sid * 32u);
     shifted = lane + 1u < active ? shifted : value;
-    {kind} distant = simd_shuffle_down(value, 65535);
+    {kind} distant = simd_shuffle_down(value, {distant});
     bool all_positive = simd_all(value > {kind}(0));
     bool any_positive = simd_any(value > {kind}(0));
     outputWords[index * {FIELDS}u] = as_type<uint>(first);
@@ -205,12 +207,24 @@ def _reference(size, kind):
 @pytest.mark.parametrize("shape", SHAPES)
 @pytest.mark.parametrize("kind", ["int", "uint", "float"])
 def test_partial_collectives_execute(tmp_path, shape, kind):
+    _execute_collectives(tmp_path, shape, kind)
+
+
+@pytest.mark.parametrize("shape", [(32, 1, 1), (64, 1, 1), (32, 4, 1)])
+@pytest.mark.parametrize("kind", ["int", "uint", "float"])
+@pytest.mark.parametrize("distance_from_wrap", [1, 32])
+def test_shuffle_offsets_do_not_wrap(tmp_path, shape, kind, distance_from_wrap):
+    distant = f"(0u - {distance_from_wrap}u * (groups / groups))"
+    _execute_collectives(tmp_path, shape, kind, distant=distant)
+
+
+def _execute_collectives(tmp_path, shape, kind, *, distant="65535"):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required partial subgroup readbacks")
     target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
     size = math.prod(shape)
     source, descriptor, package = _package(
-        tmp_path, target, kind, shape, source=_source(size, kind)
+        tmp_path, target, kind, shape, source=_source(size, kind, distant)
     )
     words, wanted = _reference(size, kind)
     guards = [0xBAD00000 + index for index in range(17)]
@@ -274,6 +288,7 @@ def test_partial_collectives_execute(tmp_path, shape, kind):
                 {
                     "target": target,
                     "kind": kind,
+                    "distant": distant,
                     "shape": shape,
                     "inputs": inputs,
                     "expected": expected,

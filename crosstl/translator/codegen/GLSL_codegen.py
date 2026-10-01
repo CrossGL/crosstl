@@ -35886,8 +35886,6 @@ complex64_t crossgl_complex64_mod_assign(
                 left = f"{scratch}[lane]"
                 right = f"{scratch}[lane + stride]"
                 result_index = "0u"
-                shuffle_source = "lane + delta"
-                shuffle_limit = f"{self.software_subgroup_width}u"
             else:
                 lane_setup = (
                     "    uint invocation = gl_LocalInvocationIndex;\n"
@@ -35898,10 +35896,6 @@ complex64_t crossgl_complex64_mod_assign(
                 left = f"{scratch}[subgroupBase + lane]"
                 right = f"{scratch}[subgroupBase + lane + stride]"
                 result_index = "subgroupBase"
-                shuffle_source = "subgroupBase + lane + delta"
-                shuffle_limit = (
-                    f"subgroupBase + {self.GLSL_SOFTWARE_SUBGROUP_WIDTH_MACRO}"
-                )
                 if partial:
                     lane_setup += f"    uint activeCount = min({self.software_subgroup_width}u, {invocation_count}u - subgroupBase);\n"
             if operation in {
@@ -35963,14 +35957,13 @@ complex64_t crossgl_complex64_mod_assign(
                     if invocation_count == self.software_subgroup_width
                     else "invocation"
                 )
-                shuffle = (
-                    "    bool sourceValid = delta < (activeCount - lane);\n"
-                    "    uint sourceLane = subgroupBase + (sourceValid ? lane + delta : lane);\n"
-                    f"    {value_type} result = sourceValid ? {scratch}[sourceLane] : value;\n"
-                    if partial
-                    else f"    uint sourceLane = {shuffle_source};\n"
-                    f"    {value_type} result = sourceLane < {shuffle_limit} "
-                    f"? {scratch}[sourceLane] : value;\n"
+                active_count = (
+                    "activeCount" if partial else f"{self.software_subgroup_width}u"
+                )
+                source_index = (
+                    "sourceLane"
+                    if invocation_count == self.software_subgroup_width
+                    else "subgroupBase + sourceLane"
                 )
                 code += (
                     f"{value_type} {helper}({value_type} value, uint delta) {{\n"
@@ -35978,7 +35971,9 @@ complex64_t crossgl_complex64_mod_assign(
                     f"    {scratch}[{write_index}] = value;\n"
                     "    memoryBarrierShared();\n"
                     "    barrier();\n"
-                    f"{shuffle}"
+                    f"    bool sourceValid = delta < ({active_count} - lane);\n"
+                    "    uint sourceLane = sourceValid ? lane + delta : lane;\n"
+                    f"    {value_type} result = sourceValid ? {scratch}[{source_index}] : value;\n"
                     "    memoryBarrierShared();\n"
                     "    barrier();\n"
                     "    return result;\n"

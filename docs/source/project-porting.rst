@@ -1237,6 +1237,8 @@ Reductions combine only those invocations, scratch storage retains the exact
 workgroup size, and shuffle-down helpers use the calling value when their source
 falls beyond the real lanes. Source shuffle results from inactive lanes are not
 portable; numerical controls select only results from active source lanes.
+Relative offsets are checked before adding the lane index, so unsigned overflow
+cannot wrap an out-of-range shuffle into another lane's value.
 All real invocations must still reach the same workgroup barriers. This does not
 provide dynamic nonuniform final dispatch groups: the runtime must preserve the
 selected workgroup shape rather than round a source thread grid up silently.
