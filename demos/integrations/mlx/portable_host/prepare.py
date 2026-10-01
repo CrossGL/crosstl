@@ -28,6 +28,7 @@ VIEW_PRIMITIVES = (
     "Unflatten",
 )
 MULTI_OUTPUT_VIEWS = {"CustomTransforms", "Depends", "Split"}
+COPY_PRIMITIVES = ("Contiguous", "Flatten")
 
 
 def replace_once(text, before, after):
@@ -38,7 +39,7 @@ def replace_once(text, before, after):
 
 def adapted_sources(original, primitives, events):
     """Render the complete adaptation without changing the source tree."""
-    for primitive in ("Arange", *UNARY_OPERATIONS, *VIEW_PRIMITIVES):
+    for primitive in ("Arange", *UNARY_OPERATIONS, *VIEW_PRIMITIVES, *COPY_PRIMITIVES):
         if primitive in {"Log2", "Log10", "Rsqrt"}:
             continue
         macro = "NO_GPU_MULTI" if primitive in MULTI_OUTPUT_VIEWS else "NO_GPU"

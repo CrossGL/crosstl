@@ -11,7 +11,11 @@ import sys
 import unittest
 from pathlib import Path
 
-from demos.integrations.mlx.portable_host import unary_workloads, view_workloads
+from demos.integrations.mlx.portable_host import (
+    copy_workloads,
+    unary_workloads,
+    view_workloads,
+)
 from demos.integrations.mlx.portable_host.packages import ENTRIES
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
@@ -46,7 +50,9 @@ NEGATIVE_CHECKS = {
     "unary-dtype": "float32",
     "unary-layout": "contiguous",
     "unary-over-limit": "65535",
-    "reshape-copy": "requires a translated copy",
+    "copy-dtype": "matching float32, int32 or uint32",
+    "copy-limit": "65535",
+    "copy-allocation": "exceeds its allocation",
 }
 
 
@@ -91,9 +97,15 @@ def worker(args):
                 value = mx.abs(
                     mx.array(np.ones(65536, dtype=np.float32)), stream=mx.gpu
                 )
-            elif args.worker == "reshape-copy":
-                source = mx.array(np.arange(12, dtype=np.float32).reshape(3, 4))
+            elif args.worker == "copy-dtype":
+                source = mx.array(np.arange(12, dtype=np.int64).reshape(3, 4))
                 value = mx.reshape(mx.transpose(source), (12,), stream=mx.gpu)
+            elif args.worker == "copy-limit":
+                source = mx.array(np.arange(65792, dtype=np.float32).reshape(257, 256))
+                value = mx.contiguous(mx.transpose(source), stream=mx.gpu)
+            elif args.worker == "copy-allocation":
+                source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (2,), (-1,))
+                value = mx.contiguous(source, stream=mx.gpu)
             else:
                 descriptor = runtime.descriptors["arangefloat32"]
                 descriptor["artifact"]["packagePath"] = "artifacts/missing.glsl"
@@ -120,6 +132,7 @@ def worker(args):
             records.append({"dtype": dtype, "count": count, "values": actual.tolist()})
     unary = unary_workloads.run(mx, np)
     views = view_workloads.run(mx, np)
+    copies = copy_workloads.run(mx, np)
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
     suite = unittest.TestSuite(
         unittest.defaultTestLoader.loadTestsFromName(name) for name in UPSTREAM_TESTS
@@ -136,6 +149,7 @@ def worker(args):
             "arrays": records,
             "unary": unary,
             "views": views,
+            "copies": copies,
         },
     )
     if (
@@ -173,6 +187,7 @@ def verify_results(result, *, cpu=False):
         raise RuntimeError("Incomplete or incorrect array readbacks")
     unary_workloads.validate(result.get("unary"), cpu=cpu)
     view_workloads.validate(result.get("views"))
+    copy_workloads.validate(result.get("copies"))
 
 
 def verify(args):
@@ -247,6 +262,7 @@ def verify(args):
         [(f"arange{dtype}", count) for dtype in DTYPES for count in COUNTS if count]
         + unary_workloads.dispatches()
         + view_workloads.dispatches()
+        + copy_workloads.dispatches()
     )
     if [(record["entry"], record.get("threads")) for record in trace][
         : len(expected_dispatches)

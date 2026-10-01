@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <atomic>
 #include <bit>
 #include <cmath>
@@ -116,6 +117,79 @@ void dispatch_unary(
   }
 }
 
+void dispatch_copy(const mlx::core::array& in, mlx::core::array& out) {
+  require_runtime();
+  if (in.dtype() != out.dtype() ||
+      (in.dtype() != mlx::core::float32 && in.dtype() != mlx::core::int32 &&
+       in.dtype() != mlx::core::uint32)) {
+    throw std::invalid_argument(
+        "CrossTL copying layouts require matching float32, int32 or uint32 arrays.");
+  }
+  if (in.size() != out.size() || in.size() > 65535 || in.ndim() > 64) {
+    throw std::invalid_argument(
+        "CrossTL copy supports equal sizes up to 65535 elements and 64 axes.");
+  }
+  if (in.size() == 0) {
+    out.set_data(mlx::core::allocator::malloc(0));
+    return;
+  }
+  std::vector<int32_t> shape(in.shape().begin(), in.shape().end());
+  std::vector<int64_t> src_strides(in.strides().begin(), in.strides().end());
+  while (shape.size() < 2) {
+    shape.insert(shape.begin(), 1);
+    src_strides.insert(src_strides.begin(), 0);
+  }
+  int64_t low = 0, high = 0;
+  for (size_t axis = 0; axis < shape.size(); ++axis) {
+    if (shape[axis] == 1) {
+      src_strides[axis] = 0;
+    }
+    if (src_strides[axis] < -65535 || src_strides[axis] > 65535) {
+      throw std::invalid_argument("CrossTL copy source stride exceeds 65535.");
+    }
+    const int64_t extent = (int64_t(shape[axis]) - 1) * src_strides[axis];
+    low += std::min<int64_t>(extent, 0);
+    high += std::max<int64_t>(extent, 0);
+  }
+  const int64_t span = high - low + 1;
+  if (span > 65535 || in.offset() < 0 || in.offset() % sizeof(uint32_t) != 0) {
+    throw std::invalid_argument("CrossTL copy source span exceeds its bounds.");
+  }
+  const uint64_t origin = in.offset() / sizeof(uint32_t);
+  const uint64_t capacity = in.buffer_size() / sizeof(uint32_t);
+  if (origin >= capacity || uint64_t(-low) > origin ||
+      uint64_t(high) >= capacity - origin) {
+    throw std::invalid_argument("CrossTL copy source view exceeds its allocation.");
+  }
+  std::vector<int64_t> dst_strides(shape.size());
+  int64_t stride = 1;
+  for (size_t axis = shape.size(); axis-- > 0;) {
+    dst_strides[axis] = stride;
+    stride *= shape[axis];
+  }
+  int32_t ndim = static_cast<int32_t>(shape.size());
+  int64_t src_offset = -low, dst_offset = 0;
+  out.set_data(mlx::core::allocator::malloc(out.nbytes()));
+  // Copy storage words to preserve NaN payloads, subnormals and signed zero.
+  CrosstlMlxBuffer buffers[] = {
+      {"src", "uint32", const_cast<uint32_t*>(in.data<uint32_t>() + low), uint64_t(span), 0},
+      {"dst", "uint32", out.data<uint32_t>(), out.size(), 1},
+      {"src_shape", "int32", shape.data(), uint64_t(ndim), 0},
+      {"src_strides", "int64", src_strides.data(), uint64_t(ndim), 0},
+      {"dst_strides", "int64", dst_strides.data(), uint64_t(ndim), 0},
+      {"ndim", "int32", &ndim, 1, 0},
+      {"src_offset", "int64", &src_offset, 1, 0},
+      {"dst_offset", "int64", &dst_offset, 1, 0},
+  };
+  char error[2048] = {};
+  int status = dispatch_callback.load()(
+      "ggn2_dynamic_copyuint32uint32", buffers, 8, out.size(), error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native copy failed: ") + error);
+  }
+}
+
 void reshape_view(
     const std::vector<mlx::core::array>& inputs,
     mlx::core::array& out) {
@@ -126,8 +200,8 @@ void reshape_view(
   const auto& in = inputs[0];
   auto [copy_required, strides] = mlx::core::prepare_reshape(in, out);
   if (copy_required) {
-    throw std::invalid_argument(
-        "CrossTL reshape requires a translated copy for this layout.");
+    dispatch_copy(in, out);
+    return;
   }
   mlx::core::shared_buffer_reshape(in, strides, out);
 }
@@ -225,6 +299,24 @@ void Reshape::eval_gpu(const std::vector<array>& inputs, array& out) {
 
 void Unflatten::eval_gpu(const std::vector<array>& inputs, array& out) {
   reshape_view(inputs, out);
+}
+
+void Flatten::eval_gpu(const std::vector<array>& inputs, array& out) {
+  reshape_view(inputs, out);
+}
+
+void Contiguous::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() != 1) {
+    throw std::invalid_argument("CrossTL contiguous requires one input.");
+  }
+  const auto& in = inputs[0];
+  if (in.buffer_size() <= out.nbytes() + 16384 &&
+      (in.flags().row_contiguous || (allow_col_major_ && in.flags().col_contiguous))) {
+    out.copy_shared_buffer(in);
+  } else {
+    dispatch_copy(in, out);
+  }
 }
 
 #define CROSSTL_UNARY_GPU(Primitive)                                       \

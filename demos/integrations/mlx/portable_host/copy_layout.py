@@ -1,0 +1,61 @@
+"""Validate bounded copy metadata before reading or submitting source storage."""
+
+import ctypes
+import math
+
+DTYPES = {
+    "src": "uint32",
+    "dst": "uint32",
+    "src_shape": "int32",
+    "src_strides": "int64",
+    "dst_strides": "int64",
+    "ndim": "int32",
+    "src_offset": "int64",
+    "dst_offset": "int64",
+}
+
+
+def geometry(buffers, logical_size):
+    rank = buffers["src_shape"].count
+    if not 2 <= rank <= 64:
+        raise ValueError("Native copy rank must be between 2 and 64")
+    for name, buffer in buffers.items():
+        expected = (
+            logical_size
+            if name == "dst"
+            else rank if name in {"src_shape", "src_strides", "dst_strides"} else 1
+        )
+        if name == "src":
+            if not 0 < buffer.count <= 65535:
+                raise ValueError("Native copy source span exceeds 65535")
+        elif buffer.count != expected:
+            raise ValueError("Native copy metadata shape does not match")
+        if buffer.dtype.decode("ascii") != DTYPES[name]:
+            raise ValueError("Native copy metadata dtype does not match")
+
+    def values(name, ctype):
+        buffer = buffers[name]
+        return list(
+            ctypes.cast(buffer.data, ctypes.POINTER(ctype * buffer.count)).contents
+        )
+
+    if values("ndim", ctypes.c_int32) != [rank]:
+        raise ValueError("Native copy rank does not match its metadata")
+    shape = values("src_shape", ctypes.c_int32)
+    strides = values("src_strides", ctypes.c_int64)
+    if any(size <= 0 for size in shape) or math.prod(shape) != logical_size:
+        raise ValueError("Native copy shape does not match the logical size")
+    if any(abs(stride) > 65535 for stride in strides):
+        raise ValueError("Native copy source stride exceeds 65535")
+    offset = values("src_offset", ctypes.c_int64)[0]
+    extents = [(size - 1) * stride for size, stride in zip(shape, strides)]
+    low = offset + sum(min(extent, 0) for extent in extents)
+    high = offset + sum(max(extent, 0) for extent in extents)
+    if low != 0 or high != buffers["src"].count - 1:
+        raise ValueError("Native copy addresses do not match the uploaded source span")
+    expected = [math.prod(shape[axis + 1 :]) for axis in range(rank)]
+    if values("dst_strides", ctypes.c_int64) != expected or values(
+        "dst_offset", ctypes.c_int64
+    ) != [0]:
+        raise ValueError("Native copy destination must be contiguous")
+    return [(shape[-1] + 1) // 2, shape[-2], math.prod(shape[:-2])]

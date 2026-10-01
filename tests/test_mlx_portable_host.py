@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from demos.integrations.mlx.portable_host import (
+    copy_workloads,
     packages,
     prepare,
     runtime,
@@ -31,6 +32,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "Add",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,
+                    *prepare.COPY_PRIMITIVES,
                 )
                 if name not in {"Log2", "Log10", "Rsqrt"}
             ).encode()
@@ -183,6 +185,17 @@ def package_templates(tmp_path_factory, request):
             for index, entry in enumerate(packages.UNARY_ENTRIES)
         )
     )
+    (root / packages.COPY_SOURCE).write_text(
+        """template <int n> kernel void copy_words(
+device const uint* src [[buffer(0)]], device uint* dst [[buffer(1)]],
+constant int* src_shape [[buffer(2)]], constant long* src_strides [[buffer(3)]],
+constant long* dst_strides [[buffer(4)]], constant int& ndim [[buffer(5)]],
+constant long& src_offset [[buffer(6)]], constant long& dst_offset [[buffer(7)]],
+uint index [[thread_position_in_grid]]) { dst[index] = src[index]; }
+"""
+        + f'template [[host_name("{packages.COPY_ENTRY}")]] [[kernel]] '
+        + "decltype(copy_words<2>) copy_words<2>;\n"
+    )
     output = tmp_path / "packages"
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr(
@@ -252,6 +265,171 @@ def unary_buffers(values=(-2.0, 0.0, 3.0)):
         ]
     )
     return buffers, memory
+
+
+def copy_buffers():
+    values = {
+        "src": list(copy_workloads.source_words()[:12]),
+        "dst": [0] * 6,
+        "src_shape": [2, 3],
+        "src_strides": [7, -2],
+        "dst_strides": [3, 1],
+        "ndim": [2],
+        "src_offset": [4],
+        "dst_offset": [0],
+    }
+    memory = {
+        name: (runtime.TYPES[runtime.copy_layout.DTYPES[name]] * len(data))(*data)
+        for name, data in values.items()
+    }
+    buffers = (runtime.Buffer * 8)(
+        *[
+            runtime.Buffer(
+                name.encode(),
+                runtime.copy_layout.DTYPES[name].encode(),
+                ctypes.addressof(data),
+                len(data),
+                int(name == "dst"),
+            )
+            for name, data in memory.items()
+        ]
+    )
+    return buffers, memory
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "count",
+        "dtype",
+        "direction",
+        "rank",
+        "metadata-count",
+        "shape",
+        "zero-shape",
+        "source-short",
+        "lower-bound",
+        "upper-bound",
+        "stride",
+        "destination-stride",
+        "destination-offset",
+        "duplicate",
+        "null",
+        "guard",
+    ],
+)
+def test_copy_dispatch_checks_metadata_before_submission(
+    translated_packages, tmp_path, monkeypatch, fault
+):
+    host = runtime.HostRuntime(translated_packages, tmp_path / "trace")
+    buffers, memory = copy_buffers()
+    if fault == "dtype":
+        buffers[0].dtype = b"float32"
+    elif fault == "direction":
+        buffers[0].output = 1
+    elif fault == "rank":
+        memory["ndim"][0] = 3
+    elif fault == "metadata-count":
+        buffers[3].count = 1
+    elif fault == "shape":
+        memory["src_shape"][0] = 3
+    elif fault == "zero-shape":
+        memory["src_shape"][0] = 0
+    elif fault == "source-short":
+        buffers[0].count = 11
+    elif fault == "lower-bound":
+        memory["src_offset"][0] = 3
+    elif fault == "upper-bound":
+        memory["src_offset"][0] = 5
+    elif fault == "stride":
+        memory["src_strides"][0] = 2**63 - 1
+    elif fault == "destination-stride":
+        memory["dst_strides"][0] = 1
+    elif fault == "destination-offset":
+        memory["dst_offset"][0] = 1
+    elif fault == "duplicate":
+        buffers[1].name = b"src"
+    elif fault == "null":
+        buffers[0].data = None
+    calls = []
+    expected = [memory["src"][index] for index in (4, 2, 0, 11, 9, 7)]
+    original_build = runtime.build_native_loader_dispatch_request
+
+    def build(descriptor, package, inputs, outputs, *args, **kwargs):
+        output_name = next(iter(outputs))
+        assert inputs[output_name]["values"] == [0] * 6 + runtime.COPY_GUARD
+        return original_build(descriptor, package, inputs, outputs, *args, **kwargs)
+
+    def execute(request):
+        calls.append(request)
+        output = next(
+            binding["name"]
+            for binding in host.descriptors[packages.COPY_ENTRY]["bindings"]
+            if binding["access"] == "read_write"
+        )
+        return SimpleNamespace(
+            status="ok",
+            outputs={
+                output: {
+                    "dtype": "uint32",
+                    "shape": [38],
+                    "values": (
+                        expected
+                        + ([0] * 32 if fault == "guard" else runtime.COPY_GUARD)
+                    ),
+                }
+            },
+            details={},
+        )
+
+    monkeypatch.setattr(host.executor, "run", execute)
+    monkeypatch.setattr(runtime, "build_native_loader_dispatch_request", build)
+    if fault == "guard":
+        with pytest.raises(RuntimeError, match="buffer guard"):
+            host.dispatch(packages.COPY_ENTRY, buffers, 8, 6)
+        assert len(calls) == 1 and list(memory["dst"]) == [0] * 6
+        assert not host.trace.exists()
+    elif fault:
+        with pytest.raises(ValueError):
+            host.dispatch(packages.COPY_ENTRY, buffers, 7 if fault == "count" else 8, 6)
+        assert not calls and not host.trace.exists()
+    else:
+        host.dispatch(packages.COPY_ENTRY, buffers, 8, 6)
+        assert list(memory["dst"]) == expected
+        assert calls[0].execution_plan.dispatch.workgroup_count == (2, 2, 1)
+        assert calls[0].execution_plan.dispatch.workgroup_size == (1, 1, 1)
+        trace = json.loads(host.trace.read_text())
+        assert trace["threads"] == 6 and trace["workgroupCount"] == [2, 2, 1]
+        assert trace["copyGuardWords"] == runtime.COPY_GUARD
+
+
+@pytest.mark.parametrize(
+    "fault", [None, "missing", "shape", "dtype", "payload", "zero", "source"]
+)
+def test_copy_workload_references_reject_incomplete_or_changed_words(fault):
+    records = copy_workloads.expected_records()
+    assert len(records) == 33 and len(copy_workloads.dispatches()) == 27
+    if fault == "missing":
+        records.pop()
+    elif fault == "shape":
+        records[0]["shape"] = [15]
+    elif fault == "dtype":
+        records[0]["dtype"] = "float64"
+    elif fault in {"payload", "zero"}:
+        index = next(
+            i
+            for i, word in enumerate(records[0]["words"])
+            if word == (0x7FC12345 if fault == "payload" else 0x80000000)
+        )
+        records[0]["words"][index] ^= 1 if fault == "payload" else 0x80000000
+    elif fault == "source":
+        records[-1]["words"][3] ^= 1
+    if fault:
+        with pytest.raises(RuntimeError, match="layout-copy"):
+            copy_workloads.validate(records)
+    else:
+        copy_workloads.validate(records)
 
 
 @pytest.mark.parametrize("fault", [None, "size", "input-count", "dtype", "direction"])
@@ -469,7 +647,7 @@ def test_view_adapter_preserves_upstream_shared_buffer_operations():
             assert f"{macro}({name})" in source
     assert "prepare_reshape(in, out)" in source
     assert "shared_buffer_reshape(in, strides, out)" in source
-    assert "requires a translated copy" in source
+    assert "dispatch_copy(in, out)" in source
     assert "eval_cpu" not in source
 
 
@@ -714,6 +892,8 @@ def test_registration_retains_callback_and_uses_platform_library(
         "views-missing",
         "views-values",
         "views-shape",
+        "copies-missing",
+        "copies-values",
         "upstream-failure",
     ],
 )
@@ -769,6 +949,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             "arrays": arrays,
             "unary": unary_workloads.expected_records(cpu=mode == "cpu"),
             "views": view_workloads.expected_records(),
+            "copies": copy_workloads.expected_records(),
         }
         if fault == "unary-missing":
             result["unary"] = []
@@ -782,6 +963,10 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             result["views"][1]["values"][0] += 1
         if fault == "views-shape":
             result["views"][0]["shape"] = [12]
+        if fault == "copies-missing":
+            result["copies"] = []
+        if fault == "copies-values":
+            result["copies"][0]["words"][0] ^= 1
         if fault == "upstream-failure":
             result["failures"] = 1
         if fault == "arrays":
@@ -809,6 +994,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 ]
                 + unary_workloads.dispatches()
                 + view_workloads.dispatches()
+                + copy_workloads.dispatches()
             )
             trace = [
                 {
@@ -854,7 +1040,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         if fault == "source-before":
             assert calls == []
         if fault == "command":
-            assert len(calls) == 9
+            assert len(calls) == 11
             assert (
                 json.loads((args.output_dir / "cpu.command.json").read_text())[
                     "returncode"
@@ -863,7 +1049,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             )
     else:
         evidence = verify.verify(args)
-        assert len(calls) == 9 and evidence["dispatchCount"] == 135
+        assert len(calls) == 11 and evidence["dispatchCount"] == 162
         assert len(identities) == 2
         assert evidence["schemaVersion"] == 2
         assert evidence["adaptation"]["files"] == {"adapter": "unchanged"}
@@ -899,7 +1085,7 @@ def test_ci_requires_all_native_platforms_and_retains_evidence():
         "portable_host.verify",
         "pytest -q -n auto tests/test_mlx_portable_host.py",
         "liblapacke-dev",
-        "--timeout-seconds 1800",
+        "--timeout-seconds 2200",
         "if: always()",
         "include-hidden-files: true",
         "Get-FileHash",

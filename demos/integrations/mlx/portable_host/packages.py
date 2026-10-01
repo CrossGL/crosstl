@@ -60,7 +60,9 @@ UNARY_OPERATIONS = (
     "Round",
 )
 UNARY_ENTRIES = tuple(f"v_{op}float32float32" for op in UNARY_OPERATIONS)
-ENTRIES = ARANGE_ENTRIES + UNARY_ENTRIES
+COPY_SOURCE = "mlx/backend/metal/kernels/copy.metal"
+COPY_ENTRY = "ggn2_dynamic_copyuint32uint32"
+ENTRIES = ARANGE_ENTRIES + UNARY_ENTRIES + (COPY_ENTRY,)
 
 
 def build_packages(root, output, target):
@@ -95,17 +97,20 @@ def build_packages(root, output, target):
         config.write_text(
             f"""[project]
 source_roots = ["mlx/backend/metal/kernels"]
-include = {json.dumps([SOURCE, UNARY_SOURCE])}
+include = {json.dumps([SOURCE, UNARY_SOURCE, COPY_SOURCE])}
 include_dirs = ["."]
 targets = ["{target}"]
 output_dir = "{work.name}/out"
 [project.entry_points]
 "{SOURCE}" = {json.dumps(ARANGE_ENTRIES)}
 "{UNARY_SOURCE}" = {json.dumps(UNARY_ENTRIES)}
+"{COPY_SOURCE}" = ["{COPY_ENTRY}"]
 [project.entry_workgroup_size_rules."{SOURCE}"]
 "arange*" = [1, 1, 1]
 [project.entry_workgroup_size_rules."{UNARY_SOURCE}"]
 "v_*" = [1, 1, 1]
+[project.entry_workgroup_size_rules."{COPY_SOURCE}"]
+"ggn2_dynamic_copy*" = [1, 1, 1]
 [project.source_options.metal]
 binary32_fma_profile = "rne-flush"
 """,

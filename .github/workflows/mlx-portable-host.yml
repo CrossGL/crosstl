@@ -120,7 +120,7 @@ jobs:
   portable-host:
     name: MLX native host (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 200
+    timeout-minutes: 210
     strategy:
       fail-fast: false
       matrix:
@@ -560,7 +560,7 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX portable host verification" -- \
+          python tools/run_bounded_command.py --timeout-seconds 2200 --label "MLX portable host verification" -- \
             python -m demos.integrations.mlx.portable_host.verify --mlx-root mlx-upstream \
               --packages .mlx-portable-host/packages --output-dir .mlx-portable-host/evidence 2>&1 | tee .mlx-portable-host/verification.log
       - name: Retain native execution evidence

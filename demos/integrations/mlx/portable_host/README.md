@@ -17,8 +17,9 @@ erf, trigonometric functions and their hyperbolic and inverse forms. The exact
 entry list is in `packages.py`. Shared-buffer views reuse upstream MLX's
 shape, stride and ownership logic: strided views, broadcasts, copy aliases,
 dimension insertion/removal, transpose, split, dependency/custom-transform
-outputs and stop-gradient. Reshape and unflatten support layouts that do not
-require copying; other layouts report the missing translated copy explicitly.
+outputs and stop-gradient. Contiguous conversion, reshape, flatten and unflatten
+dispatch translated copies when sharing storage is insufficient. Copies support
+matching float32, int32 and uint32 arrays, including negative and zero strides.
 Other primitives retain MLX's explicit unsupported-GPU errors. Unary inputs
 must be contiguous and float32, including stored-contiguous broadcast and
 column-major views.
@@ -44,6 +45,12 @@ no-GPU backend build definition and adds four explicitly named backend files:
   and stages output storage. MLX's Log and Sqrt primitives select their log-base
   and reciprocal variants, yielding 30 unary kernel entries. View hooks reuse
   upstream shared implementations and perform no CPU elementwise computation.
+  Copying layouts use the unchanged `ggn2_dynamic_copyuint32uint32` specialization
+  on storage words, preserving every 32-bit payload without floating-point
+  conversion. Source spans are checked against the actual allocation before
+  upload; the logical origin is rebased for negative strides. Shape and stride
+  metadata are independently validated at the callback boundary. Contiguous
+  destination strides and three-dimensional dispatch follow the source kernel.
 - `crosstl_dispatch.h` defines the typed C buffer/callback ABI.
 - `crosstl_primitives.cpp` copies upstream unsupported primitive definitions,
   removing only the implemented primitive stubs.
@@ -96,6 +103,10 @@ external to MLX's original backend. It compiles each checked source with
 warnings fatal and fast math disabled, then executes the reflected entry and
 returns native buffer readbacks. Every target explicitly dispatches the
 one-thread-per-workgroup geometry used by these packages.
+Copy dispatch supports at most 64 axes, 65,535 logical elements and 65,535 uploaded
+source words. Other sizes and storage widths remain explicit errors. The runtime
+checks an additional 128-byte destination guard before copying device results
+back into the MLX array.
 The complete platform setup is in
 [`mlx-portable-host.yml`](../../../../.github/workflows/mlx-portable-host.yml).
 Output directories must be new so evidence from different runs cannot mix.
@@ -140,8 +151,9 @@ They do not claim support for arbitrary 64-bit OpenGL resource addresses.
 Readbacks must match independent
 coordinate references bit for bit, preserve negative zero and leave 128-byte
 trailing guards unchanged. The macOS gate also executes the original Metal
-entries and checks that all input buffers remain unchanged. These are kernel
-tests; layout-changing copy dispatch is not yet connected to the host adapter.
+entries and checks that all input buffers remain unchanged. The host adapter
+separately uses the unchanged uint32 general-copy specialization for bit-exact
+32-bit storage copies, with its own layout and source-preservation workloads.
 
 A separate required compiler gate translates the pinned
 `seq_gated_delta_vjp_float_128_128_24_24_1` entry and compiles it with DXC,
@@ -197,18 +209,25 @@ execution through views. Broadcast dispatch sizes use stored elements rather
 than the larger logical shape. Views that only change metadata do not count as
 kernel execution; reversed/gapped unary execution is still rejected.
 
-Native traces must start with the exact 135 nonempty workload dispatches, cover
-all 35 entries, and retain artifact identities and runtime/device details.
+Another 33 records check copying layouts and source preservation across float32,
+int32 and uint32. Independent NumPy strided references check all 1,716 storage
+words exactly, including NaN payloads, signaling NaN words, subnormals and signed
+zeros. Transposes, gapped/reversed strides, broadcasts, odd four-dimensional
+rows, copying reshapes, flattening and empty outputs are covered. The 27 native
+copy dispatches retain their three-dimensional geometry and checked guard words.
+
+Native traces must start with the exact 162 nonempty workload dispatches, cover
+all 36 entries, and retain artifact identities and runtime/device details.
 Separate negative processes reject an unsupported primitive, oversized arange,
-a missing artifact, unary inputs with unsupported dtype, layout or size, and a
-reshape requiring a copy.
-Each of the nine processes has a hard 180-second process-tree deadline; all
+a missing artifact, unary inputs with unsupported dtype, layout or size, and
+copies with unsupported dtype, excessive size or an invalid source allocation.
+Each of the eleven processes has a hard 180-second process-tree deadline; all
 are attempted so a failure does not discard the other diagnostic results.
 
 The evidence directory retains before/after adaptation hashes, command status,
 stdout/stderr, upstream test logs, dispatch traces and numerical results. The
 schema-version-2 summary is written only after source and result checks pass,
-including explicit rejection messages from all seven negative cases. Source
+including explicit rejection messages from all nine negative cases. Source
 identity checks do not attest to a separately supplied binary; CI builds MLX from
 the verified sources and retains its build log. `fullUpstreamSuite` and
 `fullTranslatedBackend` remain `false`: extending primitive coverage and then

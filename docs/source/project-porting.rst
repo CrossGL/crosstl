@@ -2188,7 +2188,11 @@ instead builds MLX with its original Metal and CUDA backends disabled. Its
 synchronous callback connects ``Arange`` for five scalar types and 30 float32 unary entries to public
 DirectX/OpenGL/Metal runtime packages. Shared-buffer view primitives reuse upstream
 shape, stride and ownership logic, including broadcasts, transposes, splits and
-non-copying reshapes; other primitives retain upstream unsupported-GPU errors.
+non-copying reshapes. Layout-changing contiguous conversions, reshapes, flattening
+and unflattening dispatch the unchanged uint32 general-copy specialization for
+float32/int32/uint32 storage. Bounds-checked, rebased source spans preserve negative
+strides; integer-word transport preserves NaN payloads and subnormals. Other
+primitives retain upstream unsupported-GPU errors.
 Linux/OpenGL, Windows/Direct3D 12 and macOS/generated Metal CI build the adapted
 library, require 19 unchanged upstream tests against CPU and translated GPU execution, and check
 20 array-creation records plus 130 unary records against independent references,
@@ -2198,9 +2202,11 @@ The verifier reconstructs the five allowed source adaptations from the pin,
 requires exact bytes before and after execution, and rejects unrelated tracked
 changes. Forty additional records cover view layouts, chained unary dispatch,
 source preservation and exact 64-bit values. The verifier independently checks
-complete numerical records, the initial 135 nonempty dispatches, and seven
-required rejection cases, including unsupported unary dtypes, layouts and sizes
-and reshapes requiring a translated copy, before publishing a schema-version-2 summary.
+complete numerical records, another 33 copying/source-preservation records with
+1,716 exact storage words, the initial 162 nonempty dispatches, and nine required
+rejection cases before publishing a schema-version-2 summary. Copy checks include
+invalid allocation bounds, unsupported storage widths and excessive sizes. Each
+copy dispatch retains its geometry and checks a 128-byte destination guard.
 Unary execution is limited to contiguous float32 inputs and 65,535 stored
 elements. Source
 checks do not attest to a separately supplied binary; CI retains its build log.

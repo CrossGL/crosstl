@@ -20,7 +20,12 @@ from crosstl.project.runtime_verification import (
     RuntimeParityExecutor,
     RuntimeTestAdapterSpec,
 )
-from demos.integrations.mlx.portable_host.packages import ENTRIES, UNARY_ENTRIES
+from demos.integrations.mlx.portable_host import copy_layout
+from demos.integrations.mlx.portable_host.packages import (
+    COPY_ENTRY,
+    ENTRIES,
+    UNARY_ENTRIES,
+)
 
 
 class Buffer(ctypes.Structure):
@@ -50,6 +55,7 @@ TYPES = {
     "uint64": ctypes.c_uint64,
 }
 _installed_runtime = None
+COPY_GUARD = [0x6A15BEEF] * 32
 
 
 def wire_value(value):
@@ -127,11 +133,16 @@ class HostRuntime:
     def dispatch(self, entry, buffers, count, threads):
         if entry not in self.descriptors:
             raise ValueError(f"No translated package for {entry}")
-        if count != 3 or not buffers or not 0 < threads <= 65535:
+        copy = entry == COPY_ENTRY
+        if count != (8 if copy else 3) or not buffers or not 0 < threads <= 65535:
             raise ValueError("Invalid or unsupported native dispatch dimensions")
         descriptor = self.descriptors[entry]
         unary = entry in UNARY_ENTRIES
-        names = {"in", "size", "out"} if unary else {"start", "step", "out"}
+        names = (
+            set(copy_layout.DTYPES)
+            if copy
+            else {"in", "size", "out"} if unary else {"start", "step", "out"}
+        )
         supplied = {}
         for index in range(count):
             buffer = buffers[index]
@@ -139,16 +150,24 @@ class HostRuntime:
                 raise ValueError("Native buffer identity is missing")
             name = buffer.name.decode("ascii")
             dtype = buffer.dtype.decode("ascii")
-            if name in supplied or dtype not in TYPES or not buffer.data:
+            if (
+                name not in names
+                or name in supplied
+                or dtype not in TYPES
+                or not buffer.data
+            ):
                 raise ValueError("Invalid native buffer")
             expected = threads if name == "out" or (unary and name == "in") else 1
-            if buffer.count != expected or buffer.output != int(name == "out"):
+            if (not copy and buffer.count != expected) or buffer.output != int(
+                name == ("dst" if copy else "out")
+            ):
                 raise ValueError("Native buffer shape or direction does not match")
             if unary and dtype != ("uint32" if name == "size" else "float32"):
                 raise ValueError("Native unary buffer dtype does not match")
             supplied[name] = buffer
         if set(supplied) != names:
             raise ValueError("Native buffer names do not match the operation")
+        grid = copy_layout.geometry(supplied, threads) if copy else [threads, 1, 1]
         if (
             unary
             and ctypes.cast(supplied["size"].data, ctypes.POINTER(ctypes.c_uint32))[0]
@@ -193,6 +212,10 @@ class HostRuntime:
                     else [wire_value(value) for value in view]
                 ),
             }
+            if copy and buffer.output:
+                value["shape"] = [buffer.count + len(COPY_GUARD)]
+                value["values"].extend(COPY_GUARD)
+                inputs[binding["name"]] = value
             if buffer.output:
                 outputs[binding["name"]] = value
                 destinations[binding["name"]] = (buffer, ctype)
@@ -205,7 +228,7 @@ class HostRuntime:
             self.directory / "package",
             inputs,
             outputs,
-            {"workgroupCount": [threads, 1, 1], "workgroupSize": [1, 1, 1]},
+            {"workgroupCount": grid, "workgroupSize": [1, 1, 1]},
             expected_target=self.target,
         )
         result = self.executor.run(request)
@@ -213,16 +236,19 @@ class HostRuntime:
             raise RuntimeError("Native executor did not return the required outputs")
         for name, (buffer, ctype) in destinations.items():
             output = result.outputs[name]
+            size = buffer.count + (len(COPY_GUARD) if copy else 0)
             if output["dtype"] != buffer.dtype.decode("ascii") or output["shape"] != [
-                buffer.count
+                size
             ]:
                 raise RuntimeError("Native readback layout does not match the output")
-            if len(output["values"]) != buffer.count:
+            if len(output["values"]) != size:
                 raise RuntimeError("Native readback size does not match the output")
+            if copy and output["values"][buffer.count :] != COPY_GUARD:
+                raise RuntimeError("Native copy changed the output buffer guard")
             values = (ctype * buffer.count)(
                 *(
                     float(value) if ctype is ctypes.c_float else value
-                    for value in output["values"]
+                    for value in output["values"][: buffer.count]
                 )
             )
             ctypes.memmove(buffer.data, values, ctypes.sizeof(values))
@@ -233,8 +259,14 @@ class HostRuntime:
                         "entry": entry,
                         "target": self.target,
                         "threads": threads,
+                        "workgroupCount": grid,
                         "artifact": descriptor["artifact"],
                         "details": result.details,
+                        **(
+                            {"copyGuardWords": output["values"][buffer.count :]}
+                            if copy
+                            else {}
+                        ),
                     }
                 )
                 + "\n"
