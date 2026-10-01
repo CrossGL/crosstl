@@ -186,7 +186,7 @@ jobs:
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
-          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging \
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist "PyYAML>=6,<7" setuptools wheel cmake ninja nanobind numpy packaging \
             2>&1 | tee .mlx-portable-host/dependencies.log
       - name: Verify macOS Metal toolchain
         if: runner.os == 'macOS'

@@ -380,6 +380,14 @@ def test_row_ci_preserves_all_three_targets_and_full_width_sets():
     workflow = (
         Path(__file__).resolve().parents[1] / ".github/workflows/mlx-portable-host.yml"
     ).read_text()
+    dependencies = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Install CrossTL and MLX build dependencies"
+    )
+    assert '"PyYAML>=6,<7"' in dependencies
+    requirements = (
+        Path(__file__).resolve().parents[1] / "requirements.txt"
+    ).read_text()
+    assert "PyYAML>=6,<7" in requirements.splitlines()
     for event in ("pull_request", "push"):
         assert (
             "tests/test_mlx_portable_rows.py"
