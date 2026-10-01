@@ -6823,6 +6823,8 @@ def _runtime_scalar_layout_signature(metadata: Mapping[str, Any]) -> dict[str, A
         "vectorWidth",
         "componentCount",
         "structMembers",
+        "blockMembers",
+        "payloadEncoding",
         "alignmentBytes",
         "memberOffsetBytes",
         "storageLayout",

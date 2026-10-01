@@ -44,7 +44,10 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
-from crosstl.project.host_reflection import REFLECTION_TOOL_UNAVAILABLE
+from crosstl.project.host_reflection import (
+    REFLECTION_INCOMPLETE_OUTPUT,
+    REFLECTION_TOOL_UNAVAILABLE,
+)
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 from tests.test_backend.test_SPIRV.test_codegen import (
     SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
@@ -42500,7 +42503,7 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
     payload = inspect_runtime_package(package_dir / "runtime-package.json")
 
     host_interface = payload["bindings"][0]["hostInterface"]
-    assert host_interface["status"] == "ready"
+    assert host_interface["status"] == "incomplete"
     assert host_interface["source"] == "compiled-artifact"
     assert host_interface["parser"] == "opengl-reflection"
     assert host_interface["artifactFormat"] == "GLSL source"
@@ -42531,7 +42534,11 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
             "access": "read",
         },
     ]
-    assert host_interface["diagnostics"] == []
+    assert host_interface["diagnostics"] == [REFLECTION_INCOMPLETE_OUTPUT]
+    assert host_interface["diagnosticRecords"][0]["details"] == {
+        "resource": "Camera",
+        "reasonKind": "uniform-block-layout-unsupported",
+    }
 
 
 def test_inspect_runtime_package_reflects_generated_wgsl_resource_bindings(tmp_path):

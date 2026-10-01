@@ -257,6 +257,8 @@
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_translator/test_opengl_metal_math.py",
           "tests/test_translator/test_opengl_half_conversion.py",
+          "tests/test_translator/test_uniform_block_layouts.py",
+          "tests/test_translator/test_mlx_attention_ds_opengl.py",
           "tests/test_translator/test_metal_precise_asin.py",
           "tests/test_translator/test_fused_math.py",
           "tests/test_translator/test_metal_fma.py",
@@ -265,7 +267,7 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1831
+        "test_count": 1846
       },
       "translator_codegen": {
         "exists": true,
@@ -12979,6 +12981,14 @@
         },
         "opengl": {
           "evidence": [
+            "tests/test_translator/test_uniform_block_layouts.py::def test_uniform_reflection_retains_physical_layout",
+            "tests/test_translator/test_uniform_block_layouts.py::def test_uniform_dispatch_rejects_malformed_block",
+            "tests/test_translator/test_uniform_block_layouts.py::def test_uniform_dispatch_rejects_malformed_member",
+            "tests/test_translator/test_uniform_block_layouts.py::def test_uniform_dispatch_requires_complete_word_payload",
+            "tests/test_translator/test_uniform_block_layouts.py::def test_uniform_layout_survives_public_package_dispatch",
+            "tests/test_translator/test_uniform_block_layouts.py::def test_uniform_block_native_readback",
+            "tests/test_translator/test_mlx_attention_ds_opengl.py::def test_pinned_opengl_attention_derivative",
+            "tests/test_translator/test_mlx_attention_ds_opengl.py::def test_opengl_derivative_verifier_rejects_corruption",
             "tests/test_translator/test_host_reflection.py::def test_glsl_reflection_records_exact_mlx_scalar_block_layouts",
             "tests/test_mlx_portable_host.py::def test_translated_binding_contract_and_typed_readback",
             "tests/test_mlx_portable_host.py::def test_invalid_dispatch_never_reaches_executor",
@@ -12998,7 +13008,7 @@
             "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_zero_pads_scalar_uniform_block_allocation",
             "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_opengl_native_loader"
           ],
-          "notes": "GLSL host reflection records explicit std430 scalar/vector storage arrays and std140 single-value uniform blocks. Flat homogeneous structs with 1-64 float, int, uint, int64_t or uint64_t members retain their actual type, member names, offsets, scalar alignment and stride through packaging and dispatch. Allocation sizing uses complete struct elements, and request validation rejects mixed, nested, padded or malformed layouts rather than treating structs as native vectors. Linux EGL CI requires generic struct-buffer readback and the current-pinned MLX complex-power kernel through the public native-loader path. Existing MLX arange scalar execution remains covered. Implicit layouts are not inferred, and whole-repository runtime redirection remains separate.",
+          "notes": "GLSL host reflection records explicit std430 scalar/vector storage arrays and std140 uniform blocks. Flat homogeneous storage structs retain their actual type, member names, offsets, scalar alignment and stride through packaging and dispatch. Mixed scalar/vector uniform blocks retain per-field types, offsets, sizes and alignment, with explicit uint32-le-words transport of the complete block including padding. Loader and driver validate standard packing and reject malformed or incomplete payloads. Unsupported nested, array and matrix uniforms produce incomplete-reflection diagnostics. Linux EGL CI requires generic mixed scalar and padded vector parameter controls through public packaging/native-loader APIs, plus 16 unchanged current-pin MLX float32/float16 attention derivative configurations with shared allocations and guarded readbacks. Bfloat16 derivatives and whole-repository runtime redirection remain separate. Existing homogeneous storage, complex-power and arange execution remains covered.",
           "status": "supported"
         },
         "rust": {

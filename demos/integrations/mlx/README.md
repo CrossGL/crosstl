@@ -900,9 +900,19 @@ element count has explicit tail padding after the output guard. Exact cases
 compare bitwise and fractional cases use `rtol=atol=1e-5` against quantized
 float64 references. Original/generated Metal also checks input preservation
 and allocation identity. These are kernel-stage checks, not end-to-end
-attention backward or upstream host redirection. OpenGL execution of this
-stage remains blocked by the aggregate uniform-buffer contract in
-[issue #1991](https://github.com/CrossGL/crosstl/issues/1991).
+attention backward or upstream host redirection.
+
+The Linux gate executes the same eight derivative configurations for each of
+float32 and float16. The 32-byte parameter block uses reflected mixed-field
+layout metadata, preserved by the native runtime contract. The test uploads
+already-quantized inputs into the generated float32 storage and compares actual
+float32 readbacks against decoded source-type references; it does not round
+outputs on the host to conceal a missing shader conversion. Original inputs,
+uploads, generated modules, parameter layouts and guarded outputs are retained.
+Source-qualified index bounds cover the dispatched tile. Actual shared buffer
+allocation is tested alongside separate allocations. Bfloat16 derivatives remain
+blocked by [issue #1488](https://github.com/CrossGL/crosstl/issues/1488); no complete
+attention operation or automatic backend-wide repacking is claimed.
 
 DirectX also requires a reduced native binary16 conversion gate. It shares
 258,052 input words with the OpenGL and original/generated Metal controls,

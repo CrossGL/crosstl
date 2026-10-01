@@ -22,6 +22,8 @@ on:
       - "tests/test_translator/test_mlx_gated_delta_runtime.py"
       - "tests/test_translator/test_mlx_attention_odo_runtime.py"
       - "tests/test_translator/test_mlx_attention_ds_runtime.py"
+      - "tests/test_translator/test_mlx_attention_ds_opengl.py"
+      - "tests/test_translator/test_uniform_block_layouts.py"
       - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
       - "tests/test_translator/test_fused_math.py"
@@ -60,6 +62,8 @@ on:
       - "tests/test_translator/test_mlx_gated_delta_runtime.py"
       - "tests/test_translator/test_mlx_attention_odo_runtime.py"
       - "tests/test_translator/test_mlx_attention_ds_runtime.py"
+      - "tests/test_translator/test_mlx_attention_ds_opengl.py"
+      - "tests/test_translator/test_uniform_block_layouts.py"
       - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
       - "tests/test_translator/test_fused_math.py"
@@ -211,6 +215,21 @@ jobs:
               --junitxml=.mlx-portable-host/half-conversions/results.xml \
               tests/test_translator/test_opengl_half_conversion.py \
               2>&1 | tee .mlx-portable-host/half-conversions.log
+      - name: Validate OpenGL uniform blocks
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_REQUIRE_UNIFORM_BLOCK_RUNTIME: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/uniform-blocks
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "OpenGL uniform blocks" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/uniform-blocks/pytest \
+              --junitxml=.mlx-portable-host/uniform-blocks/results.xml \
+              tests/test_translator/test_uniform_block_layouts.py \
+              2>&1 | tee .mlx-portable-host/uniform-blocks.log
       - name: Validate DirectX half conversions
         if: runner.os == 'Windows'
         env:
@@ -325,6 +344,22 @@ jobs:
               --junitxml=.mlx-portable-host/attention-odo/results.xml \
               tests/test_translator/test_mlx_attention_odo_runtime.py \
               2>&1 | tee .mlx-portable-host/attention-odo.log
+      - name: Execute pinned OpenGL attention derivatives
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_REQUIRE_MLX_ATTENTION_DS_OPENGL: "1"
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/attention-ds
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX OpenGL attention derivatives" -- \
+            python -m pytest -q -n auto --dist loadscope \
+              --basetemp=.mlx-portable-host/attention-ds/pytest \
+              --junitxml=.mlx-portable-host/attention-ds/results.xml \
+              tests/test_translator/test_mlx_attention_ds_opengl.py \
+              2>&1 | tee .mlx-portable-host/attention-ds.log
       - name: Execute pinned DirectX attention derivatives
         if: runner.os == 'Windows'
         env:

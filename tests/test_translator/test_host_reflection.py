@@ -606,7 +606,8 @@ def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts(tmp_path
         encoding="utf-8",
     )
     glsl = reflect_target_host_interface(artifact, target="opengl", stage="compute")
-    assert all("scalarLayout" not in resource for resource in glsl["resources"])
+    assert glsl["resources"][0]["scalarLayout"]["blockSizeBytes"] == 16
+    assert all("scalarLayout" not in resource for resource in glsl["resources"][1:])
 
 
 def test_hlsl_reflection_excludes_malformed_function_declarations(tmp_path):

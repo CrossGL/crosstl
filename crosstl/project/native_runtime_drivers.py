@@ -21,6 +21,7 @@ from .runtime_verification import (
     RuntimeExecutorAvailability,
     RuntimeExecutorUnavailable,
 )
+from .uniform_layout import validate_std140_block_layout
 
 
 @dataclass(frozen=True)
@@ -4152,6 +4153,25 @@ def _scalar_block_size(
             resource=binding.name,
             scalarLayout=raw_layout,
         )
+
+    if "blockMembers" in raw_layout or "payloadEncoding" in raw_layout:
+        try:
+            block_size = validate_std140_block_layout(raw_layout)
+        except ValueError as exc:
+            raise _scalar_block_error(
+                target, str(exc), "uniform-block-layout-invalid", resource=binding.name
+            ) from exc
+        if target != "opengl" or dtype != "uint32" or payload_size != block_size:
+            raise _scalar_block_error(
+                target,
+                "Aggregate uniforms require the complete std140 block as uint32 words, including padding.",
+                "uniform-block-payload-mismatch",
+                resource=binding.name,
+                dtype=dtype,
+                payloadSizeBytes=payload_size,
+                blockSizeBytes=block_size,
+            )
+        return block_size
 
     required_fields = {
         "physicalType",

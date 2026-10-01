@@ -2235,7 +2235,7 @@ separately. The current native loader rejects padded storage vectors rather
 than uploading a falsely tight layout. GLSL ``dvec`` values, HLSL 64-bit
 vectors, matrices, fixed arrays, unsupported aggregate shapes, narrow or
 floating-point scalar widths, implicit GLSL block layouts, arbitrary member
-offsets, and multi-member blocks do not receive usable loader metadata. Those
+offsets, and multi-member HLSL blocks do not receive usable loader metadata. Those
 shapes remain unresolved or fail closed when a native loader request requires
 a physical layout. Native requests range-check signed and unsigned 64-bit
 values and preserve them with little-endian 8-byte packing; 64-bit
@@ -2254,8 +2254,29 @@ count by the member count before applying the element stride.
 Dispatch validation requires unique member names, exact homogeneous types and
 offsets, tight stride, complete elements, and the matching target storage class.
 Nested structs, mixed scalar types, arrays, padded records, explicit member
-qualifiers, duplicate declarations and struct uniform blocks remain unsupported.
+qualifiers and duplicate declarations remain unsupported on these storage paths.
 No MLX-specific type-name mapping is used.
+
+Fixed OpenGL uniform blocks may contain mixed supported scalar/vector members.
+Their ``scalarLayout`` retains the block name as ``physicalType`` and ordered
+``blockMembers`` with names, actual GLSL types, component types, vector widths,
+byte offsets, sizes and alignments. Packing follows the `OpenGL std140 rules
+<https://registry.khronos.org/OpenGL/specs/gl/glspec46.core.pdf>`_ (section 7.6.2.2).
+For example, ``int, vec2, vec3, float, uint`` members occupy offsets
+``0, 8, 16, 28, 32`` in a 48-byte block. This is the generated target layout,
+not an assumption about the original language's struct ABI.
+
+``payloadEncoding: uint32-le-words`` identifies byte transport, not homogeneous
+shader data. Inputs provide the complete little-endian block as uint32 words,
+including internal and trailing padding; no numerical conversion of mixed
+fields is performed. Reflection, package descriptors, contract comparison and
+dispatch retain the same member records. Both loader and driver independently
+validate the supplied layout against standard packing before upload. Missing,
+overlapping, misaligned or contradictory records and wrong payload lengths are
+rejected. Arrays, matrices, nested types and explicit member qualifiers remain
+unsupported and produce incomplete-reflection diagnostics. Required Linux CI
+executes translated mixed scalar and padded scalar/vector controls through the
+public package and native-loader APIs.
 
 For a single reflected HLSL or GLSL entry, ``minimumBindingSizeBytes`` records
 the minimum buffer footprint proven by constant-index accesses in its mandatory

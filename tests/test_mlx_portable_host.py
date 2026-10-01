@@ -597,6 +597,46 @@ def test_ci_requires_native_math_before_building_mlx():
     directx_half = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Validate DirectX half conversions"
     )
+    for name, directory, flag, module, seconds in (
+        (
+            "Validate OpenGL uniform blocks",
+            "uniform-blocks",
+            "CROSTL_REQUIRE_UNIFORM_BLOCK_RUNTIME",
+            "test_uniform_block_layouts.py",
+            180,
+        ),
+        (
+            "Execute pinned OpenGL attention derivatives",
+            "attention-ds",
+            "CROSTL_REQUIRE_MLX_ATTENTION_DS_OPENGL",
+            "test_mlx_attention_ds_opengl.py",
+            600,
+        ),
+    ):
+        step = ci_coverage.workflow_job_step_section(workflow, "portable-host", name)
+        assert "if: runner.os == 'Linux'" in step
+        assert "continue-on-error" not in step
+        assert f'{flag}: "1"' in step
+        assert "EGL_PLATFORM: surfaceless" in step
+        assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in step
+        assert "set -euo pipefail" in step
+        assert "pytest -q -n auto" in step
+        assert f"--timeout-seconds {seconds}" in step
+        assert f"--basetemp=.mlx-portable-host/{directory}/pytest" in step
+        assert f"--junitxml=.mlx-portable-host/{directory}/results.xml" in step
+        assert f"tee .mlx-portable-host/{directory}.log" in step
+        assert f"tests/test_translator/{module}" in step
+        for event in ("pull_request", "push"):
+            assert (
+                f"tests/test_translator/{module}"
+                in ci_coverage.workflow_event_path_filters(workflow, event)
+            )
+    derivatives = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Execute pinned OpenGL attention derivatives"
+    )
+    assert (
+        "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream" in derivatives
+    )
     assert "if: runner.os == 'Windows'" in directx_half
     assert "continue-on-error" not in directx_half
     assert 'CROSTL_REQUIRE_HALF_CONVERSION_RUNTIME: "1"' in directx_half

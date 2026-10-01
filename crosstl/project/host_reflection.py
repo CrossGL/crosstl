@@ -18,6 +18,7 @@ from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
 )
+from crosstl.project.uniform_layout import std140_block_layout
 
 REFLECTION_DIAGNOSTIC_PREFIX = "project.runtime-package-inspection"
 REFLECTION_TOOL_UNAVAILABLE = (
@@ -1365,6 +1366,7 @@ def _reflect_glsl_source(
     resources = []
     occupied_spans = []
     resource_names = {}
+    diagnostics = []
     for match in GLSL_BLOCK_RESOURCE_RE.finditer(source):
         occupied_spans.append(match.span())
         layout = _parse_layout(match.group("layout"))
@@ -1384,6 +1386,32 @@ def _reflect_glsl_source(
             layout_text=match.group("layout"),
             body=match.group("body"),
         )
+        if storage == "uniform":
+            layout_parts = (match.group("layout") or "").split(",")
+            qualifiers = {part.strip() for part in layout_parts if "=" not in part}
+            if (
+                qualifiers != {"std140"}
+                or not set(layout) <= {"binding", "set", "descriptor_set"}
+                or source[: match.start()].rstrip().endswith(")")
+            ):
+                scalar_layout = None
+            elif scalar_layout is None:
+                scalar_layout = _glsl_aggregate_block_layout(
+                    match.group("block"), match.group("body")
+                )
+            if scalar_layout is None:
+                diagnostics.append(
+                    ReflectionDiagnostic(
+                        REFLECTION_INCOMPLETE_OUTPUT,
+                        "Uniform block layout requires explicit std140 scalar/vector "
+                        "members; arrays, matrices, nested types and member qualifiers "
+                        "require additional physical-layout support.",
+                        details={
+                            "resource": name,
+                            "reasonKind": "uniform-block-layout-unsupported",
+                        },
+                    )
+                )
         if scalar_layout is None and storage == "buffer":
             member = GLSL_VALUE_BLOCK_MEMBER_RE.fullmatch(match.group("body"))
             qualifiers = {
@@ -1411,6 +1439,19 @@ def _reflect_glsl_source(
                 source_name = f"{name}.{member}" if match.group("name") else member
                 resource_names[source_name] = name
         resources.append(resource)
+    for header in re.finditer(r"\buniform\s+([A-Za-z_]\w*)\s*\{", source):
+        if not any(start <= header.start() < end for start, end in occupied_spans):
+            diagnostics.append(
+                ReflectionDiagnostic(
+                    REFLECTION_INCOMPLETE_OUTPUT,
+                    "Uniform block declaration cannot be reflected; block arrays "
+                    "and nested declarations require additional physical-layout support.",
+                    details={
+                        "resource": header[1],
+                        "reasonKind": "uniform-block-layout-unsupported",
+                    },
+                )
+            )
     for match in GLSL_RESOURCE_RE.finditer(source):
         if any(start <= match.start() < end for start, end in occupied_spans):
             continue
@@ -1480,7 +1521,7 @@ def _reflect_glsl_source(
         resources=resources,
         constants=constants,
         specialization_constants=specialization_constants,
-        diagnostics=[],
+        diagnostics=diagnostics,
     )
 
 
@@ -1535,6 +1576,23 @@ def _glsl_value_type_shape(type_name: str) -> tuple[str, int] | None:
         GLSL_VECTOR_BASE_TYPES[vector_match.group("family").lower()],
         int(vector_match.group("width")),
     )
+
+
+def _glsl_aggregate_block_layout(type_name: str, body: str) -> dict[str, Any] | None:
+    declarations = []
+    # Full-match every declaration so unsupported syntax never becomes a partial layout.
+    parts = body.strip().split(";")
+    if parts[-1].strip():
+        return None
+    for part in parts[:-1]:
+        match = re.fullmatch(r"\s*([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*", part)
+        if match is None:
+            return None
+        declarations.append((match[1], match[2]))
+    try:
+        return std140_block_layout(type_name, declarations)
+    except ValueError:
+        return None
 
 
 def _glsl_scalar_block_layout(

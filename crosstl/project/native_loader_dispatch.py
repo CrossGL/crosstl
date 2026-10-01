@@ -33,6 +33,7 @@ from crosstl.project.runtime_verification import (
     RuntimeValue,
     prepare_runtime_execution,
 )
+from crosstl.project.uniform_layout import validate_std140_block_layout
 
 _ERROR_PREFIX = "project.native-loader-dispatch"
 _COMPUTE_STAGE = "compute"
@@ -1179,6 +1180,29 @@ def _validated_scalar_layout(
             resource_kind=resource_kind,
             path=path,
         )
+    if "blockMembers" in layout or "payloadEncoding" in layout:
+        try:
+            block_size = validate_std140_block_layout(layout)
+        except ValueError as exc:
+            raise NativeLoaderDispatchError(
+                "resource-layout-invalid",
+                str(exc),
+                path=path,
+                details={"binding": runtime_value.name},
+            ) from exc
+        if (
+            target != "opengl"
+            or resource_kind != "constant-buffer"
+            or runtime_value.dtype != "uint32"
+            or math.prod(runtime_value.shape) * 4 != block_size
+        ):
+            raise NativeLoaderDispatchError(
+                "resource-layout-mismatch",
+                "Aggregate uniforms require the complete std140 block as uint32 words, including padding.",
+                path=path,
+                details={"binding": runtime_value.name, "blockSizeBytes": block_size},
+            )
+        return copy.deepcopy(dict(layout))
     element_type = _buffer_dtype(layout.get("elementType"), path=f"{path}.elementType")
     element_size = layout.get("elementSizeBytes")
     element_stride = layout.get("elementStrideBytes")
