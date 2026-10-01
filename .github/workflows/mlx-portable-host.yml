@@ -272,16 +272,18 @@ jobs:
               --junitxml=.mlx-portable-host/gated-delta-runtime/results.xml \
               tests/test_translator/test_mlx_gated_delta_directx_runtime.py \
               2>&1 | tee .mlx-portable-host/gated-delta-runtime.log
-      - name: Execute pinned DirectX attention row dots
-        if: runner.os == 'Windows'
+      - name: Execute pinned portable attention row dots
         env:
           CROSTL_REQUIRE_MLX_ATTENTION_RUNTIME: "1"
-          CROSTL_MLX_ATTENTION_TARGET: directx
+          CROSTL_MLX_ATTENTION_TARGET: ${{ matrix.target }}
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
         run: |
           set -euo pipefail
           mkdir -p .mlx-portable-host/attention-odo
-          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX DirectX attention row dots" -- \
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX portable attention row dots" -- \
             python -m pytest -q -n auto --dist loadscope \
               --basetemp=.mlx-portable-host/attention-odo/pytest \
               --junitxml=.mlx-portable-host/attention-odo/results.xml \

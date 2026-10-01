@@ -14,9 +14,11 @@ import pytest
 
 from crosstl.project.native_runtime_drivers import (
     DirectXComputeRuntime,
+    OpenGLComputeRuntime,
     _complete_directx_register_layout,
     _prepare_directx_buffers,
     _prepare_directx_constants,
+    _prepare_opengl_buffers,
     _validate_directx_register_layout,
 )
 from crosstl.project.runtime_verification import (
@@ -106,6 +108,124 @@ def _check_output(np, data, expected, *, exact):
     }
 
 
+def _index_assertions(dimension, length):
+    rows = HEADS * length
+    if dimension not in DIMENSIONS or length < 0 or rows * dimension > 2**31 - 1:
+        raise ValueError(
+            "Attention fixture exceeds its signed 32-bit indexing contract"
+        )
+    return tuple(
+        {"source": SOURCE, "expression": expression, "minimum": 0, "maximum": maximum}
+        for expression, maximum in (
+            (f"row * {dimension}", max(0, rows - 1) * dimension),
+            ("row", max(0, rows - 1)),
+            ("d", dimension - 1),
+        )
+    )
+
+
+def _opengl_request(np, buffers, artifact, module, dtype, length, directory):
+    source = artifact.read_text(encoding="utf-8")
+    bindings, uploads = {}, []
+    for slot, (name, buffer) in enumerate(zip(("o", "cot_o", "odo"), buffers)):
+        qualifier = "readonly " if slot < 2 else ""
+        assert (
+            f"layout(std430, binding = {slot}) {qualifier}buffer {name}Buffer {{ float {name}[]; }};"
+            in source
+        )
+        # GLSL exposes float storage for these input types. Preserve the
+        # already-quantized source values, not the pre-quantization dataset.
+        decoded = (
+            (buffer.astype("<u4") << 16).view("<f4")
+            if slot < 2 and dtype == "bfloat16_t"
+            else buffer.astype("<f4")
+        )
+        payload = decoded.tobytes() + GUARD
+        words = np.frombuffer(payload, dtype="<u4").tolist()
+        bindings[name] = NativeRuntimeBufferBinding(
+            name=name,
+            binding=RuntimeResourceBinding(
+                name=name,
+                kind="buffer",
+                set=0,
+                binding=slot,
+                type_name="float",
+                access="read" if slot < 2 else "read_write",
+            ),
+            dtype="uint32",
+            shape=(len(words),),
+            value=words,
+            source="input" if slot < 2 else "expectedOutput",
+        )
+        (directory / f"upload-{slot}.bin").write_bytes(payload)
+        uploads.append(
+            {
+                "slot": slot,
+                "sourceElementBytes": buffer.itemsize,
+                "targetElementBytes": 4,
+                "encoding": "decoded-float32",
+                "bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
+    assert "layout(std140, binding = 3) uniform " in source and "int qL;" in source
+    bindings["parameters"] = NativeRuntimeBufferBinding(
+        name="parameters",
+        binding=RuntimeResourceBinding(
+            name="parameters",
+            kind="uniform",
+            set=0,
+            binding=3,
+            type_name="int",
+            access="read",
+            metadata={
+                "scalarLayout": {
+                    "physicalType": "int",
+                    "elementType": "int32",
+                    "elementSizeBytes": 4,
+                    "elementStrideBytes": 4,
+                    "storageLayout": "std140",
+                    "alignmentBytes": 16,
+                    "blockSizeBytes": 16,
+                    "memberOffsetBytes": 0,
+                    "runtimeSized": False,
+                }
+            },
+        ),
+        dtype="int32",
+        shape=(1,),
+        value=[length],
+        source="input",
+    )
+    request = NativeRuntimeDispatchRequest(
+        target="opengl",
+        artifact={"target": "opengl"},
+        artifact_path=artifact,
+        module_path=module,
+        loaded_artifact=source,
+        buffers=bindings,
+        constants={},
+        entry_point="main",
+        dispatch=RuntimeDispatchGeometry(
+            entry_point="main",
+            workgroup_size=(32, 1, 1),
+            workgroup_count=(1, length + 2, HEADS),
+        ),
+    )
+    prepared = {value.name: value for value in _prepare_opengl_buffers(bindings)}
+    assert len(prepared) == 4
+    for slot, name in enumerate(("o", "cot_o", "odo")):
+        assert prepared[name].payload == (directory / f"upload-{slot}.bin").read_bytes()
+        assert prepared[name].binding_index == slot
+    assert prepared["parameters"].payload == struct.pack("<i", length)
+    assert prepared["parameters"].byte_length == 16
+    assert prepared["parameters"].allocation_size == 16
+    (directory / "upload-3.bin").write_bytes(
+        prepared["parameters"].payload + b"\x00" * 12
+    )
+    return request, uploads
+
+
 @pytest.fixture(scope="session")
 def attention_metal_runner(tmp_path_factory):
     assert sys.platform == "darwin", "Attention Metal execution requires macOS"
@@ -191,29 +311,35 @@ def compiled_attention(request, tmp_path_factory):
     if not any(os.environ.get(name) == "1" for name in (REQUIRE_ENV, COMPILE_ENV)):
         pytest.skip(f"set {REQUIRE_ENV}=1 to require pinned attention execution")
     target = os.environ.get(TARGET_ENV)
-    assert target in {"directx", "metal"}, f"Set {TARGET_ENV} to directx or metal"
+    assert target in {
+        "directx",
+        "metal",
+        "opengl",
+    }, f"Set {TARGET_ENV} to directx, metal or opengl"
     if target == "directx":
         assert shutil.which("dxc"), "Attention DirectX validation requires DXC"
+    elif target == "opengl":
+        assert shutil.which(
+            "glslangValidator"
+        ), "Attention OpenGL validation requires glslangValidator"
     else:
         assert sys.platform == "darwin", "Attention Metal validation requires macOS"
     np = importlib.import_module("numpy")
     dimension, dtype, pattern, length = request.param
     entry = f"sdpa_vjp_odo_{dtype}_{dimension}"
     directory = tmp_path_factory.mktemp("attention-odo")
+    options = {"software_subgroup_width": 32} if target != "metal" else {}
+    if target == "directx":
+        options["relative_wave_shuffle_out_of_range"] = "self"
+    assertions = _index_assertions(dimension, length) if target == "opengl" else ()
     revision, original, generated = _translate_pinned(
         directory,
         target,
         entry=entry,
         source_path=SOURCE,
         source_sha256=SOURCE_SHA256,
-        target_options=(
-            {
-                "software_subgroup_width": 32,
-                "relative_wave_shuffle_out_of_range": "self",
-            }
-            if target == "directx"
-            else {}
-        ),
+        target_options=options,
+        index_range_assertions=assertions,
     )
     artifacts = {}
     if target == "directx":
@@ -226,6 +352,30 @@ def compiled_attention(request, tmp_path_factory):
         artifacts["generated"] = _compile_directx(
             source, directory, profile="cs_6_2", flags=("-enable-16bit-types",)
         )
+    elif target == "opengl":
+        source = generated.read_text(encoding="utf-8")
+        assert "GL_KHR_shader_subgroup" not in source and "barrier();" in source
+        assert (
+            "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;"
+            in source
+        )
+        artifact, module = directory / "translated.comp", directory / "translated.spv"
+        artifact.write_text(source, encoding="utf-8")
+        run(
+            [
+                shutil.which("glslangValidator"),
+                "-G",
+                "-S",
+                "comp",
+                artifact,
+                "-o",
+                module,
+            ],
+            directory,
+            "compile-opengl",
+        )
+        assert module.stat().st_size > 0
+        artifacts["generated"] = (artifact, module)
     else:
         for label, artifact in (("original", original), ("generated", generated)):
             artifacts[label] = (
@@ -254,6 +404,7 @@ def compiled_attention(request, tmp_path_factory):
         "fullTranslatedBackend": False,
         "fullUpstreamSuite": False,
         "inputReadbacks": target == "metal",
+        "indexRangeAssertions": list(assertions),
         "results": {},
         "artifacts": {
             label: {
@@ -292,6 +443,14 @@ def compiled_attention(request, tmp_path_factory):
         evidence["constants"] = [
             value.to_json() for value in native_request.constants.values()
         ]
+    elif target == "opengl":
+        artifact, module = artifacts["generated"]
+        native_request, evidence["uploads"] = _opengl_request(
+            np, buffers, artifact, module, dtype, length, directory
+        )
+        evidence["bindings"] = [
+            value.to_json() for value in native_request.buffers.values()
+        ]
     (directory / "evidence.json").write_text(
         json.dumps(evidence, indent=2), encoding="utf-8"
     )
@@ -310,9 +469,17 @@ def test_pinned_attention_executes(compiled_attention, request):
         compiled_attention
     )
     if native_request is not None:
-        assert sys.platform == "win32", "DirectX attention execution requires Windows"
+        assert (
+            sys.platform
+            == {"directx": "win32", "opengl": "linux"}[native_request.target]
+        )
         state = SimpleNamespace(details={})
-        outputs = DirectXComputeRuntime().dispatch(None, state, native_request)
+        runtime = (
+            DirectXComputeRuntime()
+            if native_request.target == "directx"
+            else OpenGLComputeRuntime(context_backends=("egl",))
+        )
+        outputs = runtime.dispatch(None, state, native_request)
         (directory / "readback.json").write_text(json.dumps(outputs), encoding="utf-8")
         assert set(outputs) == {"odo"}
         data = np.asarray(outputs["odo"]["values"], dtype="<u4").tobytes()
@@ -370,3 +537,68 @@ def test_attention_output_verifier_rejects_corruption(corruption):
         )
     with pytest.raises(AssertionError):
         _check_output(np, data, np.zeros((1, 3)), exact=False)
+
+
+@pytest.mark.parametrize("length", [-1, 2**31])
+def test_attention_index_contract_rejects_unrepresentable_shapes(length):
+    with pytest.raises(ValueError):
+        _index_assertions(512, length)
+
+
+@pytest.mark.parametrize("length", [0, 1, 5])
+def test_attention_index_contract_matches_dispatched_rows(length):
+    records = _index_assertions(72, length)
+    assert [record["maximum"] for record in records] == [
+        max(0, HEADS * length - 1) * 72,
+        max(0, HEADS * length - 1),
+        71,
+    ]
+    assert all(
+        record["minimum"] == 0 and record["source"] == SOURCE for record in records
+    )
+
+
+@pytest.mark.parametrize(
+    "dtype,words,expected",
+    [
+        (
+            "float16_t",
+            [0x8000, 0, 0x3C01, 0xBC01, 1, 0x7C00],
+            [0x80000000, 0, 0x3F802000, 0xBF802000, 0x33800000, 0x7F800000],
+        ),
+        (
+            "bfloat16_t",
+            [0x8000, 0, 0x3F81, 0xBF81, 1, 0x7F80],
+            [0x80000000, 0, 0x3F810000, 0xBF810000, 0x00010000, 0x7F800000],
+        ),
+    ],
+)
+def test_opengl_upload_preserves_quantized_input_values(
+    tmp_path, dtype, words, expected
+):
+    np = pytest.importorskip("numpy")
+    artifact, module = tmp_path / "translated.comp", tmp_path / "translated.spv"
+    artifact.write_text(
+        """
+layout(std430, binding = 0) readonly buffer oBuffer { float o[]; };
+layout(std430, binding = 1) readonly buffer cot_oBuffer { float cot_o[]; };
+layout(std430, binding = 2) buffer odoBuffer { float odo[]; };
+layout(std140, binding = 3) uniform Params { int qL; };
+""",
+        encoding="utf-8",
+    )
+    source = np.asarray(words, dtype="<u2")
+    if dtype == "float16_t":
+        source = source.view("<f2")
+    buffers = [source, source, np.zeros(1, dtype="<f4"), np.asarray([1], dtype="<i4")]
+    request, uploads = _opengl_request(
+        np, buffers, artifact, module, dtype, 1, tmp_path
+    )
+    expected_bytes = struct.pack("<6I", *expected) + GUARD
+    assert (tmp_path / "upload-0.bin").read_bytes() == expected_bytes
+    assert (tmp_path / "upload-1.bin").read_bytes() == expected_bytes
+    assert request.buffers["o"].value == expected + list(struct.unpack("<32I", GUARD))
+    assert (
+        uploads[0]["sourceElementBytes"] == 2 and uploads[0]["targetElementBytes"] == 4
+    )
+    assert (tmp_path / "upload-3.bin").read_bytes() == struct.pack("<4i", 1, 0, 0, 0)

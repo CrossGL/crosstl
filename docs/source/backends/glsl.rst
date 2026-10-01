@@ -33,6 +33,24 @@ The backend is the primary path for OpenGL and Vulkan-style GLSL authoring:
   ``gl_GlobalInvocationID``, and related compute identifiers
 * GLSL cbuffer lowering to ``layout(std140, binding = N) uniform`` blocks
 
+Native Attention Fixture
+------------------------
+
+The pinned MLX attention row-dot fixture translates all declared input types
+and head dimensions with explicit software subgroups of width 32. Required
+Linux CI validates GLSL with glslang and executes it through the OpenGL runtime;
+it retains generated sources, validation modules, uploads and output readbacks.
+The same cases have DirectX and original/generated Metal controls.
+
+The fixture uses source-qualified index-range assertions derived from its
+concrete buffer sizes. It rejects shapes outside signed 32-bit index bounds.
+Because these GLSL entries use float32 storage, the host fixture expands
+already-quantized half and bfloat16 values before upload. Source input bytes
+remain available separately, and packing tests cover signed zero, fractional
+values and small magnitudes. The uniform scalar uses its checked std140 layout.
+This is bounded kernel execution evidence, not full MLX host integration or
+unrestricted 64-bit buffer indexing.
+
 Implementation Notes
 --------------------
 

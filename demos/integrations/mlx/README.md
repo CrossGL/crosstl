@@ -868,7 +868,7 @@ original/generated Metal numerical gates, checking all six gradients against an
 independent reference. This covers selected head layouts, checkpoint intervals,
 partial segments and float16/float32 storage, not complete MLX host integration.
 
-The attention backward row-dot stage has separate required Windows and macOS
+The attention backward row-dot stage has required Windows, Linux and macOS
 gates. They translate all 24 declared float32/float16/bfloat16 entries across
 dimensions 64, 72, 80, 96, 128, 192, 256 and 512. Exact dyadic cases distinguish
 storage interpretation, indexing and reduction behavior; additional fractional
@@ -876,8 +876,19 @@ cases compare against decoded-input float64 dot products at `rtol=atol=1e-5`.
 Dispatches preserve the upstream `(32, 1, 1)` workgroup shape and add inactive
 rows to test whole-workgroup early returns. An empty-length case must preserve
 all output guards. Original and translated Metal read back every buffer;
-DirectX reads back the writable output. These checks cover the row-dot stage,
+DirectX and OpenGL read back the writable output. These checks cover the row-dot stage,
 not the remaining attention-gradient stages or full upstream attention tests.
+
+OpenGL uses software subgroups of width 32 and validates each generated shader
+with glslang before native execution. The fixture records source-scoped index
+bounds derived from its dimensions, lengths and six flattened heads. These are
+bounded host preconditions, not a general guarantee for 64-bit MLX indices.
+Generated GLSL exposes float32 input storage for this stage: the host fixture
+decodes the already-quantized float16/bfloat16 source values before uploading
+float32 buffers. It preserves the original input files separately from the
+uploaded bytes and records both storage widths. The `qL` parameter uses a
+checked 16-byte std140 block. No source kernels are rewritten, and this fixture
+does not establish automatic layout conversion for a full MLX backend.
 
 Reduced Metal roundtrip tests execute float atomic addition and exchange on
 scalar buffers and aggregate fields. They check 513 competing updates, returned

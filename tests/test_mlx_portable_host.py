@@ -629,13 +629,6 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
             "CROSTL_REQUIRE_MLX_GATED_DELTA_DIRECTX_RUNTIME",
             "test_mlx_gated_delta_directx_runtime.py",
         ),
-        (
-            "Execute pinned DirectX attention row dots",
-            "attention-odo",
-            900,
-            "CROSTL_REQUIRE_MLX_ATTENTION_RUNTIME",
-            "test_mlx_attention_odo_runtime.py",
-        ),
     ):
         step = ci_coverage.workflow_job_step_section(workflow, "portable-host", name)
         assert "if: runner.os == 'Windows'" in step
@@ -663,11 +656,25 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
             )
     metal = (root / ".github/workflows/mlx-metal-host.yml").read_text()
     attention = ci_coverage.workflow_job_step_section(
-        workflow, "portable-host", "Execute pinned DirectX attention row dots"
+        workflow, "portable-host", "Execute pinned portable attention row dots"
     )
-    assert "CROSTL_MLX_ATTENTION_TARGET: directx" in attention
+    assert "if:" not in attention and "continue-on-error" not in attention
+    assert 'CROSTL_REQUIRE_MLX_ATTENTION_RUNTIME: "1"' in attention
+    assert "CROSTL_MLX_ATTENTION_TARGET: ${{ matrix.target }}" in attention
     assert "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream" in attention
-    assert "--dist loadscope" in attention
+    assert "EGL_PLATFORM: surfaceless" in attention
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in attention
+    assert "set -euo pipefail" in attention
+    assert "pytest -q -n auto --dist loadscope" in attention
+    assert "--timeout-seconds 900" in attention
+    assert "--basetemp=.mlx-portable-host/attention-odo/pytest" in attention
+    assert "--junitxml=.mlx-portable-host/attention-odo/results.xml" in attention
+    assert "tests/test_translator/test_mlx_attention_odo_runtime.py" in attention
+    assert "tee .mlx-portable-host/attention-odo.log" in attention
+    for event in ("push", "pull_request"):
+        assert "tests/test_translator/test_mlx_attention_odo_runtime.py" in (
+            ci_coverage.workflow_event_path_filters(workflow, event)
+        )
     assert ci_coverage.workflow_job_timeout_minutes(workflow, "portable-host") * 60 > (
         120
         + 120

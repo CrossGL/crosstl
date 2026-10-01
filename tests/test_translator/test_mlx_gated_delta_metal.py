@@ -29,6 +29,7 @@ def _translate_pinned(
     target_options=None,
     source_path=SOURCE,
     source_sha256=SOURCE_SHA256,
+    index_range_assertions=(),
 ):
     root_value = os.environ.get("CROSTL_MLX_CURRENT_ROOT")
     assert root_value, "Set CROSTL_MLX_CURRENT_ROOT to the pinned checkout"
@@ -70,6 +71,7 @@ def _translate_pinned(
                 targets=(target,),
                 entry_points={source_path: (entry,)},
                 entry_workgroup_size_rules={source_path: {entry: workgroup_size}},
+                index_range_assertions=index_range_assertions,
                 source_options={
                     "metal": {
                         "max_template_specializations": 128,
@@ -86,9 +88,18 @@ def _translate_pinned(
         shutil.copytree(output, tmp_path / "translated")
         assert payload["diagnostics"] == []
         assert payload["summary"]["translatedCount"] == 1
+        if index_range_assertions:
+            assert payload["project"]["indexRangeAssertions"] == list(
+                index_range_assertions
+            )
         record = payload["artifacts"][0]
-        assert record["entryPoint"]["target"] == (
-            entry if target == "metal" else "CSMain"
+        assert (
+            record["entryPoint"]["target"]
+            == {
+                "metal": entry,
+                "directx": "CSMain",
+                "opengl": "main",
+            }[target]
         )
         generated = (
             tmp_path / "translated" / (root / record["path"]).relative_to(output)
