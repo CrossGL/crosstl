@@ -3,6 +3,7 @@ import Metal
 
 struct Request: Decodable {
     let buffers: [String]
+    let allocationIds: [Int]?
     let workgroupCount: [Int]
     let workgroupSize: [Int]
     let simdWidth: Int
@@ -34,14 +35,31 @@ func run() throws {
           request.workgroupSize.reduce(1, *) <= pipeline.maxTotalThreadsPerThreadgroup else {
         throw ExecutionError.unavailable("Unsupported SIMD width or workgroup size")
     }
-    let buffers = try request.buffers.map { filename -> MTLBuffer in
+    let allocationIds = request.allocationIds ?? Array(request.buffers.indices)
+    guard allocationIds.count == request.buffers.count else {
+        throw ExecutionError.unavailable("Allocation identity count does not match bindings")
+    }
+    var allocations: [Int: MTLBuffer] = [:]
+    var initialPayloads: [Int: Data] = [:]
+    var buffers: [MTLBuffer] = []
+    for (index, filename) in request.buffers.enumerated() {
         let bytes = try Data(contentsOf: URL(fileURLWithPath: filename))
         guard !bytes.isEmpty else { throw ExecutionError.unavailable("Empty buffer") }
+        let identity = allocationIds[index]
+        if let allocation = allocations[identity] {
+            guard initialPayloads[identity] == bytes else {
+                throw ExecutionError.unavailable("Conflicting shared-allocation payloads")
+            }
+            buffers.append(allocation)
+            continue
+        }
         let allocation = bytes.withUnsafeBytes {
             device.makeBuffer(bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
         }
         guard let allocation else { throw ExecutionError.unavailable("Allocation failed") }
-        return allocation
+        allocations[identity] = allocation
+        initialPayloads[identity] = bytes
+        buffers.append(allocation)
     }
     guard let command = queue.makeCommandBuffer(),
           let encoder = command.makeComputeCommandEncoder() else {
@@ -68,7 +86,8 @@ func run() throws {
             .write(to: output.appendingPathComponent("buffer-\(index).bin"))
     }
     let result = try JSONSerialization.data(withJSONObject: ["device": device.name,
-        "simdWidth": pipeline.threadExecutionWidth, "bufferBytes": buffers.map { $0.length }],
+        "simdWidth": pipeline.threadExecutionWidth, "bufferBytes": buffers.map { $0.length },
+        "allocationIds": allocationIds, "uniqueAllocations": allocations.count],
         options: [.sortedKeys])
     FileHandle.standardOutput.write(result)
 }

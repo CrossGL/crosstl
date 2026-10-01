@@ -19,6 +19,7 @@ on:
       - "tests/test_translator/test_mlx_gated_delta_directx_runtime.py"
       - "tests/test_translator/test_mlx_gated_delta_runtime.py"
       - "tests/test_translator/test_mlx_attention_odo_runtime.py"
+      - "tests/test_translator/test_mlx_attention_ds_runtime.py"
       - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
       - "tests/test_translator/test_fused_math.py"
@@ -54,6 +55,7 @@ on:
       - "tests/test_translator/test_mlx_gated_delta_directx_runtime.py"
       - "tests/test_translator/test_mlx_gated_delta_runtime.py"
       - "tests/test_translator/test_mlx_attention_odo_runtime.py"
+      - "tests/test_translator/test_mlx_attention_ds_runtime.py"
       - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
       - "tests/test_translator/test_fused_math.py"
@@ -289,6 +291,21 @@ jobs:
               --junitxml=.mlx-portable-host/attention-odo/results.xml \
               tests/test_translator/test_mlx_attention_odo_runtime.py \
               2>&1 | tee .mlx-portable-host/attention-odo.log
+      - name: Execute pinned DirectX attention derivatives
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_REQUIRE_MLX_ATTENTION_DS_RUNTIME: "1"
+          CROSTL_MLX_ATTENTION_DS_TARGET: directx
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/attention-ds
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX DirectX attention derivatives" -- \
+            python -m pytest -q -n auto --dist loadscope \
+              --basetemp=.mlx-portable-host/attention-ds/pytest \
+              --junitxml=.mlx-portable-host/attention-ds/results.xml \
+              tests/test_translator/test_mlx_attention_ds_runtime.py \
+              2>&1 | tee .mlx-portable-host/attention-ds.log
       - name: Validate pinned unary fused arithmetic
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream

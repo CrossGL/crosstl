@@ -629,6 +629,13 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
             "CROSTL_REQUIRE_MLX_GATED_DELTA_DIRECTX_RUNTIME",
             "test_mlx_gated_delta_directx_runtime.py",
         ),
+        (
+            "Execute pinned DirectX attention derivatives",
+            "attention-ds",
+            600,
+            "CROSTL_REQUIRE_MLX_ATTENTION_DS_RUNTIME",
+            "test_mlx_attention_ds_runtime.py",
+        ),
     ):
         step = ci_coverage.workflow_job_step_section(workflow, "portable-host", name)
         assert "if: runner.os == 'Windows'" in step
@@ -689,6 +696,7 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
         + 1800
         + 300
         + 1000
+        + 600
         + 600
     )
     reductions = ci_coverage.workflow_job_step_section(

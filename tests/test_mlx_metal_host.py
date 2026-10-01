@@ -330,6 +330,41 @@ def test_ci_requires_pinned_attention_numerical_execution():
     )
 
 
+def test_ci_requires_pinned_attention_derivative_execution():
+    from tools import ci_coverage
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/mlx-metal-host.yml").read_text()
+    step = ci_coverage.workflow_job_step_section(
+        workflow, "metal-host", "Execute pinned MLX attention derivatives"
+    )
+    assert "if:" not in step and "continue-on-error" not in step
+    assert 'CROSTL_REQUIRE_MLX_ATTENTION_DS_RUNTIME: "1"' in step
+    assert "CROSTL_MLX_ATTENTION_DS_TARGET: metal" in step
+    assert "CROSTL_MLX_CURRENT_ROOT: mlx-upstream" in step
+    assert 'PYTEST_XDIST_AUTO_NUM_WORKERS: "2"' in step
+    assert "set -euo pipefail" in step
+    assert "--timeout-seconds 600" in step
+    assert "pytest -q -n auto --dist loadscope" in step
+    assert "--basetemp=.mlx-metal-host/attention-ds/pytest" in step
+    assert "--junitxml=.mlx-metal-host/attention-ds/results.xml" in step
+    assert "tee .mlx-metal-host/attention-ds.log" in step
+    assert "tests/test_translator/test_mlx_attention_ds_runtime.py" in step
+    for event in ("pull_request", "push"):
+        paths = ci_coverage.workflow_event_path_filters(workflow, event)
+        for path in (
+            "tests/test_translator/test_mlx_attention_ds_runtime.py",
+            "tests/test_translator/test_mlx_attention_odo_runtime.py",
+            "tests/test_translator/test_mlx_gated_delta_runtime.py",
+            "tests/test_translator/test_mlx_gated_delta_metal.py",
+            "tests/fixtures/runtime_verification/metal_raw_buffers.swift",
+        ):
+            assert path in paths
+    assert ci_coverage.workflow_job_timeout_minutes(workflow, "metal-host") * 60 > (
+        120 + 180 + 300 + 600 + 900 + 600 + 1800 + 3300 + 600
+    )
+
+
 def test_ci_requires_pinned_backward_numerical_execution():
     from tools import ci_coverage
 

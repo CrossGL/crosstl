@@ -16,6 +16,7 @@ on:
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
       - "tests/test_translator/test_mlx_gated_delta_runtime.py"
       - "tests/test_translator/test_mlx_attention_odo_runtime.py"
+      - "tests/test_translator/test_mlx_attention_ds_runtime.py"
       - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
       - "tests/fixtures/runtime_verification/metal_raw_buffers.swift"
       - "tests/fixtures/runtime_verification/metal_uint32_buffers.swift"
@@ -36,6 +37,7 @@ on:
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
       - "tests/test_translator/test_mlx_gated_delta_runtime.py"
       - "tests/test_translator/test_mlx_attention_odo_runtime.py"
+      - "tests/test_translator/test_mlx_attention_ds_runtime.py"
       - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
       - "tests/fixtures/runtime_verification/metal_raw_buffers.swift"
       - "tests/fixtures/runtime_verification/metal_uint32_buffers.swift"
@@ -150,6 +152,21 @@ jobs:
               --junitxml=.mlx-metal-host/attention-odo/results.xml \
               tests/test_translator/test_mlx_attention_odo_runtime.py \
               2>&1 | tee .mlx-metal-host/attention-odo.log
+      - name: Execute pinned MLX attention derivatives
+        env:
+          CROSTL_REQUIRE_MLX_ATTENTION_DS_RUNTIME: "1"
+          CROSTL_MLX_ATTENTION_DS_TARGET: metal
+          CROSTL_MLX_CURRENT_ROOT: mlx-upstream
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/attention-ds
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX Metal attention derivatives" -- \
+            python -m pytest -q -n auto --dist loadscope \
+              --basetemp=.mlx-metal-host/attention-ds/pytest \
+              --junitxml=.mlx-metal-host/attention-ds/results.xml \
+              tests/test_translator/test_mlx_attention_ds_runtime.py \
+              2>&1 | tee .mlx-metal-host/attention-ds.log
       - name: Prepare isolated MLX build
         run: |
           python -m venv mlx-env

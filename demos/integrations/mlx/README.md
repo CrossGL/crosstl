@@ -890,6 +890,20 @@ uploaded bytes and records both storage widths. The `qL` parameter uses a
 checked 16-byte std140 block. No source kernels are rewritten, and this fixture
 does not establish automatic layout conversion for a full MLX backend.
 
+The attention tile-derivative stage has separate Windows and macOS gates for
+all three declared storage types. Its 24 configurations cover causal masking,
+fully masked rows, nonzero tile origins, partial workgroups, fractional inputs,
+and the shared score/derivative allocation used by the upstream host. The
+32-byte mixed integer/float parameter block is packed at checked field offsets.
+Word-sized readback transport preserves native 16-bit buffer strides; an odd
+element count has explicit tail padding after the output guard. Exact cases
+compare bitwise and fractional cases use `rtol=atol=1e-5` against quantized
+float64 references. Original/generated Metal also checks input preservation
+and allocation identity. These are kernel-stage checks, not end-to-end
+attention backward or upstream host redirection. OpenGL execution of this
+stage remains blocked by the aggregate uniform-buffer contract in
+[issue #1991](https://github.com/CrossGL/crosstl/issues/1991).
+
 Reduced Metal roundtrip tests execute float atomic addition and exchange on
 scalar buffers and aggregate fields. They check 513 competing updates, returned
 values, final storage and single evaluation of address/value operands. Separate
