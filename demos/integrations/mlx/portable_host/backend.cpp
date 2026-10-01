@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "mlx/allocator.h"
+#include "mlx/backend/common/reduce.h"
 #include "mlx/backend/common/slicing.h"
 #include "mlx/backend/common/unary.h"
 #include "mlx/backend/common/utils.h"
@@ -255,6 +256,39 @@ mlx::core::array dense_input(const mlx::core::array& in) {
   return dense;
 }
 
+void dispatch_all_reduce(
+    const mlx::core::array& in,
+    mlx::core::array& out,
+    const std::string& operation,
+    const char* dtype) {
+  uint64_t size = in.size();
+  const uint32_t rows = size <= 4096 ? 1 : 128;
+  uint64_t row_size = (size + rows - 1) / rows;
+  const uint32_t width = static_cast<uint32_t>(
+      std::min<uint64_t>(1024, ((row_size + 127) / 128) * 32));
+  if (out.size() != rows || in.data_size() != size || in.offset() < 0 ||
+      uint64_t(in.offset()) > in.buffer_size() ||
+      in.nbytes() > in.buffer_size() - uint64_t(in.offset())) {
+    throw std::invalid_argument("CrossTL reduction storage does not match its pass.");
+  }
+  out.set_data(mlx::core::allocator::malloc(std::max<size_t>(out.nbytes(), 4)));
+  std::string entry = "all_reduce_" + operation + dtype;
+  CrosstlMlxBuffer buffers[] = {
+      {"in", dtype, const_cast<void*>(in.data<void>()), size, 0},
+      {"out", dtype, out.data<void>(), rows, 1},
+      {"in_size", "uint64", &size, 1, 0},
+      {"row_size", "uint64", &row_size, 1, 0},
+  };
+  const CrosstlMlxLaunch launch{{1, rows, 1}, {width, 1, 1}};
+  char error[2048] = {};
+  int status = dispatch_callback.load()(
+      entry.c_str(), buffers, 4, size, &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native reduction failed: ") + error);
+  }
+}
+
 const char* storage_type(mlx::core::Dtype dtype) {
   if (dtype == mlx::core::bool_) {
     return "bool_";
@@ -460,6 +494,59 @@ void Slice::eval_gpu(const std::vector<array>& inputs, array& out) {
 
 void AsType::eval_gpu(const std::vector<array>& inputs, array& out) {
   dispatch_cast(inputs, out);
+}
+
+void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() != 1 || axes_.empty()) {
+    throw std::invalid_argument("CrossTL reduction requires one input and nonempty axes.");
+  }
+  array in = inputs[0];
+  if (in.size() > 65535) {
+    throw std::invalid_argument("CrossTL reduction supports at most 65535 elements.");
+  }
+  if (in.size() > 0 && out.size() == in.size()) {
+    array identity(out.shape(), in.dtype(), nullptr, {});
+    reshape_view(inputs, identity);
+    dispatch_cast({identity}, out);
+    return;
+  }
+  const char* dtype = storage_type(in.dtype());
+  const bool boolean = in.dtype() == bool_;
+  const bool logical = reduce_type_ == And || reduce_type_ == Or;
+  if (!dtype || in.dtype() != out.dtype() ||
+      (boolean ? (reduce_type_ == Sum || reduce_type_ == Prod) : logical)) {
+    throw std::invalid_argument(
+        "CrossTL reductions require matching float32/int32/uint32 numeric arrays or Boolean all/any.");
+  }
+  if (in.size() == 0) {
+    throw std::invalid_argument("CrossTL empty reduction initialization is not implemented.");
+  }
+  auto plan = get_reduction_plan(in, axes_);
+  if (plan.type == GeneralReduce && axes_.size() == size_t(in.ndim())) {
+    in = dense_input(in);
+    plan = get_reduction_plan(in, axes_);
+  }
+  if (plan.type != ContiguousAllReduce) {
+    throw std::invalid_argument("CrossTL row and column reduction plans are not implemented.");
+  }
+  const char* operation = nullptr;
+  switch (reduce_type_) {
+    case And: operation = "and"; break;
+    case Or: operation = "or"; break;
+    case Sum: operation = "sum"; break;
+    case Prod: operation = "prod"; break;
+    case Min: operation = boolean ? "and" : "min"; break;
+    case Max: operation = boolean ? "or" : "max"; break;
+  }
+  if (in.size() <= 4096) {
+    dispatch_all_reduce(in, out, operation, dtype);
+  } else {
+    // Retain upstream's two passes; each callback completes before its input expires.
+    array intermediate({128}, out.dtype(), nullptr, {});
+    dispatch_all_reduce(in, intermediate, operation, dtype);
+    dispatch_all_reduce(intermediate, out, operation, dtype);
+  }
 }
 
 void Full::eval_gpu(const std::vector<array>& inputs, array& out) {

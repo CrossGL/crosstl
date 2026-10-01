@@ -17,11 +17,18 @@ from demos.integrations.mlx.portable_host import (
     cast_workloads,
     copy_workloads,
     full_workloads,
+    reduction_workloads,
     unary_workloads,
     view_workloads,
 )
 from demos.integrations.mlx.portable_host.packages import ENTRIES
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
+from demos.integrations.mlx.portable_host.reduction_packages import (
+    ENTRIES as REDUCTION_ENTRIES,
+)
+from demos.integrations.mlx.portable_host.reduction_packages import (
+    load_index as load_reduction_index,
+)
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
 
 UPSTREAM_TESTS = (
@@ -82,6 +89,14 @@ NEGATIVE_CHECKS = {
     "full-limit": "65535",
     "full-allocation": "exceeds its allocation",
 }
+REDUCTION_NEGATIVE_CHECKS = {
+    "reduce-dtype": "matching float32/int32/uint32",
+    "reduce-limit": "65535",
+    "reduce-allocation": "storage does not match",
+    "reduce-empty": "empty reduction initialization",
+    "reduce-row": "row and column reduction plans",
+    "reduce-column": "row and column reduction plans",
+}
 
 
 def save(path, payload):
@@ -100,13 +115,18 @@ def worker(args):
         raise RuntimeError("A different GPU backend is already available")
     runtime = None
     if args.worker != "cpu":
-        runtime = HostRuntime(args.packages, output / "dispatch.jsonl")
+        runtime = HostRuntime(
+            args.packages,
+            output / "dispatch.jsonl",
+            reductions=getattr(args, "reductions", None),
+        )
         runtime.install()
         assert mx.default_device() == mx.gpu and mx.is_available(mx.gpu)
     else:
         mx.set_default_device(mx.cpu)
     os.environ["DEVICE"] = "cpu" if args.worker == "cpu" else "gpu"
-    if args.worker in NEGATIVE_CHECKS:
+    checks = {**NEGATIVE_CHECKS, **REDUCTION_NEGATIVE_CHECKS}
+    if args.worker in checks:
         try:
             if args.worker == "unsupported":
                 value = mx.power(
@@ -160,6 +180,18 @@ def worker(args):
             elif args.worker == "full-allocation":
                 source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (2,), (-1,))
                 value = mx.full((3, 2), source)
+            elif args.worker == "reduce-dtype":
+                value = mx.sum(mx.array(np.ones(2, dtype=np.float16)))
+            elif args.worker == "reduce-limit":
+                value = mx.sum(mx.array(np.ones(65536, dtype=np.float32)))
+            elif args.worker == "reduce-allocation":
+                source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (5,), (1,), 2)
+                value = mx.sum(source)
+            elif args.worker == "reduce-empty":
+                value = mx.sum(mx.array([], dtype=mx.float32))
+            elif args.worker in {"reduce-row", "reduce-column"}:
+                source = mx.array([[1.0, 2.0], [3.0, 4.0]])
+                value = mx.sum(source, axis=1 if args.worker == "reduce-row" else 0)
             else:
                 descriptor = runtime.descriptors["arangefloat32"]
                 descriptor["artifact"]["packagePath"] = "artifacts/missing.glsl"
@@ -167,7 +199,7 @@ def worker(args):
             mx.eval(value)
         except (ValueError, RuntimeError) as error:
             message = str(error)
-            expected = NEGATIVE_CHECKS[args.worker]
+            expected = checks[args.worker]
             if expected not in message:
                 raise
             save(output / "result.json", {"rejected": True, "message": message})
@@ -205,6 +237,23 @@ def worker(args):
     )
     with (output / "upstream-tests.log").open("w", encoding="utf-8") as log:
         result = unittest.TextTestRunner(stream=log, verbosity=2).run(suite)
+    reductions = None
+    if getattr(args, "reductions", None) is not None:
+        index = json.loads((args.reductions / "index.json").read_text())
+
+        def observe(record):
+            with (output / "reduction-readbacks.jsonl").open(
+                "a", encoding="utf-8"
+            ) as log:
+                log.write(json.dumps(record, allow_nan=False) + "\n")
+
+        reductions = reduction_workloads.collect(
+            mx,
+            index["widths"],
+            observe=observe,
+            dispatch_count=(lambda: runtime.dispatch_count) if runtime else None,
+        )
+        reduction_workloads.validate(reductions, index["widths"])
     save(
         output / "result.json",
         {
@@ -220,6 +269,7 @@ def worker(args):
             "casts": casts,
             "full": full,
             "booleans": booleans,
+            **({"reductions": reductions} if reductions is not None else {}),
         },
     )
     if (
@@ -284,14 +334,35 @@ def verify(args):
     adaptation = verify_prepared(args.mlx_root)
     save(output / "adaptation-before.json", adaptation)
     test_sources = upstream_test_sources(args.mlx_root)
+    reductions = getattr(args, "reductions", None)
+    reduction_index = None
+    if reductions is not None:
+        target = json.loads((args.packages / "index.json").read_text())["target"]
+        reduction_index = load_reduction_index(reductions, target)
+        if set(reduction_index["entries"]) != set(REDUCTION_ENTRIES):
+            raise ValueError(
+                "Reduction proof requires every supported operation and dtype"
+            )
+        if not {32, 64, 128}.issubset(reduction_index["widths"]):
+            raise ValueError(
+                "Reduction proof requires widths 32, 64 and 128 for multipass cases"
+            )
     results = {}
     failed = []
-    for mode in ("cpu", "native", *NEGATIVE_CHECKS):
+    checks = {
+        **NEGATIVE_CHECKS,
+        **(REDUCTION_NEGATIVE_CHECKS if reductions is not None else {}),
+    }
+    for mode in ("cpu", "native", *checks):
         command = [
             sys.executable,
             str(Path(__file__).resolve().parents[4] / "tools/run_bounded_command.py"),
             "--timeout-seconds",
-            "300" if mode == "native" else "180",
+            (
+                "1800"
+                if reductions is not None and mode == "native"
+                else "300" if mode == "native" else "180"
+            ),
             "--label",
             f"MLX host {mode}",
             "--",
@@ -307,6 +378,8 @@ def verify(args):
             "--output-dir",
             str(output / mode),
         ]
+        if reductions is not None:
+            command.extend(["--reductions", str(reductions.resolve())])
         with (output / f"{mode}.stdout").open("w") as stdout, (
             output / f"{mode}.stderr"
         ).open("w") as stderr:
@@ -327,7 +400,7 @@ def verify(args):
         raise RuntimeError("Original CPU and translated GPU host results differ")
     verify_results(results["cpu"], cpu=True)
     verify_results(results["native"])
-    for mode, expected in NEGATIVE_CHECKS.items():
+    for mode, expected in checks.items():
         if (
             results[mode].get("rejected") is not True
             or not isinstance(results[mode].get("message"), str)
@@ -338,7 +411,10 @@ def verify(args):
         json.loads(line)
         for line in (output / "native/dispatch.jsonl").read_text().splitlines()
     ]
-    if {record["entry"] for record in trace} != set(ENTRIES):
+    expected_entries = set(ENTRIES) | (
+        set(REDUCTION_ENTRIES) if reductions is not None else set()
+    )
+    if {record["entry"] for record in trace} != expected_entries:
         raise RuntimeError("Native trace does not cover every translated entry")
     expected_dispatches = (
         [(f"arange{dtype}", count) for dtype in DTYPES for count in COUNTS if count]
@@ -361,6 +437,8 @@ def verify(args):
     if any(record["target"] != index["target"] for record in trace):
         raise RuntimeError("Native trace used an unexpected target")
     for record in trace:
+        if reductions is not None and record["entry"] in REDUCTION_ENTRIES:
+            continue
         count = record.get("workgroupCount")
         if (
             type(record.get("dispatchVersion")) is not int
@@ -372,6 +450,13 @@ def verify(args):
             or any(type(value) is not int or not 1 <= value <= 65535 for value in count)
         ):
             raise RuntimeError("Native trace has incomplete or invalid launch geometry")
+    if reductions is not None:
+        for mode in ("cpu", "native"):
+            reduction_workloads.validate(
+                results[mode].get("reductions"),
+                reduction_index["widths"],
+                trace=trace if mode == "native" else None,
+            )
     after = verify_prepared(args.mlx_root)
     save(output / "adaptation-after.json", after)
     if after != adaptation or upstream_test_sources(args.mlx_root) != test_sources:
@@ -390,9 +475,10 @@ def verify(args):
         "translated": results["native"],
         "dispatchCount": len(trace),
         "entries": sorted({record["entry"] for record in trace}),
-        "negativeChecks": {mode: results[mode] for mode in NEGATIVE_CHECKS},
+        "negativeChecks": {mode: results[mode] for mode in checks},
         "fullUpstreamSuite": False,
         "fullTranslatedBackend": False,
+        **({"reductionWidths": reduction_index["widths"]} if reduction_index else {}),
     }
     save(output / "evidence.json", evidence)
     return evidence
@@ -402,8 +488,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mlx-root", type=Path, required=True)
     parser.add_argument("--packages", type=Path, required=True)
+    parser.add_argument("--reductions", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--worker", choices=["cpu", "native", *NEGATIVE_CHECKS])
+    parser.add_argument(
+        "--worker",
+        choices=["cpu", "native", *NEGATIVE_CHECKS, *REDUCTION_NEGATIVE_CHECKS],
+    )
     args = parser.parse_args()
     if args.worker:
         worker(args)

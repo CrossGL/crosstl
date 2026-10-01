@@ -20,7 +20,7 @@ from crosstl.project.runtime_verification import (
     RuntimeParityExecutor,
     RuntimeTestAdapterSpec,
 )
-from demos.integrations.mlx.portable_host import copy_layout
+from demos.integrations.mlx.portable_host import copy_layout, reduction_layout
 from demos.integrations.mlx.portable_host.packages import (
     BINARY_ENTRIES,
     BOOLEAN_CAST_ENTRIES,
@@ -31,6 +31,12 @@ from demos.integrations.mlx.portable_host.packages import (
     ENTRIES,
     LOGICAL_NOT_ENTRY,
     UNARY_ENTRIES,
+)
+from demos.integrations.mlx.portable_host.reduction_packages import (
+    ENTRIES as REDUCTION_ENTRIES,
+)
+from demos.integrations.mlx.portable_host.reduction_packages import (
+    load_index as load_reduction_index,
 )
 
 
@@ -108,7 +114,7 @@ def wire_value(value):
 
 
 class HostRuntime:
-    def __init__(self, directory, trace):
+    def __init__(self, directory, trace, *, reductions=None):
         self.directory = Path(directory).resolve()
         self.trace = Path(trace).resolve()
         index = json.loads((self.directory / "index.json").read_text(encoding="utf-8"))
@@ -116,6 +122,22 @@ class HostRuntime:
         self.descriptors = index["descriptors"]
         if set(self.descriptors) != set(ENTRIES):
             raise ValueError("Packages must contain the exact supported entry set")
+        self.reduction_directory = (
+            Path(reductions).resolve()
+            if reductions is not None
+            else self.directory / "reductions"
+        )
+        reduction_index = self.reduction_directory / "index.json"
+        self.reduction_descriptors = {}
+        self.reduction_index = None
+        self.dispatch_count = 0
+        if reductions is not None and not reduction_index.is_file():
+            raise ValueError("Reduction package index is missing")
+        if reduction_index.is_file():
+            self.reduction_index = load_reduction_index(
+                self.reduction_directory, self.target
+            )
+            self.reduction_descriptors = self.reduction_index["descriptors"]
         self.trace.parent.mkdir(parents=True, exist_ok=True)
         if self.target == "opengl":
             adapter = OpenGLRuntimeParityAdapter(
@@ -178,23 +200,37 @@ class HostRuntime:
             return 1
 
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
-        if entry not in self.descriptors:
+        reduction = entry in REDUCTION_ENTRIES
+        if entry not in self.descriptors and not reduction:
             raise ValueError(f"No translated package for {entry}")
+        if reduction and launch is None:
+            raise ValueError("Native reductions require explicit launch geometry")
         copy = entry in {COPY_ENTRY, BOOLEAN_COPY_ENTRY}
         binary = entry in BINARY_ENTRIES
         comparison = entry in COMPARISON_ENTRIES
         binary_operation = binary or comparison
         cast = entry in ALL_CAST_ENTRIES
         if (
-            count != (8 if copy else 4 if binary_operation else 3)
+            count != (8 if copy else 4 if binary_operation or reduction else 3)
             or not buffers
             or not 0 < threads <= 65535
         ):
             raise ValueError("Invalid or unsupported native dispatch dimensions")
-        descriptor = self.descriptors[entry]
+        execution = launch.execution() if launch is not None else None
+        if reduction:
+            key = f'w{execution["workgroupSize"][0]}/{entry}'
+            if key not in self.reduction_descriptors:
+                raise ValueError(f"No translated reduction variant for {key}")
+            descriptor = self.reduction_descriptors[key]
+            package_directory = self.reduction_directory / "package"
+        else:
+            descriptor = self.descriptors[entry]
+            package_directory = self.directory / "package"
         logical_not = entry == LOGICAL_NOT_ENTRY
         unary = entry in UNARY_ENTRIES or logical_not
-        if copy:
+        if reduction:
+            names = {"in", "out", "in_size", "row_size"}
+        elif copy:
             names = set(copy_layout.DTYPES)
         elif binary_operation:
             names = {"a", "b", "c", "size"}
@@ -217,14 +253,19 @@ class HostRuntime:
                 or not buffer.data
             ):
                 raise ValueError("Invalid native buffer")
-            expected = (
-                threads
-                if name == output_name
-                or (unary and name == "in")
-                or (binary_operation and name in {"a", "b"})
-                or (cast and name == "src")
-                else 1
-            )
+            if reduction:
+                expected = {"in": threads, "out": execution["workgroupCount"][1]}.get(
+                    name, 1
+                )
+            else:
+                expected = (
+                    threads
+                    if name == output_name
+                    or (unary and name == "in")
+                    or (binary_operation and name in {"a", "b"})
+                    or (cast and name == "src")
+                    else 1
+                )
             if (not copy and buffer.count != expected) or buffer.output != int(
                 name == output_name
             ):
@@ -249,31 +290,46 @@ class HostRuntime:
                 else ALL_CAST_ENTRIES[entry][0 if name == "src" else 1]
             ):
                 raise ValueError("Native cast buffer dtype does not match")
+            if reduction and dtype != (
+                "uint64"
+                if name in {"in_size", "row_size"}
+                else REDUCTION_ENTRIES[entry]
+            ):
+                raise ValueError("Native reduction buffer dtype does not match")
             supplied[name] = buffer
         if set(supplied) != names:
             raise ValueError("Native buffer names do not match the operation")
+        if reduction:
+            reduction_layout.validate(supplied, threads, execution)
         grid = (
-            copy_layout.geometry(
-                supplied,
-                threads,
-                dtype="bool_" if entry == BOOLEAN_COPY_ENTRY else "uint32",
+            execution["workgroupCount"]
+            if reduction
+            else (
+                copy_layout.geometry(
+                    supplied,
+                    threads,
+                    dtype="bool_" if entry == BOOLEAN_COPY_ENTRY else "uint32",
+                )
+                if copy
+                else [threads, 1, 1]
             )
-            if copy
-            else [threads, 1, 1]
         )
         execution = (
             launch.execution()
             if launch is not None
             else {"workgroupCount": grid, "workgroupSize": [1, 1, 1]}
         )
-        if execution != {"workgroupCount": grid, "workgroupSize": [1, 1, 1]}:
+        if not reduction and execution != {
+            "workgroupCount": grid,
+            "workgroupSize": [1, 1, 1],
+        }:
             raise ValueError("Native launch geometry does not match the operation")
         if (unary or binary_operation or cast) and ctypes.cast(
             supplied["size"].data, ctypes.POINTER(ctypes.c_uint32)
         )[0] != threads:
             raise ValueError("Native operation size does not match the launch")
         guard = COPY_GUARD
-        guarded = copy or binary_operation or cast or logical_not
+        guarded = copy or binary_operation or cast or logical_not or reduction
         output_dtype = supplied[output_name].dtype.decode("ascii")
         if output_dtype == "bool_":
             guard = (
@@ -281,8 +337,10 @@ class HostRuntime:
                 if self.target == "metal"
                 else [int(value) for value in BOOLEAN_GUARD]
             )
-        if (binary and BINARY_ENTRIES[entry] == "float32") or (
-            cast and ALL_CAST_ENTRIES[entry][1] == "float32"
+        if (
+            (reduction and REDUCTION_ENTRIES[entry] == "float32")
+            or (binary and BINARY_ENTRIES[entry] == "float32")
+            or (cast and ALL_CAST_ENTRIES[entry][1] == "float32")
         ):
             guard = [
                 ctypes.c_float.from_buffer_copy(ctypes.c_uint32(word)).value
@@ -354,7 +412,7 @@ class HostRuntime:
             raise ValueError("Reflected bindings do not cover the operation")
         request = build_native_loader_dispatch_request(
             descriptor,
-            self.directory / "package",
+            package_directory,
             inputs,
             outputs,
             execution,
@@ -395,6 +453,23 @@ class HostRuntime:
                         "artifact": descriptor["artifact"],
                         "details": result.details,
                         **(
+                            {
+                                "reductionGuardValues": output["values"][
+                                    buffer.count :
+                                ],
+                                "reductionValues": output["values"][: buffer.count],
+                                "reductionMetadata": {
+                                    name: ctypes.cast(
+                                        supplied[name].data,
+                                        ctypes.POINTER(ctypes.c_uint64),
+                                    )[0]
+                                    for name in ("in_size", "row_size")
+                                },
+                            }
+                            if reduction
+                            else {}
+                        ),
+                        **(
                             {"copyGuardWords": output["values"][buffer.count :]}
                             if copy
                             else {}
@@ -423,3 +498,4 @@ class HostRuntime:
                 )
                 + "\n"
             )
+        self.dispatch_count = getattr(self, "dispatch_count", 0) + 1

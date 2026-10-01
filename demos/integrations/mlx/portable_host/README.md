@@ -35,14 +35,16 @@ other types still fail explicitly. Equal, not-equal and ordered comparisons
 support float32, int32, uint32 and bool inputs with bool outputs. Logical and,
 or and not use bool inputs, including upstream casts from numeric inputs.
 The NaN-equality entry supports float32; the maintained host workloads exercise
-scalar `array_equal(equal_nan=True)`. General array equality still needs the
-unimplemented reduction primitive. Boolean operator overloads that select
+scalar `array_equal(equal_nan=True)`. General array equality additionally needs
+the reduction packages described below. Boolean operator overloads that select
 bitwise primitives are not implemented by these logical hooks.
 Other primitives retain MLX's explicit unsupported-GPU errors. Unary inputs
 other than LogicalNot must be float32. Stored-contiguous broadcasts and column-major views retain
 their metadata; noncontiguous inputs use translated copies before unary dispatch.
 Dispatch is synchronous, uses host staging buffers and supports at most 65,535
-stored elements with one thread per workgroup. Empty arrays do not dispatch. This is a
+stored elements. Elementwise operations use one thread per workgroup; reductions
+preserve upstream launch widths and multipass planning. Empty elementwise arrays
+do not dispatch. This is a
 host integration proof, not a complete MLX backend or a performance benchmark.
 
 The pin is `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. CI builds and runs the same
@@ -83,6 +85,8 @@ no-GPU backend build definition and adds four explicitly named backend files:
   AsType selects a source/destination-specific copy entry, validates array shapes
   and allocation bounds, and allocates a dense destination. Casts perform no CPU
   elementwise conversion.
+  Reduce selects the unchanged whole-array entry and retains the upstream
+  one-pass or two-pass plan for the supported dtypes and sizes.
   Full receives the upstream broadcast/cast value and materializes it with the
   same general-copy entry. Scalar fills, row/column broadcasts and strided values
   use the source strides, with fresh output allocation and no CPU fill loop.
@@ -130,10 +134,50 @@ launch; the Python boundary validates it against the operation and reflected
 package before execution and records both dimensions in the trace. Copy kernels
 retain their two-elements-per-invocation grid, including odd final rows. The
 currently integrated elementwise and copy entries still use one-thread
-workgroups. Larger reduction workgroups can be represented without another ABI
-change, but reduction planning and host integration are not implemented by this
-contract alone. Older callback versions are rejected; rebuild the adapted MLX
+workgroups. Reduction dispatch carries the exact width and row grid for each
+pass. Older callback versions are rejected; rebuild the adapted MLX
 wheel when updating the ABI.
+
+## Whole-Array Reductions
+
+The optional reduction packages connect MLX's `Reduce::eval_gpu` to unchanged
+`all_reduce` entries for float32, int32 and uint32 sum, product, minimum and
+maximum, plus Boolean all/any. Boolean minimum/maximum use upstream's all/any
+mapping. Inputs and outputs must have matching storage types; numeric all/any,
+Boolean sum/product and narrow or complex types are not implemented yet.
+
+The host uses upstream's reduction planner. Noncontiguous whole-array inputs
+are materialized with translated copies when required. Arrays up to 4,096
+elements use the exact source launch width, rounded to a multiple of 32. Larger
+bounded arrays retain the two source passes: 128 partial rows followed by a
+32-thread final reduction. Intermediate values are staged synchronously, not
+kept in persistent GPU allocations. Row/column plans and empty-reduction
+initialization still produce explicit errors. No reduction arithmetic is
+performed on the CPU by the adapter.
+
+`reduction_packages` generates every multiple-of-32 width from 32 through 1,024
+by default: 448 entry/width combinations per target. HLSL and GLSL use explicit
+32-lane software subgroups; they do not assume the hardware wave width. Metal
+uses native subgroups and receives the launch dimensions through the callback.
+The callback validates Metal widths independently while configured Metal variant
+dimensions remain absent from package execution metadata, tracked in
+[#1388](https://github.com/CrossGL/crosstl/issues/1388).
+`--width` and `--entry` can restrict a diagnostic build, but such a subset does
+not establish coverage of the complete bounded host plan.
+
+```sh
+python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream --target opengl --jobs 2 --output-dir reduction-packages
+python -m demos.integrations.mlx.portable_host.verify --mlx-root mlx-upstream --packages host-packages --reductions reduction-packages --output-dir reduction-evidence
+```
+
+The required three-platform workflow builds all widths and verifies actual MLX
+calls against independent references and the CPU backend. Cases cover launch
+boundaries, multi-pass reductions, reversed/transposed/broadcast inputs, integer
+overflow, NaNs, infinities, signed zero and Boolean identities. Native traces
+retain intermediate readbacks, size metadata, dispatch dimensions and output
+guards. The verifier requires every source pass and retains readbacks before
+comparison. These are additional host workloads, not replacements for upstream
+tests or evidence that the full upstream reduction suite passes.
 
 ## Run
 

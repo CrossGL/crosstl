@@ -33,6 +33,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                 f"{'NO_GPU_MULTI' if name in prepare.MULTI_OUTPUT_VIEWS else 'NO_GPU'}({name})"
                 for name in (
                     "Arange",
+                    "Reduce",
                     "Power",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,
@@ -2094,7 +2095,11 @@ def test_ci_requires_resident_attention_reductions():
     assert ci_coverage.workflow_job_timeout_minutes(
         workflow, "portable-host"
     ) * 60 > sum(
-        int(value) for value in re.findall(r"--timeout-seconds (\d+)", workflow)
+        int(value)
+        for value in re.findall(
+            r"--timeout-seconds (\d+)",
+            ci_coverage.workflow_job_text(workflow, "portable-host"),
+        )
     )
 
 
