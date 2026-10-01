@@ -36,9 +36,17 @@ ROW_ENTRIES = {
     )
     for entry, dtype in ENTRIES.items()
 }
-ENTRY_GROUPS = {"all": ENTRIES, "row": ROW_ENTRIES}
+COLUMN_ENTRIES = {
+    f"col_reduce_{mode}_{dimension}_32_32_reduce_"
+    + entry.removeprefix("all_reduce_"): dtype
+    for mode in ("looped", "2pass")
+    for dimension in (1, 2, 5)
+    for entry, dtype in ENTRIES.items()
+}
+ENTRY_GROUPS = {"all": ENTRIES, "row": ROW_ENTRIES, "column": COLUMN_ENTRIES}
 WIDTHS = tuple(range(32, 1025, 32))
 ROW_WIDTHS = (32, 128, *range(288, 1025, 32))
+FAMILY_WIDTHS = {"all": WIDTHS, "row": ROW_WIDTHS, "column": (256,)}
 
 
 def load_index(directory, target):
@@ -48,7 +56,7 @@ def load_index(directory, target):
     if not isinstance(family, str) or family not in ENTRY_GROUPS:
         raise ValueError("Invalid reduction package family")
     supported = ENTRY_GROUPS[family]
-    allowed_widths = ROW_WIDTHS if family == "row" else WIDTHS
+    allowed_widths = FAMILY_WIDTHS[family]
     if (
         index.get("target") != target
         or not isinstance(widths, list)
@@ -88,7 +96,7 @@ def build_packages(
     if not isinstance(family, str) or family not in ENTRY_GROUPS:
         raise ValueError("Unknown reduction package family")
     supported = ENTRY_GROUPS[family]
-    allowed_widths = ROW_WIDTHS if family == "row" else WIDTHS
+    allowed_widths = FAMILY_WIDTHS[family]
     widths = tuple(allowed_widths if widths is None else widths)
     entries = tuple(supported if entries is None else entries)
     if (

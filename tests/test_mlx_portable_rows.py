@@ -396,7 +396,11 @@ def test_row_ci_preserves_all_three_targets_and_full_width_sets():
             ("opengl", "ubuntu-24.04"),
             ("directx", "windows-2025"),
         )
-        for family, verifier in (("all", "verify"), ("row", "verify_rows"))
+        for family, verifier in (
+            ("all", "verify"),
+            ("row", "verify_rows"),
+            ("column", "verify_columns"),
+        )
     }
     steps = {step.get("name"): step for step in job["steps"]}
     translation = steps["Translate reduction launch variants"]

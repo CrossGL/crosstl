@@ -94,8 +94,8 @@ REDUCTION_NEGATIVE_CHECKS = {
     "reduce-limit": "65535",
     "reduce-allocation": "storage does not match",
     "reduce-empty": "empty reduction initialization",
-    "reduce-row": "small-row and column reduction plans",
-    "reduce-column": "small-row and column reduction plans",
+    "reduce-row": "small-row reduction plans",
+    "reduce-column": "small-column and long-column reduction plans",
 }
 
 

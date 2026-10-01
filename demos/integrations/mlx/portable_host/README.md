@@ -151,7 +151,7 @@ are materialized with translated copies when required. Arrays up to 4,096
 elements use the exact source launch width, rounded to a multiple of 32. Larger
 bounded arrays retain the two source passes: 128 partial rows followed by a
 32-thread final reduction. Intermediate values are staged synchronously, not
-kept in persistent GPU allocations. Column plans and empty-reduction
+kept in persistent GPU allocations. Unsupported column plans and empty-reduction
 initialization still produce explicit errors. No reduction arithmetic is
 performed on the CPU by the adapter.
 
@@ -231,8 +231,37 @@ continue to build and execute all 32 widths.
 Small-row launches are not implemented yet. Preserving their partial-workgroup
 semantics on software subgroups is tracked in
 [#2011](https://github.com/CrossGL/crosstl/issues/2011). Negative-stride row views,
-column reductions, additional storage types and full upstream-suite parity
+additional storage types and full upstream-suite parity
 remain outside the current row integration.
+
+### Column Reductions
+
+The column family connects upstream looped and two-pass column plans to generated
+kernels. The default build includes all 84 entries: fourteen operation/type
+combinations, three template ranks, and two dispatch modes, each at 256 threads.
+Selection follows upstream's reduction count and contiguous output span. Small
+columns and the separate long-column algorithm still report explicit errors.
+
+The adapter preserves reduction strides, broadcast strides, allocation offsets
+and output geometry. Ranks, metadata array lengths, source spans and logical
+sizes are checked before dispatch. Two-pass plans write 32 intermediate rows;
+the second native dispatch consumes those actual results without host reduction
+arithmetic. The existing 65,535-element logical and physical bounds still apply.
+
+```sh
+python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream --target opengl --family column --jobs 2 --output-dir column-packages
+python -m demos.integrations.mlx.portable_host.verify_columns --mlx-root mlx-upstream --packages host-packages --reductions column-packages --output-dir column-evidence
+```
+
+The column CI matrix requires native execution on Windows, Linux and macOS with
+the same full entry set. Workloads use actual MLX reductions and a separate CPU
+process, covering tile tails, interleaved reduction axes, sliced and broadcast
+views, NaNs, infinities and signed zero. Independent references check every
+intermediate and final native readback; retained traces include launch geometry,
+artifact hashes and output guards. These are bounded integration workloads, not
+evidence that the complete upstream reduction suite or MLX backend is supported.
+Separate native processes also verify that invalid allocation spans, small and
+long column plans, and oversized inputs fail before any shader dispatch.
 
 ## Run
 

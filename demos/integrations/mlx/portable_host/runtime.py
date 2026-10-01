@@ -21,6 +21,7 @@ from crosstl.project.runtime_verification import (
     RuntimeTestAdapterSpec,
 )
 from demos.integrations.mlx.portable_host import (
+    column_reduction_layout,
     copy_layout,
     reduction_layout,
     row_reduction_layout,
@@ -35,6 +36,9 @@ from demos.integrations.mlx.portable_host.packages import (
     ENTRIES,
     LOGICAL_NOT_ENTRY,
     UNARY_ENTRIES,
+)
+from demos.integrations.mlx.portable_host.reduction_packages import (
+    COLUMN_ENTRIES,
 )
 from demos.integrations.mlx.portable_host.reduction_packages import (
     ENTRIES as REDUCTION_ENTRIES,
@@ -212,7 +216,12 @@ class HostRuntime:
 
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
         row_reduction = entry in ROW_ENTRIES
-        reduction = entry in REDUCTION_ENTRIES or row_reduction
+        column_reduction = entry in COLUMN_ENTRIES
+        shaped_reduction = row_reduction or column_reduction
+        layout_module = (
+            column_reduction_layout if column_reduction else row_reduction_layout
+        )
+        reduction = entry in REDUCTION_ENTRIES or shaped_reduction
         if entry not in self.descriptors and not reduction:
             raise ValueError(f"No translated package for {entry}")
         if reduction and launch is None:
@@ -225,8 +234,8 @@ class HostRuntime:
         if (
             count
             != (
-                len(row_reduction_layout.signature(entry))
-                if row_reduction
+                len(layout_module.signature(entry))
+                if shaped_reduction
                 else 8 if copy else 4 if binary_operation or reduction else 3
             )
             or not buffers
@@ -245,8 +254,8 @@ class HostRuntime:
             package_directory = self.directory / "package"
         logical_not = entry == LOGICAL_NOT_ENTRY
         unary = entry in UNARY_ENTRIES or logical_not
-        if row_reduction:
-            names = set(row_reduction_layout.signature(entry))
+        if shaped_reduction:
+            names = set(layout_module.signature(entry))
         elif reduction:
             names = {"in", "out", "in_size", "row_size"}
         elif copy:
@@ -286,7 +295,7 @@ class HostRuntime:
                     else 1
                 )
             if (
-                not copy and not row_reduction and buffer.count != expected
+                not copy and not shaped_reduction and buffer.count != expected
             ) or buffer.output != int(name == output_name):
                 raise ValueError("Native buffer shape or direction does not match")
             if unary and dtype != (
@@ -311,7 +320,7 @@ class HostRuntime:
                 raise ValueError("Native cast buffer dtype does not match")
             if (
                 reduction
-                and not row_reduction
+                and not shaped_reduction
                 and dtype
                 != (
                     "uint64"
@@ -323,9 +332,9 @@ class HostRuntime:
             supplied[name] = buffer
         if set(supplied) != names:
             raise ValueError("Native buffer names do not match the operation")
-        row_metadata = None
-        if row_reduction:
-            row_metadata = row_reduction_layout.validate(
+        shaped_metadata = None
+        if shaped_reduction:
+            shaped_metadata = layout_module.validate(
                 entry, supplied, threads, execution
             )
         elif reduction:
@@ -488,8 +497,8 @@ class HostRuntime:
                                 ],
                                 "reductionValues": output["values"][: buffer.count],
                                 "reductionMetadata": (
-                                    row_metadata
-                                    if row_reduction
+                                    shaped_metadata
+                                    if shaped_reduction
                                     else {
                                         name: ctypes.cast(
                                             supplied[name].data,

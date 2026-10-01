@@ -10,6 +10,7 @@ on:
       - "tests/test_mlx_portable_host.py"
       - "tests/test_mlx_portable_reductions.py"
       - "tests/test_mlx_portable_rows.py"
+      - "tests/test_mlx_portable_columns.py"
       - "tests/test_mlx_portable_mixed_reductions.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
@@ -73,6 +74,7 @@ on:
       - "tests/test_mlx_portable_host.py"
       - "tests/test_mlx_portable_reductions.py"
       - "tests/test_mlx_portable_rows.py"
+      - "tests/test_mlx_portable_columns.py"
       - "tests/test_mlx_portable_mixed_reductions.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
@@ -225,7 +227,7 @@ jobs:
           Expand-Archive $warpArchive -DestinationPath $warpRoot
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Validate portable host contracts
-        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py tests/test_mlx_portable_rows.py tests/test_mlx_portable_mixed_reductions.py
+        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py tests/test_mlx_portable_rows.py tests/test_mlx_portable_mixed_reductions.py tests/test_mlx_portable_columns.py
       - name: Validate software subgroup votes
         env:
           CROSTL_REQUIRE_SOFTWARE_SUBGROUP_VOTES: "1"
@@ -709,6 +711,18 @@ jobs:
             family: row
             verifier: verify_rows
             companion_args: --all-reductions .mlx-portable-reductions/companions
+          - os: windows-2025
+            target: directx
+            family: column
+            verifier: verify_columns
+          - os: ubuntu-24.04
+            target: opengl
+            family: column
+            verifier: verify_columns
+          - os: macos-26
+            target: metal
+            family: column
+            verifier: verify_columns
     defaults:
       run:
         shell: bash
