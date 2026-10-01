@@ -107,6 +107,30 @@ on any unsuccessful run; no retry, skip or known-failure allowance is built into
 the verifier. Its ordinary upstream invocations are not seeded, so their random
 inputs need not match between processes.
 
+The pinned original Metal backend also has a half-precision `divmod` boundary
+error. The macOS run at translator commit `78f86906` failed
+`TestOps.test_divmod` for a float16 vector/scalar input. A deterministic local
+reproduction with translation disabled is:
+
+```python
+import mlx.core as mx
+
+mx.set_default_device(mx.gpu)
+left = mx.array([86.375] * 10, dtype=mx.float16)
+right = mx.array([28.796875], dtype=mx.float16)
+quotient, remainder = mx.divmod(left, right)
+print(quotient.tolist(), remainder.tolist())
+```
+
+Original Metal returns ten quotients of `3.0`; NumPy and the MLX CPU backend
+return `2.0`. The remainder is `28.78125` on all three paths. A fixed-seed local
+sample of 100,000 positive float16 pairs found 40 quotient mismatches on original
+Metal and none on CPU. This harness redirects only complex-power entries, not
+half-precision division. The defect is not evidence of a translation regression,
+and the unchanged required test remains failing when it encounters this case.
+These observations use the adapted local build with original kernel libraries,
+not a separately rebuilt unmodified MLX binary.
+
 ## Upstream Adaptation
 
 `metal-library-overrides.patch` modifies only MLX's `device.cpp` and `device.h`.
