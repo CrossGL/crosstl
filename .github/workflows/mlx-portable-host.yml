@@ -124,7 +124,7 @@ jobs:
   portable-host:
     name: MLX native host (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 250
+    timeout-minutes: 270
     strategy:
       fail-fast: false
       matrix:
@@ -560,7 +560,7 @@ jobs:
       - name: Translate unchanged upstream kernels
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 1500 --label "MLX host package translation" -- \
+          python tools/run_bounded_command.py --timeout-seconds 2400 --label "MLX host package translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
               --target ${{ matrix.target }} --output-dir .mlx-portable-host/packages 2>&1 | tee .mlx-portable-host/translation.log
       - name: Execute upstream tests on the translated backend
@@ -568,7 +568,7 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 3800 --label "MLX portable host verification" -- \
+          python tools/run_bounded_command.py --timeout-seconds 4000 --label "MLX portable host verification" -- \
             python -m demos.integrations.mlx.portable_host.verify --mlx-root mlx-upstream \
               --packages .mlx-portable-host/packages --output-dir .mlx-portable-host/evidence 2>&1 | tee .mlx-portable-host/verification.log
       - name: Retain native execution evidence

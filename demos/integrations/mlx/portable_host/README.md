@@ -20,21 +20,26 @@ dimension insertion/removal, transpose, slicing, split, dependency/custom-transf
 outputs and stop-gradient. Integer and array indexing still require the
 unimplemented Gather primitive. Contiguous conversion, reshape, flatten and unflatten
 dispatch translated copies when sharing storage is insufficient. Copies support
-matching float32, int32 and uint32 arrays, including negative and zero strides.
+matching float32, int32, uint32 and bool arrays, including negative and zero strides.
 `Full`, including `zeros`, `ones` and `full_like`, uses those copies to materialize
-broadcast values in the same three types. Boolean and other storage widths are
-not yet supported by this copy path. General boolean resource reflection and
-native buffer transport are tracked in
-[#1999](https://github.com/CrossGL/crosstl/issues/1999).
-Binary addition, subtraction, multiplication, minimum and maximum support those
-three types; division supports float32. Broadcasts and non-row-contiguous binary
+broadcast values in the same four types. Other storage widths are not yet
+supported by this copy path.
+Binary addition, subtraction, multiplication, minimum and maximum support
+float32, int32 and uint32; division supports float32. Broadcasts and non-row-contiguous binary
 inputs are materialized by translated copies before the unchanged vector-vector
 binary entry executes. Casts between float32, int32 and uint32 use six unchanged
 `v_copy` entries, including automatic promotion before mixed-type arithmetic.
+Six additional casts convert between bool and those three numeric types.
 Strided cast inputs are materialized through translated copies. Casts involving
-other types still fail explicitly.
+other types still fail explicitly. Equal, not-equal and ordered comparisons
+support float32, int32, uint32 and bool inputs with bool outputs. Logical and,
+or and not use bool inputs, including upstream casts from numeric inputs.
+The NaN-equality entry supports float32; the maintained host workloads exercise
+scalar `array_equal(equal_nan=True)`. General array equality still needs the
+unimplemented reduction primitive. Boolean operator overloads that select
+bitwise primitives are not implemented by these logical hooks.
 Other primitives retain MLX's explicit unsupported-GPU errors. Unary inputs
-must be float32. Stored-contiguous broadcasts and column-major views retain
+other than LogicalNot must be float32. Stored-contiguous broadcasts and column-major views retain
 their metadata; noncontiguous inputs use translated copies before unary dispatch.
 Dispatch is synchronous, uses host staging buffers and supports at most 65,535
 stored elements with one thread per workgroup. Empty arrays do not dispatch. This is a
@@ -54,9 +59,9 @@ selection, and the complete MLX suite are not covered here.
 no-GPU backend build definition and adds four explicitly named backend files:
 
 - `crosstl_backend.cpp` registers a versioned synchronous dispatch callback,
-  implements device/stream hooks, `Arange::eval_gpu` and 27 unary primitive hooks,
+  implements device/stream hooks, `Arange::eval_gpu` and 28 unary primitive hooks,
   and stages output storage. MLX's Log and Sqrt primitives select their log-base
-  and reciprocal variants, yielding 30 unary kernel entries. View hooks reuse
+  and reciprocal variants, yielding 30 float32 entries plus Boolean LogicalNot. View hooks reuse
   upstream shared implementations and perform no CPU elementwise computation.
   Slicing uses the upstream shared-buffer helper, including signed strides,
   offsets, nested slices and empty outputs. Noncontiguous unary inputs are
@@ -72,6 +77,9 @@ no-GPU backend build definition and adds four explicitly named backend files:
   validate input shapes and types, allocate dense output and stage strided inputs
   through translated copies. Neither layout conversion nor arithmetic falls
   back to CPU computation. Binary buffer donation is not implemented.
+  Eight comparison/logical primitive hooks select 27 additional entries;
+  Equal selects NaNEqual when requested by upstream. Non-floating NaN-equality
+  uses the corresponding ordinary equality entry.
   AsType selects a source/destination-specific copy entry, validates array shapes
   and allocation bounds, and allocates a dense destination. Casts perform no CPU
   elementwise conversion.
@@ -107,6 +115,14 @@ registration. It verifies argument names, direction, counts and physical layouts
 against the selected descriptor. Native failures propagate as MLX errors; there
 is no CPU computation fallback. The element cap is deliberate pending general
 [native dispatch-limit validation](https://github.com/CrossGL/crosstl/issues/1959).
+MLX stores Boolean arrays as one-byte values. Generated Metal preserves that
+physical layout; generated HLSL and GLSL use four-byte unsigned storage. The
+callback packs and unpacks canonical zero/one values according to reflection,
+without evaluating logical operations on the CPU. Noncanonical input or output
+values fail before destination storage is changed. Boolean copies use the
+unchanged `ggn2_dynamic_copybool_bool_` entry and allocation checks use the actual
+MLX item size. DirectX constant names follow the generator's sanitized entry
+prefix, including removal of a trailing underscore from Boolean entry names.
 
 ## Run
 
@@ -217,6 +233,8 @@ these upstream tests without skips:
 - `test_array.TestArray.test_array_type_cast`
 - `test_bartlett_general`, `test_blackman_general`, `test_hamming_general`, `test_hanning_general`
 - `test_shape_overflow_error`
+- `test_comparisons`, `test_logical_not`, `test_logical_xor`
+- `test_isclose`, `test_allclose`
 
 The CPU reference uses the unchanged CPU backend in the same adapted MLX build;
 it is not a separately rebuilt pristine binary or a Metal comparison.
@@ -286,18 +304,43 @@ subnormals and NaN payloads. A mixed-type fill also requires translated broadcas
 materialization and explicit casting before the final copy. All 52 added dispatches retain
 their native geometry and output guards.
 
-Native traces must start with the exact 493 nonempty workload dispatches, cover
-all 58 entries, and retain artifact identities and runtime/device details.
+Boolean workloads add 290 records with 11,497 outputs across comparisons, logical
+operations, six casts, copies and fills. They cover scalar/empty arrays,
+257-element tails, matrices, transposes, broadcasts, reversed strides, NaNs,
+infinities and signed zeros. Source and output bytes must match independent
+references exactly. Each Boolean output retains 32 alternating guard values,
+encoded in the target's physical storage type; numeric cast outputs retain the
+existing 128-byte guard. Empty arrays and already-contiguous aliases do not
+count as kernel execution.
+
+Subnormal comparison parity is not established by these workloads. An additional
+eight-value probe found that original Metal and generated Metal compare binary32
+subnormals as zero on the tested Apple device, while generated OpenGL on Mesa
+retains their nonzero comparison behavior. The CPU reference agrees with OpenGL
+for that probe, not original Metal. All six comparison operators are affected;
+float-to-bool casts retain nonzero subnormals on both tested targets. An explicit
+source comparison profile and cross-target parity coverage are tracked in
+[#2000](https://github.com/CrossGL/crosstl/issues/2000). No host readback is
+normalized to conceal this difference. The host adapter rejects subnormal float
+comparison inputs on DirectX and OpenGL before dispatch until source parity is
+established. This check does not reject Boolean casts or ordinary comparison
+inputs, and does not claim to fix the underlying translator contract.
+
+Native traces must start with the exact 919 nonempty workload dispatches, cover
+all 93 entries, and retain artifact identities and runtime/device details.
 Separate negative processes reject an unsupported primitive, oversized arange,
 a missing artifact, unary inputs with unsupported dtype or size, contiguous and
 strided unary inputs that exceed their allocations, and
 copies with unsupported dtype, excessive size or an invalid source allocation.
 Binary inputs with unsupported dtype or excessive size are also rejected, as
 are casts with unsupported types, excessive size or an invalid source span.
-Full also rejects unsupported boolean storage, excessive output size and a source
+Full also rejects unsupported int64 storage, excessive output size and a source
 view extending before its allocation.
-Each of the twenty processes has a hard 180-second process-tree deadline; all
-are attempted so a failure does not discard the other diagnostic results.
+The native worker has a hard 300-second process-tree deadline; the CPU reference
+and eighteen negative processes each retain a 180-second deadline. All are
+attempted so a failure does not discard the other diagnostic results. CI allows
+2,400 seconds for package translation and 4,000 seconds for verification within
+a bounded 270-minute platform job.
 
 The evidence directory retains before/after adaptation hashes, command status,
 stdout/stderr, upstream test logs, dispatch traces and numerical results. The

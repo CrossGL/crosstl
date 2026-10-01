@@ -15,7 +15,9 @@ DTYPES = {
 }
 
 
-def geometry(buffers, logical_size):
+def geometry(buffers, logical_size, *, dtype="uint32"):
+    if dtype not in {"uint32", "bool_"}:
+        raise ValueError("Unsupported native copy storage dtype")
     rank = buffers["src_shape"].count
     if not 2 <= rank <= 64:
         raise ValueError("Native copy rank must be between 2 and 64")
@@ -30,7 +32,9 @@ def geometry(buffers, logical_size):
                 raise ValueError("Native copy source span exceeds 65535")
         elif buffer.count != expected:
             raise ValueError("Native copy metadata shape does not match")
-        if buffer.dtype.decode("ascii") != DTYPES[name]:
+        if buffer.dtype.decode("ascii") != (
+            dtype if name in {"src", "dst"} else DTYPES[name]
+        ):
             raise ValueError("Native copy metadata dtype does not match")
 
     def values(name, ctype):

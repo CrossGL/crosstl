@@ -13,6 +13,7 @@ from pathlib import Path
 
 from demos.integrations.mlx.portable_host import (
     binary_workloads,
+    boolean_workloads,
     cast_workloads,
     copy_workloads,
     full_workloads,
@@ -53,6 +54,11 @@ UPSTREAM_TESTS = (
     "test_ops.TestOps.test_hamming_general",
     "test_ops.TestOps.test_hanning_general",
     "test_ops.TestOps.test_shape_overflow_error",
+    "test_ops.TestOps.test_comparisons",
+    "test_ops.TestOps.test_logical_not",
+    "test_ops.TestOps.test_logical_xor",
+    "test_ops.TestOps.test_isclose",
+    "test_ops.TestOps.test_allclose",
 )
 DTYPES = ("float32", "int32", "uint32", "int64", "uint64")
 COUNTS = (0, 1, 7, 257)
@@ -64,15 +70,15 @@ NEGATIVE_CHECKS = {
     "unary-allocation": "exceeds its allocation",
     "unary-strided-allocation": "exceeds its allocation",
     "unary-over-limit": "65535",
-    "copy-dtype": "matching float32, int32 or uint32",
+    "copy-dtype": "matching float32, int32, uint32 or bool",
     "copy-limit": "65535",
     "copy-allocation": "exceeds its allocation",
     "binary-dtype": "supported 32-bit dtype",
     "binary-limit": "65535",
-    "cast-dtype": "casts require float32, int32 or uint32",
+    "cast-dtype": "casts require float32, int32, uint32 or bool",
     "cast-limit": "65535",
     "cast-allocation": "exceeds its allocation",
-    "full-dtype": "matching float32, int32 or uint32",
+    "full-dtype": "matching float32, int32, uint32 or bool",
     "full-limit": "65535",
     "full-allocation": "exceeds its allocation",
 }
@@ -148,7 +154,7 @@ def worker(args):
                 )
                 value = source.astype(mx.float32)
             elif args.worker == "full-dtype":
-                value = mx.full((3, 5), mx.array(True, dtype=mx.bool_))
+                value = mx.full((3, 5), mx.array(1, dtype=mx.int64))
             elif args.worker == "full-limit":
                 value = mx.ones((65536,), dtype=mx.float32)
             elif args.worker == "full-allocation":
@@ -190,6 +196,9 @@ def worker(args):
     full = full_workloads.run(mx, np)
     save(output / "full-readbacks.json", full)
     full_workloads.validate(full)
+    booleans = boolean_workloads.run(mx, np)
+    save(output / "boolean-readbacks.json", booleans)
+    boolean_workloads.validate(booleans)
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
     suite = unittest.TestSuite(
         unittest.defaultTestLoader.loadTestsFromName(name) for name in UPSTREAM_TESTS
@@ -210,6 +219,7 @@ def worker(args):
             "binary": binary,
             "casts": casts,
             "full": full,
+            "booleans": booleans,
         },
     )
     if (
@@ -251,6 +261,7 @@ def verify_results(result, *, cpu=False):
     binary_workloads.validate(result.get("binary"))
     cast_workloads.validate(result.get("casts"))
     full_workloads.validate(result.get("full"))
+    boolean_workloads.validate(result.get("booleans"))
 
 
 def upstream_test_sources(root):
@@ -280,7 +291,7 @@ def verify(args):
             sys.executable,
             str(Path(__file__).resolve().parents[4] / "tools/run_bounded_command.py"),
             "--timeout-seconds",
-            "180",
+            "300" if mode == "native" else "180",
             "--label",
             f"MLX host {mode}",
             "--",
@@ -337,6 +348,7 @@ def verify(args):
         + binary_workloads.dispatches()
         + cast_workloads.dispatches()
         + full_workloads.dispatches()
+        + boolean_workloads.dispatches()
     )
     if [(record["entry"], record.get("threads")) for record in trace][
         : len(expected_dispatches)

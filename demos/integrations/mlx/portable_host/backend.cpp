@@ -84,10 +84,12 @@ void dispatch_unary(
     mlx::core::array& out,
     const char* operation) {
   require_runtime();
-  if (inputs.size() != 1 || inputs[0].dtype() != mlx::core::float32 ||
-      out.dtype() != mlx::core::float32) {
+  const bool logical = std::string(operation) == "LogicalNot";
+  const auto type = logical ? mlx::core::bool_ : mlx::core::float32;
+  const char* dtype = logical ? "bool_" : "float32";
+  if (inputs.size() != 1 || inputs[0].dtype() != type || out.dtype() != type) {
     throw std::invalid_argument(
-        "CrossTL unary dispatch requires float32 arrays.");
+        "CrossTL unary dispatch requires float32 arrays, or bool for LogicalNot.");
   }
   auto in = inputs[0];
   if (in.shape() != out.shape()) {
@@ -113,10 +115,10 @@ void dispatch_unary(
   }
   mlx::core::set_unary_output_data(in, out);
   uint32_t size = static_cast<uint32_t>(in.data_size());
-  std::string entry = std::string("v_") + operation + "float32float32";
+  std::string entry = std::string("v_") + operation + dtype + dtype;
   CrosstlMlxBuffer buffers[] = {
-      {"in", "float32", const_cast<float*>(in.data<float>()), size, 0},
-      {"out", "float32", out.data<float>(), size, 1},
+      {"in", dtype, in.data<void>(), size, 0},
+      {"out", dtype, out.data<void>(), size, 1},
       {"size", "uint32", &size, 1, 0},
   };
   char error[2048] = {};
@@ -133,9 +135,9 @@ void dispatch_copy(const mlx::core::array& in, mlx::core::array& out) {
   require_runtime();
   if (in.dtype() != out.dtype() ||
       (in.dtype() != mlx::core::float32 && in.dtype() != mlx::core::int32 &&
-       in.dtype() != mlx::core::uint32)) {
+       in.dtype() != mlx::core::uint32 && in.dtype() != mlx::core::bool_)) {
     throw std::invalid_argument(
-        "CrossTL copying layouts require matching float32, int32 or uint32 arrays.");
+        "CrossTL copying layouts require matching float32, int32, uint32 or bool arrays.");
   }
   if (in.size() != out.size() || in.size() > 65535 || in.ndim() > 64) {
     throw std::invalid_argument(
@@ -164,11 +166,12 @@ void dispatch_copy(const mlx::core::array& in, mlx::core::array& out) {
     high += std::max<int64_t>(extent, 0);
   }
   const int64_t span = high - low + 1;
-  if (span > 65535 || in.offset() < 0 || in.offset() % sizeof(uint32_t) != 0) {
+  const int64_t item_size = in.itemsize();
+  if (span > 65535 || in.offset() < 0 || in.offset() % item_size != 0) {
     throw std::invalid_argument("CrossTL copy source span exceeds its bounds.");
   }
-  const uint64_t origin = in.offset() / sizeof(uint32_t);
-  const uint64_t capacity = in.buffer_size() / sizeof(uint32_t);
+  const uint64_t origin = in.offset() / item_size;
+  const uint64_t capacity = in.buffer_size() / item_size;
   if (origin >= capacity || uint64_t(-low) > origin ||
       uint64_t(high) >= capacity - origin) {
     throw std::invalid_argument("CrossTL copy source view exceeds its allocation.");
@@ -183,9 +186,11 @@ void dispatch_copy(const mlx::core::array& in, mlx::core::array& out) {
   int64_t src_offset = -low, dst_offset = 0;
   out.set_data(mlx::core::allocator::malloc(out.nbytes()));
   // Copy storage words to preserve NaN payloads, subnormals and signed zero.
+  const bool boolean = in.dtype() == mlx::core::bool_;
+  const char* dtype = boolean ? "bool_" : "uint32";
   CrosstlMlxBuffer buffers[] = {
-      {"src", "uint32", const_cast<uint32_t*>(in.data<uint32_t>() + low), uint64_t(span), 0},
-      {"dst", "uint32", out.data<uint32_t>(), out.size(), 1},
+      {"src", dtype, const_cast<uint8_t*>(in.data<uint8_t>() + low * item_size), uint64_t(span), 0},
+      {"dst", dtype, out.data<void>(), out.size(), 1},
       {"src_shape", "int32", shape.data(), uint64_t(ndim), 0},
       {"src_strides", "int64", src_strides.data(), uint64_t(ndim), 0},
       {"dst_strides", "int64", dst_strides.data(), uint64_t(ndim), 0},
@@ -195,7 +200,8 @@ void dispatch_copy(const mlx::core::array& in, mlx::core::array& out) {
   };
   char error[2048] = {};
   int status = dispatch_callback.load()(
-      "ggn2_dynamic_copyuint32uint32", buffers, 8, out.size(), error, sizeof(error));
+      boolean ? "ggn2_dynamic_copybool_bool_" : "ggn2_dynamic_copyuint32uint32",
+      buffers, 8, out.size(), error, sizeof(error));
   error[sizeof(error) - 1] = '\0';
   if (status != 0) {
     throw std::runtime_error(std::string("CrossTL native copy failed: ") + error);
@@ -232,7 +238,10 @@ mlx::core::array dense_input(const mlx::core::array& in) {
   return dense;
 }
 
-const char* storage32_type(mlx::core::Dtype dtype) {
+const char* storage_type(mlx::core::Dtype dtype) {
+  if (dtype == mlx::core::bool_) {
+    return "bool_";
+  }
   if (dtype == mlx::core::float32) {
     return "float32";
   }
@@ -250,10 +259,10 @@ void dispatch_cast(const std::vector<mlx::core::array>& inputs, mlx::core::array
   if (inputs.size() != 1 || inputs[0].shape() != out.shape()) {
     throw std::invalid_argument("CrossTL cast input must match output shape.");
   }
-  const char* source_type = storage32_type(inputs[0].dtype());
-  const char* destination_type = storage32_type(out.dtype());
+  const char* source_type = storage_type(inputs[0].dtype());
+  const char* destination_type = storage_type(out.dtype());
   if (!source_type || !destination_type) {
-    throw std::invalid_argument("CrossTL casts require float32, int32 or uint32 arrays.");
+    throw std::invalid_argument("CrossTL casts require float32, int32, uint32 or bool arrays.");
   }
   if (out.size() > 65535) {
     throw std::invalid_argument("CrossTL cast supports at most 65535 elements.");
@@ -286,19 +295,28 @@ void dispatch_cast(const std::vector<mlx::core::array>& inputs, mlx::core::array
 void dispatch_binary(
     const std::vector<mlx::core::array>& inputs,
     mlx::core::array& out,
-    const char* operation) {
+    const char* operation,
+    bool comparison = false) {
   require_runtime();
-  if (inputs.size() != 2 || inputs[0].dtype() != out.dtype() ||
-      inputs[1].dtype() != out.dtype() || inputs[0].shape() != out.shape() ||
+  if (inputs.size() != 2 || inputs[0].dtype() != inputs[1].dtype() ||
+      out.dtype() != (comparison ? mlx::core::bool_ : inputs[0].dtype()) ||
+      inputs[0].shape() != out.shape() ||
       inputs[1].shape() != out.shape()) {
     throw std::invalid_argument("CrossTL binary inputs must match output shape and dtype.");
   }
-  const char* dtype = storage32_type(out.dtype());
-  if (!dtype) {
+  const char* dtype = storage_type(inputs[0].dtype());
+  if (!dtype || (!comparison && inputs[0].dtype() == mlx::core::bool_)) {
     throw std::invalid_argument("CrossTL binary dispatch requires a supported 32-bit dtype.");
   }
   if (std::string(operation) == "Divide" && out.dtype() != mlx::core::float32) {
     throw std::invalid_argument("CrossTL division requires float32 arrays.");
+  }
+  if ((std::string(operation) == "LogicalAnd" || std::string(operation) == "LogicalOr") &&
+      inputs[0].dtype() != mlx::core::bool_) {
+    throw std::invalid_argument("CrossTL logical operations require bool arrays.");
+  }
+  if (std::string(operation) == "NaNEqual" && inputs[0].dtype() != mlx::core::float32) {
+    operation = "Equal";
   }
   if (out.size() > 65535) {
     throw std::invalid_argument("CrossTL binary dispatch supports at most 65535 elements.");
@@ -314,7 +332,7 @@ void dispatch_binary(
   CrosstlMlxBuffer buffers[] = {
       {"a", dtype, a.data<void>(), size, 0},
       {"b", dtype, b.data<void>(), size, 0},
-      {"c", dtype, out.data<void>(), size, 1},
+      {"c", comparison ? "bool_" : dtype, out.data<void>(), size, 1},
       {"size", "uint32", &size, 1, 0},
   };
   char error[2048] = {};
@@ -492,6 +510,7 @@ CROSSTL_UNARY_GPU(Sqrt)
 CROSSTL_UNARY_GPU(Tan)
 CROSSTL_UNARY_GPU(Tanh)
 CROSSTL_UNARY_GPU(Round)
+CROSSTL_UNARY_GPU(LogicalNot)
 
 #undef CROSSTL_UNARY_GPU
 
@@ -508,6 +527,22 @@ CROSSTL_BINARY_GPU(Maximum)
 CROSSTL_BINARY_GPU(Divide)
 
 #undef CROSSTL_BINARY_GPU
+
+#define CROSSTL_COMPARISON_GPU(Primitive)                                 \
+  void Primitive::eval_gpu(const std::vector<array>& inputs, array& out) { \
+    dispatch_binary(inputs, out, name(), true);                            \
+  }
+
+CROSSTL_COMPARISON_GPU(Equal)
+CROSSTL_COMPARISON_GPU(NotEqual)
+CROSSTL_COMPARISON_GPU(Less)
+CROSSTL_COMPARISON_GPU(LessEqual)
+CROSSTL_COMPARISON_GPU(Greater)
+CROSSTL_COMPARISON_GPU(GreaterEqual)
+CROSSTL_COMPARISON_GPU(LogicalAnd)
+CROSSTL_COMPARISON_GPU(LogicalOr)
+
+#undef CROSSTL_COMPARISON_GPU
 
 void Arange::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();

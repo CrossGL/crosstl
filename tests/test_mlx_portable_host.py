@@ -10,6 +10,7 @@ import pytest
 
 from demos.integrations.mlx.portable_host import (
     binary_workloads,
+    boolean_workloads,
     cast_workloads,
     copy_workloads,
     full_workloads,
@@ -38,6 +39,9 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     *prepare.COPY_PRIMITIVES,
                     *packages.BINARY_OPERATIONS,
                     *prepare.CAST_PRIMITIVES,
+                    *packages.COMPARISON_OPERATIONS,
+                    *packages.LOGICAL_OPERATIONS,
+                    "LogicalNot",
                 )
                 if name not in {"Log2", "Log10", "Rsqrt"}
             ).encode()
@@ -166,6 +170,7 @@ def package_templates(tmp_path_factory, request):
     source = root / packages.SOURCE
     source.parent.mkdir(parents=True)
     types = {
+        "bool_": "bool",
         "float32": "float",
         "int32": "int",
         "uint32": "uint",
@@ -182,6 +187,7 @@ def package_templates(tmp_path_factory, request):
             f'template [[host_name("arange{dtype}")]] [[kernel]] '
             f"decltype(arange<{metal}>) arange<{metal}>;"
             for dtype, metal in types.items()
+            if dtype != "bool_"
         )
     )
     (root / packages.UNARY_SOURCE).write_text(
@@ -193,17 +199,20 @@ def package_templates(tmp_path_factory, request):
             f"decltype(unary<{index}>) unary<{index}>;"
             for index, entry in enumerate(packages.UNARY_ENTRIES)
         )
+        + "\ntemplate <typename T> kernel void unary_bool(device const T* in [[buffer(0)]], device T* out [[buffer(1)]], constant uint& size [[buffer(2)]], uint index [[thread_position_in_grid]]) { if (index < size) out[index] = !in[index]; }\n"
+        + f'template [[host_name("{packages.LOGICAL_NOT_ENTRY}")]] [[kernel]] decltype(unary_bool<bool>) unary_bool<bool>;\n'
     )
     (root / packages.COPY_SOURCE).write_text(
-        """template <int n> kernel void copy_words(
-device const uint* src [[buffer(0)]], device uint* dst [[buffer(1)]],
+        """template <typename T, int n> kernel void copy_words(
+device const T* src [[buffer(0)]], device T* dst [[buffer(1)]],
 constant int* src_shape [[buffer(2)]], constant long* src_strides [[buffer(3)]],
 constant long* dst_strides [[buffer(4)]], constant int& ndim [[buffer(5)]],
 constant long& src_offset [[buffer(6)]], constant long& dst_offset [[buffer(7)]],
 uint index [[thread_position_in_grid]]) { dst[index] = src[index]; }
 """
         + f'template [[host_name("{packages.COPY_ENTRY}")]] [[kernel]] '
-        + "decltype(copy_words<2>) copy_words<2>;\n"
+        + "decltype(copy_words<uint, 2>) copy_words<uint, 2>;\n"
+        + f'template [[host_name("{packages.BOOLEAN_COPY_ENTRY}")]] [[kernel]] decltype(copy_words<bool, 2>) copy_words<bool, 2>;\n'
         + """template <typename T, typename U> kernel void cast_values(
 device const T* src [[buffer(0)]], device U* dst [[buffer(1)]],
 constant uint& size [[buffer(2)]], uint index [[thread_position_in_grid]]) {
@@ -213,19 +222,31 @@ constant uint& size [[buffer(2)]], uint index [[thread_position_in_grid]]) {
         + "\n".join(
             f'template [[host_name("{entry}")]] [[kernel]] '
             f"decltype(cast_values<{types[src]}, {types[dst]}>) cast_values<{types[src]}, {types[dst]}>;"
-            for entry, (src, dst) in packages.CAST_ENTRIES.items()
+            for entry, (src, dst) in {
+                **packages.CAST_ENTRIES,
+                **packages.BOOLEAN_CAST_ENTRIES,
+            }.items()
         )
     )
     (root / packages.BINARY_SOURCE).write_text(
-        """template <typename T, int op> kernel void binary(
+        """template <typename T, typename U, int op> kernel void binary(
 device const T* a [[buffer(0)]], device const T* b [[buffer(1)]],
-device T* c [[buffer(2)]], constant uint& size [[buffer(3)]],
-uint index [[thread_position_in_grid]]) { if (index < size) c[index] = a[index] + b[index]; }
+device U* c [[buffer(2)]], constant uint& size [[buffer(3)]],
+uint index [[thread_position_in_grid]]) { if (index < size) c[index] = U(a[index] + b[index]); }
 """
         + "\n".join(
             f'template [[host_name("{entry}")]] [[kernel]] '
-            f"decltype(binary<{types[dtype]}, {index}>) binary<{types[dtype]}, {index}>;"
-            for index, (entry, dtype) in enumerate(packages.BINARY_ENTRIES.items())
+            f"decltype(binary<{types[dtype]}, {types[output]}, {index}>) binary<{types[dtype]}, {types[output]}, {index}>;"
+            for index, (entry, dtype, output) in enumerate(
+                [
+                    (entry, dtype, dtype)
+                    for entry, dtype in packages.BINARY_ENTRIES.items()
+                ]
+                + [
+                    (entry, dtype, "bool_")
+                    for entry, dtype in packages.COMPARISON_ENTRIES.items()
+                ]
+            )
         )
     )
     output = tmp_path / "packages"
@@ -299,7 +320,7 @@ def unary_buffers(values=(-2.0, 0.0, 3.0)):
     return buffers, memory
 
 
-def copy_buffers():
+def copy_buffers(dtype="uint32"):
     values = {
         "src": list(copy_workloads.source_words()[:12]),
         "dst": [0] * 6,
@@ -310,15 +331,18 @@ def copy_buffers():
         "src_offset": [4],
         "dst_offset": [0],
     }
+    if dtype == "bool_":
+        values["src"] = [value % 2 for value in values["src"]]
+    dtypes = {**runtime.copy_layout.DTYPES, "src": dtype, "dst": dtype}
     memory = {
-        name: (runtime.TYPES[runtime.copy_layout.DTYPES[name]] * len(data))(*data)
+        name: (runtime.TYPES[dtypes[name]] * len(data))(*data)
         for name, data in values.items()
     }
     buffers = (runtime.Buffer * 8)(
         *[
             runtime.Buffer(
                 name.encode(),
-                runtime.copy_layout.DTYPES[name].encode(),
+                dtypes[name].encode(),
                 ctypes.addressof(data),
                 len(data),
                 int(name == "dst"),
@@ -1029,7 +1053,7 @@ def test_view_verifier_requires_complete_independent_results(fault):
         view_workloads.validate(records)
 
 
-@pytest.mark.parametrize("dtype", list(runtime.TYPES))
+@pytest.mark.parametrize("dtype", verify.DTYPES)
 def test_translated_binding_contract_and_typed_readback(
     translated_packages, tmp_path, monkeypatch, dtype
 ):
@@ -1298,8 +1322,10 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         calls.append(command)
         if fault == "test-source-after":
             cast_test_source.write_bytes(b"changed tests")
-        assert "--timeout-seconds" in command and "180" in command
         mode = command[command.index("--worker") + 1]
+        assert command[command.index("--timeout-seconds") + 1] == (
+            "300" if mode == "native" else "180"
+        )
         output = Path(command[-1])
         output.mkdir(parents=True)
         arrays = [
@@ -1323,6 +1349,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             "binary": binary_workloads.expected_records(),
             "casts": cast_workloads.expected_records(),
             "full": full_workloads.expected_records(),
+            "booleans": boolean_workloads.expected_records(),
         }
         if fault == "unary-missing":
             result["unary"] = []
@@ -1383,6 +1410,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 + binary_workloads.dispatches()
                 + cast_workloads.dispatches()
                 + full_workloads.dispatches()
+                + boolean_workloads.dispatches()
             )
             trace = [
                 {
@@ -1437,7 +1465,9 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             )
     else:
         evidence = verify.verify(args)
-        assert len(calls) == 20 and evidence["dispatchCount"] == 493
+        assert len(calls) == 20 and evidence["dispatchCount"] == 493 + len(
+            boolean_workloads.dispatches()
+        )
         assert len(identities) == 2
         assert evidence["schemaVersion"] == 2
         assert evidence["adaptation"]["files"] == {"adapter": "unchanged"}
@@ -1481,7 +1511,8 @@ def test_ci_requires_all_native_platforms_and_retains_evidence():
         "portable_host.verify",
         "pytest -q -n auto tests/test_mlx_portable_host.py",
         "liblapacke-dev",
-        "--timeout-seconds 3800",
+        "--timeout-seconds 4000",
+        "--timeout-seconds 2400",
         "if: always()",
         "include-hidden-files: true",
         "Get-FileHash",
@@ -1490,11 +1521,274 @@ def test_ci_requires_all_native_platforms_and_retains_evidence():
         assert required in workflow
     assert "continue-on-error" not in workflow
     assert "opengl-runtime" not in workflow
-    assert len(verify.UPSTREAM_TESTS) == 29
+    assert len(verify.UPSTREAM_TESTS) == 34
     assert "test_ops.TestOps.test_diff" in verify.UPSTREAM_TESTS
     assert "test_ops.TestOps.test_flip" in verify.UPSTREAM_TESTS
     assert "test_array.TestArray.test_array_type_cast" in verify.UPSTREAM_TESTS
     assert "test_ops.TestOps.test_hamming_general" in verify.UPSTREAM_TESTS
+    assert "test_ops.TestOps.test_comparisons" in verify.UPSTREAM_TESTS
+    assert "test_ops.TestOps.test_logical_not" in verify.UPSTREAM_TESTS
+    assert "test_ops.TestOps.test_logical_xor" in verify.UPSTREAM_TESTS
+    assert "test_ops.TestOps.test_isclose" in verify.UPSTREAM_TESTS
+    assert "test_ops.TestOps.test_allclose" in verify.UPSTREAM_TESTS
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        *packages.COMPARISON_ENTRIES,
+        *packages.BOOLEAN_CAST_ENTRIES,
+        packages.BOOLEAN_COPY_ENTRY,
+        packages.LOGICAL_NOT_ENTRY,
+    ],
+)
+def test_boolean_host_physical_dispatch(
+    translated_packages, tmp_path, monkeypatch, entry
+):
+    host = runtime.HostRuntime(translated_packages, tmp_path / "trace")
+    if entry == packages.BOOLEAN_COPY_ENTRY:
+        buffers, memory = copy_buffers("bool_")
+        destination, count = memory["dst"], 6
+    else:
+        if entry in packages.COMPARISON_ENTRIES:
+            names = ("a", "b", "c", "size")
+            dtypes = (
+                packages.COMPARISON_ENTRIES[entry],
+                packages.COMPARISON_ENTRIES[entry],
+                "bool_",
+                "uint32",
+            )
+        elif entry in packages.BOOLEAN_CAST_ENTRIES:
+            names = ("src", "dst", "size")
+            dtypes = (*packages.BOOLEAN_CAST_ENTRIES[entry], "uint32")
+        else:
+            names, dtypes = ("in", "out", "size"), ("bool_", "bool_", "uint32")
+        memory = [
+            (runtime.TYPES[dtype] * (1 if name == "size" else 3))(
+                *([3] if name == "size" else [0, 1, 1])
+            )
+            for name, dtype in zip(names, dtypes)
+        ]
+        destination, count = memory[-2], 3
+        buffers = (runtime.Buffer * len(names))(
+            *[
+                runtime.Buffer(
+                    name.encode(),
+                    dtype.encode(),
+                    ctypes.addressof(value),
+                    len(value),
+                    int(index == len(names) - 2),
+                )
+                for index, (name, dtype, value) in enumerate(zip(names, dtypes, memory))
+            ]
+        )
+    dtype = next(buffer.dtype.decode() for buffer in buffers if buffer.output)
+    physical = runtime.physical_dtype(dtype, host.target)
+    expected = [index % 2 for index in range(count)]
+    body = [bool(value) for value in expected] if physical == "bool" else expected
+    guard = (
+        runtime.BOOLEAN_GUARD
+        if physical == "bool"
+        else (
+            [int(value) for value in runtime.BOOLEAN_GUARD]
+            if dtype == "bool_"
+            else runtime.COPY_GUARD
+        )
+    )
+    if dtype == "float32":
+        guard = [
+            ctypes.c_float.from_buffer_copy(ctypes.c_uint32(word)).value
+            for word in runtime.COPY_GUARD
+        ]
+    calls = []
+
+    def execute(request):
+        calls.append(request)
+        name = next(value.name for value in request.fixture.expected_outputs)
+        input_value = next(
+            value for value in request.fixture.inputs if value.name == name
+        )
+        assert (
+            input_value.values
+            == ([False] * count if physical == "bool" else [0] * count) + guard
+        )
+        return SimpleNamespace(
+            status="ok",
+            outputs={
+                name: {"dtype": physical, "shape": [count + 32], "values": body + guard}
+            },
+            details={},
+        )
+
+    monkeypatch.setattr(host.executor, "run", execute)
+    host.dispatch(entry, buffers, len(buffers), count)
+    assert list(destination) == expected and len(calls) == 1
+    if dtype == "bool_":
+        trace = json.loads(host.trace.read_text())
+        assert trace["physicalBooleanType"] == physical
+        assert trace["booleanGuardValues"] == guard
+
+
+@pytest.mark.parametrize(
+    "fault", ["input-byte", "input-type", "output-byte", "output-type", "guard"]
+)
+def test_boolean_host_rejects_invalid_storage(
+    translated_packages, tmp_path, monkeypatch, fault
+):
+    host = runtime.HostRuntime(translated_packages, tmp_path / "trace")
+    entry = "vv_LogicalAndbool_"
+    memory = [
+        (ctypes.c_uint8 * 3)(0, 1, 0),
+        (ctypes.c_uint8 * 3)(1, 0, 1),
+        (ctypes.c_uint8 * 3)(7, 7, 7),
+        ctypes.c_uint32(3),
+    ]
+    buffers = (runtime.Buffer * 4)(
+        *[
+            runtime.Buffer(
+                name.encode(),
+                b"uint32" if name == "size" else b"bool_",
+                ctypes.addressof(value),
+                1 if name == "size" else 3,
+                int(name == "c"),
+            )
+            for name, value in zip(("a", "b", "c", "size"), memory)
+        ]
+    )
+    if fault == "input-byte":
+        memory[0][1] = 2
+    if fault == "input-type":
+        buffers[0].dtype = b"uint32"
+    calls = []
+
+    def execute(request):
+        calls.append(request)
+        value = request.fixture.expected_outputs[0]
+        values = [False, True, False] + runtime.BOOLEAN_GUARD
+        if host.target != "metal":
+            values = [int(item) for item in values]
+        if fault == "output-byte":
+            values[1] = 2
+        if fault == "output-type":
+            values[1] = 1 if host.target == "metal" else True
+        if fault == "guard":
+            values[-1] = not values[-1] if host.target == "metal" else 1 - values[-1]
+        return SimpleNamespace(
+            status="ok",
+            outputs={
+                value.name: {"dtype": value.dtype, "shape": [35], "values": values}
+            },
+            details={},
+        )
+
+    monkeypatch.setattr(host.executor, "run", execute)
+    with pytest.raises((ValueError, RuntimeError)):
+        host.dispatch(entry, buffers, 4, 3)
+    assert list(memory[2]) == [7, 7, 7] and not host.trace.exists()
+    assert len(calls) == (0 if fault.startswith("input") else 1)
+
+
+@pytest.mark.parametrize(
+    "fault", [None, "missing", "dtype", "shape", "input", "output", "byte-type"]
+)
+def test_boolean_workload_records_are_exact(fault):
+    records = boolean_workloads.expected_records()
+    assert len(records) > 250 and len(boolean_workloads.dispatches()) > 400
+    if fault == "missing":
+        records.pop()
+    elif fault == "dtype":
+        records[1]["dtype"] = "uint8"
+    elif fault == "shape":
+        records[1]["shape"] = [1]
+    elif fault in {"input", "output", "byte-type"}:
+        key = "aBytes" if fault == "input" else "bytes"
+        records[1][key][0] = True if fault == "byte-type" else records[1][key][0] ^ 1
+    if fault:
+        with pytest.raises(RuntimeError, match="Boolean readbacks"):
+            boolean_workloads.validate(records)
+    else:
+        boolean_workloads.validate(records)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        entry
+        for entry, dtype in packages.COMPARISON_ENTRIES.items()
+        if dtype == "float32"
+    ]
+    + ["v_copyfloat32bool_"],
+)
+@pytest.mark.parametrize("subnormal", [False, True])
+def test_unproven_subnormal_comparisons_fail_before_dispatch(
+    translated_packages, tmp_path, monkeypatch, entry, subnormal
+):
+    host = runtime.HostRuntime(translated_packages, tmp_path / "trace")
+    words = (
+        [1, 0x80000001, 0x007FFFFF, 0x807FFFFF]
+        if subnormal
+        else [0, 0x80000000, 0x00800000, 0x80800000]
+    )
+    source = (ctypes.c_uint32 * 4)(*words)
+    other = (ctypes.c_float * 4)(0, 0, 0, 0)
+    destination = (ctypes.c_uint8 * 4)(7, 7, 7, 7)
+    size = ctypes.c_uint32(4)
+    cast = entry in packages.BOOLEAN_CAST_ENTRIES
+    arguments = (
+        [("src", "float32", source), ("dst", "bool_", destination)]
+        if cast
+        else [
+            ("a", "float32", source),
+            ("b", "float32", other),
+            ("c", "bool_", destination),
+        ]
+    ) + [("size", "uint32", size)]
+    buffers = (runtime.Buffer * len(arguments))(
+        *[
+            runtime.Buffer(
+                name.encode(),
+                dtype.encode(),
+                ctypes.addressof(value),
+                1 if name == "size" else 4,
+                int(value is destination),
+            )
+            for name, dtype, value in arguments
+        ]
+    )
+    calls = []
+
+    def execute(request):
+        calls.append(request)
+        raise RuntimeError("executor reached")
+
+    monkeypatch.setattr(host.executor, "run", execute)
+    rejected = subnormal and not cast and host.target != "metal"
+    with pytest.raises(
+        ValueError if rejected else RuntimeError,
+        match="Subnormal float comparison parity" if rejected else "executor reached",
+    ):
+        host.dispatch(entry, buffers, len(buffers), 4)
+    assert len(calls) == int(not rejected)
+    assert list(destination) == [7] * 4
+    assert list(source) == words
+    assert not host.trace.exists()
+
+
+def test_boolean_unary_dispatch_preserves_stored_contiguous_layouts(monkeypatch):
+    monkeypatch.setattr(
+        boolean_workloads,
+        "definitions",
+        lambda: [
+            (packages.LOGICAL_NOT_ENTRY, "not", "bool_", "bool_", layout)
+            for layout in ("transpose", "broadcast", "reverse")
+        ],
+    )
+    assert boolean_workloads.dispatches() == [
+        (packages.LOGICAL_NOT_ENTRY, 15),
+        (packages.LOGICAL_NOT_ENTRY, 5),
+        (packages.BOOLEAN_COPY_ENTRY, 17),
+        (packages.LOGICAL_NOT_ENTRY, 17),
+    ]
 
 
 def test_ci_requires_native_math_before_building_mlx():

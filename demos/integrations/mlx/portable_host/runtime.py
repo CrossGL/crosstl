@@ -23,9 +23,13 @@ from crosstl.project.runtime_verification import (
 from demos.integrations.mlx.portable_host import copy_layout
 from demos.integrations.mlx.portable_host.packages import (
     BINARY_ENTRIES,
+    BOOLEAN_CAST_ENTRIES,
+    BOOLEAN_COPY_ENTRY,
     CAST_ENTRIES,
+    COMPARISON_ENTRIES,
     COPY_ENTRY,
     ENTRIES,
+    LOGICAL_NOT_ENTRY,
     UNARY_ENTRIES,
 )
 
@@ -50,6 +54,7 @@ CALLBACK = ctypes.CFUNCTYPE(
     ctypes.c_size_t,
 )
 TYPES = {
+    "bool_": ctypes.c_uint8,
     "float32": ctypes.c_float,
     "int32": ctypes.c_int32,
     "uint32": ctypes.c_uint32,
@@ -58,6 +63,21 @@ TYPES = {
 }
 _installed_runtime = None
 COPY_GUARD = [0x6A15BEEF] * 32
+BOOLEAN_GUARD = [index % 2 == 0 for index in range(32)]
+ALL_CAST_ENTRIES = {**CAST_ENTRIES, **BOOLEAN_CAST_ENTRIES}
+
+
+def physical_dtype(dtype, target):
+    if dtype == "bool_":
+        return "bool" if target == "metal" else "uint32"
+    return dtype
+
+
+def boolean_values(values, dtype):
+    expected_type = bool if dtype == "bool" else int
+    if any(type(value) is not expected_type or value not in (0, 1) for value in values):
+        raise ValueError("Boolean storage must contain canonical zero or one values")
+    return [bool(value) if dtype == "bool" else int(value) for value in values]
 
 
 def wire_value(value):
@@ -135,26 +155,29 @@ class HostRuntime:
     def dispatch(self, entry, buffers, count, threads):
         if entry not in self.descriptors:
             raise ValueError(f"No translated package for {entry}")
-        copy = entry == COPY_ENTRY
+        copy = entry in {COPY_ENTRY, BOOLEAN_COPY_ENTRY}
         binary = entry in BINARY_ENTRIES
-        cast = entry in CAST_ENTRIES
+        comparison = entry in COMPARISON_ENTRIES
+        binary_operation = binary or comparison
+        cast = entry in ALL_CAST_ENTRIES
         if (
-            count != (8 if copy else 4 if binary else 3)
+            count != (8 if copy else 4 if binary_operation else 3)
             or not buffers
             or not 0 < threads <= 65535
         ):
             raise ValueError("Invalid or unsupported native dispatch dimensions")
         descriptor = self.descriptors[entry]
-        unary = entry in UNARY_ENTRIES
+        logical_not = entry == LOGICAL_NOT_ENTRY
+        unary = entry in UNARY_ENTRIES or logical_not
         if copy:
             names = set(copy_layout.DTYPES)
-        elif binary:
+        elif binary_operation:
             names = {"a", "b", "c", "size"}
         elif cast:
             names = {"src", "dst", "size"}
         else:
             names = {"in", "size", "out"} if unary else {"start", "step", "out"}
-        output_name = "dst" if copy or cast else "c" if binary else "out"
+        output_name = "dst" if copy or cast else "c" if binary_operation else "out"
         supplied = {}
         for index in range(count):
             buffer = buffers[index]
@@ -173,7 +196,7 @@ class HostRuntime:
                 threads
                 if name == output_name
                 or (unary and name == "in")
-                or (binary and name in {"a", "b"})
+                or (binary_operation and name in {"a", "b"})
                 or (cast and name == "src")
                 else 1
             )
@@ -181,30 +204,53 @@ class HostRuntime:
                 name == output_name
             ):
                 raise ValueError("Native buffer shape or direction does not match")
-            if unary and dtype != ("uint32" if name == "size" else "float32"):
+            if unary and dtype != (
+                "uint32" if name == "size" else "bool_" if logical_not else "float32"
+            ):
                 raise ValueError("Native unary buffer dtype does not match")
             if binary and dtype != (
                 "uint32" if name == "size" else BINARY_ENTRIES[entry]
             ):
                 raise ValueError("Native binary buffer dtype does not match")
+            if comparison and dtype != (
+                "uint32"
+                if name == "size"
+                else "bool_" if name == "c" else COMPARISON_ENTRIES[entry]
+            ):
+                raise ValueError("Native comparison buffer dtype does not match")
             if cast and dtype != (
                 "uint32"
                 if name == "size"
-                else CAST_ENTRIES[entry][0 if name == "src" else 1]
+                else ALL_CAST_ENTRIES[entry][0 if name == "src" else 1]
             ):
                 raise ValueError("Native cast buffer dtype does not match")
             supplied[name] = buffer
         if set(supplied) != names:
             raise ValueError("Native buffer names do not match the operation")
-        grid = copy_layout.geometry(supplied, threads) if copy else [threads, 1, 1]
-        if (unary or binary or cast) and ctypes.cast(
+        grid = (
+            copy_layout.geometry(
+                supplied,
+                threads,
+                dtype="bool_" if entry == BOOLEAN_COPY_ENTRY else "uint32",
+            )
+            if copy
+            else [threads, 1, 1]
+        )
+        if (unary or binary_operation or cast) and ctypes.cast(
             supplied["size"].data, ctypes.POINTER(ctypes.c_uint32)
         )[0] != threads:
             raise ValueError("Native operation size does not match the launch")
         guard = COPY_GUARD
-        guarded = copy or binary or cast
+        guarded = copy or binary_operation or cast or logical_not
+        output_dtype = supplied[output_name].dtype.decode("ascii")
+        if output_dtype == "bool_":
+            guard = (
+                BOOLEAN_GUARD
+                if self.target == "metal"
+                else [int(value) for value in BOOLEAN_GUARD]
+            )
         if (binary and BINARY_ENTRIES[entry] == "float32") or (
-            cast and CAST_ENTRIES[entry][1] == "float32"
+            cast and ALL_CAST_ENTRIES[entry][1] == "float32"
         ):
             guard = [
                 ctypes.c_float.from_buffer_copy(ctypes.c_uint32(word)).value
@@ -217,7 +263,7 @@ class HostRuntime:
             layout = binding["scalarLayout"]
             member = layout.get("memberName", binding["name"])
             if self.target == "directx":
-                member = member.removeprefix(entry + "_")
+                member = member.removeprefix(entry.rstrip("_") + "_")
             name = {"out_": "out", "in_": "in"}.get(member, member)
             if (
                 name not in supplied
@@ -231,22 +277,37 @@ class HostRuntime:
             binding_names.add(binding["name"])
             buffer = supplied[name]
             dtype = buffer.dtype.decode("ascii")
-            if layout["elementType"] != dtype or layout[
-                "elementStrideBytes"
-            ] != ctypes.sizeof(TYPES[dtype]):
+            storage = physical_dtype(dtype, self.target)
+            if layout["elementType"] != storage or layout["elementStrideBytes"] != (
+                1 if storage == "bool" else ctypes.sizeof(TYPES[storage])
+            ):
                 raise ValueError("Native and reflected buffer layouts disagree")
             ctype = TYPES[dtype]
             view = ctypes.cast(
                 buffer.data, ctypes.POINTER(ctype * buffer.count)
             ).contents
+            if comparison and dtype == "float32" and self.target != "metal":
+                words = ctypes.cast(
+                    buffer.data, ctypes.POINTER(ctypes.c_uint32 * buffer.count)
+                ).contents
+                if any(0 < (word & 0x7FFFFFFF) < 0x00800000 for word in words):
+                    raise ValueError(
+                        "Subnormal float comparison parity is not established for "
+                        f"{self.target}; see CrossGL/crosstl#2000"
+                    )
+            values = (
+                [0] * buffer.count
+                if buffer.output
+                else [wire_value(value) for value in view]
+            )
+            if dtype == "bool_":
+                values = boolean_values(values, "uint32")
+                if storage == "bool":
+                    values = [bool(value) for value in values]
             value = {
-                "dtype": dtype,
+                "dtype": storage,
                 "shape": [buffer.count],
-                "values": (
-                    [0] * buffer.count
-                    if buffer.output
-                    else [wire_value(value) for value in view]
-                ),
+                "values": values,
             }
             if guarded and buffer.output:
                 value["shape"] = [buffer.count + len(guard)]
@@ -273,12 +334,14 @@ class HostRuntime:
         for name, (buffer, ctype) in destinations.items():
             output = result.outputs[name]
             size = buffer.count + (len(guard) if guarded else 0)
-            if output["dtype"] != buffer.dtype.decode("ascii") or output["shape"] != [
-                size
-            ]:
+            dtype = buffer.dtype.decode("ascii")
+            storage = physical_dtype(dtype, self.target)
+            if output["dtype"] != storage or output["shape"] != [size]:
                 raise RuntimeError("Native readback layout does not match the output")
             if len(output["values"]) != size:
                 raise RuntimeError("Native readback size does not match the output")
+            if dtype == "bool_":
+                boolean_values(output["values"], storage)
             if guarded and output["values"][buffer.count :] != guard:
                 raise RuntimeError("Native operation changed the output buffer guard")
             values = (ctype * buffer.count)(
@@ -311,6 +374,16 @@ class HostRuntime:
                         **(
                             {"castGuardValues": output["values"][buffer.count :]}
                             if cast
+                            else {}
+                        ),
+                        **(
+                            {
+                                "booleanGuardValues": output["values"][buffer.count :],
+                                "physicalBooleanType": physical_dtype(
+                                    "bool_", self.target
+                                ),
+                            }
+                            if output_dtype == "bool_"
                             else {}
                         ),
                     }

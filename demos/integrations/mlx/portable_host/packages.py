@@ -62,12 +62,37 @@ UNARY_OPERATIONS = (
 UNARY_ENTRIES = tuple(f"v_{op}float32float32" for op in UNARY_OPERATIONS)
 COPY_SOURCE = "mlx/backend/metal/kernels/copy.metal"
 COPY_ENTRY = "ggn2_dynamic_copyuint32uint32"
+BOOLEAN_COPY_ENTRY = "ggn2_dynamic_copybool_bool_"
+LOGICAL_NOT_ENTRY = "v_LogicalNotbool_bool_"
 CAST_ENTRIES = {
     f"v_copy{source}{destination}": (source, destination)
     for source in ("float32", "int32", "uint32")
     for destination in ("float32", "int32", "uint32")
     if source != destination
 }
+BOOLEAN_CAST_ENTRIES = {
+    f"v_copy{source}{destination}": (source, destination)
+    for dtype in ("float32", "int32", "uint32")
+    for source, destination in ((dtype, "bool_"), ("bool_", dtype))
+}
+COMPARISON_OPERATIONS = (
+    "Equal",
+    "NotEqual",
+    "Less",
+    "LessEqual",
+    "Greater",
+    "GreaterEqual",
+)
+LOGICAL_OPERATIONS = ("LogicalAnd", "LogicalOr")
+COMPARISON_ENTRIES = {
+    f"vv_{operation}{dtype}": dtype
+    for operation in COMPARISON_OPERATIONS
+    for dtype in ("float32", "int32", "uint32", "bool_")
+}
+COMPARISON_ENTRIES.update(
+    {f"vv_{operation}bool_": "bool_" for operation in LOGICAL_OPERATIONS}
+)
+COMPARISON_ENTRIES["vv_NaNEqualfloat32"] = "float32"
 BINARY_SOURCE = "mlx/backend/metal/kernels/binary.metal"
 BINARY_OPERATIONS = ("Add", "Subtract", "Multiply", "Minimum", "Maximum", "Divide")
 BINARY_ENTRIES = {
@@ -82,6 +107,9 @@ ENTRIES = (
     + (COPY_ENTRY,)
     + tuple(BINARY_ENTRIES)
     + tuple(CAST_ENTRIES)
+    + (BOOLEAN_COPY_ENTRY, LOGICAL_NOT_ENTRY)
+    + tuple(BOOLEAN_CAST_ENTRIES)
+    + tuple(COMPARISON_ENTRIES)
 )
 
 
@@ -123,9 +151,9 @@ targets = ["{target}"]
 output_dir = "{work.name}/out"
 [project.entry_points]
 "{SOURCE}" = {json.dumps(ARANGE_ENTRIES)}
-"{UNARY_SOURCE}" = {json.dumps(UNARY_ENTRIES)}
-"{COPY_SOURCE}" = {json.dumps([COPY_ENTRY, *CAST_ENTRIES])}
-"{BINARY_SOURCE}" = {json.dumps(list(BINARY_ENTRIES))}
+"{UNARY_SOURCE}" = {json.dumps([*UNARY_ENTRIES, LOGICAL_NOT_ENTRY])}
+"{COPY_SOURCE}" = {json.dumps([COPY_ENTRY, BOOLEAN_COPY_ENTRY, *CAST_ENTRIES, *BOOLEAN_CAST_ENTRIES])}
+"{BINARY_SOURCE}" = {json.dumps([*BINARY_ENTRIES, *COMPARISON_ENTRIES])}
 [project.entry_workgroup_size_rules."{SOURCE}"]
 "arange*" = [1, 1, 1]
 [project.entry_workgroup_size_rules."{UNARY_SOURCE}"]

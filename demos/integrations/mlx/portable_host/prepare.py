@@ -10,6 +10,8 @@ from pathlib import Path
 
 from demos.integrations.mlx.portable_host.packages import (
     BINARY_OPERATIONS,
+    COMPARISON_OPERATIONS,
+    LOGICAL_OPERATIONS,
     UNARY_OPERATIONS,
 )
 
@@ -51,6 +53,9 @@ def adapted_sources(original, primitives, events):
         *COPY_PRIMITIVES,
         *BINARY_OPERATIONS,
         *CAST_PRIMITIVES,
+        *COMPARISON_OPERATIONS,
+        *LOGICAL_OPERATIONS,
+        "LogicalNot",
     ):
         if primitive in {"Log2", "Log10", "Rsqrt"}:
             continue
