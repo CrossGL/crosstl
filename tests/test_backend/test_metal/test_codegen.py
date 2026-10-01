@@ -617,7 +617,7 @@ def test_codegen_xhalf_vectors_lower_before_opengl_generation():
     assert "f16vec3(normalize" in crossgl
     assert "xhalf" not in crossgl
     assert "out vec3 viewDir;" in glsl
-    assert "viewDir = vec3(normalize" in glsl
+    assert "viewDir = crossgl_round_half3(vec3(normalize" in glsl
     assert "xhalf" not in glsl
     assert "f16vec3" not in glsl
 

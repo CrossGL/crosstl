@@ -42,7 +42,10 @@
             "tests/test_translator/test_opengl_metal_math.py::def test_metal_math_translates_and_compiles_for_opengl",
             "tests/test_translator/test_opengl_metal_math.py::def test_opengl_metal_math_executes",
             "tests/test_translator/test_opengl_metal_math.py::def test_opengl_metal_math_diagnostics",
-            "tests/test_translator/test_opengl_metal_math.py::def test_opengl_metal_math_preserves_source_helpers"
+            "tests/test_translator/test_opengl_metal_math.py::def test_opengl_metal_math_preserves_source_helpers",
+            "tests/test_translator/test_opengl_half_conversion.py::def test_public_metal_half_cast_rounds_before_widening",
+            "tests/test_translator/test_opengl_half_conversion.py::def test_half_rounding_native",
+            "tests/test_translator/test_opengl_half_conversion.py::def test_half_unproven_conversions_fail_closed"
           ]
         },
         "metal": {

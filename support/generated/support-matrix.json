@@ -160,7 +160,7 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 351,
+        "unsupported_marker_count": 352,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
@@ -255,6 +255,7 @@
           "tests/test_translator/test_codegen/test_GLSL_storage_pointer_codegen.py",
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_translator/test_opengl_metal_math.py",
+          "tests/test_translator/test_opengl_half_conversion.py",
           "tests/test_translator/test_metal_precise_asin.py",
           "tests/test_translator/test_fused_math.py",
           "tests/test_translator/test_metal_fma.py",
@@ -263,7 +264,7 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1819
+        "test_count": 1831
       },
       "translator_codegen": {
         "exists": true,
@@ -1765,7 +1766,10 @@
             "tests/test_translator/test_opengl_metal_math.py::def test_metal_math_translates_and_compiles_for_opengl",
             "tests/test_translator/test_opengl_metal_math.py::def test_opengl_metal_math_executes",
             "tests/test_translator/test_opengl_metal_math.py::def test_opengl_metal_math_diagnostics",
-            "tests/test_translator/test_opengl_metal_math.py::def test_opengl_metal_math_preserves_source_helpers"
+            "tests/test_translator/test_opengl_metal_math.py::def test_opengl_metal_math_preserves_source_helpers",
+            "tests/test_translator/test_opengl_half_conversion.py::def test_public_metal_half_cast_rounds_before_widening",
+            "tests/test_translator/test_opengl_half_conversion.py::def test_half_rounding_native",
+            "tests/test_translator/test_opengl_half_conversion.py::def test_half_unproven_conversions_fail_closed"
           ],
           "notes": "OpenGL target output applies deterministic, collision-free GLSL identifier remapping to user and generated symbols, including target-reserved gl_ and consecutive-underscore spellings, while preserving declared builtin interface names and source provenance, with warning-fatal glslang and SPIR-V validation coverage. Canonical Metal floating math and eager Boolean selection have typed lowering, explicit min/max NaN handling, source-helper ownership checks, and required bounded Linux numerical execution; this is not whole-repository runtime coverage.",
           "status": "supported"

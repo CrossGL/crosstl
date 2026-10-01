@@ -33,6 +33,33 @@ The backend is the primary path for OpenGL and Vulkan-style GLSL authoring:
   ``gl_GlobalInvocationID``, and related compute identifiers
 * GLSL cbuffer lowering to ``layout(std140, binding = N) uniform`` blocks
 
+Half-Precision Values
+---------------------
+
+Scalar and two-, three-, and four-component half values use float32 GLSL
+storage. Numeric narrowing rounds to binary16, nearest with ties to even,
+before widening back to that storage representation. Casts, initializers,
+assignments, helper arguments and returns retain this rounding boundary;
+half-valued arithmetic is rounded before a later float conversion.
+
+The lowering uses integer bit operations to preserve subnormal half values,
+signed zero, overflow and infinity independently of packing-intrinsic
+subnormal handling. NaNs remain NaNs; payload preservation is not promised.
+Arguments are evaluated once. Double-to-half conversions, unsupported profiles,
+unfolded global initializers, and updates whose evaluation order cannot be
+preserved produce diagnostics. Finite scalar/vector literal constants are
+rounded during generation and remain valid GLSL constant expressions.
+This does not implement packed 16-bit buffers, bfloat16 semantics, or native
+half-matrix arithmetic. Hosts must still use the reflected physical layout.
+
+Required Linux CI executes all finite half values, both neighbors of every
+finite half rounding midpoint, exceptional values and seeded float32 samples.
+Separate checks cover assignment, helpers, structures, vectors and compound
+updates. macOS CI runs the same data through original and translated Metal.
+Retained artifacts include source, modules, input bytes, reference bytes,
+output bytes and guards. These are numeric-conversion tests, not full MLX
+runtime coverage.
+
 Native Attention Fixture
 ------------------------
 

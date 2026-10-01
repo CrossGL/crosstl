@@ -330,6 +330,29 @@ def test_ci_requires_pinned_attention_numerical_execution():
     )
 
 
+def test_ci_requires_half_conversion_reference():
+    from tools import ci_coverage
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/mlx-metal-host.yml").read_text()
+    step = ci_coverage.workflow_job_step_section(
+        workflow, "metal-host", "Validate half conversion reference"
+    )
+    assert "if:" not in step and "continue-on-error" not in step
+    assert 'CROSTL_REQUIRE_HALF_CONVERSION_RUNTIME: "1"' in step
+    assert "CROSTL_HALF_CONVERSION_TARGET: metal" in step
+    assert "--timeout-seconds 180" in step
+    assert "pytest -q -n auto" in step
+    assert "--basetemp=.mlx-metal-host/half-conversions/pytest" in step
+    assert "--junitxml=.mlx-metal-host/half-conversions/results.xml" in step
+    assert "tee .mlx-metal-host/half-conversions.log" in step
+    assert "test_opengl_half_conversion.py -k half_rounding_native" in step
+    for event in ("pull_request", "push"):
+        assert "tests/test_translator/test_opengl_half_conversion.py" in (
+            ci_coverage.workflow_event_path_filters(workflow, event)
+        )
+
+
 def test_ci_requires_pinned_attention_derivative_execution():
     from tools import ci_coverage
 

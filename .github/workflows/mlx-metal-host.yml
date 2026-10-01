@@ -15,6 +15,7 @@ on:
       - "tests/test_translator/test_directx_float_atomics.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
       - "tests/test_translator/test_mlx_gated_delta_runtime.py"
+      - "tests/test_translator/test_opengl_half_conversion.py"
       - "tests/test_translator/test_mlx_attention_odo_runtime.py"
       - "tests/test_translator/test_mlx_attention_ds_runtime.py"
       - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
@@ -36,6 +37,7 @@ on:
       - "tests/test_translator/test_directx_float_atomics.py"
       - "tests/test_translator/test_mlx_gated_delta_metal.py"
       - "tests/test_translator/test_mlx_gated_delta_runtime.py"
+      - "tests/test_translator/test_opengl_half_conversion.py"
       - "tests/test_translator/test_mlx_attention_odo_runtime.py"
       - "tests/test_translator/test_mlx_attention_ds_runtime.py"
       - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
@@ -89,6 +91,19 @@ jobs:
               --junitxml=.mlx-metal-host/argument-inference/results.xml \
               tests/test_translator/test_project_metal_discovery.py \
               2>&1 | tee .mlx-metal-host/argument-inference.log
+      - name: Validate half conversion reference
+        env:
+          CROSTL_REQUIRE_HALF_CONVERSION_RUNTIME: "1"
+          CROSTL_HALF_CONVERSION_TARGET: metal
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/half-conversions
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Metal half conversion reference" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/half-conversions/pytest \
+              --junitxml=.mlx-metal-host/half-conversions/results.xml \
+              tests/test_translator/test_opengl_half_conversion.py -k half_rounding_native \
+              2>&1 | tee .mlx-metal-host/half-conversions.log
       - name: Validate native float atomics
         env:
           CROSTL_REQUIRE_METAL_FLOAT_ATOMICS: "1"

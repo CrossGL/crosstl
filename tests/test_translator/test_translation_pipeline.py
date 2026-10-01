@@ -665,7 +665,7 @@ def test_metal_vertex_struct_return_preserves_view_dir_outputs(tmp_path):
 
     _assert_generated_output_is_usable(opengl)
     assert "out vec3 viewDir;" in opengl
-    assert "viewDir = vec3(normalize" in opengl
+    assert "viewDir = crossgl_round_half3(vec3(normalize" in opengl
     assert "xhalf" not in opengl
     assert "f16vec3" not in opengl
 

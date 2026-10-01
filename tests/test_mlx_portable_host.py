@@ -578,6 +578,22 @@ def test_ci_requires_native_math_before_building_mlx():
         "CROSTL_REQUIRE_DIRECTX_ATAN2: ${{ runner.os == 'Windows' && '1' || '0' }}"
         in scalar
     )
+    half = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Validate OpenGL half conversions"
+    )
+    assert "if: runner.os == 'Linux'" in half
+    assert "continue-on-error" not in half
+    assert 'CROSTL_REQUIRE_HALF_CONVERSION_RUNTIME: "1"' in half
+    assert "CROSTL_HALF_CONVERSION_TARGET: opengl" in half
+    assert "--timeout-seconds 180" in half
+    assert "pytest -q -n auto" in half
+    assert "--basetemp=.mlx-portable-host/half-conversions/pytest" in half
+    assert "--junitxml=.mlx-portable-host/half-conversions/results.xml" in half
+    assert "tee .mlx-portable-host/half-conversions.log" in half
+    for event in ("pull_request", "push"):
+        assert "tests/test_translator/test_opengl_half_conversion.py" in (
+            ci_coverage.workflow_event_path_filters(workflow, event)
+        )
     binary = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Validate pinned native binary math"
     )

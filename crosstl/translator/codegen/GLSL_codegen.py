@@ -1,6 +1,8 @@
 """CrossGL-to-GLSL code generator."""
 
+import math
 import re
+import struct
 from contextlib import contextmanager
 from copy import deepcopy
 from types import SimpleNamespace
@@ -2476,6 +2478,8 @@ class GLSLCodeGen:
         self.required_glsl_complex64_helpers = set()
         self.required_glsl_boolean_order_helpers = set()
         self.required_glsl_metal_math_helpers = set()
+        self.glsl_half_helper_names = {}
+        self.glsl_generating_global_initializer = False
         self.required_glsl_trailing_zero_helpers = set()
         self.glsl_trailing_zero_helper_names = {}
         self.glsl_trailing_zero_reserved_names = set()
@@ -6564,6 +6568,8 @@ class GLSLCodeGen:
         self.required_glsl_complex64_helpers = set()
         self.required_glsl_boolean_order_helpers = set()
         self.required_glsl_metal_math_helpers = set()
+        self.glsl_half_helper_names = {}
+        self.glsl_generating_global_initializer = False
         self.required_glsl_trailing_zero_helpers = set()
         self.glsl_trailing_zero_helper_names = {}
         self.glsl_trailing_zero_reserved_names = set()
@@ -6764,7 +6770,7 @@ class GLSLCodeGen:
             target_stage,
         )
         self.prepare_glsl_trailing_zero_helper_names(functions)
-        self.glsl_metal_math_reserved_names = {
+        self.glsl_numeric_helper_reserved_names = {
             self.glsl_sanitized_identifier_base(name)
             for function in functions
             for name in self.collect_glsl_function_local_identifier_names(function)
@@ -7754,6 +7760,7 @@ class GLSLCodeGen:
             + self.generate_glsl_trailing_zero_helpers()
             + self.generate_glsl_boolean_order_helpers()
             + self.generate_glsl_metal_math_helpers()
+            + self.generate_glsl_half_helpers()
             + self.generate_glsl_complex64_helpers()
         )
         if generated_helpers:
@@ -14388,7 +14395,12 @@ class GLSLCodeGen:
         ]
 
     def generate_constant_expression(self, expr, expected_type=None):
-        value_code = self.generate_expression_with_expected(expr, expected_type)
+        previous = self.glsl_generating_global_initializer
+        self.glsl_generating_global_initializer = True
+        try:
+            value_code = self.generate_expression_with_expected(expr, expected_type)
+        finally:
+            self.glsl_generating_global_initializer = previous
         if value_code == "True":
             return "true"
         if value_code == "False":
@@ -27047,10 +27059,15 @@ class GLSLCodeGen:
             initializer_type = (
                 mapped_type_for_layout if mapped_type_for_layout is not None else vtype
             )
-            initializer = (
-                " = "
-                f"{self.generate_expression_with_expected(initial_value, initializer_type)}"
-            )
+            if self.glsl_half_width(vtype) is not None:
+                initializer_type = vtype
+            self.glsl_generating_global_initializer = True
+            try:
+                initializer = " = " + self.generate_expression_with_expected(
+                    initial_value, initializer_type
+                )
+            finally:
+                self.glsl_generating_global_initializer = False
         layout = self.glsl_variable_layout_prefix(node)
         mapped_type = (
             mapped_type_for_layout if mapped_type_for_layout is not None else vtype
@@ -27436,7 +27453,13 @@ class GLSLCodeGen:
             generated = self.generate_expression(expr)
         finally:
             self.current_expression_expected_type = previous_expected_type
-        return self.glsl_expected_type_conversion(expr, generated, expected_type)
+        converted = self.glsl_expected_type_conversion(expr, generated, expected_type)
+        half_width = self.glsl_half_width(expected_type)
+        if half_width is not None and half_width == self.glsl_half_width(
+            self.glsl_source_expression_type(expr)
+        ):
+            return converted
+        return self.glsl_apply_half_contract(converted, expected_type, expr)
 
     def glsl_interface_block_value_expression(self, expression, expected_type):
         root_name = self.glsl_interface_block_value_root_name(expression)
@@ -28666,6 +28689,54 @@ class GLSLCodeGen:
             )
         return ("\n".join(helpers) + "\n") if helpers else ""
 
+    def generate_glsl_half_helpers(self):
+        if not self.glsl_half_helper_names:
+            return ""
+        scalar = self.glsl_half_helper_names[1]
+        helpers = [f"""float {scalar}(float value) {{
+    uint bits = floatBitsToUint(value);
+    uint sign = bits & 0x80000000u;
+    uint magnitude = bits & 0x7fffffffu;
+    if (magnitude >= 0x7f800000u) {{
+        return uintBitsToFloat(sign | (magnitude == 0x7f800000u ? 0x7f800000u : 0x7fc00000u));
+    }}
+    if (magnitude >= 0x477ff000u) {{
+        return uintBitsToFloat(sign | 0x7f800000u);
+    }}
+    if (magnitude >= 0x38800000u) {{
+        uint rounded = (magnitude + 0xfffu + ((magnitude >> 13u) & 1u)) & 0xffffe000u;
+        return uintBitsToFloat(sign | rounded);
+    }}
+    if (magnitude < 0x33000000u) {{
+        return uintBitsToFloat(sign);
+    }}
+    // Round the subnormal significand before rebuilding its exact float32 value.
+    uint shift = 126u - (magnitude >> 23u);
+    uint significand = (magnitude & 0x7fffffu) | 0x800000u;
+    uint rounded = significand >> shift;
+    uint remainder = significand & ((1u << shift) - 1u);
+    uint midpoint = 1u << (shift - 1u);
+    if (remainder > midpoint || (remainder == midpoint && (rounded & 1u) != 0u)) {{
+        rounded += 1u;
+    }}
+    if (rounded == 0u) {{
+        return uintBitsToFloat(sign);
+    }}
+    uint leading = uint(findMSB(rounded));
+    uint result = ((leading + 103u) << 23u) | ((rounded << (23u - leading)) & 0x7fffffu);
+    return uintBitsToFloat(sign | result);
+}}
+"""]
+        for width, name in sorted(self.glsl_half_helper_names.items()):
+            if width == 1:
+                continue
+            values = ", ".join(f"{scalar}(value.{c})" for c in "xyzw"[:width])
+            helpers.append(
+                f"vec{width} {name}(vec{width} value) {{\n"
+                f"    return vec{width}({values});\n}}\n"
+            )
+        return "\n".join(helpers) + "\n"
+
     def generate_glsl_metal_math_helpers(self):
         helpers = []
         for name, operation, value_type, condition_type, width in sorted(
@@ -29317,6 +29388,125 @@ complex64_t crossgl_complex64_mod_assign(
             "width": width,
             "mapped": self.map_type(source_type),
         }
+
+    def glsl_half_width(self, vtype):
+        source_type = self.glsl_normalized_source_type(vtype) or ""
+        if source_type in {"half", "f16", "float16", "float16_t"}:
+            return 1
+        match = re.fullmatch(
+            r"(?:half|packed_half|f16vec|float16_t)([234])", source_type
+        )
+        return int(match.group(1)) if match else None
+
+    def glsl_half_literal_components(self, expression):
+        if isinstance(expression, LiteralNode):
+            value = expression.value
+            return [value] if isinstance(value, (int, float)) else None
+        if isinstance(expression, UnaryOpNode) and self.map_operator(expression.op) in {
+            "+",
+            "-",
+        }:
+            values = self.glsl_half_literal_components(expression.operand)
+            if values is not None:
+                sign = -1 if self.map_operator(expression.op) == "-" else 1
+                return [sign * value for value in values]
+        if not isinstance(expression, FunctionCallNode):
+            return None
+        name = self.function_call_name(expression)
+        if name in self.function_return_types:
+            return None
+        mapped = self.glsl_constructor_type(name)
+        if mapped not in {"float", "vec2", "vec3", "vec4"}:
+            return None
+        values = []
+        for arg in expression.args:
+            components = self.glsl_half_literal_components(arg)
+            if components is None:
+                return None
+            values.extend(components)
+        width = 1 if mapped == "float" else int(mapped[-1])
+        if len(values) == 1:
+            values *= width
+        if len(values) != width:
+            return None
+        try:
+            values = [
+                struct.unpack("<f", struct.pack("<f", value))[0] for value in values
+            ]
+            if self.glsl_half_width(name) is not None:
+                values = [
+                    struct.unpack("<e", struct.pack("<e", value))[0] for value in values
+                ]
+        except (OverflowError, struct.error):
+            return None
+        return values
+
+    def glsl_apply_half_contract(self, value, expected_type, source_node):
+        width = self.glsl_half_width(expected_type)
+        if width is None:
+            return value
+        source_type = self.glsl_source_expression_type(source_node)
+        info = self.glsl_value_type_info(source_type)
+        version = re.match(r"#version\s+(\d+)\b", self.current_glsl_version_line or "")
+        if self.GLSL_TARGET_DISPLAY_NAME != "OpenGL" or (
+            version is not None and int(version.group(1)) < 400
+        ):
+            self.glsl_scalar_conversion_error(
+                source_node, source_type, expected_type, "half-unsupported-profile"
+            )
+        if info is not None and info["family"] == "float" and info["bits"] > 32:
+            self.glsl_scalar_conversion_error(
+                source_node, source_type, expected_type, "half-double-rounding"
+            )
+        literals = self.glsl_half_literal_components(source_node)
+        if literals is not None:
+            if len(literals) == 1:
+                literals *= width
+            if len(literals) == width:
+                try:
+                    narrowed = [
+                        struct.unpack(
+                            "<e",
+                            struct.pack(
+                                "<e", struct.unpack("<f", struct.pack("<f", value))[0]
+                            ),
+                        )[0]
+                        for value in literals
+                    ]
+                except (OverflowError, struct.error):
+                    narrowed = []
+                if narrowed and all(math.isfinite(value) for value in narrowed):
+                    values = ", ".join(repr(value) for value in narrowed)
+                    return values if width == 1 else f"vec{width}({values})"
+        if self.glsl_generating_global_initializer:
+            self.glsl_scalar_conversion_error(
+                source_node, source_type, expected_type, "half-global-initializer"
+            )
+        for builtin in ("floatBitsToUint", "uintBitsToFloat", "findMSB"):
+            if (
+                builtin in self.function_return_types
+                or builtin in self.global_variable_types
+            ):
+                self.glsl_scalar_conversion_error(
+                    source_node,
+                    source_type,
+                    expected_type,
+                    "half-target-builtin-shadowed",
+                )
+        for required_width in (1, width):
+            if required_width in self.glsl_half_helper_names:
+                continue
+            used_names = set(self.glsl_module_used_identifier_names)
+            used_names.update(
+                getattr(self, "glsl_numeric_helper_reserved_names", set())
+            )
+            name = self.glsl_unique_identifier(
+                f"crossgl_round_half{required_width}", used_names
+            )
+            self.glsl_half_helper_names[required_width] = name
+            self.glsl_module_used_identifier_names.add(name)
+        helper = self.glsl_half_helper_names[width]
+        return f"{helper}({value})"
 
     def glsl_arithmetic_operand_type(self, vtype):
         source_type = self.glsl_normalized_source_type(vtype)
@@ -31915,7 +32105,10 @@ complex64_t crossgl_complex64_mod_assign(
 
     def generate_glsl_narrow_unary_update(self, expression, operator):
         expected_type = self.glsl_source_expression_type(expression.operand)
-        if self.glsl_narrow_integer_contract(expected_type) is None:
+        if (
+            self.glsl_narrow_integer_contract(expected_type) is None
+            and self.glsl_half_width(expected_type) is None
+        ):
             return None
         is_postfix = bool(
             getattr(expression, "is_postfix", False)
@@ -32058,9 +32251,9 @@ complex64_t crossgl_complex64_mod_assign(
         if boolean_arithmetic_assignment is not None:
             return boolean_arithmetic_assignment
         left = self.generate_glsl_buffer_block_mutation_target(left_node)
-        if (
-            binary_operator is not None
-            and self.glsl_narrow_integer_contract(expected_type) is not None
+        if binary_operator is not None and (
+            self.glsl_narrow_integer_contract(expected_type) is not None
+            or self.glsl_half_width(expected_type) is not None
         ):
             right = self.glsl_narrow_update_value(
                 left_node,
@@ -33207,7 +33400,9 @@ complex64_t crossgl_complex64_mod_assign(
                     right = self.cast_integer_vector_expression_for_expected_float(
                         right, right_type, expected_vector
                     )
-            return f"({left} {op} {right})"
+            return self.glsl_apply_half_contract(
+                f"({left} {op} {right})", self.glsl_source_expression_type(expr), expr
+            )
         elif hasattr(expr, "__class__") and "AssignmentNode" in str(type(expr)):
             return self.generate_assignment(expr)
         elif hasattr(expr, "__class__") and "UnaryOpNode" in str(type(expr)):
@@ -33589,6 +33784,22 @@ complex64_t crossgl_complex64_mod_assign(
 
             constructor = self.glsl_constructor_type(func_name)
             if constructor:
+                if self.glsl_half_width(original_func_name) is not None:
+                    for arg in expr.args:
+                        info = self.glsl_value_type_info(
+                            self.glsl_source_expression_type(arg)
+                        )
+                        if (
+                            info is not None
+                            and info["family"] == "float"
+                            and info["bits"] > 32
+                        ):
+                            self.glsl_scalar_conversion_error(
+                                expr,
+                                info["source"],
+                                original_func_name,
+                                "half-double-rounding",
+                            )
                 complex_scalar_constructor = (
                     self.glsl_explicit_complex64_scalar_constructor(
                         expr,
@@ -33605,7 +33816,9 @@ complex64_t crossgl_complex64_mod_assign(
                     )
                 )
                 if partial_vector_constructor is not None:
-                    return partial_vector_constructor
+                    return self.glsl_apply_half_contract(
+                        partial_vector_constructor, original_func_name, expr
+                    )
                 converted_constructor = self.glsl_struct_constructor_conversion(
                     expr,
                     constructor,
@@ -33628,10 +33841,11 @@ complex64_t crossgl_complex64_mod_assign(
                     for index, arg in enumerate(expr.args)
                 )
                 generated_constructor = f"{constructor}({args})"
-                return self.glsl_apply_narrow_integer_contract(
+                narrowed = self.glsl_apply_narrow_integer_contract(
                     generated_constructor,
                     original_func_name,
                 )
+                return self.glsl_apply_half_contract(narrowed, original_func_name, expr)
 
             self.validate_function_structured_buffer_access_arguments(
                 func_name, expr.args
@@ -34268,7 +34482,7 @@ complex64_t crossgl_complex64_mod_assign(
         helper_name = self.glsl_module_generated_identifier_names.get(identity)
         if helper_name is None:
             used_names = self.glsl_module_used_identifier_names | getattr(
-                self, "glsl_metal_math_reserved_names", set()
+                self, "glsl_numeric_helper_reserved_names", set()
             )
             helper_name = self.glsl_unique_identifier(
                 f"crossgl_{func_name}_{value['mapped']}_{condition_type}".rstrip("_"),
@@ -37140,6 +37354,12 @@ complex64_t crossgl_complex64_mod_assign(
             return self.type_name_string(getattr(expression, "constructor_type", None))
         if isinstance(expression, FunctionCallNode):
             function_name = self.function_call_name(expression)
+            bitcast_type = self.metal_as_type_target(function_name)
+            if (
+                bitcast_type is not None
+                and function_name not in self.function_return_types
+            ):
+                return bitcast_type
             if self.glsl_constructor_type(function_name):
                 return function_name
             buffer_result_type = self.glsl_buffer_call_result_type(
