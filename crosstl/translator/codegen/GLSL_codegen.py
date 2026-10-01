@@ -5093,14 +5093,12 @@ class GLSLCodeGen:
         valid_workgroup_layout = (
             len(concrete_workgroup_size) == 3
             and all(value > 0 for value in concrete_workgroup_size)
-            and concrete_workgroup_size[0] % self.software_subgroup_width == 0
             and invocation_count <= 1024
         )
         if not valid_workgroup_layout:
             raise self.glsl_software_subgroup_error(
                 "OpenGL software subgroup lowering requires concrete positive "
-                "local dimensions, local_size_x divisible by the software "
-                "subgroup width, and at most 1024 invocations",
+                "local dimensions and at most 1024 invocations",
                 workgroup_size=raw_workgroup_size,
                 reason="workgroup-size-mismatch",
                 source_location=getattr(entry_function, "source_location", None),
@@ -5108,8 +5106,8 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_workgroup_size = concrete_workgroup_size
         self.glsl_software_subgroup_workgroup_invocation_count = invocation_count
         self.glsl_software_subgroup_count = (
-            invocation_count // self.software_subgroup_width
-        )
+            invocation_count + self.software_subgroup_width - 1
+        ) // self.software_subgroup_width
 
         if any(
             self.glsl_wave_size_attribute(attribute)
@@ -35834,6 +35832,7 @@ complex64_t crossgl_complex64_mod_assign(
             self.glsl_software_subgroup_workgroup_invocation_count
             or self.software_subgroup_width
         )
+        partial = invocation_count % self.software_subgroup_width != 0
         value_types = sorted(
             {
                 value_type
@@ -35903,6 +35902,8 @@ complex64_t crossgl_complex64_mod_assign(
                 shuffle_limit = (
                     f"subgroupBase + {self.GLSL_SOFTWARE_SUBGROUP_WIDTH_MACRO}"
                 )
+                if partial:
+                    lane_setup += f"    uint activeCount = min({self.software_subgroup_width}u, {invocation_count}u - subgroupBase);\n"
             if operation in {
                 "WaveActiveSum",
                 "WaveActiveProduct",
@@ -35935,6 +35936,8 @@ complex64_t crossgl_complex64_mod_assign(
                 active = (
                     "(lane & (2u * stride - 1u)) == 0u" if product else "lane < stride"
                 )
+                if partial:
+                    active += " && lane + stride < activeCount"
                 code += (
                     f"{value_type} {helper}({value_type} value) {{\n"
                     f"{lane_setup}"
@@ -35960,15 +35963,22 @@ complex64_t crossgl_complex64_mod_assign(
                     if invocation_count == self.software_subgroup_width
                     else "invocation"
                 )
+                shuffle = (
+                    "    bool sourceValid = delta < (activeCount - lane);\n"
+                    "    uint sourceLane = subgroupBase + (sourceValid ? lane + delta : lane);\n"
+                    f"    {value_type} result = sourceValid ? {scratch}[sourceLane] : value;\n"
+                    if partial
+                    else f"    uint sourceLane = {shuffle_source};\n"
+                    f"    {value_type} result = sourceLane < {shuffle_limit} "
+                    f"? {scratch}[sourceLane] : value;\n"
+                )
                 code += (
                     f"{value_type} {helper}({value_type} value, uint delta) {{\n"
                     f"{lane_setup}"
                     f"    {scratch}[{write_index}] = value;\n"
                     "    memoryBarrierShared();\n"
                     "    barrier();\n"
-                    f"    uint sourceLane = {shuffle_source};\n"
-                    f"    {value_type} result = sourceLane < {shuffle_limit} "
-                    f"? {scratch}[sourceLane] : value;\n"
+                    f"{shuffle}"
                     "    memoryBarrierShared();\n"
                     "    barrier();\n"
                     "    return result;\n"

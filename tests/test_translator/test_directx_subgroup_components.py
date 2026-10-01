@@ -23,6 +23,8 @@ CASES = (
     ((32, 1, 4), "y"),
     ((32, 4, 1), "z"),
     ((64, 1, 1), "y"),
+    ((1, 32, 1), "z"),
+    ((1, 1, 32), "y"),
 )
 
 
@@ -71,11 +73,11 @@ def test_uniform_rows_compile(tmp_path, shape, axis):
     _compile(generated, tmp_path)
 
 
-@pytest.mark.parametrize("shape", [(1, 32, 1), (1, 1, 32)])
-def test_component_proof_preserves_workgroup_layout_contract(shape):
+@pytest.mark.parametrize("shape,axis", [((1, 32, 1), "y"), ((1, 1, 32), "z")])
+def test_component_proof_rejects_varying_axes_in_non_x_major_groups(shape, axis):
     with pytest.raises(DirectXSoftwareSubgroupError) as failure:
-        _codegen().generate_stage(parse(_row_source(shape, "y")), "compute")
-    assert failure.value.reason == "workgroup-size-mismatch"
+        _codegen().generate_stage(parse(_row_source(shape, axis)), "compute")
+    assert failure.value.reason == "early-return-unproven"
 
 
 @pytest.mark.parametrize("shape,axis", CASES)

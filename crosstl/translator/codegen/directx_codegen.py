@@ -5007,13 +5007,11 @@ class HLSLCodeGen:
         if not (
             len(concrete_workgroup_size) == 3
             and all(value > 0 for value in concrete_workgroup_size)
-            and concrete_workgroup_size[0] % self.software_subgroup_width == 0
             and invocation_count <= 1024
         ):
             raise self.hlsl_software_subgroup_error(
                 "DirectX software subgroup lowering requires concrete positive "
-                "local dimensions, local_size_x divisible by the software "
-                "subgroup width, and at most 1024 invocations",
+                "local dimensions and at most 1024 invocations",
                 workgroup_size=raw_workgroup_size,
                 reason="workgroup-size-mismatch",
                 source_location=getattr(entry_function, "source_location", None),
@@ -5213,7 +5211,7 @@ class HLSLCodeGen:
             "gl_NumSubgroups",
             "SV_GroupID",
         }
-        if invocation_count == self.software_subgroup_width:
+        if invocation_count <= self.software_subgroup_width:
             uniform_semantics.add("gl_SubgroupID")
         uniform_parameters = {}
         for name in ordered_names:
@@ -5378,11 +5376,18 @@ class HLSLCodeGen:
     def hlsl_software_subgroup_reduction_body(self, operation, value_type, scratch):
         reducer = self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS[operation]
         qualifier = "precise " if value_type == "float" else ""
+        partial = (
+            self.hlsl_software_subgroup_invocation_count % self.software_subgroup_width
+            != 0
+        )
+        active = "(lane & (2u * stride - 1u)) == 0u"
+        if partial:
+            active += " && lane + stride < activeCount"
         if reducer == "product":
             return (
                 "    [unroll]\n"
                 f"    for (uint stride = 1u; stride < {self.software_subgroup_width}u; stride <<= 1u) {{\n"
-                "        if ((lane & (2u * stride - 1u)) == 0u) {\n"
+                f"        if ({active}) {{\n"
                 f"            {qualifier}{value_type} product = {scratch}[subgroupBase + lane] * {scratch}[subgroupBase + lane + stride];\n"
                 f"            {scratch}[subgroupBase + lane] = product;\n"
                 "        }\n"
@@ -5394,7 +5399,8 @@ class HLSLCodeGen:
             f"    {qualifier}{value_type} result = {scratch}[subgroupBase];\n"
             "    [unroll]\n"
             f"    for (uint offset = 1u; offset < {self.software_subgroup_width}u; ++offset) {{\n"
-            f"        {value_type} operand = {scratch}[subgroupBase + offset];\n"
+            + ("        if (offset >= activeCount) { continue; }\n" if partial else "")
+            + f"        {value_type} operand = {scratch}[subgroupBase + offset];\n"
         )
         if reducer in {"all", "any"}:
             operator = "&&" if reducer == "all" else "||"
@@ -5426,6 +5432,7 @@ class HLSLCodeGen:
             return ""
         invocation_count = self.hlsl_software_subgroup_invocation_count
         width = self.software_subgroup_width
+        partial = invocation_count % width != 0
         value_types = sorted(
             {
                 value_type
@@ -5454,7 +5461,12 @@ class HLSLCodeGen:
                 "uint invocation) {\n"
                 f"    uint lane = invocation % {width}u;\n"
                 "    uint subgroupBase = invocation - lane;\n"
-                f"    {scratch}[invocation] = value;\n"
+                + (
+                    f"    uint activeCount = min({width}u, {invocation_count}u - subgroupBase);\n"
+                    if partial
+                    else ""
+                )
+                + f"    {scratch}[invocation] = value;\n"
                 "    GroupMemoryBarrierWithGroupSync();\n"
             )
             if reduction:
@@ -5463,7 +5475,7 @@ class HLSLCodeGen:
                 )
             else:
                 code += (
-                    f"    bool sourceValid = delta < ({width}u - lane);\n"
+                    f"    bool sourceValid = delta < ({'activeCount' if partial else str(width) + 'u'} - lane);\n"
                     "    uint sourceLane = sourceValid ? lane + delta : lane;\n"
                     f"    {value_type} result = sourceValid\n"
                     f"        ? {scratch}[subgroupBase + sourceLane]\n"
@@ -22853,6 +22865,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return f"{self.software_subgroup_width}u"
         if canonical == "gl_NumSubgroups":
             group_size = self.hlsl_compute_group_size_constant(execution_config)
+            if (
+                self.hlsl_software_subgroup_invocation_count
+                % self.software_subgroup_width
+            ):
+                return f"(({group_size} + {self.software_subgroup_width - 1}u) / {self.software_subgroup_width}u)"
             return f"({group_size} / {self.software_subgroup_width}u)"
         if canonical not in {"gl_SubgroupID", "gl_SubgroupInvocationID"}:
             return None

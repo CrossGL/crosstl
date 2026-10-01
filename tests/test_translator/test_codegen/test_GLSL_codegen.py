@@ -26777,13 +26777,13 @@ def test_glsl_software_subgroup_generated_names_are_collision_safe(tmp_path):
     [
         (
             "float value = WaveActiveMin(1.0);",
-            (16, 1, 1),
+            (0, 1, 1),
             "",
             "workgroup-size-mismatch",
         ),
         (
             "float value = WaveActiveMin(1.0);",
-            (48, 1, 1),
+            (32, 1, 0),
             "",
             "workgroup-size-mismatch",
         ),

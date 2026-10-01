@@ -1222,15 +1222,24 @@ provide the KHR subgroup extensions:
 
 This option is target-scoped and explicit; it does not change Metal parsing or
 other target artifacts. The only accepted width is ``32``. The selected output
-must contain exactly one compute entry with concrete positive local dimensions,
-a local X dimension divisible by 32, and no more than 1,024 total invocations.
+must contain exactly one compute entry with concrete positive local dimensions
+and no more than 1,024 total invocations.
 CrossTL partitions the linear invocation range into an exact compile-time count
 of independent 32-lane software subgroups. Subgroup count, subgroup index,
 subgroup width, and lane index lower respectively to the workgroup invocation
-count divided by 32, ``gl_LocalInvocationIndex / 32``,
+count divided by 32 and rounded up, ``gl_LocalInvocationIndex / 32``,
 ``CROSSTL_SOFTWARE_SUBGROUP_WIDTH``, and
 ``gl_LocalInvocationIndex % 32``. The one-subgroup case retains the simpler
 ``1u``, ``0u``, and ``gl_LocalInvocationIndex`` forms.
+
+A fixed workgroup may end in a subgroup with fewer than 32 real invocations.
+Reductions combine only those invocations, scratch storage retains the exact
+workgroup size, and shuffle-down helpers use the calling value when their source
+falls beyond the real lanes. Source shuffle results from inactive lanes are not
+portable; numerical controls select only results from active source lanes.
+All real invocations must still reach the same workgroup barriers. This does not
+provide dynamic nonuniform final dispatch groups: the runtime must preserve the
+selected workgroup shape rather than round a source thread grid up silently.
 
 The bounded mode supports scalar ``float``, ``int``, or ``uint`` sum, minimum,
 maximum, and shuffle-down operations. Shared scratch spans the complete
