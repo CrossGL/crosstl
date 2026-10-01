@@ -33,6 +33,11 @@ The backend is the primary path for OpenGL and Vulkan-style GLSL authoring:
   ``gl_GlobalInvocationID``, and related compute identifiers
 * GLSL cbuffer lowering to ``layout(std140, binding = N) uniform`` blocks
 
+Vector equality and inequality in explicit Boolean-vector result contexts use
+``equal`` and ``notEqual``, preserving one Boolean per component. Scalar
+comparisons retain scalar operators. Implicit Boolean-vector reduction to a
+scalar remains an error; this does not establish every nested comparison context.
+
 Half-Precision Values
 ---------------------
 

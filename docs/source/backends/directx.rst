@@ -128,6 +128,13 @@ every invocation in the logical subgroup. Operands are evaluated once; shared
 scratch is synchronized before reuse, including consecutive all/any calls.
 Boolean payloads do not enable numeric reductions or shuffles on Boolean values.
 
+Equality or inequality of a private binary32 scalar/vector variable with itself
+uses integer-payload NaN classification. This preserves ``value == value`` and
+``value != value`` under optimized DXC compilation, which can otherwise fold
+these predicates even for ``precise`` locals. Repeated calls, memory accesses,
+reference views and non-binary32 comparisons are not collapsed by this lowering.
+This does not define general subnormal comparison or arithmetic profiles.
+
 Arithmetic payloads are limited to 32-bit ``float``, ``int`` and ``uint`` scalars. Floating
 sums use a precise, increasing-lane-order fold; different native reduction
 orders can round differently. Integer sums retain 32-bit wraparound. Floating

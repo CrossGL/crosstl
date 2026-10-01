@@ -12462,6 +12462,30 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             }
         return None
 
+    def hlsl_floating_self_comparison(self, expression, rendered, operator):
+        left, right = expression.left, expression.right
+        if (
+            operator not in {"==", "!="}
+            or not isinstance(left, IdentifierNode)
+            or not isinstance(right, IdentifierNode)
+            or left.name != right.name
+            or left.name not in self.local_variable_types
+        ):
+            return None
+        source_type = self.local_variable_types[left.name]
+        if any(
+            marker in (self.type_name_string(source_type) or "")
+            for marker in ("*", "&")
+        ):
+            return None
+        info = self.hlsl_floating_arithmetic_type_info(source_type)
+        if info is None or info["base_type"] != "float":
+            return None
+        # Optimized DXC folds floating self-comparisons even on precise locals.
+        # Private scalar/vector payload classification preserves the NaN branch.
+        comparison = ">" if operator == "!=" else "<="
+        return f"((asuint({rendered}) & 0x7fffffffu) {comparison} 0x7f800000u)"
+
     def hlsl_wide_integer_floating_binary_contract(
         self,
         node,
@@ -21426,6 +21450,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if option_none_comparison is not None:
                 return option_none_comparison
+            self_comparison = self.hlsl_floating_self_comparison(expr, left, mapped_op)
+            if self_comparison is not None:
+                return self_comparison
             if self.hlsl_binary_multiply_uses_mul(expr):
                 return f"mul({left}, {right})"
             complex_binary = self.hlsl_complex64_binary_expression(

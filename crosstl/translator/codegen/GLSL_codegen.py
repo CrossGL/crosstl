@@ -31457,6 +31457,10 @@ complex64_t crossgl_complex64_mod_assign(
         self, left_expr, operator, right_expr, *, source_node=None
     ):
         function_name = self.GLSL_VECTOR_RELATIONAL_FUNCTIONS.get(operator)
+        if operator in {"==", "!="} and self.map_type(
+            self.current_expression_expected_type
+        ) in {"bvec2", "bvec3", "bvec4"}:
+            function_name = "equal" if operator == "==" else "notEqual"
         if function_name is None:
             return None
 

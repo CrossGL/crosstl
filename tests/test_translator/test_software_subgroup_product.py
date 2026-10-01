@@ -143,12 +143,12 @@ kernel void products(device uint* inputWords [[buffer(0)]],
 """
 
 
-def _package(root, target, kind, shape, *, source=None):
+def _package(root, target, kind, shape, *, source=None, software_subgroups=True):
     if source is None:
         source = _source(kind, math.prod(shape))
     (root / "products.metal").write_text(source, encoding="utf-8")
     options = {}
-    if target != "metal":
+    if target != "metal" and software_subgroups:
         target_options = {"software_subgroup_width": 32}
         if target == "directx":
             target_options["relative_wave_shuffle_out_of_range"] = "self"
