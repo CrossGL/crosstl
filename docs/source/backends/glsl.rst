@@ -78,6 +78,16 @@ three wrapper levels, distinct even/odd-workgroup predicates, multiple logical
 subgroups and unchanged input/output guards. These are collective semantics
 checks, not complete MLX reduction or host-runtime coverage.
 
+Scalar float32, int32 and uint32 products combine adjacent lane pairs with
+strides 1, 2, 4, 8 and 16. Integer products retain 32-bit wraparound; floating
+products round at each multiplication. The native product gate retains
+original Metal controls, finite rounding and overflow/underflow cases, NaNs,
+infinities, signed zeros, repeated calls and guards. NaN payloads are not
+required to match. This software order does not imply equivalence with every
+possible native hardware reduction order or denormal mode.
+Narrow, vector and wider products remain diagnostic; source-precision rounding
+must be established separately from scratch storage width.
+
 Native Attention Fixture
 ------------------------
 

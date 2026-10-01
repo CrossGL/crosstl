@@ -1775,6 +1775,7 @@ class GLSLCodeGen:
     GLSL_SOFTWARE_SUBGROUP_OPERATIONS = frozenset(
         {
             "WaveActiveSum",
+            "WaveActiveProduct",
             "WaveActiveMin",
             "WaveActiveMax",
             "WaveShuffleDown",
@@ -35450,6 +35451,7 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_software_subgroup_helper_name(self, operation, value_type):
         operation_suffix = {
             "WaveActiveSum": "Sum",
+            "WaveActiveProduct": "Product",
             "WaveActiveMin": "Min",
             "WaveActiveMax": "Max",
             "WaveActiveAllTrue": "All",
@@ -35496,6 +35498,7 @@ complex64_t crossgl_complex64_mod_assign(
             "WaveShuffleDown": 3,
             "WaveActiveAllTrue": 4,
             "WaveActiveAnyTrue": 5,
+            "WaveActiveProduct": 6,
         }
         for operation, value_type in sorted(
             self.required_glsl_software_subgroup_helpers,
@@ -35540,6 +35543,7 @@ complex64_t crossgl_complex64_mod_assign(
                 )
             if operation in {
                 "WaveActiveSum",
+                "WaveActiveProduct",
                 "WaveActiveMin",
                 "WaveActiveMax",
                 "WaveActiveAllTrue",
@@ -35547,6 +35551,7 @@ complex64_t crossgl_complex64_mod_assign(
             }:
                 reduction = {
                     "WaveActiveSum": lambda left, right: f"({left} + {right})",
+                    "WaveActiveProduct": lambda left, right: f"({left} * {right})",
                     "WaveActiveMin": lambda left, right: f"min({left}, {right})",
                     "WaveActiveMax": lambda left, right: f"max({left}, {right})",
                     "WaveActiveAllTrue": lambda left, right: f"({left} && {right})",
@@ -35559,14 +35564,23 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 # Explicit shared-memory ordering preserves scratch reuse through
                 # helper calls in dynamically uniform branches on Mesa drivers.
+                product = operation == "WaveActiveProduct"
+                loop = (
+                    f"for (uint stride = 1u; stride < {self.software_subgroup_width}u; stride <<= 1u)"
+                    if product
+                    else "for (uint stride = 16u; stride > 0u; stride >>= 1u)"
+                )
+                active = (
+                    "(lane & (2u * stride - 1u)) == 0u" if product else "lane < stride"
+                )
                 code += (
                     f"{value_type} {helper}({value_type} value) {{\n"
                     f"{lane_setup}"
                     f"    {scratch}[{write_index}] = value;\n"
                     "    memoryBarrierShared();\n"
                     "    barrier();\n"
-                    "    for (uint stride = 16u; stride > 0u; stride >>= 1u) {\n"
-                    "        if (lane < stride) {\n"
+                    f"    {loop} {{\n"
+                    f"        if ({active}) {{\n"
                     f"            {left} = {reduction(left, right)};\n"
                     "        }\n"
                     "        memoryBarrierShared();\n"
@@ -35771,6 +35785,9 @@ complex64_t crossgl_complex64_mod_assign(
             else mapped_value_type in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
             or vector_shuffle_type is not None
         )
+        if operation == "WaveActiveProduct":
+            layout = scalar_storage_layout(self.glsl_normalized_source_type(value_type))
+            valid_type = valid_type and layout is not None and layout.bit_width == 32
         if not valid_type:
             raise self.glsl_software_subgroup_error(
                 f"OpenGL software subgroup operation '{operation}' requires "

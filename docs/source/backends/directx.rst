@@ -132,6 +132,16 @@ cancellation, NaNs, infinities and signed zeros. It retains compiler output,
 shader and module hashes, input words and full output readbacks. This explicit
 software path does not replace native-wave generation when the option is absent.
 
+Scalar products also support float32, int32 and uint32 in software mode. They
+combine adjacent lane pairs with strides 1, 2, 4, 8 and 16, rather than using
+the sum's increasing-lane fold. Floating products retain each multiplication's
+rounding boundary; integer products wrap modulo 2^32. A separate required native
+gate compares this order with original Metal, including a finite rounding case
+and an overflow/underflow case where other orders produce different results.
+NaN payloads are not a portable guarantee. Narrow, vector and wider products
+remain diagnostic in software mode; widening a carrier does not preserve
+source-precision rounding by itself.
+
 A separate required Windows gate translates eight pinned MLX gated-delta
 backward configurations with software subgroups and dispatches the generated
 DXIL using the upstream ``(32, 4, 1)`` workgroup shape. All six gradients are

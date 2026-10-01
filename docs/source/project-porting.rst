@@ -558,8 +558,20 @@ root overloads, lane-dependent branches and escaped or mutated uniform inputs
 remain diagnostic. The native vote gate exercises three wrapper levels and
 different predicates in even and odd workgroups; shared scratch accesses use
 explicit memory ordering as well as execution barriers. This does not establish
-complete MLX reduction support: product operations, collective-result uniformity
-and full host reduction dispatch remain separate work.
+complete MLX reduction support: collective-result uniformity and full host
+reduction dispatch remain separate work.
+
+Scalar float32, int32 and uint32 products use an adjacent-pair reduction tree
+with strides 1, 2, 4, 8 and 16 on both software backends. Integer products wrap
+at 32 bits. The required native product gate checks repeated helper calls,
+single operand evaluation, overflow, signed zeros, infinities, NaNs and
+order-sensitive rounding against original Metal and independent references.
+Input words, readbacks, output guards and validation modules are retained.
+NaN payloads are not required to match. This defines the software reduction
+order; it is not a claim of identical floating-point results for every possible
+native hardware reduction order or denormal mode.
+Narrow products remain diagnostic until their intermediate rounding is
+preserved, even where a target normally uses a 32-bit carrier for that type.
 
 The bounded Windows test also records live Direct3D 12 debug-layer messages
 through ``tools/run_directx_diagnostics.py``. Each entry's JSON-lines log is

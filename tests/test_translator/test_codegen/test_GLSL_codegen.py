@@ -26812,7 +26812,7 @@ def test_glsl_software_subgroup_generated_names_are_collision_safe(tmp_path):
             "operation-set-empty",
         ),
         (
-            "uint value = WaveActiveProduct(gl_LocalInvocationID.x);",
+            "uint value = WaveActiveBitOr(gl_LocalInvocationID.x);",
             (32, 1, 1),
             "",
             "operation-unsupported",

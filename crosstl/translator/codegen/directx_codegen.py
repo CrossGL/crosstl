@@ -2013,6 +2013,7 @@ class HLSLCodeGen:
     HLSL_SOFTWARE_SUBGROUP_SUPPORTED_WIDTH = 32
     HLSL_SOFTWARE_SUBGROUP_REDUCTIONS = {
         "WaveActiveSum": "sum",
+        "WaveActiveProduct": "product",
         "WaveActiveMin": "min",
         "WaveActiveMax": "max",
         "WaveActiveAllTrue": "all",
@@ -5272,6 +5273,9 @@ class HLSLCodeGen:
             if is_vote
             else mapped_value_type in self.HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
         )
+        if operation == "WaveActiveProduct":
+            layout = scalar_storage_layout(self.type_name_string(value_type))
+            valid_type = valid_type and layout is not None and layout.bit_width == 32
         if not valid_type:
             raise self.hlsl_software_subgroup_error(
                 "DirectX software subgroup votes require scalar bool payloads; "
@@ -5303,6 +5307,18 @@ class HLSLCodeGen:
     def hlsl_software_subgroup_reduction_body(self, operation, value_type, scratch):
         reducer = self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS[operation]
         qualifier = "precise " if value_type == "float" else ""
+        if reducer == "product":
+            return (
+                "    [unroll]\n"
+                f"    for (uint stride = 1u; stride < {self.software_subgroup_width}u; stride <<= 1u) {{\n"
+                "        if ((lane & (2u * stride - 1u)) == 0u) {\n"
+                f"            {qualifier}{value_type} product = {scratch}[subgroupBase + lane] * {scratch}[subgroupBase + lane + stride];\n"
+                f"            {scratch}[subgroupBase + lane] = product;\n"
+                "        }\n"
+                "        GroupMemoryBarrierWithGroupSync();\n"
+                "    }\n"
+                f"    {value_type} result = {scratch}[subgroupBase];\n"
+            )
         code = (
             f"    {qualifier}{value_type} result = {scratch}[subgroupBase];\n"
             "    [unroll]\n"
@@ -24081,7 +24097,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.software_subgroup_width is not None
             and operation in self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS
         ):
-            value_type = self.expression_result_type(args[0])
+            value_type = (
+                self.hlsl_source_expression_type(args[0])
+                if operation == "WaveActiveProduct"
+                else self.expression_result_type(args[0])
+            )
             value = self.generate_expression_with_expected(args[0], value_type)
             return self.hlsl_software_subgroup_call(operation, value_type, value)
         if operation in self.HLSL_WAVE_SHUFFLE_AND_FILL_INTRINSICS:
