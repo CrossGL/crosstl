@@ -545,6 +545,15 @@ require DXC validation, and the numerical entries retain every existing case
 and the required Windows WARP execution gate. Compilation alone does not
 establish numerical parity or resolve a native-runtime timeout.
 
+Explicit-width software subgroups on DirectX and OpenGL also support scalar
+Boolean all/any votes. The native host workflow requires compiler validation and
+device readbacks across multiple logical subgroups, repeated calls, single
+operand evaluation and untouched output guards. macOS additionally executes
+the original Metal source. Divergent exits before a later collective are
+rejected rather than dropping the exit or forcing inactive lanes into the vote.
+This does not establish complete MLX reduction support: product operations and
+OpenGL operation-free helper wrappers remain separate limitations.
+
 The bounded Windows test also records live Direct3D 12 debug-layer messages
 through ``tools/run_directx_diagnostics.py``. Each entry's JSON-lines log is
 stored outside pytest's temporary directory and uploaded with the runtime

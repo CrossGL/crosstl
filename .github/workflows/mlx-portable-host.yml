@@ -37,6 +37,7 @@ on:
       - "tests/test_translator/test_metal_boolean_promotion.py"
       - "tests/test_translator/test_metal_float_selection.py"
       - "tests/test_translator/test_boolean_buffer_runtime.py"
+      - "tests/test_translator/test_software_subgroup_votes.py"
       - "tests/test_translator/test_mlx_current_unary_sign.py"
       - "tests/test_translator/test_mlx_current_unary_atan.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
@@ -88,6 +89,7 @@ on:
       - "tests/test_translator/test_metal_boolean_promotion.py"
       - "tests/test_translator/test_metal_float_selection.py"
       - "tests/test_translator/test_boolean_buffer_runtime.py"
+      - "tests/test_translator/test_software_subgroup_votes.py"
       - "tests/test_translator/test_mlx_current_unary_sign.py"
       - "tests/test_translator/test_mlx_current_unary_atan.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
@@ -201,6 +203,21 @@ jobs:
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Validate portable host contracts
         run: python -m pytest -q -n auto tests/test_mlx_portable_host.py
+      - name: Validate software subgroup votes
+        env:
+          CROSTL_REQUIRE_SOFTWARE_SUBGROUP_VOTES: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/subgroup-votes
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Software subgroup votes" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/subgroup-votes/pytest \
+              --junitxml=.mlx-portable-host/subgroup-votes/results.xml \
+              tests/test_translator/test_software_subgroup_votes.py \
+              2>&1 | tee .mlx-portable-host/subgroup-votes.log
       - name: Validate Metal argument inference
         env:
           CROSTL_REQUIRE_METAL_ARGUMENT_INFERENCE: "1"

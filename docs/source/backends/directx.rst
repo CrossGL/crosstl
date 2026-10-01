@@ -81,8 +81,8 @@ Software Subgroup Reductions
 ----------------------------
 
 The explicit ``software_subgroup_width=32`` target option lowers scalar
-``WaveActiveSum``, ``WaveActiveMin`` and ``WaveActiveMax`` through groupshared
-storage. It also supports ``WaveShuffleDown`` with
+``WaveActiveSum``, ``WaveActiveMin``, ``WaveActiveMax``, ``WaveActiveAllTrue`` and
+``WaveActiveAnyTrue`` through groupshared storage. It also supports ``WaveShuffleDown`` with
 ``relative_wave_shuffle_out_of_range="self"``. Each logical group contains 32
 consecutive local invocations, independently of the device's physical wave
 width. Multiple logical groups share an allocation but never read each other's
@@ -113,7 +113,12 @@ aliasing and lexical shadowing invalidate the component proof. Windows tests
 exercise whole-workgroup early returns and row-dependent loops across multiple
 three-dimensional dispatch shapes while checking inactive outputs and guards.
 
-Payloads are limited to 32-bit ``float``, ``int`` and ``uint`` scalars. Floating
+Votes require scalar ``bool`` operands and return the same Boolean result to
+every invocation in the logical subgroup. Operands are evaluated once; shared
+scratch is synchronized before reuse, including consecutive all/any calls.
+Boolean payloads do not enable numeric reductions or shuffles on Boolean values.
+
+Arithmetic payloads are limited to 32-bit ``float``, ``int`` and ``uint`` scalars. Floating
 sums use a precise, increasing-lane-order fold; different native reduction
 orders can round differently. Integer sums retain 32-bit wraparound. Floating
 minimum and maximum ignore NaNs when a numeric lane exists and return NaN when

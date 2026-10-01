@@ -1771,8 +1771,15 @@ class GLSLCodeGen:
     GLSL_REQUIRED_SUBGROUP_WIDTH_MACRO = "CROSSTL_REQUIRED_SUBGROUP_WIDTH"
     GLSL_SOFTWARE_SUBGROUP_WIDTH_MACRO = "CROSSTL_SOFTWARE_SUBGROUP_WIDTH"
     GLSL_SOFTWARE_SUBGROUP_SUPPORTED_WIDTH = 32
+    GLSL_SOFTWARE_SUBGROUP_VOTES = frozenset({"WaveActiveAllTrue", "WaveActiveAnyTrue"})
     GLSL_SOFTWARE_SUBGROUP_OPERATIONS = frozenset(
-        {"WaveActiveSum", "WaveActiveMin", "WaveActiveMax", "WaveShuffleDown"}
+        {
+            "WaveActiveSum",
+            "WaveActiveMin",
+            "WaveActiveMax",
+            "WaveShuffleDown",
+            *GLSL_SOFTWARE_SUBGROUP_VOTES,
+        }
     )
     GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES = frozenset({"float", "int", "uint"})
     GLSL_SOFTWARE_SUBGROUP_BUILTIN_ALIASES = frozenset(
@@ -1793,6 +1800,7 @@ class GLSLCodeGen:
         }
     )
     GLSL_SOFTWARE_SUBGROUP_TYPE_SUFFIXES = {
+        "bool": "Bool",
         "float": "Float",
         "int": "Int",
         "uint": "Uint",
@@ -5093,6 +5101,94 @@ class GLSLCodeGen:
             helper_records,
             tuple(concrete_workgroup_size),
         )
+        for function in self.glsl_software_subgroup_functions(ast):
+            if (
+                function is entry_function
+                or id(function) in self.glsl_software_subgroup_helper_function_ids
+            ):
+                self.validate_glsl_software_subgroup_exits(
+                    getattr(function, "body", None),
+                    operation=all_records[0][0],
+                )
+
+    def validate_glsl_software_subgroup_exits(
+        self, body, later_work=False, *, operation
+    ):
+        def contains_work(root):
+            return bool(self.glsl_software_subgroup_operation_records(root)) or any(
+                isinstance(node, FunctionCallNode)
+                and self.glsl_software_subgroup_candidate_helper_call(node)
+                for node in self.glsl_software_subgroup_reachable_nodes(root)
+            )
+
+        statements = self.glsl_software_subgroup_statement_list(body)
+        # Exit proofs use immutable builtins, not locals that may escape by reference.
+        uniform_names = set(self.GLSL_SOFTWARE_SUBGROUP_WORKGROUP_UNIFORM_BUILTINS)
+        if self.glsl_software_subgroup_count == 1:
+            uniform_names.add("gl_SubgroupID")
+        for index, statement in enumerate(statements):
+            subsequent_work = later_work or any(
+                contains_work(item) for item in statements[index + 1 :]
+            )
+            has_work = contains_work(statement)
+            has_exit = any(
+                isinstance(node, (ReturnNode, BreakNode, ContinueNode))
+                for node in self.glsl_software_subgroup_reachable_nodes(statement)
+            )
+            if isinstance(statement, IfNode):
+                conditions = [
+                    statement.condition,
+                    *(getattr(statement, "else_if_conditions", []) or []),
+                ]
+                if (
+                    has_exit
+                    and (subsequent_work or has_work)
+                    and not all(
+                        self.glsl_software_subgroup_uniform_expression(
+                            condition, uniform_names
+                        )
+                        for condition in conditions
+                    )
+                ):
+                    raise self.glsl_software_subgroup_error(
+                        "OpenGL software subgroup barriers cannot follow an "
+                        "unproven divergent return, break, or continue",
+                        reason="potentially-divergent-control-flow",
+                        operation=operation,
+                        source_location=getattr(statement, "source_location", None),
+                    )
+                for branch in [
+                    statement.if_body,
+                    *(getattr(statement, "else_if_bodies", []) or []),
+                    getattr(statement, "else_body", None),
+                ]:
+                    self.validate_glsl_software_subgroup_exits(
+                        branch, subsequent_work, operation=operation
+                    )
+            elif isinstance(
+                statement,
+                (
+                    ForNode,
+                    WhileNode,
+                    DoWhileNode,
+                    ForInNode,
+                    LoopNode,
+                    SwitchNode,
+                    MatchNode,
+                ),
+            ):
+                if has_exit and (subsequent_work or has_work):
+                    raise self.glsl_software_subgroup_error(
+                        "OpenGL software subgroup barriers require proven "
+                        "participation across loop and switch exits",
+                        reason="potentially-divergent-control-flow",
+                        operation=operation,
+                        source_location=getattr(statement, "source_location", None),
+                    )
+            elif isinstance(statement, BlockNode) or hasattr(statement, "statements"):
+                self.validate_glsl_software_subgroup_exits(
+                    statement, subsequent_work, operation=operation
+                )
 
     def glsl_software_subgroup_uniform_seed_names(
         self,
@@ -35258,6 +35354,8 @@ complex64_t crossgl_complex64_mod_assign(
             "WaveActiveSum": "Sum",
             "WaveActiveMin": "Min",
             "WaveActiveMax": "Max",
+            "WaveActiveAllTrue": "All",
+            "WaveActiveAnyTrue": "Any",
             "WaveShuffleDown": "ShuffleDown",
         }[operation]
         type_suffix = self.GLSL_SOFTWARE_SUBGROUP_TYPE_SUFFIXES[value_type]
@@ -35281,6 +35379,7 @@ complex64_t crossgl_complex64_mod_assign(
                     self.required_glsl_software_subgroup_helpers
                 )
                 if value_type in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
+                or value_type == "bool"
             },
             key=lambda value_type: self.GLSL_SOFTWARE_SUBGROUP_TYPE_SUFFIXES[
                 value_type
@@ -35297,6 +35396,8 @@ complex64_t crossgl_complex64_mod_assign(
             "WaveActiveMin": 1,
             "WaveActiveMax": 2,
             "WaveShuffleDown": 3,
+            "WaveActiveAllTrue": 4,
+            "WaveActiveAnyTrue": 5,
         }
         for operation, value_type in sorted(
             self.required_glsl_software_subgroup_helpers,
@@ -35343,11 +35444,15 @@ complex64_t crossgl_complex64_mod_assign(
                 "WaveActiveSum",
                 "WaveActiveMin",
                 "WaveActiveMax",
+                "WaveActiveAllTrue",
+                "WaveActiveAnyTrue",
             }:
                 reduction = {
                     "WaveActiveSum": lambda left, right: f"({left} + {right})",
                     "WaveActiveMin": lambda left, right: f"min({left}, {right})",
                     "WaveActiveMax": lambda left, right: f"max({left}, {right})",
+                    "WaveActiveAllTrue": lambda left, right: f"({left} && {right})",
+                    "WaveActiveAnyTrue": lambda left, right: f"({left} || {right})",
                 }[operation]
                 write_index = (
                     "lane"
@@ -35554,14 +35659,18 @@ complex64_t crossgl_complex64_mod_assign(
             if operation == "WaveShuffleDown" and mapped_value_type == "uvec2"
             else None
         )
-        if (
-            mapped_value_type not in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
-            and vector_shuffle_type is None
-        ):
+        is_vote = operation in self.GLSL_SOFTWARE_SUBGROUP_VOTES
+        valid_type = (
+            mapped_value_type == "bool"
+            if is_vote
+            else mapped_value_type in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
+            or vector_shuffle_type is not None
+        )
+        if not valid_type:
             raise self.glsl_software_subgroup_error(
-                f"OpenGL software subgroup operation '{operation}' requires a "
-                "32-bit numeric scalar payload or an exact two-component "
-                "uint shuffle payload",
+                f"OpenGL software subgroup operation '{operation}' requires "
+                "scalar bool for votes, a 32-bit numeric scalar for arithmetic, "
+                "or an exact two-component uint shuffle payload",
                 operation=operation,
                 reason="value-type-unsupported",
                 source_location=source_location,

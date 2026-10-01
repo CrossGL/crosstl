@@ -2015,7 +2015,10 @@ class HLSLCodeGen:
         "WaveActiveSum": "sum",
         "WaveActiveMin": "min",
         "WaveActiveMax": "max",
+        "WaveActiveAllTrue": "all",
+        "WaveActiveAnyTrue": "any",
     }
+    HLSL_SOFTWARE_SUBGROUP_VOTES = frozenset({"WaveActiveAllTrue", "WaveActiveAnyTrue"})
     HLSL_SOFTWARE_SUBGROUP_OPERATIONS = frozenset(
         {"WaveShuffleDown", *HLSL_SOFTWARE_SUBGROUP_REDUCTIONS}
     )
@@ -5263,10 +5266,16 @@ class HLSLCodeGen:
         self, operation, value_type, value_expression, delta_expression=None
     ):
         mapped_value_type = self.map_type(value_type)
-        if mapped_value_type not in self.HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES:
+        is_vote = operation in self.HLSL_SOFTWARE_SUBGROUP_VOTES
+        valid_type = (
+            mapped_value_type == "bool"
+            if is_vote
+            else mapped_value_type in self.HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
+        )
+        if not valid_type:
             raise self.hlsl_software_subgroup_error(
-                "DirectX software subgroup operations support only 32-bit float, "
-                "int, and uint scalar payloads",
+                "DirectX software subgroup votes require scalar bool payloads; "
+                "arithmetic and shuffles support only 32-bit float, int, and uint",
                 workgroup_size=self.hlsl_software_subgroup_workgroup_size,
                 operation=operation,
                 reason="value-type-unsupported",
@@ -5300,7 +5309,10 @@ class HLSLCodeGen:
             f"    for (uint offset = 1u; offset < {self.software_subgroup_width}u; ++offset) {{\n"
             f"        {value_type} operand = {scratch}[subgroupBase + offset];\n"
         )
-        if reducer == "sum":
+        if reducer in {"all", "any"}:
+            operator = "&&" if reducer == "all" else "||"
+            code += f"        result = result {operator} operand;\n"
+        elif reducer == "sum":
             code += "        result = result + operand;\n"
         elif value_type == "float":
             # Classify bits before comparisons so NaNs cannot erase numeric lanes.
