@@ -360,12 +360,25 @@ def verify(args):
     index = json.loads((args.packages / "index.json").read_text())
     if any(record["target"] != index["target"] for record in trace):
         raise RuntimeError("Native trace used an unexpected target")
+    for record in trace:
+        count = record.get("workgroupCount")
+        if (
+            type(record.get("dispatchVersion")) is not int
+            or record["dispatchVersion"] != 2
+            or record.get("workgroupSize") != [1, 1, 1]
+            or any(type(value) is not int for value in record["workgroupSize"])
+            or not isinstance(count, list)
+            or len(count) != 3
+            or any(type(value) is not int or not 1 <= value <= 65535 for value in count)
+        ):
+            raise RuntimeError("Native trace has incomplete or invalid launch geometry")
     after = verify_prepared(args.mlx_root)
     save(output / "adaptation-after.json", after)
     if after != adaptation or upstream_test_sources(args.mlx_root) != test_sources:
         raise ValueError("MLX sources changed during execution")
     evidence = {
         "schemaVersion": 2,
+        "dispatchVersion": 2,
         "commit": COMMIT,
         "adaptation": adaptation,
         "target": index["target"],

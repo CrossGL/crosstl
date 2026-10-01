@@ -124,6 +124,17 @@ unchanged `ggn2_dynamic_copybool_bool_` entry and allocation checks use the actu
 MLX item size. DirectX constant names follow the generator's sanitized entry
 prefix, including removal of a trailing underscore from Boolean entry names.
 
+Callback ABI version 2 carries explicit three-dimensional workgroup counts and
+sizes separately from the logical element count. The C++ host selects each
+launch; the Python boundary validates it against the operation and reflected
+package before execution and records both dimensions in the trace. Copy kernels
+retain their two-elements-per-invocation grid, including odd final rows. The
+currently integrated elementwise and copy entries still use one-thread
+workgroups. Larger reduction workgroups can be represented without another ABI
+change, but reduction planning and host integration are not implemented by this
+contract alone. Older callback versions are rejected; rebuild the adapted MLX
+wheel when updating the ABI.
+
 ## Run
 
 Use Python 3.12, a C++20 toolchain, CMake, Ninja and the relevant runtime.

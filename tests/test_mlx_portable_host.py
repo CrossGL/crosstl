@@ -1053,9 +1053,10 @@ def test_view_verifier_requires_complete_independent_results(fault):
         view_workloads.validate(records)
 
 
+@pytest.mark.parametrize("via_callback", [False, True])
 @pytest.mark.parametrize("dtype", verify.DTYPES)
 def test_translated_binding_contract_and_typed_readback(
-    translated_packages, tmp_path, monkeypatch, dtype
+    translated_packages, tmp_path, monkeypatch, dtype, via_callback
 ):
     host = runtime.HostRuntime(translated_packages, tmp_path / "trace")
     buffers, memory = native_buffers(dtype)
@@ -1075,12 +1076,29 @@ def test_translated_binding_contract_and_typed_readback(
         )
 
     monkeypatch.setattr(host.executor, "run", execute)
-    host.dispatch("arange" + dtype, buffers, 3, 3)
+    if via_callback:
+        launch = runtime.Launch((3, 1, 1), (1, 1, 1))
+        error = ctypes.create_string_buffer(256)
+        assert (
+            host.callback(
+                ("arange" + dtype).encode(),
+                buffers,
+                3,
+                3,
+                ctypes.byref(launch),
+                error,
+                len(error),
+            )
+            == 0
+        ), error.value
+    else:
+        host.dispatch("arange" + dtype, buffers, 3, 3)
     assert list(memory[-1]) == [2, 5, 8] and len(calls) == 1
     assert calls[0].execution_plan.dispatch.workgroup_size == (1, 1, 1)
     assert calls[0].execution_plan.dispatch.workgroup_count == (3, 1, 1)
     trace = json.loads(host.trace.read_text())
     assert trace["target"] == host.target and trace["entry"] == "arange" + dtype
+    assert trace["dispatchVersion"] == 2 and trace["workgroupSize"] == [1, 1, 1]
 
 
 @pytest.mark.parametrize(
@@ -1172,14 +1190,82 @@ def test_invalid_readback_is_not_copied(
 def test_callback_reports_bounded_error_without_unwinding(tmp_path, monkeypatch):
     host = runtime.HostRuntime.__new__(runtime.HostRuntime)
 
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise ValueError("long error message")
 
     monkeypatch.setattr(host, "dispatch", fail)
     error = ctypes.create_string_buffer(8)
-    assert host._dispatch(b"entry", None, 0, 0, ctypes.addressof(error), 8) == 1
+    launch = ctypes.pointer(runtime.Launch((1, 1, 1), (1, 1, 1)))
+    assert host._dispatch(b"entry", None, 0, 0, launch, ctypes.addressof(error), 8) == 1
     assert error.raw == b"long er\0"
-    assert host._dispatch(b"entry", None, 0, 0, None, 0) == 1
+    assert host._dispatch(b"entry", None, 0, 0, launch, None, 0) == 1
+
+
+@pytest.mark.parametrize(
+    "count,size", [((7, 3, 2), (32, 4, 1)), ((1, 5, 1), (128, 1, 1))]
+)
+def test_native_callback_preserves_multidimensional_launch(monkeypatch, count, size):
+    host = runtime.HostRuntime.__new__(runtime.HostRuntime)
+    calls = []
+
+    def dispatch(entry, buffers, buffer_count, threads, *, launch):
+        calls.append((entry, buffer_count, threads, launch.execution()))
+
+    monkeypatch.setattr(host, "dispatch", dispatch)
+    callback = runtime.CALLBACK(host._dispatch)
+    launch = runtime.Launch(count, size)
+    error = ctypes.create_string_buffer(128)
+    assert (
+        callback(b"reduce", None, 0, 513, ctypes.byref(launch), error, len(error)) == 0
+    )
+    assert calls == [
+        ("reduce", 0, 513, {"workgroupCount": list(count), "workgroupSize": list(size)})
+    ]
+    assert error.value == b""
+
+
+def test_native_callback_requires_launch_pointer(monkeypatch):
+    host = runtime.HostRuntime.__new__(runtime.HostRuntime)
+    monkeypatch.setattr(
+        host, "dispatch", lambda *args, **kwargs: pytest.fail("Null launch executed")
+    )
+    error = ctypes.create_string_buffer(128)
+    callback = runtime.CALLBACK(host._dispatch)
+    assert callback(b"reduce", None, 0, 513, None, error, len(error)) == 1
+    assert b"geometry is missing" in error.value
+
+
+@pytest.mark.parametrize(
+    "count,size",
+    [
+        ((0, 1, 1), (32, 1, 1)),
+        ((1, 65536, 1), (32, 1, 1)),
+        ((1, 1, 1), (32, 0, 1)),
+        ((1, 1, 1), (32, 64, 1)),
+        ((1, 1, 1), (1025, 1, 1)),
+    ],
+)
+def test_invalid_launch_dimensions_fail_closed(count, size):
+    with pytest.raises(ValueError, match="geometry exceeds"):
+        runtime.Launch(count, size).execution()
+
+
+@pytest.mark.parametrize(
+    "count,size", [((4, 1, 1), (1, 1, 1)), ((3, 1, 1), (32, 1, 1))]
+)
+def test_native_launch_must_match_integrated_operation(
+    translated_packages, tmp_path, monkeypatch, count, size
+):
+    host = runtime.HostRuntime(translated_packages, tmp_path / "trace")
+    buffers, memory = native_buffers()
+    monkeypatch.setattr(
+        host.executor, "run", lambda *args: pytest.fail("Mismatched launch executed")
+    )
+    with pytest.raises(ValueError, match="geometry does not match"):
+        host.dispatch(
+            "arangefloat32", buffers, 3, 3, launch=runtime.Launch(count, size)
+        )
+    assert list(memory[-1]) == [0, 0, 0] and not host.trace.exists()
 
 
 @pytest.mark.parametrize("platform", ["linux", "win32", "darwin"])
@@ -1207,7 +1293,9 @@ def test_registration_retains_callback_and_uses_platform_library(
     monkeypatch.setattr(runtime.ctypes, "CDLL", load)
     host.install()
     assert runtime._installed_runtime is host
-    assert registered == [(1, host.callback)] and selected == ["gpu"]
+    assert registered == [(runtime.DISPATCH_VERSION, host.callback)] and selected == [
+        "gpu"
+    ]
     assert loaded == [
         str(tmp_path / ("mlx.dll" if platform == "win32" else "core.pyd"))
     ]
@@ -1264,6 +1352,12 @@ def test_full_references_require_exact_storage_and_broadcasts(fault):
         "negative-message",
         "threads",
         "duplicate",
+        "launch-version",
+        "launch-size",
+        "launch-count",
+        "launch-missing",
+        "launch-version-float",
+        "launch-size-boolean",
         "source-before",
         "source-after",
         "test-source-before",
@@ -1417,6 +1511,9 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                     "entry": entry,
                     "target": "directx" if fault == "target" else "opengl",
                     "threads": count,
+                    "dispatchVersion": 2,
+                    "workgroupCount": [count, 1, 1],
+                    "workgroupSize": [1, 1, 1],
                 }
                 for entry, count in dispatches
                 if fault != "trace" or entry != packages.UNARY_ENTRIES[-1]
@@ -1425,6 +1522,18 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 trace[0]["threads"] = 0
             if fault == "duplicate":
                 trace.insert(1, trace[0])
+            if fault == "launch-version":
+                trace[0]["dispatchVersion"] = 1
+            if fault == "launch-size":
+                trace[0]["workgroupSize"] = [32, 1, 1]
+            if fault == "launch-count":
+                trace[0]["workgroupCount"] = [0, 1, 1]
+            if fault == "launch-missing":
+                trace[0].pop("workgroupCount")
+            if fault == "launch-version-float":
+                trace[0]["dispatchVersion"] = 2.0
+            if fault == "launch-size-boolean":
+                trace[0]["workgroupSize"] = [True, 1, 1]
             (output / "dispatch.jsonl").write_text("\n".join(map(json.dumps, trace)))
         verify.save(
             output / "result.json",

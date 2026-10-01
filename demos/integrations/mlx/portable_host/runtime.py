@@ -44,12 +44,33 @@ class Buffer(ctypes.Structure):
     ]
 
 
+DISPATCH_VERSION = 2
+
+
+class Launch(ctypes.Structure):
+    _fields_ = [
+        ("workgroup_count", ctypes.c_uint32 * 3),
+        ("workgroup_size", ctypes.c_uint32 * 3),
+    ]
+
+    def execution(self):
+        count, size = list(self.workgroup_count), list(self.workgroup_size)
+        if (
+            any(not 1 <= value <= 65535 for value in count)
+            or any(not 1 <= value <= 1024 for value in size)
+            or math.prod(size) > 1024
+        ):
+            raise ValueError("Native launch geometry exceeds its bounds")
+        return {"workgroupCount": count, "workgroupSize": size}
+
+
 CALLBACK = ctypes.CFUNCTYPE(
     ctypes.c_int,
     ctypes.c_char_p,
     ctypes.POINTER(Buffer),
     ctypes.c_uint32,
     ctypes.c_uint64,
+    ctypes.POINTER(Launch),
     ctypes.c_void_p,
     ctypes.c_size_t,
 )
@@ -133,7 +154,7 @@ class HostRuntime:
         register = self.library.crosstl_mlx_register_dispatch
         register.argtypes = [ctypes.c_uint32, CALLBACK]
         register.restype = ctypes.c_int
-        result = register(1, self.callback)
+        result = register(DISPATCH_VERSION, self.callback)
         if result:
             raise RuntimeError(
                 f"MLX rejected the native callback registration: {result}"
@@ -141,9 +162,13 @@ class HostRuntime:
         _installed_runtime = self
         mx.set_default_device(mx.gpu)
 
-    def _dispatch(self, entry, buffers, count, threads, error, capacity):
+    def _dispatch(self, entry, buffers, count, threads, launch, error, capacity):
         try:
-            self.dispatch(entry.decode("ascii"), buffers, count, threads)
+            if not launch:
+                raise ValueError("Native launch geometry is missing")
+            self.dispatch(
+                entry.decode("ascii"), buffers, count, threads, launch=launch.contents
+            )
             return 0
         except Exception as exception:
             message = str(exception).encode("utf-8")
@@ -152,7 +177,7 @@ class HostRuntime:
                 ctypes.memmove(error, payload, len(payload))
             return 1
 
-    def dispatch(self, entry, buffers, count, threads):
+    def dispatch(self, entry, buffers, count, threads, *, launch=None):
         if entry not in self.descriptors:
             raise ValueError(f"No translated package for {entry}")
         copy = entry in {COPY_ENTRY, BOOLEAN_COPY_ENTRY}
@@ -236,6 +261,13 @@ class HostRuntime:
             if copy
             else [threads, 1, 1]
         )
+        execution = (
+            launch.execution()
+            if launch is not None
+            else {"workgroupCount": grid, "workgroupSize": [1, 1, 1]}
+        )
+        if execution != {"workgroupCount": grid, "workgroupSize": [1, 1, 1]}:
+            raise ValueError("Native launch geometry does not match the operation")
         if (unary or binary_operation or cast) and ctypes.cast(
             supplied["size"].data, ctypes.POINTER(ctypes.c_uint32)
         )[0] != threads:
@@ -325,7 +357,7 @@ class HostRuntime:
             self.directory / "package",
             inputs,
             outputs,
-            {"workgroupCount": grid, "workgroupSize": [1, 1, 1]},
+            execution,
             expected_target=self.target,
         )
         result = self.executor.run(request)
@@ -358,7 +390,8 @@ class HostRuntime:
                         "entry": entry,
                         "target": self.target,
                         "threads": threads,
-                        "workgroupCount": grid,
+                        **execution,
+                        "dispatchVersion": DISPATCH_VERSION,
                         "artifact": descriptor["artifact"],
                         "details": result.details,
                         **(

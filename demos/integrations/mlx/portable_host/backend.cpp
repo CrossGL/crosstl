@@ -24,6 +24,13 @@ void require_runtime() {
   }
 }
 
+CrosstlMlxLaunch elementwise_launch(uint64_t count) {
+  if (count == 0 || count > 65535) {
+    throw std::invalid_argument("CrossTL elementwise launch exceeds its bounds.");
+  }
+  return {{static_cast<uint32_t>(count), 1, 1}, {1, 1, 1}};
+}
+
 template <typename T>
 T scalar_cast(double value) {
   if constexpr (std::is_integral_v<T>) {
@@ -68,8 +75,9 @@ void dispatch_arange(
       {"out", dtype, out.data<T>(), out.size(), 1},
   };
   char error[2048] = {};
+  const auto launch = elementwise_launch(out.size());
   int status = dispatch_callback.load()(
-      entry, buffers, 3, out.size(), error, sizeof(error));
+      entry, buffers, 3, out.size(), &launch, error, sizeof(error));
   error[sizeof(error) - 1] = '\0';
   if (status != 0) {
     throw std::runtime_error(
@@ -122,8 +130,9 @@ void dispatch_unary(
       {"size", "uint32", &size, 1, 0},
   };
   char error[2048] = {};
+  const auto launch = elementwise_launch(size);
   int status = dispatch_callback.load()(
-      entry.c_str(), buffers, 3, size, error, sizeof(error));
+      entry.c_str(), buffers, 3, size, &launch, error, sizeof(error));
   error[sizeof(error) - 1] = '\0';
   if (status != 0) {
     throw std::runtime_error(
@@ -199,9 +208,17 @@ void dispatch_copy(const mlx::core::array& in, mlx::core::array& out) {
       {"dst_offset", "int64", &dst_offset, 1, 0},
   };
   char error[2048] = {};
+  uint32_t slices = 1;
+  for (size_t axis = 0; axis + 2 < shape.size(); ++axis) {
+    slices *= static_cast<uint32_t>(shape[axis]);
+  }
+  const CrosstlMlxLaunch launch{
+      {static_cast<uint32_t>((shape.back() + 1) / 2),
+       static_cast<uint32_t>(shape[shape.size() - 2]), slices},
+      {1, 1, 1}};
   int status = dispatch_callback.load()(
       boolean ? "ggn2_dynamic_copybool_bool_" : "ggn2_dynamic_copyuint32uint32",
-      buffers, 8, out.size(), error, sizeof(error));
+      buffers, 8, out.size(), &launch, error, sizeof(error));
   error[sizeof(error) - 1] = '\0';
   if (status != 0) {
     throw std::runtime_error(std::string("CrossTL native copy failed: ") + error);
@@ -284,8 +301,9 @@ void dispatch_cast(const std::vector<mlx::core::array>& inputs, mlx::core::array
       {"size", "uint32", &size, 1, 0},
   };
   char error[2048] = {};
+  const auto launch = elementwise_launch(size);
   int status = dispatch_callback.load()(
-      entry.c_str(), buffers, 3, size, error, sizeof(error));
+      entry.c_str(), buffers, 3, size, &launch, error, sizeof(error));
   error[sizeof(error) - 1] = '\0';
   if (status != 0) {
     throw std::runtime_error(std::string("CrossTL native cast failed: ") + error);
@@ -336,8 +354,9 @@ void dispatch_binary(
       {"size", "uint32", &size, 1, 0},
   };
   char error[2048] = {};
+  const auto launch = elementwise_launch(size);
   int status = dispatch_callback.load()(
-      entry.c_str(), buffers, 4, size, error, sizeof(error));
+      entry.c_str(), buffers, 4, size, &launch, error, sizeof(error));
   error[sizeof(error) - 1] = '\0';
   if (status != 0) {
     throw std::runtime_error(std::string("CrossTL native binary failed: ") + error);
@@ -348,7 +367,7 @@ void dispatch_binary(
 extern "C" MLX_API int crosstl_mlx_register_dispatch(
     uint32_t version,
     CrosstlMlxDispatch callback) {
-  if (version != 1 || !callback) {
+  if (version != CROSTL_MLX_DISPATCH_VERSION || !callback) {
     return 1;
   }
   CrosstlMlxDispatch expected = nullptr;
