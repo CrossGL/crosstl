@@ -3433,7 +3433,7 @@ def test_hlsl_codegen_lowers_bool_arithmetic_and_compound_assignments(tmp_path):
         source_backend="metal",
     )
 
-    assert "if (exp & 1)" in metal_generated
+    assert "if (int(exp) & 1)" in metal_generated
     assert metal_generated.count("int __crossgl_bool_compound_lhs") == 3
     assert metal_generated.count("int __crossgl_bool_compound_rhs") == 3
     assert "result *= base" not in metal_generated

@@ -1505,6 +1505,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_acos_widths = set()
         self.required_metal_precise_asin_widths = set()
         self.required_metal_precise_acosh_widths = set()
+        self.required_metal_precise_atan_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
         self.cooperative_matrix_fragment_helpers = {}
@@ -2624,6 +2625,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_acos_widths = set()
         self.required_metal_precise_asin_widths = set()
         self.required_metal_precise_acosh_widths = set()
+        self.required_metal_precise_atan_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
         self.cooperative_matrix_fragment_helpers = {}
@@ -10416,6 +10418,31 @@ class MetalToCrossGLConverter:
                 return f"{operands[0]} {expr.op} {operands[1]}"
             left = self.generate_binary_operand(expr.left, expr.op, False, is_main)
             right = self.generate_binary_operand(expr.right, expr.op, True, is_main)
+            if expr.op in {"+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"}:
+                source_types = [
+                    self.resolve_type_alias(self.expression_metal_type(operand))
+                    for operand in (expr.left, expr.right)
+                ]
+                operand_types = [
+                    self.normalized_metal_type(vtype) for vtype in source_types
+                ]
+                if (
+                    "bool" in operand_types
+                    and all(
+                        self.metal_pointer_pointee_type_once(vtype) is None
+                        for vtype in source_types
+                    )
+                    and all(
+                        self.metal_scalar_arithmetic_type_info(vtype) is not None
+                        for vtype in operand_types
+                    )
+                ):
+                    # C++ scalar bool arithmetic promotes to signed int before
+                    # the operation, not back to bool after each subexpression.
+                    if operand_types[0] == "bool":
+                        left = f"int({left})"
+                    if operand_types[1] == "bool":
+                        right = f"int({right})"
             return f"{left} {expr.op} {right}"
         elif isinstance(expr, FunctionCallNode):
             lowered_static_call = self.generate_lowered_static_struct_method_call(
@@ -13119,7 +13146,7 @@ class MetalToCrossGLConverter:
         if self.metal_math_builtin_namespace_mode(text) != "precise":
             return None
         operation = text.rsplit("::", 1)[-1]
-        if operation not in {"acos", "asin", "acosh", "sin", "cos"}:
+        if operation not in {"acos", "asin", "acosh", "atan", "sin", "cos"}:
             return None
         arguments = list(args or [])
         source_location = (
@@ -13171,6 +13198,16 @@ class MetalToCrossGLConverter:
         if operation == "asin":
             self.required_metal_precise_asin_widths.add(width)
             return self.metal_precise_asin_helper_name(width)
+        if operation == "atan":
+            if self.normalized_metal_type(type_info["element_type"]) != "float":
+                raise MetalPreciseMathLoweringError(
+                    operation,
+                    operand_type,
+                    "precise arctangent lowering requires binary32 operands",
+                    source_location,
+                )
+            self.required_metal_precise_atan_widths.add(width)
+            return self.metal_precise_atan_helper_name(width)
         if operation == "acosh":
             if self.normalized_metal_type(type_info["element_type"]) != "float":
                 raise MetalPreciseMathLoweringError(
@@ -13338,6 +13375,7 @@ class MetalToCrossGLConverter:
     def generate_metal_precise_math_support_code(self, indent=0):
         independent_code = self.generate_metal_precise_trig_support_code(indent)
         independent_code += self.generate_metal_precise_acosh_support_code(indent)
+        independent_code += self.generate_metal_precise_atan_support_code(indent)
         widths = sorted(self.required_metal_precise_acos_widths)
         if not widths and not self.required_metal_precise_asin_widths:
             return independent_code
@@ -13448,6 +13486,60 @@ class MetalToCrossGLConverter:
             + code
             + self.generate_metal_precise_asin_support_code(indent)
         )
+
+    def metal_precise_atan_helper_name(self, width):
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            f"atan-float{suffix}", f"__crossgl_metal_precise_atan_float{suffix}"
+        )
+
+    def generate_metal_precise_atan_support_code(self, indent=0):
+        if not self.required_metal_precise_atan_widths:
+            return ""
+        scalar = self.metal_precise_atan_helper_name(1)
+        # Reciprocal and pi/4 reductions bound the alternating series by
+        # tan(pi/8). Bitwise endpoint handling preserves subnormals and -0.
+        code = f"""@precise
+@metal_static
+float {scalar}(float value) {{
+    uint bits = asuint(value);
+    uint magnitude = bits & 0x7fffffffu;
+    uint sign = bits & 0x80000000u;
+    if (magnitude > 0x7f800000u || magnitude < 0x39800000u) {{
+        return value;
+    }}
+    if (magnitude >= 0x4c800000u) {{
+        return asfloat(sign | 0x3fc90fdbu);
+    }}
+    float positive = asfloat(magnitude);
+    bool invert = positive > 1.0;
+    float ratio @precise = invert ? 1.0 / positive : positive;
+    bool reduce = ratio > 0.4142135623730950488;
+    float reduced @precise = reduce ? (ratio - 1.0) / (ratio + 1.0) : ratio;
+    float squared @precise = reduced * reduced;
+    float series @precise = 1.0 / 17.0;
+    series = -1.0 / 15.0 + squared * series;
+    series = 1.0 / 13.0 + squared * series;
+    series = -1.0 / 11.0 + squared * series;
+    series = 1.0 / 9.0 + squared * series;
+    series = -1.0 / 7.0 + squared * series;
+    series = 1.0 / 5.0 + squared * series;
+    series = -1.0 / 3.0 + squared * series;
+    float angle @precise = reduced + (reduced * squared) * series;
+    if (reduce) {{ angle = 0.7853981633974483096 + angle; }}
+    if (invert) {{ angle = 1.5707963267948966192 - angle; }}
+    return asfloat(asuint(angle) | sign);
+}}
+"""
+        for width in sorted(self.required_metal_precise_atan_widths - {1}):
+            vector = self.metal_precise_atan_helper_name(width)
+            arguments = ", ".join(f"{scalar}(value.{lane})" for lane in "xyzw"[:width])
+            code += (
+                f"@precise\n@metal_static\nvec{width} {vector}(vec{width} value) {{\n"
+                f"    return vec{width}({arguments});\n}}\n"
+            )
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
 
     def metal_precise_acosh_helper_name(self, width):
         suffix = "" if width == 1 else str(width)

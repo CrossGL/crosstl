@@ -339,6 +339,8 @@ def test_unary_nonfinite_transport(translated_packages, tmp_path, monkeypatch, d
         "boolean",
         "nested",
         "acosh-near-one",
+        "atan-precision",
+        "negative-sign",
     ],
 )
 def test_unary_verifier_requires_complete_independent_results(fault):
@@ -377,6 +379,14 @@ def test_unary_verifier_requires_complete_independent_results(fault):
         assert record["count"] == 8193
         assert record["inputs"][0x805] == 1.0002447366714478
         record["values"][0x805] = 0.022124959155917168
+    elif fault in {"atan-precision", "negative-sign"}:
+        operation = "ArcTan" if fault == "atan-precision" else "Sign"
+        record = next(
+            record
+            for record in translated
+            if record["operation"] == operation and record["count"] == 1
+        )
+        record["values"][0] = 0.12434358894824982 if fault == "atan-precision" else 1.0
     if fault:
         with pytest.raises((RuntimeError, AssertionError)):
             unary_workloads.compare(original, translated)

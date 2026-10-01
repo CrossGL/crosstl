@@ -107,6 +107,13 @@ fields. Special-value cases cover signed zero, infinities, NaNs and flushed
 denormals; NaN payload preservation is not an arithmetic guarantee. The same
 oracle is checked against the original Metal source in the macOS workflow.
 
+Required arctangent and comparison-arithmetic gates cover two failures found
+by the host workload on Windows: insufficient precision in the target `atan`
+intrinsic, and loss of negative values when subtracting comparison results.
+The gates execute reduced kernels and the unchanged pinned ArcTan/Sign entries
+through public translation and native-loader interfaces. The host verifier
+continues to check the original inputs and tolerances independently.
+
 The copy-layout gate executes eight unchanged float32 copy entries on eleven layouts:
 vector/scalar copies, strided and broadcast one-dimensional inputs, transposes,
 row broadcasts, three-dimensional permutations, and strided/broadcast

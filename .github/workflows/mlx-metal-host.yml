@@ -12,6 +12,10 @@ on:
       - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tests/test_translator/test_metal_precise_acosh.py"
+      - "tests/test_translator/test_metal_precise_atan.py"
+      - "tests/test_translator/test_metal_boolean_promotion.py"
+      - "tests/test_translator/test_mlx_current_unary_sign.py"
+      - "tests/test_translator/test_mlx_current_unary_atan.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
       - "tests/test_translator/test_mlx_current_copy.py"
       - "tests/test_translator/test_metal_precise_trig.py"
@@ -41,6 +45,10 @@ on:
       - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tests/test_translator/test_metal_precise_acosh.py"
+      - "tests/test_translator/test_metal_precise_atan.py"
+      - "tests/test_translator/test_metal_boolean_promotion.py"
+      - "tests/test_translator/test_mlx_current_unary_sign.py"
+      - "tests/test_translator/test_mlx_current_unary_atan.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
       - "tests/test_translator/test_mlx_current_copy.py"
       - "tests/test_translator/test_metal_precise_trig.py"
@@ -78,7 +86,7 @@ jobs:
   metal-host:
     name: MLX translated Metal host execution
     runs-on: macos-26
-    timeout-minutes: 165
+    timeout-minutes: 175
     steps:
       - uses: actions/checkout@v4
         with:
@@ -155,6 +163,40 @@ jobs:
               tests/test_translator/test_metal_precise_acosh.py \
               tests/test_translator/test_mlx_current_unary_acosh.py \
               2>&1 | tee .mlx-metal-host/acosh.log
+      - name: Validate pinned arctangent
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: metal
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_ATAN: "1"
+          CROSTL_REQUIRE_METAL_PRECISE_ATAN: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/atan
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Pinned arctangent" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/atan/pytest \
+              --junitxml=.mlx-metal-host/atan/results.xml \
+              tests/test_translator/test_metal_precise_atan.py \
+              tests/test_translator/test_mlx_current_unary_atan.py \
+              2>&1 | tee .mlx-metal-host/atan.log
+      - name: Validate pinned comparison arithmetic
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: metal
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_SIGN: "1"
+          CROSTL_REQUIRE_METAL_BOOLEAN_PROMOTION: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/boolean-promotion
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Pinned comparison arithmetic" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/boolean-promotion/pytest \
+              --junitxml=.mlx-metal-host/boolean-promotion/results.xml \
+              tests/test_translator/test_metal_boolean_promotion.py \
+              tests/test_translator/test_mlx_current_unary_sign.py \
+              2>&1 | tee .mlx-metal-host/boolean-promotion.log
       - name: Validate pinned copy layouts
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream

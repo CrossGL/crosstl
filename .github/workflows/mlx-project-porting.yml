@@ -31,6 +31,10 @@ on:
       - "tests/test_translator/test_metal_precise_asin.py"
       - "tests/test_translator/test_metal_precise_trig.py"
       - "tests/test_translator/test_metal_precise_acosh.py"
+      - "tests/test_translator/test_metal_precise_atan.py"
+      - "tests/test_translator/test_metal_boolean_promotion.py"
+      - "tests/test_translator/test_mlx_current_unary_sign.py"
+      - "tests/test_translator/test_mlx_current_unary_atan.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
       - "tests/test_translator/test_mlx_current_copy.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
@@ -123,6 +127,10 @@ on:
       - "tests/test_translator/test_metal_precise_asin.py"
       - "tests/test_translator/test_metal_precise_trig.py"
       - "tests/test_translator/test_metal_precise_acosh.py"
+      - "tests/test_translator/test_metal_precise_atan.py"
+      - "tests/test_translator/test_metal_boolean_promotion.py"
+      - "tests/test_translator/test_mlx_current_unary_sign.py"
+      - "tests/test_translator/test_mlx_current_unary_atan.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
       - "tests/test_translator/test_mlx_current_copy.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
@@ -665,6 +673,74 @@ jobs:
         with:
           name: mlx-acosh-${{ runner.os }}
           path: mlx-acosh-results
+          if-no-files-found: error
+          retention-days: 14
+      - name: Validate pinned arctangent
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_ATAN: "1"
+          CROSTL_REQUIRE_METAL_PRECISE_ATAN: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-atan-results
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Pinned arctangent" -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-atan-results/pytest \
+              --junitxml=mlx-atan-results/results.xml \
+              tests/test_translator/test_metal_precise_atan.py \
+              tests/test_translator/test_mlx_current_unary_atan.py
+
+      - name: Upload arctangent evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-atan-${{ runner.os }}
+          path: mlx-atan-results
+          if-no-files-found: error
+          retention-days: 14
+      - name: Validate pinned comparison arithmetic
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_SIGN: "1"
+          CROSTL_REQUIRE_METAL_BOOLEAN_PROMOTION: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-boolean-promotion-results
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Pinned comparison arithmetic" -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-boolean-promotion-results/pytest \
+              --junitxml=mlx-boolean-promotion-results/results.xml \
+              tests/test_translator/test_metal_boolean_promotion.py \
+              tests/test_translator/test_mlx_current_unary_sign.py
+
+      - name: Upload comparison arithmetic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-boolean-promotion-${{ runner.os }}
+          path: mlx-boolean-promotion-results
           if-no-files-found: error
           retention-days: 14
 

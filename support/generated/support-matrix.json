@@ -124,6 +124,10 @@
           "tests/test_translator/test_directx_metal_math.py",
           "tests/test_translator/test_metal_precise_asin.py",
           "tests/test_translator/test_metal_precise_trig.py",
+          "tests/test_translator/test_metal_precise_atan.py",
+          "tests/test_translator/test_mlx_current_unary_atan.py",
+          "tests/test_translator/test_metal_boolean_promotion.py",
+          "tests/test_translator/test_mlx_current_unary_sign.py",
           "tests/test_translator/test_fused_math.py",
           "tests/test_translator/test_metal_fma.py",
           "tests/test_translator/test_project_metal_discovery.py",
@@ -135,7 +139,7 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1614
+        "test_count": 1632
       },
       "translator_codegen": {
         "exists": true,
@@ -265,6 +269,10 @@
           "tests/test_translator/test_mlx_attention_reduce_runtime.py",
           "tests/test_translator/test_metal_precise_asin.py",
           "tests/test_translator/test_metal_precise_trig.py",
+          "tests/test_translator/test_metal_precise_atan.py",
+          "tests/test_translator/test_mlx_current_unary_atan.py",
+          "tests/test_translator/test_metal_boolean_promotion.py",
+          "tests/test_translator/test_mlx_current_unary_sign.py",
           "tests/test_translator/test_fused_math.py",
           "tests/test_translator/test_metal_fma.py",
           "tests/test_translator/test_project_metal_discovery.py",
@@ -273,7 +281,7 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1863
+        "test_count": 1881
       },
       "translator_codegen": {
         "exists": true,
@@ -646,6 +654,10 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_translator/test_metal_precise_asin.py",
           "tests/test_translator/test_metal_precise_trig.py",
+          "tests/test_translator/test_metal_precise_atan.py",
+          "tests/test_translator/test_mlx_current_unary_atan.py",
+          "tests/test_translator/test_metal_boolean_promotion.py",
+          "tests/test_translator/test_mlx_current_unary_sign.py",
           "tests/test_translator/test_fused_math.py",
           "tests/test_translator/test_metal_fma.py",
           "tests/test_translator/test_project_metal_discovery.py",
@@ -653,7 +665,7 @@
           "tests/test_translator/test_mlx_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1968
+        "test_count": 1986
       },
       "translator_codegen": {
         "exists": true,

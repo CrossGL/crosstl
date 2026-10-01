@@ -335,9 +335,12 @@ def _execute(
     *,
     metal_entry="trigonometry",
     check_outputs=_check,
+    metal_compile_flags=(),
 ):
     directory.mkdir()
-    artifact, module = _compile(source, target, directory)
+    artifact, module = _compile(
+        source, target, directory, metal_compile_flags=metal_compile_flags
+    )
     assert module.is_file(), "native compiler required"
     layouts = (
         {
@@ -401,6 +404,7 @@ def _execute(
         "maxUlpError": check_outputs(actual, expected),
         "artifactSha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
         "moduleSha256": hashlib.sha256(module.read_bytes()).hexdigest(),
+        "metalCompileFlags": list(metal_compile_flags) if target == "metal" else [],
         "runtime": state.details,
     }
 

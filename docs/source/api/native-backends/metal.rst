@@ -89,6 +89,41 @@ APIs on the same inputs. Host-integration tests additionally exercise the
 near-one region through ``mx.arccosh`` at unchanged upstream tolerances.
 These sampled execution checks are not an exhaustive binary32 error proof.
 
+Precise Arctangent
+-----------------
+
+``metal::precise::atan`` uses a binary32 scalar/vector helper with reciprocal
+and pi/4 range reduction and an alternating series. Tiny inputs return their
+original bits, preserving signed zero and subnormals. Large inputs and infinities
+return signed pi/2; NaNs remain NaNs. Default and fast namespace calls and
+user-defined functions are not replaced.
+
+Required native tests compare scalar/vector results with a 100-digit reference
+using independent half-angle reduction, including a dense neighborhood of
+``0.125``, every finite exponent, both signs and reduction boundaries. Generated
+results must be within four ULPs, with exact zero/subnormal bits, intact guards
+and single operand evaluation. The unchanged pinned MLX ArcTan entry also runs
+through the public package and native-loader interfaces.
+
+The original Metal control is compiled with fast math disabled. Its native
+intrinsic can flush subnormals and return positive zero for negative zero.
+These control results are retained separately; they do not relax the generated
+kernel's bit checks or establish bitwise original/generated parity at those
+inputs. Metal's permitted subnormal flushing is described in sections 8.1 and
+8.5 of the `Metal Shading Language specification
+<https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf>`_.
+
+Scalar Boolean Arithmetic
+-------------------------
+
+Metal scalar boolean operands are explicitly promoted to signed integers before
+built-in arithmetic and bitwise operations. In particular, subtracting two
+comparison results retains negative values rather than converting the
+difference back to boolean. Logical operations, source-defined operators and
+conversion back to a boolean destination retain their existing semantics.
+Native regression tests check all boolean input pairs, nested expressions,
+side-effecting operands and the unchanged MLX Sign kernel.
+
 .. automodule:: crosstl.backend.Metal
 
 .. automodule:: crosstl.backend.Metal.MetalAst
