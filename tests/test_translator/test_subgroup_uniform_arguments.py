@@ -83,6 +83,93 @@ def test_uniform_helper_loop_arguments_compile(tmp_path, target):
 
 
 @pytest.mark.parametrize(
+    "kind,arguments",
+    [
+        ("uint", "bound"),
+        ("int16", "bound"),
+        ("uint8", "bound"),
+        ("float16", "bound"),
+        ("double", "bound"),
+        ("vec2", "bound"),
+        ("ivec3", "bound, invocation, 1"),
+        ("uvec4", "uvec2(bound, invocation), 0u, 1u"),
+        ("i16vec2", "bound, invocation"),
+        ("u8vec3", "bound, invocation, 1u"),
+        ("f16vec4", "bound"),
+        ("i64vec2", "bound, invocation"),
+        ("u64vec4", "bound"),
+        ("dvec3", "bound, invocation, 1.0"),
+        ("bvec2", "bound > 0u, invocation > 0u"),
+        ("float2", "bound, invocation"),
+        ("int2", "bound, invocation"),
+        ("uint2", "uint(int16(bound)), invocation"),
+    ],
+)
+def test_opengl_constructor_arguments_preserve_uniform_bounds(
+    tmp_path, kind, arguments
+):
+    generator = _codegen("opengl")
+    member = ".x" if generator.glsl_value_type_info(kind)["width"] > 1 else ""
+    source = _source(
+        f"uint bound = groups; {kind} coordinate = {kind}({arguments}); "
+        "float result = 0.0; for (uint i = 0u; i < bound; ++i) { "
+        "result = reduce_twice(float(invocation), i); } "
+        f"results[invocation] = asuint(result + float(coordinate{member}));",
+        _helper(),
+    )
+    ast = parse(source)
+    generated = generator.generate_stage(ast, "compute")
+    assert generated == generator.generate_stage(ast, "compute")
+    _compile(generated, "opengl", tmp_path)
+
+
+@pytest.mark.parametrize(
+    "body,helpers",
+    [
+        ("uvec2 coordinate = uvec2(bound++, invocation);", ""),
+        ("uvec2 coordinate = uvec2(++bound, invocation);", ""),
+        (
+            "uvec2 coordinate = uvec2(mutate(bound, invocation), invocation);",
+            "uint mutate(inout uint x, uint lane) { x = lane; return x; }",
+        ),
+        (
+            "uint coordinate = uvec2(bound, invocation);",
+            "uint uvec2(inout uint x, uint lane) { x = lane; return x; }",
+        ),
+        (
+            "uint coordinate = uint2(bound, invocation);",
+            "uint uint2(inout uint x, uint lane) { x = lane; return x; }",
+        ),
+        (
+            "uint& alias = bound; uvec2 coordinate = uvec2(alias, invocation);",
+            "",
+        ),
+        (
+            "uvec2 coordinate = uvec2(bound, invocation); bound = coordinate.y;",
+            "",
+        ),
+        (
+            "uvec2 coordinate = uvec2(bound, invocation); if (coordinate.y > 0u) { return; }",
+            "",
+        ),
+        (
+            "uvec2 coordinate = uvec2(bound, invocation); if (coordinate.y > 0u) { float x = reduce_twice(1.0, bound); }",
+            "",
+        ),
+    ],
+)
+def test_opengl_constructors_do_not_hide_mutation_or_divergence(body, helpers):
+    with pytest.raises(OpenGLSoftwareSubgroupError):
+        _generate(
+            "uint bound = groups; "
+            + body
+            + " for (uint i = 0u; i < bound; ++i) { float result = reduce_twice(1.0, i); }",
+            helpers + _helper(),
+            "opengl",
+        )
+
+
+@pytest.mark.parametrize(
     "body",
     [
         "{ result = reduce_twice(float(invocation), groups); }",
@@ -286,7 +373,7 @@ def _native_source(size, depth, mode):
         if (count > 1u) { result = simd_sum(result); }
         return result;
     }"""
-    if mode in {"loop", "block-loop"}:
+    if mode in {"loop", "block-loop", "vector-loop"}:
         helpers = """uint reduce_twice(uint value, uint count) {
             for (uint i = 0u; i < count; ++i) { value = simd_sum(value); }
             return value;
@@ -300,6 +387,12 @@ def _native_source(size, depth, mode):
         )
         callee = name
     count = "gid.x % 2u + 1u" if mode == "parity" else "groups"
+    setup = ""
+    first_output = "first"
+    if mode in {"vector", "vector-loop"}:
+        setup = "uint bound = groups; uint2 coordinate = uint2(bound, tid);"
+        count = "bound"
+        first_output = "first + coordinate.x + coordinate.y"
     calls = (
         f"uint first = {callee}(value + counter++, 1u);\n"
         f"uint second = {callee}(value + counter++, {count});"
@@ -321,8 +414,9 @@ kernel void products(device uint* inputWords [[buffer(0)]],
     uint index = gid.x * {size}u + tid;
     uint value = inputWords[index];
     uint counter = 0u;
+    {setup}
     {calls}
-    outputWords[index * 3u] = first;
+    outputWords[index * 3u] = {first_output};
     outputWords[index * 3u + 1u] = second;
     outputWords[index * 3u + 2u] = counter;
 }}
@@ -331,7 +425,9 @@ kernel void products(device uint* inputWords [[buffer(0)]],
 
 @pytest.mark.parametrize("shape", [(32, 1, 1), (64, 1, 1), (32, 4, 1)])
 @pytest.mark.parametrize("depth", [0, 2])
-@pytest.mark.parametrize("mode", ["groups", "parity", "loop", "block", "block-loop"])
+@pytest.mark.parametrize(
+    "mode", ["groups", "parity", "loop", "block", "block-loop", "vector", "vector-loop"]
+)
 def test_uniform_arguments_execute_across_helper_calls(tmp_path, shape, depth, mode):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required native helper argument checks")
@@ -345,9 +441,19 @@ def test_uniform_arguments_execute_across_helper_calls(tmp_path, shape, depth, m
     for start in range(0, len(words), 32):
         first = sum(words[start : start + 32])
         count = (start // size) % 2 + 1 if mode == "parity" else size // 32
-        repeats = count - 1 if mode in {"loop", "block-loop"} else int(count > 1)
+        repeats = (
+            count - 1
+            if mode in {"loop", "block-loop", "vector-loop"}
+            else int(count > 1)
+        )
         second = (first + 32) * 32**repeats
-        wanted.extend([first, second, 2] * 32)
+        for lane in range(start, start + 32):
+            value = (
+                first + size // 32 + lane % size
+                if mode in {"vector", "vector-loop"}
+                else first
+            )
+            wanted.extend([value, second, 2])
     guards = [0xBAD00000 + index for index in range(17)]
 
     def payload(values):

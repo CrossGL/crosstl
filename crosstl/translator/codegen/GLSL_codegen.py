@@ -5271,12 +5271,14 @@ class GLSLCodeGen:
                 )
 
     def glsl_software_subgroup_exit_constructor(self, node):
-        return (
-            isinstance(node, FunctionCallNode)
-            and self.function_call_name(node)
-            in {"bool", "int", "uint", "float", "int64_t", "uint64_t"}
-            and self.function_call_name(node) not in self.function_definitions
-            and len(node.arguments) == 1
+        if not isinstance(node, FunctionCallNode):
+            return False
+        name = self.function_call_name(node)
+        if name in self.function_definitions:
+            return False
+        constructor = target_arithmetic_type(self.glsl_constructor_type(name))
+        return constructor is not None and (
+            1 <= len(node.arguments) <= constructor.lanes
         )
 
     def glsl_software_subgroup_exit_uniform_expression(self, node, names, components):
