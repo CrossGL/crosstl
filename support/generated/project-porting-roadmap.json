@@ -3250,7 +3250,9 @@
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_report_rejects_rehashed_parameter_tampering",
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_entry_workgroup_rules_override_mixed_template_families",
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_entry_workgroup_rules_reject_unmatched_entry_pattern",
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_compute_workgroup_size_projects_declared_source_shape"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_compute_workgroup_size_projects_declared_source_shape",
+            "tests/test_translator/test_dispatch_regions.py::def test_region_plan_exhaustively_covers_small_3d_grids",
+            "tests/test_translator/test_dispatch_regions.py::def test_region_specialization_compiles_without_changing_source_ast"
           ],
           "notes": "A fixed project.workgroup_size or named-variant workgroup_size is joined to every deterministic host-named Metal materialization. Source-wide [project.workgroup_size_rules] expressions are evaluated against each entry's template parameters, and [project.entry_workgroup_size_rules] can override the formula for distinct host entry families while retaining the source-wide fallback. Ordinary ambiguous multi-entry sources, unmatched configured entry patterns, uncovered entries without a fallback, and incomplete materialization joins fail closed. DirectX emits one HLSL library artifact with independent numthreads values per entry, while execution metadata, source-to-target identities, selected rule provenance, and report validation preserve each dispatch contract. This support covers generated shader/kernel artifacts and reported dispatch contracts only; runtime execution and numerical parity are not claimed.",
           "status": "supported"
@@ -3287,7 +3289,9 @@
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_report_rejects_missing_opengl_split",
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_reuses_one_materialized_ast_per_target",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_compute_workgroup_size_projects_declared_source_shape",
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_keeps_only_selected_interface_and_helpers"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_keeps_only_selected_interface_and_helpers",
+            "tests/test_translator/test_dispatch_regions.py::def test_region_plan_exhaustively_covers_small_3d_grids",
+            "tests/test_translator/test_dispatch_regions.py::def test_region_specialization_compiles_without_changing_source_ast"
           ],
           "notes": "A fixed project.workgroup_size or named-variant workgroup_size is joined to every deterministic host-named Metal materialization. Source-wide [project.workgroup_size_rules] expressions are evaluated against each entry's template parameters, and [project.entry_workgroup_size_rules] can override the formula for distinct host entry families while retaining the source-wide fallback. Ordinary ambiguous multi-entry sources, unmatched configured entry patterns, uncovered entries without a fallback, and incomplete materialization joins fail closed. OpenGL splits materialized entries into deterministic standalone GLSL artifacts with runnable main entry points and entry-specific local-size layouts, while execution metadata, selected rule provenance, and report validation preserve each dispatch contract and reject missing splits. This support covers generated shader/kernel artifacts and reported dispatch contracts only; runtime execution and numerical parity are not claimed.",
           "status": "supported"

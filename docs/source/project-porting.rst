@@ -1267,6 +1267,24 @@ this explicit contract with ``exact-thread-grid-unsupported`` until their
 lowering can preserve partial-group identities and active lanes. This contract
 does not yet enable the MLX small-row host plan on those targets.
 
+The translator's ``plan_dispatch_regions`` and ``specialize_dispatch_region``
+APIs provide the lowering needed for portable exact grids. The planner partitions
+a grid into at most eight rectangular regions with uniform active workgroup
+shapes. Specialization preserves source global IDs, workgroup IDs, grid extents
+and group counts while leaving local IDs and subgroup operations tied to each
+region's actual group shape. It operates on an independent, single-entry AST;
+source kernels are not patched. Per-invocation coordinate captures remain private
+to each invocation, including when read by helper functions.
+
+Native tests execute these region artifacts through one shared-allocation
+dispatch sequence on DirectX and OpenGL, with original and roundtrip Metal
+controls. The caller must compile each specialization, submit its exact physical
+counts and share allocations across the complete plan. Automatic package
+selection, specialization caching and MLX host dispatch integration are not yet
+wired to these APIs. The public DirectX/OpenGL ``threadGridSize`` rejection remains
+in place until those contracts are implemented; a geometry plan alone does not
+make an ordinary rounded dispatch correct.
+
 The bounded mode supports scalar ``float``, ``int``, or ``uint`` sum, minimum,
 maximum, and shuffle-down operations. Shared scratch spans the complete
 workgroup, while every helper derives a subgroup-local lane and base so reads

@@ -26725,6 +26725,8 @@ class GLSLCodeGen:
             return "shared "
         if is_compile_time:
             return "const "
+        if "thread" in qualifiers:
+            return ""
         return "uniform "
 
     def opengl_compile_time_global_error(

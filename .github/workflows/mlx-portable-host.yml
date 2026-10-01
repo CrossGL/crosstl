@@ -49,6 +49,8 @@ on:
       - "tests/test_translator/test_opengl_vector_comparisons.py"
       - "tests/test_translator/test_subgroup_uniform_arguments.py"
       - "tests/test_translator/test_software_subgroup_partial.py"
+      - "tests/test_translator/test_dispatch_regions.py"
+      - "tests/test_translator/test_exact_thread_grid_runtime.py"
       - "tests/test_translator/test_metal_wave_arguments.py"
       - "tests/test_translator/test_software_subgroup_workgroup_ranges.py"
       - "tests/test_translator/test_opengl_subgroup_exit_uniformity.py"
@@ -115,6 +117,8 @@ on:
       - "tests/test_translator/test_opengl_vector_comparisons.py"
       - "tests/test_translator/test_subgroup_uniform_arguments.py"
       - "tests/test_translator/test_software_subgroup_partial.py"
+      - "tests/test_translator/test_dispatch_regions.py"
+      - "tests/test_translator/test_exact_thread_grid_runtime.py"
       - "tests/test_translator/test_metal_wave_arguments.py"
       - "tests/test_translator/test_software_subgroup_workgroup_ranges.py"
       - "tests/test_translator/test_opengl_subgroup_exit_uniformity.py"
@@ -329,6 +333,21 @@ jobs:
               --junitxml=.mlx-portable-host/wave-arguments/results.xml \
               tests/test_translator/test_metal_wave_arguments.py \
               2>&1 | tee .mlx-portable-host/wave-arguments.log
+      - name: Validate exact dispatch regions
+        env:
+          CROSTL_REQUIRE_DISPATCH_REGIONS: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/dispatch-regions
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Exact dispatch region execution" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/dispatch-regions/pytest \
+              --junitxml=.mlx-portable-host/dispatch-regions/results.xml \
+              tests/test_translator/test_dispatch_regions.py \
+              2>&1 | tee .mlx-portable-host/dispatch-regions.log
       - name: Validate Metal argument inference
         env:
           CROSTL_REQUIRE_METAL_ARGUMENT_INFERENCE: "1"

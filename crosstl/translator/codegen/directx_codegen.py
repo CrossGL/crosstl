@@ -4076,6 +4076,8 @@ class HLSLCodeGen:
             qualifier = self.resource_memory_qualifier(mapped_type, node)
             if not qualifier and not is_hlsl_resource_global:
                 qualifier = self.local_variable_qualifier(node)
+                if "thread" in (getattr(node, "qualifiers", []) or []):
+                    qualifier = "static " + qualifier
             code += f"{qualifier}{declaration}{register};\n"
             if (
                 mapped_type == "SamplerState"
