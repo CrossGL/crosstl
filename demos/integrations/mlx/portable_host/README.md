@@ -16,8 +16,9 @@ floor, ceil, round, exponential, expm1, logarithms, log1p, sigmoid, erf, inverse
 erf, trigonometric functions and their hyperbolic and inverse forms. The exact
 entry list is in `packages.py`. Shared-buffer views reuse upstream MLX's
 shape, stride and ownership logic: strided views, broadcasts, copy aliases,
-dimension insertion/removal, transpose, split, dependency/custom-transform
-outputs and stop-gradient. Contiguous conversion, reshape, flatten and unflatten
+dimension insertion/removal, transpose, slicing, split, dependency/custom-transform
+outputs and stop-gradient. Integer and array indexing still require the
+unimplemented Gather primitive. Contiguous conversion, reshape, flatten and unflatten
 dispatch translated copies when sharing storage is insufficient. Copies support
 matching float32, int32 and uint32 arrays, including negative and zero strides.
 Binary addition, subtraction, multiplication, minimum and maximum support those
@@ -26,8 +27,8 @@ inputs are materialized by translated copies before the unchanged vector-vector
 binary entry executes. Mixed-type operations that need an unsupported cast still
 fail explicitly.
 Other primitives retain MLX's explicit unsupported-GPU errors. Unary inputs
-must be contiguous and float32, including stored-contiguous broadcast and
-column-major views.
+must be float32. Stored-contiguous broadcasts and column-major views retain
+their metadata; noncontiguous inputs use translated copies before unary dispatch.
 Dispatch is synchronous, uses host staging buffers and supports at most 65,535
 stored elements with one thread per workgroup. Empty arrays do not dispatch. This is a
 host integration proof, not a complete MLX backend or a performance benchmark.
@@ -50,6 +51,10 @@ no-GPU backend build definition and adds four explicitly named backend files:
   and stages output storage. MLX's Log and Sqrt primitives select their log-base
   and reciprocal variants, yielding 30 unary kernel entries. View hooks reuse
   upstream shared implementations and perform no CPU elementwise computation.
+  Slicing uses the upstream shared-buffer helper, including signed strides,
+  offsets, nested slices and empty outputs. Noncontiguous unary inputs are
+  materialized through the translated copy entry; contiguous input spans are
+  checked against the allocation before upload.
   Copying layouts use the unchanged `ggn2_dynamic_copyuint32uint32` specialization
   on storage words, preserving every 32-bit payload without floating-point
   conversion. Source spans are checked against the actual allocation before
@@ -188,6 +193,7 @@ these upstream tests without skips:
 - `test_exp`, `test_expm1`, `test_erf`, `test_sin`, `test_cos`
 - `test_transpose_noargs`, `test_transpose_axis`, `test_broadcast`, `test_split`
 - `test_subtract`, `test_multiply`
+- `test_diff`, `test_flip`
 
 The CPU reference uses the unchanged CPU backend in the same adapted MLX build;
 it is not a separately rebuilt pristine binary or a Metal comparison.
@@ -211,13 +217,15 @@ in the summary. Generated GPU Erf must preserve the input sign as the source
 Metal implementation does. Both references check zero bits exactly; no readback
 is corrected to make the two paths agree.
 
-Another 40 records check 365 view and chained-unary values against independently
+Another 59 records check 461 view and chained-unary values against independently
 constructed NumPy arrays, including offsets, reversed/gapped strides, zero-stride
 broadcasts, split outputs, empty shapes, source preservation and exact 64-bit
-integers. Sixteen generated square dispatches and one dependency negation check
-execution through views. Broadcast dispatch sizes use stored elements rather
-than the larger logical shape. Views that only change metadata do not count as
-kernel execution; reversed/gapped unary execution is still rejected.
+integers. Positive, reversed, nested, transposed and broadcast slices feed
+translated square kernels, including row slices and empty slices. Twenty-five
+square dispatches, eight materialization copies and one dependency negation
+check execution through views. Broadcast dispatch sizes use stored elements
+rather than the larger logical shape. Views that only change metadata do not
+count as kernel execution.
 
 Another 33 records check copying layouts and source preservation across float32,
 int32 and uint32. Independent NumPy strided references check all 1,716 storage
@@ -238,19 +246,20 @@ readback. The native conditional-selection gate also checks scalar/vector payloa
 and exactly-once condition and selected-branch evaluation, tracking
 [#1998](https://github.com/CrossGL/crosstl/issues/1998).
 
-Native traces must start with the exact 360 nonempty workload dispatches, cover
+Native traces must start with the exact 377 nonempty workload dispatches, cover
 all 52 entries, and retain artifact identities and runtime/device details.
 Separate negative processes reject an unsupported primitive, oversized arange,
-a missing artifact, unary inputs with unsupported dtype, layout or size, and
+a missing artifact, unary inputs with unsupported dtype or size, contiguous and
+strided unary inputs that exceed their allocations, and
 copies with unsupported dtype, excessive size or an invalid source allocation.
 Binary inputs with unsupported dtype or excessive size are also rejected.
-Each of the thirteen processes has a hard 180-second process-tree deadline; all
+Each of the fourteen processes has a hard 180-second process-tree deadline; all
 are attempted so a failure does not discard the other diagnostic results.
 
 The evidence directory retains before/after adaptation hashes, command status,
 stdout/stderr, upstream test logs, dispatch traces and numerical results. The
 schema-version-2 summary is written only after source and result checks pass,
-including explicit rejection messages from all eleven negative cases. Source
+including explicit rejection messages from all twelve negative cases. Source
 identity checks do not attest to a separately supplied binary; CI builds MLX from
 the verified sources and retains its build log. `fullUpstreamSuite` and
 `fullTranslatedBackend` remain `false`: extending primitive coverage and then

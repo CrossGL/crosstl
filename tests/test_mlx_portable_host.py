@@ -794,7 +794,7 @@ def test_cpu_reference_profile_matches_pinned_build(
 def test_view_adapter_preserves_upstream_shared_buffer_operations():
     source = (prepare.HERE / "backend.cpp").read_text()
     for name in prepare.VIEW_PRIMITIVES:
-        if name in {"Reshape", "Unflatten"}:
+        if name in {"Reshape", "Unflatten", "Slice"}:
             assert f"void {name}::eval_gpu(" in source
         else:
             macro = (
@@ -805,6 +805,7 @@ def test_view_adapter_preserves_upstream_shared_buffer_operations():
             assert f"{macro}({name})" in source
     assert "prepare_reshape(in, out)" in source
     assert "shared_buffer_reshape(in, strides, out)" in source
+    assert "slice(inputs[0], out, start_indices_, strides_)" in source
     assert "dispatch_copy(in, out)" in source
     assert "eval_cpu" not in source
 
@@ -822,12 +823,16 @@ def test_view_adapter_preserves_upstream_shared_buffer_operations():
         "source",
         "int64",
         "nonfinite",
+        "slice-order",
+        "strided-square",
+        "empty-square",
     ],
 )
 def test_view_verifier_requires_complete_independent_results(fault):
     records = view_workloads.expected_records()
-    assert len(records) == 40
-    assert len(view_workloads.dispatches()) == 17
+    assert len(records) == 59
+    assert sum(len(record["values"]) for record in records) == 461
+    assert len(view_workloads.dispatches()) == 34
     assert view_workloads.dispatches()[8:11] == [
         ("v_Squarefloat32float32", 4),
         ("v_Squarefloat32float32", 1),
@@ -854,6 +859,17 @@ def test_view_verifier_requires_complete_independent_results(fault):
         record["values"] = [float(value) for value in record["values"]]
     elif fault == "nonfinite":
         records[0]["values"][0] = math.nan
+    elif fault == "slice-order":
+        record = next(record for record in records if record["case"] == "slice-matrix")
+        record["values"].reverse()
+    elif fault == "strided-square":
+        record = next(record for record in records if record["case"] == "gapped/square")
+        record["values"][2] = 9.0
+    elif fault == "empty-square":
+        record = next(
+            record for record in records if record["case"] == "slice-empty/square"
+        )
+        record["shape"] = [0, 1]
     if fault:
         with pytest.raises((RuntimeError, ValueError)):
             view_workloads.validate(records)
@@ -1206,7 +1222,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         if fault == "source-before":
             assert calls == []
         if fault == "command":
-            assert len(calls) == 13
+            assert len(calls) == 14
             assert (
                 json.loads((args.output_dir / "cpu.command.json").read_text())[
                     "returncode"
@@ -1215,7 +1231,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             )
     else:
         evidence = verify.verify(args)
-        assert len(calls) == 13 and evidence["dispatchCount"] == 360
+        assert len(calls) == 14 and evidence["dispatchCount"] == 377
         assert len(identities) == 2
         assert evidence["schemaVersion"] == 2
         assert evidence["adaptation"]["files"] == {"adapter": "unchanged"}
@@ -1251,7 +1267,7 @@ def test_ci_requires_all_native_platforms_and_retains_evidence():
         "portable_host.verify",
         "pytest -q -n auto tests/test_mlx_portable_host.py",
         "liblapacke-dev",
-        "--timeout-seconds 2500",
+        "--timeout-seconds 2700",
         "if: always()",
         "include-hidden-files: true",
         "Get-FileHash",
@@ -1260,7 +1276,9 @@ def test_ci_requires_all_native_platforms_and_retains_evidence():
         assert required in workflow
     assert "continue-on-error" not in workflow
     assert "opengl-runtime" not in workflow
-    assert len(verify.UPSTREAM_TESTS) == 21
+    assert len(verify.UPSTREAM_TESTS) == 23
+    assert "test_ops.TestOps.test_diff" in verify.UPSTREAM_TESTS
+    assert "test_ops.TestOps.test_flip" in verify.UPSTREAM_TESTS
 
 
 def test_ci_requires_native_math_before_building_mlx():

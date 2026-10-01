@@ -43,6 +43,8 @@ UPSTREAM_TESTS = (
     "test_ops.TestOps.test_split",
     "test_ops.TestOps.test_subtract",
     "test_ops.TestOps.test_multiply",
+    "test_ops.TestOps.test_diff",
+    "test_ops.TestOps.test_flip",
 )
 DTYPES = ("float32", "int32", "uint32", "int64", "uint64")
 COUNTS = (0, 1, 7, 257)
@@ -51,7 +53,8 @@ NEGATIVE_CHECKS = {
     "over-limit": "65535",
     "missing": "artifact",
     "unary-dtype": "float32",
-    "unary-layout": "contiguous",
+    "unary-allocation": "exceeds its allocation",
+    "unary-strided-allocation": "exceeds its allocation",
     "unary-over-limit": "65535",
     "copy-dtype": "matching float32, int32 or uint32",
     "copy-limit": "65535",
@@ -93,10 +96,13 @@ def worker(args):
                 value = mx.arange(65536, stream=mx.gpu)
             elif args.worker == "unary-dtype":
                 value = mx.abs(mx.array([-3, 2], dtype=mx.int32), stream=mx.gpu)
-            elif args.worker == "unary-layout":
+            elif args.worker == "unary-allocation":
                 source = mx.as_strided(
-                    mx.array(np.arange(8, dtype=np.float32)), (4,), (2,), stream=mx.gpu
+                    mx.array([1.0, 2.0, 3.0]), (2,), (1,), 2, stream=mx.gpu
                 )
+                value = mx.abs(source, stream=mx.gpu)
+            elif args.worker == "unary-strided-allocation":
+                source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (2,), (-1,))
                 value = mx.abs(source, stream=mx.gpu)
             elif args.worker == "unary-over-limit":
                 value = mx.abs(

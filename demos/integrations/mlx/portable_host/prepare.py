@@ -24,6 +24,7 @@ VIEW_PRIMITIVES = (
     "Depends",
     "ExpandDims",
     "Reshape",
+    "Slice",
     "Split",
     "Squeeze",
     "StopGradient",

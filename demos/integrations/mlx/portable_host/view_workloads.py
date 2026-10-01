@@ -32,8 +32,8 @@ def expected_records():
         ("broadcast-row", np.broadcast_to(base[0], (3, 4)), True),
         ("broadcast-scalar", np.full((2, 3), 2, dtype=np.float32), True),
         ("offset", flat[3:9], True),
-        ("reverse", flat[11::-1], False),
-        ("gapped", flat[:12:2], False),
+        ("reverse", flat[11::-1], True),
+        ("gapped", flat[:12:2], True),
         ("split-a", flat[:2], True),
         ("split-b", flat[2:7], True),
         ("split-c", flat[7:12], True),
@@ -42,6 +42,15 @@ def expected_records():
         ("depends", base, True),
         ("custom", base, True),
         ("int64-transpose", integer.T, False),
+        ("slice-positive", flat[2:14:3], True),
+        ("slice-reverse", flat[14:1:-2], True),
+        ("slice-matrix", base[::-1, 3:0:-2], True),
+        ("slice-nested", flat[1:15:2][::-2], True),
+        ("slice-transpose", base.T[1:4:2, ::-1], True),
+        ("slice-broadcast", np.broadcast_to(base[0:1], (3, 4))[::-1, ::2], True),
+        ("slice-row", base[1:2], True),
+        ("slice-empty", flat[4:4], True),
+        ("slice-int64", integer[::-1, ::-1], False),
     ]
     records = []
     for name, value, square in cases:
@@ -89,8 +98,8 @@ def run(mx, np):
         ),
         ("broadcast-scalar", mx.broadcast_to(mx.array(2.0), (2, 3)), True),
         ("offset", mx.as_strided(flat, (6,), (1,), 3), True),
-        ("reverse", mx.as_strided(flat, (12,), (-1,), 11), False),
-        ("gapped", mx.as_strided(flat, (6,), (2,)), False),
+        ("reverse", mx.as_strided(flat, (12,), (-1,), 11), True),
+        ("gapped", mx.as_strided(flat, (6,), (2,)), True),
         ("split-a", splits[0], True),
         ("split-b", splits[1], True),
         ("split-c", splits[2], True),
@@ -99,6 +108,19 @@ def run(mx, np):
         ("depends", mx.depends([base], [dependency])[0], True),
         ("custom", identity(base), True),
         ("int64-transpose", mx.transpose(integer), False),
+        ("slice-positive", flat[2:14:3], True),
+        ("slice-reverse", flat[14:1:-2], True),
+        ("slice-matrix", base[::-1, 3:0:-2], True),
+        ("slice-nested", flat[1:15:2][::-2], True),
+        ("slice-transpose", mx.transpose(base)[1:4:2, ::-1], True),
+        (
+            "slice-broadcast",
+            mx.broadcast_to(base[0:1], (3, 4))[::-1, ::2],
+            True,
+        ),
+        ("slice-row", base[1:2], True),
+        ("slice-empty", flat[4:4], True),
+        ("slice-int64", integer[::-1, ::-1], False),
     ]
     records = []
     for name, value, square in cases:
@@ -125,9 +147,27 @@ def validate(records):
 
 def dispatches():
     # Broadcasts compute stored elements once; metadata reuses the result.
-    counts = [12] * 8 + [4, 1, 6, 2, 5, 5]
-    return [("v_Squarefloat32float32", count) for count in counts] + [
-        ("v_Negativefloat32float32", 3),
-        ("v_Squarefloat32float32", 12),
-        ("v_Squarefloat32float32", 12),
-    ]
+    square = "v_Squarefloat32float32"
+    copy = "ggn2_dynamic_copyuint32uint32"
+    counts = [12] * 8 + [4, 1, 6]
+    return (
+        [(square, count) for count in counts]
+        + [
+            (copy, 12),
+            (square, 12),
+            (copy, 6),
+            (square, 6),
+            (square, 2),
+            (square, 5),
+            (square, 5),
+            ("v_Negativefloat32float32", 3),
+            (square, 12),
+            (square, 12),
+        ]
+        + [
+            entry
+            for count in (4, 7, 6, 4, 6, 6)
+            for entry in ((copy, count), (square, count))
+        ]
+        + [(square, 4)]
+    )

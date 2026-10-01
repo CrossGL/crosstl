@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "mlx/allocator.h"
+#include "mlx/backend/common/slicing.h"
 #include "mlx/backend/common/unary.h"
 #include "mlx/backend/common/utils.h"
 #include "mlx/backend/gpu/device_info.h"
@@ -76,6 +77,8 @@ void dispatch_arange(
   }
 }
 
+void dispatch_copy(const mlx::core::array& in, mlx::core::array& out);
+
 void dispatch_unary(
     const std::vector<mlx::core::array>& inputs,
     mlx::core::array& out,
@@ -86,18 +89,27 @@ void dispatch_unary(
     throw std::invalid_argument(
         "CrossTL unary dispatch requires float32 arrays.");
   }
-  const auto& in = inputs[0];
+  auto in = inputs[0];
+  if (in.shape() != out.shape()) {
+    throw std::invalid_argument("CrossTL unary input must match output shape.");
+  }
   if (in.size() == 0) {
     mlx::core::set_unary_output_data(in, out);
     return;
   }
-  if (!in.flags().contiguous || in.shape() != out.shape()) {
-    throw std::invalid_argument(
-        "CrossTL unary dispatch requires contiguous input.");
+  if (!in.flags().contiguous) {
+    mlx::core::array dense(in.shape(), in.dtype(), nullptr, {});
+    dispatch_copy(in, dense);
+    in = std::move(dense);
   }
   if (in.data_size() > 65535) {
     throw std::invalid_argument(
         "CrossTL unary dispatch supports at most 65535 stored elements.");
+  }
+  const uint64_t bytes = in.data_size() * in.itemsize();
+  if (in.offset() < 0 || uint64_t(in.offset()) > in.buffer_size() ||
+      bytes > in.buffer_size() - uint64_t(in.offset())) {
+    throw std::invalid_argument("CrossTL unary input exceeds its allocation.");
   }
   mlx::core::set_unary_output_data(in, out);
   uint32_t size = static_cast<uint32_t>(in.data_size());
@@ -355,6 +367,14 @@ CROSSTL_SHARED_OUTPUTS_GPU(Depends)
 CROSSTL_SHARED_OUTPUTS_GPU(Split)
 
 #undef CROSSTL_SHARED_OUTPUTS_GPU
+
+void Slice::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() != 1) {
+    throw std::invalid_argument("CrossTL slice requires one input.");
+  }
+  slice(inputs[0], out, start_indices_, strides_);
+}
 
 void Reshape::eval_gpu(const std::vector<array>& inputs, array& out) {
   reshape_view(inputs, out);
