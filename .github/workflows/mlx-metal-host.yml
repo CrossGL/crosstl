@@ -1,0 +1,95 @@
+name: MLX Metal Host Integration
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/mlx-metal-host.yml"
+      - "crosstl/**"
+      - "demos/integrations/mlx/**"
+      - "tests/test_mlx_metal_host.py"
+      - "tools/run_bounded_command.py"
+      - "pyproject.toml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/mlx-metal-host.yml"
+      - "crosstl/**"
+      - "demos/integrations/mlx/**"
+      - "tests/test_mlx_metal_host.py"
+      - "tools/run_bounded_command.py"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  MLX_COMMIT: "d9add9d11f3154111a4c85f267ec2fd307ecd18e"
+  PYTHONUNBUFFERED: "1"
+  CMAKE_BUILD_PARALLEL_LEVEL: "4"
+
+concurrency:
+  group: mlx-metal-host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  metal-host:
+    name: MLX translated Metal host execution
+    runs-on: macos-26
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install CrossTL and test dependencies
+        run: python -m pip install -e . pytest pytest-xdist
+      - name: Validate host harness contracts
+        env:
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: python -m pytest -q -n auto tests/test_mlx_metal_host.py
+      - name: Checkout pinned upstream MLX
+        run: |
+          git init mlx-upstream
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+      - name: Prepare isolated MLX build
+        run: |
+          python -m venv mlx-env
+          mlx-env/bin/python -m pip install setuptools wheel cmake ninja nanobind numpy packaging
+          python demos/integrations/mlx/run_mlx_metal_host.py prepare \
+            --mlx-root mlx-upstream --output-dir .mlx-metal-host/preparation
+      - name: Build adapted upstream MLX
+        env:
+          CMAKE_ARGS: "-DMLX_METAL_JIT=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 \
+            --label "MLX adapted host build" -- \
+            mlx-env/bin/python -m pip install -e ./mlx-upstream --no-build-isolation -v \
+            2>&1 | tee .mlx-metal-host/build.log
+      - name: Execute unchanged upstream operations with translated Metal
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 3300 \
+            --label "MLX translated host verification" -- \
+            python demos/integrations/mlx/run_mlx_metal_host.py verify \
+              --mlx-root mlx-upstream --python mlx-env/bin/python \
+              --output-dir .mlx-metal-host/evidence \
+              2>&1 | tee .mlx-metal-host/verification.log
+      - name: Retain native host execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-metal-host-${{ github.run_attempt }}
+          path: |
+            .mlx-metal-host
+            mlx-upstream/.host-metal-*/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

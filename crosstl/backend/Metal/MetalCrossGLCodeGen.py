@@ -8326,6 +8326,22 @@ class MetalToCrossGLConverter:
         if stage_entry:
             code += "    " * indent
             code += "@ stage_entry\n"
+        linkage_annotations = []
+        if not getattr(func, "qualifier", None):
+            qualifiers = set(getattr(func, "declaration_qualifiers", ()) or ())
+            if getattr(func, "internal_linkage", False) or getattr(
+                func, "is_metal_constructor_factory", False
+            ):
+                qualifiers.add("static")
+            if (
+                "constexpr" in qualifiers
+                or getattr(func, "template_parameters", None)
+                or getattr(func, "generics", None)
+            ):
+                qualifiers.add("inline")
+            for qualifier in ("static", "inline"):
+                if qualifier in qualifiers:
+                    linkage_annotations.append(f"@metal_{qualifier}")
         code += "    " * indent
         implicit_buffer_bindings = (
             self.apply_implicit_stage_entry_buffer_bindings(func) if stage_entry else []
@@ -8428,7 +8444,10 @@ class MetalToCrossGLConverter:
                         helper_name
                     )
             fn_semantic = self.map_semantic(self.function_semantic_attributes(func))
-            suffix = f" {fn_semantic}" if fn_semantic else ""
+            annotations = " ".join(
+                item for item in [fn_semantic, *linkage_annotations] if item
+            )
+            suffix = f" {annotations}" if annotations else ""
             function_name = self.sanitize_identifier(
                 output_name or self.function_output_name(func)
             )
@@ -13180,6 +13199,7 @@ class MetalToCrossGLConverter:
         code += f"{pad}// this software is freely granted, provided this notice\n"
         code += f"{pad}// is preserved.\n"
         code += f"{pad}@precise\n"
+        code += f"{pad}@metal_static\n"
         code += f"{pad}float {ratio_name}(float value) {{\n"
         code += (
             f"{body_pad}float numerator @precise = value * (\n"
@@ -13195,6 +13215,7 @@ class MetalToCrossGLConverter:
         code += f"{pad}}}\n\n"
 
         code += f"{pad}@precise\n"
+        code += f"{pad}@metal_static\n"
         code += f"{pad}float {scalar_name}(float value) {{\n"
         code += f"{body_pad}uint bits = asuint(value);\n"
         code += f"{body_pad}uint magnitude_bits = bits & 0x7fffffffu;\n"
@@ -13256,6 +13277,7 @@ class MetalToCrossGLConverter:
                 for component in components
             )
             code += f"{pad}@precise\n"
+            code += f"{pad}@metal_static\n"
             code += f"{pad}vec{width} {vector_name}(vec{width} value) {{\n"
             code += f"{body_pad}return vec{width}(\n{arguments}\n{body_pad});\n"
             code += f"{pad}}}\n\n"
@@ -14544,6 +14566,7 @@ class MetalToCrossGLConverter:
             name = contract["name"]
             matrix_type = contract["mapped_matrix_type"]
             fragment_type = contract["mapped_fragment_type"]
+            code += f"{pad}@metal_static\n"
             if contract["direction"] == "read":
                 code += f"{pad}{fragment_type} {name}" f"(in {matrix_type} matrix) {{\n"
                 code += f"{body_pad}{fragment_type} _fragment_value;\n"
@@ -15584,6 +15607,7 @@ class MetalToCrossGLConverter:
                 if operation == "get"
                 else f"inout {vector_type} value"
             )
+            code += f"{pad}@metal_static\n"
             code += (
                 f"{pad}{result_type} {helper_name}"
                 f"({value_parameter}, uint lane{right_parameter}) {{\n"
@@ -15629,6 +15653,7 @@ class MetalToCrossGLConverter:
             if has_right:
                 parameters.append(f"{descriptor['right_type']} {right_name}")
 
+            code += f"{pad}@metal_static\n"
             code += (
                 f"{pad}{info['element_type']} {descriptor['name']}"
                 f"({', '.join(parameters)}) {{\n"
@@ -15668,6 +15693,7 @@ class MetalToCrossGLConverter:
             code += f"{pad}}};\n\n"
 
             splat_name = self.wide_vector_helper_name(info, "splat")
+            code += f"{pad}@metal_static\n"
             code += f"{pad}{type_name} {splat_name}({element_type} value) {{\n"
             code += f"{body_pad}{type_name} result;\n"
             for lane in range(width):
@@ -15679,6 +15705,7 @@ class MetalToCrossGLConverter:
             parameters = ", ".join(
                 f"{element_type} value{lane}" for lane in range(width)
             )
+            code += f"{pad}@metal_static\n"
             code += f"{pad}{type_name} {make_name}({parameters}) {{\n"
             code += f"{body_pad}{type_name} result;\n"
             for lane in range(width):
@@ -15699,6 +15726,7 @@ class MetalToCrossGLConverter:
             )
             left_type = type_name if left_kind == "vector" else element_type
             right_type = type_name if right_kind == "vector" else element_type
+            code += f"{pad}@metal_static\n"
             code += (
                 f"{pad}{type_name} {helper_name}"
                 f"({left_type} left, {right_type} right) {{\n"
@@ -15725,6 +15753,7 @@ class MetalToCrossGLConverter:
                 info, operator, right_kind
             )
             right_type = type_name if right_kind == "vector" else element_type
+            code += f"{pad}@metal_static\n"
             code += (
                 f"{pad}void {helper_name}"
                 f"(inout {type_name} value, {right_type} right) {{\n"
