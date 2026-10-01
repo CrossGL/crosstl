@@ -91,6 +91,16 @@ workgroup-dependent bounds, repeated reductions and uniform loops on Windows,
 Linux and macOS, with original Metal controls on macOS. Input preservation,
 evaluation counters and output guards remain part of the numerical checks.
 
+Workgroup pointer bounds use the configured software subgroup width when
+proving logical subgroup indices and counts. Helper guards can narrow known
+invocation components in branches and in the selected arm of a conditional
+expression. Bounds include each caller's backing extent and pointer offset;
+mutation, escaped references and unproven accesses remain diagnostic. These
+proofs do not clamp indices or evaluate an inactive conditional read.
+The native helper gate also checks subgroup-indexed and guarded shared reads
+through nested helpers and offset views at workgroup widths 32, 64 and 128,
+including original Metal controls and exact output guards.
+
 Scalar float32, int32 and uint32 products combine adjacent lane pairs with
 strides 1, 2, 4, 8 and 16. Integer products retain 32-bit wraparound; floating
 products round at each multiplication. The native product gate retains

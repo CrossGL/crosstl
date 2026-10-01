@@ -86,3 +86,21 @@ def test_nested_boolean_vector_comparisons_compile(tmp_path):
     generated = GLSLCodeGen().generate_stage(parse(source), "compute")
     assert "any(notEqual(equal(left, right), equal(right, third)))" in generated
     _compile(generated, "opengl", tmp_path)
+
+
+@pytest.mark.parametrize("kind", ["float", "int", "uint", "bool"])
+@pytest.mark.parametrize("width", [2, 3, 4])
+@pytest.mark.parametrize("array", [False, True])
+def test_indexed_vector_component_comparison_is_scalar(tmp_path, kind, width, array):
+    parameter = f"{kind}{width} values[2]" if array else f"{kind}{width} values"
+    element = "values[0][1]" if array else "values[1]"
+    source = f"""shader Comparison {{
+        bool compare({parameter}, {kind} scalar) {{
+            return {element} != scalar;
+        }}
+        compute {{ @numthreads(1, 1, 1) void main() {{ }} }}
+    }}"""
+    generator = GLSLCodeGen()
+    generated = generator.generate_stage(parse(source), "compute")
+    assert "notEqual(" not in generated
+    _compile(generated, "opengl", tmp_path)

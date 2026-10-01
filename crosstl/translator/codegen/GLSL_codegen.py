@@ -9455,7 +9455,9 @@ class GLSLCodeGen:
                     getattr(stage, "execution_config", None)
                 )
                 entry_point._glsl_workgroup_proof_subgroup_width = (
-                    self.glsl_exact_subgroup_width(
+                    self.software_subgroup_width
+                    if self.software_subgroup_width is not None
+                    else self.glsl_exact_subgroup_width(
                         entry_point,
                         normalize_stage_name(stage_name),
                     )
@@ -12481,25 +12483,34 @@ class GLSLCodeGen:
             if isinstance(value, TernaryOpNode):
                 visit(value.condition, active_aliases, active_intervals)
                 base_aliases = dict(active_aliases)
-                true_aliases = dict(base_aliases)
-                false_aliases = dict(base_aliases)
-                true_intervals = dict(active_intervals)
-                false_intervals = dict(active_intervals)
-                visit(value.true_expr, true_aliases, true_intervals)
-                visit(value.false_expr, false_aliases, false_intervals)
-                active_intervals.clear()
-                active_intervals.update(
-                    merge_intervals(true_intervals, false_intervals)
-                )
-                active_aliases.clear()
-                active_aliases.update(base_aliases)
-                merge_alias_states(
-                    active_aliases,
-                    [
-                        (true_aliases, true_intervals),
-                        (false_aliases, false_intervals),
-                    ],
-                )
+                branch_states = []
+                for selected, branch in (
+                    (True, value.true_expr),
+                    (False, value.false_expr),
+                ):
+                    branch_intervals = (
+                        self.glsl_private_pointer_refined_condition_intervals(
+                            value.condition,
+                            active_intervals,
+                            constants,
+                            selected,
+                            excluded_names=mutated_interval_names,
+                        )
+                    )
+                    if branch_intervals is None:
+                        continue
+                    branch_aliases = dict(base_aliases)
+                    visit(branch, branch_aliases, branch_intervals)
+                    branch_states.append((branch_aliases, branch_intervals))
+                if branch_states:
+                    merged = branch_states[0][1]
+                    for _, branch_intervals in branch_states[1:]:
+                        merged = merge_intervals(merged, branch_intervals)
+                    active_intervals.clear()
+                    active_intervals.update(merged)
+                    active_aliases.clear()
+                    active_aliases.update(base_aliases)
+                    merge_alias_states(active_aliases, branch_states)
                 return
             if isinstance(value, BinaryOpNode) and self.map_operator(value.op) in {
                 "&&",
@@ -31330,6 +31341,9 @@ complex64_t crossgl_complex64_mod_assign(
             # to a diagnostic comment instead of real GLSL.
             if array_type and array_type.rstrip().endswith("*"):
                 return array_type.rstrip()[:-1].strip()
+            component_type = self.vector_component_type(array_type)
+            if component_type is not None:
+                return component_type
             return array_type
         if isinstance(expr, MemberAccessNode):
             object_type = self.expression_result_type(expr.object)
@@ -37921,6 +37935,9 @@ complex64_t crossgl_complex64_mod_assign(
                 return element_type
             if type_name.rstrip().endswith(("*", "&")):
                 return type_name.rstrip()[:-1].strip()
+            component_type = self.vector_component_type(type_name)
+            if component_type is not None:
+                return component_type
             return type_name
         if isinstance(expression, BinaryOpNode):
             operator = self.map_operator(
@@ -44645,7 +44662,7 @@ complex64_t crossgl_complex64_mod_assign(
             return refined
 
         def narrow(candidate, lower, upper):
-            name = self.expression_name(candidate)
+            name = self.glsl_private_pointer_interval_key(candidate, refined, constants)
             if name not in refined:
                 return True
             current = refined[name]
@@ -44668,21 +44685,24 @@ complex64_t crossgl_complex64_mod_assign(
         if operator == "!=":
             if left[0] == left[1] == right[0] == right[1]:
                 return None
-            if (
-                right[0] == right[1]
-                and self.expression_name(left_expression) in refined
-            ):
+            left_name = self.glsl_private_pointer_interval_key(
+                left_expression, refined, constants
+            )
+            right_name = self.glsl_private_pointer_interval_key(
+                right_expression, refined, constants
+            )
+            if right[0] == right[1] and left_name in refined:
                 excluded = right[0]
-                lower, upper = refined[self.expression_name(left_expression)]
+                lower, upper = refined[left_name]
                 if lower == excluded:
                     lower += 1
                 elif upper == excluded:
                     upper -= 1
                 if not narrow(left_expression, lower, upper):
                     return None
-            if left[0] == left[1] and self.expression_name(right_expression) in refined:
+            if left[0] == left[1] and right_name in refined:
                 excluded = left[0]
-                lower, upper = refined[self.expression_name(right_expression)]
+                lower, upper = refined[right_name]
                 if lower == excluded:
                     lower += 1
                 elif upper == excluded:
@@ -45146,9 +45166,7 @@ complex64_t crossgl_complex64_mod_assign(
             )
         return None
 
-    def glsl_private_pointer_interval(self, expression, intervals, constants):
-        if expression is None:
-            return None
+    def glsl_private_pointer_interval_key(self, expression, intervals, constants):
         if isinstance(expression, MemberAccessNode):
             component_index = self.glsl_index_component_index(expression.member)
             key = self.glsl_index_component_interval_key(
@@ -45156,10 +45174,10 @@ complex64_t crossgl_complex64_mod_assign(
                 component_index,
             )
             if key is not None and key in intervals:
-                return intervals[key]
+                return key
             member_name = expression_debug_name(expression)
             if member_name in intervals:
-                return intervals[member_name]
+                return member_name
         if isinstance(expression, ArrayAccessNode):
             component_index = self.literal_int_value(expression.index, constants)
             key = self.glsl_index_component_interval_key(
@@ -45167,6 +45185,18 @@ complex64_t crossgl_complex64_mod_assign(
                 component_index,
             )
             if key is not None and key in intervals:
+                return key
+        name = self.expression_name(expression)
+        return name if name in intervals else None
+
+    def glsl_private_pointer_interval(self, expression, intervals, constants):
+        if expression is None:
+            return None
+        if isinstance(expression, (MemberAccessNode, ArrayAccessNode)):
+            key = self.glsl_private_pointer_interval_key(
+                expression, intervals, constants
+            )
+            if key is not None:
                 return intervals[key]
         integer_cast = self.glsl_integer_scalar_cast_call(expression)
         if integer_cast is not None:

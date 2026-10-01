@@ -45,6 +45,7 @@ on:
       - "tests/test_translator/test_directx_self_comparisons.py"
       - "tests/test_translator/test_opengl_vector_comparisons.py"
       - "tests/test_translator/test_subgroup_uniform_arguments.py"
+      - "tests/test_translator/test_software_subgroup_workgroup_ranges.py"
       - "tests/test_translator/test_opengl_subgroup_exit_uniformity.py"
       - "tests/test_translator/test_mlx_current_unary_sign.py"
       - "tests/test_translator/test_mlx_current_unary_atan.py"
@@ -105,6 +106,7 @@ on:
       - "tests/test_translator/test_directx_self_comparisons.py"
       - "tests/test_translator/test_opengl_vector_comparisons.py"
       - "tests/test_translator/test_subgroup_uniform_arguments.py"
+      - "tests/test_translator/test_software_subgroup_workgroup_ranges.py"
       - "tests/test_translator/test_opengl_subgroup_exit_uniformity.py"
       - "tests/test_translator/test_mlx_current_unary_sign.py"
       - "tests/test_translator/test_mlx_current_unary_atan.py"
@@ -273,6 +275,7 @@ jobs:
       - name: Validate collective helper arguments
         env:
           CROSTL_REQUIRE_SUBGROUP_UNIFORM_ARGUMENTS: "1"
+          CROSTL_REQUIRE_WORKGROUP_RANGE_READBACKS: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
@@ -284,6 +287,7 @@ jobs:
               --basetemp=.mlx-portable-host/subgroup-arguments/pytest \
               --junitxml=.mlx-portable-host/subgroup-arguments/results.xml \
               tests/test_translator/test_subgroup_uniform_arguments.py \
+              tests/test_translator/test_software_subgroup_workgroup_ranges.py \
               2>&1 | tee .mlx-portable-host/subgroup-arguments.log
       - name: Validate Metal argument inference
         env:
