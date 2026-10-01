@@ -60,6 +60,24 @@ Retained artifacts include source, modules, input bytes, reference bytes,
 output bytes and guards. These are numeric-conversion tests, not full MLX
 runtime coverage.
 
+Software Subgroup Helpers
+-------------------------
+
+Explicit-width software subgroup operations can be reached through resolved,
+unconditional helper chains. Each call retains its source overload identity.
+Entry-point calls in immutable workgroup-uniform branches are supported;
+lane-dependent branches, recursive call graphs and unproven early exits remain
+errors. Const qualification alone does not prove invocation uniformity.
+Raw hardware subgroup builtins are rejected in software mode; annotated
+subgroup inputs use the configured logical width instead.
+
+Generated collectives pair execution barriers with explicit shared-memory
+ordering. This preserves scratch reuse across conditional helper calls on
+the tested Mesa runtime. The required native vote gate covers repeated calls,
+three wrapper levels, distinct even/odd-workgroup predicates, multiple logical
+subgroups and unchanged input/output guards. These are collective semantics
+checks, not complete MLX reduction or host-runtime coverage.
+
 Native Attention Fixture
 ------------------------
 

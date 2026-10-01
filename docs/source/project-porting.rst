@@ -551,8 +551,15 @@ device readbacks across multiple logical subgroups, repeated calls, single
 operand evaluation and untouched output guards. macOS additionally executes
 the original Metal source. Divergent exits before a later collective are
 rejected rather than dropping the exit or forcing inactive lanes into the vote.
-This does not establish complete MLX reduction support: product operations and
-OpenGL operation-free helper wrappers remain separate limitations.
+OpenGL resolves unconditional wrapper chains to their exact collective helper
+overloads. Entry-point calls may occur in proven uniform loops or branches
+controlled by immutable workgroup-uniform inputs. Recursive chains, ambiguous
+root overloads, lane-dependent branches and escaped or mutated uniform inputs
+remain diagnostic. The native vote gate exercises three wrapper levels and
+different predicates in even and odd workgroups; shared scratch accesses use
+explicit memory ordering as well as execution barriers. This does not establish
+complete MLX reduction support: product operations, collective-result uniformity
+and full host reduction dispatch remain separate work.
 
 The bounded Windows test also records live Direct3D 12 debug-layer messages
 through ``tools/run_directx_diagnostics.py``. Each entry's JSON-lines log is

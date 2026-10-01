@@ -38,6 +38,7 @@ on:
       - "tests/test_translator/test_metal_float_selection.py"
       - "tests/test_translator/test_boolean_buffer_runtime.py"
       - "tests/test_translator/test_software_subgroup_votes.py"
+      - "tests/test_translator/test_opengl_subgroup_wrappers.py"
       - "tests/test_translator/test_mlx_current_unary_sign.py"
       - "tests/test_translator/test_mlx_current_unary_atan.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
@@ -90,6 +91,7 @@ on:
       - "tests/test_translator/test_metal_float_selection.py"
       - "tests/test_translator/test_boolean_buffer_runtime.py"
       - "tests/test_translator/test_software_subgroup_votes.py"
+      - "tests/test_translator/test_opengl_subgroup_wrappers.py"
       - "tests/test_translator/test_mlx_current_unary_sign.py"
       - "tests/test_translator/test_mlx_current_unary_atan.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
@@ -217,6 +219,7 @@ jobs:
               --basetemp=.mlx-portable-host/subgroup-votes/pytest \
               --junitxml=.mlx-portable-host/subgroup-votes/results.xml \
               tests/test_translator/test_software_subgroup_votes.py \
+              tests/test_translator/test_opengl_subgroup_wrappers.py \
               2>&1 | tee .mlx-portable-host/subgroup-votes.log
       - name: Validate Metal argument inference
         env:

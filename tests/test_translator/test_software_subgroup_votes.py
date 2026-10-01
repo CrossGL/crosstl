@@ -206,6 +206,7 @@ def test_software_votes_are_required_in_native_workflow():
         workflow, "Validate software subgroup votes"
     )
     assert "test_software_subgroup_votes.py" in step
+    assert "test_opengl_subgroup_wrappers.py" in step
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "-n auto" in step and "continue-on-error" not in step
     assert "--timeout-seconds" in step and "--junitxml" in step
@@ -215,12 +216,30 @@ def test_software_votes_are_required_in_native_workflow():
             "tests/test_translator/test_software_subgroup_votes.py"
             in ci_coverage.workflow_event_path_filters(workflow, event)
         )
+        assert (
+            "tests/test_translator/test_opengl_subgroup_wrappers.py"
+            in ci_coverage.workflow_event_path_filters(workflow, event)
+        )
 
 
-def _metal_source(size):
+def _metal_source(size, wrapper_depth=0):
+    helpers = "bool some_value(bool value) { return simd_any(value); }\n"
+    callee = "some_value"
+    for depth in range(wrapper_depth):
+        name = f"wrapped_vote_{depth}"
+        helpers += f"bool {name}(bool value) {{ return {callee}(value); }}\n"
+        callee = name
+    some = f"bool some = {callee}(predicate);"
+    if wrapper_depth:
+        some = f"""bool some = false;
+    if (group.x % 2u == 0u) {{
+        some = {callee}(predicate);
+    }} else {{
+        some = {callee}(!predicate);
+    }}"""
     return f"""#include <metal_stdlib>
 using namespace metal;
-bool some_value(bool value) {{ return simd_any(value); }}
+{helpers}
 kernel void votes(device uint* values [[buffer(0)]],
                   device uint* results [[buffer(1)]],
                   uint invocation [[thread_index_in_threadgroup]],
@@ -229,7 +248,7 @@ kernel void votes(device uint* values [[buffer(0)]],
     bool predicate = values[index] != 0u;
     uint counter = 0u;
     bool every = simd_all((counter++ == 0u) && predicate);
-    bool some = some_value(predicate);
+    {some}
     bool none = simd_all(!predicate);
     bool not_every = simd_any(!predicate);
     bool repeated = simd_all(some);
@@ -243,8 +262,8 @@ kernel void votes(device uint* values [[buffer(0)]],
 """
 
 
-def _package(root, target, shape):
-    source = _metal_source(shape[0] * shape[1] * shape[2])
+def _package(root, target, shape, wrapper_depth=0):
+    source = _metal_source(shape[0] * shape[1] * shape[2], wrapper_depth)
     (root / "votes.metal").write_text(source, encoding="utf-8")
     options = {}
     if target != "metal":
@@ -279,7 +298,7 @@ def _package(root, target, shape):
     return source, descriptor, package
 
 
-def _values(count):
+def _values(count, workgroup_size=None):
     patterns = [
         [0] * 32,
         [7] * 32,
@@ -294,9 +313,12 @@ def _values(count):
     for i in range(count // 32):
         lanes = patterns[i % len(patterns)]
         every, some = all(lanes), any(lanes)
+        if workgroup_size is not None and (i * 32 // workgroup_size) % 2:
+            some = not every
         values.extend(lanes)
         expected.extend(
-            [int(every), int(some), int(not some), int(not every), int(some), 1] * 32
+            [int(every), int(some), int(not any(lanes)), int(not every), int(some), 1]
+            * 32
         )
     guards = [0xBAD00000 + i for i in range(17)]
 
@@ -327,13 +349,14 @@ def test_metal_votes_translate_through_project_packages(tmp_path, target):
 
 
 @pytest.mark.parametrize("shape", [(32, 1, 1), (32, 4, 1), (64, 2, 1)])
-def test_software_votes_execute_on_device(tmp_path, shape):
+@pytest.mark.parametrize("wrapper_depth", [0, 3])
+def test_software_votes_execute_on_device(tmp_path, shape, wrapper_depth):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required native votes")
     target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
-    source, descriptor, package = _package(tmp_path, target, shape)
+    source, descriptor, package = _package(tmp_path, target, shape, wrapper_depth)
     count = 8 * shape[0] * shape[1] * shape[2]
-    inputs, outputs = _values(count)
+    inputs, outputs = _values(count, count // 8 if wrapper_depth else None)
     expected = _bound_values(descriptor, outputs)
     request = build_native_loader_dispatch_request(
         descriptor,
@@ -356,7 +379,6 @@ def test_software_votes_execute_on_device(tmp_path, shape):
         assert availability.available, availability
         result = executor.run(request)
         assert result.status == "ok", result
-        assert result.outputs == expected
         records["generated"] = {"outputs": result.outputs, "details": result.details}
         if target == "metal":
             original = tmp_path / "original"
@@ -382,6 +404,7 @@ def test_software_votes_execute_on_device(tmp_path, shape):
                 {
                     "target": target,
                     "shape": shape,
+                    "wrapperDepth": wrapper_depth,
                     "inputs": inputs,
                     "expected": expected,
                     "descriptor": descriptor,
@@ -397,6 +420,7 @@ def test_software_votes_execute_on_device(tmp_path, shape):
             ),
             encoding="utf-8",
         )
+        assert result.outputs == expected
     finally:
         close = getattr(executor.runtime_adapter.runtime, "close", None)
         if close:

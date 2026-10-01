@@ -4298,13 +4298,13 @@ class GLSLCodeGen:
         expression = statement
         if isinstance(statement, ExpressionStatementNode):
             expression = getattr(statement, "expression", None)
-        elif isinstance(statement, VariableNode):
-            expression = getattr(statement, "initial_value", None)
-        elif isinstance(statement, AssignmentNode):
+        if isinstance(expression, VariableNode):
+            expression = getattr(expression, "initial_value", None)
+        elif isinstance(expression, AssignmentNode):
             expression = getattr(
-                statement,
+                expression,
                 "value",
-                getattr(statement, "right", None),
+                getattr(expression, "right", None),
             )
         if isinstance(expression, FunctionCallNode):
             return expression
@@ -4325,6 +4325,18 @@ class GLSLCodeGen:
                         getattr(statement, "body", None)
                     )
                 )
+            if (
+                isinstance(statement, IfNode)
+                and id(statement) in self.glsl_software_subgroup_uniform_if_node_ids
+            ):
+                for branch in [
+                    statement.if_body,
+                    *(getattr(statement, "else_if_bodies", []) or []),
+                    getattr(statement, "else_body", None),
+                ]:
+                    call_ids.update(
+                        self.glsl_software_subgroup_uniform_top_level_call_ids(branch)
+                    )
         return call_ids
 
     def validate_glsl_software_subgroup_helpers(
@@ -4370,14 +4382,15 @@ class GLSLCodeGen:
                 }
             )
 
-        def resolve_call(call):
+        def resolve_call(function, call):
             name = self.function_call_name(call)
             if name not in functions_by_name:
                 return None
             arguments = list(
                 getattr(call, "arguments", getattr(call, "args", [])) or []
             )
-            resolved = self.resolve_glsl_function_overload(
+            resolved = self.glsl_resolve_function_overload_in_scope(
+                function,
                 name,
                 arguments,
                 call_node=call,
@@ -4404,7 +4417,7 @@ class GLSLCodeGen:
                 if not isinstance(node, FunctionCallNode):
                     continue
                 try:
-                    target = resolve_call(node)
+                    target = resolve_call(function, node)
                 except OpenGLMappedOverloadError as error:
                     unresolved_edges[id(function)].append((node, error))
                     continue
@@ -4493,6 +4506,19 @@ class GLSLCodeGen:
                     return False
             return True
 
+        self.glsl_software_subgroup_candidate_helper_function_ids = (
+            reaches_operation - {id(entry_function)}
+        )
+        self.glsl_software_subgroup_resolved_call_targets = {
+            id(call): target_id
+            for call_edges in edges.values()
+            for call, target_id in call_edges
+        }
+        # Uniform loop proofs must see transitive collective calls as well as leaves.
+        self.glsl_software_subgroup_analyze_uniform_statements(
+            getattr(entry_function, "body", None),
+            self.glsl_software_subgroup_uniform_seed_names(ast, entry_function),
+        )
         uniform_entry_call_ids = self.glsl_software_subgroup_uniform_top_level_call_ids(
             getattr(entry_function, "body", None)
         )
@@ -4510,17 +4536,6 @@ class GLSLCodeGen:
             operation, operation_node = first_operation(target_id)
             target = functions_by_id[target_id]
             name = getattr(target, "name", None)
-            if target_id not in direct_records:
-                raise self.glsl_software_subgroup_error(
-                    "OpenGL software subgroup helpers must be called directly "
-                    "from the compute entry point rather than through an "
-                    "operation-free wrapper",
-                    workgroup_size=workgroup_size,
-                    operation=operation,
-                    reason="helper-call-not-uniform",
-                    source_location=getattr(call, "source_location", None)
-                    or getattr(operation_node, "source_location", None),
-                )
             if source_overload_count(name) != 1:
                 raise self.glsl_software_subgroup_error(
                     "OpenGL software subgroup root helpers cannot use overloaded "
@@ -4573,9 +4588,7 @@ class GLSLCodeGen:
                     continue
                 target = functions_by_id[target_id]
                 target_name = getattr(target, "name", None)
-                if target_id not in direct_records or not call_is_unconditional(
-                    getattr(function, "body", None), call
-                ):
+                if not call_is_unconditional(getattr(function, "body", None), call):
                     raise self.glsl_software_subgroup_error(
                         "OpenGL nested software subgroup helper "
                         f"'{target_name}' must be reached by an unconditional, "
@@ -4589,6 +4602,32 @@ class GLSLCodeGen:
                 if target_id not in approved:
                     approved.add(target_id)
                     pending.append(target_id)
+
+        incoming = {function_id: 0 for function_id in approved}
+        for function_id in approved:
+            for _call, target_id in edges.get(function_id, ()):
+                if target_id in incoming:
+                    incoming[target_id] += 1
+        pending = [function_id for function_id, count in incoming.items() if count == 0]
+        visited = set()
+        while pending:
+            function_id = pending.pop()
+            visited.add(function_id)
+            for _call, target_id in edges.get(function_id, ()):
+                if target_id not in incoming:
+                    continue
+                incoming[target_id] -= 1
+                if incoming[target_id] == 0:
+                    pending.append(target_id)
+        if visited != approved:
+            operation, node = first_operation(next(iter(approved - visited)))
+            raise self.glsl_software_subgroup_error(
+                "OpenGL software subgroup helpers cannot form a recursive call chain",
+                workgroup_size=workgroup_size,
+                operation=operation,
+                reason="helper-call-recursive",
+                source_location=getattr(node, "source_location", None),
+            )
 
         self.glsl_software_subgroup_helper_function_ids = approved
         self.glsl_software_subgroup_helper_function_names = {
@@ -4933,6 +4972,9 @@ class GLSLCodeGen:
 
     def validate_glsl_software_subgroup_contract(self, ast, target_stage=None):
         self.required_glsl_software_subgroup_helpers = set()
+        self.glsl_software_subgroup_resolved_call_targets = {}
+        self.glsl_software_subgroup_uniform_if_node_ids = set()
+        self.glsl_software_subgroup_immutable_uniform_names = set()
         self.glsl_software_subgroup_entry_function_id = None
         self.glsl_software_subgroup_entry_function_name = None
         self.glsl_software_subgroup_helper_function_names = set()
@@ -5067,7 +5109,9 @@ class GLSLCodeGen:
             semantic = self.semantic_from_node(node)
             mapped_semantic = self.map_semantic(semantic) if semantic else None
             raw_hardware_name = isinstance(name, str) and (
-                name.startswith("gl_Subgroup") or name.startswith("subgroup")
+                name == "gl_NumSubgroups"
+                or name.startswith("gl_Subgroup")
+                or name.startswith("subgroup")
             )
             unsupported_mapped_semantic = (
                 mapped_semantic in self.GLSL_SUBGROUP_BASIC_BUILTINS
@@ -5087,6 +5131,47 @@ class GLSLCodeGen:
             entry_function,
             target_stage,
         )
+        immutable_names = set(uniform_names)
+        for parameter in getattr(entry_function, "parameters", []) or []:
+            semantic = self.semantic_from_node(parameter)
+            mapped_semantic = self.map_semantic(semantic) if semantic else None
+            qualifiers = {
+                str(qualifier).strip().lower()
+                for qualifier in getattr(parameter, "qualifiers", []) or []
+            }
+            if mapped_semantic is not None:
+                if (
+                    mapped_semantic
+                    not in self.GLSL_SOFTWARE_SUBGROUP_WORKGROUP_UNIFORM_BUILTINS
+                ):
+                    immutable_names.discard(getattr(parameter, "name", None))
+            elif not qualifiers & {"constant", "uniform"}:
+                immutable_names.discard(getattr(parameter, "name", None))
+        for node in self.glsl_software_subgroup_reachable_nodes(
+            getattr(entry_function, "body", None)
+        ):
+            invalidated = None
+            if isinstance(node, VariableNode):
+                immutable_names.discard(getattr(node, "name", None))
+                if "&" in (
+                    self.type_name_string(getattr(node, "var_type", None)) or ""
+                ):
+                    invalidated = getattr(node, "initial_value", None)
+            elif isinstance(node, AssignmentNode):
+                invalidated = getattr(node, "target", getattr(node, "left", None))
+            elif isinstance(node, UnaryOpNode) and self.map_operator(node.op) in {
+                "++",
+                "--",
+                "&",
+            }:
+                invalidated = node.operand
+            elif isinstance(node, FunctionCallNode):
+                invalidated = getattr(node, "arguments", [])
+            if invalidated is not None:
+                immutable_names.difference_update(
+                    self.glsl_software_subgroup_expression_identifier_names(invalidated)
+                )
+        self.glsl_software_subgroup_immutable_uniform_names = immutable_names
         self.prepare_glsl_software_subgroup_strided_for_plans(
             entry_function,
             uniform_names,
@@ -5311,6 +5396,13 @@ class GLSLCodeGen:
                 assigned.update(self.glsl_software_subgroup_assigned_names(body))
             return set(uniform_names) - assigned
 
+        if all(
+            self.glsl_software_subgroup_uniform_expression(
+                condition, self.glsl_software_subgroup_immutable_uniform_names
+            )
+            for condition in conditions
+        ):
+            self.glsl_software_subgroup_uniform_if_node_ids.add(id(node))
         branch_results = [
             self.glsl_software_subgroup_analyze_uniform_statements(
                 body,
@@ -5429,6 +5521,12 @@ class GLSLCodeGen:
         return names
 
     def glsl_software_subgroup_candidate_helper_call(self, call):
+        targets = getattr(self, "glsl_software_subgroup_resolved_call_targets", {})
+        if id(call) in targets:
+            return (
+                targets[id(call)]
+                in self.glsl_software_subgroup_candidate_helper_function_ids
+            )
         name = self.function_call_name(call)
         if name not in self.glsl_function_overloads_by_name:
             return False
@@ -35459,18 +35557,23 @@ complex64_t crossgl_complex64_mod_assign(
                     if invocation_count == self.software_subgroup_width
                     else "invocation"
                 )
+                # Explicit shared-memory ordering preserves scratch reuse through
+                # helper calls in dynamically uniform branches on Mesa drivers.
                 code += (
                     f"{value_type} {helper}({value_type} value) {{\n"
                     f"{lane_setup}"
                     f"    {scratch}[{write_index}] = value;\n"
+                    "    memoryBarrierShared();\n"
                     "    barrier();\n"
                     "    for (uint stride = 16u; stride > 0u; stride >>= 1u) {\n"
                     "        if (lane < stride) {\n"
                     f"            {left} = {reduction(left, right)};\n"
                     "        }\n"
+                    "        memoryBarrierShared();\n"
                     "        barrier();\n"
                     "    }\n"
                     f"    {value_type} result = {scratch}[{result_index}];\n"
+                    "    memoryBarrierShared();\n"
                     "    barrier();\n"
                     "    return result;\n"
                     "}\n\n"
@@ -35485,10 +35588,12 @@ complex64_t crossgl_complex64_mod_assign(
                     f"{value_type} {helper}({value_type} value, uint delta) {{\n"
                     f"{lane_setup}"
                     f"    {scratch}[{write_index}] = value;\n"
+                    "    memoryBarrierShared();\n"
                     "    barrier();\n"
                     f"    uint sourceLane = {shuffle_source};\n"
                     f"    {value_type} result = sourceLane < {shuffle_limit} "
                     f"? {scratch}[sourceLane] : value;\n"
+                    "    memoryBarrierShared();\n"
                     "    barrier();\n"
                     "    return result;\n"
                     "}\n\n"

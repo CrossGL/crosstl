@@ -27153,7 +27153,7 @@ def test_glsl_software_subgroup_rejects_non_top_level_helper_calls(entry_body):
     assert raised.value.operation == "WaveActiveMin"
 
 
-def test_glsl_software_subgroup_rejects_indirect_helper_calls():
+def test_glsl_software_subgroup_accepts_unconditional_indirect_helper_calls(tmp_path):
     code = """
     shader GLSLSoftwareSubgroupIndirectHelperCall {
         float reduceValue(float value) {
@@ -27173,13 +27173,14 @@ def test_glsl_software_subgroup_rejects_indirect_helper_calls():
     }
     """
 
-    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
-        GLSLCodeGen(software_subgroup_width=32).generate(
-            parse_code(tokenize_code(code))
-        )
-
-    assert raised.value.reason == "helper-call-not-uniform"
-    assert raised.value.operation == "WaveActiveMin"
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+    assert "return reduceValue(value);" in generated
+    assert "return crossglSoftwareSubgroupMinFloat(value);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "software_subgroup_indirect_helper", validate_spirv=True
+    )
 
 
 def test_glsl_software_subgroup_accepts_exact_nested_overload_identity(tmp_path):
