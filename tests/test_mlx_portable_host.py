@@ -12,6 +12,7 @@ from demos.integrations.mlx.portable_host import (
     binary_workloads,
     cast_workloads,
     copy_workloads,
+    full_workloads,
     packages,
     prepare,
     runtime,
@@ -75,6 +76,8 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     assert "NO_GPU(Abs)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(AsType)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(AsType)" in (backend / "primitives.cpp").read_text()
+    assert "NO_GPU(Full)" not in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(Full)" in (backend / "primitives.cpp").read_text()
     for name in prepare.VIEW_PRIMITIVES:
         macro = "NO_GPU_MULTI" if name in prepare.MULTI_OUTPUT_VIEWS else "NO_GPU"
         assert (
@@ -1190,6 +1193,36 @@ def test_registration_retains_callback_and_uses_platform_library(
 
 @pytest.mark.parametrize(
     "fault",
+    [None, "missing", "payload", "broadcast", "shape", "dtype", "source", "promotion"],
+)
+def test_full_references_require_exact_storage_and_broadcasts(fault):
+    records = full_workloads.expected_records()
+    assert len(records) == 62
+    assert sum(len(record["words"]) for record in records) == 2421
+    assert len(full_workloads.dispatches()) == 52
+    if fault == "missing":
+        records.pop()
+    elif fault == "payload":
+        records[1]["words"][0] ^= 1
+    elif fault == "broadcast":
+        records[3]["words"][5] = records[3]["words"][1]
+    elif fault == "shape":
+        records[0]["shape"] = [1]
+    elif fault == "dtype":
+        records[0]["dtype"] = "uint32"
+    elif fault == "source":
+        records[19]["words"][0] ^= 1
+    elif fault == "promotion":
+        records[-2]["words"][0] = 1
+    if fault:
+        with pytest.raises(RuntimeError, match="Full readbacks"):
+            full_workloads.validate(records)
+    else:
+        full_workloads.validate(records)
+
+
+@pytest.mark.parametrize(
+    "fault",
     [
         None,
         "command",
@@ -1223,6 +1256,8 @@ def test_registration_retains_callback_and_uses_platform_library(
         "binary-values",
         "casts-missing",
         "casts-values",
+        "full-missing",
+        "full-values",
         "upstream-failure",
     ],
 )
@@ -1287,6 +1322,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             "copies": copy_workloads.expected_records(),
             "binary": binary_workloads.expected_records(),
             "casts": cast_workloads.expected_records(),
+            "full": full_workloads.expected_records(),
         }
         if fault == "unary-missing":
             result["unary"] = []
@@ -1312,6 +1348,10 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             result["casts"] = []
         if fault == "casts-values":
             result["casts"][1]["words"][0] ^= 1
+        if fault == "full-missing":
+            result["full"] = []
+        if fault == "full-values":
+            result["full"][0]["words"][0] ^= 1
         if fault == "upstream-failure":
             result["failures"] = 1
         if fault == "arrays":
@@ -1342,6 +1382,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 + copy_workloads.dispatches()
                 + binary_workloads.dispatches()
                 + cast_workloads.dispatches()
+                + full_workloads.dispatches()
             )
             trace = [
                 {
@@ -1387,7 +1428,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         if fault in {"source-before", "test-source-before"}:
             assert calls == []
         if fault == "command":
-            assert len(calls) == 17
+            assert len(calls) == 20
             assert (
                 json.loads((args.output_dir / "cpu.command.json").read_text())[
                     "returncode"
@@ -1396,7 +1437,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             )
     else:
         evidence = verify.verify(args)
-        assert len(calls) == 17 and evidence["dispatchCount"] == 441
+        assert len(calls) == 20 and evidence["dispatchCount"] == 493
         assert len(identities) == 2
         assert evidence["schemaVersion"] == 2
         assert evidence["adaptation"]["files"] == {"adapter": "unchanged"}
@@ -1440,7 +1481,7 @@ def test_ci_requires_all_native_platforms_and_retains_evidence():
         "portable_host.verify",
         "pytest -q -n auto tests/test_mlx_portable_host.py",
         "liblapacke-dev",
-        "--timeout-seconds 3250",
+        "--timeout-seconds 3800",
         "if: always()",
         "include-hidden-files: true",
         "Get-FileHash",
@@ -1449,10 +1490,11 @@ def test_ci_requires_all_native_platforms_and_retains_evidence():
         assert required in workflow
     assert "continue-on-error" not in workflow
     assert "opengl-runtime" not in workflow
-    assert len(verify.UPSTREAM_TESTS) == 24
+    assert len(verify.UPSTREAM_TESTS) == 29
     assert "test_ops.TestOps.test_diff" in verify.UPSTREAM_TESTS
     assert "test_ops.TestOps.test_flip" in verify.UPSTREAM_TESTS
     assert "test_array.TestArray.test_array_type_cast" in verify.UPSTREAM_TESTS
+    assert "test_ops.TestOps.test_hamming_general" in verify.UPSTREAM_TESTS
 
 
 def test_ci_requires_native_math_before_building_mlx():

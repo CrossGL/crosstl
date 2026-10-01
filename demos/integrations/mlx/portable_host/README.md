@@ -21,6 +21,11 @@ outputs and stop-gradient. Integer and array indexing still require the
 unimplemented Gather primitive. Contiguous conversion, reshape, flatten and unflatten
 dispatch translated copies when sharing storage is insufficient. Copies support
 matching float32, int32 and uint32 arrays, including negative and zero strides.
+`Full`, including `zeros`, `ones` and `full_like`, uses those copies to materialize
+broadcast values in the same three types. Boolean and other storage widths are
+not yet supported by this copy path. General boolean resource reflection and
+native buffer transport are tracked in
+[#1999](https://github.com/CrossGL/crosstl/issues/1999).
 Binary addition, subtraction, multiplication, minimum and maximum support those
 three types; division supports float32. Broadcasts and non-row-contiguous binary
 inputs are materialized by translated copies before the unchanged vector-vector
@@ -70,6 +75,9 @@ no-GPU backend build definition and adds four explicitly named backend files:
   AsType selects a source/destination-specific copy entry, validates array shapes
   and allocation bounds, and allocates a dense destination. Casts perform no CPU
   elementwise conversion.
+  Full receives the upstream broadcast/cast value and materializes it with the
+  same general-copy entry. Scalar fills, row/column broadcasts and strided values
+  use the source strides, with fresh output allocation and no CPU fill loop.
 - `crosstl_dispatch.h` defines the typed C buffer/callback ABI.
 - `crosstl_primitives.cpp` copies upstream unsupported primitive definitions,
   removing only the implemented primitive stubs.
@@ -79,6 +87,9 @@ no-GPU backend build definition and adds four explicitly named backend files:
 No upstream Metal kernel or Python test is edited. Preparation records hashes of
 every adapted file. Integer argument conversion explicitly implements truncation
 and modular wrapping; it does not depend on undefined out-of-range C++ casts.
+The pinned Python `full` binding retains the dtype of an array-valued fill even
+when a different `dtype` is requested. The harness verifies this unchanged
+behavior; its mixed-type fill explicitly casts the broadcast value before `full`.
 The host adapter is repository-specific; package generation, reflection, artifact
 verification and native execution use the public CrossTL project interfaces.
 Unary output allocation uses MLX's existing `set_unary_output_data` helper,
@@ -204,6 +215,8 @@ these upstream tests without skips:
 - `test_subtract`, `test_multiply`
 - `test_diff`, `test_flip`
 - `test_array.TestArray.test_array_type_cast`
+- `test_bartlett_general`, `test_blackman_general`, `test_hamming_general`, `test_hanning_general`
+- `test_shape_overflow_error`
 
 The CPU reference uses the unchanged CPU backend in the same adapted MLX build;
 it is not a separately rebuilt pristine binary or a Metal comparison.
@@ -265,7 +278,15 @@ nonfinite and out-of-range float-to-integer conversions are not covered by this
 portability proof. Each cast checks a 128-byte device output guard before host
 readback. Empty conversions do not dispatch.
 
-Native traces must start with the exact 441 nonempty workload dispatches, cover
+Full workloads add 62 records with 2,421 storage words, including scalar fills,
+257-element tails, row/column and three-dimensional broadcasts, transposed and
+reversed inputs, negative four-dimensional strides, `full_like`, zeros, ones,
+empty outputs and source preservation. Exact words include signed zero,
+subnormals and NaN payloads. A mixed-type fill also requires translated broadcast
+materialization and explicit casting before the final copy. All 52 added dispatches retain
+their native geometry and output guards.
+
+Native traces must start with the exact 493 nonempty workload dispatches, cover
 all 58 entries, and retain artifact identities and runtime/device details.
 Separate negative processes reject an unsupported primitive, oversized arange,
 a missing artifact, unary inputs with unsupported dtype or size, contiguous and
@@ -273,14 +294,16 @@ strided unary inputs that exceed their allocations, and
 copies with unsupported dtype, excessive size or an invalid source allocation.
 Binary inputs with unsupported dtype or excessive size are also rejected, as
 are casts with unsupported types, excessive size or an invalid source span.
-Each of the seventeen processes has a hard 180-second process-tree deadline; all
+Full also rejects unsupported boolean storage, excessive output size and a source
+view extending before its allocation.
+Each of the twenty processes has a hard 180-second process-tree deadline; all
 are attempted so a failure does not discard the other diagnostic results.
 
 The evidence directory retains before/after adaptation hashes, command status,
 stdout/stderr, upstream test logs, dispatch traces and numerical results. The
 schema-version-2 summary records both upstream test-file hashes and is written
 only after source and result checks pass,
-including explicit rejection messages from all fifteen negative cases. Source
+including explicit rejection messages from all eighteen negative cases. Source
 identity checks do not attest to a separately supplied binary; CI builds MLX from
 the verified sources and retains its build log. `fullUpstreamSuite` and
 `fullTranslatedBackend` remain `false`: extending primitive coverage and then

@@ -425,6 +425,15 @@ void AsType::eval_gpu(const std::vector<array>& inputs, array& out) {
   dispatch_cast(inputs, out);
 }
 
+void Full::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() != 1 || inputs[0].shape() != out.shape()) {
+    throw std::invalid_argument("CrossTL Full input must match output shape.");
+  }
+  // MLX has already broadcast and cast the value; materialize it on the device.
+  dispatch_copy(inputs[0], out);
+}
+
 void Reshape::eval_gpu(const std::vector<array>& inputs, array& out) {
   reshape_view(inputs, out);
 }

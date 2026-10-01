@@ -32,7 +32,7 @@ VIEW_PRIMITIVES = (
     "Unflatten",
 )
 MULTI_OUTPUT_VIEWS = {"CustomTransforms", "Depends", "Split"}
-COPY_PRIMITIVES = ("Contiguous", "Flatten")
+COPY_PRIMITIVES = ("Contiguous", "Flatten", "Full")
 CAST_PRIMITIVES = ("AsType",)
 
 

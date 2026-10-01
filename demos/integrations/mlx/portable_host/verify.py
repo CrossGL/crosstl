@@ -15,6 +15,7 @@ from demos.integrations.mlx.portable_host import (
     binary_workloads,
     cast_workloads,
     copy_workloads,
+    full_workloads,
     unary_workloads,
     view_workloads,
 )
@@ -47,6 +48,11 @@ UPSTREAM_TESTS = (
     "test_ops.TestOps.test_diff",
     "test_ops.TestOps.test_flip",
     "test_array.TestArray.test_array_type_cast",
+    "test_ops.TestOps.test_bartlett_general",
+    "test_ops.TestOps.test_blackman_general",
+    "test_ops.TestOps.test_hamming_general",
+    "test_ops.TestOps.test_hanning_general",
+    "test_ops.TestOps.test_shape_overflow_error",
 )
 DTYPES = ("float32", "int32", "uint32", "int64", "uint64")
 COUNTS = (0, 1, 7, 257)
@@ -66,6 +72,9 @@ NEGATIVE_CHECKS = {
     "cast-dtype": "casts require float32, int32 or uint32",
     "cast-limit": "65535",
     "cast-allocation": "exceeds its allocation",
+    "full-dtype": "matching float32, int32 or uint32",
+    "full-limit": "65535",
+    "full-allocation": "exceeds its allocation",
 }
 
 
@@ -138,6 +147,13 @@ def worker(args):
                     mx.array([1, 2, 3], dtype=mx.int32), (2,), (1,), 2
                 )
                 value = source.astype(mx.float32)
+            elif args.worker == "full-dtype":
+                value = mx.full((3, 5), mx.array(True, dtype=mx.bool_))
+            elif args.worker == "full-limit":
+                value = mx.ones((65536,), dtype=mx.float32)
+            elif args.worker == "full-allocation":
+                source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (2,), (-1,))
+                value = mx.full((3, 2), source)
             else:
                 descriptor = runtime.descriptors["arangefloat32"]
                 descriptor["artifact"]["packagePath"] = "artifacts/missing.glsl"
@@ -171,6 +187,9 @@ def worker(args):
     casts = cast_workloads.run(mx, np)
     save(output / "cast-readbacks.json", casts)
     cast_workloads.validate(casts)
+    full = full_workloads.run(mx, np)
+    save(output / "full-readbacks.json", full)
+    full_workloads.validate(full)
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
     suite = unittest.TestSuite(
         unittest.defaultTestLoader.loadTestsFromName(name) for name in UPSTREAM_TESTS
@@ -190,6 +209,7 @@ def worker(args):
             "copies": copies,
             "binary": binary,
             "casts": casts,
+            "full": full,
         },
     )
     if (
@@ -230,6 +250,7 @@ def verify_results(result, *, cpu=False):
     copy_workloads.validate(result.get("copies"))
     binary_workloads.validate(result.get("binary"))
     cast_workloads.validate(result.get("casts"))
+    full_workloads.validate(result.get("full"))
 
 
 def upstream_test_sources(root):
@@ -315,6 +336,7 @@ def verify(args):
         + copy_workloads.dispatches()
         + binary_workloads.dispatches()
         + cast_workloads.dispatches()
+        + full_workloads.dispatches()
     )
     if [(record["entry"], record.get("threads")) for record in trace][
         : len(expected_dispatches)
