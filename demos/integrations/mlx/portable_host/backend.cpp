@@ -218,18 +218,69 @@ void reshape_view(
   mlx::core::shared_buffer_reshape(in, strides, out);
 }
 
-mlx::core::array binary_input(const mlx::core::array& in) {
+mlx::core::array dense_input(const mlx::core::array& in) {
   if (in.flags().row_contiguous && in.data_size() == in.size()) {
     const uint64_t bytes = in.nbytes();
     if (in.offset() < 0 || uint64_t(in.offset()) > in.buffer_size() ||
         bytes > in.buffer_size() - uint64_t(in.offset())) {
-      throw std::invalid_argument("CrossTL binary input exceeds its allocation.");
+      throw std::invalid_argument("CrossTL dense input exceeds its allocation.");
     }
     return in;
   }
   mlx::core::array dense(in.shape(), in.dtype(), nullptr, {});
   dispatch_copy(in, dense);
   return dense;
+}
+
+const char* storage32_type(mlx::core::Dtype dtype) {
+  if (dtype == mlx::core::float32) {
+    return "float32";
+  }
+  if (dtype == mlx::core::int32) {
+    return "int32";
+  }
+  if (dtype == mlx::core::uint32) {
+    return "uint32";
+  }
+  return nullptr;
+}
+
+void dispatch_cast(const std::vector<mlx::core::array>& inputs, mlx::core::array& out) {
+  require_runtime();
+  if (inputs.size() != 1 || inputs[0].shape() != out.shape()) {
+    throw std::invalid_argument("CrossTL cast input must match output shape.");
+  }
+  const char* source_type = storage32_type(inputs[0].dtype());
+  const char* destination_type = storage32_type(out.dtype());
+  if (!source_type || !destination_type) {
+    throw std::invalid_argument("CrossTL casts require float32, int32 or uint32 arrays.");
+  }
+  if (out.size() > 65535) {
+    throw std::invalid_argument("CrossTL cast supports at most 65535 elements.");
+  }
+  if (inputs[0].dtype() == out.dtype()) {
+    out.copy_shared_buffer(inputs[0]);
+    return;
+  }
+  out.set_data(mlx::core::allocator::malloc(out.nbytes()));
+  if (out.size() == 0) {
+    return;
+  }
+  auto in = dense_input(inputs[0]);
+  uint32_t size = static_cast<uint32_t>(out.size());
+  std::string entry = std::string("v_copy") + source_type + destination_type;
+  CrosstlMlxBuffer buffers[] = {
+      {"src", source_type, in.data<void>(), size, 0},
+      {"dst", destination_type, out.data<void>(), size, 1},
+      {"size", "uint32", &size, 1, 0},
+  };
+  char error[2048] = {};
+  int status = dispatch_callback.load()(
+      entry.c_str(), buffers, 3, size, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native cast failed: ") + error);
+  }
 }
 
 void dispatch_binary(
@@ -242,14 +293,8 @@ void dispatch_binary(
       inputs[1].shape() != out.shape()) {
     throw std::invalid_argument("CrossTL binary inputs must match output shape and dtype.");
   }
-  const char* dtype;
-  if (out.dtype() == mlx::core::float32) {
-    dtype = "float32";
-  } else if (out.dtype() == mlx::core::int32) {
-    dtype = "int32";
-  } else if (out.dtype() == mlx::core::uint32) {
-    dtype = "uint32";
-  } else {
+  const char* dtype = storage32_type(out.dtype());
+  if (!dtype) {
     throw std::invalid_argument("CrossTL binary dispatch requires a supported 32-bit dtype.");
   }
   if (std::string(operation) == "Divide" && out.dtype() != mlx::core::float32) {
@@ -262,8 +307,8 @@ void dispatch_binary(
   if (out.size() == 0) {
     return;
   }
-  auto a = binary_input(inputs[0]);
-  auto b = binary_input(inputs[1]);
+  auto a = dense_input(inputs[0]);
+  auto b = dense_input(inputs[1]);
   uint32_t size = static_cast<uint32_t>(out.size());
   std::string entry = std::string("vv_") + operation + dtype;
   CrosstlMlxBuffer buffers[] = {
@@ -374,6 +419,10 @@ void Slice::eval_gpu(const std::vector<array>& inputs, array& out) {
     throw std::invalid_argument("CrossTL slice requires one input.");
   }
   slice(inputs[0], out, start_indices_, strides_);
+}
+
+void AsType::eval_gpu(const std::vector<array>& inputs, array& out) {
+  dispatch_cast(inputs, out);
 }
 
 void Reshape::eval_gpu(const std::vector<array>& inputs, array& out) {

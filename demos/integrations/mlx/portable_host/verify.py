@@ -13,6 +13,7 @@ from pathlib import Path
 
 from demos.integrations.mlx.portable_host import (
     binary_workloads,
+    cast_workloads,
     copy_workloads,
     unary_workloads,
     view_workloads,
@@ -45,6 +46,7 @@ UPSTREAM_TESTS = (
     "test_ops.TestOps.test_multiply",
     "test_ops.TestOps.test_diff",
     "test_ops.TestOps.test_flip",
+    "test_array.TestArray.test_array_type_cast",
 )
 DTYPES = ("float32", "int32", "uint32", "int64", "uint64")
 COUNTS = (0, 1, 7, 257)
@@ -61,6 +63,9 @@ NEGATIVE_CHECKS = {
     "copy-allocation": "exceeds its allocation",
     "binary-dtype": "supported 32-bit dtype",
     "binary-limit": "65535",
+    "cast-dtype": "casts require float32, int32 or uint32",
+    "cast-limit": "65535",
+    "cast-allocation": "exceeds its allocation",
 }
 
 
@@ -124,6 +129,15 @@ def worker(args):
             elif args.worker == "binary-limit":
                 source = mx.array(np.ones(65536, dtype=np.float32))
                 value = mx.add(source, source, stream=mx.gpu)
+            elif args.worker == "cast-dtype":
+                value = mx.array([1, 2], dtype=mx.int64).astype(mx.float32)
+            elif args.worker == "cast-limit":
+                value = mx.array(np.ones(65536, dtype=np.int32)).astype(mx.float32)
+            elif args.worker == "cast-allocation":
+                source = mx.as_strided(
+                    mx.array([1, 2, 3], dtype=mx.int32), (2,), (1,), 2
+                )
+                value = source.astype(mx.float32)
             else:
                 descriptor = runtime.descriptors["arangefloat32"]
                 descriptor["artifact"]["packagePath"] = "artifacts/missing.glsl"
@@ -154,6 +168,9 @@ def worker(args):
     binary = binary_workloads.run(mx, np)
     save(output / "binary-readbacks.json", binary)
     binary_workloads.validate(binary)
+    casts = cast_workloads.run(mx, np)
+    save(output / "cast-readbacks.json", casts)
+    cast_workloads.validate(casts)
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
     suite = unittest.TestSuite(
         unittest.defaultTestLoader.loadTestsFromName(name) for name in UPSTREAM_TESTS
@@ -172,6 +189,7 @@ def worker(args):
             "views": views,
             "copies": copies,
             "binary": binary,
+            "casts": casts,
         },
     )
     if (
@@ -211,6 +229,21 @@ def verify_results(result, *, cpu=False):
     view_workloads.validate(result.get("views"))
     copy_workloads.validate(result.get("copies"))
     binary_workloads.validate(result.get("binary"))
+    cast_workloads.validate(result.get("casts"))
+
+
+def upstream_test_sources(root):
+    sources = {}
+    paths = {f"python/tests/{test.split('.')[0]}.py" for test in UPSTREAM_TESTS}
+    for name in sorted(paths):
+        path = root / name
+        pristine = subprocess.check_output(
+            ["git", "-C", str(root), "show", f"HEAD:{name}"], timeout=30
+        )
+        if path.is_symlink() or path.read_bytes() != pristine:
+            raise ValueError(f"Upstream test source was modified: {name}")
+        sources[name] = hashlib.sha256(pristine).hexdigest()
+    return sources
 
 
 def verify(args):
@@ -218,13 +251,7 @@ def verify(args):
     output.mkdir(parents=True)
     adaptation = verify_prepared(args.mlx_root)
     save(output / "adaptation-before.json", adaptation)
-    test_path = args.mlx_root / "python/tests/test_ops.py"
-    pristine = subprocess.check_output(
-        ["git", "-C", str(args.mlx_root), "show", "HEAD:python/tests/test_ops.py"],
-        timeout=30,
-    )
-    if test_path.read_bytes() != pristine:
-        raise ValueError("Upstream operation tests were modified")
+    test_sources = upstream_test_sources(args.mlx_root)
     results = {}
     failed = []
     for mode in ("cpu", "native", *NEGATIVE_CHECKS):
@@ -287,6 +314,7 @@ def verify(args):
         + view_workloads.dispatches()
         + copy_workloads.dispatches()
         + binary_workloads.dispatches()
+        + cast_workloads.dispatches()
     )
     if [(record["entry"], record.get("threads")) for record in trace][
         : len(expected_dispatches)
@@ -300,7 +328,7 @@ def verify(args):
         raise RuntimeError("Native trace used an unexpected target")
     after = verify_prepared(args.mlx_root)
     save(output / "adaptation-after.json", after)
-    if after != adaptation or test_path.read_bytes() != pristine:
+    if after != adaptation or upstream_test_sources(args.mlx_root) != test_sources:
         raise ValueError("MLX sources changed during execution")
     evidence = {
         "schemaVersion": 2,
@@ -308,7 +336,8 @@ def verify(args):
         "adaptation": adaptation,
         "target": index["target"],
         "cpuReferenceProfile": unary_workloads.cpu_reference_profile(),
-        "upstreamTestSha256": hashlib.sha256(pristine).hexdigest(),
+        "upstreamTestSha256": test_sources["python/tests/test_ops.py"],
+        "upstreamTestSources": test_sources,
         "upstreamTests": list(UPSTREAM_TESTS),
         "original": results["cpu"],
         "translated": results["native"],

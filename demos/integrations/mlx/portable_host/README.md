@@ -24,8 +24,10 @@ matching float32, int32 and uint32 arrays, including negative and zero strides.
 Binary addition, subtraction, multiplication, minimum and maximum support those
 three types; division supports float32. Broadcasts and non-row-contiguous binary
 inputs are materialized by translated copies before the unchanged vector-vector
-binary entry executes. Mixed-type operations that need an unsupported cast still
-fail explicitly.
+binary entry executes. Casts between float32, int32 and uint32 use six unchanged
+`v_copy` entries, including automatic promotion before mixed-type arithmetic.
+Strided cast inputs are materialized through translated copies. Casts involving
+other types still fail explicitly.
 Other primitives retain MLX's explicit unsupported-GPU errors. Unary inputs
 must be float32. Stored-contiguous broadcasts and column-major views retain
 their metadata; noncontiguous inputs use translated copies before unary dispatch.
@@ -65,6 +67,9 @@ no-GPU backend build definition and adds four explicitly named backend files:
   validate input shapes and types, allocate dense output and stage strided inputs
   through translated copies. Neither layout conversion nor arithmetic falls
   back to CPU computation. Binary buffer donation is not implemented.
+  AsType selects a source/destination-specific copy entry, validates array shapes
+  and allocation bounds, and allocates a dense destination. Casts perform no CPU
+  elementwise conversion.
 - `crosstl_dispatch.h` defines the typed C buffer/callback ABI.
 - `crosstl_primitives.cpp` copies upstream unsupported primitive definitions,
   removing only the implemented primitive stubs.
@@ -81,6 +86,10 @@ including its contiguous strides and buffer-donation behavior. It performs no
 CPU calculation. Host inputs are copied before output readback, including when
 MLX donates the input allocation. Translation explicitly selects the
 `rne-flush` binary32 FMA profile required by the pinned Erf and Expm1 bodies.
+All selected copy and cast entries genuinely use the same `[1, 1, 1]` workgroup
+size and share one matching configuration rule. Distinct per-entry rules remain
+subject to the project validation defect tracked in
+[#1970](https://github.com/CrossGL/crosstl/issues/1970).
 
 `runtime.py` retains the callback for the process lifetime and permits one
 registration. It verifies argument names, direction, counts and physical layouts
@@ -194,6 +203,7 @@ these upstream tests without skips:
 - `test_transpose_noargs`, `test_transpose_axis`, `test_broadcast`, `test_split`
 - `test_subtract`, `test_multiply`
 - `test_diff`, `test_flip`
+- `test_array.TestArray.test_array_type_cast`
 
 The CPU reference uses the unchanged CPU backend in the same adapted MLX build;
 it is not a separately rebuilt pristine binary or a Metal comparison.
@@ -246,20 +256,31 @@ readback. The native conditional-selection gate also checks scalar/vector payloa
 and exactly-once condition and selected-branch evaluation, tracking
 [#1998](https://github.com/CrossGL/crosstl/issues/1998).
 
-Native traces must start with the exact 377 nonempty workload dispatches, cover
-all 52 entries, and retain artifact identities and runtime/device details.
+Cast workloads add 50 records with 1,976 outputs across all six conversions and
+eight layouts, plus two automatically promoted additions. Exact output words
+check truncation toward zero, signed/unsigned integer wrapping, integer-to-float
+rounding at binary32 precision boundaries, and source preservation. Floating
+inputs for integer destinations are finite and within the representable range;
+nonfinite and out-of-range float-to-integer conversions are not covered by this
+portability proof. Each cast checks a 128-byte device output guard before host
+readback. Empty conversions do not dispatch.
+
+Native traces must start with the exact 441 nonempty workload dispatches, cover
+all 58 entries, and retain artifact identities and runtime/device details.
 Separate negative processes reject an unsupported primitive, oversized arange,
 a missing artifact, unary inputs with unsupported dtype or size, contiguous and
 strided unary inputs that exceed their allocations, and
 copies with unsupported dtype, excessive size or an invalid source allocation.
-Binary inputs with unsupported dtype or excessive size are also rejected.
-Each of the fourteen processes has a hard 180-second process-tree deadline; all
+Binary inputs with unsupported dtype or excessive size are also rejected, as
+are casts with unsupported types, excessive size or an invalid source span.
+Each of the seventeen processes has a hard 180-second process-tree deadline; all
 are attempted so a failure does not discard the other diagnostic results.
 
 The evidence directory retains before/after adaptation hashes, command status,
 stdout/stderr, upstream test logs, dispatch traces and numerical results. The
-schema-version-2 summary is written only after source and result checks pass,
-including explicit rejection messages from all twelve negative cases. Source
+schema-version-2 summary records both upstream test-file hashes and is written
+only after source and result checks pass,
+including explicit rejection messages from all fifteen negative cases. Source
 identity checks do not attest to a separately supplied binary; CI builds MLX from
 the verified sources and retains its build log. `fullUpstreamSuite` and
 `fullTranslatedBackend` remain `false`: extending primitive coverage and then

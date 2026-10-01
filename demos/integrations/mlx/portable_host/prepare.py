@@ -33,6 +33,7 @@ VIEW_PRIMITIVES = (
 )
 MULTI_OUTPUT_VIEWS = {"CustomTransforms", "Depends", "Split"}
 COPY_PRIMITIVES = ("Contiguous", "Flatten")
+CAST_PRIMITIVES = ("AsType",)
 
 
 def replace_once(text, before, after):
@@ -49,6 +50,7 @@ def adapted_sources(original, primitives, events):
         *VIEW_PRIMITIVES,
         *COPY_PRIMITIVES,
         *BINARY_OPERATIONS,
+        *CAST_PRIMITIVES,
     ):
         if primitive in {"Log2", "Log10", "Rsqrt"}:
             continue
