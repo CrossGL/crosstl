@@ -573,6 +573,18 @@ native hardware reduction order or denormal mode.
 Narrow products remain diagnostic until their intermediate rounding is
 preserved, even where a target normally uses a 32-bit carrier for that type.
 
+Pure scalar helpers of the form ``if (subgroup_vote) return fallback; return
+subgroup_reduce(value);`` can converge both collectives before selecting each
+logical subgroup's result. This retains different subgroup votes within one
+workgroup; it does not reclassify them as workgroup-uniform. The lowering requires
+safe by-value operands and rejects memory loads, effectful calls, mutation and
+unproven arithmetic. Direct votes, negated votes and immutable Boolean locals
+are supported, including unused method receivers. Native-mode branches remain
+unchanged. Required native tests compare generated outputs with independent
+references and original Metal compiled without fast math, retaining exact
+finite results, NaN classification, repeated calls and guards. Full MLX host
+reduction planning and arbitrary collective control flow remain separate work.
+
 The bounded Windows test also records live Direct3D 12 debug-layer messages
 through ``tools/run_directx_diagnostics.py``. Each entry's JSON-lines log is
 stored outside pytest's temporary directory and uploaded with the runtime

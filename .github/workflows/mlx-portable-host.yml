@@ -40,6 +40,8 @@ on:
       - "tests/test_translator/test_software_subgroup_votes.py"
       - "tests/test_translator/test_opengl_subgroup_wrappers.py"
       - "tests/test_translator/test_software_subgroup_product.py"
+      - "tests/test_translator/test_subgroup_guarded_returns.py"
+      - "tests/test_translator/test_opengl_subgroup_exit_uniformity.py"
       - "tests/test_translator/test_mlx_current_unary_sign.py"
       - "tests/test_translator/test_mlx_current_unary_atan.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
@@ -94,6 +96,8 @@ on:
       - "tests/test_translator/test_software_subgroup_votes.py"
       - "tests/test_translator/test_opengl_subgroup_wrappers.py"
       - "tests/test_translator/test_software_subgroup_product.py"
+      - "tests/test_translator/test_subgroup_guarded_returns.py"
+      - "tests/test_translator/test_opengl_subgroup_exit_uniformity.py"
       - "tests/test_translator/test_mlx_current_unary_sign.py"
       - "tests/test_translator/test_mlx_current_unary_atan.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
@@ -238,6 +242,22 @@ jobs:
               --junitxml=.mlx-portable-host/subgroup-products/results.xml \
               tests/test_translator/test_software_subgroup_product.py \
               2>&1 | tee .mlx-portable-host/subgroup-products.log
+      - name: Validate subgroup-guarded returns
+        env:
+          CROSTL_REQUIRE_SUBGROUP_GUARDED_RETURNS: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/subgroup-returns
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Subgroup-guarded returns" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/subgroup-returns/pytest \
+              --junitxml=.mlx-portable-host/subgroup-returns/results.xml \
+              tests/test_translator/test_subgroup_guarded_returns.py \
+              tests/test_translator/test_opengl_subgroup_exit_uniformity.py \
+              2>&1 | tee .mlx-portable-host/subgroup-returns.log
       - name: Validate Metal argument inference
         env:
           CROSTL_REQUIRE_METAL_ARGUMENT_INFERENCE: "1"

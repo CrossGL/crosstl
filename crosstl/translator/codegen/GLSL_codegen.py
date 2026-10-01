@@ -348,6 +348,7 @@ from .stage_utils import (
     should_emit_qualified_function,
     stage_matches,
 )
+from .subgroup_control_flow import converge_subgroup_guarded_returns
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
 
@@ -5195,10 +5196,145 @@ class GLSLCodeGen:
                 self.validate_glsl_software_subgroup_exits(
                     getattr(function, "body", None),
                     operation=all_records[0][0],
+                    **self.glsl_software_subgroup_exit_facts(
+                        function,
+                        immutable_names if function is entry_function else set(),
+                        function is entry_function,
+                    ),
                 )
 
+    def glsl_software_subgroup_exit_constructor(self, node):
+        return (
+            isinstance(node, FunctionCallNode)
+            and self.function_call_name(node)
+            in {"bool", "int", "uint", "float", "int64_t", "uint64_t"}
+            and self.function_call_name(node) not in self.function_definitions
+            and len(node.arguments) == 1
+        )
+
+    def glsl_software_subgroup_exit_uniform_expression(self, node, names, components):
+        if isinstance(node, LiteralNode):
+            return True
+        if isinstance(node, IdentifierNode):
+            return node.name in names
+        if isinstance(node, (MemberAccessNode, SwizzleNode)):
+            base = (
+                node.object_expr
+                if isinstance(node, MemberAccessNode)
+                else node.vector_expr
+            )
+            member = (
+                node.member if isinstance(node, MemberAccessNode) else node.components
+            )
+            if isinstance(base, IdentifierNode) and base.name in components:
+                positions = {
+                    letter: index
+                    for alphabet in ("xyzw", "rgba")
+                    for index, letter in enumerate(alphabet)
+                }
+                return bool(member) and all(
+                    positions.get(letter) in components[base.name] for letter in member
+                )
+            children = [base]
+        elif self.glsl_software_subgroup_exit_constructor(node):
+            children = node.arguments
+        elif isinstance(node, ConstructorNode):
+            children = [*node.arguments, *node.named_arguments.values()]
+        elif isinstance(node, CastNode):
+            children = [node.expression]
+        elif isinstance(node, BinaryOpNode):
+            children = [node.left, node.right]
+        elif isinstance(node, UnaryOpNode) and self.map_operator(node.operator) in {
+            "+",
+            "-",
+            "!",
+            "~",
+        }:
+            children = [node.operand]
+        else:
+            return False
+        return all(
+            self.glsl_software_subgroup_exit_uniform_expression(
+                child, names, components
+            )
+            for child in children
+        )
+
+    def glsl_software_subgroup_exit_facts(self, function, seeds, entry):
+        names = set(self.GLSL_SOFTWARE_SUBGROUP_WORKGROUP_UNIFORM_BUILTINS) | set(seeds)
+        components = {
+            builtin: {
+                axis
+                for axis, size in enumerate(self.glsl_software_subgroup_workgroup_size)
+                if size == 1
+            }
+            for builtin in ("gl_GlobalInvocationID", "gl_LocalInvocationID")
+        }
+        mutable = set()
+        declarations = {}
+        for parameter in function.parameters or []:
+            name = parameter.name
+            declarations[name] = declarations.get(name, 0) + 1
+            if not entry or name not in seeds:
+                names.discard(name)
+            components.pop(name, None)
+            semantic = self.map_semantic(self.semantic_from_node(parameter))
+            if entry and semantic in {"gl_GlobalInvocationID", "gl_LocalInvocationID"}:
+                components[name] = {
+                    axis
+                    for axis, size in enumerate(
+                        self.glsl_software_subgroup_workgroup_size
+                    )
+                    if size == 1
+                }
+        for node in self.walk_ast(function.body):
+            invalidated = None
+            if isinstance(node, VariableNode):
+                declarations[node.name] = declarations.get(node.name, 0) + 1
+                if "&" in (self.type_name_string(node.var_type) or ""):
+                    invalidated = node.initial_value
+            elif isinstance(node, AssignmentNode):
+                invalidated = getattr(node, "target", getattr(node, "left", None))
+            elif isinstance(node, UnaryOpNode) and self.map_operator(node.operator) in {
+                "++",
+                "--",
+                "&",
+            }:
+                invalidated = node.operand
+            elif isinstance(
+                node, FunctionCallNode
+            ) and not self.glsl_software_subgroup_exit_constructor(node):
+                invalidated = node.arguments
+            if invalidated is not None:
+                mutable.update(
+                    self.glsl_software_subgroup_expression_identifier_names(invalidated)
+                )
+        mutable.update(name for name, count in declarations.items() if count > 1)
+        names.difference_update(mutable)
+        if (
+            self.glsl_software_subgroup_count == 1
+            and "gl_SubgroupID" not in mutable
+            and "gl_SubgroupID" not in declarations
+        ):
+            names.add("gl_SubgroupID")
+        components = {
+            name: axes for name, axes in components.items() if name not in mutable
+        }
+        return {
+            "uniform_names": names,
+            "uniform_components": components,
+            "mutable_names": mutable,
+        }
+
     def validate_glsl_software_subgroup_exits(
-        self, body, later_work=False, *, operation
+        self,
+        body,
+        later_work=False,
+        *,
+        operation,
+        uniform_names=None,
+        uniform_components=None,
+        mutable_names=None,
     ):
         def contains_work(root):
             return bool(self.glsl_software_subgroup_operation_records(root)) or any(
@@ -5208,11 +5344,22 @@ class GLSLCodeGen:
             )
 
         statements = self.glsl_software_subgroup_statement_list(body)
-        # Exit proofs use immutable builtins, not locals that may escape by reference.
-        uniform_names = set(self.GLSL_SOFTWARE_SUBGROUP_WORKGROUP_UNIFORM_BUILTINS)
-        if self.glsl_software_subgroup_count == 1:
-            uniform_names.add("gl_SubgroupID")
+        uniform_names = set(uniform_names or ())
+        uniform_components = dict(uniform_components or {})
+        mutable_names = set(mutable_names or ())
         for index, statement in enumerate(statements):
+            if isinstance(statement, VariableNode):
+                uniform_names.discard(statement.name)
+                uniform_components.pop(statement.name, None)
+                if (
+                    statement.name not in mutable_names
+                    and self.map_type(statement.var_type)
+                    in {"bool", "int", "uint", "float", "int64_t", "uint64_t"}
+                    and self.glsl_software_subgroup_exit_uniform_expression(
+                        statement.initial_value, uniform_names, uniform_components
+                    )
+                ):
+                    uniform_names.add(statement.name)
             subsequent_work = later_work or any(
                 contains_work(item) for item in statements[index + 1 :]
             )
@@ -5230,8 +5377,8 @@ class GLSLCodeGen:
                     has_exit
                     and (subsequent_work or has_work)
                     and not all(
-                        self.glsl_software_subgroup_uniform_expression(
-                            condition, uniform_names
+                        self.glsl_software_subgroup_exit_uniform_expression(
+                            condition, uniform_names, uniform_components
                         )
                         for condition in conditions
                     )
@@ -5249,7 +5396,12 @@ class GLSLCodeGen:
                     getattr(statement, "else_body", None),
                 ]:
                     self.validate_glsl_software_subgroup_exits(
-                        branch, subsequent_work, operation=operation
+                        branch,
+                        subsequent_work,
+                        operation=operation,
+                        uniform_names=uniform_names,
+                        uniform_components=uniform_components,
+                        mutable_names=mutable_names,
                     )
             elif isinstance(
                 statement,
@@ -5273,7 +5425,12 @@ class GLSLCodeGen:
                     )
             elif isinstance(statement, BlockNode) or hasattr(statement, "statements"):
                 self.validate_glsl_software_subgroup_exits(
-                    statement, subsequent_work, operation=operation
+                    statement,
+                    subsequent_work,
+                    operation=operation,
+                    uniform_names=uniform_names,
+                    uniform_components=uniform_components,
+                    mutable_names=mutable_names,
                 )
 
     def glsl_software_subgroup_uniform_seed_names(
@@ -6541,6 +6698,10 @@ class GLSLCodeGen:
     def generate_program(self, ast, target_stage=None):
         """Render an AST to GLSL, optionally filtering stage entry points."""
         ast = self.with_glsl_builtin_option_prelude(ast)
+        if self.software_subgroup_width is not None:
+            ast = converge_subgroup_guarded_returns(
+                ast, self.walk_ast, self.map_operator
+            )
         target_stage = normalize_stage_name(target_stage)
         self.glsl_stage_reachable_function_names = self.stage_reachable_function_names(
             ast, target_stage

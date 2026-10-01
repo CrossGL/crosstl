@@ -88,6 +88,18 @@ possible native hardware reduction order or denormal mode.
 Narrow, vector and wider products remain diagnostic; source-precision rounding
 must be established separately from scratch storage width.
 
+Pure subgroup-vote guards around scalar reduction returns are lowered to
+converged collectives followed by value selection. A subgroup-wide vote is not
+treated as workgroup-uniform; multiple logical subgroups can select different
+results. Only safe by-value operands are speculated, and unproven effects or
+participation remain diagnostic. Original Metal controls use fast math disabled,
+matching the generated native runtime's NaN-sensitive compilation contract.
+
+Uniform bounds-check exits also retain immutable local facts and individual
+invocation components whose workgroup extent is one. Mutation, reference
+escape, shadowing and unknown calls invalidate those facts. A uniform ``y``
+component does not make ``x`` or the whole invocation vector uniform.
+
 Native Attention Fixture
 ------------------------
 

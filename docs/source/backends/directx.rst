@@ -142,6 +142,15 @@ NaN payloads are not a portable guarantee. Narrow, vector and wider products
 remain diagnostic in software mode; widening a carrier does not preserve
 source-precision rounding by itself.
 
+Pure reduction helpers may return early on a subgroup-wide Boolean vote.
+Software lowering evaluates the vote and reduction before selecting the return
+value, so different logical subgroups can retain different results without
+skipping workgroup barriers. This requires a direct all/any vote (or an immutable
+local holding it), a scalar reduction and safe by-value operands. Memory loads,
+effectful calls, mutation, division and unknown control flow are not speculated.
+Native mode keeps the original branch. Required native checks retain NaNs in
+different subgroups, both return paths, repeated calls and buffer guards.
+
 A separate required Windows gate translates eight pinned MLX gated-delta
 backward configurations with software subgroups and dispatches the generated
 DXIL using the upstream ``(32, 4, 1)`` workgroup shape. All six gradients are

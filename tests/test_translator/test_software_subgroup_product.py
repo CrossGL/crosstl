@@ -143,8 +143,9 @@ kernel void products(device uint* inputWords [[buffer(0)]],
 """
 
 
-def _package(root, target, kind, shape):
-    source = _source(kind, math.prod(shape))
+def _package(root, target, kind, shape, *, source=None):
+    if source is None:
+        source = _source(kind, math.prod(shape))
     (root / "products.metal").write_text(source, encoding="utf-8")
     options = {}
     if target != "metal":

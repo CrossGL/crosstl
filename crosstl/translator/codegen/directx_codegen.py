@@ -351,6 +351,7 @@ from .stage_utils import (
     stage_layout_entry_value,
     stage_matches,
 )
+from .subgroup_control_flow import converge_subgroup_guarded_returns
 
 
 class DirectXUnresolvedSourceTypeError(ValueError):
@@ -3008,6 +3009,10 @@ class HLSLCodeGen:
         self.directx_cooperative_matrix_lowerings = {}
         self.hlsl_builtin_option_available = False
         ast = self.with_hlsl_builtin_option_prelude(ast)
+        if self.software_subgroup_width is not None:
+            ast = converge_subgroup_guarded_returns(
+                ast, self.walk_ast, self.map_operator
+            )
 
         self.texture_variables = set()
         self.sampler_variables = set()
