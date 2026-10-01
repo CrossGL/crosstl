@@ -205,8 +205,8 @@ def row_evidence():
             for key, value in case.items()
         }
         record.update(
-            actual=expected.tolist(),
-            expected=expected.tolist(),
+            actual=row_workloads.wire_values(expected.tolist()),
+            expected=row_workloads.wire_values(expected.tolist()),
             resultShape=list(expected.shape),
             logicalShape=list(logical.shape),
             resultDtype="mlx.core." + case["dtype"].removesuffix("_"),
@@ -240,7 +240,9 @@ def row_evidence():
                     ),
                     1,
                 ],
-                reductionValues=expected.reshape(-1).tolist(),
+                reductionValues=row_workloads.wire_values(
+                    expected.reshape(-1).tolist()
+                ),
                 reductionGuardValues=guards,
             )
         )
@@ -274,6 +276,8 @@ def row_evidence():
         "readback",
         "guard",
         "guard-count",
+        "nan",
+        "negative-zero",
     ],
 )
 def test_row_evidence_requires_complete_native_execution(row_evidence, fault):
@@ -320,6 +324,47 @@ def test_row_evidence_requires_complete_native_execution(row_evidence, fault):
         trace[0]["reductionGuardValues"][0] = 0
     elif fault == "guard-count":
         trace[0]["reductionGuardValues"].pop()
+    elif fault in {"nan", "negative-zero"}:
+        record = next(
+            record
+            for record in records
+            if record.get("profile")
+            == ("early-nan" if fault == "nan" else "negative-zero")
+            and record["entry"] == "row_reduce_simple_prodfloat32"
+        )
+        record["actual"][0] = 0.0
+    if fault:
+        with pytest.raises(ValueError):
+            row_workloads.validate(records, (32, 128), trace=trace)
+    else:
+        row_workloads.validate(records, (32, 128), trace=trace)
+
+
+def test_row_special_profiles_cover_every_float_entry():
+    cases = list(row_workloads.cases((32, 128)))
+    special = [case for case in cases if "profile" in case]
+    assert len(special) == 64
+    assert {(case["entry"], case["profile"]) for case in special} == {
+        (entry, profile)
+        for entry, dtype in reduction_packages.ROW_ENTRIES.items()
+        if dtype == "float32"
+        for profile in ("early-nan", "late-nan", "positive-infinity", "negative-zero")
+    }
+
+
+@pytest.mark.parametrize("target", ["metal", "opengl", "directx"])
+@pytest.mark.parametrize("fault", [False, True])
+def test_row_trace_checks_physical_boolean_storage(row_evidence, target, fault):
+    records, trace = copy.deepcopy(row_evidence)
+    for record, dispatch in zip(records, trace):
+        dispatch["target"] = target
+        if record["dtype"] == "bool_":
+            if target != "metal":
+                dispatch["reductionValues"] = [
+                    int(value) for value in dispatch["reductionValues"]
+                ]
+            if fault:
+                dispatch["reductionValues"][0] = 2
     if fault:
         with pytest.raises(ValueError):
             row_workloads.validate(records, (32, 128), trace=trace)

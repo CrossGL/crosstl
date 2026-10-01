@@ -205,8 +205,9 @@ python -m demos.integrations.mlx.portable_host.verify_rows --mlx-root mlx-upstre
 
 The separate row CI matrix runs on all three operating systems. Workloads cover
 every integrated entry, reachable launch boundaries, multidimensional axes,
-slices and transposes. CPU and generated-native results are compared with NumPy
-references. The verifier requires the exact source entry, launch geometry,
+slices, transposes, early/late NaNs, infinities and signed zeros. CPU and
+generated-native results are compared with NumPy references. The verifier
+requires the exact source entry, launch geometry,
 one native reduction per case and intact output guards. Not every packaged
 entry/width pair is executable within the current 65,535-element host limit;
 the retained case list identifies precisely which combinations execute.

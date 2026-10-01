@@ -4,13 +4,14 @@ import math
 import struct
 
 from demos.integrations.mlx.portable_host.reduction_packages import ROW_ENTRIES
-from demos.integrations.mlx.portable_host.reduction_workloads import matches
+from demos.integrations.mlx.portable_host.reduction_workloads import matches, wire
 from demos.integrations.mlx.portable_host.row_reduction_layout import width
 
 
 def cases(widths):
     for entry, dtype in ROW_ENTRIES.items():
         operation = entry.removesuffix(dtype).rsplit("_", 1)[1]
+        first_case = None
         for group_width in widths:
             row_sizes = (
                 (65, 512)
@@ -34,7 +35,7 @@ def cases(widths):
                 if math.prod(shape) > 65535:
                     continue
                 assert width(row_size) == group_width
-                yield {
+                case = {
                     "id": f"{entry}-{row_size}",
                     "entry": entry,
                     "dtype": dtype,
@@ -44,6 +45,17 @@ def cases(widths):
                     "width": group_width,
                     "layout": "dense",
                 }
+                if row_size == 65:
+                    first_case = case
+                yield case
+        if dtype == "float32" and first_case is not None:
+            for profile in (
+                "early-nan",
+                "late-nan",
+                "positive-infinity",
+                "negative-zero",
+            ):
+                yield first_case | {"id": f"{entry}-{profile}", "profile": profile}
         if "looped_1_" in entry and 32 in widths:
             for layout in ("contiguous", "slice", "transpose"):
                 shape = (
@@ -99,6 +111,19 @@ def reference(np, case):
         if dtype == "float32":
             values = values * 0.25
     base = values.astype(np.bool_ if dtype == "bool_" else dtype).reshape(case["shape"])
+    profile = case.get("profile")
+    if profile is not None:
+        base.fill(1.0)
+        if profile == "early-nan":
+            base.flat[0] = np.nan
+        elif profile == "late-nan":
+            base.flat[-1] = np.nan
+        elif profile == "positive-infinity":
+            base.fill(np.inf)
+        elif profile == "negative-zero":
+            base.fill(-0.0)
+        else:
+            raise ValueError("Unknown row numerical profile")
     values = (
         base[1::2]
         if case["layout"] == "slice"
@@ -107,6 +132,37 @@ def reference(np, case):
     name = {"and": "all", "or": "any"}.get(case["operation"], case["operation"])
     kwargs = {"dtype": values.dtype} if name in {"sum", "prod"} else {}
     return base, values, getattr(np, name)(values, axis=case["axes"], **kwargs)
+
+
+def wire_values(values):
+    return (
+        [wire_values(value) for value in values]
+        if isinstance(values, list)
+        else wire(values)
+    )
+
+
+def values_match(actual, expected, dtype, *, physical_boolean=False):
+    if isinstance(expected, list):
+        return (
+            isinstance(actual, list)
+            and len(actual) == len(expected)
+            and all(
+                values_match(a, b, dtype, physical_boolean=physical_boolean)
+                for a, b in zip(actual, expected)
+            )
+        )
+    if physical_boolean and dtype == "bool_":
+        if type(actual) is not int or actual not in (0, 1):
+            return False
+        actual = bool(actual)
+    if isinstance(actual, str):
+        if actual not in {"nan", "+infinity", "-infinity"}:
+            return False
+        actual = {"nan": math.nan, "+infinity": math.inf, "-infinity": -math.inf}[
+            actual
+        ]
+    return matches(actual, expected, dtype)
 
 
 def collect(mx, np, widths, *, observe=None, dispatch_count=None):
@@ -128,8 +184,8 @@ def collect(mx, np, widths, *, observe=None, dispatch_count=None):
             for key, value in case.items()
         } | dict(
             logicalShape=list(values.shape),
-            expected=expected.tolist(),
-            actual=actual.tolist(),
+            expected=wire_values(expected.tolist()),
+            actual=wire_values(actual.tolist()),
             resultShape=list(result.shape),
             resultDtype=str(result.dtype),
         )
@@ -168,8 +224,12 @@ def validate(records, widths, *, trace=None):
         }
         if (
             any(record.get(key) != value for key, value in identity.items())
-            or record.get("actual") != reference_values.tolist()
-            or record.get("expected") != reference_values.tolist()
+            or not values_match(
+                record.get("actual"), reference_values.tolist(), case["dtype"]
+            )
+            or not values_match(
+                record.get("expected"), reference_values.tolist(), case["dtype"]
+            )
             or record.get("resultShape") != list(reference_values.shape)
             or record.get("logicalShape") != list(logical.shape)
             or record.get("resultDtype")
@@ -221,8 +281,12 @@ def validate(records, widths, *, trace=None):
                 or dispatch.get("threads") != logical.size
                 or type(dispatch.get("dispatchVersion")) is not int
                 or dispatch.get("dispatchVersion") != 2
-                or dispatch.get("reductionValues")
-                != reference_values.reshape(-1).tolist()
+                or not values_match(
+                    dispatch.get("reductionValues"),
+                    reference_values.reshape(-1).tolist(),
+                    case["dtype"],
+                    physical_boolean=dispatch.get("target") in {"opengl", "directx"},
+                )
                 or guards != expected_guards
             ):
                 raise ValueError("Row trace does not match the source entry and width")
