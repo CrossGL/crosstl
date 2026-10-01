@@ -2479,6 +2479,7 @@ class GLSLCodeGen:
         self.required_glsl_boolean_order_helpers = set()
         self.required_glsl_metal_math_helpers = set()
         self.glsl_half_helper_names = {}
+        self.glsl_float_selection_helper_names = {}
         self.glsl_generating_global_initializer = False
         self.required_glsl_trailing_zero_helpers = set()
         self.glsl_trailing_zero_helper_names = {}
@@ -6569,6 +6570,7 @@ class GLSLCodeGen:
         self.required_glsl_boolean_order_helpers = set()
         self.required_glsl_metal_math_helpers = set()
         self.glsl_half_helper_names = {}
+        self.glsl_float_selection_helper_names = {}
         self.glsl_generating_global_initializer = False
         self.required_glsl_trailing_zero_helpers = set()
         self.glsl_trailing_zero_helper_names = {}
@@ -7761,6 +7763,7 @@ class GLSLCodeGen:
             + self.generate_glsl_boolean_order_helpers()
             + self.generate_glsl_metal_math_helpers()
             + self.generate_glsl_half_helpers()
+            + self.generate_glsl_float_selection_helpers()
             + self.generate_glsl_complex64_helpers()
         )
         if generated_helpers:
@@ -34027,9 +34030,64 @@ complex64_t crossgl_complex64_mod_assign(
                 false_expr = self.generate_expression_with_expected(
                     expr.false_expr, plan.right_target_type
                 )
+            selection = self.generate_glsl_float_selection(
+                expr, condition, true_expr, false_expr
+            )
+            if selection is not None:
+                return selection
             return f"({condition} ? {true_expr} : {false_expr})"
         else:
             return str(expr)
+
+    def generate_glsl_float_selection(self, node, condition, true_expr, false_expr):
+        # Only already-evaluated values may cross the helper call boundary.
+        # Calls, indexing and other lazy arms retain native conditional evaluation.
+        if self.glsl_generating_global_initializer:
+            return None
+        if not self.glsl_side_effect_free_expression(node.condition) or not all(
+            isinstance(arm, (VariableNode, IdentifierNode, LiteralNode))
+            for arm in (node.true_expr, node.false_expr)
+        ):
+            return None
+        result_type = self.glsl_source_expression_type(node)
+        mapped = self.map_type(result_type) if result_type is not None else None
+        if mapped not in {"float", "vec2", "vec3", "vec4"}:
+            return None
+        for builtin in ("floatBitsToUint", "uintBitsToFloat"):
+            if (
+                builtin in self.function_return_types
+                or builtin in self.global_variable_types
+            ):
+                self.glsl_scalar_conversion_error(
+                    node,
+                    result_type,
+                    result_type,
+                    "conditional-target-builtin-shadowed",
+                )
+        name = self.glsl_float_selection_helper_names.get(mapped)
+        if name is None:
+            used_names = self.glsl_module_used_identifier_names | getattr(
+                self, "glsl_numeric_helper_reserved_names", set()
+            )
+            name = self.glsl_unique_identifier(
+                f"crossgl_select_bits_{mapped}", used_names
+            )
+            self.glsl_module_used_identifier_names.add(name)
+            self.glsl_float_selection_helper_names[mapped] = name
+        return f"{name}({condition}, {true_expr}, {false_expr})"
+
+    def generate_glsl_float_selection_helpers(self):
+        code = ""
+        for mapped, name in sorted(self.glsl_float_selection_helper_names.items()):
+            mask_type = "uint" if mapped == "float" else "uvec" + mapped[-1]
+            code += (
+                f"{mapped} {name}(bool condition, {mapped} yes, {mapped} no) {{\n"
+                f"    {mask_type} mask = {mask_type}(0u - uint(condition));\n"
+                "    return uintBitsToFloat((floatBitsToUint(yes) & mask) | "
+                "(floatBitsToUint(no) & ~mask));\n"
+                "}\n\n"
+            )
+        return code
 
     def atomic_fence_operand_identifier(self, expr):
         name = self.expression_name(expr)

@@ -33,6 +33,7 @@ on:
       - "tests/test_translator/test_metal_precise_acosh.py"
       - "tests/test_translator/test_metal_precise_atan.py"
       - "tests/test_translator/test_metal_boolean_promotion.py"
+      - "tests/test_translator/test_metal_float_selection.py"
       - "tests/test_translator/test_mlx_current_unary_sign.py"
       - "tests/test_translator/test_mlx_current_unary_atan.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
@@ -129,6 +130,7 @@ on:
       - "tests/test_translator/test_metal_precise_acosh.py"
       - "tests/test_translator/test_metal_precise_atan.py"
       - "tests/test_translator/test_metal_boolean_promotion.py"
+      - "tests/test_translator/test_metal_float_selection.py"
       - "tests/test_translator/test_mlx_current_unary_sign.py"
       - "tests/test_translator/test_mlx_current_unary_atan.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
@@ -715,6 +717,7 @@ jobs:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_SIGN: "1"
           CROSTL_REQUIRE_METAL_BOOLEAN_PROMOTION: "1"
+          CROSTL_REQUIRE_METAL_FLOAT_SELECTION: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -733,6 +736,7 @@ jobs:
               --basetemp=mlx-boolean-promotion-results/pytest \
               --junitxml=mlx-boolean-promotion-results/results.xml \
               tests/test_translator/test_metal_boolean_promotion.py \
+              tests/test_translator/test_metal_float_selection.py \
               tests/test_translator/test_mlx_current_unary_sign.py
 
       - name: Upload comparison arithmetic evidence
