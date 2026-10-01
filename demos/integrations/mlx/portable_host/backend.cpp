@@ -205,6 +205,69 @@ void reshape_view(
   }
   mlx::core::shared_buffer_reshape(in, strides, out);
 }
+
+mlx::core::array binary_input(const mlx::core::array& in) {
+  if (in.flags().row_contiguous && in.data_size() == in.size()) {
+    const uint64_t bytes = in.nbytes();
+    if (in.offset() < 0 || uint64_t(in.offset()) > in.buffer_size() ||
+        bytes > in.buffer_size() - uint64_t(in.offset())) {
+      throw std::invalid_argument("CrossTL binary input exceeds its allocation.");
+    }
+    return in;
+  }
+  mlx::core::array dense(in.shape(), in.dtype(), nullptr, {});
+  dispatch_copy(in, dense);
+  return dense;
+}
+
+void dispatch_binary(
+    const std::vector<mlx::core::array>& inputs,
+    mlx::core::array& out,
+    const char* operation) {
+  require_runtime();
+  if (inputs.size() != 2 || inputs[0].dtype() != out.dtype() ||
+      inputs[1].dtype() != out.dtype() || inputs[0].shape() != out.shape() ||
+      inputs[1].shape() != out.shape()) {
+    throw std::invalid_argument("CrossTL binary inputs must match output shape and dtype.");
+  }
+  const char* dtype;
+  if (out.dtype() == mlx::core::float32) {
+    dtype = "float32";
+  } else if (out.dtype() == mlx::core::int32) {
+    dtype = "int32";
+  } else if (out.dtype() == mlx::core::uint32) {
+    dtype = "uint32";
+  } else {
+    throw std::invalid_argument("CrossTL binary dispatch requires a supported 32-bit dtype.");
+  }
+  if (std::string(operation) == "Divide" && out.dtype() != mlx::core::float32) {
+    throw std::invalid_argument("CrossTL division requires float32 arrays.");
+  }
+  if (out.size() > 65535) {
+    throw std::invalid_argument("CrossTL binary dispatch supports at most 65535 elements.");
+  }
+  out.set_data(mlx::core::allocator::malloc(out.nbytes()));
+  if (out.size() == 0) {
+    return;
+  }
+  auto a = binary_input(inputs[0]);
+  auto b = binary_input(inputs[1]);
+  uint32_t size = static_cast<uint32_t>(out.size());
+  std::string entry = std::string("vv_") + operation + dtype;
+  CrosstlMlxBuffer buffers[] = {
+      {"a", dtype, a.data<void>(), size, 0},
+      {"b", dtype, b.data<void>(), size, 0},
+      {"c", dtype, out.data<void>(), size, 1},
+      {"size", "uint32", &size, 1, 0},
+  };
+  char error[2048] = {};
+  int status = dispatch_callback.load()(
+      entry.c_str(), buffers, 4, size, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native binary failed: ") + error);
+  }
+}
 } // namespace
 
 extern "C" MLX_API int crosstl_mlx_register_dispatch(
@@ -353,6 +416,20 @@ CROSSTL_UNARY_GPU(Tanh)
 CROSSTL_UNARY_GPU(Round)
 
 #undef CROSSTL_UNARY_GPU
+
+#define CROSSTL_BINARY_GPU(Primitive)                                    \
+  void Primitive::eval_gpu(const std::vector<array>& inputs, array& out) { \
+    dispatch_binary(inputs, out, name());                                 \
+  }
+
+CROSSTL_BINARY_GPU(Add)
+CROSSTL_BINARY_GPU(Subtract)
+CROSSTL_BINARY_GPU(Multiply)
+CROSSTL_BINARY_GPU(Minimum)
+CROSSTL_BINARY_GPU(Maximum)
+CROSSTL_BINARY_GPU(Divide)
+
+#undef CROSSTL_BINARY_GPU
 
 void Arange::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();

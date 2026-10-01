@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 
 from demos.integrations.mlx.portable_host import (
+    binary_workloads,
     copy_workloads,
     unary_workloads,
     view_workloads,
@@ -40,6 +41,8 @@ UPSTREAM_TESTS = (
     "test_ops.TestOps.test_transpose_axis",
     "test_ops.TestOps.test_broadcast",
     "test_ops.TestOps.test_split",
+    "test_ops.TestOps.test_subtract",
+    "test_ops.TestOps.test_multiply",
 )
 DTYPES = ("float32", "int32", "uint32", "int64", "uint64")
 COUNTS = (0, 1, 7, 257)
@@ -53,6 +56,8 @@ NEGATIVE_CHECKS = {
     "copy-dtype": "matching float32, int32 or uint32",
     "copy-limit": "65535",
     "copy-allocation": "exceeds its allocation",
+    "binary-dtype": "supported 32-bit dtype",
+    "binary-limit": "65535",
 }
 
 
@@ -81,7 +86,7 @@ def worker(args):
     if args.worker in NEGATIVE_CHECKS:
         try:
             if args.worker == "unsupported":
-                value = mx.add(
+                value = mx.power(
                     mx.array([-3.0, 2.0]), mx.array([1.0, 1.0]), stream=mx.gpu
                 )
             elif args.worker == "over-limit":
@@ -106,6 +111,13 @@ def worker(args):
             elif args.worker == "copy-allocation":
                 source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (2,), (-1,))
                 value = mx.contiguous(source, stream=mx.gpu)
+            elif args.worker == "binary-dtype":
+                value = mx.add(
+                    mx.array([1, 2], dtype=mx.int64), mx.array([2, 3], dtype=mx.int64)
+                )
+            elif args.worker == "binary-limit":
+                source = mx.array(np.ones(65536, dtype=np.float32))
+                value = mx.add(source, source, stream=mx.gpu)
             else:
                 descriptor = runtime.descriptors["arangefloat32"]
                 descriptor["artifact"]["packagePath"] = "artifacts/missing.glsl"
@@ -133,6 +145,9 @@ def worker(args):
     unary = unary_workloads.run(mx, np)
     views = view_workloads.run(mx, np)
     copies = copy_workloads.run(mx, np)
+    binary = binary_workloads.run(mx, np)
+    save(output / "binary-readbacks.json", binary)
+    binary_workloads.validate(binary)
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
     suite = unittest.TestSuite(
         unittest.defaultTestLoader.loadTestsFromName(name) for name in UPSTREAM_TESTS
@@ -150,6 +165,7 @@ def worker(args):
             "unary": unary,
             "views": views,
             "copies": copies,
+            "binary": binary,
         },
     )
     if (
@@ -188,6 +204,7 @@ def verify_results(result, *, cpu=False):
     unary_workloads.validate(result.get("unary"), cpu=cpu)
     view_workloads.validate(result.get("views"))
     copy_workloads.validate(result.get("copies"))
+    binary_workloads.validate(result.get("binary"))
 
 
 def verify(args):
@@ -263,6 +280,7 @@ def verify(args):
         + unary_workloads.dispatches()
         + view_workloads.dispatches()
         + copy_workloads.dispatches()
+        + binary_workloads.dispatches()
     )
     if [(record["entry"], record.get("threads")) for record in trace][
         : len(expected_dispatches)

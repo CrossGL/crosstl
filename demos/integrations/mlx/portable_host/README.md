@@ -20,6 +20,11 @@ dimension insertion/removal, transpose, split, dependency/custom-transform
 outputs and stop-gradient. Contiguous conversion, reshape, flatten and unflatten
 dispatch translated copies when sharing storage is insufficient. Copies support
 matching float32, int32 and uint32 arrays, including negative and zero strides.
+Binary addition, subtraction, multiplication, minimum and maximum support those
+three types; division supports float32. Broadcasts and non-row-contiguous binary
+inputs are materialized by translated copies before the unchanged vector-vector
+binary entry executes. Mixed-type operations that need an unsupported cast still
+fail explicitly.
 Other primitives retain MLX's explicit unsupported-GPU errors. Unary inputs
 must be contiguous and float32, including stored-contiguous broadcast and
 column-major views.
@@ -51,6 +56,10 @@ no-GPU backend build definition and adds four explicitly named backend files:
   upload; the logical origin is rebased for negative strides. Shape and stride
   metadata are independently validated at the callback boundary. Contiguous
   destination strides and three-dimensional dispatch follow the source kernel.
+  Six binary primitive hooks select 16 unchanged `vv_` specializations. They
+  validate input shapes and types, allocate dense output and stage strided inputs
+  through translated copies. Neither layout conversion nor arithmetic falls
+  back to CPU computation. Binary buffer donation is not implemented.
 - `crosstl_dispatch.h` defines the typed C buffer/callback ABI.
 - `crosstl_primitives.cpp` copies upstream unsupported primitive definitions,
   removing only the implemented primitive stubs.
@@ -178,6 +187,7 @@ these upstream tests without skips:
 - `test_square`, `test_sqrt`, `test_rsqrt`
 - `test_exp`, `test_expm1`, `test_erf`, `test_sin`, `test_cos`
 - `test_transpose_noargs`, `test_transpose_axis`, `test_broadcast`, `test_split`
+- `test_subtract`, `test_multiply`
 
 The CPU reference uses the unchanged CPU backend in the same adapted MLX build;
 it is not a separately rebuilt pristine binary or a Metal comparison.
@@ -216,18 +226,31 @@ zeros. Transposes, gapped/reversed strides, broadcasts, odd four-dimensional
 rows, copying reshapes, flattening and empty outputs are covered. The 27 native
 copy dispatches retain their three-dimensional geometry and checked guard words.
 
-Native traces must start with the exact 162 nonempty workload dispatches, cover
-all 36 entries, and retain artifact identities and runtime/device details.
+Binary workloads add 134 records with 5,274 outputs: empty/scalar/vector inputs,
+257-element tails, matrices, transposes, broadcasts, reversed/gapped strides,
+unsigned subtraction wraparound, NaNs, infinities and signed zeros. Operand words
+must remain unchanged. Independent references use `rtol=2e-6, atol=1e-6` for finite
+float32 results, exact zero signs and nonfinite classification, and exact integer
+results. Minimum and maximum follow MLX's explicit second-operand tie rule;
+NumPy's minimum/maximum zero-sign behavior is not used as that reference.
+Every binary dispatch checks and retains a 128-byte output guard before host
+readback. The native conditional-selection gate also checks scalar/vector payloads
+and exactly-once condition and selected-branch evaluation, tracking
+[#1998](https://github.com/CrossGL/crosstl/issues/1998).
+
+Native traces must start with the exact 360 nonempty workload dispatches, cover
+all 52 entries, and retain artifact identities and runtime/device details.
 Separate negative processes reject an unsupported primitive, oversized arange,
 a missing artifact, unary inputs with unsupported dtype, layout or size, and
 copies with unsupported dtype, excessive size or an invalid source allocation.
-Each of the eleven processes has a hard 180-second process-tree deadline; all
+Binary inputs with unsupported dtype or excessive size are also rejected.
+Each of the thirteen processes has a hard 180-second process-tree deadline; all
 are attempted so a failure does not discard the other diagnostic results.
 
 The evidence directory retains before/after adaptation hashes, command status,
 stdout/stderr, upstream test logs, dispatch traces and numerical results. The
 schema-version-2 summary is written only after source and result checks pass,
-including explicit rejection messages from all nine negative cases. Source
+including explicit rejection messages from all eleven negative cases. Source
 identity checks do not attest to a separately supplied binary; CI builds MLX from
 the verified sources and retains its build log. `fullUpstreamSuite` and
 `fullTranslatedBackend` remain `false`: extending primitive coverage and then

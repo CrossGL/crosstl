@@ -62,7 +62,15 @@ UNARY_OPERATIONS = (
 UNARY_ENTRIES = tuple(f"v_{op}float32float32" for op in UNARY_OPERATIONS)
 COPY_SOURCE = "mlx/backend/metal/kernels/copy.metal"
 COPY_ENTRY = "ggn2_dynamic_copyuint32uint32"
-ENTRIES = ARANGE_ENTRIES + UNARY_ENTRIES + (COPY_ENTRY,)
+BINARY_SOURCE = "mlx/backend/metal/kernels/binary.metal"
+BINARY_OPERATIONS = ("Add", "Subtract", "Multiply", "Minimum", "Maximum", "Divide")
+BINARY_ENTRIES = {
+    f"vv_{operation}{dtype}": dtype
+    for operation in BINARY_OPERATIONS
+    for dtype in ("float32", "int32", "uint32")
+    if operation != "Divide" or dtype == "float32"
+}
+ENTRIES = ARANGE_ENTRIES + UNARY_ENTRIES + (COPY_ENTRY,) + tuple(BINARY_ENTRIES)
 
 
 def build_packages(root, output, target):
@@ -97,7 +105,7 @@ def build_packages(root, output, target):
         config.write_text(
             f"""[project]
 source_roots = ["mlx/backend/metal/kernels"]
-include = {json.dumps([SOURCE, UNARY_SOURCE, COPY_SOURCE])}
+include = {json.dumps([SOURCE, UNARY_SOURCE, COPY_SOURCE, BINARY_SOURCE])}
 include_dirs = ["."]
 targets = ["{target}"]
 output_dir = "{work.name}/out"
@@ -105,12 +113,15 @@ output_dir = "{work.name}/out"
 "{SOURCE}" = {json.dumps(ARANGE_ENTRIES)}
 "{UNARY_SOURCE}" = {json.dumps(UNARY_ENTRIES)}
 "{COPY_SOURCE}" = ["{COPY_ENTRY}"]
+"{BINARY_SOURCE}" = {json.dumps(list(BINARY_ENTRIES))}
 [project.entry_workgroup_size_rules."{SOURCE}"]
 "arange*" = [1, 1, 1]
 [project.entry_workgroup_size_rules."{UNARY_SOURCE}"]
 "v_*" = [1, 1, 1]
 [project.entry_workgroup_size_rules."{COPY_SOURCE}"]
 "ggn2_dynamic_copy*" = [1, 1, 1]
+[project.entry_workgroup_size_rules."{BINARY_SOURCE}"]
+"vv_*" = [1, 1, 1]
 [project.source_options.metal]
 binary32_fma_profile = "rne-flush"
 """,

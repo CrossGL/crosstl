@@ -8,7 +8,10 @@ import json
 import subprocess
 from pathlib import Path
 
-from demos.integrations.mlx.portable_host.packages import UNARY_OPERATIONS
+from demos.integrations.mlx.portable_host.packages import (
+    BINARY_OPERATIONS,
+    UNARY_OPERATIONS,
+)
 
 COMMIT = "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 HERE = Path(__file__).resolve().parent
@@ -39,7 +42,13 @@ def replace_once(text, before, after):
 
 def adapted_sources(original, primitives, events):
     """Render the complete adaptation without changing the source tree."""
-    for primitive in ("Arange", *UNARY_OPERATIONS, *VIEW_PRIMITIVES, *COPY_PRIMITIVES):
+    for primitive in (
+        "Arange",
+        *UNARY_OPERATIONS,
+        *VIEW_PRIMITIVES,
+        *COPY_PRIMITIVES,
+        *BINARY_OPERATIONS,
+    ):
         if primitive in {"Log2", "Log10", "Rsqrt"}:
             continue
         macro = "NO_GPU_MULTI" if primitive in MULTI_OUTPUT_VIEWS else "NO_GPU"

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from demos.integrations.mlx.portable_host import (
+    binary_workloads,
     copy_workloads,
     packages,
     prepare,
@@ -29,10 +30,11 @@ def checkout(root, monkeypatch, newline=b"\n"):
                 f"{'NO_GPU_MULTI' if name in prepare.MULTI_OUTPUT_VIEWS else 'NO_GPU'}({name})"
                 for name in (
                     "Arange",
-                    "Add",
+                    "Power",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,
                     *prepare.COPY_PRIMITIVES,
+                    *packages.BINARY_OPERATIONS,
                 )
                 if name not in {"Log2", "Log10", "Rsqrt"}
             ).encode()
@@ -75,7 +77,7 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
             f"{macro}({name})" not in (backend / "crosstl_primitives.cpp").read_text()
         )
         assert f"{macro}({name})" in (backend / "primitives.cpp").read_text()
-    assert "NO_GPU(Add)" in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(Power)" in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(Arange)" in (backend / "primitives.cpp").read_text()
     events = (backend / "crosstl_event.cpp").read_text()
     assert events.count("stream.device == Device::gpu") == 2
@@ -195,6 +197,18 @@ uint index [[thread_position_in_grid]]) { dst[index] = src[index]; }
 """
         + f'template [[host_name("{packages.COPY_ENTRY}")]] [[kernel]] '
         + "decltype(copy_words<2>) copy_words<2>;\n"
+    )
+    (root / packages.BINARY_SOURCE).write_text(
+        """template <typename T, int op> kernel void binary(
+device const T* a [[buffer(0)]], device const T* b [[buffer(1)]],
+device T* c [[buffer(2)]], constant uint& size [[buffer(3)]],
+uint index [[thread_position_in_grid]]) { if (index < size) c[index] = a[index] + b[index]; }
+"""
+        + "\n".join(
+            f'template [[host_name("{entry}")]] [[kernel]] '
+            f"decltype(binary<{types[dtype]}, {index}>) binary<{types[dtype]}, {index}>;"
+            for index, (entry, dtype) in enumerate(packages.BINARY_ENTRIES.items())
+        )
     )
     output = tmp_path / "packages"
     with pytest.MonkeyPatch.context() as monkeypatch:
@@ -430,6 +444,150 @@ def test_copy_workload_references_reject_incomplete_or_changed_words(fault):
             copy_workloads.validate(records)
     else:
         copy_workloads.validate(records)
+
+
+@pytest.mark.parametrize("dtype", ["float32", "int32", "uint32"])
+@pytest.mark.parametrize(
+    "fault", [None, "count", "size", "dtype", "direction", "input-count", "guard"]
+)
+def test_binary_dispatch_contract(
+    translated_packages, tmp_path, monkeypatch, dtype, fault
+):
+    host = runtime.HostRuntime(translated_packages, tmp_path / "trace")
+    ctype = runtime.TYPES[dtype]
+    memory = [
+        (ctype * 3)(1, 2, 3),
+        (ctype * 3)(4, 5, 6),
+        (ctype * 3)(),
+        ctypes.c_uint32(3),
+    ]
+    buffers = (runtime.Buffer * 4)(
+        *[
+            runtime.Buffer(
+                name.encode(),
+                ("uint32" if name == "size" else dtype).encode(),
+                ctypes.addressof(data),
+                1 if name == "size" else 3,
+                int(name == "c"),
+            )
+            for name, data in zip(("a", "b", "c", "size"), memory)
+        ]
+    )
+    if fault == "size":
+        memory[-1].value = 2
+    elif fault == "dtype":
+        buffers[1].dtype = b"int64"
+    elif fault == "direction":
+        buffers[0].output = 1
+    elif fault == "input-count":
+        buffers[0].count = 2
+    calls = []
+    entry = "vv_Add" + dtype
+    guard = (
+        runtime.COPY_GUARD
+        if dtype != "float32"
+        else [
+            ctypes.c_float.from_buffer_copy(ctypes.c_uint32(word)).value
+            for word in runtime.COPY_GUARD
+        ]
+    )
+    original_build = runtime.build_native_loader_dispatch_request
+
+    def build(descriptor, package, inputs, outputs, *args, **kwargs):
+        name = next(iter(outputs))
+        assert inputs[name]["values"] == [0] * 3 + guard
+        return original_build(descriptor, package, inputs, outputs, *args, **kwargs)
+
+    def execute(request):
+        calls.append(request)
+        name = next(
+            binding["name"]
+            for binding in host.descriptors[entry]["bindings"]
+            if binding["access"] == "read_write"
+        )
+        return SimpleNamespace(
+            status="ok",
+            outputs={
+                name: {
+                    "dtype": dtype,
+                    "shape": [35],
+                    "values": [5, 7, 9] + ([0] * 32 if fault == "guard" else guard),
+                }
+            },
+            details={},
+        )
+
+    monkeypatch.setattr(runtime, "build_native_loader_dispatch_request", build)
+    monkeypatch.setattr(host.executor, "run", execute)
+    if fault == "guard":
+        with pytest.raises(RuntimeError, match="buffer guard"):
+            host.dispatch(entry, buffers, 4, 3)
+        assert list(memory[2]) == [0] * 3 and not host.trace.exists()
+    elif fault:
+        with pytest.raises(ValueError):
+            host.dispatch(entry, buffers, 3 if fault == "count" else 4, 3)
+        assert not calls
+    else:
+        host.dispatch(entry, buffers, 4, 3)
+        assert list(memory[2]) == [5, 7, 9]
+        assert calls[0].execution_plan.dispatch.workgroup_count == (3, 1, 1)
+        assert json.loads(host.trace.read_text())["binaryGuardValues"] == guard
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [None, "missing", "identity", "value", "integer", "source", "nonfinite", "zero"],
+)
+def test_binary_reference_checks_reject_changed_results(fault):
+    records = binary_workloads.expected_records()
+    assert len(records) == 134 and len(binary_workloads.dispatches()) == 198
+    if fault == "missing":
+        records.pop()
+    elif fault == "identity":
+        records[0]["layout"] = "other"
+    elif fault == "value":
+        records[1]["values"][0] += 1
+    elif fault == "integer":
+        record = next(
+            row for row in records if row["dtype"] == "uint32" and row["values"]
+        )
+        record["values"][0] = float(record["values"][0])
+    elif fault == "source":
+        records[1]["aWords"][0] ^= 1
+    elif fault == "nonfinite":
+        record = next(row for row in records if row["layout"] == "nonfinite")
+        record["values"][0] = 0
+    elif fault == "zero":
+        record = next(
+            row
+            for row in records
+            if row["entry"] == "vv_Multiplyfloat32" and row["layout"] == "nonfinite"
+        )
+        assert math.copysign(1, record["values"][3]) == -1
+        record["values"][3] = 0.0
+    if fault:
+        with pytest.raises(RuntimeError):
+            binary_workloads.validate(records)
+    else:
+        binary_workloads.validate(records)
+
+
+@pytest.mark.parametrize("operation", ["Minimum", "Maximum"])
+@pytest.mark.parametrize("index", [3, 4])
+def test_binary_extrema_preserve_second_operand_zero_sign(operation, index):
+    records = binary_workloads.expected_records()
+    record = next(
+        row
+        for row in records
+        if row["entry"] == f"vv_{operation}float32" and row["layout"] == "nonfinite"
+    )
+    assert record["values"][2] == "nan"
+    assert record["values"][index] == 0
+    assert math.copysign(1, record["values"][index]) == (-1 if index == 3 else 1)
+    binary_workloads.validate(records)
+    record["values"][index] = -record["values"][index]
+    with pytest.raises(RuntimeError, match="Incorrect float32 binary result"):
+        binary_workloads.validate(records)
 
 
 @pytest.mark.parametrize("fault", [None, "size", "input-count", "dtype", "direction"])
@@ -894,6 +1052,8 @@ def test_registration_retains_callback_and_uses_platform_library(
         "views-shape",
         "copies-missing",
         "copies-values",
+        "binary-missing",
+        "binary-values",
         "upstream-failure",
     ],
 )
@@ -950,6 +1110,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             "unary": unary_workloads.expected_records(cpu=mode == "cpu"),
             "views": view_workloads.expected_records(),
             "copies": copy_workloads.expected_records(),
+            "binary": binary_workloads.expected_records(),
         }
         if fault == "unary-missing":
             result["unary"] = []
@@ -967,6 +1128,10 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             result["copies"] = []
         if fault == "copies-values":
             result["copies"][0]["words"][0] ^= 1
+        if fault == "binary-missing":
+            result["binary"] = []
+        if fault == "binary-values":
+            result["binary"][1]["values"][0] += 1
         if fault == "upstream-failure":
             result["failures"] = 1
         if fault == "arrays":
@@ -995,6 +1160,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 + unary_workloads.dispatches()
                 + view_workloads.dispatches()
                 + copy_workloads.dispatches()
+                + binary_workloads.dispatches()
             )
             trace = [
                 {
@@ -1040,7 +1206,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         if fault == "source-before":
             assert calls == []
         if fault == "command":
-            assert len(calls) == 11
+            assert len(calls) == 13
             assert (
                 json.loads((args.output_dir / "cpu.command.json").read_text())[
                     "returncode"
@@ -1049,7 +1215,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             )
     else:
         evidence = verify.verify(args)
-        assert len(calls) == 11 and evidence["dispatchCount"] == 162
+        assert len(calls) == 13 and evidence["dispatchCount"] == 360
         assert len(identities) == 2
         assert evidence["schemaVersion"] == 2
         assert evidence["adaptation"]["files"] == {"adapter": "unchanged"}
@@ -1085,7 +1251,7 @@ def test_ci_requires_all_native_platforms_and_retains_evidence():
         "portable_host.verify",
         "pytest -q -n auto tests/test_mlx_portable_host.py",
         "liblapacke-dev",
-        "--timeout-seconds 2200",
+        "--timeout-seconds 2500",
         "if: always()",
         "include-hidden-files: true",
         "Get-FileHash",
@@ -1094,7 +1260,7 @@ def test_ci_requires_all_native_platforms_and_retains_evidence():
         assert required in workflow
     assert "continue-on-error" not in workflow
     assert "opengl-runtime" not in workflow
-    assert len(verify.UPSTREAM_TESTS) == 19
+    assert len(verify.UPSTREAM_TESTS) == 21
 
 
 def test_ci_requires_native_math_before_building_mlx():

@@ -22,6 +22,7 @@ from crosstl.project.runtime_verification import (
 )
 from demos.integrations.mlx.portable_host import copy_layout
 from demos.integrations.mlx.portable_host.packages import (
+    BINARY_ENTRIES,
     COPY_ENTRY,
     ENTRIES,
     UNARY_ENTRIES,
@@ -134,15 +135,22 @@ class HostRuntime:
         if entry not in self.descriptors:
             raise ValueError(f"No translated package for {entry}")
         copy = entry == COPY_ENTRY
-        if count != (8 if copy else 3) or not buffers or not 0 < threads <= 65535:
+        binary = entry in BINARY_ENTRIES
+        if (
+            count != (8 if copy else 4 if binary else 3)
+            or not buffers
+            or not 0 < threads <= 65535
+        ):
             raise ValueError("Invalid or unsupported native dispatch dimensions")
         descriptor = self.descriptors[entry]
         unary = entry in UNARY_ENTRIES
-        names = (
-            set(copy_layout.DTYPES)
-            if copy
-            else {"in", "size", "out"} if unary else {"start", "step", "out"}
-        )
+        if copy:
+            names = set(copy_layout.DTYPES)
+        elif binary:
+            names = {"a", "b", "c", "size"}
+        else:
+            names = {"in", "size", "out"} if unary else {"start", "step", "out"}
+        output_name = "dst" if copy else "c" if binary else "out"
         supplied = {}
         for index in range(count):
             buffer = buffers[index]
@@ -157,23 +165,37 @@ class HostRuntime:
                 or not buffer.data
             ):
                 raise ValueError("Invalid native buffer")
-            expected = threads if name == "out" or (unary and name == "in") else 1
+            expected = (
+                threads
+                if name == output_name
+                or (unary and name == "in")
+                or (binary and name in {"a", "b"})
+                else 1
+            )
             if (not copy and buffer.count != expected) or buffer.output != int(
-                name == ("dst" if copy else "out")
+                name == output_name
             ):
                 raise ValueError("Native buffer shape or direction does not match")
             if unary and dtype != ("uint32" if name == "size" else "float32"):
                 raise ValueError("Native unary buffer dtype does not match")
+            if binary and dtype != (
+                "uint32" if name == "size" else BINARY_ENTRIES[entry]
+            ):
+                raise ValueError("Native binary buffer dtype does not match")
             supplied[name] = buffer
         if set(supplied) != names:
             raise ValueError("Native buffer names do not match the operation")
         grid = copy_layout.geometry(supplied, threads) if copy else [threads, 1, 1]
-        if (
-            unary
-            and ctypes.cast(supplied["size"].data, ctypes.POINTER(ctypes.c_uint32))[0]
-            != threads
-        ):
-            raise ValueError("Native unary size does not match the launch")
+        if (unary or binary) and ctypes.cast(
+            supplied["size"].data, ctypes.POINTER(ctypes.c_uint32)
+        )[0] != threads:
+            raise ValueError("Native operation size does not match the launch")
+        guard = COPY_GUARD
+        if binary and BINARY_ENTRIES[entry] == "float32":
+            guard = [
+                ctypes.c_float.from_buffer_copy(ctypes.c_uint32(word)).value
+                for word in COPY_GUARD
+            ]
         inputs, outputs, destinations = {}, {}, {}
         matched = set()
         binding_names = set()
@@ -212,9 +234,9 @@ class HostRuntime:
                     else [wire_value(value) for value in view]
                 ),
             }
-            if copy and buffer.output:
-                value["shape"] = [buffer.count + len(COPY_GUARD)]
-                value["values"].extend(COPY_GUARD)
+            if (copy or binary) and buffer.output:
+                value["shape"] = [buffer.count + len(guard)]
+                value["values"].extend(guard)
                 inputs[binding["name"]] = value
             if buffer.output:
                 outputs[binding["name"]] = value
@@ -236,15 +258,15 @@ class HostRuntime:
             raise RuntimeError("Native executor did not return the required outputs")
         for name, (buffer, ctype) in destinations.items():
             output = result.outputs[name]
-            size = buffer.count + (len(COPY_GUARD) if copy else 0)
+            size = buffer.count + (len(guard) if copy or binary else 0)
             if output["dtype"] != buffer.dtype.decode("ascii") or output["shape"] != [
                 size
             ]:
                 raise RuntimeError("Native readback layout does not match the output")
             if len(output["values"]) != size:
                 raise RuntimeError("Native readback size does not match the output")
-            if copy and output["values"][buffer.count :] != COPY_GUARD:
-                raise RuntimeError("Native copy changed the output buffer guard")
+            if (copy or binary) and output["values"][buffer.count :] != guard:
+                raise RuntimeError("Native operation changed the output buffer guard")
             values = (ctype * buffer.count)(
                 *(
                     float(value) if ctype is ctypes.c_float else value
@@ -265,6 +287,11 @@ class HostRuntime:
                         **(
                             {"copyGuardWords": output["values"][buffer.count :]}
                             if copy
+                            else {}
+                        ),
+                        **(
+                            {"binaryGuardValues": output["values"][buffer.count :]}
+                            if binary
                             else {}
                         ),
                     }

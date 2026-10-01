@@ -2191,10 +2191,14 @@ shape, stride and ownership logic, including broadcasts, transposes, splits and
 non-copying reshapes. Layout-changing contiguous conversions, reshapes, flattening
 and unflattening dispatch the unchanged uint32 general-copy specialization for
 float32/int32/uint32 storage. Bounds-checked, rebased source spans preserve negative
-strides; integer-word transport preserves NaN payloads and subnormals. Other
+strides; integer-word transport preserves NaN payloads and subnormals. Six binary
+primitives dispatch 16 unchanged entries: addition, subtraction, multiplication,
+minimum and maximum for float32/int32/uint32, and float32 division. Translated
+copies materialize non-row-contiguous and broadcast inputs before arithmetic;
+no CPU elementwise fallback is used. Unsupported casts remain explicit errors. Other
 primitives retain upstream unsupported-GPU errors.
 Linux/OpenGL, Windows/Direct3D 12 and macOS/generated Metal CI build the adapted
-library, require 19 unchanged upstream tests against CPU and translated GPU execution, and check
+library, require 21 unchanged upstream tests against CPU and translated GPU execution, and check
 20 array-creation records plus 130 unary records against independent references,
 including 8,193 consecutive binary32 inputs at and above one for inverse
 hyperbolic cosine at unchanged upstream tolerances.
@@ -2203,10 +2207,16 @@ requires exact bytes before and after execution, and rejects unrelated tracked
 changes. Forty additional records cover view layouts, chained unary dispatch,
 source preservation and exact 64-bit values. The verifier independently checks
 complete numerical records, another 33 copying/source-preservation records with
-1,716 exact storage words, the initial 162 nonempty dispatches, and nine required
+1,716 exact storage words, 134 binary records with 5,274 outputs, the initial 360
+nonempty dispatches, all 52 entries, and eleven required
 rejection cases before publishing a schema-version-2 summary. Copy checks include
 invalid allocation bounds, unsupported storage widths and excessive sizes. Each
 copy dispatch retains its geometry and checks a 128-byte destination guard.
+Binary checks require preserved operand words, exact integer results, zero signs,
+nonfinite classification and ``rtol=2e-6, atol=1e-6`` for finite float32 outputs.
+Minimum/maximum ties select the second operand as specified by the pinned source.
+Binary dispatches also retain a checked 128-byte destination guard. Required native
+conditional-selection controls cover operand bits and lazy branch evaluation.
 Unary execution is limited to contiguous float32 inputs and 65,535 stored
 elements. Source
 checks do not attest to a separately supplied binary; CI retains its build log.
