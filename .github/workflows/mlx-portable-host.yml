@@ -129,6 +129,8 @@ jobs:
             target: opengl
           - os: windows-2025
             target: directx
+          - os: macos-26
+            target: metal
     defaults:
       run:
         shell: bash
@@ -153,6 +155,16 @@ jobs:
           set -euo pipefail
           python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging \
             2>&1 | tee .mlx-portable-host/dependencies.log
+      - name: Verify macOS Metal toolchain
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk macosx metal --version | tee .mlx-portable-host/metal-version.txt
+          xcrun --sdk macosx swiftc --version | tee .mlx-portable-host/swift-version.txt
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
         run: |

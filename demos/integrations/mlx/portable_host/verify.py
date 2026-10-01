@@ -267,6 +267,7 @@ def verify(args):
         "commit": COMMIT,
         "adaptation": adaptation,
         "target": index["target"],
+        "cpuReferenceProfile": unary_workloads.cpu_reference_profile(),
         "upstreamTestSha256": hashlib.sha256(pristine).hexdigest(),
         "upstreamTests": list(UPSTREAM_TESTS),
         "original": results["cpu"],

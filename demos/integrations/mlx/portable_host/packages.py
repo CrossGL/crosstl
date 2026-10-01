@@ -65,7 +65,7 @@ ENTRIES = ARANGE_ENTRIES + UNARY_ENTRIES
 
 def build_packages(root, output, target):
     root = Path(root).resolve()
-    if target not in {"opengl", "directx"}:
+    if target not in {"opengl", "directx", "metal"}:
         raise ValueError(f"Unsupported target: {target}")
     from demos.integrations.mlx.portable_host.prepare import COMMIT
 
@@ -164,6 +164,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mlx-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--target", choices=["opengl", "directx"], required=True)
+    parser.add_argument(
+        "--target", choices=["opengl", "directx", "metal"], required=True
+    )
     args = parser.parse_args()
     build_packages(args.mlx_root, args.output_dir, args.target)

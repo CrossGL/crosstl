@@ -148,7 +148,7 @@ def test_prepare_rejects_invalid_checkout_before_edits(tmp_path, monkeypatch, fa
     assert not (backend / "crosstl_backend.cpp").exists()
 
 
-@pytest.fixture(scope="module", params=["opengl", "directx"])
+@pytest.fixture(scope="module", params=["opengl", "directx", "metal"])
 def package_templates(tmp_path_factory, request):
     tmp_path = tmp_path_factory.mktemp(request.param)
     root = tmp_path / "mlx"
@@ -203,6 +203,16 @@ def package_templates(tmp_path_factory, request):
 @pytest.fixture
 def translated_packages(tmp_path, package_templates):
     return Path(shutil.copytree(package_templates, tmp_path / "packages"))
+
+
+def test_runtime_selects_the_requested_native_adapter(translated_packages, tmp_path):
+    host = runtime.HostRuntime(translated_packages, tmp_path / "trace")
+    adapters = {
+        "directx": runtime.DirectXRuntimeParityAdapter,
+        "opengl": runtime.OpenGLRuntimeParityAdapter,
+        "metal": runtime.MetalRuntimeParityAdapter,
+    }
+    assert type(host.executor.runtime_adapter) is adapters[host.target]
 
 
 def native_buffers(dtype="float32", count=3):
@@ -404,6 +414,47 @@ def test_unary_adapter_definitions_match_packages():
     assert "!in.flags().contiguous" in source
 
 
+@pytest.mark.parametrize("profile", ["generic", "apple-accelerate-arm64"])
+def test_cpu_erf_zero_profile_does_not_relax_generated_checks(monkeypatch, profile):
+    monkeypatch.setattr(unary_workloads, "cpu_reference_profile", lambda: profile)
+    cpu = unary_workloads.expected_records(cpu=True)
+    for record in cpu:
+        if record["operation"] != "Erf":
+            continue
+        for index, value in enumerate(record["inputs"]):
+            if value == 0:
+                negative = profile == "generic" or index < record["count"] // 8 * 8
+                assert math.copysign(1.0, record["values"][index]) == (
+                    -1 if negative else 1
+                )
+    unary_workloads.validate(cpu, cpu=True)
+    with pytest.raises(AssertionError, match="zero sign"):
+        unary_workloads.validate(cpu)
+    wrong_cpu = unary_workloads.expected_records(cpu=True)
+    record = next(
+        item for item in wrong_cpu if item["operation"] == "Erf" and item["count"] == 7
+    )
+    record["values"][2] = -record["values"][2]
+    with pytest.raises(AssertionError, match="zero sign"):
+        unary_workloads.validate(wrong_cpu, cpu=True)
+
+
+@pytest.mark.parametrize(
+    "system,machine,expected",
+    [
+        ("Darwin", "arm64", "apple-accelerate-arm64"),
+        ("Linux", "aarch64", "generic"),
+        ("Windows", "AMD64", "generic"),
+    ],
+)
+def test_cpu_reference_profile_matches_pinned_build(
+    monkeypatch, system, machine, expected
+):
+    monkeypatch.setattr(unary_workloads.platform, "system", lambda: system)
+    monkeypatch.setattr(unary_workloads.platform, "machine", lambda: machine)
+    assert unary_workloads.cpu_reference_profile() == expected
+
+
 def test_view_adapter_preserves_upstream_shared_buffer_operations():
     source = (prepare.HERE / "backend.cpp").read_text()
     for name in prepare.VIEW_PRIMITIVES:
@@ -498,6 +549,8 @@ def test_translated_binding_contract_and_typed_readback(
     monkeypatch.setattr(host.executor, "run", execute)
     host.dispatch("arange" + dtype, buffers, 3, 3)
     assert list(memory[-1]) == [2, 5, 8] and len(calls) == 1
+    assert calls[0].execution_plan.dispatch.workgroup_size == (1, 1, 1)
+    assert calls[0].execution_plan.dispatch.workgroup_count == (3, 1, 1)
     trace = json.loads(host.trace.read_text())
     assert trace["target"] == host.target and trace["entry"] == "arange" + dtype
 
@@ -516,6 +569,7 @@ def test_translated_binding_contract_and_typed_readback(
         "binding",
         "missing-binding",
         "missing-artifact",
+        "workgroup",
     ],
 )
 def test_invalid_dispatch_never_reaches_executor(
@@ -547,6 +601,8 @@ def test_invalid_dispatch_never_reaches_executor(
         descriptor["bindings"].pop()
     elif fault == "missing-artifact":
         descriptor["artifact"]["packagePath"] = "missing.glsl"
+    elif fault == "workgroup":
+        descriptor["entryPoint"]["workgroupSize"] = [2, 1, 1]
     monkeypatch.setattr(
         host.executor, "run", lambda *args: pytest.fail("Invalid request executed")
     )
@@ -598,7 +654,7 @@ def test_callback_reports_bounded_error_without_unwinding(tmp_path, monkeypatch)
     assert host._dispatch(b"entry", None, 0, 0, None, 0) == 1
 
 
-@pytest.mark.parametrize("platform", ["linux", "win32"])
+@pytest.mark.parametrize("platform", ["linux", "win32", "darwin"])
 def test_registration_retains_callback_and_uses_platform_library(
     tmp_path, monkeypatch, platform
 ):
@@ -816,13 +872,14 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         assert evidence["original"] == evidence["translated"]
 
 
-def test_ci_requires_both_native_platforms_and_retains_evidence():
+def test_ci_requires_all_native_platforms_and_retains_evidence():
     root = Path(__file__).resolve().parents[1]
     workflow = (root / ".github/workflows/mlx-portable-host.yml").read_text()
     for required in (
         prepare.COMMIT,
         "ubuntu-24.04",
         "windows-2025",
+        "macos-26",
         'python-version: "3.12"',
         "Initialize execution evidence",
         "tee .mlx-portable-host/dependencies.log",
@@ -830,6 +887,10 @@ def test_ci_requires_both_native_platforms_and_retains_evidence():
         'pip install -e ".[directx-runtime]"',
         "target: opengl",
         "target: directx",
+        "target: metal",
+        "Verify macOS Metal toolchain",
+        "tee .mlx-portable-host/metal-version.txt",
+        "tee .mlx-portable-host/swift-version.txt",
         "-DMLX_BUILD_METAL=OFF",
         "-DMLX_BUILD_CUDA=OFF",
         "-DMLX_CROSTL_HOST=ON",

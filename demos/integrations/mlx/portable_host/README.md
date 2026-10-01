@@ -1,7 +1,8 @@
 # Portable MLX Host Execution
 
-This harness builds pinned MLX with Metal and CUDA disabled and connects its C++
-GPU evaluation path to translated native runtime packages. Python calls such as
+This harness builds pinned MLX with its original Metal and CUDA backends disabled
+and connects its C++ GPU evaluation path to translated native runtime packages.
+Python calls such as
 `mlx.core.arange` reach an MLX primitive, dispatch the translated upstream kernel,
 and receive the device result in the original MLX array. Python operations and
 upstream tests are not replaced.
@@ -26,9 +27,11 @@ stored elements with one thread per workgroup. Empty arrays do not dispatch. Thi
 host integration proof, not a complete MLX backend or a performance benchmark.
 
 The pin is `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. CI builds and runs the same
-proof on Linux/OpenGL and Windows/Direct3D 12. Mesa software rendering and pinned
-WARP make execution reproducible without dedicated GPU runners. DirectX 10/11,
-Vulkan, asynchronous queues, persistent GPU allocations, automatic operation
+proof on Linux/OpenGL, Windows/Direct3D 12 and macOS/generated Metal. Mesa software
+rendering and pinned WARP make Windows/Linux execution reproducible without
+dedicated GPU runners. The macOS path uses the same callback adapter with generated
+Metal packages, not MLX's original Metal backend. DirectX 10/11, Vulkan,
+asynchronous queues, persistent GPU allocations, automatic operation
 selection, and the complete MLX suite are not covered here.
 
 ## Upstream Adaptations
@@ -69,11 +72,12 @@ is no CPU computation fallback. The element cap is deliberate pending general
 Use Python 3.12, a C++20 toolchain, CMake, Ninja and the relevant runtime.
 Linux additionally needs OpenBLAS, LAPACK/LAPACKE and Mesa EGL development/runtime
 packages. Windows needs Visual Studio C++ build tools and DXC; the workflow pins
-DXC and WARP archives with SHA-256 checks. Run from the CrossTL repository root:
+DXC and WARP archives with SHA-256 checks. macOS requires Xcode's Metal and Swift
+toolchains and an available Metal device. Run from the CrossTL repository root:
 
 Python 3.13 also works for the Linux build, but the Windows graphics dependency
-currently requires the published Python 3.12 wheel. CI uses 3.12 on both platforms
-and retains dependency-install output even when setup fails.
+currently requires the published Python 3.12 wheel. CI uses 3.12 on all three
+platforms and retains dependency-install output even when setup fails.
 
 ```sh
 python -m pip install -e . moderngl PyOpenGL setuptools wheel cmake ninja nanobind numpy packaging
@@ -85,8 +89,14 @@ python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream 
 LIBGL_ALWAYS_SOFTWARE=1 python -m demos.integrations.mlx.portable_host.verify --mlx-root mlx-upstream --packages host-packages --output-dir host-evidence
 ```
 
-For Windows use `directx-runtime` and `--target directx`, with the same build
-options set in `CMAKE_ARGS`. The complete platform setup is in
+For Windows use `directx-runtime` and `--target directx`. For macOS omit the
+OpenGL dependencies and use `--target metal`. Keep the same build options in
+`CMAKE_ARGS`, including `MLX_BUILD_METAL=OFF`: the generated Metal runtime is
+external to MLX's original backend. It compiles each checked source with
+warnings fatal and fast math disabled, then executes the reflected entry and
+returns native buffer readbacks. Every target explicitly dispatches the
+one-thread-per-workgroup geometry used by these packages.
+The complete platform setup is in
 [`mlx-portable-host.yml`](../../../../.github/workflows/mlx-portable-host.yml).
 Output directories must be new so evidence from different runs cannot mix.
 
@@ -166,10 +176,13 @@ use `rtol=2e-5, atol=1e-6`, with exact zero values/signs and nonfinite
 classification. The near-one inverse hyperbolic cosine case uses the upstream
 `rtol=1e-5, atol=1e-6` limits. Upstream tests and their tolerances are unchanged.
 
-The pinned CPU Erf approximation returns negative zero for both zero input
-signs. Its reference records this behavior explicitly; generated GPU Erf must
-preserve the input sign as the source Metal implementation does. No readback is
-corrected to make the two paths agree.
+The pinned generic CPU Erf approximation returns negative zero for both zero
+input signs. The Apple Silicon Accelerate build uses eight-lane blocks with
+the same behavior, followed by scalar tails that return positive zero for both
+signs. The CPU reference follows those block boundaries and records its profile
+in the summary. Generated GPU Erf must preserve the input sign as the source
+Metal implementation does. Both references check zero bits exactly; no readback
+is corrected to make the two paths agree.
 
 Another 40 records check 365 view and chained-unary values against independently
 constructed NumPy arrays, including offsets, reversed/gapped strides, zero-stride

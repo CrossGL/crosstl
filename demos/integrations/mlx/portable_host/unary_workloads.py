@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import platform
 import struct
 
 from demos.integrations.mlx.portable_host.packages import UNARY_OPERATIONS
@@ -140,6 +141,12 @@ def _reference(operation, value):
     return functions[operation](value)
 
 
+def cpu_reference_profile():
+    if platform.system() == "Darwin" and platform.machine() == "arm64":
+        return "apple-accelerate-arm64"
+    return "generic"
+
+
 def expected_records(*, cpu=False):
     records = []
     for case in cases():
@@ -147,9 +154,17 @@ def expected_records(*, cpu=False):
             _reference(case["operation"], float(value)) for value in case["inputs"]
         ]
         if cpu and case["operation"] == "Erf":
-            # The pinned CPU approximation returns negative zero for both
-            # input zero signs; the source Metal operation preserves the sign.
-            values = [-0.0 if value == 0 else value for value in values]
+            # The pinned Accelerate path uses eight-lane blocks, then scalar
+            # tails with +0. Generic CPU and vector blocks produce -0.
+            vector_end = (
+                len(values) // 8 * 8
+                if cpu_reference_profile() == "apple-accelerate-arm64"
+                else len(values)
+            )
+            values = [
+                (-0.0 if index < vector_end else 0.0) if value == 0 else value
+                for index, value in enumerate(values)
+            ]
         records.append(
             {**case, "values": [wire_value(_f32(value)) for value in values]}
         )

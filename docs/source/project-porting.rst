@@ -2184,13 +2184,13 @@ integration, not automatic C++ runtime translation or full upstream-suite parity
 
 The `portable MLX host adapter
 <https://github.com/CrossGL/crosstl/blob/main/demos/integrations/mlx/portable_host/README.md>`_
-instead builds MLX with Metal and CUDA disabled. Its synchronous callback connects
-``Arange`` for five scalar types and 30 float32 unary entries to public
-DirectX/OpenGL runtime packages. Shared-buffer view primitives reuse upstream
+instead builds MLX with its original Metal and CUDA backends disabled. Its
+synchronous callback connects ``Arange`` for five scalar types and 30 float32 unary entries to public
+DirectX/OpenGL/Metal runtime packages. Shared-buffer view primitives reuse upstream
 shape, stride and ownership logic, including broadcasts, transposes, splits and
 non-copying reshapes; other primitives retain upstream unsupported-GPU errors.
-Linux/OpenGL and Windows/Direct3D 12 CI build the adapted library, require
-19 unchanged upstream tests against CPU and translated GPU execution, and check
+Linux/OpenGL, Windows/Direct3D 12 and macOS/generated Metal CI build the adapted
+library, require 19 unchanged upstream tests against CPU and translated GPU execution, and check
 20 array-creation records plus 130 unary records against independent references,
 including 8,193 consecutive binary32 inputs at and above one for inverse
 hyperbolic cosine at unchanged upstream tolerances.
@@ -2204,7 +2204,10 @@ and reshapes requiring a translated copy, before publishing a schema-version-2 s
 Unary execution is limited to contiguous float32 inputs and 65,535 stored
 elements. Source
 checks do not attest to a separately supplied binary; CI retains its build log.
-This is selected host-staging coverage, not a complete translated MLX backend.
+The Metal path compiles the generated package with warnings fatal and fast math
+disabled; the original MLX Metal backend is unavailable in this build. All three
+targets use explicit one-thread-per-workgroup dispatch. This is selected
+host-staging coverage, not a complete translated MLX backend.
 
 Exact Scalar Physical Resource Layouts
 --------------------------------------

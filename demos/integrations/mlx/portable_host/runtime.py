@@ -15,6 +15,7 @@ from crosstl.project.native_runtime_drivers import (
 )
 from crosstl.project.runtime_verification import (
     DirectXRuntimeParityAdapter,
+    MetalRuntimeParityAdapter,
     OpenGLRuntimeParityAdapter,
     RuntimeParityExecutor,
     RuntimeTestAdapterSpec,
@@ -73,6 +74,8 @@ class HostRuntime:
             )
         elif self.target == "directx":
             adapter = DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime())
+        elif self.target == "metal":
+            adapter = MetalRuntimeParityAdapter()
         else:
             raise ValueError(f"Unsupported host target: {self.target}")
         self.executor = RuntimeParityExecutor(
@@ -202,7 +205,7 @@ class HostRuntime:
             self.directory / "package",
             inputs,
             outputs,
-            (threads, 1, 1),
+            {"workgroupCount": [threads, 1, 1], "workgroupSize": [1, 1, 1]},
             expected_target=self.target,
         )
         result = self.executor.run(request)
