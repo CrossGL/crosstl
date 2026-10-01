@@ -107,6 +107,20 @@ fields. Special-value cases cover signed zero, infinities, NaNs and flushed
 denormals; NaN payload preservation is not an arithmetic guarantee. The same
 oracle is checked against the original Metal source in the macOS workflow.
 
+The copy-layout gate executes eight unchanged float32 copy entries on eleven layouts:
+vector/scalar copies, strided and broadcast one-dimensional inputs, transposes,
+row broadcasts, three-dimensional permutations, and strided/broadcast
+four-dimensional inputs with odd row lengths. Dynamic copies also check negative
+source/destination strides, nonzero offsets and untouched destination gaps.
+For the one-dimensional dynamic OpenGL entry, project index assertions bound the
+final source/destination addresses to the independently enumerated workload.
+They do not claim support for arbitrary 64-bit OpenGL resource addresses.
+Readbacks must match independent
+coordinate references bit for bit, preserve negative zero and leave 128-byte
+trailing guards unchanged. The macOS gate also executes the original Metal
+entries and checks that all input buffers remain unchanged. These are kernel
+tests; layout-changing copy dispatch is not yet connected to the host adapter.
+
 A separate required compiler gate translates the pinned
 `seq_gated_delta_vjp_float_128_128_24_24_1` entry and compiles it with DXC,
 Shader Model 6.2 and native 16-bit types. That gate retains the source identity,

@@ -34,6 +34,7 @@ on:
       - "tests/test_translator/test_mlx_current_unary_trig.py"
       - "tests/test_translator/test_metal_precise_acosh.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
+      - "tests/test_translator/test_mlx_current_copy.py"
       - "tests/test_translator/test_metal_precise_asin.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tests/test_translator/test_mlx_current_complex_power.py"
@@ -78,6 +79,7 @@ on:
       - "tests/test_translator/test_mlx_current_unary_trig.py"
       - "tests/test_translator/test_metal_precise_acosh.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
+      - "tests/test_translator/test_mlx_current_copy.py"
       - "tests/test_translator/test_metal_precise_asin.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tests/test_translator/test_mlx_current_complex_power.py"
@@ -422,6 +424,24 @@ jobs:
               tests/test_translator/test_metal_precise_acosh.py \
               tests/test_translator/test_mlx_current_unary_acosh.py \
               2>&1 | tee .mlx-portable-host/acosh.log
+      - name: Validate pinned copy layouts
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
+          CROSTL_REQUIRE_MLX_CURRENT_COPY: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/copy-layouts
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Pinned copy layouts" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/copy-layouts/pytest \
+              --junitxml=.mlx-portable-host/copy-layouts/results.xml \
+              tests/test_translator/test_mlx_current_copy.py \
+              2>&1 | tee .mlx-portable-host/copy-layouts.log
       - name: Validate pinned native binary math
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream

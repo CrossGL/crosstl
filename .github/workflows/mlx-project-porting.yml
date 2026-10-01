@@ -32,6 +32,7 @@ on:
       - "tests/test_translator/test_metal_precise_trig.py"
       - "tests/test_translator/test_metal_precise_acosh.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
+      - "tests/test_translator/test_mlx_current_copy.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_metal_fma.py"
@@ -123,6 +124,7 @@ on:
       - "tests/test_translator/test_metal_precise_trig.py"
       - "tests/test_translator/test_metal_precise_acosh.py"
       - "tests/test_translator/test_mlx_current_unary_acosh.py"
+      - "tests/test_translator/test_mlx_current_copy.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
       - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_metal_fma.py"
@@ -663,6 +665,39 @@ jobs:
         with:
           name: mlx-acosh-${{ runner.os }}
           path: mlx-acosh-results
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Validate pinned copy layouts
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_COPY: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-copy-results
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Pinned copy layouts" -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-copy-results/pytest \
+              --junitxml=mlx-copy-results/results.xml \
+              tests/test_translator/test_mlx_current_copy.py
+
+      - name: Upload pinned copy evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-copy-${{ runner.os }}
+          path: mlx-copy-results
           if-no-files-found: error
           retention-days: 14
 
