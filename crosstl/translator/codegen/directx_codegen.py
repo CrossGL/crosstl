@@ -4790,6 +4790,7 @@ class HLSLCodeGen:
         call_mutations,
         mutable_names,
         uniform_components,
+        uniform_call_arguments=None,
     ):
         body = getattr(function, "body", None)
         operation_records = self.hlsl_software_subgroup_operation_records(body)
@@ -4950,6 +4951,20 @@ class HLSLCodeGen:
                         source_location=source_location,
                     )
 
+                if uniform_call_arguments is not None:
+                    for call in self.walk_ast(statement):
+                        if (
+                            isinstance(call, FunctionCallNode)
+                            and self.function_call_name(call) in dependent_names
+                        ):
+                            uniform_call_arguments[id(call)] = {
+                                index
+                                for index, argument in enumerate(call.arguments)
+                                if self.hlsl_software_subgroup_uniform_expression(
+                                    argument, names, components
+                                )
+                            }
+
         validate_statements(body, set(uniform_names), dict(uniform_components))
 
     def prepare_hlsl_software_subgroup_contract(self, ast, target_stage=None):
@@ -5107,6 +5122,37 @@ class HLSLCodeGen:
                 source_location=getattr(entry_function, "source_location", None),
             )
 
+        # Process callers before callees, intersecting facts from every call.
+        # Recursive collective graphs cannot establish a finite barrier schedule.
+        call_edges = {}
+        incoming = {name: 0 for name in dependent_names}
+        for name in sorted(dependent_names):
+            call_edges[name] = [
+                node
+                for node in self.walk_ast(functions_by_name[name].body)
+                if isinstance(node, FunctionCallNode)
+                and self.function_call_name(node) in dependent_names
+            ]
+            for call in call_edges[name]:
+                incoming[self.function_call_name(call)] += 1
+        pending = sorted(name for name, count in incoming.items() if count == 0)
+        ordered_names = []
+        while pending:
+            name = pending.pop(0)
+            ordered_names.append(name)
+            for call in call_edges[name]:
+                target = self.function_call_name(call)
+                incoming[target] -= 1
+                if incoming[target] == 0:
+                    pending.append(target)
+        if len(ordered_names) != len(dependent_names):
+            raise self.hlsl_software_subgroup_error(
+                "DirectX software subgroup helpers cannot use recursive calls",
+                workgroup_size=concrete_workgroup_size,
+                reason="helper-call-recursive",
+                source_location=getattr(entry_function, "source_location", None),
+            )
+
         self.hlsl_software_subgroup_function_names = dependent_names
         reserved_names = self.hlsl_helper_reserved_names(functions)
         self.hlsl_software_subgroup_reserved_names = reserved_names
@@ -5169,12 +5215,23 @@ class HLSLCodeGen:
         }
         if invocation_count == self.software_subgroup_width:
             uniform_semantics.add("gl_SubgroupID")
-        for name in dependent_names:
+        uniform_parameters = {}
+        for name in ordered_names:
             function = functions_by_name[name]
             parameters = getattr(function, "parameters", []) or []
             uniform_names = set(self.literal_int_constants) - {
                 parameter.name for parameter in parameters
             }
+            uniform_names.update(
+                parameter.name
+                for index, parameter in enumerate(parameters)
+                if index in uniform_parameters.get(name, set())
+                and not isinstance(parameter.param_type, (PointerType, ReferenceType))
+                and not set(self.hlsl_parameter_qualifiers(parameter))
+                & {"out", "inout"}
+                and self.map_type(parameter.param_type)
+                in {"bool", "int", "uint", "float", "int16_t", "uint16_t"}
+            )
             uniform_components = {}
             if function is entry_function:
                 unit_dimensions = {
@@ -5225,6 +5282,7 @@ class HLSLCodeGen:
                 for name, components in uniform_components.items()
                 if name not in mutable_names
             }
+            uniform_call_arguments = {}
             self.validate_hlsl_software_subgroup_control_flow(
                 function,
                 dependent_names,
@@ -5232,7 +5290,15 @@ class HLSLCodeGen:
                 call_mutations,
                 mutable_names,
                 uniform_components,
+                uniform_call_arguments,
             )
+            for call in call_edges[name]:
+                target = self.function_call_name(call)
+                facts = uniform_call_arguments.get(id(call), set())
+                if target not in uniform_parameters:
+                    uniform_parameters[target] = set(facts)
+                else:
+                    uniform_parameters[target].intersection_update(facts)
 
     def hlsl_software_subgroup_identifier(self, key, base_name):
         existing = self.hlsl_software_subgroup_helper_names.get(key)

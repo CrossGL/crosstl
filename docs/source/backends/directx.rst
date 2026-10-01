@@ -104,6 +104,16 @@ uniformity only when their operands are workgroup-uniform. Writes, reference
 aliases, address escapes and possibly mutating calls invalidate these facts.
 Lane-dependent bounds and unproven early exits remain translation errors.
 
+Resolved, nonrecursive collective helpers can receive workgroup-uniform scalar
+arguments through multiple call levels. A parameter is considered uniform only
+when every call supplies a proven-uniform expression. Different workgroups and
+different call sites may supply different values. Mutation, reference or output
+parameters, shadowing and lane-dependent arguments invalidate the proof;
+``const`` or invocation annotations on a helper parameter do not establish it.
+Windows numerical controls compare repeated helper calls and workgroup-dependent
+branches with original and generated Metal controls. OpenGL helper-argument
+propagation remains a separate limitation.
+
 Invocation-vector components are proven separately. A global or local ID
 component is workgroup-uniform when its corresponding declared workgroup
 dimension is one. For example, global ``y`` can select an entire ``(32, 1, 1)``

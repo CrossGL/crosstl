@@ -42,6 +42,7 @@ on:
       - "tests/test_translator/test_opengl_subgroup_wrappers.py"
       - "tests/test_translator/test_software_subgroup_product.py"
       - "tests/test_translator/test_subgroup_guarded_returns.py"
+      - "tests/test_translator/test_subgroup_uniform_arguments.py"
       - "tests/test_translator/test_opengl_subgroup_exit_uniformity.py"
       - "tests/test_translator/test_mlx_current_unary_sign.py"
       - "tests/test_translator/test_mlx_current_unary_atan.py"
@@ -99,6 +100,7 @@ on:
       - "tests/test_translator/test_opengl_subgroup_wrappers.py"
       - "tests/test_translator/test_software_subgroup_product.py"
       - "tests/test_translator/test_subgroup_guarded_returns.py"
+      - "tests/test_translator/test_subgroup_uniform_arguments.py"
       - "tests/test_translator/test_opengl_subgroup_exit_uniformity.py"
       - "tests/test_translator/test_mlx_current_unary_sign.py"
       - "tests/test_translator/test_mlx_current_unary_atan.py"
@@ -261,6 +263,19 @@ jobs:
               tests/test_translator/test_subgroup_guarded_returns.py \
               tests/test_translator/test_opengl_subgroup_exit_uniformity.py \
               2>&1 | tee .mlx-portable-host/subgroup-returns.log
+      - name: Validate collective helper arguments
+        if: runner.os != 'Linux'
+        env:
+          CROSTL_REQUIRE_SUBGROUP_UNIFORM_ARGUMENTS: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/subgroup-arguments
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Collective helper arguments" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/subgroup-arguments/pytest \
+              --junitxml=.mlx-portable-host/subgroup-arguments/results.xml \
+              tests/test_translator/test_subgroup_uniform_arguments.py \
+              2>&1 | tee .mlx-portable-host/subgroup-arguments.log
       - name: Validate Metal argument inference
         env:
           CROSTL_REQUIRE_METAL_ARGUMENT_INFERENCE: "1"
