@@ -99,6 +99,86 @@ def convert_without_preprocessing(code: str, file_path=None) -> str:
 
 
 @pytest.mark.parametrize(
+    "operator",
+    ["+", "-", "*", "/", "%", "&", "|", "^", "<", "<=", ">", ">=", "==", "!="],
+)
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize(
+    "vector,scalar,element",
+    [
+        ("uint2", "long", "uint"),
+        ("int3", "ulong", "int"),
+        ("long4", "uint", "int64"),
+        ("ulong2", "int", "uint64"),
+    ],
+)
+def test_integer_vector_scalar_operands_convert_before_operation(
+    operator, reverse, vector, scalar, element
+):
+    left, right = ("scalar", "value") if reverse else ("value", "scalar")
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+{vector} combine({vector} value, {scalar} scalar) {{
+    auto result = {left} {operator} {right};
+    return {vector}(result);
+}}
+"""
+    generated = convert(source)
+    expected_left, expected_right = (
+        (f"{element}(scalar)", "value") if reverse else ("value", f"{element}(scalar)")
+    )
+    assert f"{expected_left} {operator} {expected_right}" in generated
+
+
+@pytest.mark.parametrize("operator", ["+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="])
+@pytest.mark.parametrize("resource", [False, True])
+def test_integer_vector_scalar_compound_preserves_index_and_rhs_once(
+    operator, resource
+):
+    parameter = "device uint2* values [[buffer(0)]]" if resource else ""
+    local = "" if resource else "uint2 values[2] = {uint2(128), uint2(128)};"
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+kernel void combine({parameter}) {{
+    {local}
+    long scalar = -94;
+    uint index = 0u;
+    values[index++] {operator} scalar++;
+}}
+"""
+    generated = convert(source)
+    assert f"values[index++] {operator} uint(scalar++)" in generated
+    assert generated.count("index++") == generated.count("scalar++") == 1
+
+
+def test_integer_vector_scalar_auto_keeps_source_type_for_overloads():
+    source = """#include <metal_stdlib>
+using namespace metal;
+uint choose(uint2 value) { return value.x; }
+long choose(long2 value) { return value.y; }
+uint combine(uint2 value, long scalar) {
+    auto divided = value / scalar;
+    return choose(divided);
+}
+"""
+    generated = convert(source)
+    assert "uvec2 divided = value / uint(scalar);" in generated
+    assert "choose(divided)" in generated
+
+
+def test_integer_vector_scalar_conversion_does_not_change_shifts_or_scalar_rank():
+    source = """#include <metal_stdlib>
+using namespace metal;
+uint2 shift(uint2 value, long count) { value >>= count; return value << count; }
+long scalar_rank(long value, uint divisor) { return value / divisor; }
+"""
+    generated = convert(source)
+    assert "value >>= count;" in generated
+    assert "return value << count;" in generated
+    assert "return value / divisor;" in generated
+
+
+@pytest.mark.parametrize(
     "operator", ["+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="]
 )
 @pytest.mark.parametrize("expression_result", [False, True])

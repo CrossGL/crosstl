@@ -10054,6 +10054,16 @@ class MetalToCrossGLConverter:
             if pushed_context:
                 self.materialized_constexpr_expression_contexts.pop()
         op = node.operator
+        if op != "=" and op.endswith("="):
+            conversion = self.metal_integer_vector_scalar_conversion(
+                op[:-1],
+                self.expression_metal_type(node.left),
+                self.expression_metal_type(node.right),
+            )
+            if conversion is not None and conversion[0] == 1:
+                rhs = self.metal_vector_scalar_operand(
+                    rhs, self.expression_metal_type(node.right), conversion[1]
+                )
         if component_info is not None:
             if op == "=":
                 right_type = component_info["element_type"]
@@ -10428,10 +10438,23 @@ class MetalToCrossGLConverter:
                 return f"{operands[0]} {expr.op} {operands[1]}"
             left = self.generate_binary_operand(expr.left, expr.op, False, is_main)
             right = self.generate_binary_operand(expr.right, expr.op, True, is_main)
+            source_types = [
+                self.expression_metal_type(operand)
+                for operand in (expr.left, expr.right)
+            ]
+            conversion = self.metal_integer_vector_scalar_conversion(
+                expr.op, *source_types
+            )
+            if conversion is not None:
+                index, element_type = conversion
+                operands = [left, right]
+                operands[index] = self.metal_vector_scalar_operand(
+                    operands[index], source_types[index], element_type
+                )
+                left, right = operands
             if expr.op in {"+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"}:
                 source_types = [
-                    self.resolve_type_alias(self.expression_metal_type(operand))
-                    for operand in (expr.left, expr.right)
+                    self.resolve_type_alias(source_type) for source_type in source_types
                 ]
                 operand_types = [
                     self.normalized_metal_type(vtype) for vtype in source_types
@@ -17195,6 +17218,56 @@ float {scalar}(float value) {{
             return signed_name
         return "uint64_t" if signed_bits == 64 else "uint"
 
+    def metal_integer_vector_scalar_conversion(self, operator, left_type, right_type):
+        if operator not in {
+            "+",
+            "-",
+            "*",
+            "/",
+            "%",
+            "&",
+            "|",
+            "^",
+            "==",
+            "!=",
+            "<",
+            "<=",
+            ">",
+            ">=",
+        }:
+            return None
+        if any(
+            self.metal_pointer_pointee_type_once(vtype) is not None
+            for vtype in (left_type, right_type)
+        ):
+            return None
+        left_vector = self.metal_small_vector_type_parts(left_type)
+        right_vector = self.metal_small_vector_type_parts(right_type)
+        if (left_vector is None) == (right_vector is None):
+            return None
+        index = 1 if left_vector is not None else 0
+        element_type, _width = left_vector or right_vector
+        element = self.metal_scalar_arithmetic_type_info(element_type)
+        scalar = self.metal_scalar_arithmetic_type_info((left_type, right_type)[index])
+        if (
+            element is None
+            or scalar is None
+            or element[0] != "integer"
+            or scalar[0] != "integer"
+            or element[2] == 1
+        ):
+            return None
+        return index, element_type
+
+    def metal_vector_scalar_operand(self, rendered, source_type, element_type):
+        if self.metal_scalar_arithmetic_type_info(
+            source_type
+        ) == self.metal_scalar_arithmetic_type_info(element_type):
+            return rendered
+        # Metal converts the scalar before the vector operation. Recording that
+        # conversion in CrossGL also preserves it through saved intermediates.
+        return f"{self.map_type(element_type)}({rendered})"
+
     def metal_scalar_binary_result_type(self, operator, left_type, right_type):
         left_info = self.metal_scalar_arithmetic_type_info(left_type)
         right_info = self.metal_scalar_arithmetic_type_info(right_type)
@@ -17299,6 +17372,13 @@ float {scalar}(float value) {{
         right_vector = self.metal_small_vector_type_parts(right_type)
         if left_vector is not None or right_vector is not None:
             vector = left_vector or right_vector
+            if (
+                self.metal_integer_vector_scalar_conversion(
+                    expr.op, left_type, right_type
+                )
+                is not None
+            ):
+                return self.metal_vector_type_from_element(vector[0], vector[1])
             if (
                 left_vector is not None
                 and right_vector is not None
@@ -18038,6 +18118,15 @@ float {scalar}(float value) {{
             binary_op = compound_ops.get(operator)
             if binary_op is None:
                 return None
+            conversion = self.metal_integer_vector_scalar_conversion(
+                binary_op,
+                self.expression_metal_type(access),
+                self.expression_metal_type(value),
+            )
+            if conversion is not None and conversion[0] == 1:
+                rendered_value = self.metal_vector_scalar_operand(
+                    rendered_value, self.expression_metal_type(value), conversion[1]
+                )
             # Keep the lvalue intact so target lowering evaluates its index once.
             return f"{buffer}[{index}] {operator} {rendered_value}"
         return f"buffer_store({buffer}, {index}, {rendered_value})"

@@ -535,6 +535,7 @@ def _execute_integer_case(
     denominator_dtype,
     *,
     source_backend="metal",
+    original_metal_compile_flags=(),
 ):
     guards = [0x37000000 + index for index in range(8)]
 
@@ -574,7 +575,12 @@ def _execute_integer_case(
         if target == source_backend:
             original = tmp_path / "original"
             original.mkdir()
-            artifact, original_module = _compile(source, target, original)
+            artifact, original_module = _compile(
+                source,
+                target,
+                original,
+                metal_compile_flags=original_metal_compile_flags,
+            )
             state, native = _native_request(request)
             native = replace(
                 native,
@@ -588,6 +594,7 @@ def _execute_integer_case(
                 "moduleSha256": (
                     hashlib.sha256(original_module.read_bytes()).hexdigest()
                 ),
+                "metalCompileFlags": list(original_metal_compile_flags),
             }
         (tmp_path / "evidence.json").write_text(
             json.dumps(
@@ -776,12 +783,10 @@ kernel void products(device {kind}* numerators [[buffer(0)]],
     )
 
 
-def test_hlsl_vector_scalar_arithmetic_matches_original_metal(tmp_path):
+def test_vector_scalar_integer_arithmetic_matches_original_metal(tmp_path):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required vector arithmetic")
-    if sys.platform not in {"darwin", "win32"}:
-        pytest.skip("HLSL vector conversion is compared with its original Metal source")
-    target = "metal" if sys.platform == "darwin" else "directx"
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
     source = """#include <metal_stdlib>
 using namespace metal;
 kernel void products(device long* numerators [[buffer(0)]],

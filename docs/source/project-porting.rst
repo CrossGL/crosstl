@@ -787,6 +787,13 @@ The Metal frontend retains structured-buffer compound assignments as lvalues in
 the intermediate representation, including side-effecting indices. It does not
 expand them into a load/store pair that evaluates the index twice.
 
+For built-in integer vector/scalar arithmetic and comparisons, the Metal
+frontend explicitly converts the scalar to the vector element type before the
+operation. Both operand orders, compound assignments and inferred local types
+retain this source rule in saved CrossGL. Scalar pairs still use their usual
+integer conversions, and shifts still promote their operands independently.
+This does not change standalone CrossGL or native HLSL conversion rules.
+
 Metal-to-HLSL lowering explicitly applies source integer conversions before arithmetic,
 bitwise operations, comparisons and conditional selection. In particular,
 ``int64_t`` combined with ``uint`` uses signed 64-bit arithmetic, not HLSL's
@@ -825,13 +832,15 @@ remainder on Windows, Linux and macOS, including original Metal controls,
 unchanged inputs and guarded outputs. Wide shift counts cover both directions,
 32-bit and 64-bit left operands, vector widths two through four, scalar
 broadcasts and side-effecting binary and compound expressions on every target.
-The original Metal controls use representable, nonnegative signed left-shift
-operands and valid counts throughout. HLSL vector/scalar arithmetic conversions
-receive separate Windows/Metal controls.
+The original Metal shift controls use representable, nonnegative signed left-shift
+operands and valid counts throughout. Vector/scalar arithmetic controls include
+values outside the vector component range, both operand orders, comparisons,
+inferred locals, nested operations and single-evaluation compound assignments.
+The original Metal mixed-sign comparison controls disable only ``-Wsign-compare``
+and record that flag; generated artifacts retain warning-fatal compilation.
 Native HLSL controls additionally compare generated results on each target and
 the original HLSL on Windows; optimized DXC checks cover direct and saved-CrossGL
-round trips. Metal scalar/vector arithmetic on OpenGL remains tracked in
-`issue #2035 <https://github.com/CrossGL/crosstl/issues/2035>`_.
+round trips.
 These checks do not establish full MLX-suite parity.
 
 **Fused arithmetic profiles.**

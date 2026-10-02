@@ -57,6 +57,7 @@ on:
       - "tests/test_translator/test_subgroup_guarded_returns.py"
       - "tests/test_translator/test_directx_self_comparisons.py"
       - "tests/test_translator/test_wide_integer_arithmetic.py"
+      - "tests/test_translator/test_metal_vector_scalar_arithmetic.py"
       - "tests/test_translator/test_opengl_vector_comparisons.py"
       - "tests/test_translator/test_subgroup_uniform_arguments.py"
       - "tests/test_translator/test_software_subgroup_partial.py"
@@ -137,6 +138,7 @@ on:
       - "tests/test_translator/test_subgroup_guarded_returns.py"
       - "tests/test_translator/test_directx_self_comparisons.py"
       - "tests/test_translator/test_wide_integer_arithmetic.py"
+      - "tests/test_translator/test_metal_vector_scalar_arithmetic.py"
       - "tests/test_translator/test_opengl_vector_comparisons.py"
       - "tests/test_translator/test_subgroup_uniform_arguments.py"
       - "tests/test_translator/test_software_subgroup_partial.py"
@@ -388,6 +390,7 @@ jobs:
               --basetemp=.mlx-portable-host/integer-arithmetic/pytest \
               --junitxml=.mlx-portable-host/integer-arithmetic/results.xml \
               tests/test_translator/test_wide_integer_arithmetic.py \
+              tests/test_translator/test_metal_vector_scalar_arithmetic.py \
               2>&1 | tee .mlx-portable-host/integer-arithmetic.log
       - name: Validate Metal argument inference
         env:
