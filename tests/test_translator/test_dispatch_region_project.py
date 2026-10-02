@@ -589,3 +589,136 @@ def test_packaged_regions_execute_natively(tmp_path, grid, size):
         )
     )
     assert result == expected_outputs
+
+
+CONSTANT_SOURCE = """#include <metal_stdlib>
+using namespace metal;
+kernel void update(device uint* values [[buffer(0)]],
+                   constant uint& bias [[buffer(1)]],
+                   uint3 tid [[thread_position_in_grid]],
+                   uint3 gid [[threadgroup_position_in_grid]],
+                   uint3 grid [[threads_per_grid]]) {
+    uint index = tid.x + grid.x * (tid.y + grid.y * tid.z);
+    values[16u + index] += bias + gid.x + 11u * gid.y + 101u * gid.z;
+}
+"""
+
+
+@pytest.mark.parametrize(
+    "grid,size", [((37, 1, 1), (32, 1, 1)), ((7, 5, 3), (4, 3, 2))]
+)
+def test_packaged_regions_reuse_source_constants(tmp_path, grid, size):
+    if sys.platform == "darwin":
+        pytest.skip("DirectX/OpenGL region sequences require their native platforms")
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 to require native region packages")
+    target = {"win32": "directx", "linux": "opengl"}[sys.platform]
+    count = grid[0] * grid[1] * grid[2]
+    guard = 0x5A39E714
+    bias = 37
+    initial = [guard] * 16 + [3 * i + 1 for i in range(count)] + [guard] * 16
+    expected = initial.copy()
+    for z in range(grid[2]):
+        for y in range(grid[1]):
+            for x in range(grid[0]):
+                index = x + grid[0] * (y + grid[1] * z)
+                expected[16 + index] += (
+                    bias + x // size[0] + 11 * (y // size[1]) + 101 * (z // size[2])
+                )
+    packages = []
+    for index, region in enumerate(plan_dispatch_regions(grid, size)):
+        directory = tmp_path / str(index)
+        config = _config(directory, target, region)
+        config.source_options["metal"]["target_options"][target].pop(
+            "software_subgroup_width"
+        )
+        config.source_options["metal"]["target_options"][target].pop(
+            "relative_wave_shuffle_out_of_range", None
+        )
+        (directory / "kernel.metal").write_text(CONSTANT_SOURCE, encoding="utf-8")
+        descriptor, package, _ = _package(directory, target, region, config=config)
+        artifact = package / descriptor["artifact"]["packagePath"]
+        _, compiled = _compile(artifact.read_text(), target, directory)
+        assert compiled.is_file()
+        packages.append((descriptor, package))
+    supplied, outputs = {}, {}
+    for binding in descriptor["bindings"]:
+        if "executionInput" in binding.get("provenance", {}):
+            continue
+        is_output = binding["coordinates"]["binding"] == 0
+        values = initial if is_output else [bias]
+        supplied[binding["name"]] = {
+            "dtype": "uint32",
+            "shape": [len(values)],
+            "values": values,
+        }
+        if is_output:
+            outputs[binding["name"]] = {
+                "dtype": "uint32",
+                "shape": [len(expected)],
+                "values": expected,
+            }
+        else:
+            constant_name = binding["name"]
+    executor = _executor(target)
+    evidence = []
+    with prepare_native_loader_dispatch_regions(
+        packages[::-1],
+        supplied,
+        outputs,
+        thread_grid_size=grid,
+        source_workgroup_size=size,
+        adapter=executor.runtime_adapter,
+    ) as requests:
+        assert len(requests) > 1
+        shared_constant = requests[0].buffers[constant_name].allocation
+        derived_ids = set()
+        for index, (request, (descriptor, _)) in enumerate(zip(requests, packages)):
+            constant = request.buffers[constant_name]
+            assert constant.allocation == shared_constant
+            assert (constant.value is not None) == (index == 0)
+            derived_names = {
+                binding["name"]
+                for binding in descriptor["bindings"]
+                if "executionInput" in binding.get("provenance", {})
+            }
+            for name in derived_names:
+                derived = request.buffers[name]
+                assert derived.value is not None
+                assert derived.allocation.allocation_id not in derived_ids
+                assert derived.allocation != shared_constant
+                derived_ids.add(derived.allocation.allocation_id)
+            module = tmp_path / str(index) / request.module_path.name
+            module.write_bytes(request.module_path.read_bytes())
+            evidence.append(
+                {
+                    "descriptor": descriptor,
+                    "artifactSha256": (
+                        hashlib.sha256(request.artifact_path.read_bytes()).hexdigest()
+                    ),
+                    "moduleSha256": hashlib.sha256(module.read_bytes()).hexdigest(),
+                    "moduleFile": module.name,
+                    "sourceConstantAllocation": shared_constant.to_json(),
+                    "derivedConstants": sorted(derived_names),
+                }
+            )
+        result = executor.runtime_adapter.runtime.dispatch_sequence(
+            None, None, requests
+        )
+    (tmp_path / "evidence.json").write_text(
+        json.dumps(
+            {
+                "target": target,
+                "grid": grid,
+                "size": size,
+                "sourceSha256": hashlib.sha256(CONSTANT_SOURCE.encode()).hexdigest(),
+                "bias": bias,
+                "initial": initial,
+                "expected": expected,
+                "result": result,
+                "regions": evidence,
+            },
+            indent=2,
+        )
+    )
+    assert result == outputs

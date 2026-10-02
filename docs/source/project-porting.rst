@@ -2063,7 +2063,12 @@ allocation for the group, and bind that allocation at each reflected coordinate.
 Conflicting upload bytes fail setup instead of causing an implicit conversion or
 per-binding allocation. DirectX currently requires every structured-buffer view
 to cover the complete allocation, requires one dtype and stride across the
-group, and rejects shared constant-buffer allocations. OpenGL supports bounded
+group, and rejects simultaneous aliases of a constant buffer within one dispatch.
+An ordered DirectX sequence may reuse an immutable constant allocation across
+nodes when every view has the same scalar layout and extent at offset zero.
+Conflicting uploads, different allocation sizes, and mixing constant buffers with
+SRV/UAV resources remain errors. Source constants are uploaded once; derived
+region constants retain distinct allocations. OpenGL supports bounded
 uniform-block and storage-buffer ranges, subject to the offset-alignment limits
 reported by the active context. It rejects mixed uniform/storage groups,
 incompatible overlapping scalar layouts, and overlapping writable ranges.

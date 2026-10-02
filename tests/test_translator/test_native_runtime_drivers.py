@@ -28,6 +28,7 @@ from crosstl.project.native_runtime_drivers import (
     _prepare_directx_constants,
     _prepare_opengl_buffers,
     _prepare_opengl_specializations,
+    _prepare_sequence_allocations,
     _prepare_vulkan_buffers,
     _read_mapped_memory,
     _validate_directx_register_layout,
@@ -5884,6 +5885,116 @@ def test_directx_compute_runtime_dispatch_sequence_cleans_up_after_failure(tmp_p
     assert all(buffer.release_count == 1 for buffer in module.buffers)
     assert all(compute.release_count == 1 for compute in module.computes)
     assert not any(event[0] == "readback" for event in module.events)
+
+
+def _sequence_constant(name="shared_parameters", *, values=(37,), register=0):
+    return NativeRuntimeBufferBinding(
+        name=name,
+        binding=RuntimeResourceBinding(
+            name=name,
+            kind="constant-buffer",
+            set=0,
+            binding=register,
+            access="read",
+            metadata={"scalarLayout": _scalar_block_layout("hlsl-constant-buffer")},
+        ),
+        value=list(values) if values is not None else None,
+        source="input" if values is not None else None,
+        dtype="uint32",
+        shape=(1,),
+        allocation=RuntimeAllocationView(
+            allocation_id="shared_parameters", byte_length=4, allocation_byte_length=256
+        ),
+    )
+
+
+@pytest.mark.parametrize("second_upload", [False, True])
+def test_directx_sequence_reuses_immutable_constant_allocation(tmp_path, second_upload):
+    requests = _native_dispatch_sequence_requests(tmp_path, "directx")
+    constants = (
+        _sequence_constant(),
+        _sequence_constant(
+            "consumer_parameters", values=(37,) if second_upload else None
+        ),
+    )
+    requests = tuple(
+        replace(
+            request,
+            buffers={
+                **request.buffers,
+                constant.name: constant,
+                "region_parameters": replace(
+                    _sequence_constant(
+                        "region_parameters", values=(index + 1,), register=1
+                    ),
+                    allocation=RuntimeAllocationView(
+                        allocation_id=f"region:{index}",
+                        byte_length=4,
+                        allocation_byte_length=256,
+                    ),
+                ),
+            },
+        )
+        for index, (request, constant) in enumerate(zip(requests, constants))
+    )
+    module = _SequenceCompushady()
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: module, platform_name="win32"
+    )
+
+    assert runtime.dispatch_sequence(None, None, requests)["result"]["values"] == [
+        5,
+        7,
+        9,
+        11,
+    ]
+    first, second = (compute.cbv[0] for compute in module.computes)
+    assert first is second
+    assert bytes(first.payload) == struct.pack("<I", 37) + bytes(252)
+    local_first, local_second = (compute.cbv[1] for compute in module.computes)
+    assert local_first is not local_second and local_first is not first
+    assert bytes(local_first.payload) == struct.pack("<I", 1) + bytes(252)
+    assert bytes(local_second.payload) == struct.pack("<I", 2) + bytes(252)
+    assert sum(buffer.heap_type == module.HEAP_UPLOAD for buffer in module.buffers) == 4
+    assert all(buffer.release_count == 1 for buffer in module.buffers)
+
+
+@pytest.mark.parametrize(
+    "change,reason",
+    [
+        ("same-node", "unsupported-shared-allocation"),
+        ("uav", "unsupported-shared-allocation"),
+        ("srv", "unsupported-shared-allocation"),
+        ("dtype", "allocation-layout-incompatible"),
+        ("size", "allocation-layout-incompatible"),
+        ("offset", "allocation-layout-incompatible"),
+        ("allocation", "allocation-size-conflict"),
+        ("upload", "allocation-upload-conflict"),
+    ],
+)
+def test_directx_sequence_rejects_incompatible_constant_reuse(change, reason):
+    (first,) = _prepare_directx_buffers({"shared_parameters": _sequence_constant()})
+    second = replace(
+        first, name="consumer_parameters", payload=b"", upload=False, source=None
+    )
+    if change in {"srv", "uav"}:
+        second = replace(second, namespace=change, writable=change == "uav")
+    elif change == "dtype":
+        second = replace(second, dtype="int32")
+    elif change == "size":
+        second = replace(second, byte_length=8)
+    elif change == "offset":
+        first = replace(first, byte_offset=4)
+        second = replace(second, byte_offset=4)
+    elif change == "allocation":
+        second = replace(second, allocation_size=512)
+    elif change == "upload":
+        second = replace(second, upload=True, payload=struct.pack("<I", 38))
+    nodes = ((first, second),) if change == "same-node" else ((first,), (second,))
+    with pytest.raises(RuntimeAdapterSetupError) as failure:
+        _prepare_sequence_allocations(nodes, target="directx")
+    assert failure.value.details["reasonKind"] == reason
+    assert failure.value.details["allocationId"] == "shared_parameters"
 
 
 def test_opengl_compute_runtime_dispatch_sequence_preserves_temporary_allocation(

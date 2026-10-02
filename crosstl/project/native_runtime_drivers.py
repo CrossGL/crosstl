@@ -2517,10 +2517,24 @@ def _validate_directx_allocation_views(
     views: Sequence[_PreparedDirectXBuffer],
     *,
     validate_writes: bool = True,
+    allow_constant_reuse: bool = False,
 ) -> None:
     if len(views) < 2:
         return
     if any(view.namespace == "cbv" for view in views):
+        if allow_constant_reuse and all(view.namespace == "cbv" for view in views):
+            layouts = {
+                (view.dtype, view.stride, view.byte_offset, view.size) for view in views
+            }
+            if len(layouts) != 1 or any(view.byte_offset for view in views):
+                raise _directx_setup_error(
+                    "DirectX sequential constant-buffer views require the same layout at offset zero.",
+                    "allocation-layout-incompatible",
+                    allocationId=allocation_id,
+                    views=[_prepared_allocation_view_payload(view) for view in views],
+                    targetConstraint="constant-buffer-view-layout",
+                )
+            return
         raise _directx_setup_error(
             "DirectX constant-buffer allocations cannot be shared with another binding.",
             "unsupported-shared-allocation",
@@ -2688,7 +2702,13 @@ def _prepare_sequence_allocations(
     allocations = []
     for key, views in groups.items():
         allocation_id = display_ids[key]
-        validate(allocation_id, views, validate_writes=False)
+        if target == "directx":
+            # Per-node validation above still rejects simultaneous CBV aliases.
+            _validate_directx_allocation_views(
+                allocation_id, views, validate_writes=False, allow_constant_reuse=True
+            )
+        else:
+            validate(allocation_id, views, validate_writes=False)
         allocations.append(
             _PreparedSequenceAllocation(
                 key=key,
