@@ -54,6 +54,8 @@ on:
       - "tests/test_translator/test_metal_float_selection.py"
       - "tests/test_translator/test_boolean_buffer_runtime.py"
       - "tests/test_translator/test_float_storage_encoding.py"
+      - "tests/test_translator/test_loop_updates.py"
+      - "tests/test_translator/test_mlx_current_gather.py"
       - "tests/test_translator/test_software_subgroup_votes.py"
       - "tests/test_translator/test_opengl_subgroup_wrappers.py"
       - "tests/test_translator/test_software_subgroup_product.py"
@@ -138,6 +140,8 @@ on:
       - "tests/test_translator/test_metal_float_selection.py"
       - "tests/test_translator/test_boolean_buffer_runtime.py"
       - "tests/test_translator/test_float_storage_encoding.py"
+      - "tests/test_translator/test_loop_updates.py"
+      - "tests/test_translator/test_mlx_current_gather.py"
       - "tests/test_translator/test_software_subgroup_votes.py"
       - "tests/test_translator/test_opengl_subgroup_wrappers.py"
       - "tests/test_translator/test_software_subgroup_product.py"
@@ -192,7 +196,7 @@ jobs:
   portable-host:
     name: MLX native host (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 330
+    timeout-minutes: 350
     strategy:
       fail-fast: false
       matrix:
@@ -397,6 +401,21 @@ jobs:
               --junitxml=.mlx-portable-host/float-storage/results.xml \
               tests/test_translator/test_float_storage_encoding.py \
               2>&1 | tee .mlx-portable-host/float-storage.log
+      - name: Validate ordered loop updates
+        env:
+          CROSTL_REQUIRE_LOOP_UPDATE_RUNTIME: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/loop-updates
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Ordered loop updates" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/loop-updates/pytest \
+              --junitxml=.mlx-portable-host/loop-updates/results.xml \
+              tests/test_translator/test_loop_updates.py \
+              2>&1 | tee .mlx-portable-host/loop-updates.log
       - name: Validate mixed-width integer arithmetic
         env:
           CROSTL_REQUIRE_WIDE_INTEGER_ARITHMETIC: "1"
@@ -545,6 +564,23 @@ jobs:
           git -C mlx-upstream checkout --detach FETCH_HEAD
           mkdir -p .mlx-portable-host
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-host/adaptation.json
+      - name: Validate pinned gather loops
+        env:
+          CROSTL_REQUIRE_MLX_CURRENT_GATHER: "1"
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/gather
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "Pinned gather loops" -- \
+            python -m pytest -q -n auto --dist loadscope \
+              --basetemp=.mlx-portable-host/gather/pytest \
+              --junitxml=.mlx-portable-host/gather/results.xml \
+              tests/test_translator/test_mlx_current_gather.py \
+              2>&1 | tee .mlx-portable-host/gather.log
       - name: Compile pinned DirectX gated-delta backward entry
         if: runner.os == 'Windows'
         env:

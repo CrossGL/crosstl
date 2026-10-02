@@ -33093,11 +33093,17 @@ complex64_t crossgl_complex64_mod_assign(
                 if getattr(node, "condition", None)
                 else ""
             )
-            update = (
-                self.generate_discarded_expression(node.update)
-                if getattr(node, "update", None)
-                else ""
-            )
+            if isinstance(getattr(node, "update", None), list):
+                update = ", ".join(
+                    self.generate_discarded_expression(expression).strip().rstrip(";")
+                    for expression in node.update
+                )
+            else:
+                update = (
+                    self.generate_discarded_expression(node.update)
+                    if getattr(node, "update", None)
+                    else ""
+                )
 
             code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
 

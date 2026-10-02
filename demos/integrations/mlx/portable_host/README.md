@@ -18,7 +18,11 @@ entry list is in `packages.py`. Shared-buffer views reuse upstream MLX's
 shape, stride and ownership logic: strided views, broadcasts, copy aliases,
 dimension insertion/removal, transpose, slicing, split, dependency/custom-transform
 outputs and stop-gradient. Integer and array indexing still require the
-unimplemented Gather primitive. Contiguous conversion, reshape, flatten and unflatten
+unimplemented Gather primitive. A separate required native CI proof executes
+unchanged `gather_front<float, int, int, N>` specializations for `N = 1, 4, 8`,
+including negative/duplicate indices, partial chunks and exact storage words.
+It does not yet connect Python indexing to the portable host adapter.
+Contiguous conversion, reshape, flatten and unflatten
 dispatch translated copies when sharing storage is insufficient. Copies support
 matching float32, int32, uint32 and bool arrays, including negative and zero strides.
 The optional integer64 packages extend copies to int64 and uint64.

@@ -4265,7 +4265,10 @@
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_reduced_side_effecting_subarray_selector_is_evaluated_once",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_unknown_or_user_defined_iterables_are_structured_diagnostics",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_mutable_reference_binding_is_structured_diagnostic",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fixed_array_for_in_validates_with_dxc"
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fixed_array_for_in_validates_with_dxc",
+            "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_translate_and_compile",
+            "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_execute_natively",
+            "tests/test_translator/test_mlx_current_gather.py::def test_pinned_gather_front_native_parity"
           ]
         },
         "opengl": {
@@ -4276,13 +4279,19 @@
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_for_in_fixed_arrays_bind_source_element_types_and_evaluate_once",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_for_in_unknown_or_user_defined_iterables_are_structured_diagnostics",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_for_in_mutable_reference_binding_is_structured_diagnostic",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_fixed_array_for_in_validates_with_glslang_and_spirv_val"
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_fixed_array_for_in_validates_with_glslang_and_spirv_val",
+            "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_translate_and_compile",
+            "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_execute_natively",
+            "tests/test_translator/test_mlx_current_gather.py::def test_pinned_gather_front_native_parity"
           ]
         },
         "metal": {
           "status": "supported",
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax",
+            "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_translate_and_compile",
+            "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_execute_natively",
+            "tests/test_translator/test_mlx_current_gather.py::def test_pinned_gather_front_native_parity"
           ]
         },
         "vulkan": {

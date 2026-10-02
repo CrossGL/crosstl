@@ -781,6 +781,20 @@ close complete discovered-unary translation, reflection, and native compiler
 coverage on both targets; they do not claim numerical execution, MLX host
 runtime redirection, or MLX test-suite parity.
 
+**Ordered loop updates.**
+
+Metal and OpenGL emit comma-separated ``for`` updates individually in source
+order, matching DirectX. Updates remain in the loop header so ``continue``
+executes them and ``break`` skips them. Prefix/postfix increments, dependent
+compound assignments, empty and single updates retain their loop-local scopes.
+Required three-platform native tests check these effects and guarded outputs.
+The pinned MLX ``gather_front<float, int, int, N>`` proof instantiates unchanged
+upstream bodies for ``N`` equal to 1, 4 and 8. It checks negative and repeated
+indices, empty slices, partial chunks and exact binary32 storage words, including
+NaN payloads and signed zeros. The source wrapper only includes upstream headers
+and declares template instantiations. This is kernel execution coverage, not
+MLX Gather host integration or complete indexing support.
+
 **Mixed-width integer arithmetic.**
 
 The Metal frontend retains structured-buffer compound assignments as lvalues in
