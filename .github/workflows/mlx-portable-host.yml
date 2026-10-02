@@ -17,6 +17,7 @@ on:
       - "tests/test_mlx_portable_small_rows.py"
       - "tests/test_mlx_portable_empty_reductions.py"
       - "tests/test_mlx_portable_bitwise.py"
+      - "tests/test_mlx_portable_concatenate.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
       - "tests/test_translator/test_directx_half_conversion.py"
@@ -91,6 +92,7 @@ on:
       - "tests/test_mlx_portable_small_rows.py"
       - "tests/test_mlx_portable_empty_reductions.py"
       - "tests/test_mlx_portable_bitwise.py"
+      - "tests/test_mlx_portable_concatenate.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
       - "tests/test_translator/test_directx_half_conversion.py"
@@ -248,7 +250,7 @@ jobs:
           Expand-Archive $warpArchive -DestinationPath $warpRoot
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Validate portable host contracts
-        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py tests/test_mlx_portable_rows.py tests/test_mlx_portable_mixed_reductions.py tests/test_mlx_portable_columns.py tests/test_mlx_portable_small_rows.py tests/test_mlx_portable_empty_reductions.py tests/test_mlx_portable_bitwise.py tests/test_mlx_random_audit.py
+        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py tests/test_mlx_portable_rows.py tests/test_mlx_portable_mixed_reductions.py tests/test_mlx_portable_columns.py tests/test_mlx_portable_small_rows.py tests/test_mlx_portable_empty_reductions.py tests/test_mlx_portable_bitwise.py tests/test_mlx_portable_concatenate.py tests/test_mlx_random_audit.py
       - name: Validate software subgroup votes
         env:
           CROSTL_REQUIRE_SOFTWARE_SUBGROUP_VOTES: "1"
@@ -746,7 +748,7 @@ jobs:
     name: MLX small-row reductions (${{ matrix.target }})
     needs: portable-host
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 220
+    timeout-minutes: 250
     strategy:
       fail-fast: false
       matrix:
@@ -896,6 +898,25 @@ jobs:
             python -m demos.integrations.mlx.portable_host.verify_bitwise --mlx-root mlx-upstream \
               --packages .mlx-portable-small-rows/base/packages --bitwise .mlx-portable-small-rows/bitwise-packages \
               --output-dir .mlx-portable-small-rows/bitwise-evidence 2>&1 | tee .mlx-portable-small-rows/bitwise-verification.log
+      - name: Translate concatenation test reduction
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX concatenation reduction translation" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --entry all_reduce_andbool_ --width 32 \
+              --output-dir .mlx-portable-small-rows/concatenate-reductions \
+              2>&1 | tee .mlx-portable-small-rows/concatenate-translation.log
+      - name: Execute concatenation host operations
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1500 --label "MLX concatenation verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_concatenate --mlx-root mlx-upstream \
+              --packages .mlx-portable-small-rows/base/packages --reductions .mlx-portable-small-rows/concatenate-reductions \
+              --output-dir .mlx-portable-small-rows/concatenate-evidence 2>&1 | tee .mlx-portable-small-rows/concatenate-verification.log
       - name: Retain small-row execution evidence
         if: always()
         uses: actions/upload-artifact@v4

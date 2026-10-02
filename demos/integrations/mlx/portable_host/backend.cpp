@@ -154,7 +154,12 @@ void dispatch_unary(
   }
 }
 
-void dispatch_copy(const mlx::core::array& in, mlx::core::array& out) {
+void dispatch_copy_into(
+    const mlx::core::array& in,
+    mlx::core::array& out,
+    std::vector<int64_t> dst_strides,
+    int64_t dst_offset,
+    bool preserve) {
   require_runtime();
   if (in.dtype() != out.dtype() ||
       (in.dtype() != mlx::core::float32 && in.dtype() != mlx::core::int32 &&
@@ -162,12 +167,13 @@ void dispatch_copy(const mlx::core::array& in, mlx::core::array& out) {
     throw std::invalid_argument(
         "CrossTL copying layouts require matching float32, int32, uint32 or bool arrays.");
   }
-  if (in.size() != out.size() || in.size() > 65535 || in.ndim() > 64) {
+  if (in.size() > 65535 || in.ndim() > 64 ||
+      dst_strides.size() != in.ndim() ||
+      out.size() > std::numeric_limits<int32_t>::max()) {
     throw std::invalid_argument(
-        "CrossTL copy supports equal sizes up to 65535 elements and 64 axes.");
+        "CrossTL copy supports up to 65535 input elements and 64 axes.");
   }
   if (in.size() == 0) {
-    out.set_data(mlx::core::allocator::malloc(0));
     return;
   }
   std::vector<int32_t> shape(in.shape().begin(), in.shape().end());
@@ -175,6 +181,7 @@ void dispatch_copy(const mlx::core::array& in, mlx::core::array& out) {
   while (shape.size() < 2) {
     shape.insert(shape.begin(), 1);
     src_strides.insert(src_strides.begin(), 0);
+    dst_strides.insert(dst_strides.begin(), 0);
   }
   int64_t low = 0, high = 0;
   for (size_t axis = 0; axis < shape.size(); ++axis) {
@@ -199,21 +206,28 @@ void dispatch_copy(const mlx::core::array& in, mlx::core::array& out) {
       uint64_t(high) >= capacity - origin) {
     throw std::invalid_argument("CrossTL copy source view exceeds its allocation.");
   }
-  std::vector<int64_t> dst_strides(shape.size());
-  int64_t stride = 1;
-  for (size_t axis = shape.size(); axis-- > 0;) {
-    dst_strides[axis] = stride;
-    stride *= shape[axis];
+  int64_t destination_high = dst_offset;
+  for (size_t axis = 0; axis < shape.size(); ++axis) {
+    if (dst_strides[axis] < 0 ||
+        dst_strides[axis] > std::numeric_limits<int32_t>::max()) {
+      throw std::invalid_argument("CrossTL copy destination stride is invalid.");
+    }
+    destination_high += (int64_t(shape[axis]) - 1) * dst_strides[axis];
+  }
+  if (dst_offset < 0 || destination_high >= out.size() ||
+      out.offset() < 0 || uint64_t(out.offset()) > out.buffer_size() ||
+      out.nbytes() > out.buffer_size() - uint64_t(out.offset())) {
+    throw std::invalid_argument("CrossTL copy destination exceeds its allocation.");
   }
   int32_t ndim = static_cast<int32_t>(shape.size());
-  int64_t src_offset = -low, dst_offset = 0;
-  out.set_data(mlx::core::allocator::malloc(out.nbytes()));
+  int64_t src_offset = -low;
   // Copy storage words to preserve NaN payloads, subnormals and signed zero.
   const bool boolean = in.dtype() == mlx::core::bool_;
   const char* dtype = boolean ? "bool_" : "uint32";
   CrosstlMlxBuffer buffers[] = {
       {"src", dtype, const_cast<uint8_t*>(in.data<uint8_t>() + low * item_size), uint64_t(span), 0},
-      {"dst", dtype, out.data<void>(), out.size(), 1},
+      {"dst", dtype, out.data<void>(), out.size(),
+       preserve ? CROSTL_MLX_BUFFER_INOUT : uint32_t(1)},
       {"src_shape", "int32", shape.data(), uint64_t(ndim), 0},
       {"src_strides", "int64", src_strides.data(), uint64_t(ndim), 0},
       {"dst_strides", "int64", dst_strides.data(), uint64_t(ndim), 0},
@@ -232,11 +246,25 @@ void dispatch_copy(const mlx::core::array& in, mlx::core::array& out) {
       {1, 1, 1}};
   int status = dispatch_callback.load()(
       boolean ? "ggn2_dynamic_copybool_bool_" : "ggn2_dynamic_copyuint32uint32",
-      buffers, 8, out.size(), &launch, error, sizeof(error));
+      buffers, 8, in.size(), &launch, error, sizeof(error));
   error[sizeof(error) - 1] = '\0';
   if (status != 0) {
     throw std::runtime_error(std::string("CrossTL native copy failed: ") + error);
   }
+}
+
+void dispatch_copy(const mlx::core::array& in, mlx::core::array& out) {
+  if (in.size() != out.size()) {
+    throw std::invalid_argument("CrossTL copy requires equal logical sizes.");
+  }
+  out.set_data(mlx::core::allocator::malloc(out.nbytes()));
+  std::vector<int64_t> strides(in.ndim());
+  int64_t stride = 1;
+  for (size_t axis = in.ndim(); axis-- > 0;) {
+    strides[axis] = stride;
+    stride *= in.shape(axis);
+  }
+  dispatch_copy_into(in, out, std::move(strides), 0, false);
 }
 
 void reshape_view(
@@ -924,6 +952,47 @@ CROSSTL_BINARY_GPU(Divide)
 
 void BitwiseBinary::eval_gpu(const std::vector<array>& inputs, array& out) {
   dispatch_binary(inputs, out, name(), false, true);
+}
+
+void Concatenate::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.empty() || axis_ < 0 || axis_ >= out.ndim() || out.ndim() > 64 ||
+      out.size() > std::numeric_limits<int32_t>::max()) {
+    throw std::invalid_argument("CrossTL concatenate shape exceeds its bounds.");
+  }
+  int64_t axis_size = 0;
+  for (const auto& in : inputs) {
+    if (in.dtype() != out.dtype() ||
+        (in.dtype() != float32 && in.dtype() != int32 &&
+         in.dtype() != uint32 && in.dtype() != bool_)) {
+      throw std::invalid_argument(
+          "CrossTL concatenate requires matching float32/int32/uint32/bool arrays.");
+    }
+    if (in.ndim() != out.ndim() || in.size() > 65535) {
+      throw std::invalid_argument(
+          "CrossTL concatenate supports at most 65535 elements per input.");
+    }
+    for (int axis = 0; axis < out.ndim(); ++axis) {
+      if (axis != axis_ && in.shape(axis) != out.shape(axis)) {
+        throw std::invalid_argument("CrossTL concatenate input shapes do not match.");
+      }
+    }
+    axis_size += in.shape(axis_);
+  }
+  if (axis_size != out.shape(axis_)) {
+    throw std::invalid_argument("CrossTL concatenate output shape does not match.");
+  }
+  out.set_data(allocator::malloc(out.nbytes()));
+  std::vector<int64_t> strides(out.strides().begin(), out.strides().end());
+  int64_t offset = 0;
+  bool preserve = false;
+  for (const auto& in : inputs) {
+    if (in.size()) {
+      dispatch_copy_into(in, out, strides, offset, preserve);
+      preserve = true;
+    }
+    offset += int64_t(in.shape(axis_)) * strides[axis_];
+  }
 }
 
 #define CROSSTL_COMPARISON_GPU(Primitive)                                 \

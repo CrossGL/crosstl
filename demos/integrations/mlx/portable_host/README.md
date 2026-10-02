@@ -38,11 +38,13 @@ The NaN-equality entry supports float32; the maintained host workloads exercise
 scalar `array_equal(equal_nan=True)`. General array equality additionally needs
 the reduction packages described below. The optional bitwise package family supports
 Boolean operator overloads and 32-bit integer AND, OR, XOR, shifts and inversion.
+Concatenate supports float32, int32, uint32 and bool inputs through destination-strided copies.
 Other primitives retain MLX's explicit unsupported-GPU errors. Unary inputs
 other than LogicalNot and BitwiseInvert must be float32. Stored-contiguous broadcasts and column-major views retain
 their metadata; noncontiguous inputs use translated copies before unary dispatch.
-Dispatch is synchronous, uses host staging buffers and supports at most 65,535
-stored elements. Elementwise operations use one thread per workgroup; reductions
+Dispatch is synchronous and uses host staging buffers. Individual copy inputs and
+most elementwise operations remain bounded to 65,535 stored elements; concatenation
+can produce larger outputs as described below. Elementwise operations use one thread per workgroup; reductions
 preserve upstream launch widths and multipass planning. Empty elementwise arrays
 do not dispatch. This is a
 host integration proof, not a complete MLX backend or a performance benchmark.
@@ -95,6 +97,9 @@ no-GPU backend build definition and adds four explicitly named backend files:
   Full receives the upstream broadcast/cast value and materializes it with the
   same general-copy entry. Scalar fills, row/column broadcasts and strided values
   use the source strides, with fresh output allocation and no CPU fill loop.
+  Concatenate allocates its output once and dispatches each nonempty input into
+  a strided destination slice. Later copies upload the initialized output so
+  earlier slices remain intact. There is no CPU concatenation fallback.
 - `crosstl_dispatch.h` defines the typed C buffer/callback ABI.
 - `crosstl_primitives.cpp` copies upstream unsupported primitive definitions,
   removing only the implemented primitive stubs.
@@ -142,6 +147,13 @@ currently integrated elementwise and copy entries still use one-thread
 workgroups. Reduction dispatch carries the exact width and row grid for each
 pass. Older callback versions are rejected; rebuild the adapted MLX
 wheel when updating the ABI.
+
+Copy destinations additionally accept direction value 2 for initialized
+input/output storage. Values 0 and 1 retain their input-only and output-only
+meanings, and the buffer layout and callback signature are unchanged. Older
+callbacks reject direction 2 rather than silently discarding destination data.
+The first concatenation copy uses output-only storage initialized by the runtime;
+later copies preserve it. No uninitialized host output is uploaded.
 
 ## Whole-Array Reductions
 
@@ -664,3 +676,44 @@ passing that unchanged test. No upstream kernel or test is patched.
 The workload layout helper reinterprets a NumPy base allocation using the view's
 dtype before constructing the MLX view. This preserves signedness when the view
 and its base have different dtypes; it does not perform arithmetic on the CPU.
+
+## Concatenation
+
+Concatenation reuses the unchanged word-copy and Boolean-copy entries in the
+93-entry base package. Source inputs retain the 65,535-element logical and physical
+span bounds. Destinations use checked signed 32-bit indices and can exceed that
+input bound. The maintained large cases and unchanged upstream test each produce
+65,536-element outputs. This does not establish arbitrary-size backend support.
+
+Destination offsets, strides, allocation bounds and nonoverlapping element
+addresses are checked before submission. Overlapping source/destination spans are
+rejected. After execution, every untouched destination element and the trailing
+guard must match the uploaded values before any host output is modified.
+Both the destination contents and copy metadata are retained in the trace.
+
+The proof runs 72 raw-payload cases across float32, int32, uint32 and bool.
+It covers both matrix axes, flattening, transposes, negative strides, broadcasts,
+empty inputs, three-input sequences and larger outputs. Float32 inputs include
+signed zero, subnormal values, infinities and NaN payloads; these are copied as
+storage words, not recomputed as floating-point values. Each native run requires
+128 workload dispatches plus the unchanged upstream
+`test_ops.TestOps.test_concatenate`, which exercises all axes and permutations.
+Four rejection controls cover missing packages, unsupported int64/uint8 storage
+and an input exceeding the per-copy bound.
+
+The upstream test's array-equality assertion requires one Boolean reduction:
+
+```bash
+python -m demos.integrations.mlx.portable_host.reduction_packages \
+  --mlx-root mlx-upstream --target opengl --entry all_reduce_andbool_ --width 32 \
+  --output-dir concatenate-reductions
+python -m demos.integrations.mlx.portable_host.verify_concatenate \
+  --mlx-root mlx-upstream --packages host-packages --reductions concatenate-reductions \
+  --output-dir concatenate-evidence
+```
+
+Use the matching target on Windows/DirectX or macOS/Metal. The existing
+three-platform host workflow requires this proof and retains all failure output.
+No upstream tests, kernels or tolerances are changed. The additional upstream
+test is separate from the 34-test base selection; the full MLX suite remains
+incomplete.

@@ -36,6 +36,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "Reduce",
                     "BitwiseBinary",
                     "BitwiseInvert",
+                    "Concatenate",
                     "Power",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,
@@ -465,6 +466,105 @@ def test_copy_dispatch_checks_metadata_before_submission(
         trace = json.loads(host.trace.read_text())
         assert trace["threads"] == 6 and trace["workgroupCount"] == [2, 2, 1]
         assert trace["copyGuardWords"] == runtime.COPY_GUARD
+
+
+@pytest.mark.parametrize("dtype", ["uint32", "bool_"])
+@pytest.mark.parametrize("preserve", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize(
+    "fault",
+    [None, "direction", "overlap", "collision", "bounds", "span", "untouched", "guard"],
+)
+def test_strided_copy_preserves_other_destination_elements(
+    translated_packages, tmp_path, monkeypatch, dtype, preserve, reverse, fault
+):
+    host = runtime.HostRuntime(translated_packages, tmp_path / "trace")
+    buffers, memory = copy_buffers(dtype)
+    initial = [bool(i % 2) if dtype == "bool_" else 1000 + i for i in range(14)]
+    memory["dst"] = (runtime.TYPES[dtype] * 14)(*initial)
+    buffers[1].data = ctypes.addressof(memory["dst"])
+    buffers[1].count = 14
+    buffers[1].output = runtime.copy_layout.INOUT if preserve else 1
+    memory["dst_strides"][:] = [-7 if reverse else 7, 2]
+    memory["dst_offset"][0] = 8 if reverse else 1
+    indices = [8, 10, 12, 1, 3, 5] if reverse else [1, 3, 5, 8, 10, 12]
+    expected = list(initial) if preserve else [False if dtype == "bool_" else 0] * 14
+    for destination, source in zip(indices, [4, 2, 0, 11, 9, 7]):
+        expected[destination] = memory["src"][source]
+    if fault == "direction":
+        buffers[1].output = 3
+    elif fault == "overlap":
+        buffers[1].data = buffers[0].data
+    elif fault == "collision":
+        memory["dst_strides"][:] = [2, 2]
+        memory["dst_offset"][0] = 0
+    elif fault == "bounds":
+        memory["dst_offset"][0] = 14
+    elif fault == "span":
+        buffers[1].count = 2**31
+    calls = []
+    entry = packages.BOOLEAN_COPY_ENTRY if dtype == "bool_" else packages.COPY_ENTRY
+    physical = runtime.physical_dtype(dtype, host.target)
+    guard = (
+        runtime.COPY_GUARD
+        if dtype != "bool_"
+        else (
+            runtime.BOOLEAN_GUARD
+            if host.target == "metal"
+            else [int(v) for v in runtime.BOOLEAN_GUARD]
+        )
+    )
+
+    def execute(request):
+        calls.append(request)
+        binding = next(
+            item["name"]
+            for item in host.descriptors[entry]["bindings"]
+            if item["access"] == "read_write"
+        )
+        uploaded = next(item for item in request.fixture.inputs if item.name == binding)
+        assert list(uploaded.values[:14]) == (initial if preserve else [0] * 14)
+        values = list(expected) + guard
+        if physical == "uint32":
+            values = [int(v) for v in values]
+        else:
+            values = [bool(v) for v in values]
+        if fault == "untouched":
+            values[0] = not values[0] if physical == "bool" else int(not values[0])
+        elif fault == "guard":
+            values[-1] = not values[-1] if physical == "bool" else int(not values[-1])
+        return SimpleNamespace(
+            status="ok",
+            outputs={binding: {"dtype": physical, "shape": [46], "values": values}},
+            details={},
+        )
+
+    monkeypatch.setattr(host.executor, "run", execute)
+    if fault:
+        with pytest.raises((ValueError, RuntimeError)):
+            host.dispatch(entry, buffers, 8, 6)
+        assert list(memory["dst"]) == initial
+        assert len(calls) == int(fault in {"untouched", "guard"})
+        assert not host.trace.exists()
+    else:
+        host.dispatch(entry, buffers, 8, 6)
+        assert list(memory["dst"]) == expected
+        event = json.loads(host.trace.read_text())
+        assert event["copyMetadata"]["preserveDestination"] is preserve
+        assert event["copyValues"] == expected
+
+
+def test_copy_destination_span_is_independent_of_dispatch_size():
+    buffers, memory = copy_buffers()
+    memory["dst"] = (ctypes.c_uint32 * 65536)()
+    buffers[1].data = ctypes.addressof(memory["dst"])
+    buffers[1].count = 65536
+    memory["dst_offset"][0] = 65530
+    metadata = runtime.copy_layout.validate({b.name.decode(): b for b in buffers}, 6)
+    assert list(runtime.copy_layout.destination_indices(metadata)) == list(
+        range(65530, 65536)
+    )
+    assert metadata["workgroupCount"] == [2, 2, 1]
 
 
 @pytest.mark.parametrize(

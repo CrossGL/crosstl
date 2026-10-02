@@ -1,6 +1,7 @@
 """Validate bounded copy metadata before reading or submitting source storage."""
 
 import ctypes
+import itertools
 import math
 
 DTYPES = {
@@ -15,7 +16,19 @@ DTYPES = {
 }
 
 
-def geometry(buffers, logical_size, *, dtype="uint32"):
+MAX_DESTINATION_ELEMENTS = 2**31 - 1
+INOUT = 2
+
+
+def destination_indices(metadata):
+    for coordinates in itertools.product(*(range(size) for size in metadata["shape"])):
+        yield metadata["destinationOffset"] + sum(
+            coordinate * stride
+            for coordinate, stride in zip(coordinates, metadata["destinationStrides"])
+        )
+
+
+def validate(buffers, logical_size, *, dtype="uint32"):
     if dtype not in {"uint32", "bool_"}:
         raise ValueError("Unsupported native copy storage dtype")
     rank = buffers["src_shape"].count
@@ -27,7 +40,10 @@ def geometry(buffers, logical_size, *, dtype="uint32"):
             if name == "dst"
             else rank if name in {"src_shape", "src_strides", "dst_strides"} else 1
         )
-        if name == "src":
+        if name == "dst":
+            if not logical_size <= buffer.count <= MAX_DESTINATION_ELEMENTS:
+                raise ValueError("Native copy destination span exceeds its bounds")
+        elif name == "src":
             if not 0 < buffer.count <= 65535:
                 raise ValueError("Native copy source span exceeds 65535")
         elif buffer.count != expected:
@@ -57,9 +73,37 @@ def geometry(buffers, logical_size, *, dtype="uint32"):
     high = offset + sum(max(extent, 0) for extent in extents)
     if low != 0 or high != buffers["src"].count - 1:
         raise ValueError("Native copy addresses do not match the uploaded source span")
-    expected = [math.prod(shape[axis + 1 :]) for axis in range(rank)]
-    if values("dst_strides", ctypes.c_int64) != expected or values(
-        "dst_offset", ctypes.c_int64
-    ) != [0]:
-        raise ValueError("Native copy destination must be contiguous")
-    return [(shape[-1] + 1) // 2, shape[-2], math.prod(shape[:-2])]
+    destination_strides = values("dst_strides", ctypes.c_int64)
+    destination_offset = values("dst_offset", ctypes.c_int64)[0]
+    if any(abs(stride) > MAX_DESTINATION_ELEMENTS for stride in destination_strides):
+        raise ValueError("Native copy destination stride exceeds signed index bounds")
+    extents = [(size - 1) * stride for size, stride in zip(shape, destination_strides)]
+    if (
+        destination_offset < 0
+        or destination_offset + sum(min(extent, 0) for extent in extents) < 0
+        or destination_offset + sum(max(extent, 0) for extent in extents)
+        >= buffers["dst"].count
+        or sum(abs(extent) for extent in extents) > MAX_DESTINATION_ELEMENTS
+    ):
+        raise ValueError("Native copy destination addresses exceed its allocation")
+    itemsize = 1 if dtype == "bool_" else 4
+    source, destination = buffers["src"], buffers["dst"]
+    if max(source.data, destination.data) < min(
+        source.data + source.count * itemsize,
+        destination.data + destination.count * itemsize,
+    ):
+        raise ValueError("Native copy source and destination allocations overlap")
+    metadata = {
+        "shape": shape,
+        "sourceStrides": strides,
+        "destinationStrides": destination_strides,
+        "sourceOffset": offset,
+        "destinationOffset": destination_offset,
+        "sourceCount": source.count,
+        "destinationCount": destination.count,
+        "preserveDestination": destination.output == INOUT,
+        "workgroupCount": [(shape[-1] + 1) // 2, shape[-2], math.prod(shape[:-2])],
+    }
+    if len(set(destination_indices(metadata))) != logical_size:
+        raise ValueError("Native copy destination elements overlap")
+    return metadata

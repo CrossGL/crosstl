@@ -8,10 +8,12 @@ typedef struct {
   const char* dtype;
   void* data;
   uint64_t count;
+  // 0: input, 1: output, 2: initialized input/output for strided copies.
   uint32_t output;
 } CrosstlMlxBuffer;
 
 enum { CROSTL_MLX_DISPATCH_VERSION = 3 };
+enum { CROSTL_MLX_BUFFER_INOUT = 2 };
 
 typedef struct {
   uint32_t workgroup_count[3];

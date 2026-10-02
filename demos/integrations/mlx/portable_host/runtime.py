@@ -374,9 +374,14 @@ class HostRuntime:
                     or (cast and name == "src")
                     else 1
                 )
+            directions = (
+                {1, copy_layout.INOUT}
+                if copy and name == output_name
+                else {int(name == output_name)}
+            )
             if (
                 not copy and not shaped_reduction and buffer.count != expected
-            ) or buffer.output != int(name == output_name):
+            ) or buffer.output not in directions:
                 raise ValueError("Native buffer shape or direction does not match")
             if unary and dtype != (
                 "uint32"
@@ -426,18 +431,19 @@ class HostRuntime:
             )
         elif reduction and not initialization:
             reduction_layout.validate(supplied, threads, execution)
+        copy_metadata = (
+            copy_layout.validate(
+                supplied,
+                threads,
+                dtype="bool_" if entry == BOOLEAN_COPY_ENTRY else "uint32",
+            )
+            if copy
+            else None
+        )
         grid = (
             execution["workgroupCount"]
             if reduction
-            else (
-                copy_layout.geometry(
-                    supplied,
-                    threads,
-                    dtype="bool_" if entry == BOOLEAN_COPY_ENTRY else "uint32",
-                )
-                if copy
-                else [threads, 1, 1]
-            )
+            else (copy_metadata["workgroupCount"] if copy else [threads, 1, 1])
         )
         execution = (
             launch.execution()
@@ -532,7 +538,7 @@ class HostRuntime:
                     )
             values = (
                 [0] * buffer.count
-                if buffer.output
+                if buffer.output == 1
                 else [wire_value(value) for value in view]
             )
             if initialization:
@@ -626,7 +632,7 @@ class HostRuntime:
                 raise RuntimeError("Native readback size does not match the output")
             if dtype == "bool_":
                 boolean_values(output["values"], storage)
-            elif bitwise:
+            elif bitwise or copy:
                 low, high = (
                     (-(2**31), 2**31 - 1) if dtype == "int32" else (0, 2**32 - 1)
                 )
@@ -635,10 +641,21 @@ class HostRuntime:
                     for value in output["values"]
                 ):
                     raise RuntimeError(
-                        "Native bitwise readback is outside its integer type"
+                        "Native integer readback is outside its integer type"
                     )
             if guarded and output["values"][buffer.count :] != guard:
                 raise RuntimeError("Native operation changed the output buffer guard")
+            if copy:
+                written = set(copy_layout.destination_indices(copy_metadata))
+                initial = inputs[name]["values"]
+                if any(
+                    value != initial[index]
+                    for index, value in enumerate(output["values"][: buffer.count])
+                    if index not in written
+                ):
+                    raise RuntimeError(
+                        "Native copy changed untouched destination storage"
+                    )
             values = (ctype * buffer.count)(
                 *(
                     float(value) if ctype is ctypes.c_float else value
@@ -698,7 +715,11 @@ class HostRuntime:
                             else {}
                         ),
                         **(
-                            {"copyGuardWords": output["values"][buffer.count :]}
+                            {
+                                "copyGuardWords": output["values"][buffer.count :],
+                                "copyMetadata": copy_metadata,
+                                "copyValues": output["values"][: buffer.count],
+                            }
                             if copy
                             else {}
                         ),
