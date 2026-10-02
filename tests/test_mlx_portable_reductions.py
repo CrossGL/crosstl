@@ -452,7 +452,7 @@ def test_reduction_host_ci_requires_every_variant_and_retains_failures():
         workflow, "reductions", "Execute MLX reductions"
     )
     for step in (translation, execution):
-        assert "continue-on-error" not in step and "if:" not in step
+        assert "continue-on-error" not in step
         assert "set -euo pipefail" in step and "run_bounded_command.py" in step
         assert "tee .mlx-portable-reductions/" in step
     assert "--width" not in translation and "--entry" not in translation
@@ -465,10 +465,33 @@ def test_reduction_host_ci_requires_every_variant_and_retains_failures():
         "Translate reduction launch variants",
     )
     job = ci_coverage.workflow_job_text(workflow, "reductions")
-    assert "needs: portable-host" in job
+    assert "needs: [portable-host, row-packages]" in job
     assert "artifact-ids: ${{ steps.host-artifact.outputs.id }}" in job
     assert "run_id: context.runId" in job and "merge-multiple: true" in job
     assert "if: always()" in job and "include-hidden-files: true" in job
-    assert ci_coverage.workflow_job_timeout_minutes(workflow, "reductions") * 60 > sum(
-        int(value) for value in re.findall(r"--timeout-seconds (\d+)", job)
-    )
+    import yaml
+
+    config = yaml.safe_load(workflow)["jobs"]["reductions"]
+    assert "if: matrix.family != 'row'" in translation and "if:" not in execution
+    for case in config["strategy"]["matrix"]["include"]:
+        steps = [
+            step
+            for step in config["steps"]
+            if step.get("if")
+            not in (
+                (
+                    "matrix.family != 'row'"
+                    if case["family"] == "row"
+                    else "matrix.family == 'row'"
+                ),
+            )
+        ]
+        deadline = sum(
+            int(value)
+            for step in steps
+            for value in re.findall(r"--timeout-seconds (\d+)", step.get("run", ""))
+        )
+        assert (
+            deadline + case.get("verification_timeout", 5400) + 1800
+            < config["timeout-minutes"] * 60
+        )

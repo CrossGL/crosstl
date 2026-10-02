@@ -416,8 +416,10 @@ def test_row_ci_preserves_all_three_targets_and_full_width_sets():
     assert "--family ${{ matrix.family }}" in translation["run"]
     assert "--width" not in translation["run"] and "--entry" not in translation["run"]
     assert "portable_host.${{ matrix.verifier }}" in execution["run"]
+    assert translation["if"] == "matrix.family != 'row'"
+    assert "if" not in execution
     for step in (translation, execution):
-        assert "if" not in step and not step.get("continue-on-error")
+        assert not step.get("continue-on-error")
 
 
 @pytest.mark.parametrize("target", ["metal", "opengl", "directx"])

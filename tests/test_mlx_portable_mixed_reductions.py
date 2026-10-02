@@ -285,7 +285,8 @@ def test_mixed_ci_requires_companions_without_reducing_standalone_coverage():
         "opengl",
     }
     assert all(
-        case["companion_args"] == "--all-reductions .mlx-portable-reductions/companions"
+        case["companion_args"]
+        == "--all-reductions .mlx-portable-reductions/companions --require-all-widths"
         for case in cases
         if case["family"] == "row"
     )

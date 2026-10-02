@@ -266,14 +266,44 @@ python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx
 python -m demos.integrations.mlx.portable_host.verify_rows --mlx-root mlx-upstream --packages host-packages --reductions row-packages --output-dir row-evidence
 ```
 
-The separate row CI matrix runs on all three operating systems. Workloads cover
+Row translation is split into eight Linux jobs per target, each containing all
+56 entries and three or four disjoint launch widths. Translation does not require
+the target driver. Each successful shard records the MLX pin, translator Git
+revision, source hash and package-index hash. Native jobs download the eight
+shards from the same workflow run and reject missing or duplicate shards, mixed
+revisions, mismatched targets and changed artifact bytes before using them.
+The collection retains each artifact's original package directory and descriptor.
+
+The native matrix compiles all 1,456 variants on the corresponding operating
+system: Metal with warnings as errors and fast math disabled, DXC shader model
+6.6 with warnings as errors, or glslang for OpenGL followed by SPIR-V validation.
+Compilation failures stop verification and retain compiler output. Module hashes
+and per-variant results are uploaded alongside the translation checkpoints and
+native numerical evidence.
+
+For an equivalent local collection, build shards 0 through 7 into
+`row-collection/shards/shard-N/packages`, then run:
+
+```sh
+python -m demos.integrations.mlx.portable_host.reduction_shards build --mlx-root mlx-upstream --target opengl --shard 0 --jobs 2 --output-dir row-collection/shards/shard-0/packages
+# Repeat the build for shards 1 through 7, using the same translator revision.
+python -m demos.integrations.mlx.portable_host.reduction_shards collect --directory row-collection --target opengl
+python -m demos.integrations.mlx.portable_host.reduction_shards compile --directory row-collection --target opengl --output-dir row-compiled
+python -m demos.integrations.mlx.portable_host.verify_rows --mlx-root mlx-upstream --packages host-packages --reductions row-collection --require-all-widths --output-dir row-evidence
+```
+
+The separate row CI matrix executes on all three operating systems. Workloads cover
 every integrated entry, reachable launch boundaries, multidimensional axes,
 slices, transposes, early/late NaNs, infinities and signed zeros. CPU and
 generated-native results are compared with NumPy references. The verifier
 requires the exact source entry, launch geometry,
 one native reduction per case and intact output guards. Not every packaged
-entry/width pair is executable within the current 65,535-element host limit;
-the retained case list identifies precisely which combinations execute.
+entry/width pair is executable within the current 65,535-element host limit.
+The maintained 1,870 standalone cases execute 896 distinct entry/width pairs;
+the other 560 receive compilation coverage, not numerical coverage. The retained
+case list identifies precisely which combinations execute. `--require-all-widths`
+rejects diagnostic subsets in CI; single-directory packages remain supported
+for local checks. Compilation success is not evidence of numerical parity.
 These workloads supplement, rather than replace, unchanged upstream tests.
 
 One `HostRuntime` can load multiple reduction directories with

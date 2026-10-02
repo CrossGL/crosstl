@@ -12,6 +12,7 @@ on:
       - "tests/test_mlx_portable_host.py"
       - "tests/test_mlx_portable_reductions.py"
       - "tests/test_mlx_portable_rows.py"
+      - "tests/test_mlx_portable_reduction_shards.py"
       - "tests/test_mlx_portable_columns.py"
       - "tests/test_mlx_portable_mixed_reductions.py"
       - "tests/test_mlx_portable_small_rows.py"
@@ -88,6 +89,7 @@ on:
       - "tests/test_mlx_portable_host.py"
       - "tests/test_mlx_portable_reductions.py"
       - "tests/test_mlx_portable_rows.py"
+      - "tests/test_mlx_portable_reduction_shards.py"
       - "tests/test_mlx_portable_columns.py"
       - "tests/test_mlx_portable_mixed_reductions.py"
       - "tests/test_mlx_portable_small_rows.py"
@@ -252,7 +254,7 @@ jobs:
           Expand-Archive $warpArchive -DestinationPath $warpRoot
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Validate portable host contracts
-        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py tests/test_mlx_portable_rows.py tests/test_mlx_portable_mixed_reductions.py tests/test_mlx_portable_columns.py tests/test_mlx_portable_small_rows.py tests/test_mlx_portable_empty_reductions.py tests/test_mlx_portable_bitwise.py tests/test_mlx_portable_concatenate.py tests/test_mlx_portable_selection.py tests/test_mlx_random_audit.py
+        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py tests/test_mlx_portable_rows.py tests/test_mlx_portable_reduction_shards.py tests/test_mlx_portable_mixed_reductions.py tests/test_mlx_portable_columns.py tests/test_mlx_portable_small_rows.py tests/test_mlx_portable_empty_reductions.py tests/test_mlx_portable_bitwise.py tests/test_mlx_portable_concatenate.py tests/test_mlx_portable_selection.py tests/test_mlx_random_audit.py
       - name: Validate software subgroup votes
         env:
           CROSTL_REQUIRE_SOFTWARE_SUBGROUP_VOTES: "1"
@@ -956,9 +958,60 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  row-packages:
+    name: MLX row translation (${{ matrix.target }}, shard ${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        target: [metal, opengl, directx]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Initialize row translation evidence
+        run: mkdir -p .mlx-row-shard
+      - name: Install translation dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e . 2>&1 | tee .mlx-row-shard/dependencies.log
+      - name: Check out pinned MLX kernels
+        run: |
+          set -euo pipefail
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+      - name: Translate complete row shard
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 7200 --label "MLX row translation shard" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_shards build --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --shard "${{ matrix.shard }}" --jobs 2 \
+              --output-dir .mlx-row-shard/packages 2>&1 | tee .mlx-row-shard/translation.log
+      - name: Retain row translation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-row-packages-${{ matrix.target }}-s${{ matrix.shard }}-${{ github.run_attempt }}
+          path: .mlx-row-shard
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
   reductions:
     name: MLX ${{ matrix.family }} reductions (${{ matrix.target }})
-    needs: portable-host
+    needs: [portable-host, row-packages]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 360
     strategy:
@@ -981,17 +1034,20 @@ jobs:
             target: opengl
             family: row
             verifier: verify_rows
-            companion_args: --all-reductions .mlx-portable-reductions/companions
+            verification_timeout: 7800
+            companion_args: --all-reductions .mlx-portable-reductions/companions --require-all-widths
           - os: windows-2025
             target: directx
             family: row
             verifier: verify_rows
-            companion_args: --all-reductions .mlx-portable-reductions/companions
+            verification_timeout: 7800
+            companion_args: --all-reductions .mlx-portable-reductions/companions --require-all-widths
           - os: macos-26
             target: metal
             family: row
             verifier: verify_rows
-            companion_args: --all-reductions .mlx-portable-reductions/companions
+            verification_timeout: 7800
+            companion_args: --all-reductions .mlx-portable-reductions/companions --require-all-widths
           - os: windows-2025
             target: directx
             family: column
@@ -1099,11 +1155,57 @@ jobs:
           python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX reduction host build" -- \
             python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-reductions/build.log
       - name: Translate reduction launch variants
+        if: matrix.family != 'row'
         run: |
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 12000 --label "MLX reduction packages" -- \
             python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
               --target ${{ matrix.target }} --family ${{ matrix.family }} --jobs 2 --output-dir .mlx-portable-reductions/packages 2>&1 | tee .mlx-portable-reductions/translation.log
+      - name: Select same-run row shards
+        if: matrix.family == 'row'
+        uses: actions/github-script@v7
+        id: row-artifacts
+        env:
+          MLX_TARGET: ${{ matrix.target }}
+        with:
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
+            });
+            const ids = [];
+            for (let shard = 0; shard < 8; shard++) {
+              const prefix = `mlx-row-packages-${process.env.MLX_TARGET}-s${shard}-`;
+              const matches = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
+                && /^\d+$/.test(item.name.slice(prefix.length)));
+              matches.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
+              if (!matches.length) throw new Error(`Missing row translation shard ${shard}`);
+              ids.push(matches[0].id);
+            }
+            core.setOutput("ids", ids.join(","));
+      - name: Download row shards
+        if: matrix.family == 'row'
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.row-artifacts.outputs.ids }}
+          path: .mlx-portable-reductions/packages/shards
+          merge-multiple: false
+      - name: Verify complete row package collection
+        if: matrix.family == 'row'
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "MLX row package collection" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_shards collect \
+              --directory .mlx-portable-reductions/packages --target "${{ matrix.target }}" \
+              2>&1 | tee .mlx-portable-reductions/collection.log
+      - name: Compile every row variant natively
+        if: matrix.family == 'row'
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 7200 --label "MLX row native compilation" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_shards compile \
+              --directory .mlx-portable-reductions/packages --target "${{ matrix.target }}" \
+              --output-dir .mlx-portable-reductions/compiled \
+              2>&1 | tee .mlx-portable-reductions/compilation.log
       - name: Translate whole-array companions for mixed workloads
         if: matrix.family == 'row'
         run: |
@@ -1117,7 +1219,7 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 5400 --label "MLX reduction host verification" -- \
+          python tools/run_bounded_command.py --timeout-seconds ${{ matrix.verification_timeout || 5400 }} --label "MLX reduction host verification" -- \
             python -m demos.integrations.mlx.portable_host.${{ matrix.verifier }} --mlx-root mlx-upstream \
               --packages .mlx-portable-reductions/base/packages --reductions .mlx-portable-reductions/packages \
               ${{ matrix.companion_args }} --output-dir .mlx-portable-reductions/evidence 2>&1 | tee .mlx-portable-reductions/verification.log

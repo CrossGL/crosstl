@@ -17,6 +17,7 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
     ROW_ENTRIES,
     load_index,
 )
+from demos.integrations.mlx.portable_host.reduction_shards import load_row_packages
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
 
 
@@ -54,16 +55,23 @@ def worker(args):
 
     output = args.output_dir
     output.mkdir(parents=True)
-    index = json.loads((args.reductions / "index.json").read_text())
+    if mx.is_available(mx.gpu):
+        raise RuntimeError("A different GPU backend is already available")
+    target = json.loads((args.packages / "index.json").read_text())["target"]
+    index, directories = load_row_packages(
+        args.reductions,
+        target,
+        require_all_widths=getattr(args, "require_all_widths", False),
+    )
     runtime = None
     if args.worker == "native":
         runtime = HostRuntime(
             args.packages,
             output / "dispatch.jsonl",
             reductions=(
-                [args.reductions, args.all_reductions]
+                [*directories, args.all_reductions]
                 if args.all_reductions is not None
-                else args.reductions
+                else directories
             ),
         )
         runtime.install()
@@ -114,13 +122,11 @@ def verify(args):
     before = verify_prepared(args.mlx_root)
     base_index = json.loads((args.packages / "index.json").read_text())
     target = base_index["target"]
-    index = load_index(args.reductions, target)
-    if (
-        index.get("family") != "row"
-        or set(index["entries"]) != set(ROW_ENTRIES)
-        or not {32, 128}.issubset(index["widths"])
-    ):
-        raise ValueError("Row proof requires every row entry and both threshold widths")
+    index, directories = load_row_packages(
+        args.reductions,
+        target,
+        require_all_widths=getattr(args, "require_all_widths", False),
+    )
     all_index = None
     if args.all_reductions is not None:
         all_index = load_index(args.all_reductions, target)
@@ -156,6 +162,8 @@ def verify(args):
         ]
         if all_index is not None:
             command.extend(["--all-reductions", str(args.all_reductions.resolve())])
+        if getattr(args, "require_all_widths", False):
+            command.append("--require-all-widths")
         with (output / f"{mode}.stdout").open("w") as stdout, (
             output / f"{mode}.stderr"
         ).open("w") as stderr:
@@ -173,7 +181,23 @@ def verify(args):
     row_workloads.validate(results["cpu"], index["widths"])
     row_count = len(results["native"])
     row_workloads.validate(results["native"], index["widths"], trace=trace[:row_count])
-    verify_artifacts(trace[:row_count], args.reductions, index)
+
+    def verify_row_artifacts(events):
+        checked = 0
+        for directory in directories:
+            shard = load_index(directory, target)
+            selected = [
+                event
+                for event in events
+                if f'w{event["workgroupSize"][0]}/{event["entry"]}'
+                in shard["descriptors"]
+            ]
+            verify_artifacts(selected, directory, shard)
+            checked += len(selected)
+        if checked != len(events):
+            raise ValueError("Row trace references an unknown package variant")
+
+    verify_row_artifacts(trace[:row_count])
     mixed_results = {}
     if all_index is not None:
         mixed_results = {
@@ -185,10 +209,8 @@ def verify(args):
             mixed_results["native"], trace=trace, offset=row_count
         )
         mixed_trace = trace[row_count:]
-        verify_artifacts(
+        verify_row_artifacts(
             [record for record in mixed_trace if record["entry"] in ROW_ENTRIES],
-            args.reductions,
-            index,
         )
         verify_artifacts(
             [record for record in mixed_trace if record["entry"] in ENTRIES],
@@ -215,11 +237,20 @@ def verify(args):
         raise ValueError("CPU and native row results differ")
     if verify_prepared(args.mlx_root) != before:
         raise ValueError("MLX sources changed during row verification")
+    after, after_directories = load_row_packages(
+        args.reductions,
+        target,
+        require_all_widths=getattr(args, "require_all_widths", False),
+    )
+    if index != after or directories != after_directories:
+        raise ValueError("Row packages changed during verification")
     evidence = {
         "commit": COMMIT,
         "target": target,
         "adaptation": before,
         "widths": index["widths"],
+        "packageCount": len(directories),
+        "artifactCount": len(index["descriptors"]),
         "entries": sorted(ROW_ENTRIES),
         "casesPerPath": len(results["native"]),
         "dispatchCount": len(trace),
@@ -243,6 +274,7 @@ if __name__ == "__main__":
     parser.add_argument("--all-reductions", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--worker", choices=("cpu", "native"))
+    parser.add_argument("--require-all-widths", action="store_true")
     args = parser.parse_args()
     if args.worker:
         worker(args)
