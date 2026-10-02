@@ -287,6 +287,16 @@ evidence that the complete upstream reduction suite or MLX backend is supported.
 Separate native processes also verify that invalid allocation spans, small and
 long column plans, and oversized inputs fail before any shader dispatch.
 
+Small-column integration also requires a native-barrier convergence check,
+tracked in [#2021](https://github.com/CrossGL/crosstl/issues/2021). For example,
+upstream reduces a `(31, 129)` array with two X workgroups of `[32, 8, 1]`.
+In the final group, eight invocations reach the shared-memory barrier while
+248 return before it. The generated HLSL and GLSL retain this control flow.
+Compiler acceptance and passing local readbacks do not establish portable
+barrier participation. The host continues to reject this plan until the source
+semantics are established and the target lowering or checked launch contract
+preserves them. The existing looped and two-pass gates do not cover this kernel.
+
 ## Run
 
 Use Python 3.12, a C++20 toolchain, CMake, Ninja and the relevant runtime.
