@@ -4050,6 +4050,16 @@ CrossGL, and already-preprocessed source paths retain their existing behavior.
 This contract does not infer variants for which the source supplies no concrete
 evidence, and it is not a full-corpus or runtime-parity claim.
 
+Concrete struct-member array accesses participate in free-function and member
+template deduction. C-style dimensions and standard ``array<T, N>`` layers are
+consumed one index at a time; struct-scoped aliases are resolved before indexing.
+Selecting a pointer element preserves its Metal address space and qualifiers,
+while a subsequent index selects its pointee. Native package tests cover integer
+and fractional values, free and member calls, index side effects, and output
+guards on the three generated backends. This does not provide a representation
+for pointer-bearing aggregates: general MLX gather still needs that lowering
+and host dispatch integration.
+
 During project translation, Metal template-member inference preserves a
 generic pointer template parameter as a pointer rather than reducing it to its
 pointee type. For a parameter such as ``Pointer src``, a bare tracked pointer,

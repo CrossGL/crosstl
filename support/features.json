@@ -4161,13 +4161,19 @@
         "directx": {
           "status": "supported",
           "evidence": [
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_function_call"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_function_call",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_compiles",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_executes_natively",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_materialization_preserves_concrete_element_type"
           ]
         },
         "opengl": {
           "status": "supported",
           "evidence": [
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_function_call"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_function_call",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_compiles",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_executes_natively",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_materialization_preserves_concrete_element_type"
           ]
         },
         "metal": {
@@ -4177,7 +4183,10 @@
             "tests/test_translator/test_metal_helper_linkage.py::def test_source_function_qualifiers_survive_intermediate_ir",
             "tests/test_translator/test_metal_helper_linkage.py::def test_materialized_anonymous_template_remains_private",
             "tests/test_translator/test_metal_helper_linkage.py::def test_private_helpers_and_exported_functions_keep_distinct_linkage",
-            "tests/test_translator/test_metal_helper_linkage.py::def test_independent_metal_modules_link_and_execute_distinct_helpers"
+            "tests/test_translator/test_metal_helper_linkage.py::def test_independent_metal_modules_link_and_execute_distinct_helpers",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_compiles",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_executes_natively",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_materialization_preserves_concrete_element_type"
           ],
           "notes": "Metal roundtrips preserve static and anonymous-namespace helper linkage, including materialized templates. Inline definitions and implicit template instantiations retain repeatable linkage. Generated constructor and lowered member helpers are artifact-private. Required macOS coverage links independent translated units with colliding private names and executes distinct computations while retaining visible callable functions and kernel names. The MLX host gate links all 15 selected complex-power entries into one library; this is not whole-repository link coverage."
         },

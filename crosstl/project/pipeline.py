@@ -17887,21 +17887,12 @@ def _metal_struct_field_type_environments(
     environments: list[tuple[tuple[int, int], str, dict[str, str]]] = []
     for struct in structs:
         field_types: dict[str, str] = {}
-        full_pointer_types = {
-            member.name: member.type_text
-            for member in struct.data_members
-            if member.is_pointer
-        }
         for name, type_text in struct.data_member_types.items():
-            # ``data_member_types`` intentionally stores a value-normalized
-            # spelling for legacy member-overload inference.  Plain helper
-            # deduction needs the full Metal storage pointer type: directly
-            # binding ``W`` from a ``threadgroup T*`` member must not silently
-            # materialize a default ``thread T*`` helper.  The ordered member
-            # metadata retains that complete declaration.
-            inference_type = full_pointer_types.get(name, type_text)
+            # Keep declarator dimensions and nested pointer qualifiers until an
+            # expression selects an element; an array of device pointers is not
+            # a device pointer, and one index does not select its pointee.
             canonical = preprocessor._canonicalize_struct_scoped_type(
-                inference_type,
+                type_text,
                 struct,
                 structs_by_name,
             )
@@ -18154,7 +18145,7 @@ def _metal_expression_type(
             if cursor >= len(text) or text[cursor] != "[":
                 break
             close = preprocessor._find_matching_delimiter(text, cursor, "[", "]")
-            if close is None:
+            if close is None or not text[cursor + 1 : close].strip():
                 break
             index_count += 1
             cursor = close + 1
@@ -18168,7 +18159,9 @@ def _metal_expression_type(
             for _ in range(index_count):
                 if not indexed_type:
                     return None
-                element_type = _metal_array_element_type(indexed_type)
+                element_type = preprocessor._subscript_declared_element_type(
+                    indexed_type
+                )
                 if element_type is None:
                     element_type = _metal_pointer_pointee_type(indexed_type)
                 if element_type is None:

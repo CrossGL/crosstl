@@ -22,6 +22,10 @@ unimplemented Gather primitive. A separate required native CI proof executes
 unchanged `gather_front<float, int, int, N>` specializations for `N = 1, 4, 8`,
 including negative/duplicate indices, partial chunks and exact storage words.
 It does not yet connect Python indexing to the portable host adapter.
+General gather now resolves template arguments from concrete array-member
+elements, including its nested index-buffer access. Pointer-bearing aggregate
+lowering and host dispatch remain incomplete; the `gather_front` proof does not
+establish general gather support.
 Contiguous conversion, reshape, flatten and unflatten
 dispatch translated copies when sharing storage is insufficient. Copies support
 matching float32, int32, uint32 and bool arrays, including negative and zero strides.

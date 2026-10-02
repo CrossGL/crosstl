@@ -15703,6 +15703,64 @@ def test_metal_expression_type_infers_nested_index_elements():
     )
 
 
+@pytest.mark.parametrize(
+    "declared, expression, expected",
+    [
+        ("const array<int, 2>", "refs.values[i]", "int"),
+        ("metal::array<float, 2>", "refs.values[i]", "float"),
+        ("array<array<int, 2>, 3>", "refs.values[i][j]", "int"),
+        ("float[2][3]", "refs.values[i]", "float[3]"),
+        ("float[2][3]", "refs.values[i][j]", "float"),
+        ("array<const device int*, 2>", "refs.values[i]", "const device int*"),
+        ("array<const device int*, 2>", "refs.values[i][j]", "int"),
+        ("const device int*[2]", "refs.values[i]", "const device int*"),
+        ("const device int*[2]", "refs.values[i][j]", "int"),
+        ("array<const constant int*, 2>", "refs.values[i]", "const constant int*"),
+        ("array<threadgroup uint*, 2>", "refs.values[i]", "threadgroup uint*"),
+        ("array<int, 2>", "refs.values[i][j]", None),
+        ("Other<int, 2>", "refs.values[i]", None),
+        ("array<int, 2>", "refs.values[]", None),
+        ("array<int, 2>", "refs.values[i]garbage[j]", None),
+        ("array<int, 2>", "refs->values[i]", None),
+    ],
+)
+def test_metal_expression_type_preserves_member_array_layers(
+    declared, expression, expected
+):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    assert (
+        project_pipeline._metal_expression_type(
+            MetalPreprocessor(), expression, {"refs.values": declared}, {}
+        )
+        == expected
+    )
+
+
+def test_metal_struct_member_environment_retains_declared_array_types():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = """
+    struct References {
+        int dimensions[2][3];
+        const device float* pointers[2];
+        const array<const constant int*, 2> arrays;
+    };
+    """
+    environments = project_pipeline._metal_struct_field_type_environments(
+        MetalPreprocessor(), source
+    )
+    assert len(environments) == 1
+    assert environments[0][1:] == (
+        "References",
+        {
+            "dimensions": "int[2][3]",
+            "pointers": "const device float*[2]",
+            "arrays": "const array<const constant int*,2>",
+        },
+    )
+
+
 def test_metal_expression_type_infers_vector_components():
     from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 

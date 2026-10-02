@@ -12045,7 +12045,7 @@ def test_infer_argument_type_local_array_and_member_subscript():
     pp = MetalPreprocessor()
     buffers = {"totals": "float", "buf": "uint"}
     locals_ = {"acc": "half", "update": "bool4_or_uint"}
-    fields = {"init": {"data": "float", "scale": "half"}}
+    fields = {"init": {"data": "float[4]", "scale": "half"}}
     # Local array / buffer subscript -> element type.
     assert pp._infer_argument_type("totals[i]", buffers, locals_, fields) == "float"
     assert pp._infer_argument_type("buf[i + 1]", buffers, locals_, fields) == "uint"
@@ -12055,7 +12055,7 @@ def test_infer_argument_type_local_array_and_member_subscript():
     )
     # Bare member access -> field type.
     assert pp._infer_argument_type("init.scale", buffers, locals_, fields) == "half"
-    pointer_fields = {"params->": {"stride": "int", "data": "float*"}}
+    pointer_fields = {"params->": {"stride": "int", "data": "const device float*"}}
     assert (
         pp._infer_argument_type("params->stride", buffers, locals_, pointer_fields)
         == "int"
@@ -12066,7 +12066,7 @@ def test_infer_argument_type_local_array_and_member_subscript():
     )
     assert (
         pp._infer_argument_type("params->data", buffers, locals_, pointer_fields)
-        is None
+        == "const device float*"
     )
     assert (
         pp._infer_argument_type("params.stride", buffers, locals_, pointer_fields)
@@ -12081,6 +12081,41 @@ def test_infer_argument_type_local_array_and_member_subscript():
     assert pp._infer_argument_type("missing[i]", buffers, locals_, fields) is None
     assert pp._infer_argument_type("init.unknown", buffers, locals_, fields) is None
     assert pp._infer_argument_type("foo()", buffers, locals_, fields) is None
+
+
+@pytest.mark.parametrize(
+    "declaration, expression, expected",
+    [
+        ("float[2][3]", "data.values[1]", "float[3]"),
+        ("float[2][3]", "data.values[1][2]", "float"),
+        ("float[2][3]", "data.values[1][2][0]", None),
+        ("array<int, 4>", "data.values[i++]", "int"),
+        ("const metal::array<int, 4>", "data.values[i]", "int"),
+        ("array<array<uint, 2>, 3>", "data.values[i][j]", "uint"),
+        ("array<const device float*, 2>", "data.values[i]", "const device float*"),
+        ("array<const device float*, 2>", "data.values[i][j]", "float"),
+        ("const device float*[2]", "data.values[i]", "const device float*"),
+        ("const device float*[2]", "data.values[i][j]", "float"),
+        ("array<const constant int*, 2>", "data.values[i][j]", "int"),
+        ("array<threadgroup uint*, 2>", "data.values[i]", "threadgroup uint*"),
+        ("float", "data.values[i]", None),
+        ("Other<int, 4>", "data.values[i]", None),
+        ("array<int>", "data.values[i]", None),
+        ("array<int, 4>", "data.values[]", None),
+        ("array<int, 4>", "data.values[i]garbage[j]", None),
+        ("array<int, 4>", "data.values[i][", None),
+        ("array<int, 4>", "data->values[i]", None),
+    ],
+)
+def test_infer_argument_type_preserves_member_array_layers(
+    declaration, expression, expected
+):
+    assert (
+        MetalPreprocessor()._infer_argument_type(
+            expression, {}, {}, {"data": {"values": declaration}}
+        )
+        == expected
+    )
 
 
 def test_infer_argument_type_builtin_vector_swizzle():

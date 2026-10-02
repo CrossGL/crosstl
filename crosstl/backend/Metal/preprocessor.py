@@ -638,11 +638,10 @@ class _MetalReceiverContract:
 class _MetalDataMember:
     """One data member of a struct, kept in DECLARATION order.
 
-    Unlike the unordered ``data_member_names`` set and the normalized
-    ``data_member_types`` map, this preserves the full declared type text
-    (address space + cv + pointer, e.g. ``const device float2*``), the trailing
-    array suffix (``[N]`` for array members), any default initializer, and the
-    source declaration span. It is what the pointer-member scalar-replacement
+    In addition to the full types in ``data_member_types``, this separates the
+    declared type text (e.g. ``const device float2*``) from its trailing array
+    suffix and retains any default initializer and source declaration span.
+    It is what the pointer-member scalar-replacement
     and declaration-order constant-substitution paths need.
     """
 
@@ -728,10 +727,9 @@ class _MetalStructDefinition:
     methods: List[_MetalStructMethod]
     has_operator_call: bool
     qualified_name: str = ""
-    # Data-member name -> its declared element type (the value type a `self.x`
-    # access yields, with array extents stripped). Populated best-effort for
-    # members whose type is recognizable; missing entries are simply
-    # un-inferable. Used to type a `obj.member` / `obj.member[i]` call argument.
+    # Full member types retain array layers and pointer qualifiers until a
+    # call-argument expression selects an element. Missing entries remain
+    # un-inferable.
     data_member_types: Dict[str, str] = field(default_factory=dict)
     # Template member methods are kept separate from `methods`: they have no
     # single concrete signature to emit up front, so they are instantiated on
@@ -5238,13 +5236,15 @@ class MetalPreprocessor(HLSLPreprocessor):
         if not name:
             return False
         data_member_names.add(name)
-        self._record_data_member_type(data_member_types, name, declarator)
         member = self._parse_ordered_data_member(
             name,
             declaration,
             declaration_span,
         )
         if member is not None:
+            data_member_types[name] = self._normalize_template_argument_text(
+                f"{member.type_text}{member.array_suffix}"
+            )
             ordered_members.append(member)
             return True
         return False
@@ -5492,38 +5492,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             init_map[member] = item[open_index + 1 : close_index].strip()
         return init_map
-
-    def _record_data_member_type(
-        self, data_member_types: Dict[str, str], name: str, declaration: str
-    ) -> None:
-        # Best-effort capture of a data member's element type from its
-        # declaration text (`float bias`, `T data[N]`, `device float* ptr`,
-        # `bool4 b`). The type is the declaration with the trailing declarator
-        # (name + any array extents / default value) removed; pointer members
-        # keep a `*` marker so a `self.ptr[i]` access can still resolve. A type
-        # we cannot isolate is simply omitted (left un-inferable).
-        element_type = self._data_member_element_type(declaration)
-        if element_type:
-            data_member_types[name] = element_type
-
-    def _data_member_element_type(self, declaration: str) -> Optional[str]:
-        text = self._strip_top_level_default_value(declaration).strip()
-        if not text:
-            return None
-        # Drop trailing array extents so a `T data[N]` member yields element T.
-        while text.endswith("]"):
-            open_bracket = text.rfind("[")
-            if open_bracket == -1:
-                break
-            text = text[:open_bracket].rstrip()
-        # Strip the trailing member name to leave the type text.
-        type_text = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\s*$", "", text).strip()
-        normalized = self._normalize_inferred_type(type_text)
-        # A pointer member (`device T* ptr`) collapses to the pointee marked with
-        # a single trailing `*` so a subscript access can be element-typed.
-        if not normalized:
-            return None
-        return normalized
 
     def _parse_struct_template_method(
         self,
@@ -19319,7 +19287,12 @@ class MetalPreprocessor(HLSLPreprocessor):
             if struct is None or not struct.data_member_types:
                 continue
             access_key = f"{name}->" if indirection == "*" else name
-            field_types[access_key] = struct.data_member_types
+            field_types[access_key] = {
+                member: self._canonicalize_struct_scoped_type(
+                    declared_type, struct, structs_by_name
+                )
+                for member, declared_type in struct.data_member_types.items()
+            }
         return field_types
 
     # ------------------------------------------------------------------ #
@@ -20012,20 +19985,25 @@ class MetalPreprocessor(HLSLPreprocessor):
             if paren_end == len(expr) - 1 and resolved_type is not None:
                 return resolved_type
 
-        # Subscript access `base[expr]` -> element type of `base`. `base` may be a
-        # bare buffer/array name (`buf[i]`, `totals[i]`) OR a member-access into a
-        # struct local (`obj.member[i]`); both balance to a single trailing
-        # subscript.
+        # Resolve one declared array/pointer layer per balanced subscript. Do not
+        # collapse an array of pointers to its pointee before the second index.
         bracket = expr.find("[")
         if bracket != -1 and expr.endswith("]"):
-            close = self._find_matching_delimiter(expr, bracket, "[", "]")
-            if close == len(expr) - 1:
-                base = expr[:bracket].strip()
-                element = self._infer_subscript_base_element_type(
-                    base, buffer_element_types, struct_field_types
-                )
-                if element is not None:
+            element = self._infer_subscript_base_element_type(
+                expr[:bracket].strip(), buffer_element_types, struct_field_types
+            )
+            while element is not None:
+                close = self._find_matching_delimiter(expr, bracket, "[", "]")
+                if close is None or not expr[bracket + 1 : close].strip():
+                    break
+                if close == len(expr) - 1:
                     return element
+                bracket = close + 1
+                while bracket < len(expr) and expr[bracket].isspace():
+                    bracket += 1
+                if bracket >= len(expr) or expr[bracket] != "[":
+                    break
+                element = self._subscript_declared_element_type(element)
 
         # A SIMD/quad group built-in that returns its first argument's type
         # (`simd_shuffle_and_fill_up(x, ...)`, `simd_prefix_inclusive_sum(x)`).
@@ -20834,10 +20812,33 @@ class MetalPreprocessor(HLSLPreprocessor):
         field_type = self._struct_member_field_type(base, struct_field_types)
         if field_type is None:
             return None
-        # A subscript yields the field's element type; strip a single pointer
-        # marker if the field type recorded one. Array fields already record the
-        # element type, so the value is returned as-is.
-        return field_type.rstrip("*").strip() or None
+        return self._subscript_declared_element_type(field_type)
+
+    def _subscript_declared_element_type(self, type_text: str) -> Optional[str]:
+        text = self._normalize_template_argument_text(type_text)
+        # Declarator dimensions enclose the named type, even when that type is
+        # itself a standard array or an address-space-qualified pointer.
+        dimensions = re.fullmatch(r"(.+?)\[[^\[\]]*\]((?:\[[^\[\]]*\])*)", text)
+        if dimensions is not None:
+            return self._normalize_template_argument_text(
+                dimensions.group(1) + dimensions.group(2)
+            )
+        value_type = re.sub(
+            r"^(?:(?:const|constexpr|volatile|mutable|device|constant|thread|threadgroup)\s+)+",
+            "",
+            text,
+        )
+        array = re.match(r"(?:metal::|c10::metal::)?array\s*<", value_type)
+        if array is not None:
+            start = value_type.find("<")
+            end = self._find_matching_angle(value_type, start)
+            if end != len(value_type) - 1:
+                return None
+            arguments = self._split_top_level_commas(value_type[start + 1 : end])
+            if len(arguments) != 2 or not all(item.strip() for item in arguments):
+                return None
+            return self._normalize_template_argument_text(arguments[0])
+        return self._pointer_pointee_value_type(text)
 
     def _infer_group_builtin_call_type(
         self,
@@ -20885,10 +20886,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         field_type = self._struct_member_field_type(expr, struct_field_types)
         if field_type is None:
             return None
-        # A bare member access onto a pointer field is not a value; reject it.
-        if field_type.endswith("*"):
-            return None
-        return field_type or None
+        return self._normalize_inferred_expression_type(field_type)
 
     def _infer_vector_member_access_type(
         self, expr: str, local_variable_types: Dict[str, str]
