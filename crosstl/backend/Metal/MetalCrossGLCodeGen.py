@@ -9765,7 +9765,7 @@ class MetalToCrossGLConverter:
             or mapped_alias_type in local_aggregate_type_names
         )
         if (
-            getattr(alias, "qualifiers", None)
+            set(alias_qualifiers) - {"const", "volatile"}
             or getattr(alias, "array_sizes", None)
             or getattr(alias, "declarator_type_suffix", "")
             or (
@@ -13226,6 +13226,7 @@ class MetalToCrossGLConverter:
         text = str(name)
         decltype_type = self.resolve_metal_decltype_type(text)
         is_local_alias = text in self.local_type_alias_names
+        is_type_alias = text in self.type_aliases
         is_materialized_type = any(
             text in bindings for bindings in self.template_type_bindings
         )
@@ -13233,13 +13234,15 @@ class MetalToCrossGLConverter:
             decltype_type is None
             and "::" not in text
             and text not in self.unscoped_metal_type_constructors
+            and self.metal_vector_type_parts(text) is None
             and not is_local_alias
+            and not is_type_alias
             and not is_materialized_type
         ):
             return None
         normalized = self.normalized_metal_type(
             decltype_type
-            or self.substitute_template_type_text(self.resolve_local_type_aliases(text))
+            or self.substitute_template_type_text(self.resolve_type_alias(text))
         )
         mapped = self.map_type(normalized)
         if (

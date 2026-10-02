@@ -6586,6 +6586,126 @@ def test_preprocessor_preserves_mutating_conversion_on_named_receiver():
     assert "return Value__operator_float(value);" in output
 
 
+@pytest.mark.parametrize(
+    "declared", ["float2", "vec<float, 2>", "metal::vec<float, 2>"]
+)
+@pytest.mark.parametrize(
+    "cast",
+    [
+        "static_cast<float2>",
+        "static_cast<vec<float, 2>>",
+        "float2",
+        "vec<float, 2>",
+        "metal::vec<float, 2>",
+        "Pair",
+        "static_cast<Pair>",
+    ],
+)
+def test_preprocessor_selects_declared_vector_conversion(declared, cast):
+    code = f"""
+    using Pair = metal::vec<float, 2>;
+    struct Components {{
+        float base;
+        operator {declared}() const {{ return float2(base + 1, base + 7); }}
+    }};
+    float2 convert(Components item) {{ return {cast}(item); }}
+    """
+    output = MetalPreprocessor().preprocess(code)
+    helper = re.search(
+        r"(Components__operator_\w+)\(thread const Components& self\)", output
+    )
+    assert helper is not None, output
+    assert f"return {helper.group(1)}(item);" in output
+    assert "self.base + 1" in output and "self.base + 7" in output
+
+
+@pytest.mark.parametrize(
+    "qualifiers,receiver",
+    [("", "const thread"), ("device", "thread"), ("&", "temporary")],
+)
+def test_preprocessor_rejects_incompatible_vector_conversion_receiver(
+    qualifiers, receiver
+):
+    value = "Components{1}" if receiver == "temporary" else "item"
+    declaration = "" if receiver == "temporary" else f"{receiver} Components& item"
+    code = f"""
+    struct Components {{
+        float base;
+        operator float2() {qualifiers} {{ return float2(base + 1, base + 7); }}
+    }};
+    float2 convert({declaration}) {{ return static_cast<float2>({value}); }}
+    """
+    with pytest.raises(MetalStructMethodError) as exc_info:
+        MetalPreprocessor().preprocess(code)
+    error = exc_info.value
+    assert error.reason == "conversion-operator-no-viable"
+    assert error.candidate_signatures
+    assert error.candidate_mismatches[0]["mismatches"]
+    assert error.source_location
+
+
+def test_preprocessor_vector_conversion_alias_uses_declaration_scope():
+    code = """
+    using Pair = float2;
+    struct Components {
+        float base;
+        operator Pair() const { return Pair(base + 1, base + 7); }
+    };
+    float2 convert(Components item) {
+        using Pair = int2;
+        return static_cast<float2>(item);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "return Components__operator_Pair(item);" in output
+
+
+def test_preprocessor_vector_conversion_prefers_receiver_qualifiers():
+    code = """
+    struct Components {
+        float base;
+        operator float2() { return float2(base + 1, base + 7); }
+        operator float2() const { return float2(base + 3, base + 9); }
+    };
+    float2 first(Components item) { return static_cast<float2>(item); }
+    float2 second(const Components item) { return static_cast<float2>(item); }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    calls = re.findall(r"return (Components__operator_\w+)\(item\);", output)
+    assert len(calls) == 2 and calls[0] != calls[1], output
+
+
+def test_preprocessor_rejects_ambiguous_vector_conversion_receiver():
+    source = """
+    struct Components {
+        float base;
+        operator float2() const { return float2(base + 1, base + 7); }
+        operator float2() volatile { return float2(base + 3, base + 9); }
+    };
+    float2 convert(Components item) { return static_cast<float2>(item); }
+    """
+    with pytest.raises(MetalStructMethodError) as exc_info:
+        MetalPreprocessor().preprocess(source)
+    error = exc_info.value
+    assert error.reason == "conversion-operator-ambiguous"
+    assert len(error.candidate_signatures) == 2
+    assert all(record["viable"] for record in error.candidate_mismatches)
+
+
+@pytest.mark.parametrize("space", ["thread", "device", "constant", "threadgroup"])
+def test_preprocessor_vector_conversion_retains_receiver_address_space(space):
+    source = f"""
+    struct Components {{
+        float base;
+        operator float2() const {space} {{ return float2(base + 1, base + 7); }}
+    }};
+    float2 convert(const {space} Components& item) {{ return static_cast<float2>(item); }}
+    """
+    output = MetalPreprocessor().preprocess(source)
+    assert "return Components__operator_float2(item);" in output
+    assert f"{space} const Components& self" in output
+
+
 def test_preprocessor_lowers_materialized_template_functor():
     # After the struct-template materializer produces a concrete `Sum_float`, the
     # member-function lowering pass lowers its `operator()` and rewrites the call.

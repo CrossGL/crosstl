@@ -4081,6 +4081,17 @@ Incompatible address spaces and removal of pointee constness remain errors.
 This source qualification support does not supply resource-backed aggregate
 representations for DirectX or OpenGL.
 
+Concrete Metal ``vec<T, N>`` constructors preserve scalar splats, copied vectors
+and mixed component arguments for float, half and integer widths two through
+four. Global and local aliases resolve before constructor emission. Named
+``static_cast`` and functional vector conversions select the declared conversion
+operator by destination type and receiver qualifiers, retaining its body and
+single evaluation. Incompatible or ambiguous receivers produce structured
+diagnostics. Required native controls include mutable receivers, const overloads,
+materialized template owners, side-effecting temporary construction and output
+guards; macOS also executes the original source. This bounded contract does not
+establish arbitrary user-defined conversion chains or bfloat16 parity.
+
 During project translation, Metal template-member inference preserves a
 generic pointer template parameter as a pointer rather than reducing it to its
 pointee type. For a parameter such as ``Pointer src``, a bare tracked pointer,

@@ -56,6 +56,7 @@ on:
       - "tests/test_translator/test_float_storage_encoding.py"
       - "tests/test_translator/test_loop_updates.py"
       - "tests/test_translator/test_metal_member_array_inference.py"
+      - "tests/test_translator/test_metal_vector_constructors.py"
       - "tests/test_translator/test_mlx_current_gather.py"
       - "tests/test_translator/test_software_subgroup_votes.py"
       - "tests/test_translator/test_opengl_subgroup_wrappers.py"
@@ -143,6 +144,7 @@ on:
       - "tests/test_translator/test_float_storage_encoding.py"
       - "tests/test_translator/test_loop_updates.py"
       - "tests/test_translator/test_metal_member_array_inference.py"
+      - "tests/test_translator/test_metal_vector_constructors.py"
       - "tests/test_translator/test_mlx_current_gather.py"
       - "tests/test_translator/test_software_subgroup_votes.py"
       - "tests/test_translator/test_opengl_subgroup_wrappers.py"
@@ -433,6 +435,21 @@ jobs:
               --junitxml=.mlx-portable-host/member-arrays/results.xml \
               tests/test_translator/test_metal_member_array_inference.py \
               2>&1 | tee .mlx-portable-host/member-arrays.log
+      - name: Validate generic vector constructors
+        env:
+          CROSTL_REQUIRE_VECTOR_CONSTRUCTOR_RUNTIME: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/vector-constructors
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Generic vector constructors" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/vector-constructors/pytest \
+              --junitxml=.mlx-portable-host/vector-constructors/results.xml \
+              tests/test_translator/test_metal_vector_constructors.py \
+              2>&1 | tee .mlx-portable-host/vector-constructors.log
       - name: Validate mixed-width integer arithmetic
         env:
           CROSTL_REQUIRE_WIDE_INTEGER_ARITHMETIC: "1"

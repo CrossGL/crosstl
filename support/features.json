@@ -4166,6 +4166,9 @@
           "status": "supported",
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_function_call",
+            "tests/test_translator/test_metal_vector_constructors.py::def test_generic_vector_constructors_execute_natively",
+            "tests/test_translator/test_metal_vector_constructors.py::def test_selected_vector_conversion_executes_natively",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_resolves_vector_type_alias_declarations",
             "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_compiles",
             "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_executes_natively",
             "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_materialization_preserves_concrete_element_type"
@@ -4175,6 +4178,8 @@
           "status": "supported",
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_function_call",
+            "tests/test_translator/test_metal_vector_constructors.py::def test_generic_vector_constructors_execute_natively",
+            "tests/test_translator/test_metal_vector_constructors.py::def test_selected_vector_conversion_executes_natively",
             "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_compiles",
             "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_executes_natively",
             "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_materialization_preserves_concrete_element_type"
@@ -4184,6 +4189,9 @@
           "status": "supported",
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_function_call",
+            "tests/test_translator/test_metal_vector_constructors.py::def test_generic_vector_constructors_execute_natively",
+            "tests/test_translator/test_metal_vector_constructors.py::def test_selected_vector_conversion_executes_natively",
+            "tests/test_backend/test_metal/test_preprocessor.py::def test_preprocessor_rejects_incompatible_vector_conversion_receiver",
             "tests/test_translator/test_metal_helper_linkage.py::def test_source_function_qualifiers_survive_intermediate_ir",
             "tests/test_translator/test_metal_helper_linkage.py::def test_materialized_anonymous_template_remains_private",
             "tests/test_translator/test_metal_helper_linkage.py::def test_private_helpers_and_exported_functions_keep_distinct_linkage",

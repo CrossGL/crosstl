@@ -2822,6 +2822,7 @@ class HLSLCodeGen:
                     declaration
                     for declaration in getattr(owner, attribute, []) or []
                     if id(declaration) in retained_ids
+                    or getattr(declaration, "is_type_alias", False)
                 ],
             )
 
@@ -3008,6 +3009,12 @@ class HLSLCodeGen:
 
     def generate_program(self, ast, target_stage=None):
         """Render an AST to HLSL, optionally filtering stage entry points."""
+        self.hlsl_type_aliases = {
+            node.name: getattr(node, "var_type", None)
+            for node in getattr(ast, "global_variables", []) or []
+            if getattr(node, "is_type_alias", False)
+            and node.name not in self.METAL_TYPE_ALIAS_GLOBALS
+        }
         target_stage = normalize_stage_name(target_stage)
         self.directx_cooperative_matrix_lowerings = {}
         self.hlsl_builtin_option_available = False
@@ -11365,11 +11372,28 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return self.hlsl_record_generated_statement_int_constants(
                         stmt, code
                     )
-                struct_init = self.render_hlsl_struct_value_initialization(
-                    stmt_name, vtype, initial_value, indent
+                struct_initializer = self.hlsl_struct_initializer_components(
+                    vtype, initial_value
                 )
-                if struct_init is not None:
-                    code = f"{indent_str}{declaration};\n{struct_init}"
+                if struct_initializer is not None:
+                    _type_name, fields, rendered_args, field_exprs = struct_initializer
+                    is_const = "const" in self.local_variable_qualifier(stmt).split()
+                    target = (
+                        self.next_hlsl_temp_variable("struct_init")
+                        if is_const
+                        else stmt_name
+                    )
+                    struct_init = self.render_hlsl_struct_field_assignments(
+                        target, fields, rendered_args, field_exprs, indent
+                    )
+                    if is_const:
+                        self.local_variable_types[target] = self.type_name_string(vtype)
+                        code = (
+                            f"{indent_str}{declaration_type} {target};\n{struct_init}"
+                        )
+                        code += f"{indent_str}{declaration} = {target};\n"
+                    else:
+                        code = f"{indent_str}{declaration};\n{struct_init}"
                     return self.hlsl_record_generated_statement_int_constants(
                         stmt, code
                     )
@@ -23029,6 +23053,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_type_constructor_name(self, name):
         if not isinstance(name, str):
             return None
+        if name in getattr(self, "hlsl_type_aliases", {}):
+            return self.map_type(name)
         if name in getattr(self, "function_return_types", {}):
             return None
         if name in self.METAL_TYPE_ALIAS_GLOBALS:
@@ -23049,7 +23075,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not isinstance(type_name, str):
             return None
         match = re.fullmatch(
-            r"(?:metal::)?vec\s*<\s*([^,>]+)\s*,\s*([234])\s*>",
+            r"(?:metal::)?(?:vec|vector)\s*<\s*([^,>]+)\s*,\s*([234])\s*>",
             type_name.strip(),
         )
         if match is None:
@@ -26097,6 +26123,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             node
             for node in getattr(root, "global_variables", []) or []
             if id(node) not in specialization_constant_ids
+            and not getattr(node, "is_type_alias", False)
         ]
         stage_resource_vars = collect_stage_local_variables(
             root, target_stage, self.is_stage_local_resource_variable
@@ -47610,6 +47637,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
+
+        aliases = getattr(self, "hlsl_type_aliases", {})
+        if vtype_str in aliases:
+            seen = getattr(self, "hlsl_type_alias_resolution_stack", [])
+            if vtype_str in seen:
+                raise ValueError(
+                    f"Cyclic HLSL type alias: {' -> '.join([*seen, vtype_str])}"
+                )
+            self.hlsl_type_alias_resolution_stack = [*seen, vtype_str]
+            try:
+                return self.map_type(aliases[vtype_str])
+            finally:
+                self.hlsl_type_alias_resolution_stack = seen
 
         cooperative_base, cooperative_args = generic_type_parts(vtype_str)
         if (

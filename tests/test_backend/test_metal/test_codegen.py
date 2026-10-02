@@ -9834,6 +9834,44 @@ def test_codegen_member_pointer_address_keeps_pointee_space(space, owner_const):
 
 
 @pytest.mark.parametrize(
+    "kind, prefix", [("float", "vec"), ("half", "f16vec"), ("int", "ivec")]
+)
+@pytest.mark.parametrize("width", [2, 3, 4])
+@pytest.mark.parametrize("qualified", [False, True])
+def test_codegen_concrete_generic_vector_constructor(kind, prefix, width, qualified):
+    name = f"{'metal::' if qualified else ''}vec<{kind}, {width}>"
+    source = f"{name} make_value({kind} value) {{ return {name}(value); }}"
+    crossgl = convert_without_preprocessing(source)
+    assert f"return {prefix}{width}(value);" in crossgl
+    assert "vec_u3c" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+@pytest.mark.parametrize("local", [False, True])
+@pytest.mark.parametrize(
+    "kind, prefix", [("float", "vec"), ("half", "f16vec"), ("int", "ivec")]
+)
+def test_codegen_resolves_generic_vector_constructor_alias(local, kind, prefix):
+    alias = f"using Value = metal::vec<{kind}, 3>;"
+    source = f"{' ' if local else alias} {kind}3 make_value({kind} value) {{ {alias if local else ''} return Value(value); }}"
+    crossgl = convert_without_preprocessing(source)
+    assert f"return {prefix}3(value);" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_user_vector_named_template_function():
+    source = """
+    template <typename T, int Width>
+    T vec(T value) { return value + T(Width); }
+    float make_value(float value) { return vec<float, 2>(value); }
+    """
+    crossgl = convert(source)
+    assert "return vec2(value);" not in crossgl
+    assert "value + float(2)" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+@pytest.mark.parametrize(
     "actual, expected",
     [("const device", "device"), ("constant", "device"), ("threadgroup", "thread")],
 )

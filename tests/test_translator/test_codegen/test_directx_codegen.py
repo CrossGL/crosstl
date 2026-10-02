@@ -130,6 +130,62 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+@pytest.mark.parametrize(
+    "element, mapped", [("float", "float2"), ("f16", "float16_t2"), ("int", "int2")]
+)
+@pytest.mark.parametrize("entry_only", [False, True])
+def test_hlsl_resolves_vector_type_alias_declarations(
+    tmp_path, element, mapped, entry_only
+):
+    source = f"""shader Alias {{
+        typedef vector<{element}, 2> Pair;
+        typedef Pair Copy;
+        RWStructuredBuffer<float> results;
+        compute {{ void main() {{
+            Copy value = Copy(1, 2);
+            results[0] = float(value.x + value.y);
+        }} }}
+    }}"""
+    generator = HLSLCodeGen()
+    ast = parse_code(tokenize_code(source))
+    hlsl = (
+        generator.generate_entry(ast, "main") if entry_only else generator.generate(ast)
+    )
+    assert generator.map_type("Copy") == mapped
+    assert f"{mapped} value" in hlsl
+    assert " Pair;" not in hlsl and " Copy;" not in hlsl
+    assert_directx_warnings_clean_if_available(hlsl, tmp_path, profile="cs_6_2")
+    generator.generate(parse_code(tokenize_code("shader Empty {}")))
+    assert generator.map_type("Copy") == "Copy"
+
+
+@pytest.mark.parametrize("target", ["Second", "vector<Second, 2>"])
+def test_hlsl_rejects_cyclic_type_alias_declarations(target):
+    generator = HLSLCodeGen()
+    with pytest.raises(ValueError, match="Cyclic HLSL type alias"):
+        generator.generate(
+            parse_code(
+                tokenize_code(
+                    f"shader Alias {{ typedef {target} First; typedef First Second; }}"
+                )
+            )
+        )
+    assert not generator.hlsl_type_alias_resolution_stack
+
+
+def test_hlsl_preserves_builtin_narrow_alias_contracts():
+    generator = HLSLCodeGen()
+    generator.generate(
+        parse_code(
+            tokenize_code(
+                "shader Alias { typedef half bfloat16_t; typedef f16 float16_t; }"
+            )
+        )
+    )
+    assert generator.map_type("bfloat16_t") == "uint"
+    assert generator.map_type("float16_t") == "float16_t"
+
+
 def assert_directx_warnings_clean_if_available(
     hlsl_code,
     tmp_path,

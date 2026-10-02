@@ -12601,6 +12601,54 @@ class MetalPreprocessor(HLSLPreprocessor):
             i += 1
         return replacements
 
+    def _conversion_value_type(
+        self,
+        type_text: str,
+        position: int,
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+    ) -> Optional[str]:
+        if (
+            IDENTIFIER_RE.fullmatch(type_text)
+            and type_text not in self._METAL_SCALAR_VECTOR_TYPES
+            and type_text not in type_aliases
+        ):
+            return None
+        canonical = self._canonicalize_type_aliases_at(
+            type_text, type_aliases, position
+        )
+        if canonical is None:
+            return None
+        normalized = self._normalize_inferred_type(canonical)
+        normalized = re.sub(r"^(?:::)?metal::", "", normalized)
+        if normalized in self._METAL_SCALAR_VECTOR_TYPES:
+            return normalized
+        angle = normalized.find("<")
+        if (
+            angle < 0
+            or normalized[:angle].strip() not in {"vec", "vector"}
+            or self._find_matching_angle(normalized, angle) != len(normalized) - 1
+        ):
+            return None
+        arguments = self._split_top_level_commas(normalized[angle + 1 : -1])
+        if len(arguments) != 2:
+            return None
+        element, width = (argument.strip() for argument in arguments)
+        if element not in {
+            "float",
+            "half",
+            "int",
+            "uint",
+            "short",
+            "ushort",
+            "char",
+            "uchar",
+            "long",
+            "ulong",
+            "bool",
+        } or width not in {"2", "3", "4"}:
+            return None
+        return f"{element}{width}"
+
     def _try_rewrite_implicit_conversion_call(
         self,
         code: str,
@@ -12616,7 +12664,10 @@ class MetalPreprocessor(HLSLPreprocessor):
             Dict[str, List[_MetalIntegralConstantBinding]]
         ] = None,
     ) -> Optional[Tuple[int, str]]:
-        if target_type not in self._METAL_SCALAR_VECTOR_TYPES:
+        normalized_target = self._conversion_value_type(
+            target_type, ident_start, type_aliases or {}
+        )
+        if normalized_target is None:
             return None
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:
@@ -12629,6 +12680,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         if len(arguments) != 1:
             return None
         argument = arguments[0]
+        receiver_expression = self._strip_enclosing_parens(
+            self._strip_template_argument_comments(argument).strip()
+        )
         source_type = self._infer_argument_type(
             argument,
             self._flatten_types_at(buffer_element_types, arg_open),
@@ -12696,22 +12750,144 @@ class MetalPreprocessor(HLSLPreprocessor):
                                     type_aliases,
                                     arg_open,
                                 )
-        source_type = self._normalize_inferred_type(source_type or "")
+        if source_type is None and IDENTIFIER_RE.fullmatch(receiver_expression):
+            declaration = self._visible_receiver_declaration_at(
+                code, receiver_expression, ident_start
+            )
+            if declaration is not None:
+                source_type = self._canonicalize_type_aliases_at(
+                    declaration.raw_type_text,
+                    type_aliases or {},
+                    declaration.type_position,
+                )
+        source_type = self._canonicalize_type_aliases_at(
+            source_type or "", type_aliases or {}, arg_open
+        )
+        source_type = (
+            self._normalize_inferred_type(source_type or "").rstrip("&").strip()
+        )
         struct = field_structs_by_name.get(source_type)
         if struct is None:
             return None
-        normalized_target = self._normalize_inferred_type(target_type)
         candidates = [
             method
             for method in struct.methods
             if method.is_conversion_operator
-            and self._normalize_inferred_type(method.return_type) == normalized_target
+            and self._conversion_value_type(
+                self._canonicalize_struct_scoped_type(
+                    method.return_type, struct, field_structs_by_name
+                ),
+                method.span[0],
+                type_aliases or {},
+            )
+            == normalized_target
         ]
-        if len(candidates) != 1:
+        if not candidates:
             return None
-        method = candidates[0]
+        receiver = self._receiver_contract_for_named_value(
+            code,
+            source_type,
+            receiver_expression,
+            ident_start,
+            type_aliases=type_aliases,
+        )
+        if IDENTIFIER_RE.fullmatch(receiver_expression):
+            declaration = self._visible_receiver_declaration_at(
+                code, receiver_expression, ident_start
+            )
+            if declaration is not None:
+                canonical_receiver = self._canonicalize_type_aliases_at(
+                    declaration.raw_type_text,
+                    type_aliases or {},
+                    declaration.type_position,
+                )
+                if canonical_receiver is not None:
+                    receiver = self._receiver_contract_from_type_text(
+                        canonical_receiver, source_type
+                    )
+        if receiver is None:
+            construction = re.match(r"[A-Za-z_]\w*\s*([({])", receiver_expression)
+            if construction is not None:
+                opening = construction.end() - 1
+                delimiter = receiver_expression[opening]
+                closing = self._find_matching_delimiter(
+                    receiver_expression,
+                    opening,
+                    delimiter,
+                    ")" if delimiter == "(" else "}",
+                )
+                if closing == len(receiver_expression) - 1:
+                    receiver = self._receiver_contract_from_type_text(
+                        source_type, source_type, value_category="rvalue"
+                    )
+            elif receiver_expression.startswith("*("):
+                closing = self._find_matching_delimiter(
+                    receiver_expression, 1, "(", ")"
+                )
+                if closing is not None:
+                    pointer_type = receiver_expression[2:closing].strip()
+                    if pointer_type.endswith("*"):
+                        receiver = self._receiver_contract_from_type_text(
+                            pointer_type[:-1], source_type
+                        )
+        records = []
+        viable = []
+        for candidate in candidates:
+            mismatches = (
+                self._receiver_candidate_mismatches(candidate, receiver)
+                if receiver is not None
+                else ("receiver cv/reference/address-space state is unavailable",)
+            )
+            records.append(
+                {
+                    "candidate": self._concrete_method_candidate_signature(candidate),
+                    "receiver_qualifiers": self._method_receiver_qualifier_details(
+                        candidate
+                    ),
+                    "mismatches": mismatches,
+                    "viable": not mismatches,
+                }
+            )
+            if not mismatches:
+                viable.append(candidate)
+        if len(viable) > 1:
+            best = min(
+                self._receiver_candidate_preference_rank(candidate, receiver)
+                for candidate in viable
+            )
+            viable = [
+                candidate
+                for candidate in viable
+                if self._receiver_candidate_preference_rank(candidate, receiver) == best
+            ]
+        if len(viable) != 1:
+            raise MetalStructMethodError(
+                f"Cannot select a unique conversion from '{source_type}' to '{target_type}'.",
+                struct_name=source_type,
+                method_name=f"operator {target_type}",
+                requested_signature=f"{target_type}({argument})",
+                suggested_action="preserve receiver qualifiers and provide a unique source conversion",
+                source_location=self._source_location_for_offsets(
+                    code, ident_start, arg_close + 1
+                ),
+                missing_capabilities=("metal.conversion-operator-selection",),
+                reason=(
+                    "conversion-operator-ambiguous"
+                    if viable
+                    else "conversion-operator-no-viable"
+                ),
+                receiver_type=(
+                    receiver.source_type if receiver is not None else "<unknown>"
+                ),
+                candidate_signatures=tuple(
+                    self._concrete_method_candidate_signature(candidate)
+                    for candidate in candidates
+                ),
+                candidate_mismatches=tuple(records),
+            )
+        method = viable[0]
         if not self._conversion_operator_receiver_is_readonly(struct, method) and (
-            IDENTIFIER_RE.fullmatch(argument) is None
+            IDENTIFIER_RE.fullmatch(receiver_expression) is None
         ):
             raise MetalStructMethodError(
                 "Cannot lower a mutating conversion operator on a temporary "
@@ -12799,12 +12975,38 @@ class MetalPreprocessor(HLSLPreprocessor):
         if j >= len(code):
             return None
 
-        if code[j] == "(":
+        conversion_type = ident
+        conversion_open = j
+        if ident == "static_cast" and code[j] == "<":
+            angle_close = self._find_matching_angle(code, j)
+            if angle_close is not None:
+                conversion_type = code[j + 1 : angle_close]
+                conversion_open = angle_close + 1
+        elif ident in {"vec", "vector", "metal"}:
+            type_end = j
+            if ident == "metal" and code[j : j + 2] == "::":
+                type_end = j + 2
+                while type_end < len(code) and code[type_end].isspace():
+                    type_end += 1
+                _name, consumed = self._read_identifier(code, type_end)
+                type_end += consumed
+                conversion_type = code[ident_start:type_end]
+                conversion_open = type_end
+                while type_end < len(code) and code[type_end].isspace():
+                    type_end += 1
+            if type_end < len(code) and code[type_end] == "<":
+                angle_close = self._find_matching_angle(code, type_end)
+                if angle_close is not None:
+                    conversion_type = code[ident_start : angle_close + 1]
+                    conversion_open = angle_close + 1
+        while conversion_open < len(code) and code[conversion_open].isspace():
+            conversion_open += 1
+        if conversion_open < len(code) and code[conversion_open] == "(":
             conversion = self._try_rewrite_implicit_conversion_call(
                 code,
                 ident_start,
-                ident,
-                j,
+                conversion_type,
+                conversion_open,
                 buffer_element_types,
                 local_variable_types,
                 field_variable_types,

@@ -27,7 +27,11 @@ elements, including its nested index-buffer access, and preserves address-space
 qualifiers when passing addresses through pointer members. The unchanged wrapper
 still fails native validation: DirectX reports unsupported aggregate resource
 pointers, OpenGL emits pointer-bearing fields, and Metal retains unresolved
-generic-vector constructors and bfloat types in conversion helpers. Aggregate
+bfloat types in conversion helpers. Concrete float, half and integer vector
+constructors and declared vector conversions have a separate required native
+gate on all three platforms. It covers aliases, splats, mixed constructors,
+receiver qualification, mutations and single evaluation, with original Metal
+controls. Passing these cases does not provide bfloat conversion support. Aggregate
 lowering and host dispatch remain incomplete; the `gather_front` proof does not
 establish general gather support.
 Contiguous conversion, reshape, flatten and unflatten
