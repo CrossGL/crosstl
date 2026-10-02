@@ -168,7 +168,7 @@ def validate(records, *, trace=None, offset=0):
                 )
                 or type(dispatch.get("threads")) is not int
                 or type(dispatch.get("dispatchVersion")) is not int
-                or dispatch.get("dispatchVersion") != 2
+                or dispatch.get("dispatchVersion") != 3
                 or dispatch.get("entry") != entry
                 or dispatch.get("threads") != size
                 or dimensions != [groups, width]

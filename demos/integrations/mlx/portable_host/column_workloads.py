@@ -211,7 +211,7 @@ def validate(records, *, trace=None):
             )
             if (
                 dispatch.get("entry") != entry
-                or dispatch.get("dispatchVersion") != 2
+                or dispatch.get("dispatchVersion") != 3
                 or type(dispatch.get("dispatchVersion")) is not int
                 or type(dispatch.get("threads")) is not int
                 or dispatch.get("threads")

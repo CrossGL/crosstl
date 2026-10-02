@@ -229,7 +229,7 @@ def row_evidence():
             dict(
                 entry=case["entry"],
                 threads=logical.size,
-                dispatchVersion=2,
+                dispatchVersion=3,
                 workgroupSize=[case["width"], 1, 1],
                 workgroupCount=[
                     1,

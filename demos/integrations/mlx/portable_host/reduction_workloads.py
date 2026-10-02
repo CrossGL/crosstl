@@ -237,7 +237,7 @@ def validate(records, widths=WIDTHS, *, trace=None):
                     dispatch.get(key) != plan[key]
                     for key in ("workgroupCount", "workgroupSize")
                 )
-                or dispatch.get("dispatchVersion") != 2
+                or dispatch.get("dispatchVersion") != 3
                 or type(dispatch.get("dispatchVersion")) is not int
                 or type(dispatch.get("threads")) is not int
                 or any(

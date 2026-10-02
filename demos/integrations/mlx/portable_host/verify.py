@@ -94,7 +94,7 @@ REDUCTION_NEGATIVE_CHECKS = {
     "reduce-limit": "65535",
     "reduce-allocation": "storage does not match",
     "reduce-empty": "empty reduction initialization",
-    "reduce-row": "small-row reduction plans",
+    "reduce-row": "Small-row dispatch requires the pinned MLX source root",
     "reduce-column": "small-column and long-column reduction plans",
 }
 
@@ -442,7 +442,7 @@ def verify(args):
         count = record.get("workgroupCount")
         if (
             type(record.get("dispatchVersion")) is not int
-            or record["dispatchVersion"] != 2
+            or record["dispatchVersion"] != 3
             or record.get("workgroupSize") != [1, 1, 1]
             or any(type(value) is not int for value in record["workgroupSize"])
             or not isinstance(count, list)
@@ -463,7 +463,7 @@ def verify(args):
         raise ValueError("MLX sources changed during execution")
     evidence = {
         "schemaVersion": 2,
-        "dispatchVersion": 2,
+        "dispatchVersion": 3,
         "commit": COMMIT,
         "adaptation": adaptation,
         "target": index["target"],

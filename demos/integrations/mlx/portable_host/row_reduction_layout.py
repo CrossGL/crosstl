@@ -4,6 +4,7 @@ import ctypes
 import math
 
 from demos.integrations.mlx.portable_host.reduction_packages import ROW_ENTRIES
+from demos.integrations.mlx.portable_host.small_row_packages import SMALL_ROW_ENTRIES
 
 SIMPLE = {"in": None, "out": None, "reduction_size": "uint64", "out_size": "int64"}
 LOOPED = {
@@ -41,10 +42,12 @@ def width(row_size):
 
 def validate(entry, buffers, logical_size, execution):
     spec = signature(entry)
-    if set(buffers) != set(spec) or entry not in ROW_ENTRIES:
+    entries = {**ROW_ENTRIES, **SMALL_ROW_ENTRIES}
+    small = entry in SMALL_ROW_ENTRIES
+    if set(buffers) != set(spec) or entry not in entries:
         raise ValueError("Native row reduction metadata does not match")
     for name, buffer in buffers.items():
-        expected_type = spec[name] or ROW_ENTRIES[entry]
+        expected_type = spec[name] or entries[entry]
         if buffer.dtype.decode("ascii") != expected_type:
             raise ValueError("Native row reduction dtype does not match")
         maximum = (
@@ -75,7 +78,10 @@ def validate(entry, buffers, logical_size, execution):
     }
     rows = buffers["out"].count
     row_size = metadata["reduction_size" if spec is SIMPLE else "row_size"][0]
-    group_width = width(row_size)
+    if small and not 1 <= row_size <= 64:
+        raise ValueError("Small-row kernels require 1 to 64 elements per row")
+    group_width = 32 if small else width(row_size)
+    exact_grid = None
     if spec is SIMPLE:
         if (
             rows < 32
@@ -129,9 +135,21 @@ def validate(entry, buffers, logical_size, execution):
         if extent != buffers["in"].count:
             raise ValueError("Native row reduction view does not match its source span")
         dimension = 1 if reduce_ndim <= 1 else 2 if reduce_ndim == 2 else 5
-        if not entry.startswith(f"row_reduce_looped_{dimension}_reduce_"):
+        family = "small" if small else "looped"
+        if not entry.startswith(f"row_reduce_{family}_{dimension}_reduce_"):
             raise ValueError("Native row reduction template rank does not match")
         grid = [1, rows, 1]
-    if execution != {"workgroupCount": grid, "workgroupSize": [group_width, 1, 1]}:
+        if small:
+            scalar = (non_rows < 32 and row_size <= 8) or non_rows <= 8
+            if scalar:
+                group_width = min(rows, 1024)
+                grid = [(rows + group_width - 1) // group_width, 1, 1]
+                exact_grid = [rows, 1, 1]
+            else:
+                exact_grid = [32, rows, 1]
+    expected = {"workgroupCount": grid, "workgroupSize": [group_width, 1, 1]}
+    if exact_grid is not None:
+        expected["threadGridSize"] = exact_grid
+    if execution != expected:
         raise ValueError("Native row reduction launch does not match the upstream plan")
     return metadata

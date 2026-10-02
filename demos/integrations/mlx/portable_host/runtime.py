@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import math
 import sys
 from pathlib import Path
 
-from crosstl.project import build_native_loader_dispatch_request
+from crosstl.project import (
+    build_native_loader_dispatch_request,
+    prepare_native_loader_dispatch_regions,
+)
 from crosstl.project.native_runtime_drivers import (
     DirectXComputeRuntime,
     OpenGLComputeRuntime,
@@ -17,6 +21,7 @@ from crosstl.project.runtime_verification import (
     DirectXRuntimeParityAdapter,
     MetalRuntimeParityAdapter,
     OpenGLRuntimeParityAdapter,
+    RuntimeExecutorResult,
     RuntimeParityExecutor,
     RuntimeTestAdapterSpec,
 )
@@ -47,6 +52,10 @@ from demos.integrations.mlx.portable_host.reduction_packages import ROW_ENTRIES
 from demos.integrations.mlx.portable_host.reduction_packages import (
     load_index as load_reduction_index,
 )
+from demos.integrations.mlx.portable_host.small_row_packages import (
+    SMALL_ROW_ENTRIES,
+    SmallRowPackageCache,
+)
 
 
 class Buffer(ctypes.Structure):
@@ -59,13 +68,14 @@ class Buffer(ctypes.Structure):
     ]
 
 
-DISPATCH_VERSION = 2
+DISPATCH_VERSION = 3
 
 
 class Launch(ctypes.Structure):
     _fields_ = [
         ("workgroup_count", ctypes.c_uint32 * 3),
         ("workgroup_size", ctypes.c_uint32 * 3),
+        ("thread_grid_size", ctypes.c_uint32 * 3),
     ]
 
     def execution(self):
@@ -76,7 +86,16 @@ class Launch(ctypes.Structure):
             or math.prod(size) > 1024
         ):
             raise ValueError("Native launch geometry exceeds its bounds")
-        return {"workgroupCount": count, "workgroupSize": size}
+        execution = {"workgroupCount": count, "workgroupSize": size}
+        exact = list(self.thread_grid_size)
+        if any(exact):
+            if any(value < 1 for value in exact) or any(
+                (extent + width - 1) // width != groups
+                for extent, width, groups in zip(exact, size, count)
+            ):
+                raise ValueError("Native exact grid does not match its covering groups")
+            execution["threadGridSize"] = exact
+        return execution
 
 
 CALLBACK = ctypes.CFUNCTYPE(
@@ -123,11 +142,16 @@ def wire_value(value):
 
 
 class HostRuntime:
-    def __init__(self, directory, trace, *, reductions=None):
+    def __init__(self, directory, trace, *, reductions=None, mlx_root=None):
         self.directory = Path(directory).resolve()
         self.trace = Path(trace).resolve()
         index = json.loads((self.directory / "index.json").read_text(encoding="utf-8"))
         self.target = index["target"]
+        self.small_rows = (
+            SmallRowPackageCache(mlx_root, self.directory / "small-rows", self.target)
+            if mlx_root is not None
+            else None
+        )
         self.descriptors = index["descriptors"]
         if set(self.descriptors) != set(ENTRIES):
             raise ValueError("Packages must contain the exact supported entry set")
@@ -215,7 +239,8 @@ class HostRuntime:
             return 1
 
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
-        row_reduction = entry in ROW_ENTRIES
+        small_row = entry in SMALL_ROW_ENTRIES
+        row_reduction = entry in ROW_ENTRIES or small_row
         column_reduction = entry in COLUMN_ENTRIES
         shaped_reduction = row_reduction or column_reduction
         layout_module = (
@@ -243,13 +268,13 @@ class HostRuntime:
         ):
             raise ValueError("Invalid or unsupported native dispatch dimensions")
         execution = launch.execution() if launch is not None else None
-        if reduction:
+        if reduction and not small_row:
             key = f'w{execution["workgroupSize"][0]}/{entry}'
             if key not in self.reduction_descriptors:
                 raise ValueError(f"No translated reduction variant for {key}")
             descriptor = self.reduction_descriptors[key]
             package_directory = self.reduction_directories[key] / "package"
-        else:
+        elif not small_row:
             descriptor = self.descriptors[entry]
             package_directory = self.directory / "package"
         logical_not = entry == LOGICAL_NOT_ENTRY
@@ -362,6 +387,17 @@ class HostRuntime:
             "workgroupSize": [1, 1, 1],
         }:
             raise ValueError("Native launch geometry does not match the operation")
+        if small_row:
+            if self.small_rows is None:
+                raise ValueError(
+                    "Small-row dispatch requires the pinned MLX source root"
+                )
+            region_packages = self.small_rows.get(
+                entry,
+                thread_grid_size=execution["threadGridSize"],
+                workgroup_size=execution["workgroupSize"],
+            )
+            descriptor, package_directory = region_packages[0]
         if (unary or binary_operation or cast) and ctypes.cast(
             supplied["size"].data, ctypes.POINTER(ctypes.c_uint32)
         )[0] != threads:
@@ -388,6 +424,8 @@ class HostRuntime:
         matched = set()
         binding_names = set()
         for binding in descriptor["bindings"]:
+            if "executionInput" in binding.get("provenance", {}):
+                continue
             layout = binding["scalarLayout"]
             member = layout.get("memberName", binding["name"])
             if self.target == "directx":
@@ -448,15 +486,58 @@ class HostRuntime:
                 inputs[binding["name"]] = value
         if matched != set(supplied):
             raise ValueError("Reflected bindings do not cover the operation")
-        request = build_native_loader_dispatch_request(
-            descriptor,
-            package_directory,
-            inputs,
-            outputs,
-            execution,
-            expected_target=self.target,
-        )
-        result = self.executor.run(request)
+        if small_row and self.target != "metal":
+            adapter = self.executor.runtime_adapter
+            with prepare_native_loader_dispatch_regions(
+                region_packages,
+                inputs,
+                outputs,
+                thread_grid_size=execution["threadGridSize"],
+                source_workgroup_size=execution["workgroupSize"],
+                adapter=adapter,
+            ) as requests:
+                records = []
+                for (region_descriptor, root), request in zip(
+                    region_packages, requests
+                ):
+                    module_bytes = request.module_path.read_bytes()
+                    module_hash = hashlib.sha256(module_bytes).hexdigest()
+                    module = (
+                        self.trace.parent
+                        / "native-modules"
+                        / (module_hash + request.module_path.suffix)
+                    )
+                    module.parent.mkdir(parents=True, exist_ok=True)
+                    module.write_bytes(module_bytes)
+                    records.append(
+                        {
+                            "artifact": region_descriptor["artifact"],
+                            "packageRoot": str(root),
+                            "provenance": region_descriptor["provenance"],
+                            "moduleHash": module_hash,
+                            "moduleFile": str(module),
+                            "workgroupCount": list(request.dispatch.workgroup_count),
+                            "workgroupSize": list(request.dispatch.workgroup_size),
+                        }
+                    )
+                native_outputs = adapter.runtime.dispatch_sequence(None, None, requests)
+                result = RuntimeExecutorResult(
+                    outputs=native_outputs,
+                    details={
+                        "runtime": adapter.runtime.name,
+                        "regions": records,
+                    },
+                )
+        else:
+            request = build_native_loader_dispatch_request(
+                descriptor,
+                package_directory,
+                inputs,
+                outputs,
+                execution,
+                expected_target=self.target,
+            )
+            result = self.executor.run(request)
         if result.status != "ok" or set(result.outputs) != set(destinations):
             raise RuntimeError("Native executor did not return the required outputs")
         for name, (buffer, ctype) in destinations.items():

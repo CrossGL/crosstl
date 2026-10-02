@@ -128,8 +128,8 @@ unchanged `ggn2_dynamic_copybool_bool_` entry and allocation checks use the actu
 MLX item size. DirectX constant names follow the generator's sanitized entry
 prefix, including removal of a trailing underscore from Boolean entry names.
 
-Callback ABI version 2 carries explicit three-dimensional workgroup counts and
-sizes separately from the logical element count. The C++ host selects each
+Callback ABI version 3 carries explicit three-dimensional workgroup counts,
+sizes and an optional exact thread grid separately from the logical element count. The C++ host selects each
 launch; the Python boundary validates it against the operation and reflected
 package before execution and records both dimensions in the trace. Copy kernels
 retain their two-elements-per-invocation grid, including odd final rows. The
@@ -228,11 +228,35 @@ that supplied each dispatch. CI requires these cases in each row job, using
 whole-array companion packages at width 32; the separate whole-array jobs
 continue to build and execute all 32 widths.
 
-Small-row launches are not implemented yet. Preserving their partial-workgroup
-semantics on software subgroups is tracked in
-[#2011](https://github.com/CrossGL/crosstl/issues/2011). Negative-stride row views,
-additional storage types and full upstream-suite parity
-remain outside the current row integration.
+Small-row launches use the unchanged `row_reduce_small` entries for rows of
+1 to 64 elements. Pass the pinned checkout as `mlx_root` to `HostRuntime` to
+enable on-demand translation. The host retains upstream's scalar/cooperative
+choice: scalar when `(non_row_reductions < 32 && row_size <= 8)` or
+`non_row_reductions <= 8`, otherwise cooperative with 32 threads per row.
+Metal receives the exact thread grid. DirectX and OpenGL execute the complete
+region plan with shared allocations, preserving incomplete workgroups without
+rounding up the source grid or changing the upstream kernels.
+
+Packages live under `small-rows` in the base package directory. Cache identity
+includes the pinned revision, target, source entry, translation implementation,
+recipe and complete region geometry. Source cleanliness and package integrity
+are checked on reuse. The cache stores translated sources, not native binaries
+or computed results; each dispatch uses the configured native compiler and
+runtime. ABI version 2 wheels must be rebuilt.
+
+```sh
+python -m demos.integrations.mlx.portable_host.verify_small_rows --mlx-root mlx-upstream --packages packages --output-dir small-row-evidence
+```
+
+The dedicated three-OS CI gate compares 34 host workloads against MLX CPU and
+NumPy, checks unchanged host inputs and output guards, and retains package identity
+and DirectX/OpenGL region module evidence. These are additional integration
+workloads, not 34 additional upstream unit tests. The existing upstream-test
+gate remains required. Every operation has distinguishable row results to reject
+constant-output and wrong-row errors. Negative-stride row views, additional storage types,
+the 65,535-element bound and full upstream-suite parity remain open work;
+partial-workgroup coverage is tracked in
+[#2011](https://github.com/CrossGL/crosstl/issues/2011).
 
 ### Column Reductions
 

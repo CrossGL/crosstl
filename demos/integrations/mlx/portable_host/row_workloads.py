@@ -280,7 +280,7 @@ def validate(records, widths, *, trace=None):
                 or dispatch.get("workgroupCount") != grid
                 or dispatch.get("threads") != logical.size
                 or type(dispatch.get("dispatchVersion")) is not int
-                or dispatch.get("dispatchVersion") != 2
+                or dispatch.get("dispatchVersion") != 3
                 or not values_match(
                     dispatch.get("reductionValues"),
                     reference_values.reshape(-1).tolist(),

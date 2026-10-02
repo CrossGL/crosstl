@@ -298,9 +298,7 @@ void dispatch_row_reduce(
     const char* dtype) {
   using namespace mlx::core;
   int64_t row_size = plan.shape.back();
-  if (row_size <= 64) {
-    throw std::invalid_argument("CrossTL small-row reduction plans are not implemented.");
-  }
+  const bool small = row_size <= 64;
   uint32_t width = row_size <= 512 ? 32 : row_size <= 1024 ? 128 :
       static_cast<uint32_t>(std::min<int64_t>(1024, ((row_size + 127) / 128) * 32));
   auto reduce_shape = plan.shape;
@@ -332,7 +330,7 @@ void dispatch_row_reduce(
       uint64_t(row_size * non_rows) * out.size() != in.size()) {
     throw std::invalid_argument("CrossTL row reduction source view exceeds its bounds.");
   }
-  const bool simple = plan.type == ContiguousReduce && reduce_ndim == 0 &&
+  const bool simple = !small && plan.type == ContiguousReduce && reduce_ndim == 0 &&
       in.size() / row_size >= 32;
   out.set_data(allocator::malloc(std::max<size_t>(out.nbytes(), 4)));
   char error[2048] = {};
@@ -351,7 +349,8 @@ void dispatch_row_reduce(
     status = dispatch_callback.load()(entry.c_str(), buffers, 4, in.size(), &launch, error, sizeof(error));
   } else {
     const int dimension = reduce_ndim <= 1 ? 1 : reduce_ndim == 2 ? 2 : 5;
-    std::string entry = "row_reduce_looped_" + std::to_string(dimension) + "_reduce_" + operation + dtype;
+    std::string entry = std::string(small ? "row_reduce_small_" : "row_reduce_looped_") +
+        std::to_string(dimension) + "_reduce_" + operation + dtype;
     if (ndim == 0) { shape.push_back(0); strides.push_back(0); }
     if (reduce_ndim == 0) { reduce_shape.push_back(0); reduce_strides.push_back(0); }
     CrosstlMlxBuffer buffers[] = {
@@ -366,7 +365,18 @@ void dispatch_row_reduce(
         {"reduce_strides", "int64", reduce_strides.data(), reduce_strides.size(), 0},
         {"reduce_ndim", "int32", &reduce_ndim, 1, 0},
     };
-    const CrosstlMlxLaunch launch{{1, uint32_t(out.size()), 1}, {width, 1, 1}};
+    CrosstlMlxLaunch launch{{1, uint32_t(out.size()), 1}, {width, 1, 1}, {0, 0, 0}};
+    if (small) {
+      // The current bounded output fits upstream get_2d_grid_dims' first axis.
+      const uint32_t rows = static_cast<uint32_t>(out.size());
+      const bool scalar = (non_rows < 32 && row_size <= 8) || non_rows <= 8;
+      if (scalar) {
+        width = std::min<uint32_t>(rows, 1024);
+        launch = {{(rows + width - 1) / width, 1, 1}, {width, 1, 1}, {rows, 1, 1}};
+      } else {
+        launch = {{1, rows, 1}, {32, 1, 1}, {32, rows, 1}};
+      }
+    }
     status = dispatch_callback.load()(entry.c_str(), buffers, 10, in.size(), &launch, error, sizeof(error));
   }
   error[sizeof(error) - 1] = '\0';

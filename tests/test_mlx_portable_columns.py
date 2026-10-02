@@ -350,7 +350,7 @@ def column_evidence():
                         + case["operation"]
                         + dtype
                     ),
-                    dispatchVersion=2,
+                    dispatchVersion=3,
                     threads=logical.size if stage == 0 else partials.size,
                     workgroupSize=[256, 1, 1],
                     workgroupCount=[

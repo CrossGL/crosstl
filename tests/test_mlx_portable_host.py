@@ -1099,7 +1099,7 @@ def test_translated_binding_contract_and_typed_readback(
     assert calls[0].execution_plan.dispatch.workgroup_count == (3, 1, 1)
     trace = json.loads(host.trace.read_text())
     assert trace["target"] == host.target and trace["entry"] == "arange" + dtype
-    assert trace["dispatchVersion"] == 2 and trace["workgroupSize"] == [1, 1, 1]
+    assert trace["dispatchVersion"] == 3 and trace["workgroupSize"] == [1, 1, 1]
 
 
 @pytest.mark.parametrize(
@@ -1512,7 +1512,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                     "entry": entry,
                     "target": "directx" if fault == "target" else "opengl",
                     "threads": count,
-                    "dispatchVersion": 2,
+                    "dispatchVersion": 3,
                     "workgroupCount": [count, 1, 1],
                     "workgroupSize": [1, 1, 1],
                 }

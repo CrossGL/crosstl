@@ -11,11 +11,13 @@ typedef struct {
   uint32_t output;
 } CrosstlMlxBuffer;
 
-enum { CROSTL_MLX_DISPATCH_VERSION = 2 };
+enum { CROSTL_MLX_DISPATCH_VERSION = 3 };
 
 typedef struct {
   uint32_t workgroup_count[3];
   uint32_t workgroup_size[3];
+  // All zero for full workgroups; otherwise the exact source thread extent.
+  uint32_t thread_grid_size[3];
 } CrosstlMlxLaunch;
 
 typedef int (*CrosstlMlxDispatch)(

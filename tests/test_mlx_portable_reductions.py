@@ -318,7 +318,7 @@ def reduction_evidence():
                 {
                     "entry": case["entry"],
                     "threads": count,
-                    "dispatchVersion": 2,
+                    "dispatchVersion": 3,
                     "workgroupCount": plan["workgroupCount"],
                     "workgroupSize": plan["workgroupSize"],
                     "reductionGuardValues": [],

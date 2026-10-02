@@ -141,7 +141,7 @@ def evidence():
                 "entry": entry,
                 "target": "metal",
                 "threads": size,
-                "dispatchVersion": 2,
+                "dispatchVersion": 3,
                 "workgroupSize": [32, 1, 1],
                 "workgroupCount": groups,
                 "reductionValues": values,
@@ -155,7 +155,7 @@ def evidence():
                     "entry": BOOLEAN_COPY_ENTRY if dtype == "bool_" else COPY_ENTRY,
                     "target": "metal",
                     "threads": 2145,
-                    "dispatchVersion": 2,
+                    "dispatchVersion": 3,
                     "workgroupSize": [1, 1, 1],
                     "workgroupCount": [33, 33, 1],
                     "copyGuardWords": (
