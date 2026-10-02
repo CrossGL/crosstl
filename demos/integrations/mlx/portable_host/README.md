@@ -37,9 +37,9 @@ or and not use bool inputs, including upstream casts from numeric inputs.
 The NaN-equality entry supports float32; the maintained host workloads exercise
 scalar `array_equal(equal_nan=True)`. General array equality additionally needs
 the reduction packages described below. The optional bitwise package family supports
-Boolean operator overloads and 32-bit integer AND, OR, XOR and shifts.
+Boolean operator overloads and 32-bit integer AND, OR, XOR, shifts and inversion.
 Other primitives retain MLX's explicit unsupported-GPU errors. Unary inputs
-other than LogicalNot must be float32. Stored-contiguous broadcasts and column-major views retain
+other than LogicalNot and BitwiseInvert must be float32. Stored-contiguous broadcasts and column-major views retain
 their metadata; noncontiguous inputs use translated copies before unary dispatch.
 Dispatch is synchronous, uses host staging buffers and supports at most 65,535
 stored elements. Elementwise operations use one thread per workgroup; reductions
@@ -61,7 +61,7 @@ selection, and the complete MLX suite are not covered here.
 no-GPU backend build definition and adds four explicitly named backend files:
 
 - `crosstl_backend.cpp` registers a versioned synchronous dispatch callback,
-  implements device/stream hooks, `Arange::eval_gpu` and 28 unary primitive hooks,
+  implements device/stream hooks, `Arange::eval_gpu` and 29 unary primitive hooks,
   and stages output storage. MLX's Log and Sqrt primitives select their log-base
   and reciprocal variants, yielding 30 float32 entries plus Boolean LogicalNot. View hooks reuse
   upstream shared implementations and perform no CPU elementwise computation.
@@ -85,6 +85,8 @@ no-GPU backend build definition and adds four explicitly named backend files:
   BitwiseBinary selects 13 optional Boolean/int32/uint32 entries, reusing the
   binary layout checks and translated copies. Shift counts outside 0 through 31
   are rejected before the bitwise dispatch. There is no CPU bitwise fallback.
+  BitwiseInvert selects two optional int32/uint32 unary entries, preserving
+  upstream unary allocation, buffer donation and stored-contiguous layout metadata.
   AsType selects a source/destination-specific copy entry, validates array shapes
   and allocation bounds, and allocates a dense destination. Casts perform no CPU
   elementwise conversion.
@@ -621,9 +623,11 @@ running the entire suite is the next stage, not an implicit property of this pro
 
 ## Bitwise Host Operations
 
-The optional family contains 13 unchanged `binary.metal` specializations:
+The optional family contains 15 unchanged specializations: 13 from `binary.metal`,
 int32/uint32 AND, OR, XOR, left shift and right shift, plus Boolean AND, OR and
-XOR. Existing base packages remain at 93 entries. Build the additional packages
+XOR; and two int32/uint32 inversion entries from `unary.metal`.
+Existing base packages remain at 93 entries. Rebuild older 13-entry optional
+packages before using this adapter. Build the additional packages
 and run the host proof with a prepared MLX checkout and its installed host build:
 
 ```bash
@@ -636,20 +640,25 @@ python -m demos.integrations.mlx.portable_host.verify_bitwise \
 
 Use `directx` on Windows or `metal` on macOS when building the corresponding
 packages. The three-platform CI requires this proof after the base host test.
-It compares 104 workloads against separate MLX CPU execution, NumPy and an exact
-Python integer reference. Each native run requires 156 dispatches, including
-translated copies for transpose, broadcast and negative-stride inputs. Empty
+It compares 120 workloads against separate MLX CPU execution, NumPy and an exact
+Python integer reference. Each native run requires 172 dispatches, including
+67 translated layout copies. Binary operations materialize transpose, broadcast
+and negative-stride inputs. Inversion preserves stored-contiguous transpose and
+broadcast layouts; negative-stride inputs still require a translated copy. Empty
 inputs require no dispatch. The proof retains numerical readbacks before any
 comparison failure, validates compiler and native-dispatch identities, checks
-artifact hashes and output guards, and requires six rejection controls.
+artifact hashes and output guards, and requires ten rejection controls.
+Inversion controls reject missing packages, int64 and uint8 storage, and inputs
+above the stored-element limit.
 
 Unsigned shifts exercise all 32 bits and counts through 31; signed right shifts
 include negative operands. Signed left-shift cases use nonnegative values and
 representable results, without making a parity claim for undefined source
 overflow. Inputs and outputs remain bounded to 65,535 elements. Other integer
-widths, integer invert, and Boolean shifts are not implemented by this family.
+widths and Boolean shifts are not implemented by this family. Upstream maps
+Boolean inversion to the existing LogicalNot path.
 The complete upstream `test_bitwise_ops` also requires random generation and
-those missing widths and operations; the 104 workloads are not a substitute for
+those missing widths and operations; the 120 workloads are not a substitute for
 passing that unchanged test. No upstream kernel or test is patched.
 
 The workload layout helper reinterprets a NumPy base allocation using the view's

@@ -3,6 +3,8 @@
 from demos.integrations.mlx.portable_host.binary_workloads import LAYOUTS, mlx_operand
 from demos.integrations.mlx.portable_host.packages import (
     BITWISE_ENTRIES,
+    BITWISE_INVERT_ENTRIES,
+    BITWISE_PACKAGE_ENTRIES,
     BOOLEAN_COPY_ENTRY,
     COPY_ENTRY,
 )
@@ -18,16 +20,21 @@ OPERATIONS = {
     "BitwiseXor": "bitwise_xor",
     "LeftShift": "left_shift",
     "RightShift": "right_shift",
+    "BitwiseInvert": "invert",
 }
 
 
 def cases():
-    for entry, dtype in BITWISE_ENTRIES.items():
+    for entry, dtype in BITWISE_PACKAGE_ENTRIES.items():
         for layout in LAYOUTS:
             yield {
                 "entry": entry,
                 "dtype": dtype,
-                "operation": entry[3 : -len(dtype)],
+                "operation": (
+                    "BitwiseInvert"
+                    if entry in BITWISE_INVERT_ENTRIES
+                    else entry[3 : -len(dtype)]
+                ),
                 "layout": layout,
             }
 
@@ -87,10 +94,14 @@ def operands(np, case):
 
 def reference(np, case):
     a, b = operands(np, case)
-    result = getattr(np, OPERATIONS[case["operation"]])(a, b)
+    if case["operation"] == "BitwiseInvert":
+        b = None
+        result = np.invert(a)
+    else:
+        result = getattr(np, OPERATIONS[case["operation"]])(a, b)
     # A separate integer oracle catches accidental signedness or width changes.
     values = []
-    for left, right in zip(a.reshape(-1), b.reshape(-1)):
+    for left, right in zip(a.reshape(-1), [0] * a.size if b is None else b.reshape(-1)):
         left, right = int(left), int(right)
         operation = case["operation"]
         value = {
@@ -99,6 +110,7 @@ def reference(np, case):
             "BitwiseXor": lambda: left ^ right,
             "LeftShift": lambda: left << right,
             "RightShift": lambda: left >> right,
+            "BitwiseInvert": lambda: ~left,
         }[operation]()
         value &= 0xFFFFFFFF
         if case["dtype"] == "int32" and value >= 0x80000000:
@@ -115,6 +127,11 @@ def dispatches(np, case):
         return []
     copy = BOOLEAN_COPY_ENTRY if case["dtype"] == "bool_" else COPY_ENTRY
     result = []
+    if case["entry"] in BITWISE_INVERT_ENTRIES:
+        if case["layout"] == "reverse":
+            result.append((copy, a.size, [(a.size + 1) // 2, 1, 1]))
+        count = a.shape[-1] if case["layout"] == "broadcast" else a.size
+        return result + [(case["entry"], count, [count, 1, 1])]
     for value in (a, b):
         if not value.flags.c_contiguous:
             shape = (1, *value.shape) if value.ndim == 1 else value.shape
@@ -122,24 +139,39 @@ def dispatches(np, case):
     return result + [(case["entry"], a.size, [a.size, 1, 1])]
 
 
+def stored_values(case, expected):
+    if case["entry"] in BITWISE_INVERT_ENTRIES:
+        if case["layout"] == "broadcast":
+            return expected[0].tolist()
+        if case["layout"] == "transpose":
+            return expected.ravel(order="F").tolist()
+    return expected.reshape(-1).tolist()
+
+
 def collect(mx, np, *, observe, dispatch_count=None):
     records = []
     for case in cases():
         a, b, expected = reference(np, case)
-        left, right = mlx_operand(mx, np, a), mlx_operand(mx, np, b)
+        left = mlx_operand(mx, np, a)
+        right = mlx_operand(mx, np, b) if b is not None else None
         start = dispatch_count() if dispatch_count else 0
-        result = getattr(mx, OPERATIONS[case["operation"]])(left, right)
+        result = (
+            mx.bitwise_invert(left)
+            if b is None
+            else getattr(mx, OPERATIONS[case["operation"]])(left, right)
+        )
         actual = np.array(result)
         record = {
             **case,
             "a": a.tolist(),
-            "b": b.tolist(),
+            "b": b.tolist() if b is not None else None,
             "actual": actual.tolist(),
             "expected": expected.tolist(),
             "resultShape": list(actual.shape),
             "resultDtype": str(result.dtype),
             "inputUnchanged": bool(
-                np.array_equal(np.array(left), a) and np.array_equal(np.array(right), b)
+                np.array_equal(np.array(left), a)
+                and (b is None or np.array_equal(np.array(right), b))
             ),
             "dispatchCount": dispatch_count() - start if dispatch_count else 0,
         }
@@ -167,7 +199,7 @@ def validate(records, trace, *, native):
         if (
             any(record.get(key) != value for key, value in case.items())
             or record.get("a") != a.tolist()
-            or record.get("b") != b.tolist()
+            or record.get("b") != (b.tolist() if b is not None else None)
             or record.get("expected") != expected.tolist()
             or record.get("actual") != expected.tolist()
             or record.get("resultShape") != list(expected.shape)
@@ -216,13 +248,17 @@ def validate(records, trace, *, native):
                 event.get(
                     "binaryGuardValues"
                     if entry in BITWISE_ENTRIES
-                    else "copyGuardWords"
+                    else (
+                        "unaryGuardValues"
+                        if entry in BITWISE_INVERT_ENTRIES
+                        else "copyGuardWords"
+                    )
                 )
                 != guard
             ):
                 raise ValueError("Bitwise native output guard differs")
-            if entry in BITWISE_ENTRIES:
-                values = expected.reshape(-1).tolist()
+            if entry in BITWISE_PACKAGE_ENTRIES:
+                values = stored_values(case, expected)
                 if case["dtype"] == "bool_" and event["target"] != "metal":
                     values = [int(value) for value in values]
                 if event.get("bitwiseValues") != values:

@@ -35,6 +35,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "Arange",
                     "Reduce",
                     "BitwiseBinary",
+                    "BitwiseInvert",
                     "Power",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,

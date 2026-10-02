@@ -892,7 +892,7 @@ jobs:
           PYOPENGL_PLATFORM: egl
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX bitwise verification" -- \
+          python tools/run_bounded_command.py --timeout-seconds 1500 --label "MLX bitwise verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_bitwise --mlx-root mlx-upstream \
               --packages .mlx-portable-small-rows/base/packages --bitwise .mlx-portable-small-rows/bitwise-packages \
               --output-dir .mlx-portable-small-rows/bitwise-evidence 2>&1 | tee .mlx-portable-small-rows/bitwise-verification.log

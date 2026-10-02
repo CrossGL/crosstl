@@ -34,6 +34,8 @@ from demos.integrations.mlx.portable_host import (
 from demos.integrations.mlx.portable_host.packages import (
     BINARY_ENTRIES,
     BITWISE_ENTRIES,
+    BITWISE_INVERT_ENTRIES,
+    BITWISE_PACKAGE_ENTRIES,
     BOOLEAN_CAST_ENTRIES,
     BOOLEAN_COPY_ENTRY,
     CAST_ENTRIES,
@@ -174,7 +176,7 @@ class HostRuntime:
                 or operators.get("family") != "bitwise"
                 or operators.get("target") != self.target
                 or not isinstance(operators.get("descriptors"), dict)
-                or set(operators.get("descriptors", {})) != set(BITWISE_ENTRIES)
+                or set(operators.get("descriptors", {})) != set(BITWISE_PACKAGE_ENTRIES)
                 or any(
                     not isinstance(value, dict) or value.get("target") != self.target
                     for value in operators["descriptors"].values()
@@ -282,7 +284,8 @@ class HostRuntime:
         if reduction and launch is None:
             raise ValueError("Native reductions require explicit launch geometry")
         copy = entry in {COPY_ENTRY, BOOLEAN_COPY_ENTRY}
-        bitwise = entry in BITWISE_ENTRIES
+        invert = entry in BITWISE_INVERT_ENTRIES
+        bitwise = entry in BITWISE_PACKAGE_ENTRIES
         binary = entry in ALL_BINARY_ENTRIES
         comparison = entry in COMPARISON_ENTRIES
         binary_operation = binary or comparison
@@ -322,7 +325,7 @@ class HostRuntime:
                 self.bitwise_directory if bitwise else self.directory
             ) / "package"
         logical_not = entry == LOGICAL_NOT_ENTRY
-        unary = entry in UNARY_ENTRIES or logical_not
+        unary = entry in UNARY_ENTRIES or logical_not or invert
         if initialization:
             names = {"out"}
         elif shaped_reduction:
@@ -376,7 +379,13 @@ class HostRuntime:
             ) or buffer.output != int(name == output_name):
                 raise ValueError("Native buffer shape or direction does not match")
             if unary and dtype != (
-                "uint32" if name == "size" else "bool_" if logical_not else "float32"
+                "uint32"
+                if name == "size"
+                else (
+                    BITWISE_INVERT_ENTRIES[entry]
+                    if invert
+                    else "bool_" if logical_not else "float32"
+                )
             ):
                 raise ValueError("Native unary buffer dtype does not match")
             if binary and dtype != (
@@ -463,7 +472,7 @@ class HostRuntime:
             if any(not 0 <= counts[index] < 32 for index in range(threads)):
                 raise ValueError("32-bit shifts require counts in [0, 31]")
         guard = COPY_GUARD
-        guarded = copy or binary_operation or cast or logical_not or reduction
+        guarded = copy or binary_operation or cast or logical_not or reduction or invert
         output_dtype = supplied[output_name].dtype.decode("ascii")
         if output_dtype == "bool_":
             guard = (
@@ -651,6 +660,11 @@ class HostRuntime:
                         **(
                             {"bitwiseValues": output["values"][: buffer.count]}
                             if bitwise
+                            else {}
+                        ),
+                        **(
+                            {"unaryGuardValues": output["values"][buffer.count :]}
+                            if invert
                             else {}
                         ),
                         **(

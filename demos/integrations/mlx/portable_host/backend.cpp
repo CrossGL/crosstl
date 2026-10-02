@@ -94,8 +94,21 @@ void dispatch_unary(
     const char* operation) {
   require_runtime();
   const bool logical = std::string(operation) == "LogicalNot";
-  const auto type = logical ? mlx::core::bool_ : mlx::core::float32;
-  const char* dtype = logical ? "bool_" : "float32";
+  const bool invert = std::string(operation) == "BitwiseInvert";
+  if (invert &&
+      (inputs.size() != 1 ||
+       (inputs[0].dtype() != mlx::core::int32 &&
+        inputs[0].dtype() != mlx::core::uint32) ||
+       out.dtype() != inputs[0].dtype())) {
+    throw std::invalid_argument(
+        "CrossTL BitwiseInvert requires matching int32 or uint32 arrays.");
+  }
+  const auto type = invert ? inputs[0].dtype()
+      : logical           ? mlx::core::bool_
+                          : mlx::core::float32;
+  const char* dtype = invert ? (type == mlx::core::int32 ? "int32" : "uint32")
+      : logical             ? "bool_"
+                            : "float32";
   if (inputs.size() != 1 || inputs[0].dtype() != type || out.dtype() != type) {
     throw std::invalid_argument(
         "CrossTL unary dispatch requires float32 arrays, or bool for LogicalNot.");
@@ -891,6 +904,7 @@ CROSSTL_UNARY_GPU(Tan)
 CROSSTL_UNARY_GPU(Tanh)
 CROSSTL_UNARY_GPU(Round)
 CROSSTL_UNARY_GPU(LogicalNot)
+CROSSTL_UNARY_GPU(BitwiseInvert)
 
 #undef CROSSTL_UNARY_GPU
 

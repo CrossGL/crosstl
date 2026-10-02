@@ -43,7 +43,20 @@ uint index [[thread_position_in_grid]]) {{ if (index < size) c[index] = a[index]
             f'template [[host_name("{entry}")]] [[kernel]] decltype({operation}<{metal_type}>) {operation}<{metal_type}>;\n'
         )
     source.write_text("".join(definitions))
+    unary = root / packages.UNARY_SOURCE
+    unary.write_text(
+        """template<typename T> kernel void invert(
+device const T* in [[buffer(0)]], device T* out [[buffer(1)]],
+constant uint& size [[buffer(2)]], uint index [[thread_position_in_grid]]) {
+if (index < size) out[index] = ~in[index]; }
+"""
+        + "".join(
+            f'template [[host_name("{entry}")]] [[kernel]] decltype(invert<{"int" if dtype == "int32" else "uint"}>) invert<{"int" if dtype == "int32" else "uint"}>;\n'
+            for entry, dtype in packages.BITWISE_INVERT_ENTRIES.items()
+        )
+    )
     original = source.read_bytes()
+    original_unary = unary.read_bytes()
     output = root / "bitwise"
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(
@@ -53,10 +66,11 @@ uint index [[thread_position_in_grid]]) {{ if (index < size) c[index] = a[index]
         )
         index = packages.build_packages(root, output, request.param, family="bitwise")
     assert source.read_bytes() == original
-    assert set(index["descriptors"]) == set(packages.BITWISE_ENTRIES)
+    assert unary.read_bytes() == original_unary
+    assert set(index["descriptors"]) == set(packages.BITWISE_PACKAGE_ENTRIES)
     assert index["family"] == "bitwise"
     assert len(packages.ENTRIES) == 93
-    assert not set(packages.BITWISE_ENTRIES).intersection(packages.ENTRIES)
+    assert not set(packages.BITWISE_PACKAGE_ENTRIES).intersection(packages.ENTRIES)
     return output, index
 
 
@@ -120,7 +134,7 @@ def test_optional_index_contract(host, translated, tmp_path, fault):
             host.directory, tmp_path / "trace2", bitwise=directory
         )
         assert set(loaded.descriptors) == set(packages.ENTRIES) | set(
-            packages.BITWISE_ENTRIES
+            packages.BITWISE_PACKAGE_ENTRIES
         )
     legacy = runtime.HostRuntime(host.directory, tmp_path / "legacy")
     assert legacy.bitwise_directory is None
@@ -249,6 +263,108 @@ def test_bitwise_callback_contract(host, monkeypatch, entry, fault):
         assert record["binaryGuardValues"] == guard
 
 
+@pytest.mark.parametrize("entry", packages.BITWISE_INVERT_ENTRIES)
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "dtype",
+        "direction",
+        "count",
+        "size",
+        "guard",
+        "readback-type",
+        "readback-range",
+    ],
+)
+@pytest.mark.parametrize("donated", [False, True])
+def test_invert_callback_preserves_integer_storage(
+    host, monkeypatch, entry, fault, donated
+):
+    dtype = packages.BITWISE_INVERT_ENTRIES[entry]
+    ctype = runtime.TYPES[dtype]
+    values = [-1, 0, -(2**31)] if dtype == "int32" else [0xFFFFFFFF, 0, 0x80000000]
+    source = (ctype * 3)(*values)
+    destination = source if donated else (ctype * 3)(7, 7, 7)
+    before = list(destination)
+    size = ctypes.c_uint32(3)
+    buffers = (runtime.Buffer * 3)(
+        runtime.Buffer(b"in", dtype.encode(), ctypes.addressof(source), 3, 0),
+        runtime.Buffer(b"out", dtype.encode(), ctypes.addressof(destination), 3, 1),
+        runtime.Buffer(b"size", b"uint32", ctypes.addressof(size), 1, 0),
+    )
+    if fault == "dtype":
+        buffers[0].dtype = b"float32"
+    elif fault == "direction":
+        buffers[1].output = 0
+    elif fault == "count":
+        buffers[0].count = 2
+    elif fault == "size":
+        size.value = 2
+    expected = [0, -1, 2**31 - 1] if dtype == "int32" else [0, 0xFFFFFFFF, 0x7FFFFFFF]
+    output = expected + runtime.COPY_GUARD
+    if fault == "guard":
+        output[-1] = 0
+    elif fault == "readback-type":
+        output[0] = 0.0
+    elif fault == "readback-range":
+        output[0] = 2**32
+    calls = []
+
+    def execute(request):
+        calls.append(request)
+        assert request.artifact_path.is_relative_to(host.bitwise_directory)
+        binding = next(
+            item["name"]
+            for item in host.descriptors[entry]["bindings"]
+            if item["access"] == "read_write"
+        )
+        initial = next(item for item in request.fixture.inputs if item.name == binding)
+        assert list(initial.values) == [runtime.COPY_GUARD[0]] * 35
+        input_value = next(
+            item
+            for item in request.fixture.inputs
+            if item.dtype == dtype and len(item.values) == 3
+        )
+        assert list(input_value.values) == values
+        return SimpleNamespace(
+            status="ok",
+            outputs={binding: {"dtype": dtype, "shape": [35], "values": output}},
+            details={},
+        )
+
+    monkeypatch.setattr(host.executor, "run", execute)
+    if fault:
+        with pytest.raises((ValueError, RuntimeError)):
+            host.dispatch(entry, buffers, 3, 3)
+        assert list(destination) == before
+        assert len(calls) == int(fault in {"guard", "readback-type", "readback-range"})
+        assert not host.trace.exists()
+    else:
+        host.dispatch(entry, buffers, 3, 3)
+        assert list(destination) == expected
+        trace = json.loads(host.trace.read_text())
+        assert trace["bitwiseValues"] == expected
+        assert trace["unaryGuardValues"] == runtime.COPY_GUARD
+
+
+@pytest.mark.parametrize(
+    "layout,count", [("transpose", 15), ("broadcast", 5), ("reverse", 17)]
+)
+def test_invert_dispatch_preserves_stored_unary_layout(layout, count):
+    case = {
+        "entry": "v_BitwiseInvertint32int32",
+        "dtype": "int32",
+        "operation": "BitwiseInvert",
+        "layout": layout,
+    }
+    calls = workloads.dispatches(np, case)
+    assert calls[-1] == (case["entry"], count, [count, 1, 1])
+    assert len(calls) == (2 if layout == "reverse" else 1)
+    _, _, expected = workloads.reference(np, case)
+    assert len(workloads.stored_values(case, expected)) == count
+
+
 def expected_evidence(target="metal", native=True):
     records, trace = [], []
     for case in workloads.cases():
@@ -258,7 +374,7 @@ def expected_evidence(target="metal", native=True):
             {
                 **case,
                 "a": a.tolist(),
-                "b": b.tolist(),
+                "b": b.tolist() if b is not None else None,
                 "actual": expected.tolist(),
                 "expected": expected.tolist(),
                 "resultShape": list(expected.shape),
@@ -289,14 +405,18 @@ def expected_evidence(target="metal", native=True):
                 (
                     "binaryGuardValues"
                     if entry in packages.BITWISE_ENTRIES
-                    else "copyGuardWords"
+                    else (
+                        "unaryGuardValues"
+                        if entry in packages.BITWISE_INVERT_ENTRIES
+                        else "copyGuardWords"
+                    )
                 )
             ] = guard
-            if entry in packages.BITWISE_ENTRIES:
+            if entry in packages.BITWISE_PACKAGE_ENTRIES:
                 event["bitwiseValues"] = (
-                    [int(v) for v in expected.reshape(-1)]
+                    [int(v) for v in workloads.stored_values(case, expected)]
                     if case["dtype"] == "bool_" and target != "metal"
-                    else expected.reshape(-1).tolist()
+                    else workloads.stored_values(case, expected)
                 )
             trace.append(event)
     return records, trace
@@ -351,12 +471,39 @@ def test_bitwise_evidence_is_exact(target, fault):
         workloads.validate(records, trace, native=True)
         cpu, empty_trace = expected_evidence(native=False)
         workloads.validate(cpu, empty_trace, native=False)
-        assert len(records) == 104
+        assert len(records) == 120
         assert {
             record["entry"]
             for record in trace
-            if record["entry"] in packages.BITWISE_ENTRIES
-        } == set(packages.BITWISE_ENTRIES)
+            if record["entry"] in packages.BITWISE_PACKAGE_ENTRIES
+        } == set(packages.BITWISE_PACKAGE_ENTRIES)
+
+
+@pytest.mark.parametrize("target", ["metal", "opengl", "directx"])
+@pytest.mark.parametrize("fault", ["values", "guard", "layout", "geometry", "input"])
+def test_invert_evidence_rejects_corruption(target, fault):
+    records, trace = expected_evidence(target)
+    entry = "v_BitwiseInvertint32int32"
+    record = next(
+        item
+        for item in records
+        if item["entry"] == entry and item["layout"] == "transpose"
+    )
+    event = next(
+        item for item in trace if item["entry"] == entry and item["threads"] == 15
+    )
+    if fault == "values":
+        event["bitwiseValues"][0] += 1
+    elif fault == "guard":
+        event["unaryGuardValues"] = []
+    elif fault == "layout":
+        event["bitwiseValues"] = np.asarray(record["actual"]).reshape(-1).tolist()
+    elif fault == "geometry":
+        event["workgroupCount"] = [5, 3, 1]
+    elif fault == "input":
+        record["inputUnchanged"] = False
+    with pytest.raises(ValueError, match="Bitwise"):
+        workloads.validate(records, trace, native=True)
 
 
 def test_layout_operand_retains_reinterpreted_signed_type():
@@ -393,7 +540,7 @@ def test_failed_worker_keeps_command_and_no_success(tmp_path, monkeypatch):
             {
                 "target": "metal",
                 "family": "bitwise",
-                "descriptors": dict.fromkeys(packages.BITWISE_ENTRIES, {}),
+                "descriptors": dict.fromkeys(packages.BITWISE_PACKAGE_ENTRIES, {}),
             }
         )
     )

@@ -114,6 +114,10 @@ BITWISE_ENTRIES = {
     for dtype in ("int32", "uint32", "bool_")
     if dtype != "bool_" or operation not in {"LeftShift", "RightShift"}
 }
+BITWISE_INVERT_ENTRIES = {
+    f"v_BitwiseInvert{dtype}{dtype}": dtype for dtype in ("int32", "uint32")
+}
+BITWISE_PACKAGE_ENTRIES = {**BITWISE_ENTRIES, **BITWISE_INVERT_ENTRIES}
 ENTRIES = (
     ARANGE_ENTRIES
     + UNARY_ENTRIES
@@ -132,7 +136,7 @@ def build_packages(root, output, target, *, family="base"):
         raise ValueError(f"Unsupported target: {target}")
     if family not in {"base", "bitwise"}:
         raise ValueError(f"Unsupported package family: {family}")
-    entries = ENTRIES if family == "base" else tuple(BITWISE_ENTRIES)
+    entries = ENTRIES if family == "base" else tuple(BITWISE_PACKAGE_ENTRIES)
     sources = (
         {
             SOURCE: ARANGE_ENTRIES,
@@ -146,7 +150,10 @@ def build_packages(root, output, target, *, family="base"):
             BINARY_SOURCE: (*BINARY_ENTRIES, *COMPARISON_ENTRIES),
         }
         if family == "base"
-        else {BINARY_SOURCE: tuple(BITWISE_ENTRIES)}
+        else {
+            BINARY_SOURCE: tuple(BITWISE_ENTRIES),
+            UNARY_SOURCE: tuple(BITWISE_INVERT_ENTRIES),
+        }
     )
     patterns = {
         SOURCE: "arange*",

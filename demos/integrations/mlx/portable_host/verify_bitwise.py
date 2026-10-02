@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from demos.integrations.mlx.portable_host import bitwise_workloads
-from demos.integrations.mlx.portable_host.packages import BITWISE_ENTRIES
+from demos.integrations.mlx.portable_host.packages import BITWISE_PACKAGE_ENTRIES
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
 from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
@@ -19,6 +19,10 @@ NEGATIVE_CHECKS = {
     "over-limit": "at most 65535",
     "negative-shift": "counts in [0, 31]",
     "large-shift": "counts in [0, 31]",
+    "invert-missing": "No translated package for v_BitwiseInvertint32int32",
+    "invert-int64": "requires matching int32 or uint32",
+    "invert-uint8": "requires matching int32 or uint32",
+    "invert-over-limit": "at most 65535",
 }
 
 
@@ -72,13 +76,14 @@ def worker(args):
         host = HostRuntime(
             args.packages, output / "dispatch.jsonl", bitwise=args.bitwise
         )
-        if args.worker == "missing":
-            for entry in BITWISE_ENTRIES:
+        if args.worker in {"missing", "invert-missing"}:
+            for entry in BITWISE_PACKAGE_ENTRIES:
                 host.descriptors.pop(entry)
         host.install()
     if args.worker in NEGATIVE_CHECKS:
-        dtype = args.worker if args.worker in {"uint8", "int64"} else "int32"
-        size = 65536 if args.worker == "over-limit" else 3
+        kind = args.worker.removeprefix("invert-")
+        dtype = kind if kind in {"uint8", "int64"} else "int32"
+        size = 65536 if kind == "over-limit" else 3
         a = mx.array(np.ones(size, dtype=dtype))
         b = mx.array(
             np.full(
@@ -93,7 +98,11 @@ def worker(args):
         )
         operation = mx.left_shift if args.worker.endswith("shift") else mx.bitwise_and
         try:
-            mx.eval(operation(a, b))
+            mx.eval(
+                mx.bitwise_invert(a)
+                if args.worker.startswith("invert-")
+                else operation(a, b)
+            )
         except (ValueError, RuntimeError) as error:
             record = {
                 "check": args.worker,
@@ -131,7 +140,7 @@ def verify(args):
     if (
         index.get("family") != "bitwise"
         or index.get("target") != base["target"]
-        or set(index.get("descriptors", {})) != set(BITWISE_ENTRIES)
+        or set(index.get("descriptors", {})) != set(BITWISE_PACKAGE_ENTRIES)
     ):
         raise ValueError("Bitwise proof requires every entry for the base target")
     results, rejections = {}, {}
@@ -202,7 +211,7 @@ def verify(args):
         "adaptation": before,
         "casesPerPath": len(results["native"]),
         "dispatchCount": len(trace),
-        "entries": sorted(BITWISE_ENTRIES),
+        "entries": sorted(BITWISE_PACKAGE_ENTRIES),
         "negativeChecks": rejections,
         "fullTranslatedBackend": False,
         "fullUpstreamSuite": False,
