@@ -7,6 +7,8 @@ on:
       - ".github/workflows/mlx-portable-host.yml"
       - "crosstl/**"
       - "demos/integrations/mlx/portable_host/**"
+      - "demos/integrations/mlx/random_audit.py"
+      - "tests/test_mlx_random_audit.py"
       - "tests/test_mlx_portable_host.py"
       - "tests/test_mlx_portable_reductions.py"
       - "tests/test_mlx_portable_rows.py"
@@ -79,6 +81,8 @@ on:
       - ".github/workflows/mlx-portable-host.yml"
       - "crosstl/**"
       - "demos/integrations/mlx/portable_host/**"
+      - "demos/integrations/mlx/random_audit.py"
+      - "tests/test_mlx_random_audit.py"
       - "tests/test_mlx_portable_host.py"
       - "tests/test_mlx_portable_reductions.py"
       - "tests/test_mlx_portable_rows.py"
@@ -244,7 +248,7 @@ jobs:
           Expand-Archive $warpArchive -DestinationPath $warpRoot
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Validate portable host contracts
-        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py tests/test_mlx_portable_rows.py tests/test_mlx_portable_mixed_reductions.py tests/test_mlx_portable_columns.py tests/test_mlx_portable_small_rows.py tests/test_mlx_portable_empty_reductions.py tests/test_mlx_portable_bitwise.py
+        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py tests/test_mlx_portable_rows.py tests/test_mlx_portable_mixed_reductions.py tests/test_mlx_portable_columns.py tests/test_mlx_portable_small_rows.py tests/test_mlx_portable_empty_reductions.py tests/test_mlx_portable_bitwise.py tests/test_mlx_random_audit.py
       - name: Validate software subgroup votes
         env:
           CROSTL_REQUIRE_SOFTWARE_SUBGROUP_VOTES: "1"

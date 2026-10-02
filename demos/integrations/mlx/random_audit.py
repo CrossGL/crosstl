@@ -1,0 +1,425 @@
+"""Audit pinned random kernels through translation, native compilation and execution."""
+
+import argparse
+import hashlib
+import json
+import shutil
+import struct
+import subprocess
+import tempfile
+from pathlib import Path
+
+from crosstl.project import (
+    ProjectConfig,
+    build_native_loader_abi_descriptor,
+    build_native_loader_dispatch_request,
+    build_runtime_artifact_manifest,
+    build_runtime_loader_manifest,
+    build_runtime_package,
+    translate_project,
+)
+from crosstl.project.native_runtime_drivers import (
+    DirectXComputeRuntime,
+    OpenGLComputeRuntime,
+)
+from crosstl.project.runtime_verification import (
+    DirectXRuntimeParityAdapter,
+    MetalRuntimeParityAdapter,
+    OpenGLRuntimeParityAdapter,
+    RuntimeParityExecutor,
+    RuntimeTestAdapterSpec,
+)
+from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
+
+SOURCE = "mlx/backend/metal/kernels/random.metal"
+SOURCE_SHA256 = "f1a19b3f11b7b10203824890f13debc6d627959b4e7f17c219e2e9da553c1bd7"
+ENTRIES = ("rbitsc", "rbits")
+KEYS = ((0, 0), (0xFFFFFFFF, 0x80000000), (123, 456))
+WORD_COUNTS = (1, 2, 3, 8, 17)
+GUARD_COUNT = 17
+
+
+def write_json(path, value):
+    path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
+
+
+def threefry(key, count):
+    """Reference Threefry2x32 using explicitly modular Python integer arithmetic."""
+    if (
+        len(key) != 2
+        or len(count) != 2
+        or any(
+            type(value) is not int or not 0 <= value < 2**32 for value in (*key, *count)
+        )
+    ):
+        raise ValueError("Threefry requires two uint32 key and counter words")
+    mask = 2**32 - 1
+    schedule = (*key, key[0] ^ key[1] ^ 0x1BD11BDA)
+    x, y = ((count[i] + schedule[i]) & mask for i in range(2))
+    for step in range(5):
+        for rotation in ((13, 15, 26, 6), (17, 29, 16, 24))[step % 2]:
+            x = (x + y) & mask
+            y = (((y << rotation) | (y >> (32 - rotation))) & mask) ^ x
+        x = (x + schedule[(step + 1) % 3]) & mask
+        y = (y + schedule[(step + 2) % 3] + step + 1) & mask
+    return x, y
+
+
+def workload(entry, key_count, word_count):
+    if entry not in ENTRIES or key_count not in (1, 3) or word_count not in WORD_COUNTS:
+        raise ValueError("Unknown bounded random workload")
+    keys = KEYS[:key_count]
+    width = (word_count + 1) // 2
+    expected = []
+    for key in keys:
+        words = [None] * word_count
+        for y in range(width):
+            drop = bool(word_count % 2 and y == width - 1)
+            pair = threefry(key, (y, 0 if drop else y + width))
+            words[y] = pair[0]
+            if not drop:
+                words[y + width] = pair[1]
+        expected.extend(struct.pack("<" + "I" * word_count, *words))
+    key_values = (
+        [value for key in keys for value in key]
+        if entry == "rbitsc"
+        else [key[i] for i in range(2) for key in keys]
+    )
+    # These bounds justify every index assertion used during GLSL translation.
+    if len(expected) + GUARD_COUNT > 65535 or len(key_values) > 65535:
+        raise ValueError("Random workload exceeds its asserted index bounds")
+    return {
+        "id": f"{entry}-{key_count}-{word_count}",
+        "entry": entry,
+        "keyCount": key_count,
+        "wordCount": word_count,
+        "keys": key_values,
+        "keyShape": [key_count, 2],
+        "keyStrides": [1, key_count],
+        "odd": word_count % 2,
+        "bytesPerKey": word_count * 4,
+        "expected": [value if value < 128 else value - 256 for value in expected],
+        "execution": {
+            "workgroupCount": [key_count, width, 1],
+            "workgroupSize": [1, 1, 1],
+        },
+    }
+
+
+def workloads():
+    return [
+        workload(entry, keys, words)
+        for entry in ENTRIES
+        for keys in (1, 3)
+        for words in WORD_COUNTS
+    ]
+
+
+def dispatch_values(descriptor, case):
+    values = {
+        "keys": ("uint32", case["keys"]),
+        "odd": ("bool" if descriptor["target"] == "metal" else "uint32", [case["odd"]]),
+        "bytes_per_key": ("uint64", [case["bytesPerKey"]]),
+        "ndim": ("int32", [2]),
+        "key_shape": ("int32", case["keyShape"]),
+        "key_strides": ("int64", case["keyStrides"]),
+    }
+    inputs, outputs = {}, {}
+    seen = set()
+    for binding in descriptor["bindings"]:
+        if "executionInput" in binding.get("provenance", {}):
+            continue
+        layout = binding.get("scalarLayout")
+        if not layout:
+            raise ValueError(f"Missing scalar layout for {binding['name']}")
+        member = layout.get("memberName", binding["name"])
+        if descriptor["target"] == "directx":
+            member = member.removeprefix(case["entry"] + "_")
+        member = {"out": "out_"}.get(member, member)
+        if member in seen:
+            raise ValueError("Duplicate random binding member")
+        seen.add(member)
+        dtype = layout["elementType"]
+        if member == "out_":
+            expected_dtype = "int8" if descriptor["target"] == "metal" else "int32"
+            if dtype != expected_dtype:
+                raise ValueError("Random output has an unexpected physical dtype")
+            data = [91] * (len(case["expected"]) + GUARD_COUNT)
+        else:
+            if member not in values:
+                raise ValueError("Unexpected random binding member")
+            expected_dtype, data = values[member]
+            if dtype != expected_dtype:
+                raise ValueError("Random input has an unexpected physical dtype")
+            if dtype == "bool":
+                data = [bool(value) for value in data]
+        value = {"dtype": dtype, "shape": [len(data)], "values": data}
+        inputs[binding["name"]] = value
+        if member == "out_":
+            outputs[binding["name"]] = value
+    required = {"keys", "out_", "odd", "bytes_per_key"}
+    if case["entry"] == "rbits":
+        required |= {"ndim", "key_shape", "key_strides"}
+    if seen != required:
+        raise ValueError("Random bindings do not cover the source contract")
+    return inputs, outputs
+
+
+def native_identity(details, descriptor, case):
+    target = descriptor["target"]
+    artifact = descriptor["artifact"]
+    expected = {key: artifact[key] for key in ("hash", "sizeBytes")}
+    identity = details.get("artifactIdentityVerification", {})
+    native = details.get("nativeRuntimeDispatch", {})
+    adapter = details.get("runtimeParityAdapter", {})
+    steps = details.get("adapterSteps", [])
+    required = {"dispatch-translated-artifact", "collect-runtime-outputs"} | {
+        "metal": {"compile-metal-for-native-runtime", "link-metal-for-native-runtime"},
+        "opengl": {"validate-glsl-for-opengl-runtime"},
+        "directx": {"compile-hlsl-for-directx-runtime"},
+    }[target]
+    return (
+        identity.get("verificationStatus") == "verified"
+        and identity.get("target") == target
+        and identity.get("expectedIdentity") == expected
+        and identity.get("observedIdentity") == expected
+        and native.get("artifact", {}).get("packagePath") == artifact["packagePath"]
+        and native.get("artifact", {}).get("target") == target
+        and native.get("dispatch", {}).get("entryPoint")
+        == descriptor["entryPoint"]["name"]
+        and all(
+            native.get("dispatch", {}).get(key) == value
+            for key, value in case["execution"].items()
+        )
+        and adapter.get("target") == target
+        and adapter.get("runtimeAdapter") == target + "-native-runtime"
+        and all(step.get("status") == "passed" for step in steps)
+        and required <= {step.get("action") for step in steps}
+    )
+
+
+def compare_readback(result, output_name, case, descriptor):
+    target = descriptor["target"]
+    dtype = "int8" if target == "metal" else "int32"
+    expected = case["expected"] + [91] * GUARD_COUNT
+    value = result.outputs.get(output_name, {})
+    actual = value.get("values", [])
+    return (
+        result.status == "ok"
+        and set(result.outputs) == {output_name}
+        and value.get("dtype") == dtype
+        and value.get("shape") == [len(expected)]
+        and isinstance(actual, list)
+        and len(actual) == len(expected)
+        and all(type(item) is int for item in actual)
+        and actual == expected
+        and native_identity(result.details, descriptor, case)
+    )
+
+
+def verify_source(root):
+    require_revision(root)
+    if hashlib.sha256((root / SOURCE).read_bytes()).hexdigest() != SOURCE_SHA256:
+        raise ValueError("Pinned random source hash differs")
+    changed = subprocess.check_output(
+        [
+            "git",
+            "-C",
+            str(root),
+            "status",
+            "--porcelain",
+            "--",
+            "mlx/backend/metal/kernels",
+        ],
+        text=True,
+        timeout=30,
+    )
+    if changed.strip():
+        raise ValueError("Pinned kernel tree has local changes")
+
+
+def build_packages(root, target, output):
+    verify_source(root)
+    with tempfile.TemporaryDirectory(prefix=".random-audit-", dir=root) as directory:
+        work = Path(directory)
+        config = ProjectConfig(
+            root=root,
+            source_roots=("mlx/backend/metal/kernels",),
+            include_patterns=(SOURCE,),
+            include_dirs=(".",),
+            targets=(target,),
+            output_dir=f"{work.name}/out",
+            entry_points={SOURCE: ENTRIES},
+            workgroup_size=(1, 1, 1),
+            index_range_assertions=(
+                [
+                    {
+                        "source": SOURCE,
+                        "function": function,
+                        "expression": expression,
+                        "minimum": 0,
+                        "maximum": 65535,
+                    }
+                    for function, expression in (
+                        ("rbitsc", "idx + i"),
+                        ("rbits", "idx + i"),
+                        ("rbits", "k1_elem"),
+                        ("rbits", "k2_elem"),
+                    )
+                ]
+                if target == "opengl"
+                else ()
+            ),
+        )
+        report = translate_project(config, format_output=False)
+        report.write_json(work / "report.json")
+        shutil.copytree(work, output / "translation")
+        payload = report.to_json()
+        if payload["summary"]["failedCount"] or len(payload["artifacts"]) != 2:
+            raise ValueError("Random translation did not produce both entries")
+        entries = {
+            item["path"]: item["entryPoint"]["source"] for item in payload["artifacts"]
+        }
+        manifest = build_runtime_artifact_manifest(work / "report.json")
+        if not manifest["success"]:
+            raise ValueError("Random runtime manifest is incomplete")
+        write_json(work / "artifacts.json", manifest)
+        package = output / "package"
+        result = build_runtime_package(work / "artifacts.json", package)
+        if not result["success"]:
+            raise ValueError("Random runtime package is incomplete")
+        loader = build_runtime_loader_manifest(package / "runtime-package.json")
+        if not loader["success"]:
+            raise ValueError("Random loader manifest is incomplete")
+        descriptors = {}
+        for unit in loader["loadUnits"]:
+            descriptor = build_native_loader_abi_descriptor(
+                loader, load_unit_id=unit["id"]
+            )
+            descriptors[entries[descriptor["source"]["artifactPath"]]] = descriptor
+        if set(descriptors) != set(ENTRIES):
+            raise ValueError("Random entry coverage differs")
+        write_json(
+            output / "index.json",
+            {"commit": COMMIT, "target": target, "descriptors": descriptors},
+        )
+        return descriptors
+
+
+def executor(target):
+    adapter = {
+        "metal": lambda: MetalRuntimeParityAdapter(),
+        "opengl": lambda: OpenGLRuntimeParityAdapter(
+            runtime=OpenGLComputeRuntime(context_backends=("egl",))
+        ),
+        "directx": lambda: DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime()),
+    }[target]()
+    return RuntimeParityExecutor(
+        RuntimeTestAdapterSpec(
+            adapter_id="mlx-random-" + target,
+            target=target,
+            executor=target,
+            adapter_kind=target + "-native-runtime",
+        ),
+        runtime_adapter=adapter,
+    )
+
+
+def audit(root, target, output):
+    output.mkdir(parents=True)
+    evidence = {
+        "commit": COMMIT,
+        "target": target,
+        "passed": False,
+        "cases": [],
+        "fullHostIntegration": False,
+        "fullUpstreamSuite": False,
+    }
+    native = None
+    try:
+        descriptors = build_packages(root.resolve(), target, output.resolve())
+        native = executor(target)
+        for case in workloads():
+            destination = output / case["id"]
+            destination.mkdir()
+            record = {"workload": case, "passed": False}
+            try:
+                inputs, outputs = dispatch_values(descriptors[case["entry"]], case)
+                write_json(
+                    destination / "inputs.json", {"inputs": inputs, "outputs": outputs}
+                )
+                request = build_native_loader_dispatch_request(
+                    descriptors[case["entry"]],
+                    output / "package",
+                    inputs,
+                    outputs,
+                    case["execution"],
+                    expected_target=target,
+                )
+                result = native.run(request)
+                write_json(
+                    destination / "result.json",
+                    {
+                        "status": result.status,
+                        "outputs": result.outputs,
+                        "details": result.details,
+                    },
+                )
+                (output_name,) = outputs
+                record["passed"] = compare_readback(
+                    result, output_name, case, descriptors[case["entry"]]
+                )
+                if not record["passed"]:
+                    record["error"] = (
+                        "Native random values, layout, guards or execution identity differ"
+                    )
+            except (ValueError, RuntimeError) as error:
+                record["error"] = str(error)
+                record["errorType"] = type(error).__name__
+                record["details"] = getattr(error, "details", {})
+            evidence["cases"].append(record)
+            write_json(output / "evidence.json", evidence)
+        evidence["passed"] = len(evidence["cases"]) == len(workloads()) and all(
+            record["passed"] for record in evidence["cases"]
+        )
+        verify_source(root)
+    except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
+        evidence["passed"] = False
+        evidence["error"] = str(error)
+        evidence["errorType"] = type(error).__name__
+    finally:
+        if native is not None:
+            close = getattr(native.runtime_adapter.runtime, "close", None)
+            if close:
+                try:
+                    close()
+                except (RuntimeError, OSError) as error:
+                    evidence["passed"] = False
+                    evidence["cleanupError"] = str(error)
+        write_json(output / "evidence.json", evidence)
+    return evidence
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mlx-root", type=Path, required=True)
+    parser.add_argument(
+        "--target", choices=("metal", "opengl", "directx"), required=True
+    )
+    parser.add_argument("--output-dir", type=Path, required=True)
+    args = parser.parse_args(argv)
+    result = audit(args.mlx_root, args.target, args.output_dir)
+    print(
+        json.dumps(
+            {
+                "passed": result["passed"],
+                "cases": len(result["cases"]),
+                "evidence": str(args.output_dir / "evidence.json"),
+            }
+        )
+    )
+    return 0 if result["passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

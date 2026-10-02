@@ -338,6 +338,51 @@ barrier participation. The host continues to reject this plan until the source
 semantics are established and the target lowering or checked launch contract
 preserves them. The existing looped and two-pass gates do not cover this kernel.
 
+## Random Generation Readiness
+
+`RandomBits` is not integrated into the host adapter. Successful compilation of
+the two DirectX random entries does not establish numerical parity. The
+`random_audit` command translates unchanged `random.metal`, creates public runtime
+packages and compares native results against an independent integer Threefry
+reference. It retains translation reports, descriptors, input values, native
+readbacks, compiler/dispatch identity and per-case failures. Incorrect output or
+an unsupported runtime contract produces a nonzero exit status.
+
+Run against a clean checkout of the pinned revision, using the matching native
+platform and a new output directory:
+
+```sh
+python -m demos.integrations.mlx.random_audit --mlx-root mlx-upstream --target opengl --output-dir random-opengl-audit
+```
+
+Use `directx` on Windows or `metal` on macOS. The audit covers both contiguous
+and strided key entries, one or three keys, odd/even word counts and 17 trailing
+guard values, for 20 cases per target. GLSL index assertions are backed by these
+bounded key spans and output extents. Partial-byte outputs are not covered;
+their source allocation and tail-write contract still needs separate validation.
+
+At CrossTL `046b8d15`, the unchanged original Metal kernels match all 20 reference
+cases. Generated OpenGL passes glslang and SPIR-V validation but returns zeros
+in all 20 native cases, with intact guards. Generated Metal has independent
+compilation and byte-layout blockers. DirectX compiles both entries, but its
+random numerical execution has not been established. The current blockers are:
+
+| Contract | Issue |
+| --- | --- |
+| Reflected byte buffers and native byte transport | [#2022](https://github.com/CrossGL/crosstl/issues/2022) |
+| Signed/unsigned byte conversion semantics | [#2023](https://github.com/CrossGL/crosstl/issues/2023) |
+| Shared union storage in OpenGL | [#2024](https://github.com/CrossGL/crosstl/issues/2024) |
+| Partial vector initialization in Metal | [#2025](https://github.com/CrossGL/crosstl/issues/2025) |
+| Fixed-array range iteration in Metal | [#2026](https://github.com/CrossGL/crosstl/issues/2026) |
+| Aggregate type lookup under name shadowing | [#2027](https://github.com/CrossGL/crosstl/issues/2027) |
+| Narrow vector layout in Metal aggregates | [#2028](https://github.com/CrossGL/crosstl/issues/2028) |
+
+CI checks the audit's reference, binding and evidence-validation contracts on all
+three operating systems. The failing native random audit is not a passing host
+gate and does not count toward upstream-suite coverage. After the blockers are
+resolved, require this native audit in CI before enabling `RandomBits` dispatch.
+No kernel edits, generated-source repairs or readback corrections are applied.
+
 ## Run
 
 Use Python 3.12, a C++20 toolchain, CMake, Ninja and the relevant runtime.

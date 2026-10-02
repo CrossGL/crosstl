@@ -443,6 +443,10 @@ The current harness verifies:
   metadata remains tracked by
   [#1542](https://github.com/CrossGL/crosstl/issues/1542). Host dispatch contract
   import was completed under [#1793](https://github.com/CrossGL/crosstl/issues/1793).
+  These are compilation claims only. The current-pin
+  [random readiness audit](portable_host/README.md#random-generation-readiness)
+  records failed OpenGL numerical execution and separate Metal round-trip
+  blockers; `RandomBits` host integration is not enabled.
   The three pending aggregate sources cover 76 compute entries. Those historical
   aggregate runs do not consume the later entry-scoped bounded contracts and
   remain asserted as failed artifacts; no placeholder workgroup size is
