@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+import operator
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +22,7 @@ from crosstl.project import (
     build_runtime_package,
     translate_project,
 )
+from crosstl.project.runtime_verification import RuntimeExecutionState
 from crosstl.translator import parse
 from crosstl.translator.codegen.directx_codegen import (
     DirectXContextualConversionError,
@@ -28,7 +31,6 @@ from crosstl.translator.codegen.directx_codegen import (
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_metal_builtin_ownership import _compile
-from tests.test_translator.test_metal_native_runtime import _native_request
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 from tests.test_translator.test_software_subgroup_product import _package
 
@@ -207,7 +209,11 @@ def test_compound_assignment_widens_before_narrowing_and_evaluates_lvalue_once(
     assert generated.count("index++") == 1
     assert "inout uint target, int64_t value" in generated
     assert f"target = uint(int64_t(target) {operator[:-1]} value);" in generated
-    assert "__crossgl_integer_compound(values[index++], b)" in generated
+    assert "uint __crossgl_integer_index;" in generated
+    assert (
+        "(__crossgl_integer_index = index++, __crossgl_integer_compound(values[__crossgl_integer_index], b))"
+        in generated
+    )
 
 
 def test_compound_helper_names_do_not_shadow_source_identifiers_and_reset():
@@ -228,6 +234,33 @@ def test_compound_helper_names_do_not_shadow_source_identifiers_and_reset():
     )
 
 
+def test_compound_indices_are_scoped_collision_safe_and_expression_local():
+    source = """shader Test {
+        struct Box { uint values[2][2]; };
+        uint combine(bool enabled, int64_t divisor) {
+            Box box;
+            uint row = 0u, column = 0u;
+            uint __crossgl_integer_index = 19u;
+            return enabled ? (box.values[row++][column++] /= divisor) : __crossgl_integer_index;
+        }
+        void other(int64_t divisor) {
+            uint values[2];
+            int64_t index = 0;
+            for (uint step = 0u; step < 1u; values[index++] %= divisor) { ++step; }
+        }
+    }"""
+    codegen = HLSLCodeGen()
+    generated = codegen.generate(parse(source))
+    assert generated.count("row++") == generated.count("column++") == 1
+    assert "uint __crossgl_integer_index_;" in generated
+    assert "uint __crossgl_integer_index__;" in generated
+    assert "enabled ? (__crossgl_integer_index_ = row++" in generated
+    assert "int64_t __crossgl_integer_index_;" in generated
+    assert "for (" in generated and "__crossgl_integer_index_ = index++" in generated
+    assert generated == codegen.generate(parse(source))
+    assert "__crossgl_integer_index" not in codegen.generate(parse("shader Empty {}"))
+
+
 def test_compound_copy_in_rejects_potential_rhs_alias_modification():
     source = """shader Test {
         uint value;
@@ -236,6 +269,62 @@ def test_compound_copy_in_rejects_potential_rhs_alias_modification():
     }"""
     with pytest.raises(DirectXContextualConversionError, match="right operand"):
         HLSLCodeGen().generate(parse(source))
+
+
+def test_optimized_dxc_preserves_indexed_copyback_values(tmp_path):
+    from crosstl import translate
+
+    if not shutil.which("dxc"):
+        if sys.platform == "win32" and os.environ.get(REQUIRE_ENV) == "1":
+            pytest.fail("DXC is required for indexed copyback validation")
+        pytest.skip("DXC is required to inspect indexed copyback")
+    source = tmp_path / "copyback.metal"
+    source.write_text("""#include <metal_stdlib>
+using namespace metal;
+kernel void products(device uint* outputs [[buffer(0)]]) {
+    uint values[2] = {128u, 128u};
+    uint index = 0u;
+    int64_t divisor = -94;
+    values[index++] /= divisor;
+    values[index++] %= divisor;
+    outputs[0] = values[0];
+    outputs[1] = values[1];
+    outputs[2] = index;
+}
+""")
+    artifact = tmp_path / "copyback.hlsl"
+    artifact.write_text(translate(str(source), backend="directx", format_output=False))
+    assembly = tmp_path / "copyback.ll"
+    result = subprocess.run(
+        [
+            "dxc",
+            "-T",
+            "cs_6_6",
+            "-E",
+            "CSMain",
+            "-O3",
+            "-WX",
+            str(artifact),
+            "-Fc",
+            str(assembly),
+            "-Fo",
+            str(tmp_path / "copyback.dxil"),
+        ],
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    stores = [
+        line
+        for line in assembly.read_text().splitlines()
+        if "call void @dx.op.rawBufferStore.i32" in line
+    ]
+    assert len(stores) == 3
+    for index, value in enumerate((-1, 34, 2)):
+        assert any(
+            re.search(rf", i32 {index}, i32 0, i32 {value},", line) for line in stores
+        ), stores
 
 
 @pytest.mark.parametrize("right", ["uint2", "int64_t3"])
@@ -464,6 +553,122 @@ def _quotient(left, right):
     return (abs(left) // abs(right)) * (-1 if (left < 0) != (right < 0) else 1)
 
 
+COMPOUND_OPERATIONS = {
+    "+": operator.add,
+    "-": operator.sub,
+    "*": operator.mul,
+    "/": _quotient,
+    "%": lambda a, b: a - _quotient(a, b) * b,
+    "&": operator.and_,
+    "|": operator.or_,
+    "^": operator.xor,
+}
+
+
+def _indexed_compound_source(storage, context):
+    count = 8 if storage == "nested" else 4
+    owner = "box.values" if storage == "member" else "values"
+    target = f"{owner}[row++][index++]" if storage == "nested" else f"{owner}[index++]"
+    declarations = {
+        "array": "uint values[4] = {41u, b, b, 43u};",
+        "member": (
+            "Box box; box.values[0] = 41u; box.values[1] = b; box.values[2] = b; box.values[3] = 43u;"
+        ),
+        "nested": "uint values[2][4] = {{41u, b, b, 43u}, {41u, b, b, 43u}};",
+    }
+    blocks = []
+    for operation_index, symbol in enumerate(COMPOUND_OPERATIONS):
+        expression = f"({target} {symbol}= a)"
+        statements = {
+            "statement": f"{expression};",
+            "expression": f"result = {expression};",
+            "conditional": f"result = (tid & 1u) != 0u ? {expression} : b;",
+            "loop": (
+                f"for (uint step = 0u; step < 2u; result = {expression}) {{ ++step; continue; }}"
+            ),
+        }
+        stores = []
+        for index in range(count):
+            access = (
+                f"[{index // 4}][{index % 4}]" if storage == "nested" else f"[{index}]"
+            )
+            stores.append(f"outputs[base + {index}u] = {owner}{access};")
+        blocks.append(f"""{{
+            {declarations[storage]}
+            uint index = 1u;
+            uint row = 0u;
+            uint result = b;
+            {statements[context]}
+            uint base = (tid * 8u + {operation_index}u) * {count + 3}u;
+            {''.join(stores)}
+            outputs[base + {count}u] = result;
+            outputs[base + {count + 1}u] = index;
+            outputs[base + {count + 2}u] = row;
+        }}""")
+    return """#include <metal_stdlib>
+using namespace metal;
+struct Box { uint values[4]; };
+kernel void products(device int64_t* numerators [[buffer(0)]],
+                     device uint* denominators [[buffer(1)]],
+                     device int64_t* outputs [[buffer(2)]],
+                     uint tid [[thread_position_in_grid]]) {
+    int64_t a = numerators[tid];
+    uint b = denominators[tid];
+""" + "\n".join(blocks) + "\n}\n"
+
+
+@pytest.mark.parametrize("storage", ["array", "member", "nested"])
+@pytest.mark.parametrize("context", ["statement", "expression", "conditional", "loop"])
+def test_indexed_compound_copyback_executes_once(tmp_path, storage, context):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required indexed assignment execution")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    source = _indexed_compound_source(storage, context)
+    if target == "opengl":
+        from crosstl import translate
+
+        path = tmp_path / "indexed.metal"
+        path.write_text(source)
+        with pytest.raises(ValueError, match="side-effecting lvalue"):
+            translate(str(path), backend=target, format_output=False)
+        return
+    source, descriptor, package = _package(
+        tmp_path, target, "int64_t", (1, 1, 1), source=source, software_subgroups=False
+    )
+    numerators = [-7, 3, -94, 257]
+    denominators = [128, 1, 65537, 2**31]
+    wanted = []
+    for invocation, (a, b) in enumerate(zip(numerators, denominators)):
+        for operation in COMPOUND_OPERATIONS.values():
+            values = [41, b, b, 43] * (2 if storage == "nested" else 1)
+            times = (
+                2
+                if context == "loop"
+                else int(context != "conditional" or invocation & 1)
+            )
+            result = b
+            for iteration in range(times):
+                offset = 1 + iteration + (4 * iteration if storage == "nested" else 0)
+                values[offset] = operation(b, a) & 0xFFFFFFFF
+                if context != "statement":
+                    result = values[offset]
+            wanted.extend(
+                values + [result, 1 + times, times if storage == "nested" else 0]
+            )
+    _execute_integer_case(
+        tmp_path,
+        source,
+        descriptor,
+        package,
+        target,
+        numerators,
+        denominators,
+        wanted,
+        "int64",
+        "uint32",
+    )
+
+
 @pytest.mark.parametrize("side_effects", [False, True])
 def test_mixed_integer_arithmetic_executes_with_source_signedness(
     tmp_path, side_effects
@@ -581,12 +786,8 @@ def _execute_integer_case(
                 original,
                 metal_compile_flags=original_metal_compile_flags,
             )
-            state, native = _native_request(request)
-            native = replace(
-                native,
-                artifact_path=artifact,
-                module_path=original_module,
-                entry_point="products" if target == "metal" else "CSMain",
+            state, native = _original_request(
+                executor, request, artifact, original_module, target
             )
             actual = executor.runtime_adapter.runtime.dispatch(None, state, native)
             records["originalMetal" if target == "metal" else "originalHLSL"] = {
@@ -620,6 +821,52 @@ def _execute_integer_case(
         close = getattr(executor.runtime_adapter.runtime, "close", None)
         if close:
             close()
+
+
+def _original_request(executor, request, artifact, module, target):
+    state = RuntimeExecutionState(request=request, plan=request.execution_plan)
+    native = executor.runtime_adapter._prepare_dispatch_request(state, artifact, module)
+    return state, replace(
+        native,
+        entry_point={"metal": "products", "directx": "CSMain", "opengl": "main"}[
+            target
+        ],
+    )
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
+def test_original_integer_control_uses_selected_runtime_adapter(tmp_path, target):
+    _, descriptor, package = _package(
+        tmp_path, target, "int64_t", (1, 1, 1), source=SOURCE, software_subgroups=False
+    )
+    inputs = {
+        name: {"dtype": dtype, "shape": [1], "values": [1]}
+        for name, dtype in [
+            ("numerators", "int64"),
+            ("denominators", "uint32"),
+            ("outputs", "int64"),
+        ]
+    }
+    bound = _bound_values(descriptor, inputs)
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        bound,
+        {
+            name: {"dtype": value["dtype"], "shape": value["shape"]}
+            for name, value in bound.items()
+        },
+        {"workgroupCount": [1, 1, 1], "workgroupSize": [1, 1, 1]},
+        expected_target=target,
+    )
+    artifact, module = tmp_path / "original.source", tmp_path / "original.module"
+    _, native = _original_request(_executor(target), request, artifact, module, target)
+    assert native.target == target
+    assert native.artifact_path == artifact and native.module_path == module
+    assert (
+        native.entry_point
+        == {"metal": "products", "directx": "CSMain", "opengl": "main"}[target]
+    )
 
 
 def test_native_hlsl_arithmetic_preserves_source_results_on_each_target(tmp_path):
@@ -1026,7 +1273,8 @@ def test_wide_integer_native_gate_is_required_on_every_target():
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "test_wide_integer_arithmetic.py" in step
     assert "if:" not in step and "continue-on-error" not in step
-    assert "--timeout-seconds 180" in step and "--junitxml" in step
+    assert "--timeout-seconds 360" in step and "--junitxml" in step
+    assert "--durations=20" in step
     for event in ("pull_request", "push"):
         assert (
             "tests/test_translator/test_wide_integer_arithmetic.py"

@@ -814,8 +814,13 @@ bitwise operations, comparisons and conditional selection. In particular,
 implicit unsigned conversion. Vector/scalar pairs retain the vector element
 type, and shifts preserve independent operand promotions, including compound
 shifts with scalar counts and vector destinations. Compound assignments
-convert before narrowing back to the destination; typed helpers retain single
-evaluation of indexed destinations. A right operand that may modify a copied
+convert before narrowing back to the destination. Before an indexed destination
+is passed to a typed ``inout`` helper, effectful indices are captured in private
+temporaries: DXC may otherwise evaluate a private-array index on both copy-in
+and copy-out. Captures remain in the assignment expression, not at function
+entry, preserving conditional selection, loop updates and returned values.
+Nested arrays and structure-member arrays retain their destination identity.
+A right operand that may modify a copied
 destination receives a diagnostic rather than an unproven copy-in/copy-out
 translation.
 
@@ -855,6 +860,12 @@ and record that flag; generated artifacts retain warning-fatal compilation.
 Native HLSL controls additionally compare generated results on each target and
 the original HLSL on Windows; optimized DXC checks cover direct and saved-CrossGL
 round trips.
+Twelve additional original/generated Metal and required Windows cases cover
+eight compound operators on private arrays, nested arrays and structure-member
+arrays in statement, expression, conditional and loop-update positions. Each
+case checks modified elements, unchanged neighbors, evaluation counts, the
+assignment result, input preservation and output guards. OpenGL retains an
+explicit diagnostic for these unsupported effectful compound destinations.
 These checks do not establish full MLX-suite parity.
 
 **Fused arithmetic profiles.**

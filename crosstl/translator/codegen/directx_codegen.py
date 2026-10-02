@@ -2175,6 +2175,7 @@ class HLSLCodeGen:
         self.required_hlsl_trailing_zero_helpers = set()
         self.hlsl_trailing_zero_helper_names = {}
         self.hlsl_wide_integer_compound_helpers = {}
+        self.hlsl_wide_integer_compound_indices = None
         self.hlsl_wide_integer_reserved_names = set()
         self.required_hlsl_inverse_hyperbolic_helpers = set()
         self.hlsl_inverse_hyperbolic_helper_names = {}
@@ -3136,6 +3137,7 @@ class HLSLCodeGen:
         self.required_hlsl_trailing_zero_helpers = set()
         self.hlsl_trailing_zero_helper_names = {}
         self.hlsl_wide_integer_compound_helpers = {}
+        self.hlsl_wide_integer_compound_indices = None
         self.hlsl_wide_integer_reserved_names = set()
         self.required_hlsl_inverse_hyperbolic_helpers = set()
         self.hlsl_inverse_hyperbolic_helper_names = {}
@@ -10843,6 +10845,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         needs_fallthrough_return = (
             return_type != "void" and not self.statement_body_terminates(body)
         )
+        compound_declaration_offset = len(code)
+        previous_compound_indices = self.hlsl_wide_integer_compound_indices
+        self.hlsl_wide_integer_compound_indices = []
         try:
             if stage_output_lowering is not None:
                 output_name = stage_output_lowering.get("local_name")
@@ -10869,7 +10874,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 code += f"{'    ' * (indent + 1)}}}\n"
             else:
                 code += self.generate_statement_body(body, indent + 1)
+            declarations = "".join(
+                f"{'    ' * (indent + 1)}{vtype} {name};\n"
+                for vtype, name in self.hlsl_wide_integer_compound_indices
+            )
+            code = (
+                code[:compound_declaration_offset]
+                + declarations
+                + code[compound_declaration_offset:]
+            )
         finally:
+            self.hlsl_wide_integer_compound_indices = previous_compound_indices
             self.current_hlsl_visible_int_constants = (
                 previous_hlsl_visible_int_constants
             )
@@ -12732,10 +12747,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         # needed; assignment-context rendering would impose the lvalue's shape.
         if (left, right) == ("target", "value") and binary not in {"<<", ">>"}:
             return None
-        lhs = lhs if lhs is not None else self.generate_expression(target)
         rhs = self.generate_expression_with_expected(value, None)
         if left == "target":
             # Native compound assignment already evaluates its lvalue once.
+            lhs = lhs if lhs is not None else self.generate_expression(target)
             rhs = self.hlsl_widened_integer_operand(
                 rhs, contract["right"], contract["right_base"]
             )
@@ -12754,6 +12769,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         target_mapped = contract["left"]["mapped_type"]
         value_mapped = contract["right"]["mapped_type"]
+        assignments = []
+        if self.hlsl_expression_has_observable_side_effects(target):
+            assignments, stable_target = self.hlsl_wide_integer_compound_lvalue(
+                node, target, target_mapped
+            )
+            lhs = self.generate_expression(stable_target)
+        elif lhs is None:
+            lhs = self.generate_expression(target)
         key = (target_mapped, value_mapped, binary, left, right)
         name = self.hlsl_wide_integer_compound_helpers.get(key)
         if name is None:
@@ -12767,7 +12790,65 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             while name in used:
                 name += "_"
             self.hlsl_wide_integer_compound_helpers[key] = name
-        return f"{name}({lhs}, {rhs})"
+        call = f"{name}({lhs}, {rhs})"
+        return f"({', '.join([*assignments, call])})" if assignments else call
+
+    def hlsl_wide_integer_compound_lvalue(self, node, target, target_type):
+        # DXC may evaluate an indexed inout argument on both copy-in and copy-out.
+        # Declare private temporaries in the function, but evaluate their values
+        # in the original expression so conditional and loop execution is intact.
+        assignments = []
+
+        def reject():
+            raise DirectXContextualConversionError(
+                "DirectX cannot preserve the indexed mixed-width assignment "
+                "without a scalar integer index and a stable storage owner",
+                target_type=target_type,
+                source_type=self.expression_result_type(target),
+                reason="wide-integer-compound-unstable-lvalue",
+                source_location=getattr(node, "source_location", None),
+            )
+
+        def stabilize(expression):
+            if isinstance(expression, (IdentifierNode, VariableNode)):
+                return expression
+            if isinstance(expression, MemberAccessNode):
+                expression.object_expr = expression.object = stabilize(
+                    expression.object_expr
+                )
+                return expression
+            if isinstance(expression, SwizzleNode):
+                expression.vector_expr = stabilize(expression.vector_expr)
+                return expression
+            if not isinstance(expression, ArrayAccessNode):
+                reject()
+            expression.array_expr = expression.array = stabilize(expression.array)
+            index = expression.index
+            index_type = self.expression_result_type(index)
+            info = self.hlsl_boolean_compound_type_info(index_type)
+            if (
+                info is None
+                or info["kind"] != "integer"
+                or info["width"] != 1
+                or self.hlsl_wide_integer_compound_indices is None
+            ):
+                reject()
+            mapped_type = self.map_type(index_type)
+            used = self.current_identifier_reserved_names | set(
+                self.local_variable_types
+            )
+            used.update(self.hlsl_wide_integer_reserved_names)
+            used.update(self.global_variable_types)
+            name = self.hlsl_unique_local_identifier("__crossgl_integer_index", used)
+            self.current_identifier_reserved_names.add(name)
+            self.local_variable_types[name] = mapped_type
+            self.hlsl_wide_integer_compound_indices.append((mapped_type, name))
+            rendered = self.generate_expression_with_expected(index, None)
+            assignments.append(f"{name} = {rendered}")
+            expression.index_expr = expression.index = IdentifierNode(name)
+            return expression
+
+        return assignments, stabilize(deepcopy(target))
 
     def generate_hlsl_wide_integer_compound_helpers(self):
         code = ""

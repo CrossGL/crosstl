@@ -204,7 +204,8 @@ def test_vector_scalar_native_gate_is_required_on_every_target():
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "test_metal_vector_scalar_arithmetic.py" in step
     assert "if:" not in step and "continue-on-error" not in step
-    assert "--timeout-seconds 180" in step and "--junitxml" in step
+    assert "--timeout-seconds 360" in step and "--junitxml" in step
+    assert "--durations=20" in step
     for event in ("pull_request", "push"):
         assert (
             "tests/test_translator/test_metal_vector_scalar_arithmetic.py"

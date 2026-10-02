@@ -198,7 +198,7 @@ jobs:
   portable-host:
     name: MLX native host (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 350
+    timeout-minutes: 355
     strategy:
       fail-fast: false
       matrix:
@@ -442,8 +442,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .mlx-portable-host/integer-arithmetic
-          python tools/run_bounded_command.py --timeout-seconds 180 --label "Mixed-width integer arithmetic" -- \
-            python -m pytest -q -n auto \
+          python tools/run_bounded_command.py --timeout-seconds 360 --label "Mixed-width integer arithmetic" -- \
+            python -m pytest -q -n auto --durations=20 \
               --basetemp=.mlx-portable-host/integer-arithmetic/pytest \
               --junitxml=.mlx-portable-host/integer-arithmetic/results.xml \
               tests/test_translator/test_wide_integer_arithmetic.py \

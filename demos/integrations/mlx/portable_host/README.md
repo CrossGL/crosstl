@@ -496,6 +496,14 @@ artifacts, readbacks and test reports even if a later build or host test fails.
 They also remain in the project-porting workflow; the focused host checks do not
 replace corpus-wide or upstream-suite validation.
 
+The integer-arithmetic gate also checks indexed mixed-width compound assignments.
+HLSL captures effectful indices before its helper's copy-in/copy-out operation,
+while retaining conditional and loop-local evaluation. Twelve original/generated
+Metal and required Windows cases cover eight operators, private and nested arrays,
+structure members, assignment results, unchanged neighbors and guards. Original
+HLSL controls use the DirectX adapter on Windows. OpenGL rejects these unsupported
+effectful compound destinations; this gate does not claim their OpenGL execution.
+
 The Windows gate also executes generated floating-point atomic add and exchange
 on scalar and structured buffers, using Shader Model 6.0 bitwise compare/exchange
 for addition. Readbacks check contention, returned values, single operand
