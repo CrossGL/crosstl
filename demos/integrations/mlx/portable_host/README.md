@@ -59,6 +59,11 @@ selection, and the complete MLX suite are not covered here.
 
 ## Upstream Adaptations
 
+Configure `core.autocrlf=false` before checking out MLX, including on Windows.
+The native proofs compare upstream test files against their exact Git blob bytes;
+automatic line-ending conversion is treated as a source modification. Every CI
+job that checks out MLX applies this setting before checkout.
+
 `prepare.py` requires a clean, exact-pinned checkout. It changes only the selected
 no-GPU backend build definition and adds four explicitly named backend files:
 

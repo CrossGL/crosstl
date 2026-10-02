@@ -843,6 +843,7 @@ jobs:
         run: |
           set -euo pipefail
           git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
           git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
           git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
           git -C mlx-upstream checkout --detach FETCH_HEAD
@@ -1059,6 +1060,7 @@ jobs:
         run: |
           set -euo pipefail
           git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
           git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
           git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
           git -C mlx-upstream checkout --detach FETCH_HEAD

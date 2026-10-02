@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from demos.integrations.mlx.portable_host import (
     binary_workloads,
@@ -1698,6 +1699,56 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 verify.hashlib.sha256(b"unchanged tests").hexdigest()
             ),
         }
+
+
+@pytest.mark.parametrize(
+    "job_name", ["portable-host", "small-row-reductions", "reductions"]
+)
+def test_ci_preserves_upstream_checkout_bytes_in_every_job(job_name):
+    workflow = yaml.safe_load(
+        (
+            Path(__file__).resolve().parents[1]
+            / ".github/workflows/mlx-portable-host.yml"
+        ).read_text()
+    )
+    job = workflow["jobs"][job_name]
+    checkouts = [
+        step for step in job["steps"] if "git init mlx-upstream" in step.get("run", "")
+    ]
+    assert len(checkouts) == 1
+    step = checkouts[0]
+    commands = [line.strip() for line in step["run"].splitlines()]
+    assert (
+        commands.index("git init mlx-upstream")
+        < commands.index("git -C mlx-upstream config core.autocrlf false")
+        < commands.index("git -C mlx-upstream checkout --detach FETCH_HEAD")
+    )
+    assert "if" not in step and "continue-on-error" not in step
+
+
+@pytest.mark.parametrize("content", [b"unchanged\n", b"unchanged\r\n", b"modified\n"])
+def test_upstream_test_sources_requires_exact_git_bytes(tmp_path, monkeypatch, content):
+    monkeypatch.setattr(
+        verify, "UPSTREAM_TESTS", ("test_ops.TestOps.test_concatenate",)
+    )
+    name = "python/tests/test_ops.py"
+    source = tmp_path / name
+    source.parent.mkdir(parents=True)
+    source.write_bytes(content)
+
+    def git_blob(command, *, timeout):
+        assert command == ["git", "-C", str(tmp_path), "show", f"HEAD:{name}"]
+        assert timeout == 30
+        return b"unchanged\n"
+
+    monkeypatch.setattr(verify.subprocess, "check_output", git_blob)
+    if content == b"unchanged\n":
+        assert verify.upstream_test_sources(tmp_path) == {
+            name: verify.hashlib.sha256(content).hexdigest()
+        }
+    else:
+        with pytest.raises(ValueError, match="Upstream test source was modified"):
+            verify.upstream_test_sources(tmp_path)
 
 
 def test_ci_requires_all_native_platforms_and_retains_evidence():
