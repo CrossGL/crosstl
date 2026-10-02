@@ -22484,6 +22484,20 @@ class MetalCodeGen:
                 f"parameter {param_name}: got access::{actual_access}"
             )
 
+    def metal_standard_array_element_type(self, type_name):
+        qualified = re.fullmatch(r"((?:(?:const|volatile)\s+)+)(.+)", type_name)
+        if qualified is not None:
+            return qualified[1] + self.metal_standard_array_element_type(qualified[2])
+        if re.fullmatch(
+            r"packed_(?:char|uchar|short|ushort|int|uint|long|ulong|half|bfloat|float)[234]",
+            type_name,
+        ):
+            return type_name
+        native = self.metal_native_narrow_bitcast_storage_type(type_name)
+        if native is not None:
+            return native
+        return self.map_type(type_name)
+
     def split_metal_array_resource_type(self, type_name):
         type_name = str(type_name or "").strip()
         if not type_name.startswith("array<") or not type_name.endswith(">"):
@@ -25239,6 +25253,35 @@ class MetalCodeGen:
             )
             return f"{referenced_type}&"
         generic_args = getattr(type_node, "generic_args", [])
+        if getattr(type_node, "name", None) == "array" and len(generic_args) == 2:
+            element, extent = generic_args
+            if isinstance(element, PointerType):
+                pointee = self.metal_standard_array_element_type(
+                    self.convert_type_node_to_string(element.pointee_type)
+                )
+                space = element.address_space or "thread"
+                readonly = (
+                    "const "
+                    if (
+                        "const" in getattr(element, "qualifiers", [])
+                        or element.access_mode in {"read", "readonly"}
+                    )
+                    else ""
+                )
+                memory = self.resource_memory_qualifier_prefix(raw_type=element)
+                element_text = f"{memory}{readonly}{space} {pointee}*"
+            else:
+                element_text = self.metal_standard_array_element_type(
+                    self.convert_type_node_to_string(element)
+                )
+                qualifiers = [
+                    str(value)
+                    for value in getattr(element, "qualifiers", [])
+                    if str(value) in {"const", "volatile"}
+                ]
+                if qualifiers:
+                    element_text = " ".join([*qualifiers, element_text])
+            return f"array<{element_text}, {self.safe_expression_to_string(extent)}>"
         if hasattr(type_node, "name") and generic_args:
             args = ", ".join(
                 self.convert_type_node_to_string(arg)
@@ -25456,6 +25499,11 @@ class MetalCodeGen:
         if self.is_metal_ray_query_type_name(vtype_str):
             self.require_metal_ray_query_runtime()
             return "CglRayQuery"
+
+        standard_array = self.split_metal_array_resource_type(vtype_str)
+        if standard_array is not None:
+            element, extent = standard_array
+            return f"array<{self.metal_standard_array_element_type(element)}, {extent}>"
 
         if self.requires_metal_builtin_ray_desc(vtype_str):
             self.required_metal_ray_desc_runtime = True

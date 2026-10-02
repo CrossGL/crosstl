@@ -1907,6 +1907,29 @@ class MetalToCrossGLConverter:
         if layout is not None:
             return layout
 
+        array_base, _ = self.generic_type_parts(resolved_type)
+        array = (
+            self.metal_array_type_parts(resolved_type)
+            if array_base in {"array", "metal::array"}
+            else None
+        )
+        if array is not None:
+            element, extent_text = array
+            extent = self.evaluate_concrete_array_extent(extent_text)
+            if not isinstance(extent, int) or extent < 0:
+                return None
+            if resolved_type in (resolving or ()):
+                return None
+            element_layout = self.metal_concrete_type_layout(
+                element, {*(resolving or ()), resolved_type}
+            )
+            if element_layout is None:
+                return None
+            size, alignment = element_layout
+            stride = ((size + alignment - 1) // alignment) * alignment
+            total = stride * max(1, extent)
+            return (total, alignment) if total < (1 << 63) else None
+
         struct_name = self.normalized_metal_type(resolved_type)
         if struct_name in self.ambiguous_struct_names:
             return None
@@ -7845,6 +7868,10 @@ class MetalToCrossGLConverter:
         array_type = self.metal_array_type_parts(
             self.effective_metal_variable_type(var)
         )
+        if self.zero_extent_metal_array_type_parts(
+            self.effective_metal_variable_type(var)
+        ):
+            array_type = None
         suffix = f"[{self.format_array_extent(array_type[1])}]" if array_type else ""
         if not include_declarator_arrays:
             return suffix
@@ -7890,6 +7917,8 @@ class MetalToCrossGLConverter:
         if structured_buffer_type:
             return structured_buffer_type
         array_type = self.metal_array_type_parts(raw_type)
+        if self.zero_extent_metal_array_type_parts(raw_type):
+            array_type = None
         type_to_map = array_type[0] if array_type else raw_type
         if (
             id(var) in self.storage_texture_declaration_ids
@@ -14491,6 +14520,10 @@ float {scalar}(float value) {{
         if resolved_local_type != str(metal_type).strip():
             return self.map_type(resolved_local_type)
 
+        empty_array = self.zero_extent_metal_array_type_parts(metal_type)
+        if empty_array is not None:
+            return f"array<{self.map_standard_array_storage_type(empty_array[0])}, 0>"
+
         alias_base = str(metal_type).strip()
         alias_suffix = ""
         while alias_base.endswith("*") or alias_base.endswith("&"):
@@ -16718,6 +16751,27 @@ float {scalar}(float value) {{
         if not self.is_metal_array_type_name(base_name) or len(generic_args) < 2:
             return None
         return generic_args[0].strip(), generic_args[1].strip()
+
+    def map_standard_array_storage_type(self, metal_type):
+        element = self.resolve_type_alias(metal_type)
+        nested = self.metal_array_type_parts(element)
+        if nested is not None:
+            value_type, extent = nested
+            return f"array<{self.map_standard_array_storage_type(value_type)}, {self.format_array_extent(extent)}>"
+        # Storage elements must retain packing rather than use value carriers.
+        if element.startswith("packed_") and metal_type_layout(element) is not None:
+            return element
+        return self.map_type(element)
+
+    def zero_extent_metal_array_type_parts(self, metal_type):
+        resolved = self.resolve_type_alias(str(metal_type or "").strip())
+        base_name, arguments = self.generic_type_parts(resolved)
+        if base_name not in {"array", "metal::array"} or len(arguments) != 2:
+            return None
+        extent = self.substitute_template_value_text(arguments[1])
+        if self.evaluate_concrete_array_extent(extent) != 0:
+            return None
+        return arguments[0].strip(), "0"
 
     def is_metal_array_type_name(self, base_name):
         return base_name in {"array", "metal::array", "c10::metal::array"}

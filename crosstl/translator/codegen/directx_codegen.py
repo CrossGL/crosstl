@@ -84,6 +84,7 @@ from ..validation import (
     texture_sample_index_argument_index,
 )
 from .array_utils import (
+    ZeroExtentArrayUnsupportedError,
     _UnsignedLiteralInt,
     collect_literal_int_constants,
     collect_struct_member_types,
@@ -47652,6 +47653,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.hlsl_type_alias_resolution_stack = seen
 
         cooperative_base, cooperative_args = generic_type_parts(vtype_str)
+        if (
+            cooperative_base == "array"
+            and len(cooperative_args) == 2
+            and evaluate_literal_int_expression(cooperative_args[1]) == 0
+        ):
+            raise ZeroExtentArrayUnsupportedError("directx", vtype_str)
         if (
             cooperative_args
             and cooperative_base.rsplit("::", 1)[-1] == "CooperativeMatrix"

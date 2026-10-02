@@ -1,0 +1,82 @@
+name: MLX Gather Round Trip
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/mlx-gather-roundtrip.yml"
+      - "crosstl/**"
+      - "demos/integrations/mlx/portable_host/**"
+      - "tests/test_translator/**"
+      - "tests/fixtures/runtime_verification/**"
+      - "tools/run_bounded_command.py"
+      - "pyproject.toml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/mlx-gather-roundtrip.yml"
+      - "crosstl/**"
+      - "demos/integrations/mlx/portable_host/**"
+      - "tests/test_translator/**"
+      - "tests/fixtures/runtime_verification/**"
+      - "tools/run_bounded_command.py"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+  PYTHONUNBUFFERED: "1"
+
+concurrency:
+  group: mlx-gather-roundtrip-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  metal:
+    name: Original and translated Metal gather
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install CrossTL and test dependencies
+        run: python -m pip install -e . pytest pytest-xdist numpy
+      - name: Checkout pinned upstream MLX
+        run: |
+          git init mlx-upstream
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+      - name: Validate general gather and empty arrays
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_REQUIRE_MLX_GENERAL_GATHER: "1"
+          CROSTL_REQUIRE_METAL_EMPTY_ARRAYS: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-gather
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "Native gather round trip" -- \
+            python -m pytest -q -n auto --dist loadgroup --durations=20 \
+              --basetemp=.mlx-gather/pytest \
+              --junitxml=.mlx-gather/results.xml \
+              tests/test_translator/test_mlx_general_gather.py \
+              tests/test_translator/test_metal_empty_arrays.py \
+              2>&1 | tee .mlx-gather/execution.log
+      - name: Retain original and translated execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-gather-metal-${{ github.run_attempt }}
+          path: .mlx-gather
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

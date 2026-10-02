@@ -1444,6 +1444,7 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_array_handling",
+            "tests/test_translator/test_metal_empty_arrays.py::def test_unsupported_empty_array_targets_report_a_diagnostic",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_codegen_lowers_fixed_array_value_locals_and_indexing",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_workgroup_pointer_aliases_compose_offsets_and_forward_writes",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_workgroup_pointer_nested_helpers_specialize_by_backing_identity",
@@ -1457,7 +1458,9 @@
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_array_handling"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_array_handling",
+            "tests/test_translator/test_metal_empty_arrays.py::def test_zero_extent_standard_arrays_execute_natively",
+            "tests/test_translator/test_mlx_general_gather.py::def test_pinned_general_gather_executes_original_and_generated"
           ],
           "notes": "",
           "status": "supported"
@@ -1465,6 +1468,7 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_array_handling",
+            "tests/test_translator/test_metal_empty_arrays.py::def test_unsupported_empty_array_targets_report_a_diagnostic",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_aggregate_initializers",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_aggregate_initializer_reports_excess_fixed_array_elements",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_threadgroup_pointer_alias_composes_dynamic_offset_into_accesses",

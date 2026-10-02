@@ -4099,10 +4099,24 @@ generated kernels using exact integer readbacks: ties-to-even conversion,
 signed zero, overflow, infinity, raw 16-bit payload copies, indexed/swizzled
 components, vector size and output guards. Raw copies include NaN payloads;
 this is not a claim about every arithmetic operation or NaN conversion rule.
-The unchanged pinned general-gather wrapper compiles on Metal with its bfloat
-conversion helpers retained. General gather still lacks host dispatch integration
-and resource-backed aggregate lowering on DirectX/OpenGL. These bfloat-vector
-results do not establish DirectX or OpenGL bfloat parity.
+The unchanged pinned general-gather wrapper executes as original and generated
+Metal in a required macOS gate. Six specializations cover zero, one or two index
+buffers and scalar through three-dimensional indices across dense, transposed,
+strided and broadcast layouts. The 24 workloads retain negative and repeated
+indices, exact binary32 storage payloads and trailing output guards. General
+gather still lacks MLX host dispatch integration and resource-backed aggregate
+lowering on DirectX/OpenGL. These results do not establish foreign-target gather
+or bfloat parity.
+
+Zero-extent Metal standard arrays retain native array objects rather than
+illegal C-style zero-length arrays. Layout calculations retain the element
+storage required by Metal, including packed/narrow elements, nested arrays and
+concrete structs. Native controls verify logical size zero, alignment,
+initialization, independent copies, adjacent fields and pointer-element storage
+qualification. DirectX/OpenGL report an unsupported-representation diagnostic
+for these objects until their value and layout contracts are implemented.
+This does not make C-style zero-length arrays valid or define portable pointer
+object sizes.
 
 During project translation, Metal template-member inference preserves a
 generic pointer template parameter as a pointer rather than reducing it to its

@@ -58,6 +58,25 @@ not cover arbitrary dynamic indexing.
 
 ## Scope
 
+The independent [general-gather round-trip workflow](../../../.github/workflows/mlx-gather-roundtrip.yml)
+uses the unchanged JIT template and indexing headers at
+`9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. It executes 24 original/generated
+Metal workloads through public project, package and native-dispatch APIs.
+Coverage includes zero through two index buffers, scalar through three-dimensional
+indices, negative and repeated indices, and dense, transposed, strided and
+broadcast source/index layouts. Binary32 outputs are compared as exact storage
+words, including trailing guards. No upstream source or test is modified.
+
+The no-index specialization requires a valid zero-extent standard array.
+CrossTL retains that native object and its layout instead of emitting an illegal
+C-style array. Separate native controls exercise aliases, nested arrays,
+packed/narrow elements, copies and neighboring fields. DirectX/OpenGL empty-array
+representation and general-gather pointer aggregates remain unsupported
+([#2042](https://github.com/CrossGL/crosstl/issues/2042),
+[#1544](https://github.com/CrossGL/crosstl/issues/1544)).
+These are direct kernel proofs, not integration of general Gather into the MLX
+host adapter or a passing complete upstream suite.
+
 The [Metal host integration harness](METAL_HOST.md) redirects selected current-pinned
 complex-power kernels through MLX's own runtime and runs its unchanged upstream
 operations tests. Its dispatch trace distinguishes actual host execution from

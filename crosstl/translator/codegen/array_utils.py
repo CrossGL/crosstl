@@ -12,6 +12,21 @@ class _UnsignedLiteralInt(int):
     """Integer constant whose unsigned source type must survive lookup."""
 
 
+class ZeroExtentArrayUnsupportedError(ValueError):
+    """A target cannot yet preserve a zero-extent standard array object."""
+
+    project_diagnostic_code = "project.translate.zero-extent-array-unsupported"
+
+    def __init__(self, target, source_type):
+        super().__init__(
+            f"{target} cannot yet preserve the layout and value semantics of "
+            f"zero-extent standard array '{source_type}'"
+        )
+        self.source_type = source_type
+        self.reason = "zero-extent-standard-array"
+        self.missing_capabilities = (f"{target}.zero-extent-standard-array",)
+
+
 def parse_array_type(type_name: str) -> Tuple[str, Optional[int]]:
     """Parse an array type string into base type and size, returning None size for dynamic arrays."""
     if not type_name or "[" not in type_name:

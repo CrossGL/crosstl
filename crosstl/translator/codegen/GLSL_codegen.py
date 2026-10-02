@@ -103,6 +103,7 @@ from ..validation import (
     texture_sample_index_argument_index,
 )
 from .array_utils import (
+    ZeroExtentArrayUnsupportedError,
     collect_literal_int_constants,
     collect_struct_member_types,
     evaluate_literal_int_expression,
@@ -48558,6 +48559,12 @@ complex64_t crossgl_complex64_mod_assign(
         else:
             vtype_str = str(vtype)
         cooperative_base, cooperative_args = generic_type_parts(vtype_str)
+        if (
+            cooperative_base == "array"
+            and len(cooperative_args) == 2
+            and evaluate_literal_int_expression(cooperative_args[1]) == 0
+        ):
+            raise ZeroExtentArrayUnsupportedError("opengl", vtype_str)
         if (
             cooperative_args
             and cooperative_base.rsplit("::", 1)[-1] == "CooperativeMatrix"

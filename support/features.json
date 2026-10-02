@@ -3962,6 +3962,7 @@
           "notes": "DirectX preserves native HLSL arrays for storage while lowering fixed-array return values to scalar-compatible vectors or generated carrier structs. Matching local declarations and initializers use the same value representation, retain source array types for overload resolution, and preserve constant and dynamic indexing. Compute workgroup pointer helpers are specialized by concrete groupshared backing identity and fixed extent, with nested views represented as composed integer offsets instead of pointer or array parameters. Static expressions and recognized flat local-invocation ranges are checked against the backing extent; unresolved backing selection, unbounded offsets, and out-of-range views fail closed with structured diagnostics. Direct and project Metal translation plus official DXC validation cover the value-local contract. This support row does not assert complete runtime integration or corpus parity.",
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_array_handling",
+            "tests/test_translator/test_metal_empty_arrays.py::def test_unsupported_empty_array_targets_report_a_diagnostic",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_codegen_lowers_fixed_array_value_locals_and_indexing",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_workgroup_pointer_aliases_compose_offsets_and_forward_writes",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_workgroup_pointer_nested_helpers_specialize_by_backing_identity",
@@ -3976,6 +3977,7 @@
           "notes": "OpenGL lowers fixed arrays and indexed access, recursively materializes omitted trailing values in partial fixed-array and struct initializers, and hoists function-local workgroup arrays to module-scope shared storage. Compute workgroup pointer helpers are specialized by concrete shared backing and extent, with nested views represented as composed integer offsets instead of pointer parameters. Static expressions, bounded loop ranges, immutable branch-refined offsets derived from exact workgroup and subgroup execution contracts, and explicit entry-scoped host workgroup-access assertions are checked against the backing extent. Assertions cannot provide backing identity or override a statically contradictory access, are recorded in project reports, and are not enforced at runtime. Address-taken or otherwise mutated offset dependencies disable branch refinement. Unbounded runtime offsets, out-of-range composed views, unresolved extents, reachable null pointers, and other unrepresentable cases fail closed with structured project diagnostics that retain available codegen provenance; statically unreachable null-pointer parameters are removed. This support row does not assert complete runtime integration or corpus parity.",
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_array_handling",
+            "tests/test_translator/test_metal_empty_arrays.py::def test_unsupported_empty_array_targets_report_a_diagnostic",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_aggregate_initializers",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_aggregate_initializer_reports_excess_fixed_array_elements",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_threadgroup_pointer_alias_composes_dynamic_offset_into_accesses",
@@ -4006,7 +4008,9 @@
         "metal": {
           "status": "supported",
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_array_handling"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_array_handling",
+            "tests/test_translator/test_metal_empty_arrays.py::def test_zero_extent_standard_arrays_execute_natively",
+            "tests/test_translator/test_mlx_general_gather.py::def test_pinned_general_gather_executes_original_and_generated"
           ]
         },
         "vulkan": {

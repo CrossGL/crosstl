@@ -3644,7 +3644,24 @@ class Parser:
         argument = None
 
         try:
-            if self.current_token_starts_qualified_identifier():
+            if self.current_token_is_parameter_qualifier() and self.peek()[0] not in {
+                "COMMA",
+                "GREATER_THAN",
+                "BITWISE_SHIFT_RIGHT",
+            }:
+                qualifiers, resource_qualifiers = self.partition_resource_qualifiers(
+                    self.parse_parameter_qualifiers()
+                )
+                if not self.current_token_starts_type():
+                    raise SyntaxError(
+                        "Expected a type after generic argument qualifiers"
+                    )
+                argument = self.parse_type()
+                self.apply_pointer_resource_contract(
+                    argument, qualifiers, resource_qualifiers
+                )
+                argument.qualifiers = qualifiers
+            elif self.current_token_starts_qualified_identifier():
                 argument = IdentifierNode(self.parse_qualified_identifier())
             elif self.current_token_starts_type():
                 argument = self.parse_type()
