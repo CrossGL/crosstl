@@ -118,6 +118,13 @@ BITWISE_INVERT_ENTRIES = {
     f"v_BitwiseInvert{dtype}{dtype}": dtype for dtype in ("int32", "uint32")
 }
 BITWISE_PACKAGE_ENTRIES = {**BITWISE_ENTRIES, **BITWISE_INVERT_ENTRIES}
+SELECTION_SOURCE = "mlx/backend/metal/kernels/ternary.metal"
+SELECTION_ENTRIES = {
+    f"v_Select{dtype}": dtype for dtype in ("float32", "int32", "uint32", "bool_")
+}
+ABSOLUTE_ENTRIES = {
+    f"v_Abs{dtype}{dtype}": dtype for dtype in ("int32", "uint32", "bool_")
+}
 ENTRIES = (
     ARANGE_ENTRIES
     + UNARY_ENTRIES
@@ -134,11 +141,17 @@ def build_packages(root, output, target, *, family="base"):
     root = Path(root).resolve()
     if target not in {"opengl", "directx", "metal"}:
         raise ValueError(f"Unsupported target: {target}")
-    if family not in {"base", "bitwise"}:
+    families = {
+        "base": ENTRIES,
+        "bitwise": BITWISE_PACKAGE_ENTRIES,
+        "selection": SELECTION_ENTRIES,
+        "absolute": ABSOLUTE_ENTRIES,
+    }
+    if family not in families:
         raise ValueError(f"Unsupported package family: {family}")
-    entries = ENTRIES if family == "base" else tuple(BITWISE_PACKAGE_ENTRIES)
-    sources = (
-        {
+    entries = tuple(families[family])
+    sources = {
+        "base": {
             SOURCE: ARANGE_ENTRIES,
             UNARY_SOURCE: (*UNARY_ENTRIES, LOGICAL_NOT_ENTRY),
             COPY_SOURCE: (
@@ -148,18 +161,20 @@ def build_packages(root, output, target, *, family="base"):
                 *BOOLEAN_CAST_ENTRIES,
             ),
             BINARY_SOURCE: (*BINARY_ENTRIES, *COMPARISON_ENTRIES),
-        }
-        if family == "base"
-        else {
+        },
+        "bitwise": {
             BINARY_SOURCE: tuple(BITWISE_ENTRIES),
             UNARY_SOURCE: tuple(BITWISE_INVERT_ENTRIES),
-        }
-    )
+        },
+        "selection": {SELECTION_SOURCE: tuple(SELECTION_ENTRIES)},
+        "absolute": {UNARY_SOURCE: tuple(ABSOLUTE_ENTRIES)},
+    }[family]
     patterns = {
         SOURCE: "arange*",
         UNARY_SOURCE: "v_*",
         COPY_SOURCE: "*copy*",
         BINARY_SOURCE: "vv_*",
+        SELECTION_SOURCE: "v_Select*",
     }
     from demos.integrations.mlx.portable_host.prepare import COMMIT
 
@@ -260,6 +275,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--target", choices=["opengl", "directx", "metal"], required=True
     )
-    parser.add_argument("--family", choices=("base", "bitwise"), default="base")
+    parser.add_argument(
+        "--family", choices=("base", "bitwise", "selection", "absolute"), default="base"
+    )
     args = parser.parse_args()
     build_packages(args.mlx_root, args.output_dir, args.target, family=args.family)

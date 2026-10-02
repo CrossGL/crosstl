@@ -39,8 +39,11 @@ scalar `array_equal(equal_nan=True)`. General array equality additionally needs
 the reduction packages described below. The optional bitwise package family supports
 Boolean operator overloads and 32-bit integer AND, OR, XOR, shifts and inversion.
 Concatenate supports float32, int32, uint32 and bool inputs through destination-strided copies.
-Other primitives retain MLX's explicit unsupported-GPU errors. Unary inputs
-other than LogicalNot and BitwiseInvert must be float32. Stored-contiguous broadcasts and column-major views retain
+Optional selection packages support `where` with Boolean conditions and
+float32, int32, uint32 or bool values. Optional absolute-value packages extend
+`abs` to int32, uint32 and bool. Other primitives retain MLX's explicit
+unsupported-GPU errors. Other unary inputs except LogicalNot and BitwiseInvert
+must be float32. Stored-contiguous broadcasts and column-major views retain
 their metadata; noncontiguous inputs use translated copies before unary dispatch.
 Dispatch is synchronous and uses host staging buffers. Individual copy inputs and
 most elementwise operations remain bounded to 65,535 stored elements; concatenation
@@ -619,9 +622,9 @@ and eighteen negative processes each retain a 180-second deadline. All are
 attempted so a failure does not discard the other diagnostic results. CI allows
 2,400 seconds for package translation and 4,000 seconds for verification within
 a bounded 330-minute platform job. Small-row host workloads run in separate
-220-minute platform jobs after the base host proof. These jobs also require
-translated empty-reduction and bitwise execution and retain their packages and
-readbacks.
+300-minute platform jobs after the base host proof. These jobs also require
+translated empty-reduction, bitwise, concatenation, selection and integer
+absolute-value execution and retain their packages and readbacks.
 
 The workflow preserves an active native run when a branch changes and keeps only
 the newest pending run for that ref. This lets long reduction jobs finish without
@@ -722,3 +725,53 @@ three-platform host workflow requires this proof and retains all failure output.
 No upstream tests, kernels or tolerances are changed. The additional upstream
 test is separate from the 34-test base selection; the full MLX suite remains
 incomplete.
+
+## Selection And Integer Absolute Value
+
+The optional `selection` family contains four unchanged `v_Select` entries from
+`ternary.metal`. MLX performs its normal dtype promotion and broadcasting, then
+the adapter materializes strided operands through translated copies and dispatches
+the selected kernel. Values may be float32, int32, uint32 or bool; the condition
+must reach the adapter as bool. Outputs are limited to 65,535 elements. Empty
+results do not dispatch.
+
+The optional `absolute` family contains three unchanged `v_Abs` entries from
+`unary.metal` for int32, uint32 and bool. These entries are also needed by MLX's
+unchanged `where` test, whose comparison helper computes integer absolute values.
+Stored-contiguous transposes and broadcasts retain their physical layout;
+reversed inputs use translated copies. The bound is 65,535 stored elements.
+The signed minimum follows the original Metal result, remaining `INT32_MIN`.
+Neither family changes the base 93-entry package contract.
+
+```bash
+python -m demos.integrations.mlx.portable_host.packages \
+  --mlx-root mlx-upstream --target opengl --family selection --output-dir selection-packages
+python -m demos.integrations.mlx.portable_host.packages \
+  --mlx-root mlx-upstream --target opengl --family absolute --output-dir absolute-packages
+python -m demos.integrations.mlx.portable_host.verify_selection \
+  --mlx-root mlx-upstream --packages host-packages --selection selection-packages \
+  --absolute absolute-packages --reductions concatenate-reductions \
+  --output-dir selection-evidence
+```
+
+Use the width-32 Boolean reduction package built above and the matching target
+on Windows/DirectX or macOS/Metal. The three-platform workflow requires both
+package families and native verification; compiler or numerical failure fails
+the job. Evidence is retained even when verification fails.
+
+The proof runs 45 selection and 24 absolute-value workloads separately on MLX
+CPU and the translated backend. These cover empty/scalar/vector arrays, tails,
+matrices, transposes, broadcasts, reversed strides, Boolean masks, integer
+boundaries, numeric conditions and mixed-type promotion. Selection checks exact
+finite float32 bits, signed zeros, subnormals and infinities, but only NaN
+classification: the native JSON transport does not preserve NaN payloads.
+Integer and Boolean values are exact. Every workload checks input preservation,
+and native outputs include checked guard values and launch geometry.
+
+The same workers run `test_ops.TestOps.test_where` from the pinned checkout
+without changing its assertions. The native proof requires all workload
+dispatches, upstream execution, compiler/dispatch identity and artifact hashes.
+Eight separate processes check missing packages, unsupported types and oversized
+inputs without dispatch. Before/after source checks require byte-identical
+upstream tests and unchanged prepared sources. These 69 workloads and one
+upstream test extend coverage; they do not establish full-suite parity.

@@ -32,6 +32,7 @@ from demos.integrations.mlx.portable_host import (
     row_reduction_layout,
 )
 from demos.integrations.mlx.portable_host.packages import (
+    ABSOLUTE_ENTRIES,
     BINARY_ENTRIES,
     BITWISE_ENTRIES,
     BITWISE_INVERT_ENTRIES,
@@ -43,6 +44,7 @@ from demos.integrations.mlx.portable_host.packages import (
     COPY_ENTRY,
     ENTRIES,
     LOGICAL_NOT_ENTRY,
+    SELECTION_ENTRIES,
     UNARY_ENTRIES,
 )
 from demos.integrations.mlx.portable_host.reduction_packages import (
@@ -150,7 +152,15 @@ def wire_value(value):
 
 class HostRuntime:
     def __init__(
-        self, directory, trace, *, reductions=None, mlx_root=None, bitwise=None
+        self,
+        directory,
+        trace,
+        *,
+        reductions=None,
+        mlx_root=None,
+        bitwise=None,
+        selection=None,
+        absolute=None,
     ):
         self.directory = Path(directory).resolve()
         self.trace = Path(trace).resolve()
@@ -167,23 +177,35 @@ class HostRuntime:
         self.bitwise_directory = (
             Path(bitwise).resolve() if bitwise is not None else None
         )
-        if self.bitwise_directory is not None:
+        self.selection_directory = (
+            Path(selection).resolve() if selection is not None else None
+        )
+        self.absolute_directory = (
+            Path(absolute).resolve() if absolute is not None else None
+        )
+        for family, directory, entries in (
+            ("bitwise", self.bitwise_directory, BITWISE_PACKAGE_ENTRIES),
+            ("selection", self.selection_directory, SELECTION_ENTRIES),
+            ("absolute", self.absolute_directory, ABSOLUTE_ENTRIES),
+        ):
+            if directory is None:
+                continue
             operators = json.loads(
-                (self.bitwise_directory / "index.json").read_text(encoding="utf-8")
+                (directory / "index.json").read_text(encoding="utf-8")
             )
             if (
                 not isinstance(operators, dict)
-                or operators.get("family") != "bitwise"
+                or operators.get("family") != family
                 or operators.get("target") != self.target
                 or not isinstance(operators.get("descriptors"), dict)
-                or set(operators.get("descriptors", {})) != set(BITWISE_PACKAGE_ENTRIES)
+                or set(operators.get("descriptors", {})) != set(entries)
                 or any(
                     not isinstance(value, dict) or value.get("target") != self.target
                     for value in operators["descriptors"].values()
                 )
             ):
                 raise ValueError(
-                    "Bitwise packages must match the target and exact entry set"
+                    f"{family.title()} packages must match the target and exact entry set"
                 )
             self.descriptors.update(operators["descriptors"])
         directories = (
@@ -285,10 +307,12 @@ class HostRuntime:
             raise ValueError("Native reductions require explicit launch geometry")
         copy = entry in {COPY_ENTRY, BOOLEAN_COPY_ENTRY}
         invert = entry in BITWISE_INVERT_ENTRIES
+        absolute = entry in ABSOLUTE_ENTRIES
         bitwise = entry in BITWISE_PACKAGE_ENTRIES
         binary = entry in ALL_BINARY_ENTRIES
         comparison = entry in COMPARISON_ENTRIES
         binary_operation = binary or comparison
+        selection = entry in SELECTION_ENTRIES
         cast = entry in ALL_CAST_ENTRIES
         if (
             count
@@ -298,7 +322,15 @@ class HostRuntime:
                 else (
                     len(layout_module.signature(entry))
                     if shaped_reduction
-                    else 8 if copy else 4 if binary_operation or reduction else 3
+                    else (
+                        8
+                        if copy
+                        else (
+                            5
+                            if selection
+                            else 4 if binary_operation or reduction else 3
+                        )
+                    )
                 )
             )
             or not buffers
@@ -322,10 +354,16 @@ class HostRuntime:
         elif not small_row:
             descriptor = self.descriptors[entry]
             package_directory = (
-                self.bitwise_directory if bitwise else self.directory
+                self.bitwise_directory
+                if bitwise
+                else (
+                    self.selection_directory
+                    if selection
+                    else self.absolute_directory if absolute else self.directory
+                )
             ) / "package"
         logical_not = entry == LOGICAL_NOT_ENTRY
-        unary = entry in UNARY_ENTRIES or logical_not or invert
+        unary = entry in UNARY_ENTRIES or logical_not or invert or absolute
         if initialization:
             names = {"out"}
         elif shaped_reduction:
@@ -336,11 +374,17 @@ class HostRuntime:
             names = set(copy_layout.DTYPES)
         elif binary_operation:
             names = {"a", "b", "c", "size"}
+        elif selection:
+            names = {"a", "b", "c", "d", "size"}
         elif cast:
             names = {"src", "dst", "size"}
         else:
             names = {"in", "size", "out"} if unary else {"start", "step", "out"}
-        output_name = "dst" if copy or cast else "c" if binary_operation else "out"
+        output_name = (
+            "dst"
+            if copy or cast
+            else "c" if binary_operation else "d" if selection else "out"
+        )
         supplied = {}
         for index in range(count):
             buffer = buffers[index]
@@ -371,6 +415,7 @@ class HostRuntime:
                     if name == output_name
                     or (unary and name == "in")
                     or (binary_operation and name in {"a", "b"})
+                    or (selection and name in {"a", "b", "c"})
                     or (cast and name == "src")
                     else 1
                 )
@@ -389,7 +434,11 @@ class HostRuntime:
                 else (
                     BITWISE_INVERT_ENTRIES[entry]
                     if invert
-                    else "bool_" if logical_not else "float32"
+                    else (
+                        ABSOLUTE_ENTRIES[entry]
+                        if absolute
+                        else "bool_" if logical_not else "float32"
+                    )
                 )
             ):
                 raise ValueError("Native unary buffer dtype does not match")
@@ -403,6 +452,12 @@ class HostRuntime:
                 else "bool_" if name == "c" else COMPARISON_ENTRIES[entry]
             ):
                 raise ValueError("Native comparison buffer dtype does not match")
+            if selection and dtype != (
+                "uint32"
+                if name == "size"
+                else "bool_" if name == "a" else SELECTION_ENTRIES[entry]
+            ):
+                raise ValueError("Native selection buffer dtype does not match")
             if cast and dtype != (
                 "uint32"
                 if name == "size"
@@ -466,7 +521,7 @@ class HostRuntime:
                 workgroup_size=execution["workgroupSize"],
             )
             descriptor, package_directory = region_packages[0]
-        if (unary or binary_operation or cast) and ctypes.cast(
+        if (unary or binary_operation or cast or selection) and ctypes.cast(
             supplied["size"].data, ctypes.POINTER(ctypes.c_uint32)
         )[0] != threads:
             raise ValueError("Native operation size does not match the launch")
@@ -478,7 +533,16 @@ class HostRuntime:
             if any(not 0 <= counts[index] < 32 for index in range(threads)):
                 raise ValueError("32-bit shifts require counts in [0, 31]")
         guard = COPY_GUARD
-        guarded = copy or binary_operation or cast or logical_not or reduction or invert
+        guarded = (
+            copy
+            or binary_operation
+            or cast
+            or logical_not
+            or reduction
+            or invert
+            or selection
+            or absolute
+        )
         output_dtype = supplied[output_name].dtype.decode("ascii")
         if output_dtype == "bool_":
             guard = (
@@ -490,6 +554,7 @@ class HostRuntime:
             (reduction and output_dtype == "float32")
             or (binary and ALL_BINARY_ENTRIES[entry] == "float32")
             or (cast and ALL_CAST_ENTRIES[entry][1] == "float32")
+            or (selection and output_dtype == "float32")
         ):
             guard = [
                 ctypes.c_float.from_buffer_copy(ctypes.c_uint32(word)).value
@@ -545,8 +610,12 @@ class HostRuntime:
                 # Unwritten outputs must differ from the reduction identity.
                 initial_value = int("sum" in entry or entry == "init_reduce_orbool_")
                 values = [initial_value] * buffer.count
-            if bitwise and buffer.output:
+            if (bitwise or absolute) and buffer.output:
                 values = [1 if dtype == "bool_" else COPY_GUARD[0]] * buffer.count
+            if selection and buffer.output:
+                values = [
+                    int(guard[0]) if dtype == "bool_" else guard[0]
+                ] * buffer.count
             if dtype == "bool_":
                 values = boolean_values(values, "uint32")
                 if storage == "bool":
@@ -632,7 +701,7 @@ class HostRuntime:
                 raise RuntimeError("Native readback size does not match the output")
             if dtype == "bool_":
                 boolean_values(output["values"], storage)
-            elif bitwise or copy:
+            elif bitwise or copy or absolute or (selection and dtype != "float32"):
                 low, high = (
                     (-(2**31), 2**31 - 1) if dtype == "int32" else (0, 2**32 - 1)
                 )
@@ -675,13 +744,28 @@ class HostRuntime:
                         "artifact": descriptor["artifact"],
                         "details": result.details,
                         **(
+                            {
+                                "selectionValues": output["values"][: buffer.count],
+                                "selectionGuardValues": output["values"][
+                                    buffer.count :
+                                ],
+                            }
+                            if selection
+                            else {}
+                        ),
+                        **(
                             {"bitwiseValues": output["values"][: buffer.count]}
                             if bitwise
                             else {}
                         ),
                         **(
+                            {"absoluteValues": output["values"][: buffer.count]}
+                            if absolute
+                            else {}
+                        ),
+                        **(
                             {"unaryGuardValues": output["values"][buffer.count :]}
-                            if invert
+                            if invert or absolute
                             else {}
                         ),
                         **(

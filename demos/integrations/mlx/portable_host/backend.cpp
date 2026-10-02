@@ -95,6 +95,10 @@ void dispatch_unary(
   require_runtime();
   const bool logical = std::string(operation) == "LogicalNot";
   const bool invert = std::string(operation) == "BitwiseInvert";
+  const bool absolute = std::string(operation) == "Abs" && inputs.size() == 1 &&
+      (inputs[0].dtype() == mlx::core::int32 ||
+       inputs[0].dtype() == mlx::core::uint32 ||
+       inputs[0].dtype() == mlx::core::bool_);
   if (invert &&
       (inputs.size() != 1 ||
        (inputs[0].dtype() != mlx::core::int32 &&
@@ -103,12 +107,13 @@ void dispatch_unary(
     throw std::invalid_argument(
         "CrossTL BitwiseInvert requires matching int32 or uint32 arrays.");
   }
-  const auto type = invert ? inputs[0].dtype()
-      : logical           ? mlx::core::bool_
-                          : mlx::core::float32;
-  const char* dtype = invert ? (type == mlx::core::int32 ? "int32" : "uint32")
-      : logical             ? "bool_"
-                            : "float32";
+  const auto type = (invert || absolute) ? inputs[0].dtype()
+      : logical                         ? mlx::core::bool_
+                                        : mlx::core::float32;
+  const char* dtype = type == mlx::core::int32 ? "int32"
+      : type == mlx::core::uint32            ? "uint32"
+      : type == mlx::core::bool_             ? "bool_"
+                                            : "float32";
   if (inputs.size() != 1 || inputs[0].dtype() != type || out.dtype() != type) {
     throw std::invalid_argument(
         "CrossTL unary dispatch requires float32 arrays, or bool for LogicalNot.");
@@ -952,6 +957,51 @@ CROSSTL_BINARY_GPU(Divide)
 
 void BitwiseBinary::eval_gpu(const std::vector<array>& inputs, array& out) {
   dispatch_binary(inputs, out, name(), false, true);
+}
+
+void Select::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  const char* dtype = storage_type(out.dtype());
+  if (inputs.size() != 3 || !dtype || inputs[0].dtype() != bool_ ||
+      inputs[1].dtype() != out.dtype() || inputs[2].dtype() != out.dtype()) {
+    throw std::invalid_argument(
+        "CrossTL selection requires Boolean conditions and matching float32/int32/uint32/bool values.");
+  }
+  if (out.size() > 65535) {
+    throw std::invalid_argument("CrossTL selection supports at most 65535 elements.");
+  }
+  for (const auto& in : inputs) {
+    if (in.shape() != out.shape()) {
+      throw std::invalid_argument(
+          "CrossTL selection inputs must match the output shape.");
+    }
+  }
+  out.set_data(allocator::malloc(out.nbytes()));
+  if (out.size() == 0) {
+    return;
+  }
+  // MLX has already cast and broadcast the operands; materialize their layouts.
+  auto condition = dense_input(inputs[0]);
+  auto left = dense_input(inputs[1]);
+  auto right = dense_input(inputs[2]);
+  uint32_t size = static_cast<uint32_t>(out.size());
+  std::string entry = std::string("v_Select") + dtype;
+  CrosstlMlxBuffer buffers[] = {
+      {"a", "bool_", condition.data<void>(), size, 0},
+      {"b", dtype, left.data<void>(), size, 0},
+      {"c", dtype, right.data<void>(), size, 0},
+      {"d", dtype, out.data<void>(), size, 1},
+      {"size", "uint32", &size, 1, 0},
+  };
+  const auto launch = elementwise_launch(size);
+  char error[2048] = {};
+  int status = dispatch_callback.load()(
+      entry.c_str(), buffers, 5, size, &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(
+        std::string("CrossTL native selection failed: ") + error);
+  }
 }
 
 void Concatenate::eval_gpu(const std::vector<array>& inputs, array& out) {

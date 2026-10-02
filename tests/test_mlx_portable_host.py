@@ -38,6 +38,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "BitwiseBinary",
                     "BitwiseInvert",
                     "Concatenate",
+                    "Select",
                     "Power",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,
@@ -1409,6 +1410,39 @@ def test_registration_retains_callback_and_uses_platform_library(
     ]
     with pytest.raises(RuntimeError, match="already installed"):
         host.install()
+
+
+def test_unary_dtype_rejection_uses_unsupported_width(tmp_path, monkeypatch):
+    installed = []
+    arrays = []
+    module = SimpleNamespace(
+        gpu="gpu",
+        int64="int64",
+        metal=SimpleNamespace(is_available=lambda: False),
+        is_available=lambda device: bool(installed),
+        default_device=lambda: "gpu",
+        array=lambda values, *, dtype: arrays.append((values, dtype)) or values,
+        abs=lambda values, *, stream: values,
+    )
+
+    def evaluate(value):
+        assert arrays == [([-3, 2], "int64")]
+        raise ValueError("CrossTL unary dispatch requires float32 arrays")
+
+    module.eval = evaluate
+    monkeypatch.setitem(sys.modules, "mlx", SimpleNamespace(core=module))
+    monkeypatch.setitem(sys.modules, "mlx.core", module)
+    monkeypatch.setattr(
+        verify,
+        "HostRuntime",
+        lambda *args, **kwargs: SimpleNamespace(install=lambda: installed.append(True)),
+    )
+    monkeypatch.setenv("DEVICE", "cpu")
+    args = SimpleNamespace(
+        worker="unary-dtype", output_dir=tmp_path / "proof", packages=tmp_path
+    )
+    verify.worker(args)
+    assert json.loads((args.output_dir / "result.json").read_text())["rejected"] is True
 
 
 @pytest.mark.parametrize(

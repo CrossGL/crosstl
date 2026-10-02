@@ -52,6 +52,7 @@ def adapted_sources(original, primitives, events):
         "BitwiseBinary",
         "BitwiseInvert",
         "Concatenate",
+        "Select",
         *UNARY_OPERATIONS,
         *VIEW_PRIMITIVES,
         *COPY_PRIMITIVES,

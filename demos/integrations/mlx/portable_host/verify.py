@@ -135,7 +135,7 @@ def worker(args):
             elif args.worker == "over-limit":
                 value = mx.arange(65536, stream=mx.gpu)
             elif args.worker == "unary-dtype":
-                value = mx.abs(mx.array([-3, 2], dtype=mx.int32), stream=mx.gpu)
+                value = mx.abs(mx.array([-3, 2], dtype=mx.int64), stream=mx.gpu)
             elif args.worker == "unary-allocation":
                 source = mx.as_strided(
                     mx.array([1.0, 2.0, 3.0]), (2,), (1,), 2, stream=mx.gpu

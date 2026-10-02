@@ -480,7 +480,7 @@ def test_small_row_ci_requires_native_execution_on_all_targets():
         for step in job["steps"]
         for seconds in re.findall(r"--timeout-seconds (\d+)", step.get("run", ""))
     ]
-    assert deadlines == [1800, 4000, 900, 1200, 600, 1500, 600, 1500]
+    assert deadlines == [1800, 4000, 900, 1200, 600, 1500, 600, 1500, 600, 600, 1800]
     assert sum(deadlines) + 1800 < job["timeout-minutes"] * 60 <= 360 * 60
     triggers = workflow.get("on", workflow.get(True))
     for event in ("pull_request", "push"):
