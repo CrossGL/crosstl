@@ -856,3 +856,45 @@ reductions and bitwise operations.
 This does not add 64-bit division, selection, concatenation or general unary
 operations. The 65,535-element bounds and synchronous host-staging model remain.
 The two upstream tests are additional coverage, not full-suite parity.
+
+### Padding and Slice Updates
+
+`Pad` fills the destination through an unchanged translated copy kernel, then
+copies the input into its padded region. `SliceUpdate` copies the base array and
+replaces the requested slice through the same kernel. No array computation is
+performed by a CPU fallback. Destination strides may be negative; source and
+destination bounds, preserved regions and nonoverlapping writes are checked
+before native submission. Aliased base/update views remain alive while a distinct
+output allocation is populated.
+
+These hooks support float32, int32, uint32, bool, int64 and uint64, with at most
+65,535 output elements. The wider types require the optional `integer64` packages.
+MLX's unchanged edge, reflect and symmetric padding implementations compose these
+hooks with shared-buffer slices. Slice-update reductions such as indexed addition
+remain explicitly unsupported; replacement support does not imply scatter or
+general indexing support.
+
+`verify_padding` runs 102 workloads on CPU and generated GPU paths, checking exact
+storage bytes, intermediate copy readbacks, output guards, signed strides,
+broadcast inputs, aliased updates, empty regions and the maximum supported output
+size. Float copies include NaN payloads, subnormals and signed zero. Seven isolated
+negative workers reject missing packages, unsupported types, oversized outputs
+and slice-update reductions. The unchanged upstream `test_pad`,
+`test_pad_reflect_symmetric` and `test_slice_update_reversed` methods must also pass
+without skips; `test_pad` retains its gradient check. Their Boolean reductions
+require widths 32 and 64.
+
+```bash
+python -m demos.integrations.mlx.portable_host.reduction_packages \
+  --mlx-root mlx-upstream --target opengl --entry all_reduce_andbool_ --width 64 \
+  --output-dir padding-reductions
+python -m demos.integrations.mlx.portable_host.verify_padding \
+  --mlx-root mlx-upstream --packages host-packages --integer64 integer64-packages \
+  --reductions concatenate-reductions --reductions padding-reductions \
+  --output-dir padding-evidence
+```
+
+The three-OS integer64 CI job requires this additional proof using its existing
+host build and packages. It retains source hashes, compiler and dispatch identity,
+raw readbacks and failed worker logs. The three additional upstream methods do
+not establish full MLX test-suite or backend parity.

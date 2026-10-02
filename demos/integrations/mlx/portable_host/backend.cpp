@@ -212,15 +212,17 @@ void dispatch_copy_into(
       uint64_t(high) >= capacity - origin) {
     throw std::invalid_argument("CrossTL copy source view exceeds its allocation.");
   }
-  int64_t destination_high = dst_offset;
+  int64_t destination_low = dst_offset, destination_high = dst_offset;
   for (size_t axis = 0; axis < shape.size(); ++axis) {
-    if (dst_strides[axis] < 0 ||
+    if (dst_strides[axis] < -int64_t(std::numeric_limits<int32_t>::max()) ||
         dst_strides[axis] > std::numeric_limits<int32_t>::max()) {
       throw std::invalid_argument("CrossTL copy destination stride is invalid.");
     }
-    destination_high += (int64_t(shape[axis]) - 1) * dst_strides[axis];
+    const int64_t extent = (int64_t(shape[axis]) - 1) * dst_strides[axis];
+    destination_low += std::min<int64_t>(extent, 0);
+    destination_high += std::max<int64_t>(extent, 0);
   }
-  if (dst_offset < 0 || destination_high >= out.size() ||
+  if (dst_offset < 0 || destination_low < 0 || destination_high >= out.size() ||
       out.offset() < 0 || uint64_t(out.offset()) > out.buffer_size() ||
       out.nbytes() > out.buffer_size() - uint64_t(out.offset())) {
     throw std::invalid_argument("CrossTL copy destination exceeds its allocation.");
@@ -887,6 +889,80 @@ void Full::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
   // MLX has already broadcast and cast the value; materialize it on the device.
   dispatch_copy(inputs[0], out);
+}
+
+void Pad::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() != 2 || inputs[0].ndim() != out.ndim() ||
+      inputs[1].size() != 1 || inputs[0].dtype() != out.dtype() ||
+      inputs[1].dtype() != out.dtype() || !storage_type(out.dtype()) ||
+      out.size() > 65535 || out.ndim() > 64 ||
+      axes_.size() != low_pad_size_.size() || axes_.size() != high_pad_size_.size()) {
+    throw std::invalid_argument(
+        "CrossTL padding requires matching supported arrays, one fill value and at most 65535 output elements.");
+  }
+  const auto& in = inputs[0];
+  Shape expected = in.shape();
+  int64_t offset = 0;
+  for (size_t i = 0; i < axes_.size(); ++i) {
+    const int axis = axes_[i] < 0 ? out.ndim() + axes_[i] : axes_[i];
+    if (axis < 0 || axis >= out.ndim() || low_pad_size_[i] < 0 || high_pad_size_[i] < 0 ||
+        int64_t(expected[axis]) + low_pad_size_[i] + high_pad_size_[i] > 65535) {
+      throw std::invalid_argument("CrossTL padding axes or extents are invalid.");
+    }
+    expected[axis] += low_pad_size_[i] + high_pad_size_[i];
+    offset += out.strides()[axis] * low_pad_size_[i];
+  }
+  if (expected != out.shape()) {
+    throw std::invalid_argument("CrossTL padding output shape does not match.");
+  }
+  // A broadcast view lets the unchanged copy kernel fill every output element.
+  array fill(out.shape(), out.dtype(), nullptr, {});
+  fill.copy_shared_buffer(
+      inputs[1], Strides(out.ndim(), 0), {true, out.size() <= 1, out.size() <= 1}, 1);
+  dispatch_copy(fill, out);
+  dispatch_copy_into(
+      in, out, std::vector<int64_t>(out.strides().begin(), out.strides().end()),
+      offset, true);
+}
+
+void SliceUpdate::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (reduce_type_ != None) {
+    throw std::invalid_argument("CrossTL slice update reductions are not implemented.");
+  }
+  if (inputs.size() != 2 || inputs[0].shape() != out.shape() ||
+      inputs[1].ndim() != out.ndim() || inputs[0].dtype() != out.dtype() ||
+      inputs[1].dtype() != out.dtype() || !storage_type(out.dtype()) ||
+      out.size() > 65535 || out.ndim() > 64 ||
+      start_indices_.size() != out.ndim() || end_indices_.size() != out.ndim() ||
+      strides_.size() != out.ndim()) {
+    throw std::invalid_argument(
+        "CrossTL slice updates require matching supported arrays and at most 65535 output elements.");
+  }
+  const auto& update = inputs[1];
+  int64_t offset = 0;
+  std::vector<int64_t> destination_strides(out.ndim());
+  for (int axis = 0; axis < out.ndim(); ++axis) {
+    const int64_t step = strides_[axis], start = start_indices_[axis];
+    const int64_t distance = step > 0 ? int64_t(end_indices_[axis]) - start
+                                     : start - int64_t(end_indices_[axis]);
+    const int64_t magnitude = step < 0 ? -step : step;
+    if (!step || (std::max<int64_t>(distance, 0) + magnitude - 1) / magnitude != update.shape(axis)) {
+      throw std::invalid_argument("CrossTL slice update shape does not match its strides.");
+    }
+    if (update.size()) {
+      const int64_t last = start + (int64_t(update.shape(axis)) - 1) * step;
+      if (start < 0 || start >= out.shape(axis) || last < 0 || last >= out.shape(axis)) {
+        throw std::invalid_argument("CrossTL slice update exceeds the destination.");
+      }
+    }
+    offset += start * out.strides()[axis];
+    destination_strides[axis] = step * out.strides()[axis];
+  }
+  // Keep the base and update allocations alive and distinct, including aliasing views.
+  dispatch_copy(inputs[0], out);
+  dispatch_copy_into(update, out, std::move(destination_strides), offset, true);
 }
 
 void Reshape::eval_gpu(const std::vector<array>& inputs, array& out) {

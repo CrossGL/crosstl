@@ -542,7 +542,7 @@ def test_integer64_ci_requires_all_three_native_targets():
         for step in job["steps"]
         for value in re.findall(r"--timeout-seconds (\d+)", step.get("run", ""))
     ]
-    assert deadlines == [1800, 7200, 600, 900, 900, 3000]
+    assert deadlines == [1800, 7200, 600, 900, 900, 3000, 900, 3000]
     assert sum(deadlines) + 1800 < job["timeout-minutes"] * 60 <= 360 * 60
     retained = steps["Retain integer64 execution evidence"]
     assert retained["if"] == "always()"
