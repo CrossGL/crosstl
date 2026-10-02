@@ -554,6 +554,18 @@ def test_small_row_worker_retains_failed_readbacks(tmp_path, monkeypatch, fault)
         assert record["resultShape"] == [1, expected.size]
 
 
+def test_native_host_ci_preserves_active_execution():
+    import yaml
+
+    workflow = yaml.safe_load(
+        Path(".github/workflows/mlx-portable-host.yml").read_text()
+    )
+    concurrency = workflow["concurrency"]
+    assert concurrency["group"] == "mlx-portable-host-${{ github.ref }}"
+    assert concurrency["cancel-in-progress"] is False
+    assert concurrency.get("queue", "single") == "single"
+
+
 def test_small_row_oracle_distinguishes_outputs_for_every_operation():
     import numpy as np
 

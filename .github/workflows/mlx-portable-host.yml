@@ -157,7 +157,8 @@ env:
 
 concurrency:
   group: mlx-portable-host-${{ github.ref }}
-  cancel-in-progress: true
+  # Preserve native runs; newer commits replace only the pending run.
+  cancel-in-progress: false
 
 jobs:
   portable-host:

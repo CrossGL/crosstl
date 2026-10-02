@@ -503,7 +503,13 @@ The native worker has a hard 300-second process-tree deadline; the CPU reference
 and eighteen negative processes each retain a 180-second deadline. All are
 attempted so a failure does not discard the other diagnostic results. CI allows
 2,400 seconds for package translation and 4,000 seconds for verification within
-a bounded 270-minute platform job.
+a bounded 330-minute platform job. Small-row host workloads run in separate
+150-minute platform jobs after the base host proof.
+
+The workflow preserves an active native run when a branch changes and keeps only
+the newest pending run for that ref. This lets long reduction jobs finish without
+building a queue of superseded revisions. Retained evidence identifies its source
+revision; results from an earlier commit do not establish that a newer one passes.
 
 The evidence directory retains before/after adaptation hashes, command status,
 stdout/stderr, upstream test logs, dispatch traces and numerical results. The
