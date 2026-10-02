@@ -1305,10 +1305,28 @@ or a second thread-grid mapping. Each region needs its own output directory or
 otherwise distinct artifact identity; a grid or offset change changes the
 specialized program, even when the physical workgroup shape stays the same.
 
-Automatic package selection, specialization caching and MLX host dispatch integration are not yet
-wired to these APIs. The public DirectX/OpenGL ``threadGridSize`` rejection remains
-in place until those contracts are implemented; a geometry plan alone does not
-make an ordinary rounded dispatch correct.
+Region packages also record ``dispatchRegionProgram``: the selected source
+entry, resolved CrossGL program hash (including included definitions), target,
+lowering settings and installed translation-code identity. This is a consistency
+record, not a cryptographic signature or a proof of numerical equivalence.
+
+``select_native_loader_dispatch_regions`` accepts descriptor/package-root pairs
+and orders the complete canonical plan for a requested exact grid and nominal
+workgroup size. Missing, duplicate, unrelated or mixed-program regions are
+rejected. Older packages without the program identity can still be loaded
+individually, but cannot participate in automatic region selection.
+
+``prepare_native_loader_dispatch_regions`` additionally verifies every artifact,
+preflights its bindings and compiles through the native adapter before yielding
+requests for ``dispatch_sequence``. Source allocations are shared, with uploads
+only on the first region; derived launch uniforms remain region-local. Use the
+context manager for the whole dispatch so compiled modules remain alive and are
+cleaned up on success or failure.
+
+On-demand specialization caching and MLX host dispatch integration are not yet
+wired to these APIs. Single-request DirectX/OpenGL ``threadGridSize`` rejection
+remains in place; use the complete region preparation API for an exact grid,
+not an ordinary rounded dispatch.
 
 The bounded mode supports scalar ``float``, ``int``, or ``uint`` sum, minimum,
 maximum, and shuffle-down operations. Shared scratch spans the complete

@@ -3254,7 +3254,10 @@
             "tests/test_translator/test_dispatch_regions.py::def test_region_plan_exhaustively_covers_small_3d_grids",
             "tests/test_translator/test_dispatch_regions.py::def test_region_specialization_compiles_without_changing_source_ast",
             "tests/test_translator/test_dispatch_region_project.py::def test_project_region_package_and_launch_contract",
-            "tests/test_translator/test_dispatch_region_project.py::def test_region_identity_includes_source_grid_and_offset"
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_identity_includes_source_grid_and_offset",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_selection_preserves_program_and_complete_coverage",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_selection_rejects_mixed_programs",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_preparation_checks_all_artifacts_before_compilation"
           ],
           "notes": "A fixed project.workgroup_size or named-variant workgroup_size is joined to every deterministic host-named Metal materialization. Source-wide [project.workgroup_size_rules] expressions are evaluated against each entry's template parameters, and [project.entry_workgroup_size_rules] can override the formula for distinct host entry families while retaining the source-wide fallback. Ordinary ambiguous multi-entry sources, unmatched configured entry patterns, uncovered entries without a fallback, and incomplete materialization joins fail closed. DirectX emits one HLSL library artifact with independent numthreads values per entry, while execution metadata, source-to-target identities, selected rule provenance, and report validation preserve each dispatch contract. This support covers generated shader/kernel artifacts and reported dispatch contracts only; runtime execution and numerical parity are not claimed.",
           "status": "supported"
@@ -3295,7 +3298,10 @@
             "tests/test_translator/test_dispatch_regions.py::def test_region_plan_exhaustively_covers_small_3d_grids",
             "tests/test_translator/test_dispatch_regions.py::def test_region_specialization_compiles_without_changing_source_ast",
             "tests/test_translator/test_dispatch_region_project.py::def test_project_region_package_and_launch_contract",
-            "tests/test_translator/test_dispatch_region_project.py::def test_region_identity_includes_source_grid_and_offset"
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_identity_includes_source_grid_and_offset",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_selection_preserves_program_and_complete_coverage",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_selection_rejects_mixed_programs",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_preparation_checks_all_artifacts_before_compilation"
           ],
           "notes": "A fixed project.workgroup_size or named-variant workgroup_size is joined to every deterministic host-named Metal materialization. Source-wide [project.workgroup_size_rules] expressions are evaluated against each entry's template parameters, and [project.entry_workgroup_size_rules] can override the formula for distinct host entry families while retaining the source-wide fallback. Ordinary ambiguous multi-entry sources, unmatched configured entry patterns, uncovered entries without a fallback, and incomplete materialization joins fail closed. OpenGL splits materialized entries into deterministic standalone GLSL artifacts with runnable main entry points and entry-specific local-size layouts, while execution metadata, selected rule provenance, and report validation preserve each dispatch contract and reject missing splits. This support covers generated shader/kernel artifacts and reported dispatch contracts only; runtime execution and numerical parity are not claimed.",
           "status": "supported"

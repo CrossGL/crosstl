@@ -708,6 +708,8 @@ def test_project_package_exposes_public_api_surface():
         "build_native_loader_abi_descriptor",
         "build_native_loader_abi_package",
         "build_native_loader_dispatch_request",
+        "prepare_native_loader_dispatch_regions",
+        "select_native_loader_dispatch_regions",
         "build_runtime_host_loader_scaffolds",
         "build_runtime_host_integration_handoff",
         "build_runtime_loader_manifest",
@@ -22661,7 +22663,8 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
         project_pipeline.REPORT_ARTIFACT_INCLUDE_PATH_PROCESSING_FIELDS
     )
     assert set(artifact["provenance"]) == (
-        project_pipeline.REPORT_ARTIFACT_PROVENANCE_FIELDS - {"dispatchRegion"}
+        project_pipeline.REPORT_ARTIFACT_PROVENANCE_FIELDS
+        - {"dispatchRegion", "dispatchRegionProgram"}
     )
     assert set(artifact["sourceRemap"]) == (
         project_pipeline.REPORT_ARTIFACT_SOURCE_REMAP_FIELDS

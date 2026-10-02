@@ -7947,7 +7947,10 @@
             "tests/test_translator/test_dispatch_regions.py::def test_region_plan_exhaustively_covers_small_3d_grids",
             "tests/test_translator/test_dispatch_regions.py::def test_region_specialization_compiles_without_changing_source_ast",
             "tests/test_translator/test_dispatch_region_project.py::def test_project_region_package_and_launch_contract",
-            "tests/test_translator/test_dispatch_region_project.py::def test_region_identity_includes_source_grid_and_offset"
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_identity_includes_source_grid_and_offset",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_selection_preserves_program_and_complete_coverage",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_selection_rejects_mixed_programs",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_preparation_checks_all_artifacts_before_compilation"
           ]
         },
         "opengl": {
@@ -7967,7 +7970,10 @@
             "tests/test_translator/test_dispatch_regions.py::def test_region_plan_exhaustively_covers_small_3d_grids",
             "tests/test_translator/test_dispatch_regions.py::def test_region_specialization_compiles_without_changing_source_ast",
             "tests/test_translator/test_dispatch_region_project.py::def test_project_region_package_and_launch_contract",
-            "tests/test_translator/test_dispatch_region_project.py::def test_region_identity_includes_source_grid_and_offset"
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_identity_includes_source_grid_and_offset",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_selection_preserves_program_and_complete_coverage",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_selection_rejects_mixed_programs",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_preparation_checks_all_artifacts_before_compilation"
           ]
         },
         "metal": {

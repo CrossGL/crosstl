@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from crosstl.translator.dispatch_region_identity import validate_dispatch_region_program
 from crosstl.translator.dispatch_regions import DispatchRegion
 
 NATIVE_LOADER_ABI_KIND = "crosstl-native-loader-abi-descriptor"
@@ -1686,6 +1687,19 @@ def _validate_descriptor(descriptor: Mapping[str, Any]) -> dict[str, Any]:
 def _validate_dispatch_region(
     target: str, entry_point: Mapping[str, Any], provenance: Mapping[str, Any]
 ) -> None:
+    if "dispatchRegionProgram" in provenance:
+        try:
+            if "dispatchRegion" not in provenance:
+                raise ValueError("dispatchRegionProgram requires dispatchRegion")
+            validate_dispatch_region_program(
+                provenance["dispatchRegionProgram"], target=target
+            )
+        except ValueError as exc:
+            raise NativeLoaderABIError(
+                "dispatch-region-program-invalid",
+                str(exc),
+                path="$.provenance.dispatchRegionProgram",
+            ) from exc
     if "dispatchRegion" not in provenance:
         return
     try:
@@ -1697,7 +1711,10 @@ def _validate_dispatch_region(
         key = "numthreads" if target == "directx" else "local_size"
         size = entry_point["executionConfig"].get(key)
         if size is None and target == "opengl":
-            size = [entry_point["executionConfig"].get(f"local_size_{axis}") for axis in "xyz"]
+            size = [
+                entry_point["executionConfig"].get(f"local_size_{axis}")
+                for axis in "xyz"
+            ]
         if (
             not isinstance(size, list)
             or any(type(n) is not int for n in size)

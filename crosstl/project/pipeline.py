@@ -93,6 +93,10 @@ from crosstl.translator.codegen.workgroup_access_contracts import (
     parse_workgroup_access_assertions,
 )
 from crosstl.translator.default_arguments import lower_default_arguments
+from crosstl.translator.dispatch_region_identity import (
+    build_dispatch_region_program,
+    validate_dispatch_region_program,
+)
 from crosstl.translator.dispatch_region_lowering import specialize_dispatch_region
 from crosstl.translator.dispatch_regions import DispatchRegion
 from crosstl.translator.entry_discovery import (
@@ -1815,7 +1819,7 @@ REPORT_ARTIFACT_INCLUDE_DEPENDENCY_PROCESSING_FIELDS = frozenset(
 )
 REPORT_HASH_FIELDS = frozenset(("algorithm", "value"))
 REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(
-    ("pipeline", "intermediate", "dispatchRegion")
+    ("pipeline", "intermediate", "dispatchRegion", "dispatchRegionProgram")
 )
 REPORT_ARTIFACT_ENTRY_POINT_FIELDS = frozenset(("source", "target", "stage"))
 REPORT_ARTIFACT_EXECUTION_FIELDS = frozenset(
@@ -27392,12 +27396,16 @@ def _crossgl_ast_for_project_target(
             )
         intermediate = reverse_codegen.generate(source_ast)
 
-    return cgl_spec.parse(
+    ast = cgl_spec.parse(
         intermediate,
         source_options={
             "strict_function_bodies": original_source_backend != "mojo",
         },
     )
+    ast.annotations["dispatch_region_intermediate_hash"] = hashlib.sha256(
+        intermediate.encode("utf-8")
+    ).hexdigest()
+    return ast
 
 
 def _project_workgroup_execution_metadata(
@@ -27728,6 +27736,7 @@ def _generate_project_target_from_crossgl_ast(
     directx_relative_wave_shuffle_out_of_range: Any | None = None,
     directx_widen_native_float16: Any | None = None,
     dispatch_region: DispatchRegion | None = None,
+    provenance: dict[str, Any] | None = None,
 ) -> str:
     codegen = get_codegen(target)
     if cooperative_matrix_software_lowering is not None:
@@ -27809,7 +27818,52 @@ def _generate_project_target_from_crossgl_ast(
         codegen, ast, entry_point
     )
     if dispatch_region is not None:
+        stages = _crossgl_compute_stages(selected_ast, remaining_entry_point)
+        if len(stages) != 1:
+            raise ValueError("Dispatch region identity requires one compute entry")
+        stage = stages[0]
+        execution = dict(getattr(stage, "execution_config", {}) or {})
+        for key in (
+            "numthreads",
+            "workgroup_size",
+            "local_size",
+            "local_size_x",
+            "local_size_y",
+            "local_size_z",
+        ):
+            execution.pop(key, None)
+        program = build_dispatch_region_program(
+            intermediate_hash=ast.annotations.get("dispatch_region_intermediate_hash"),
+            entry_point=stage.entry_point.name,
+            target=target,
+            settings={
+                "execution": execution,
+                "subgroupWidths": [
+                    [
+                        _literal_workgroup_size_component(value)
+                        for value in attribute.arguments
+                    ]
+                    for attribute in getattr(stage.entry_point, "attributes", ())
+                    if _wave_size_attribute(attribute)
+                ],
+                "indexRanges": [item.to_json() for item in index_range_assertions],
+                "workgroupAccesses": [
+                    item.to_json() for item in workgroup_access_assertions
+                ],
+                "softwareSubgroupWidth": software_subgroup_width,
+                "cooperativeMatrixSoftwareLowering": (
+                    cooperative_matrix_software_lowering
+                ),
+                "privatePointerOutOfBoundsRead": private_pointer_out_of_bounds_read,
+                "relativeWaveShuffleOutOfRange": (
+                    directx_relative_wave_shuffle_out_of_range
+                ),
+                "widenNativeFloat16": directx_widen_native_float16,
+            },
+        )
         selected_ast = specialize_dispatch_region(selected_ast, dispatch_region)
+        if provenance is not None:
+            provenance["dispatchRegionProgram"] = program
     validate_pointer_reinterpretation_target(selected_ast, target)
     if remaining_entry_point is None:
         generated = codegen.generate(selected_ast)
@@ -29283,6 +29337,7 @@ def _translate_project_impl(
                                     try:
                                         split_source = _generate_project_target_from_crossgl_ast(
                                             dispatch_region=dispatch_region,
+                                            provenance=split_artifact["provenance"],
                                             ast=crossgl_ast,
                                             target=target,
                                             output_path=split_output_path,
@@ -29364,6 +29419,7 @@ def _translate_project_impl(
                                 try:
                                     generated_source = _generate_project_target_from_crossgl_ast(
                                         dispatch_region=dispatch_region,
+                                        provenance=artifact["provenance"],
                                         ast=crossgl_ast,
                                         target=target,
                                         output_path=output_path,
@@ -29437,6 +29493,7 @@ def _translate_project_impl(
                             )
                         generated_source = _generate_project_target_from_crossgl_ast(
                             dispatch_region=dispatch_region,
+                            provenance=artifact["provenance"],
                             ast=crossgl_ast,
                             target=target,
                             output_path=output_path,
@@ -46767,6 +46824,15 @@ def _provenance_contract_reasons(
                 )
         except ValueError as exc:
             reasons.append(f"{prefix}.dispatchRegion: {exc}")
+    if "dispatchRegionProgram" in provenance:
+        try:
+            if "dispatchRegion" not in provenance:
+                raise ValueError("dispatchRegionProgram requires dispatchRegion")
+            validate_dispatch_region_program(
+                provenance["dispatchRegionProgram"], target=artifact.get("target")
+            )
+        except ValueError as exc:
+            reasons.append(f"{prefix}.dispatchRegionProgram: {exc}")
     if (
         config is not None
         and artifact.get("status") == "translated"

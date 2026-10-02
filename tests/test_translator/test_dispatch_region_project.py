@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,14 +17,12 @@ from crosstl.project import (
     build_runtime_artifact_manifest,
     build_runtime_loader_manifest,
     build_runtime_package,
+    prepare_native_loader_dispatch_regions,
+    select_native_loader_dispatch_regions,
     translate_project,
 )
 from crosstl.project.native_loader_abi import NativeLoaderABIError
 from crosstl.project.native_loader_dispatch import NativeLoaderDispatchError
-from crosstl.project.runtime_verification import (
-    RuntimeAllocationView,
-    RuntimeExecutionState,
-)
 from crosstl.translator.dispatch_regions import DispatchRegion, plan_dispatch_regions
 from tests.test_translator.test_dispatch_regions import REQUIRE_ENV, _case
 from tests.test_translator.test_exact_thread_grid_runtime import GRIDS, SOURCE
@@ -58,8 +57,10 @@ def _config(root, target, region):
     )
 
 
-def _package(root, target, region):
-    report = translate_project(_config(root, target, region), format_output=False)
+def _package(root, target, region, *, config=None):
+    report = translate_project(
+        config or _config(root, target, region), format_output=False
+    )
     payload = report.to_json()
     assert payload["summary"]["failedCount"] == 0, json.dumps(
         payload["diagnostics"], indent=2
@@ -69,6 +70,7 @@ def _package(root, target, region):
         "pipeline",
         "intermediate",
         "dispatchRegion",
+        "dispatchRegionProgram",
     }
     assert payload["artifacts"][0]["provenance"]["dispatchRegion"] == region.to_json()
     report.write_json(root / "report.json")
@@ -82,6 +84,256 @@ def _package(root, target, region):
     descriptor = build_native_loader_abi_descriptor(loader)
     assert descriptor["provenance"]["dispatchRegion"] == region.to_json()
     return descriptor, package, loader
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_region_selection_preserves_program_and_complete_coverage(tmp_path, target):
+    regions = plan_dispatch_regions([37], [32])
+    packages = [
+        _package(tmp_path / str(i), target, region)[:2]
+        for i, region in enumerate(regions)
+    ]
+    selected = select_native_loader_dispatch_regions(
+        packages[::-1], thread_grid_size=[37], source_workgroup_size=[32]
+    )
+    assert selected == tuple(packages)
+    programs = [
+        descriptor["provenance"]["dispatchRegionProgram"] for descriptor, _ in selected
+    ]
+    assert programs[0] == programs[1]
+    assert programs[0]["sourceEntryPoint"] != "main"
+    for invalid in (packages[:1], packages + packages[:1], [packages[0], packages[0]]):
+        with pytest.raises(NativeLoaderDispatchError, match="coverage-invalid"):
+            select_native_loader_dispatch_regions(
+                invalid, thread_grid_size=[37], source_workgroup_size=[32]
+            )
+    with pytest.raises(NativeLoaderDispatchError, match="coverage-invalid"):
+        select_native_loader_dispatch_regions(
+            packages, thread_grid_size=[69], source_workgroup_size=[32]
+        )
+    legacy = copy.deepcopy(packages)
+    legacy[1][0]["provenance"].pop("dispatchRegionProgram")
+    with pytest.raises(NativeLoaderDispatchError, match="program-missing"):
+        select_native_loader_dispatch_regions(
+            legacy, thread_grid_size=[37], source_workgroup_size=[32]
+        )
+
+
+@pytest.mark.parametrize("change", ["entry", "include", "policy", "implementation"])
+def test_region_selection_rejects_mixed_programs(tmp_path, change, monkeypatch):
+    from crosstl.translator import dispatch_region_identity
+
+    source = """
+#include <metal_stdlib>
+#include "value.h"
+using namespace metal;
+kernel void first(device uint* output [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
+    output[tid] = VALUE;
+}
+kernel void second(device uint* output [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
+    output[tid] = VALUE + 1;
+}
+"""
+    packages = []
+    for i, region in enumerate(plan_dispatch_regions([37], [32])):
+        root = tmp_path / str(i)
+        config = replace(
+            _config(root, "opengl", region),
+            entry_points={
+                "kernel.metal": "second" if i and change == "entry" else "first"
+            },
+        )
+        config.source_options["metal"]["target_options"]["opengl"].pop(
+            "software_subgroup_width"
+        )
+        (root / "kernel.metal").write_text(source)
+        (root / "value.h").write_text(
+            f"#define VALUE {2 if i and change == 'include' else 1}\n"
+        )
+        if i and change == "policy":
+            config.source_options["metal"]["target_options"]["opengl"][
+                "private_pointer_out_of_bounds_read"
+            ] = "zero"
+        if i and change == "implementation":
+            monkeypatch.setattr(
+                dispatch_region_identity,
+                "translation_implementation_hash",
+                lambda: "a" * 64,
+            )
+        packages.append(_package(root, "opengl", region, config=config)[:2])
+    a, b = (pair[0] for pair in packages)
+    assert a["source"]["hash"] == b["source"]["hash"]
+    assert a["entryPoint"]["name"] == b["entryPoint"]["name"] == "main"
+    assert (
+        a["provenance"]["dispatchRegionProgram"]
+        != b["provenance"]["dispatchRegionProgram"]
+    )
+    with pytest.raises(NativeLoaderDispatchError, match="program-mismatch"):
+        select_native_loader_dispatch_regions(
+            packages, thread_grid_size=[37], source_workgroup_size=[32]
+        )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("hash", "0" * 64),
+        ("sourceEntryPoint", "other"),
+        ("target", "metal"),
+        ("schemaVersion", True),
+    ],
+)
+def test_region_program_metadata_is_validated(tmp_path, field, value):
+    region = plan_dispatch_regions([37], [32])[-1]
+    _, _, loader = _package(tmp_path, "opengl", region)
+    loader["loadUnits"][0]["provenance"]["dispatchRegionProgram"][field] = value
+    with pytest.raises(NativeLoaderABIError, match="program-invalid"):
+        build_native_loader_abi_descriptor(loader)
+    payload = json.loads((tmp_path / "report.json").read_text())
+    payload["artifacts"][0]["provenance"]["dispatchRegionProgram"][field] = value
+    (tmp_path / "report.json").write_text(json.dumps(payload))
+    result = build_runtime_artifact_manifest(tmp_path / "report.json")
+    assert not result["success"]
+    assert "dispatchRegionProgram" in json.dumps(result["diagnostics"])
+
+
+def test_region_selection_rejects_different_configured_subgroup_widths(tmp_path):
+    packages = []
+    for i, region in enumerate(plan_dispatch_regions([192], [128])):
+        root = tmp_path / str(i)
+        config = replace(
+            _config(root, "directx", region),
+            workgroup_size=None,
+            entry_workgroup_size_rules={"kernel.metal": {"*": region.workgroup_size}},
+            subgroup_width_rules={"kernel.metal": 32 if i == 0 else 64},
+            entry_points={"kernel.metal": "subgroup_uint"},
+        )
+        config.source_options["metal"]["target_options"]["directx"].pop(
+            "software_subgroup_width"
+        )
+        (root / "kernel.metal").write_text("""
+#include <metal_stdlib>
+using namespace metal;
+template <typename T>
+[[kernel]] void subgroup_copy(device T* output [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
+    output[tid] = T(simd_sum(tid));
+}
+instantiate_kernel("subgroup_uint", subgroup_copy, uint)
+""")
+        packages.append(_package(root, "directx", region, config=config)[:2])
+    first, second = (
+        pair[0]["provenance"]["dispatchRegionProgram"] for pair in packages
+    )
+    assert first["intermediateHash"] == second["intermediateHash"]
+    assert first["settingsHash"] != second["settingsHash"]
+    with pytest.raises(NativeLoaderDispatchError, match="program-mismatch"):
+        select_native_loader_dispatch_regions(
+            packages, thread_grid_size=[192], source_workgroup_size=[128]
+        )
+
+
+def test_region_preparation_checks_all_artifacts_before_compilation(tmp_path):
+    packages = [
+        _package(tmp_path / str(i), "opengl", region)[:2]
+        for i, region in enumerate(plan_dispatch_regions([37], [32]))
+    ]
+    inputs, initial, expected = _case((37, 1, 1), (32, 1, 1))
+    supplied, outputs = _values(packages[0][0], inputs, initial, expected)
+    descriptor, root = packages[-1]
+    (root / descriptor["artifact"]["packagePath"]).write_text("changed")
+    adapter = SimpleNamespace(
+        target="opengl",
+        prepare_buffers=lambda state: pytest.fail(
+            "must validate every artifact before compilation"
+        ),
+    )
+    with pytest.raises(NativeLoaderDispatchError, match="artifact"):
+        with prepare_native_loader_dispatch_regions(
+            packages,
+            supplied,
+            outputs,
+            thread_grid_size=[37],
+            source_workgroup_size=[32],
+            adapter=adapter,
+        ):
+            pytest.fail("must reject changed package")
+
+
+@pytest.mark.parametrize("fail_index", [0, 1])
+def test_region_preparation_cleans_up_after_compile_failure(tmp_path, fail_index):
+    import tempfile
+    from pathlib import Path
+
+    packages = [
+        _package(tmp_path / str(i), "opengl", region)[:2]
+        for i, region in enumerate(plan_dispatch_regions([37], [32]))
+    ]
+    inputs, initial, expected = _case((37, 1, 1), (32, 1, 1))
+    supplied, outputs = _values(packages[0][0], inputs, initial, expected)
+    directories = []
+    adapter = _executor("opengl").runtime_adapter
+
+    def prepare(state):
+        directory = tempfile.TemporaryDirectory()
+        directories.append(Path(directory.name))
+        state.temporary_directories.append(directory)
+        if len(directories) == fail_index + 1:
+            raise RuntimeError("compiler failed")
+        state.loaded_artifact = state.request.artifact_path.read_text()
+        return adapter._prepare_dispatch_request(
+            state, state.request.artifact_path, state.request.artifact_path
+        )
+
+    with pytest.raises(RuntimeError, match="compiler failed"):
+        with prepare_native_loader_dispatch_regions(
+            packages,
+            supplied,
+            outputs,
+            thread_grid_size=[37],
+            source_workgroup_size=[32],
+            adapter=SimpleNamespace(target="opengl", prepare_buffers=prepare),
+        ):
+            pytest.fail("must not dispatch")
+    assert directories and not any(path.exists() for path in directories)
+
+
+def test_region_preparation_retains_explicit_allocation_views(tmp_path):
+    from crosstl.project.runtime_verification import RuntimeAllocationView
+
+    packages = [
+        _package(tmp_path / str(i), "opengl", region)[:2]
+        for i, region in enumerate(plan_dispatch_regions([37], [32]))
+    ]
+    inputs, initial, expected = _case((37, 1, 1), (32, 1, 1))
+    supplied, outputs = _values(packages[0][0], inputs, initial, expected)
+    adapter = _executor("opengl").runtime_adapter
+    allocations = {}
+
+    def prepare(state):
+        state.loaded_artifact = state.request.artifact_path.read_text()
+        native = adapter._prepare_dispatch_request(
+            state, state.request.artifact_path, state.request.artifact_path
+        )
+        buffers = {}
+        for name, buffer in native.buffers.items():
+            allocations[name] = RuntimeAllocationView(
+                allocation_id=name, byte_offset=32, byte_length=4 * buffer.shape[0]
+            )
+            buffers[name] = replace(buffer, allocation=allocations[name])
+        return replace(native, buffers=buffers)
+
+    with prepare_native_loader_dispatch_regions(
+        packages,
+        supplied,
+        outputs,
+        thread_grid_size=[37],
+        source_workgroup_size=[32],
+        adapter=SimpleNamespace(target="opengl", prepare_buffers=prepare),
+    ) as requests:
+        for index, request in enumerate(requests):
+            for name, buffer in request.buffers.items():
+                assert buffer.allocation == allocations[name]
+                assert (buffer.value is not None) == (index == 0)
 
 
 def _values(descriptor, inputs, initial, expected):
@@ -281,48 +533,46 @@ def test_packaged_regions_execute_natively(tmp_path, grid, size):
     target = {"win32": "directx", "linux": "opengl"}[sys.platform]
     inputs, initial, expected = _case(grid, size)
     executor = _executor(target)
-    requests, evidence = [], []
+    packages, evidence = [], []
     for index, region in enumerate(plan_dispatch_regions(grid, size)):
         directory = tmp_path / str(index)
         descriptor, package, _ = _package(directory, target, region)
-        request = _request(descriptor, package, region, inputs, initial, expected)
-        assert not request.execution_plan.diagnostics
-        _, module = _compile(request.artifact_path.read_text(), target, directory)
-        assert module.is_file()
-        state = RuntimeExecutionState(
-            request=request,
-            plan=request.execution_plan,
-            loaded_artifact=(
-                request.artifact_path.read_text()
-                if target == "opengl"
-                else module.read_bytes()
-            ),
-        )
-        native = executor.runtime_adapter._prepare_dispatch_request(
-            state, request.artifact_path, module
-        )
-        buffers = {
-            name: replace(
-                buffer,
-                value=buffer.value if index == 0 else None,
-                source=buffer.source if index == 0 else None,
-                allocation=RuntimeAllocationView(allocation_id=name),
+        artifact = package / descriptor["artifact"]["packagePath"]
+        _, validated_module = _compile(artifact.read_text(), target, directory)
+        assert validated_module.is_file()
+        packages.append((descriptor, package))
+    supplied, expected_outputs = _values(descriptor, inputs, initial, expected)
+    with prepare_native_loader_dispatch_regions(
+        packages[::-1],
+        supplied,
+        expected_outputs,
+        thread_grid_size=grid,
+        source_workgroup_size=size,
+        adapter=executor.runtime_adapter,
+    ) as requests:
+        for index, (request, (descriptor, _)) in enumerate(zip(requests, packages)):
+            assert request.module_path.is_file()
+            for buffer in request.buffers.values():
+                assert buffer.allocation is not None
+                assert (buffer.value is not None) == (index == 0)
+            # Retain the validated module before the preparation context cleans up.
+            module = tmp_path / str(index) / request.module_path.name
+            module.write_bytes(request.module_path.read_bytes())
+            evidence.append(
+                {
+                    "descriptor": descriptor,
+                    "region": descriptor["provenance"]["dispatchRegion"],
+                    "artifactSha256": (
+                        hashlib.sha256(request.artifact_path.read_bytes()).hexdigest()
+                    ),
+                    "moduleSha256": hashlib.sha256(module.read_bytes()).hexdigest(),
+                    "moduleFile": module.name,
+                }
             )
-            for name, buffer in native.buffers.items()
-        }
-        requests.append(replace(native, buffers=buffers))
-        evidence.append(
-            {
-                "descriptor": descriptor,
-                "region": region.to_json(),
-                "artifactSha256": (
-                    hashlib.sha256(request.artifact_path.read_bytes()).hexdigest()
-                ),
-                "moduleSha256": hashlib.sha256(module.read_bytes()).hexdigest(),
-            }
+        result = executor.runtime_adapter.runtime.dispatch_sequence(
+            None, None, requests
         )
-    result = executor.runtime_adapter.runtime.dispatch_sequence(None, None, requests)
-    _, expected_outputs = _values(descriptor, inputs, initial, expected)
+    assert all(not request.module_path.exists() for request in requests)
     (tmp_path / "evidence.json").write_text(
         json.dumps(
             {
