@@ -11,6 +11,7 @@ on:
       - "tests/test_translator/test_project_metal_discovery.py"
       - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
+      - "tests/test_translator/test_metal_member_pointer_provenance.py"
       - "tests/test_translator/test_metal_precise_acosh.py"
       - "tests/test_translator/test_metal_precise_atan.py"
       - "tests/test_translator/test_metal_boolean_promotion.py"
@@ -46,6 +47,7 @@ on:
       - "tests/test_translator/test_project_metal_discovery.py"
       - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
+      - "tests/test_translator/test_metal_member_pointer_provenance.py"
       - "tests/test_translator/test_metal_precise_acosh.py"
       - "tests/test_translator/test_metal_precise_atan.py"
       - "tests/test_translator/test_metal_boolean_promotion.py"
@@ -84,7 +86,7 @@ env:
 
 concurrency:
   group: mlx-metal-host-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   metal-host:
@@ -117,6 +119,19 @@ jobs:
               --junitxml=.mlx-metal-host/argument-inference/results.xml \
               tests/test_translator/test_project_metal_discovery.py \
               2>&1 | tee .mlx-metal-host/argument-inference.log
+      - name: Validate pointer member round trips
+        env:
+          CROSTL_REQUIRE_MEMBER_POINTER_METAL: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/member-pointers
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Pointer member round trips" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/member-pointers/pytest \
+              --junitxml=.mlx-metal-host/member-pointers/results.xml \
+              tests/test_translator/test_metal_member_pointer_provenance.py \
+              2>&1 | tee .mlx-metal-host/member-pointers.log
       - name: Validate half conversion reference
         env:
           CROSTL_REQUIRE_HALF_CONVERSION_RUNTIME: "1"

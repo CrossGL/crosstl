@@ -9813,6 +9813,64 @@ def test_codegen_auto_pointer_from_index_preserves_device_provenance():
     assert parse_crossgl(crossgl) is not None
 
 
+@pytest.mark.parametrize("space", ["constant", "device", "thread", "threadgroup"])
+@pytest.mark.parametrize("owner_const", [False, True])
+def test_codegen_member_pointer_address_keeps_pointee_space(space, owner_const):
+    source = f"""
+    struct Cursor {{ const {space} int* values; }};
+    int load(const {space} int* values, int index) {{ return values[index]; }}
+    int load(const {space} int* values, int2 index) {{ return values[index.x]; }}
+    int read_member({'const ' if owner_const else ''}thread Cursor& cursor, uint index) {{
+        auto pointer = &cursor.values[index];
+        return load(pointer, 1) + load(&cursor.values[index], 2);
+    }}
+    """
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+    qualifier = space if space == "constant" else f"const {space}"
+    assert f"{qualifier} int* pointer = (&cursor.values[index]);" in normalized
+    assert "load(pointer, 1)" in normalized
+    assert parse_crossgl(crossgl) is not None
+
+
+@pytest.mark.parametrize(
+    "actual, expected",
+    [("const device", "device"), ("constant", "device"), ("threadgroup", "thread")],
+)
+def test_codegen_member_pointer_address_rejects_incompatible_overloads(
+    actual, expected
+):
+    source = f"""
+    struct Cursor {{ {actual} int* values; }};
+    int load({expected} int* values, int index) {{ return values[index]; }}
+    int load({expected} int* values, int2 index) {{ return values[index.x]; }}
+    int read_member(thread Cursor& cursor, uint index) {{
+        return load(&cursor.values[index], 1);
+    }}
+    """
+    with pytest.raises(MetalSourceOverloadResolutionError):
+        convert_without_preprocessing(source)
+
+
+@pytest.mark.parametrize("pointer_const", [False, True])
+def test_codegen_const_owner_does_not_make_pointer_pointee_readonly(pointer_const):
+    source = """
+    struct Cursor { device int* POINTER_CONST values; };
+    int adjust(device int* values, int index) { values[index] += 3; return values[index]; }
+    int adjust(device int* values, int2 index) { values[index.x] += 7; return values[index.x]; }
+    int apply(const thread Cursor& cursor, uint index) {
+        auto pointer = &cursor.values[index];
+        return adjust(pointer, 1);
+    }
+    """
+    crossgl = convert_without_preprocessing(
+        source.replace("POINTER_CONST", "const" if pointer_const else "")
+    )
+    assert "device int* pointer = (&cursor.values[index]);" in normalize(crossgl)
+    assert "const device int* pointer" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_auto_pointer_from_index_preserves_writable_storage():
     source = """
     void write_indexed(device float* values, uint index, float value) {

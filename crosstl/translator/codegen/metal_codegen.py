@@ -15491,6 +15491,8 @@ class MetalCodeGen:
             arg_name = self.assignment_target_root_name(arg)
             if arg_name not in self.current_readonly_metal_parameters:
                 continue
+            if self.mutable_metal_pointer_member_argument(arg):
+                continue
             reason = self.current_readonly_metal_parameter_reasons.get(
                 arg_name, "readonly"
             )
@@ -15519,6 +15521,22 @@ class MetalCodeGen:
                 f"'{parameter_name}' of '{func_name}' */"
             )
         return None
+
+    def mutable_metal_pointer_member_argument(self, expression):
+        if isinstance(expression, UnaryOpNode) and expression.operator == "&":
+            operand = expression.operand
+            if not isinstance(operand, ArrayAccessNode) and not (
+                isinstance(operand, UnaryOpNode) and operand.operator == "*"
+            ):
+                # Taking the pointer slot's address still observes owner constness.
+                return False
+        member = self.metal_storage_pointer_reinterpret_member_node(expression)
+        if member is None:
+            return False
+        raw_type = getattr(member, "member_type", None)
+        return isinstance(raw_type, PointerType) and self.is_mutable_metal_parameter(
+            raw_type, member
+        )
 
     def readonly_metal_mesh_payload_call_diagnostic(self, func_name, call_args):
         if func_name not in self.user_function_names:
@@ -22207,7 +22225,7 @@ class MetalCodeGen:
         object_type = self.expression_result_type(object_expr)
         if object_type is None:
             return None
-        object_type = self.pointer_pointee_type_name(object_type) or object_type
+        object_type = self.member_lookup_type_name(object_type)
         struct_node = self.structs_by_name.get(self.type_name_string(object_type))
         if struct_node is None:
             return None

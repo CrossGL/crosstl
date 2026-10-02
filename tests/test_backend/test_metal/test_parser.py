@@ -415,7 +415,8 @@ def test_parse_reinterpret_cast_retains_pointer_qualifiers():
     ]
 
 
-def test_parse_parameter_retains_pointee_and_pointer_object_const_provenance():
+@pytest.mark.parametrize("context", ["parameter", "member"])
+def test_parse_parameter_retains_pointee_and_pointer_object_const_provenance(context):
     code = """
     void qualifiers(
         const thread float* leading_const,
@@ -425,7 +426,15 @@ def test_parse_parameter_retains_pointee_and_pointer_object_const_provenance():
         thread float* mutable_values) {}
     """
 
-    params = parse_ok(code).functions[0].params
+    if context == "member":
+        code = (
+            "struct Cursor {"
+            + code.split("(", 1)[1].split(")", 1)[0].replace(",", ";")
+            + "; };"
+        )
+        params = parse_ok(code).structs[0].members
+    else:
+        params = parse_ok(code).functions[0].params
 
     assert [param.pointee_qualifiers for param in params] == [
         ["const", "thread"],

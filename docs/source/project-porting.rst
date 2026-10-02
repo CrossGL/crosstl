@@ -4060,6 +4060,16 @@ guards on the three generated backends. This does not provide a representation
 for pointer-bearing aggregates: general MLX gather still needs that lowering
 and host dispatch integration.
 
+Addresses taken through concrete Metal pointer members retain the pointee's
+address space and read-only qualification, including scoped aliases, nested
+owners and fixed pointer arrays. A const owner or pointer slot does not make a
+mutable pointee read-only. Metal round-trip tests compile and execute the original
+and generated kernels across constant, device, thread and threadgroup storage,
+checking overload selection, index side effects, writes and output guards.
+Incompatible address spaces and removal of pointee constness remain errors.
+This source qualification support does not supply resource-backed aggregate
+representations for DirectX or OpenGL.
+
 During project translation, Metal template-member inference preserves a
 generic pointer template parameter as a pointer rather than reducing it to its
 pointee type. For a parameter such as ``Pointer src``, a bare tracked pointer,

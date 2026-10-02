@@ -4577,6 +4577,44 @@ def test_metal_readonly_call_preserves_same_arity_const_overload():
     compile_with_metal_if_available(generated_code)
 
 
+@pytest.mark.parametrize("readonly", [False, True])
+def test_metal_const_owner_pointer_call_uses_pointee_access(readonly):
+    shader = """
+    shader MemberPointerAccess {
+        struct Cursor { QUALIFIER device int* values; };
+        void mutate(device int* values) { values[0] += 3; }
+        void inspect(const Cursor& cursor) {
+            mutate(cursor.values);
+            mutate(&cursor.values[1]);
+        }
+        compute { void main() {} }
+    }
+    """.replace("QUALIFIER", "const" if readonly else "")
+    generated = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+    if readonly:
+        assert generated.count("unsupported Metal parameter call") == 2
+    else:
+        assert "unsupported Metal parameter call" not in generated
+        compile_with_metal_if_available(generated)
+
+
+def test_metal_const_owner_pointer_slot_remains_readonly():
+    shader = """
+    shader MemberPointerSlot {
+        struct Cursor { device int* values; };
+        void rebind(device int* * values) {}
+        void inspect(const Cursor& cursor) { rebind(&cursor.values); }
+        compute { void main() {} }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+    assert "unsupported Metal parameter call" in generated
+
+
 def test_metal_const_reference_helper_parameters_are_readonly():
     shader = """
     shader MetalConstReferenceHelpers {

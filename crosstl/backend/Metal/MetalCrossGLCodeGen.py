@@ -1451,6 +1451,7 @@ class MetalToCrossGLConverter:
         self.struct_member_types = {}
         self.struct_member_name_maps = {}
         self.resolved_struct_member_types = {}
+        self.resolved_struct_member_qualifiers = {}
         self.struct_declarations = {}
         self.struct_name_map = {}
         self.ambiguous_struct_names = set()
@@ -3159,6 +3160,7 @@ class MetalToCrossGLConverter:
     def collect_struct_member_types(self, structs):
         member_types = {}
         self.resolved_struct_member_types = {}
+        self.resolved_struct_member_qualifiers = {}
         for struct_node in structs or []:
             struct_name = getattr(struct_node, "name", None)
             if not struct_name:
@@ -3210,7 +3212,7 @@ class MetalToCrossGLConverter:
             previous_context = self.current_type_resolution_context
             self.current_type_resolution_context = member
             try:
-                resolved = self.resolve_dependent_alias_type(
+                resolved = self.resolve_dependent_alias_contract(
                     owner, candidate, required=True
                 )
             finally:
@@ -3222,7 +3224,9 @@ class MetalToCrossGLConverter:
                     "the owning declaration does not define a concrete alias",
                     [struct_node],
                 )
-            declared_type = f"{resolved}{suffix}"
+            target, qualifiers = resolved
+            self.resolved_struct_member_qualifiers[id(member)] = qualifiers
+            declared_type = f"{target}{suffix}"
 
         return declared_type
 
@@ -5853,6 +5857,10 @@ class MetalToCrossGLConverter:
         return tuple(qualifiers), canonical_type
 
     def resolve_dependent_alias_type(self, owner, member, required):
+        contract = self.resolve_dependent_alias_contract(owner, member, required)
+        return contract[0] if contract is not None else None
+
+    def resolve_dependent_alias_contract(self, owner, member, required):
         resolved_owner = self.materialize_alias_template_type(owner, required=required)
         match = self.struct_templates_for_dependent_owner(resolved_owner)
         if match is None:
@@ -5959,7 +5967,8 @@ class MetalToCrossGLConverter:
                 aliases,
                 candidate_identities=candidate_identities,
             )
-        return resolved_candidates[0][1]
+        identity, target, _alias = resolved_candidates[0]
+        return target, identity[0]
 
     def metal_standard_remove_cv_alias_visible(self, name):
         raw_name = self.normalize_qualified_type_name(name)
@@ -7673,6 +7682,7 @@ class MetalToCrossGLConverter:
         )
         self.struct_member_types = {}
         self.resolved_struct_member_types = {}
+        self.resolved_struct_member_qualifiers = {}
         self.struct_declarations = {}
         self.struct_name_map = {}
         self.ambiguous_struct_names = set()
@@ -7947,6 +7957,7 @@ class MetalToCrossGLConverter:
         qualifiers = [
             str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
         ]
+        qualifiers.extend(self.resolved_struct_member_qualifiers.get(id(var), ()))
         metal_type = str(getattr(var, "vtype", "") or "").strip()
         while metal_type.endswith(("*", "&")):
             metal_type = metal_type[:-1].strip()
@@ -8119,11 +8130,16 @@ class MetalToCrossGLConverter:
         )
         pointee_qualifiers = getattr(var, "pointee_qualifiers", None)
         pointee_qualifier_names = {
-            str(qualifier).lower() for qualifier in pointee_qualifiers or []
+            str(qualifier).lower()
+            for qualifier in (
+                qualifiers if pointee_qualifiers is None else pointee_qualifiers
+            )
         }
+        pointee_qualifier_names.update(
+            self.resolved_struct_member_qualifiers.get(id(var), ())
+        )
         const_pointer_pointee = bool(
             self.preserve_pointer_pointee_const
-            and pointee_qualifiers is not None
             and "const" in pointee_qualifier_names
             and self.pointer_element_type(resolved_effective_type) is not None
         )
@@ -17431,6 +17447,35 @@ float {scalar}(float value) {{
             return expr.right, right_type
         return None
 
+    def metal_member_type_qualifiers(self, expression):
+        owner = self.normalized_metal_type(
+            self.metal_source_overload_value_type(
+                self.expression_metal_type(expression.object)
+            )
+        )
+        declaration = self.struct_declarations.get(owner)
+        for member in getattr(declaration, "members", ()) or ():
+            if getattr(member, "name", None) != str(expression.member):
+                continue
+            qualifiers = set(self.metal_declaration_type_qualifiers(member))
+            resolved = self.struct_member_types.get(owner, {}).get(member.name, "")
+            pointee_qualifiers = getattr(member, "pointee_qualifiers", None)
+            if "*" in resolved and pointee_qualifiers is not None:
+                qualifiers = set(pointee_qualifiers)
+                qualifiers.update(
+                    self.resolved_struct_member_qualifiers.get(id(member), ())
+                )
+            for token in str(resolved).split():
+                if token not in self.metal_source_overload_type_qualifiers:
+                    break
+                qualifiers.add(token)
+            return tuple(
+                qualifier
+                for qualifier in self.metal_source_overload_type_qualifiers
+                if qualifier in qualifiers
+            )
+        return ()
+
     def expression_metal_type_qualifiers(self, expr):
         if isinstance(expr, CastNode):
             target_type = self.resolve_type_alias(expr.target_type)
@@ -17459,9 +17504,27 @@ float {scalar}(float value) {{
             if pointer_source is not None:
                 return self.expression_metal_type_qualifiers(pointer_source[0])
         if isinstance(expr, ArrayAccessNode):
+            selected_type = self.expression_metal_type(expr)
+            if self.metal_pointer_pointee_type_once(selected_type) is not None:
+                # Standard arrays retain qualifiers inside their element type,
+                # not on the array object that stores the pointer.
+                qualifiers = []
+                for token in str(selected_type).split():
+                    if token not in self.metal_source_overload_type_qualifiers:
+                        break
+                    qualifiers.append(token)
+                if qualifiers:
+                    return tuple(qualifiers)
             return self.expression_metal_type_qualifiers(expr.array)
         if isinstance(expr, MemberAccessNode):
-            return self.expression_metal_type_qualifiers(expr.object)
+            declared_qualifiers = self.metal_member_type_qualifiers(expr)
+            member_type = self.expression_metal_type(expr)
+            if member_type is not None and "*" in member_type:
+                # A pointer field names its pointee storage, independently of
+                # the address space and cv qualification of its owning object.
+                return declared_qualifiers
+            owner_qualifiers = self.expression_metal_type_qualifiers(expr.object)
+            return tuple(dict.fromkeys((*owner_qualifiers, *declared_qualifiers)))
         if isinstance(expr, UnaryOpNode):
             if expr.op == "&":
                 provenance = self.metal_address_provenance(expr)
@@ -17675,12 +17738,26 @@ float {scalar}(float value) {{
             )
 
         if isinstance(expression, ArrayAccessNode):
+            selected_type = self.expression_metal_type(expression)
+            if self.metal_pointer_pointee_type_once(selected_type) is not None:
+                return self.normalized_metal_address_qualifiers(
+                    self.expression_metal_type_qualifiers(expression),
+                    getattr(expression, "source_location", None),
+                    selected_type,
+                )
             selection = self.metal_indexed_type_selection(expression)
             if selection["kind"] not in {"array", "pointer"}:
                 return None
             return self.metal_addressable_storage_qualifiers(expression.array)
 
         if isinstance(expression, MemberAccessNode):
+            member_type = self.expression_metal_type(expression)
+            if self.metal_pointer_pointee_type_once(member_type) is not None:
+                return self.normalized_metal_address_qualifiers(
+                    self.expression_metal_type_qualifiers(expression),
+                    getattr(expression, "source_location", None),
+                    member_type,
+                )
             object_type = self.expression_metal_type(expression.object)
             if (
                 self.metal_vector_component_parts(object_type) is not None

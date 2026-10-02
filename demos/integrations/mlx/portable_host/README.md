@@ -23,7 +23,11 @@ unchanged `gather_front<float, int, int, N>` specializations for `N = 1, 4, 8`,
 including negative/duplicate indices, partial chunks and exact storage words.
 It does not yet connect Python indexing to the portable host adapter.
 General gather now resolves template arguments from concrete array-member
-elements, including its nested index-buffer access. Pointer-bearing aggregate
+elements, including its nested index-buffer access, and preserves address-space
+qualifiers when passing addresses through pointer members. The unchanged wrapper
+still fails native validation: DirectX reports unsupported aggregate resource
+pointers, OpenGL emits pointer-bearing fields, and Metal retains unresolved
+generic-vector constructors and bfloat types in conversion helpers. Aggregate
 lowering and host dispatch remain incomplete; the `gather_front` proof does not
 establish general gather support.
 Contiguous conversion, reshape, flatten and unflatten

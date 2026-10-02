@@ -3128,6 +3128,7 @@ class MetalParser:
             if self.current_token[0] == "OPERATOR":
                 self.skip_struct_method()
                 continue
+            qualifier_contract = dict(self.last_type_specifier_qualifier_contract)
             var_name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
             member_type = self.apply_declarator_type_suffix(vtype, type_suffix)
             if var_name == "operator":
@@ -3147,6 +3148,8 @@ class MetalParser:
             var_node = VariableNode(
                 member_type, var_name, qualifiers=qualifiers, attributes=attributes
             )
+            var_node.pointee_qualifiers = list(qualifier_contract["pointee"])
+            var_node.indirection_qualifiers = list(qualifier_contract["indirection"])
             var_node.array_sizes = array_sizes
             self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
             var_node.alignas = member_alignas
