@@ -205,8 +205,13 @@ def gather_root():
 def gather_package(request, tmp_path_factory, gather_root):
     root, hashes = gather_root
     count, ndim = request.param
-    entry, source = _source(root, count, ndim)
     retained = tmp_path_factory.mktemp(f"gather-{count}-{ndim}")
+    entry, source, descriptor, package = _package(root, count, ndim, retained, "metal")
+    return root, hashes, count, ndim, entry, source, descriptor, package
+
+
+def _package(root, count, ndim, retained, target):
+    entry, source = _source(root, count, ndim)
     (retained / "source.metal").write_text(source)
     with tempfile.TemporaryDirectory(prefix=".general-gather-", dir=root) as directory:
         work = Path(directory)
@@ -219,7 +224,7 @@ def gather_package(request, tmp_path_factory, gather_root):
                 source_roots=(work.name,),
                 include_patterns=(relative,),
                 include_dirs=(".",),
-                targets=("metal",),
+                targets=(target,),
                 output_dir=f"{work.name}/out",
                 entry_points={relative: (entry,)},
                 workgroup_size=(1, 1, 1),
@@ -229,7 +234,7 @@ def gather_package(request, tmp_path_factory, gather_root):
         report.write_json(retained / "report.json")
         assert report.to_json()["summary"]["failedCount"] == 0, report.to_json()
         descriptor, package = _prepare_native_package(report, retained)
-    return root, hashes, count, ndim, entry, source, descriptor, package
+    return entry, source, descriptor, package
 
 
 @pytest.mark.parametrize("layout", LAYOUTS)

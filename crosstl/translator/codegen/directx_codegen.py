@@ -331,6 +331,7 @@ from .pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
 )
+from .resource_aggregates import lower_resource_aggregates
 from .resource_arrays import (
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
@@ -3010,6 +3011,7 @@ class HLSLCodeGen:
 
     def generate_program(self, ast, target_stage=None):
         """Render an AST to HLSL, optionally filtering stage entry points."""
+        ast = lower_resource_aggregates(ast)
         self.hlsl_type_aliases = {
             node.name: getattr(node, "var_type", None)
             for node in getattr(ast, "global_variables", []) or []
@@ -42555,6 +42557,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ):
                 function = getattr(node, "function", getattr(node, "name", None))
                 name = getattr(function, "name", function)
+                definition = self.current_hlsl_available_functions.get(name)
+                if getattr(definition, "resource_aggregate_nonmutating", False):
+                    # Lowering proves handle reads and private-value helpers.
+                    # The walk still checks all argument evaluation below them.
+                    continue
                 if (
                     allow_integer_constructors
                     and isinstance(name, str)
@@ -43185,6 +43192,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             field_target = f"{target_name}.{field_name}"
             field_type_name = self.type_name_string(field_type)
+            if field_expr is not None and self.hlsl_outer_array_type(field_type_name):
+                code += self.render_hlsl_aggregate_conditional_branch_assignment(
+                    field_expr,
+                    field_target,
+                    field_type_name,
+                    indent,
+                    context="struct-member-initializer",
+                )
+                continue
             if (
                 field_expr is not None
                 and self.hlsl_struct_constructor_fields(field_type_name) is not None

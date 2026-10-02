@@ -1421,6 +1421,7 @@ class MetalToCrossGLConverter:
         }
         self.type_aliases = {}
         self.type_alias_qualifiers = {}
+        self.type_alias_pointee_qualifiers = {}
         self.alias_template_declarations = {}
         self.alias_template_plain_declarations = {}
         self.alias_template_cache = {}
@@ -2694,6 +2695,13 @@ class MetalToCrossGLConverter:
             if isinstance(alias, TypeAliasNode)
             and alias.name not in self.callable_type_aliases
             and not self.is_template_alias_declaration(alias)
+        }
+        self.type_alias_pointee_qualifiers = {
+            alias.name: list(
+                getattr(alias, "pointee_qualifiers", alias.qualifiers) or []
+            )
+            for alias in typedefs
+            if isinstance(alias, TypeAliasNode) and alias.name in self.type_aliases
         }
         # Body-local ``using`` and ``typedef`` aliases discovered while emitting
         # function bodies; these are inlined at their use sites rather than
@@ -8019,6 +8027,18 @@ class MetalToCrossGLConverter:
             qualifiers.extend(inferred)
         return list(dict.fromkeys(qualifiers))
 
+    def alias_pointer_pointee_qualifiers(self, var):
+        """Keep alias pointee qualifiers separate from a const pointer object."""
+        name = str(getattr(var, "vtype", "") or "").strip()
+        seen = set()
+        while name in self.type_aliases and name not in seen:
+            seen.add(name)
+            target = str(self.type_aliases[name]).strip()
+            if self.pointer_element_type(target) is not None:
+                return self.type_alias_pointee_qualifiers.get(name, ())
+            name = target
+        return ()
+
     def resource_memory_qualifiers(self, var):
         """Return ordered Metal resource-memory qualifiers for a declaration."""
         if not self.declaration_has_resource_storage(var):
@@ -8172,6 +8192,7 @@ class MetalToCrossGLConverter:
         pointee_qualifier_names.update(
             self.resolved_struct_member_qualifiers.get(id(var), ())
         )
+        pointee_qualifier_names.update(self.alias_pointer_pointee_qualifiers(var))
         const_pointer_pointee = bool(
             self.preserve_pointer_pointee_const
             and "const" in pointee_qualifier_names
@@ -8433,6 +8454,9 @@ class MetalToCrossGLConverter:
         )
         previous_type_aliases = dict(self.type_aliases)
         previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
+        previous_type_alias_pointee_qualifiers = dict(
+            self.type_alias_pointee_qualifiers
+        )
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
         previous_local_integral_constant_bindings = (
@@ -8584,6 +8608,7 @@ class MetalToCrossGLConverter:
             self.current_variable_type_qualifiers = previous_variable_type_qualifiers
             self.type_aliases = previous_type_aliases
             self.type_alias_qualifiers = previous_type_alias_qualifiers
+            self.type_alias_pointee_qualifiers = previous_type_alias_pointee_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
             self.local_integral_constant_bindings = (
@@ -9210,6 +9235,9 @@ class MetalToCrossGLConverter:
         """Render a nested lexical block without leaking local type aliases."""
         previous_type_aliases = dict(self.type_aliases)
         previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
+        previous_type_alias_pointee_qualifiers = dict(
+            self.type_alias_pointee_qualifiers
+        )
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
         previous_local_integral_constant_bindings = dict(
@@ -9222,6 +9250,7 @@ class MetalToCrossGLConverter:
             self.template_binding_shadow_scopes.pop()
             self.type_aliases = previous_type_aliases
             self.type_alias_qualifiers = previous_type_alias_qualifiers
+            self.type_alias_pointee_qualifiers = previous_type_alias_pointee_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
             self.local_integral_constant_bindings = (
@@ -9310,6 +9339,9 @@ class MetalToCrossGLConverter:
         previous_variable_type_qualifiers = self.current_variable_type_qualifiers
         previous_type_aliases = dict(self.type_aliases)
         previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
+        previous_type_alias_pointee_qualifiers = dict(
+            self.type_alias_pointee_qualifiers
+        )
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
         previous_local_integral_constant_bindings = dict(
@@ -9332,6 +9364,7 @@ class MetalToCrossGLConverter:
             self.current_variable_type_qualifiers = previous_variable_type_qualifiers
             self.type_aliases = previous_type_aliases
             self.type_alias_qualifiers = previous_type_alias_qualifiers
+            self.type_alias_pointee_qualifiers = previous_type_alias_pointee_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
             self.local_integral_constant_bindings = (
@@ -9763,6 +9796,9 @@ class MetalToCrossGLConverter:
         if not name or not alias_type:
             return
         alias_qualifiers = list(getattr(alias, "qualifiers", None) or [])
+        self.type_alias_pointee_qualifiers[name] = list(
+            getattr(alias, "pointee_qualifiers", alias_qualifiers) or []
+        )
         # Struct aliases remain uninlined, but scoped static-member references
         # need their concrete owner to resolve constants and backing globals.
         self.local_struct_type_aliases[name] = alias_type
@@ -18483,6 +18519,9 @@ float {scalar}(float value) {{
     def generate_switch_statement(self, node, indent, is_main):
         previous_type_aliases = dict(self.type_aliases)
         previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
+        previous_type_alias_pointee_qualifiers = dict(
+            self.type_alias_pointee_qualifiers
+        )
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
         previous_local_integral_constant_bindings = dict(
@@ -18511,6 +18550,7 @@ float {scalar}(float value) {{
         finally:
             self.type_aliases = previous_type_aliases
             self.type_alias_qualifiers = previous_type_alias_qualifiers
+            self.type_alias_pointee_qualifiers = previous_type_alias_pointee_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
             self.local_integral_constant_bindings = (

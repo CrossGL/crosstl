@@ -1,6 +1,7 @@
 """Pointer-member addresses retain source storage during overload binding."""
 
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -218,7 +219,6 @@ kernel void member_pointer(device int* src [[buffer(0)]],
 @pytest.mark.parametrize(
     "target, code",
     [
-        ("directx", "project.translate.directx-resource-pointer-array-unsupported"),
         ("opengl", "project.translate.opengl-storage-pointer-unsupported"),
     ],
 )
@@ -238,6 +238,24 @@ def test_pointer_free_targets_retain_aggregate_storage_diagnostics(
     ).to_json()
     assert report["summary"]["failedCount"] == 1
     assert [item["code"] for item in report["diagnostics"]] == [code]
+
+
+def test_directx_member_pointer_address_compiles(tmp_path):
+    if not shutil.which("dxc"):
+        pytest.skip("the optional DirectX compiler is unavailable")
+    _, _, package = _package(
+        tmp_path,
+        "directx",
+        "int",
+        (1, 1, 1),
+        source=_source("constant", "direct"),
+        software_subgroups=False,
+    )
+    (generated,) = package.rglob("*.hlsl")
+    validation = tmp_path / "validation"
+    validation.mkdir()
+    _, module = _compile(generated.read_text(), "directx", validation)
+    assert module.is_file() and module.stat().st_size
 
 
 def test_member_pointer_metal_gate_is_required():

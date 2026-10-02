@@ -16173,3 +16173,26 @@ def test_codegen_preserves_private_pointer_pointee_const_without_constifying_poi
     assert "float read_fixed(thread float[4] values)" in normalized
     assert "float read_mutable_fixed(inout thread float[4] values)" in normalized
     assert parse_crossgl(crossgl) is not None
+
+
+@pytest.mark.parametrize("syntax", ["typedef", "using"])
+@pytest.mark.parametrize("pointee_const", [True, False])
+def test_codegen_pointer_alias_member_preserves_pointee_qualifiers(
+    syntax, pointee_const
+):
+    target = "const device int*" if pointee_const else "device int* const"
+    alias = (
+        f"typedef {target} Pointer; typedef Pointer Chain;"
+        if syntax == "typedef"
+        else f"using Pointer = {target}; using Chain = Pointer;"
+    )
+    crossgl = convert_without_preprocessing(
+        alias + "struct Cursor { Chain values[2][2]; }; "
+    )
+    normalized = normalize(crossgl)
+    if pointee_const:
+        assert "const device int* values[2][2]" in normalized
+    else:
+        assert "device int* values[2][2]" in normalized
+        assert "const device int* values" not in normalized
+    assert parse_crossgl(crossgl) is not None

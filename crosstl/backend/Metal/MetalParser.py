@@ -1812,6 +1812,7 @@ class MetalParser:
         if self.is_union_alias_start():
             return self.parse_using_union_alias(alias_name)
         alias_type, qualifiers = self.parse_type_specifier()
+        qualifier_contract = dict(self.last_type_specifier_qualifier_contract)
         if self.current_token[0] == "LPAREN":
             indirection = self.parse_callable_alias_abstract_indirection()
             parameters = self.parse_callable_alias_parameters()
@@ -1831,16 +1832,16 @@ class MetalParser:
             )
         self.eat("SEMICOLON")
         self.register_known_type(alias_name)
-        return self.annotate_declaration_scope(
-            TypeAliasNode(
-                alias_type,
-                alias_name,
-                qualifiers=qualifiers,
-                source_location=self.source_span_from_tokens(
-                    start_token, self.tokens[self.pos - 1]
-                ),
-            )
+        alias = TypeAliasNode(
+            alias_type,
+            alias_name,
+            qualifiers=qualifiers,
+            source_location=self.source_span_from_tokens(
+                start_token, self.tokens[self.pos - 1]
+            ),
         )
+        alias.pointee_qualifiers = list(qualifier_contract["pointee"])
+        return self.annotate_declaration_scope(alias)
 
     def is_using_declaration_start(self):
         return self.current_token[0] in {"IDENTIFIER", "METAL", "SCOPE"} and not (
@@ -1941,6 +1942,7 @@ class MetalParser:
         if self.current_token[0] == "ENUM":
             return self.parse_typedef_enum()
         qualifiers = []
+        qualifier_contract = {"pointee": ()}
         if (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] == "decltype"
@@ -1948,6 +1950,7 @@ class MetalParser:
             alias_type = self.parse_decltype_type()
         else:
             alias_type, qualifiers = self.parse_type_specifier()
+            qualifier_contract = dict(self.last_type_specifier_qualifier_contract)
         if self.current_token[0] == "LPAREN":
             alias_name, indirection = self.parse_function_typedef_declarator()
             if self.current_token[0] != "LPAREN":
@@ -1996,7 +1999,7 @@ class MetalParser:
             )
         self.eat("SEMICOLON")
         self.register_known_type(alias_name)
-        return TypeAliasNode(
+        alias = TypeAliasNode(
             alias_type,
             alias_name,
             qualifiers=qualifiers,
@@ -2007,6 +2010,8 @@ class MetalParser:
                 start_token, self.tokens[self.pos - 1]
             ),
         )
+        alias.pointee_qualifiers = list(qualifier_contract["pointee"])
+        return alias
 
     def parse_typedef_enum(self):
         tag_name, is_scoped, underlying_type = self.parse_enum_header()

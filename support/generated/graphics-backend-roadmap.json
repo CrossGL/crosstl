@@ -1410,9 +1410,13 @@
       "support": {
         "directx": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_struct"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_struct",
+            "tests/test_translator/test_resource_aggregates.py::def test_resource_aggregate_compiles",
+            "tests/test_translator/test_resource_aggregates.py::def test_resource_aggregate_executes_natively",
+            "tests/test_translator/test_resource_aggregates.py::def test_resource_aggregate_rejects_unproven_operations",
+            "tests/test_translator/test_mlx_general_gather_directx.py::def test_indexed_general_gather_executes_natively"
           ],
-          "notes": "",
+          "notes": "Selected compute entries lower private constant/device pointer-bearing aggregates to resource identity and signed element offsets, including nested owners, fixed pointer arrays, copies, rebasing and helper calls. Native Windows controls are required. External aggregate buffer layouts, thread/workgroup pointer fields, pointer identity operations and unproven escapes remain unsupported; this is not full MLX host integration.",
           "status": "supported"
         },
         "metal": {

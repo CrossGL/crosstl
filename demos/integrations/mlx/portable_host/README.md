@@ -25,9 +25,14 @@ It does not yet connect Python indexing to the portable host adapter.
 General gather now resolves template arguments from concrete array-member
 elements, including its nested index-buffer access, and preserves address-space
 qualifiers when passing addresses through pointer members. The unchanged wrapper
-compiles on Metal with its bfloat conversion helpers retained. DirectX still
-reports unsupported aggregate resource pointers and OpenGL emits pointer-bearing
-fields that fail native validation. Concrete float, half and integer vector
+compiles and executes on Metal with its bfloat conversion helpers retained.
+The required macOS gate covers 24 general-gather workloads, including zero-index
+specializations. DirectX now lowers private constant/device pointer aggregates
+to resource identities and element offsets. A required Windows gate covers the
+same 20 indexed workloads; the four zero-index cases remain unsupported there.
+OpenGL general gather still needs aggregate lowering with proven index ranges.
+These package-level controls do not implement MLX host Gather dispatch.
+Concrete float, half and integer vector
 constructors and declared vector conversions have a separate required native
 gate on all three platforms. It covers aliases, splats, mixed constructors,
 receiver qualification, mutations and single evaluation, with original Metal

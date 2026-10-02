@@ -55,6 +55,21 @@ def parse_ok(code: str):
     return ast
 
 
+@pytest.mark.parametrize("syntax", ["typedef", "using"])
+@pytest.mark.parametrize("pointee_const", [True, False])
+def test_pointer_alias_retains_pointee_qualifiers(syntax, pointee_const):
+    target = "const device int*" if pointee_const else "device int* const"
+    source = (
+        f"typedef {target} Pointer;"
+        if syntax == "typedef"
+        else f"using Pointer = {target};"
+    )
+    (alias,) = parse_ok(source).typedefs
+    assert "const" in alias.qualifiers
+    assert ("const" in alias.pointee_qualifiers) == pointee_const
+    assert "device" in alias.pointee_qualifiers
+
+
 def parse_fails(code: str):
     with pytest.raises(SyntaxError):
         parse_code(code)

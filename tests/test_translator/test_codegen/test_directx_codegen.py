@@ -11108,7 +11108,7 @@ def test_hlsl_metal_unsupported_address_space_pointer_arrays_fail_closed(
     ],
     ids=("direct", "one-dimensional", "multidimensional", "typedef-alias"),
 )
-def test_hlsl_metal_struct_pointer_member_fails_closed(
+def test_hlsl_metal_struct_pointer_member_preserves_resource_reference(
     tmp_path,
     alias_definition,
     member_declaration,
@@ -11138,20 +11138,17 @@ def test_hlsl_metal_struct_pointer_member_fails_closed(
         shader_path, tmp_path / "struct_pointer_member.air"
     )
 
-    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
-        crosstl.translate(
-            str(shader_path),
-            backend="directx",
-            format_output=False,
-            source_backend="metal",
-        )
-
-    assert excinfo.value.array_name in {"row", "rows"}
-    assert excinfo.value.address_space == "device"
-    assert excinfo.value.reason == "struct-pointer-member-unsupported"
+    generated = crosstl.translate(
+        str(shader_path), backend="directx", format_output=False, source_backend="metal"
+    )
+    assert "crosstl_resource_ref_float" in generated
+    assert "crosstl_resource_load_float" in generated
+    assert "const device float*" not in generated
 
 
-def test_hlsl_metal_generic_struct_pointer_member_fails_closed(tmp_path):
+def test_hlsl_metal_generic_struct_pointer_member_preserves_resource_reference(
+    tmp_path,
+):
     shader = """
     #include <metal_stdlib>
     using namespace metal;
@@ -11175,17 +11172,12 @@ def test_hlsl_metal_generic_struct_pointer_member_fails_closed(tmp_path):
         shader_path, tmp_path / "generic_struct_pointer_member.air"
     )
 
-    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
-        crosstl.translate(
-            str(shader_path),
-            backend="directx",
-            format_output=False,
-            source_backend="metal",
-        )
-
-    assert excinfo.value.array_name == "value"
-    assert excinfo.value.address_space == "device"
-    assert excinfo.value.reason == "struct-pointer-member-unsupported"
+    generated = crosstl.translate(
+        str(shader_path), backend="directx", format_output=False, source_backend="metal"
+    )
+    assert "crosstl_resource_ref_float" in generated
+    assert "crosstl_resource_load_float" in generated
+    assert "const device float*" not in generated
 
 
 @pytest.mark.parametrize(

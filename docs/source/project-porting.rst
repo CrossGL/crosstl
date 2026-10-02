@@ -4067,9 +4067,8 @@ consumed one index at a time; struct-scoped aliases are resolved before indexing
 Selecting a pointer element preserves its Metal address space and qualifiers,
 while a subsequent index selects its pointee. Native package tests cover integer
 and fractional values, free and member calls, index side effects, and output
-guards on the three generated backends. This does not provide a representation
-for pointer-bearing aggregates: general MLX gather still needs that lowering
-and host dispatch integration.
+guards on the three generated backends. Source deduction is separate from the
+target representation of pointer-bearing aggregates described below.
 
 Addresses taken through concrete Metal pointer members retain the pointee's
 address space and read-only qualification, including scoped aliases, nested
@@ -4078,8 +4077,19 @@ mutable pointee read-only. Metal round-trip tests compile and execute the origin
 and generated kernels across constant, device, thread and threadgroup storage,
 checking overload selection, index side effects, writes and output guards.
 Incompatible address spaces and removal of pointee constness remain errors.
-This source qualification support does not supply resource-backed aggregate
-representations for DirectX or OpenGL.
+DirectX selected compute entries can carry constant/device buffer references in
+private aggregates as binding identities and signed element offsets. Concrete
+resource arguments are forwarded through helpers; loads and stores select a
+bound resource explicitly instead of creating arrays of HLSL resource objects.
+Nested aggregates, fixed pointer arrays, value copies, mutable reference parameters,
+rebasing and concrete template owners retain their backing buffers. Required
+Windows numerical controls use the same inputs and guarded outputs as the
+original/generated Metal controls. Unknown pointer escapes, incompatible access
+contracts, local reference aliases, reference returns, pointer identity operations,
+compound pointee updates and external
+aggregate buffer layouts remain diagnostic. This representation does not yet
+cover thread/threadgroup pointer members or OpenGL index-range proofs, and it
+does not change the source buffer ABI to store these private handles.
 
 Concrete Metal ``vec<T, N>`` constructors preserve scalar splats, copied vectors
 and mixed component arguments for float, half and integer widths two through
@@ -4104,9 +4114,12 @@ Metal in a required macOS gate. Six specializations cover zero, one or two index
 buffers and scalar through three-dimensional indices across dense, transposed,
 strided and broadcast layouts. The 24 workloads retain negative and repeated
 indices, exact binary32 storage payloads and trailing output guards. General
-gather still lacks MLX host dispatch integration and resource-backed aggregate
-lowering on DirectX/OpenGL. These results do not establish foreign-target gather
-or bfloat parity.
+gather still lacks MLX host dispatch integration. A separate required Windows
+gate compiles and executes the same twenty indexed workloads through DirectX
+packages. The four zero-index workloads retain their Metal gate; their empty
+pointer-array representation remains unsupported on DirectX. OpenGL general
+gather and foreign-target bfloat parity remain unfinished. Compiler success is
+not a substitute for the required native readback evidence.
 
 Zero-extent Metal standard arrays retain native array objects rather than
 illegal C-style zero-length arrays. Layout calculations retain the element

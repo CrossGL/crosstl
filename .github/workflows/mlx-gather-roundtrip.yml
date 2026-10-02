@@ -60,6 +60,7 @@ jobs:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_REQUIRE_MLX_GENERAL_GATHER: "1"
           CROSTL_REQUIRE_METAL_EMPTY_ARRAYS: "1"
+          CROSTL_REQUIRE_RESOURCE_AGGREGATES: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
         run: |
           set -euo pipefail
@@ -70,6 +71,7 @@ jobs:
               --junitxml=.mlx-gather/results.xml \
               tests/test_translator/test_mlx_general_gather.py \
               tests/test_translator/test_metal_empty_arrays.py \
+              tests/test_translator/test_resource_aggregates.py \
               2>&1 | tee .mlx-gather/execution.log
       - name: Retain original and translated execution evidence
         if: always()
@@ -77,6 +79,77 @@ jobs:
         with:
           name: mlx-gather-metal-${{ github.run_attempt }}
           path: .mlx-gather
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  directx:
+    name: Translated DirectX indexed gather
+    runs-on: windows-2025
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install CrossTL and runtime dependencies
+        run: python -m pip install -e ".[directx-runtime]" pytest pytest-xdist numpy
+      - name: Install pinned DirectX tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $root = Join-Path $env:RUNNER_TEMP "dxc"
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4") {
+            throw "DXC archive checksum mismatch."
+          }
+          Expand-Archive $archive -DestinationPath $root
+          $bin = Join-Path $root "bin/x64"
+          if (-not (Test-Path "$bin/dxc.exe")) { throw "DXC executable missing." }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $warpArchive = Join-Path $env:RUNNER_TEMP "warp.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "warp"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg" -OutFile $warpArchive
+          if ((Get-FileHash $warpArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681") {
+            throw "WARP archive checksum mismatch."
+          }
+          Expand-Archive $warpArchive -DestinationPath $warpRoot
+          Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
+      - name: Checkout pinned upstream MLX
+        run: |
+          git init mlx-upstream
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+      - name: Validate indexed DirectX gather and resource aggregates
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_REQUIRE_MLX_DIRECTX_GENERAL_GATHER: "1"
+          CROSTL_REQUIRE_RESOURCE_AGGREGATES: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-gather-directx
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "Native DirectX indexed gather" -- \
+            python -m pytest -q -n auto --dist loadgroup --durations=20 \
+              --basetemp=.mlx-gather-directx/pytest \
+              --junitxml=.mlx-gather-directx/results.xml \
+              tests/test_translator/test_mlx_general_gather_directx.py \
+              tests/test_translator/test_resource_aggregates.py \
+              2>&1 | tee .mlx-gather-directx/execution.log
+      - name: Retain DirectX execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-gather-directx-${{ github.run_attempt }}
+          path: .mlx-gather-directx
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
