@@ -998,6 +998,9 @@ class MetalCodeGen:
             "bfloat": "bfloat",
             "bfloat16": "bfloat",
             "bfloat16_t": "bfloat",
+            "bfloat16vec2": "bfloat2",
+            "bfloat16vec3": "bfloat3",
+            "bfloat16vec4": "bfloat4",
             "i8": "int",
             "u8": "uint",
             "i16": "int",
@@ -8956,6 +8959,7 @@ class MetalCodeGen:
         return self.map_type(vtype) in {
             "float",
             "half",
+            "bfloat",
             "double",
             "int",
             "uint",
@@ -8973,6 +8977,9 @@ class MetalCodeGen:
             "half2",
             "half3",
             "half4",
+            "bfloat2",
+            "bfloat3",
+            "bfloat4",
             "double2",
             "double3",
             "double4",
@@ -9014,6 +9021,8 @@ class MetalCodeGen:
 
     def vector_component_type(self, vtype):
         mapped_type = self.map_type(vtype)
+        if mapped_type in {"bfloat2", "bfloat3", "bfloat4"}:
+            return "bfloat"
         if mapped_type.startswith("float"):
             return "float"
         if mapped_type.startswith("half"):
@@ -9147,6 +9156,8 @@ class MetalCodeGen:
             pointee_type = self.pointer_pointee_type_name(array_type)
             if pointee_type is not None:
                 return pointee_type
+            if self.is_vector_value_type(array_type):
+                return self.vector_component_type(array_type)
             return array_type
         if isinstance(expr, MemberAccessNode):
             block_access = self.glsl_buffer_block_member_access(expr)
@@ -10673,6 +10684,10 @@ class MetalCodeGen:
                 return aggregate_constructor
             if (
                 func_name in self.metal_type_aliases
+                or (
+                    func_name not in self.user_function_names
+                    and self.is_vector_value_type(func_name)
+                )
                 or re.fullmatch(
                     r"(?:u?int(?:8|16|32|64)(?:_t)?|"
                     r"(?:float(?:16|32|64)|bfloat16)(?:_t)?)[234]",

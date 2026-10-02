@@ -11,6 +11,7 @@ on:
       - "tests/test_translator/test_project_metal_discovery.py"
       - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
+      - "tests/test_translator/test_metal_bfloat_vectors.py"
       - "tests/test_translator/test_metal_member_pointer_provenance.py"
       - "tests/test_translator/test_metal_precise_acosh.py"
       - "tests/test_translator/test_metal_precise_atan.py"
@@ -47,6 +48,7 @@ on:
       - "tests/test_translator/test_project_metal_discovery.py"
       - "tests/test_translator/test_fused_math.py"
       - "tests/test_translator/test_metal_builtin_ownership.py"
+      - "tests/test_translator/test_metal_bfloat_vectors.py"
       - "tests/test_translator/test_metal_member_pointer_provenance.py"
       - "tests/test_translator/test_metal_precise_acosh.py"
       - "tests/test_translator/test_metal_precise_atan.py"
@@ -132,6 +134,19 @@ jobs:
               --junitxml=.mlx-metal-host/member-pointers/results.xml \
               tests/test_translator/test_metal_member_pointer_provenance.py \
               2>&1 | tee .mlx-metal-host/member-pointers.log
+      - name: Validate bfloat vector round trips
+        env:
+          CROSTL_REQUIRE_METAL_BFLOAT_VECTORS: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/bfloat-vectors
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Bfloat vector round trips" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/bfloat-vectors/pytest \
+              --junitxml=.mlx-metal-host/bfloat-vectors/results.xml \
+              tests/test_translator/test_metal_bfloat_vectors.py \
+              2>&1 | tee .mlx-metal-host/bfloat-vectors.log
       - name: Validate half conversion reference
         env:
           CROSTL_REQUIRE_HALF_CONVERSION_RUNTIME: "1"

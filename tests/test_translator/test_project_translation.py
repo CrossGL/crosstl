@@ -52910,7 +52910,7 @@ def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_pat
     intermediate = MetalToCrossGLConverter().generate(
         MetalParser(MetalLexer(source).tokenize()).parse()
     )
-    assert "(const device vec<bfloat16_t, 4>*)(base + offset)" in intermediate
+    assert "(const device bfloat16vec4*)(base + offset)" in intermediate
 
     payload = translate_project(
         repo,
@@ -52980,7 +52980,7 @@ def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_pat
                 "addressSpace": "storage",
                 "reason": "unsupported-scalar-layout",
                 "sourceType": expected_source_types[target],
-                "targetType": "vec<bfloat16_t, 4>",
+                "targetType": "bfloat16vec4",
             },
             "sourcePath": "generic_vector_pointer.metal",
             "targetArtifact": (

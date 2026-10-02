@@ -1898,6 +1898,11 @@ class MetalToCrossGLConverter:
 
     def metal_concrete_type_layout(self, metal_type, resolving=None):
         resolved_type = self.resolve_type_alias(metal_type)
+        vector = self.metal_vector_type_parts(resolved_type)
+        if vector is not None:
+            element, width = vector
+            element = self.resolve_type_alias(self.resolve_local_type_aliases(element))
+            resolved_type = f"vec<{element}, {width}>"
         layout = metal_type_layout(resolved_type)
         if layout is not None:
             return layout
@@ -16725,6 +16730,9 @@ float {scalar}(float value) {{
 
     def map_generic_vector_type(self, element_type, size):
         size = str(size).strip()
+        element_type = self.resolve_type_alias(
+            self.resolve_local_type_aliases(element_type)
+        )
         mapped_element = self.map_type(element_type)
         prefixes = {
             "float": "vec",

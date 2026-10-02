@@ -25,14 +25,17 @@ It does not yet connect Python indexing to the portable host adapter.
 General gather now resolves template arguments from concrete array-member
 elements, including its nested index-buffer access, and preserves address-space
 qualifiers when passing addresses through pointer members. The unchanged wrapper
-still fails native validation: DirectX reports unsupported aggregate resource
-pointers, OpenGL emits pointer-bearing fields, and Metal retains unresolved
-bfloat types in conversion helpers. Concrete float, half and integer vector
+compiles on Metal with its bfloat conversion helpers retained. DirectX still
+reports unsupported aggregate resource pointers and OpenGL emits pointer-bearing
+fields that fail native validation. Concrete float, half and integer vector
 constructors and declared vector conversions have a separate required native
 gate on all three platforms. It covers aliases, splats, mixed constructors,
 receiver qualification, mutations and single evaluation, with original Metal
-controls. Passing these cases does not provide bfloat conversion support. Aggregate
-lowering and host dispatch remain incomplete; the `gather_front` proof does not
+controls. A separate required macOS gate verifies native bfloat vector aliases,
+declared conversions, rounding, raw payload copies, indexing, swizzles and vector
+sizes against the original source. It does not establish DirectX/OpenGL bfloat
+parity or complete arithmetic coverage. Aggregate lowering and host dispatch
+remain incomplete; the `gather_front` proof does not
 establish general gather support.
 Contiguous conversion, reshape, flatten and unflatten
 dispatch translated copies when sharing storage is insufficient. Copies support

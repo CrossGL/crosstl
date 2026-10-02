@@ -665,7 +665,7 @@
           "tests/test_translator/test_mlx_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2006
+        "test_count": 2007
       },
       "translator_codegen": {
         "exists": true,
@@ -5996,6 +5996,7 @@
         "metal": {
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_function_call",
+            "tests/test_translator/test_metal_bfloat_vectors.py::def test_bfloat_vectors_execute_natively",
             "tests/test_translator/test_metal_vector_constructors.py::def test_generic_vector_constructors_execute_natively",
             "tests/test_translator/test_metal_vector_constructors.py::def test_selected_vector_conversion_executes_natively",
             "tests/test_backend/test_metal/test_preprocessor.py::def test_preprocessor_rejects_incompatible_vector_conversion_receiver",

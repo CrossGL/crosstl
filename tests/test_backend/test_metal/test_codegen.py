@@ -10406,6 +10406,25 @@ def test_metal_target_resolves_chained_aliases_and_rejects_cycles():
         MetalCodeGen().generate(cyclic)
 
 
+@pytest.mark.parametrize("width", [2, 3, 4])
+@pytest.mark.parametrize("access", ["[0]", ".x"])
+def test_metal_target_bfloat_vector_elements_retain_bitcast_width(
+    tmp_path, width, access
+):
+    metal = MetalCodeGen().generate(parse_crossgl(f"""
+        shader main {{
+            uint bits(bfloat16vec{width} values) {{
+                return uint(as_type<ushort>(values{access}));
+            }}
+        }}
+    """))
+    assert f"uint bits(bfloat{width} values)" in metal
+    assert f"as_type<ushort>(values{access})" in metal
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "bfloat-vector-element"
+    )
+
+
 def test_metal_target_materializes_and_rebinds_aggregate_free_operator(tmp_path):
     source = """
     template <typename T>

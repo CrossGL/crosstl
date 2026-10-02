@@ -12636,6 +12636,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         if element not in {
             "float",
             "half",
+            "bfloat",
             "int",
             "uint",
             "short",
@@ -19833,6 +19834,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         for base in (
             "float",
             "half",
+            "bfloat",
             "double",
             "int",
             "uint",

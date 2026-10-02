@@ -4092,6 +4092,18 @@ materialized template owners, side-effecting temporary construction and output
 guards; macOS also executes the original source. This bounded contract does not
 establish arbitrary user-defined conversion chains or bfloat16 parity.
 
+Metal round trips additionally preserve native two-, three- and four-lane bfloat
+vectors, including scalar alias chains, vector aliases and declared conversions
+on materialized template owners. Required macOS execution compares original and
+generated kernels using exact integer readbacks: ties-to-even conversion,
+signed zero, overflow, infinity, raw 16-bit payload copies, indexed/swizzled
+components, vector size and output guards. Raw copies include NaN payloads;
+this is not a claim about every arithmetic operation or NaN conversion rule.
+The unchanged pinned general-gather wrapper compiles on Metal with its bfloat
+conversion helpers retained. General gather still lacks host dispatch integration
+and resource-backed aggregate lowering on DirectX/OpenGL. These bfloat-vector
+results do not establish DirectX or OpenGL bfloat parity.
+
 During project translation, Metal template-member inference preserves a
 generic pointer template parameter as a pointer rather than reducing it to its
 pointee type. For a parameter such as ``Pointer src``, a bare tracked pointer,
