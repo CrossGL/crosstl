@@ -34,6 +34,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                 for name in (
                     "Arange",
                     "Reduce",
+                    "BitwiseBinary",
                     "Power",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,
@@ -83,6 +84,10 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     assert "NO_GPU(AsType)" in (backend / "primitives.cpp").read_text()
     assert "NO_GPU(Full)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(Full)" in (backend / "primitives.cpp").read_text()
+    assert (
+        "NO_GPU(BitwiseBinary)" not in (backend / "crosstl_primitives.cpp").read_text()
+    )
+    assert "NO_GPU(BitwiseBinary)" in (backend / "primitives.cpp").read_text()
     for name in prepare.VIEW_PRIMITIVES:
         macro = "NO_GPU_MULTI" if name in prepare.MULTI_OUTPUT_VIEWS else "NO_GPU"
         assert (

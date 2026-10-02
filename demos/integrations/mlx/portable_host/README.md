@@ -36,8 +36,8 @@ support float32, int32, uint32 and bool inputs with bool outputs. Logical and,
 or and not use bool inputs, including upstream casts from numeric inputs.
 The NaN-equality entry supports float32; the maintained host workloads exercise
 scalar `array_equal(equal_nan=True)`. General array equality additionally needs
-the reduction packages described below. Boolean operator overloads that select
-bitwise primitives are not implemented by these logical hooks.
+the reduction packages described below. The optional bitwise package family supports
+Boolean operator overloads and 32-bit integer AND, OR, XOR and shifts.
 Other primitives retain MLX's explicit unsupported-GPU errors. Unary inputs
 other than LogicalNot must be float32. Stored-contiguous broadcasts and column-major views retain
 their metadata; noncontiguous inputs use translated copies before unary dispatch.
@@ -82,6 +82,9 @@ no-GPU backend build definition and adds four explicitly named backend files:
   Eight comparison/logical primitive hooks select 27 additional entries;
   Equal selects NaNEqual when requested by upstream. Non-floating NaN-equality
   uses the corresponding ordinary equality entry.
+  BitwiseBinary selects 13 optional Boolean/int32/uint32 entries, reusing the
+  binary layout checks and translated copies. Shift counts outside 0 through 31
+  are rejected before the bitwise dispatch. There is no CPU bitwise fallback.
   AsType selects a source/destination-specific copy entry, validates array shapes
   and allocation bounds, and allocates a dense destination. Casts perform no CPU
   elementwise conversion.
@@ -552,8 +555,9 @@ and eighteen negative processes each retain a 180-second deadline. All are
 attempted so a failure does not discard the other diagnostic results. CI allows
 2,400 seconds for package translation and 4,000 seconds for verification within
 a bounded 330-minute platform job. Small-row host workloads run in separate
-180-minute platform jobs after the base host proof. These jobs also require
-translated empty-reduction execution and retain its packages and readbacks.
+220-minute platform jobs after the base host proof. These jobs also require
+translated empty-reduction and bitwise execution and retain their packages and
+readbacks.
 
 The workflow preserves an active native run when a branch changes and keeps only
 the newest pending run for that ref. This lets long reduction jobs finish without
@@ -569,3 +573,40 @@ identity checks do not attest to a separately supplied binary; CI builds MLX fro
 the verified sources and retains its build log. `fullUpstreamSuite` and
 `fullTranslatedBackend` remain `false`: extending primitive coverage and then
 running the entire suite is the next stage, not an implicit property of this proof.
+
+## Bitwise Host Operations
+
+The optional family contains 13 unchanged `binary.metal` specializations:
+int32/uint32 AND, OR, XOR, left shift and right shift, plus Boolean AND, OR and
+XOR. Existing base packages remain at 93 entries. Build the additional packages
+and run the host proof with a prepared MLX checkout and its installed host build:
+
+```bash
+python -m demos.integrations.mlx.portable_host.packages \
+  --mlx-root mlx-upstream --target opengl --family bitwise --output-dir bitwise-packages
+python -m demos.integrations.mlx.portable_host.verify_bitwise \
+  --mlx-root mlx-upstream --packages host-packages --bitwise bitwise-packages \
+  --output-dir bitwise-evidence
+```
+
+Use `directx` on Windows or `metal` on macOS when building the corresponding
+packages. The three-platform CI requires this proof after the base host test.
+It compares 104 workloads against separate MLX CPU execution, NumPy and an exact
+Python integer reference. Each native run requires 156 dispatches, including
+translated copies for transpose, broadcast and negative-stride inputs. Empty
+inputs require no dispatch. The proof retains numerical readbacks before any
+comparison failure, validates compiler and native-dispatch identities, checks
+artifact hashes and output guards, and requires six rejection controls.
+
+Unsigned shifts exercise all 32 bits and counts through 31; signed right shifts
+include negative operands. Signed left-shift cases use nonnegative values and
+representable results, without making a parity claim for undefined source
+overflow. Inputs and outputs remain bounded to 65,535 elements. Other integer
+widths, integer invert, and Boolean shifts are not implemented by this family.
+The complete upstream `test_bitwise_ops` also requires random generation and
+those missing widths and operations; the 104 workloads are not a substitute for
+passing that unchanged test. No upstream kernel or test is patched.
+
+The workload layout helper reinterprets a NumPy base allocation using the view's
+dtype before constructing the MLX view. This preserves signedness when the view
+and its base have different dtypes; it does not perform arithmetic on the CPU.

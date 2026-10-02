@@ -123,7 +123,7 @@ def mlx_operand(mx, np, value):
     while isinstance(base.base, np.ndarray):
         base = base.base
     offset = (value.ctypes.data - base.ctypes.data) // value.itemsize
-    source = mx.array(base.reshape(-1))
+    source = mx.array(base.reshape(-1).view(value.dtype))
     return mx.as_strided(
         source,
         value.shape,

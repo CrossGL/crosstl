@@ -49,6 +49,7 @@ def adapted_sources(original, primitives, events):
     for primitive in (
         "Arange",
         "Reduce",
+        "BitwiseBinary",
         *UNARY_OPERATIONS,
         *VIEW_PRIMITIVES,
         *COPY_PRIMITIVES,

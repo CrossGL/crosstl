@@ -101,6 +101,19 @@ BINARY_ENTRIES = {
     for dtype in ("float32", "int32", "uint32")
     if operation != "Divide" or dtype == "float32"
 }
+BITWISE_OPERATIONS = (
+    "BitwiseAnd",
+    "BitwiseOr",
+    "BitwiseXor",
+    "LeftShift",
+    "RightShift",
+)
+BITWISE_ENTRIES = {
+    f"vv_{operation}{dtype}": dtype
+    for operation in BITWISE_OPERATIONS
+    for dtype in ("int32", "uint32", "bool_")
+    if dtype != "bool_" or operation not in {"LeftShift", "RightShift"}
+}
 ENTRIES = (
     ARANGE_ENTRIES
     + UNARY_ENTRIES
@@ -113,10 +126,34 @@ ENTRIES = (
 )
 
 
-def build_packages(root, output, target):
+def build_packages(root, output, target, *, family="base"):
     root = Path(root).resolve()
     if target not in {"opengl", "directx", "metal"}:
         raise ValueError(f"Unsupported target: {target}")
+    if family not in {"base", "bitwise"}:
+        raise ValueError(f"Unsupported package family: {family}")
+    entries = ENTRIES if family == "base" else tuple(BITWISE_ENTRIES)
+    sources = (
+        {
+            SOURCE: ARANGE_ENTRIES,
+            UNARY_SOURCE: (*UNARY_ENTRIES, LOGICAL_NOT_ENTRY),
+            COPY_SOURCE: (
+                COPY_ENTRY,
+                BOOLEAN_COPY_ENTRY,
+                *CAST_ENTRIES,
+                *BOOLEAN_CAST_ENTRIES,
+            ),
+            BINARY_SOURCE: (*BINARY_ENTRIES, *COMPARISON_ENTRIES),
+        }
+        if family == "base"
+        else {BINARY_SOURCE: tuple(BITWISE_ENTRIES)}
+    )
+    patterns = {
+        SOURCE: "arange*",
+        UNARY_SOURCE: "v_*",
+        COPY_SOURCE: "*copy*",
+        BINARY_SOURCE: "vv_*",
+    }
     from demos.integrations.mlx.portable_host.prepare import COMMIT
 
     head = subprocess.check_output(
@@ -143,28 +180,19 @@ def build_packages(root, output, target):
         work = Path(directory)
         config = work / "crosstl.toml"
         config.write_text(
-            f"""[project]
-source_roots = ["mlx/backend/metal/kernels"]
-include = {json.dumps([SOURCE, UNARY_SOURCE, COPY_SOURCE, BINARY_SOURCE])}
-include_dirs = ["."]
-targets = ["{target}"]
-output_dir = "{work.name}/out"
-[project.entry_points]
-"{SOURCE}" = {json.dumps(ARANGE_ENTRIES)}
-"{UNARY_SOURCE}" = {json.dumps([*UNARY_ENTRIES, LOGICAL_NOT_ENTRY])}
-"{COPY_SOURCE}" = {json.dumps([COPY_ENTRY, BOOLEAN_COPY_ENTRY, *CAST_ENTRIES, *BOOLEAN_CAST_ENTRIES])}
-"{BINARY_SOURCE}" = {json.dumps([*BINARY_ENTRIES, *COMPARISON_ENTRIES])}
-[project.entry_workgroup_size_rules."{SOURCE}"]
-"arange*" = [1, 1, 1]
-[project.entry_workgroup_size_rules."{UNARY_SOURCE}"]
-"v_*" = [1, 1, 1]
-[project.entry_workgroup_size_rules."{COPY_SOURCE}"]
-"*copy*" = [1, 1, 1]
-[project.entry_workgroup_size_rules."{BINARY_SOURCE}"]
-"vv_*" = [1, 1, 1]
-[project.source_options.metal]
-binary32_fma_profile = "rne-flush"
-""",
+            '[project]\nsource_roots = ["mlx/backend/metal/kernels"]\n'
+            f'include = {json.dumps(list(sources))}\ninclude_dirs = ["."]\n'
+            f'targets = ["{target}"]\noutput_dir = "{work.name}/out"\n'
+            "[project.entry_points]\n"
+            + "".join(
+                f'"{source}" = {json.dumps(selected)}\n'
+                for source, selected in sources.items()
+            )
+            + "".join(
+                f'[project.entry_workgroup_size_rules."{source}"]\n"{patterns[source]}" = [1, 1, 1]\n'
+                for source in sources
+            )
+            + '[project.source_options.metal]\nbinary32_fma_profile = "rne-flush"\n',
             encoding="utf-8",
         )
         try:
@@ -179,9 +207,9 @@ binary32_fma_profile = "rne-flush"
                 artifact["path"]: artifact["entryPoint"]["source"]
                 for artifact in payload["artifacts"]
             }
-            if len(entries_by_path) != len(ENTRIES) or set(
+            if len(entries_by_path) != len(entries) or set(
                 entries_by_path.values()
-            ) != set(ENTRIES):
+            ) != set(entries):
                 raise RuntimeError(
                     "Translation did not produce the exact required entries"
                 )
@@ -205,9 +233,11 @@ binary32_fma_profile = "rne-flush"
                 if entry is None or entry in descriptors:
                     raise RuntimeError(f"Ambiguous loader entry: {unit['id']}")
                 descriptors[entry] = descriptor
-            if set(descriptors) != set(ENTRIES):
+            if set(descriptors) != set(entries):
                 raise RuntimeError("Missing required loader entries")
             index = {"target": target, "descriptors": descriptors}
+            if family != "base":
+                index["family"] = family
             (output / "index.json").write_text(
                 json.dumps(index, indent=2), encoding="utf-8"
             )
@@ -223,5 +253,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--target", choices=["opengl", "directx", "metal"], required=True
     )
+    parser.add_argument("--family", choices=("base", "bitwise"), default="base")
     args = parser.parse_args()
-    build_packages(args.mlx_root, args.output_dir, args.target)
+    build_packages(args.mlx_root, args.output_dir, args.target, family=args.family)

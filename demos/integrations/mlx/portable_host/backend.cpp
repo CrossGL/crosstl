@@ -602,7 +602,8 @@ void dispatch_binary(
     const std::vector<mlx::core::array>& inputs,
     mlx::core::array& out,
     const char* operation,
-    bool comparison = false) {
+    bool comparison = false,
+    bool bitwise = false) {
   require_runtime();
   if (inputs.size() != 2 || inputs[0].dtype() != inputs[1].dtype() ||
       out.dtype() != (comparison ? mlx::core::bool_ : inputs[0].dtype()) ||
@@ -611,7 +612,8 @@ void dispatch_binary(
     throw std::invalid_argument("CrossTL binary inputs must match output shape and dtype.");
   }
   const char* dtype = storage_type(inputs[0].dtype());
-  if (!dtype || (!comparison && inputs[0].dtype() == mlx::core::bool_)) {
+  if (!dtype || (!comparison && !bitwise && inputs[0].dtype() == mlx::core::bool_) ||
+      (bitwise && inputs[0].dtype() == mlx::core::float32)) {
     throw std::invalid_argument("CrossTL binary dispatch requires a supported 32-bit dtype.");
   }
   if (std::string(operation) == "Divide" && out.dtype() != mlx::core::float32) {
@@ -633,6 +635,15 @@ void dispatch_binary(
   }
   auto a = dense_input(inputs[0]);
   auto b = dense_input(inputs[1]);
+  if (bitwise && (std::string(operation) == "LeftShift" || std::string(operation) == "RightShift")) {
+    for (size_t i = 0; i < b.size(); ++i) {
+      const int64_t shift = b.dtype() == mlx::core::int32
+          ? b.data<int32_t>()[i] : b.data<uint32_t>()[i];
+      if (shift < 0 || shift >= 32) {
+        throw std::invalid_argument("CrossTL 32-bit shifts require counts in [0, 31].");
+      }
+    }
+  }
   uint32_t size = static_cast<uint32_t>(out.size());
   std::string entry = std::string("vv_") + operation + dtype;
   CrosstlMlxBuffer buffers[] = {
@@ -896,6 +907,10 @@ CROSSTL_BINARY_GPU(Maximum)
 CROSSTL_BINARY_GPU(Divide)
 
 #undef CROSSTL_BINARY_GPU
+
+void BitwiseBinary::eval_gpu(const std::vector<array>& inputs, array& out) {
+  dispatch_binary(inputs, out, name(), false, true);
+}
 
 #define CROSSTL_COMPARISON_GPU(Primitive)                                 \
   void Primitive::eval_gpu(const std::vector<array>& inputs, array& out) { \

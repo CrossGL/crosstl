@@ -33,6 +33,7 @@ from demos.integrations.mlx.portable_host import (
 )
 from demos.integrations.mlx.portable_host.packages import (
     BINARY_ENTRIES,
+    BITWISE_ENTRIES,
     BOOLEAN_CAST_ENTRIES,
     BOOLEAN_COPY_ENTRY,
     CAST_ENTRIES,
@@ -123,6 +124,7 @@ _installed_runtime = None
 COPY_GUARD = [0x6A15BEEF] * 32
 BOOLEAN_GUARD = [index % 2 == 0 for index in range(32)]
 ALL_CAST_ENTRIES = {**CAST_ENTRIES, **BOOLEAN_CAST_ENTRIES}
+ALL_BINARY_ENTRIES = {**BINARY_ENTRIES, **BITWISE_ENTRIES}
 
 
 def physical_dtype(dtype, target):
@@ -145,7 +147,9 @@ def wire_value(value):
 
 
 class HostRuntime:
-    def __init__(self, directory, trace, *, reductions=None, mlx_root=None):
+    def __init__(
+        self, directory, trace, *, reductions=None, mlx_root=None, bitwise=None
+    ):
         self.directory = Path(directory).resolve()
         self.trace = Path(trace).resolve()
         index = json.loads((self.directory / "index.json").read_text(encoding="utf-8"))
@@ -158,6 +162,28 @@ class HostRuntime:
         self.descriptors = index["descriptors"]
         if set(self.descriptors) != set(ENTRIES):
             raise ValueError("Packages must contain the exact supported entry set")
+        self.bitwise_directory = (
+            Path(bitwise).resolve() if bitwise is not None else None
+        )
+        if self.bitwise_directory is not None:
+            operators = json.loads(
+                (self.bitwise_directory / "index.json").read_text(encoding="utf-8")
+            )
+            if (
+                not isinstance(operators, dict)
+                or operators.get("family") != "bitwise"
+                or operators.get("target") != self.target
+                or not isinstance(operators.get("descriptors"), dict)
+                or set(operators.get("descriptors", {})) != set(BITWISE_ENTRIES)
+                or any(
+                    not isinstance(value, dict) or value.get("target") != self.target
+                    for value in operators["descriptors"].values()
+                )
+            ):
+                raise ValueError(
+                    "Bitwise packages must match the target and exact entry set"
+                )
+            self.descriptors.update(operators["descriptors"])
         directories = (
             [self.directory / "reductions"]
             if reductions is None
@@ -256,7 +282,8 @@ class HostRuntime:
         if reduction and launch is None:
             raise ValueError("Native reductions require explicit launch geometry")
         copy = entry in {COPY_ENTRY, BOOLEAN_COPY_ENTRY}
-        binary = entry in BINARY_ENTRIES
+        bitwise = entry in BITWISE_ENTRIES
+        binary = entry in ALL_BINARY_ENTRIES
         comparison = entry in COMPARISON_ENTRIES
         binary_operation = binary or comparison
         cast = entry in ALL_CAST_ENTRIES
@@ -291,7 +318,9 @@ class HostRuntime:
             package_directory = self.reduction_directories[key] / "package"
         elif not small_row:
             descriptor = self.descriptors[entry]
-            package_directory = self.directory / "package"
+            package_directory = (
+                self.bitwise_directory if bitwise else self.directory
+            ) / "package"
         logical_not = entry == LOGICAL_NOT_ENTRY
         unary = entry in UNARY_ENTRIES or logical_not
         if initialization:
@@ -351,7 +380,7 @@ class HostRuntime:
             ):
                 raise ValueError("Native unary buffer dtype does not match")
             if binary and dtype != (
-                "uint32" if name == "size" else BINARY_ENTRIES[entry]
+                "uint32" if name == "size" else ALL_BINARY_ENTRIES[entry]
             ):
                 raise ValueError("Native binary buffer dtype does not match")
             if comparison and dtype != (
@@ -426,6 +455,13 @@ class HostRuntime:
             supplied["size"].data, ctypes.POINTER(ctypes.c_uint32)
         )[0] != threads:
             raise ValueError("Native operation size does not match the launch")
+        if bitwise and entry.startswith(("vv_LeftShift", "vv_RightShift")):
+            buffer = supplied["b"]
+            counts = ctypes.cast(
+                buffer.data, ctypes.POINTER(TYPES[BITWISE_ENTRIES[entry]])
+            )
+            if any(not 0 <= counts[index] < 32 for index in range(threads)):
+                raise ValueError("32-bit shifts require counts in [0, 31]")
         guard = COPY_GUARD
         guarded = copy or binary_operation or cast or logical_not or reduction
         output_dtype = supplied[output_name].dtype.decode("ascii")
@@ -437,7 +473,7 @@ class HostRuntime:
             )
         if (
             (reduction and output_dtype == "float32")
-            or (binary and BINARY_ENTRIES[entry] == "float32")
+            or (binary and ALL_BINARY_ENTRIES[entry] == "float32")
             or (cast and ALL_CAST_ENTRIES[entry][1] == "float32")
         ):
             guard = [
@@ -494,6 +530,8 @@ class HostRuntime:
                 # Unwritten outputs must differ from the reduction identity.
                 initial_value = int("sum" in entry or entry == "init_reduce_orbool_")
                 values = [initial_value] * buffer.count
+            if bitwise and buffer.output:
+                values = [1 if dtype == "bool_" else COPY_GUARD[0]] * buffer.count
             if dtype == "bool_":
                 values = boolean_values(values, "uint32")
                 if storage == "bool":
@@ -579,6 +617,17 @@ class HostRuntime:
                 raise RuntimeError("Native readback size does not match the output")
             if dtype == "bool_":
                 boolean_values(output["values"], storage)
+            elif bitwise:
+                low, high = (
+                    (-(2**31), 2**31 - 1) if dtype == "int32" else (0, 2**32 - 1)
+                )
+                if any(
+                    type(value) is not int or not low <= value <= high
+                    for value in output["values"]
+                ):
+                    raise RuntimeError(
+                        "Native bitwise readback is outside its integer type"
+                    )
             if guarded and output["values"][buffer.count :] != guard:
                 raise RuntimeError("Native operation changed the output buffer guard")
             values = (ctype * buffer.count)(
@@ -599,6 +648,11 @@ class HostRuntime:
                         "dispatchVersion": DISPATCH_VERSION,
                         "artifact": descriptor["artifact"],
                         "details": result.details,
+                        **(
+                            {"bitwiseValues": output["values"][: buffer.count]}
+                            if bitwise
+                            else {}
+                        ),
                         **(
                             {"initializationValue": initial_value}
                             if initialization
