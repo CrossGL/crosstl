@@ -26,6 +26,17 @@ ENTRIES = {
     for dtype in ("float32", "int32", "uint32")
 }
 ENTRIES.update({"all_reduce_andbool_": "bool_", "all_reduce_orbool_": "bool_"})
+INIT_ENTRIES = {
+    f"init_reduce_{operation}{dtype}": dtype
+    for operation in ("sum", "prod")
+    for dtype in ("float32", "int32", "uint32")
+}
+INIT_ENTRIES.update({"init_reduce_andbool_": "bool_", "init_reduce_orbool_": "bool_"})
+INIT_SOURCE = (
+    f'#include "{SOURCE}"\n'
+    "instantiate_init_reduce(sum, uint32, uint32_t, Sum)\n"
+    "instantiate_init_reduce(prod, uint32, uint32_t, Prod)\n"
+)
 ROW_ENTRIES = {
     prefix + entry.removeprefix("all_reduce_"): dtype
     for prefix in (
@@ -43,10 +54,15 @@ COLUMN_ENTRIES = {
     for dimension in (1, 2, 5)
     for entry, dtype in ENTRIES.items()
 }
-ENTRY_GROUPS = {"all": ENTRIES, "row": ROW_ENTRIES, "column": COLUMN_ENTRIES}
+ENTRY_GROUPS = {
+    "all": ENTRIES,
+    "row": ROW_ENTRIES,
+    "column": COLUMN_ENTRIES,
+    "init": INIT_ENTRIES,
+}
 WIDTHS = tuple(range(32, 1025, 32))
 ROW_WIDTHS = (32, 128, *range(288, 1025, 32))
-FAMILY_WIDTHS = {"all": WIDTHS, "row": ROW_WIDTHS, "column": (256,)}
+FAMILY_WIDTHS = {"all": WIDTHS, "row": ROW_WIDTHS, "column": (256,), "init": (1,)}
 
 
 def load_index(directory, target):
@@ -106,7 +122,7 @@ def build_packages(
             type(width) is not int or width not in allowed_widths for width in widths
         )
     ):
-        raise ValueError("Reduction widths must be unique multiples of 32 up to 1024")
+        raise ValueError(f"Reduction widths must be unique members of {allowed_widths}")
     if (
         not entries
         or len(set(entries)) != len(entries)
@@ -133,17 +149,23 @@ def build_packages(
     with tempfile.TemporaryDirectory(prefix=".host-reductions-", dir=root) as directory:
         work = Path(directory)
         config = work / "crosstl.toml"
+        source = SOURCE
+        source_root = "mlx/backend/metal/kernels"
+        if family == "init":
+            source_root = work.name
+            source = f"{work.name}/init_reduce.metal"
+            (work / "init_reduce.metal").write_text(INIT_SOURCE, encoding="utf-8")
         variants = "".join(
             f"[project.variants.w{width}]\nworkgroup_size = [{width}, 1, 1]\n"
             for width in widths
         )
         options = ""
-        if target != "metal":
+        if target != "metal" and family != "init":
             options = (
                 f"[project.source_options.metal.target_options.{target}]\n"
                 "software_subgroup_width = 32\n"
             )
-        if target == "directx":
+        if target == "directx" and family != "init":
             options += 'relative_wave_shuffle_out_of_range = "self"\n'
         if family == "row" and target == "opengl":
             options += (
@@ -153,10 +175,10 @@ def build_packages(
                 "minimum = 0\nmaximum = 131071\n"
             )
         config.write_text(
-            '[project]\nsource_roots = ["mlx/backend/metal/kernels"]\n'
-            f'include = ["{SOURCE}"]\ninclude_dirs = ["."]\ntargets = ["{target}"]\n'
+            f'[project]\nsource_roots = ["{source_root}"]\n'
+            f'include = ["{source}"]\ninclude_dirs = ["."]\ntargets = ["{target}"]\n'
             f'output_dir = "{work.name}/out"\n[project.entry_points]\n'
-            f'"{SOURCE}" = {json.dumps(entries)}\n'
+            f'"{source}" = {json.dumps(entries)}\n'
             + variants
             + "[project.source_options.metal]\nmax_template_specializations = 128\n"
             "max_template_materialization_work = 8192\n" + options,

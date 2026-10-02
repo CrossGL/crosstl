@@ -271,6 +271,23 @@ def test_column_runtime_checks_layout_and_guards(
                 },
             }
         )
+    if target == "directx":
+        bindings.append(
+            {
+                "name": "CrossGLDispatchInfo",
+                "scalarLayout": {"memberName": "crossglNumWorkGroups"},
+                "provenance": {
+                    "kind": "generated-execution-input",
+                    "executionInput": {
+                        "kind": "dispatch-workgroup-count",
+                        "coordinateSpace": "physical",
+                        "dimensions": 3,
+                        "memberName": "crossglNumWorkGroups",
+                        "valueSource": "dispatch.workgroupCount",
+                    },
+                },
+            }
+        )
     host.reduction_descriptors = {
         f"w256/{entry}": {
             "bindings": bindings,
@@ -282,6 +299,8 @@ def test_column_runtime_checks_layout_and_guards(
     def request(descriptor, directory, inputs, outputs, launch, **kwargs):
         assert launch == execution and directory == tmp_path / "package"
         assert inputs["in"]["shape"] == [count]
+        assert "CrossGLDispatchInfo" not in inputs
+        assert "CrossGLDispatchInfo" not in outputs
         return outputs
 
     def execute(outputs):

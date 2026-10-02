@@ -570,6 +570,34 @@ void dispatch_cast(const std::vector<mlx::core::array>& inputs, mlx::core::array
   }
 }
 
+void dispatch_empty_reduce(mlx::core::array& out, const char* operation) {
+  if (out.size() > 65535) {
+    throw std::invalid_argument("CrossTL reduction initialization supports at most 65535 outputs.");
+  }
+  if (out.size() == 0) {
+    out.set_data(mlx::core::allocator::malloc(0));
+    return;
+  }
+  const char* dtype = storage_type(out.dtype());
+  const bool logical = std::string(operation) == "and" || std::string(operation) == "or";
+  if (!dtype || logical != (out.dtype() == mlx::core::bool_) ||
+      (!logical && std::string(operation) != "sum" && std::string(operation) != "prod")) {
+    throw std::invalid_argument("CrossTL reduction initialization requires float32/int32/uint32 sum/product or Boolean all/any.");
+  }
+  out.set_data(mlx::core::allocator::malloc(std::max<size_t>(out.nbytes(), 4)));
+  std::string entry = std::string("init_reduce_") + operation + dtype;
+  CrosstlMlxBuffer buffer{"out", dtype, out.data<void>(), out.size(), 1};
+  // init_reduce observes only the global ID, so one-thread groups preserve its writes.
+  const auto launch = elementwise_launch(out.size());
+  char error[2048] = {};
+  int status = dispatch_callback.load()(
+      entry.c_str(), &buffer, 1, out.size(), &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native reduction initialization failed: ") + error);
+  }
+}
+
 void dispatch_binary(
     const std::vector<mlx::core::array>& inputs,
     mlx::core::array& out,
@@ -740,19 +768,6 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
   const char* dtype = storage_type(in.dtype());
   const bool boolean = in.dtype() == bool_;
   const bool logical = reduce_type_ == And || reduce_type_ == Or;
-  if (!dtype || in.dtype() != out.dtype() ||
-      (boolean ? (reduce_type_ == Sum || reduce_type_ == Prod) : logical)) {
-    throw std::invalid_argument(
-        "CrossTL reductions require matching float32/int32/uint32 numeric arrays or Boolean all/any.");
-  }
-  if (in.size() == 0) {
-    throw std::invalid_argument("CrossTL empty reduction initialization is not implemented.");
-  }
-  auto plan = get_reduction_plan(in, axes_);
-  if (plan.type == GeneralReduce) {
-    in = dense_input(in);
-    plan = get_reduction_plan(in, axes_);
-  }
   const char* operation = nullptr;
   switch (reduce_type_) {
     case And: operation = "and"; break;
@@ -761,6 +776,20 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
     case Prod: operation = "prod"; break;
     case Min: operation = boolean ? "and" : "min"; break;
     case Max: operation = boolean ? "or" : "max"; break;
+  }
+  if (in.size() == 0) {
+    dispatch_empty_reduce(out, operation);
+    return;
+  }
+  if (!dtype || in.dtype() != out.dtype() ||
+      (boolean ? (reduce_type_ == Sum || reduce_type_ == Prod) : logical)) {
+    throw std::invalid_argument(
+        "CrossTL reductions require matching float32/int32/uint32 numeric arrays or Boolean all/any.");
+  }
+  auto plan = get_reduction_plan(in, axes_);
+  if (plan.type == GeneralReduce) {
+    in = dense_input(in);
+    plan = get_reduction_plan(in, axes_);
   }
   if (plan.type == ContiguousReduce || plan.type == GeneralContiguousReduce) {
     dispatch_row_reduce(in, out, plan, axes_, operation, dtype);

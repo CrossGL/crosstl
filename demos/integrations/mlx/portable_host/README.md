@@ -143,7 +143,7 @@ wheel when updating the ABI.
 The optional reduction packages connect MLX's `Reduce::eval_gpu` to unchanged
 `all_reduce` entries for float32, int32 and uint32 sum, product, minimum and
 maximum, plus Boolean all/any. Boolean minimum/maximum use upstream's all/any
-mapping. Inputs and outputs must have matching storage types; numeric all/any,
+mapping. Nonempty inputs and outputs must have matching storage types; numeric all/any,
 Boolean sum/product and narrow or complex types are not implemented yet.
 
 The host uses upstream's reduction planner. Noncontiguous whole-array inputs
@@ -151,9 +151,47 @@ are materialized with translated copies when required. Arrays up to 4,096
 elements use the exact source launch width, rounded to a multiple of 32. Larger
 bounded arrays retain the two source passes: 128 partial rows followed by a
 32-thread final reduction. Intermediate values are staged synchronously, not
-kept in persistent GPU allocations. Unsupported column plans and empty-reduction
-initialization still produce explicit errors. No reduction arithmetic is
+kept in persistent GPU allocations. Unsupported column plans still produce
+explicit errors. No reduction arithmetic is
 performed on the CPU by the adapter.
+
+### Empty Reductions
+
+The `init` package family translates upstream `init_reduce` for float32, int32
+and uint32 sum/product and Boolean all/any. Empty Boolean sum/product uses MLX's
+int32 output promotion; empty numeric all/any produces Boolean outputs without
+reading input storage. Outputs with no elements require no dispatch, including
+valid empty minimum/maximum outputs. Reducing an empty axis with minimum or
+maximum retains MLX's upstream error.
+
+Unsigned sum/product initialization is instantiated by MLX's JIT rather than
+listed in `reduce.metal`. The package builder retains an additional translation
+unit that includes the unchanged source and adds those two template declarations
+using upstream's instantiation macro. Kernel bodies are not modified. The host
+uses one-thread workgroups because this kernel observes only the global ID,
+not subgroup or workgroup geometry. Nonempty outputs are bounded to 65,535
+elements; unsupported output types and missing packages are rejected explicitly.
+
+```sh
+python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream --target metal --family init --output-dir init-packages
+python -m demos.integrations.mlx.portable_host.verify_empty_reductions --mlx-root mlx-upstream --packages packages --reductions init-packages --output-dir empty-evidence
+```
+
+Use `opengl` or `directx` on the corresponding native platform. The verifier
+compares 68 cases against separate CPU MLX and NumPy references, checks 50 native
+dispatches and their output guards, and runs unchanged upstream
+`test_reduce.TestReduce.test_zero_size`. It retains readbacks, package hashes,
+source adaptation records and three separate rejection controls. These checks
+cover empty reductions, not the complete upstream test suite.
+Output buffers start with values different from the required identity, so a
+missing write cannot pass merely because the allocation was already zeroed.
+
+The pinned CPU reduction planner can hang on empty arrays imported from NumPy
+with zero strides. Its reference worker constructs equivalent contiguous empty
+MLX arrays instead; the native worker still evaluates the imported NumPy arrays.
+The retained records identify this input-construction difference. No CPU source,
+test method, expected result or comparison tolerance is patched. The unchanged
+upstream zero-size test is run in both workers with its original constructors.
 
 `reduction_packages` generates every multiple-of-32 width from 32 through 1,024
 by default: 448 entry/width combinations per target. HLSL and GLSL use explicit
@@ -514,7 +552,8 @@ and eighteen negative processes each retain a 180-second deadline. All are
 attempted so a failure does not discard the other diagnostic results. CI allows
 2,400 seconds for package translation and 4,000 seconds for verification within
 a bounded 330-minute platform job. Small-row host workloads run in separate
-150-minute platform jobs after the base host proof.
+180-minute platform jobs after the base host proof. These jobs also require
+translated empty-reduction execution and retain its packages and readbacks.
 
 The workflow preserves an active native run when a branch changes and keeps only
 the newest pending run for that ref. This lets long reduction jobs finish without

@@ -13,6 +13,7 @@ on:
       - "tests/test_mlx_portable_columns.py"
       - "tests/test_mlx_portable_mixed_reductions.py"
       - "tests/test_mlx_portable_small_rows.py"
+      - "tests/test_mlx_portable_empty_reductions.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
       - "tests/test_translator/test_directx_half_conversion.py"
@@ -83,6 +84,7 @@ on:
       - "tests/test_mlx_portable_columns.py"
       - "tests/test_mlx_portable_mixed_reductions.py"
       - "tests/test_mlx_portable_small_rows.py"
+      - "tests/test_mlx_portable_empty_reductions.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
       - "tests/test_translator/test_directx_half_conversion.py"
@@ -240,7 +242,7 @@ jobs:
           Expand-Archive $warpArchive -DestinationPath $warpRoot
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Validate portable host contracts
-        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py tests/test_mlx_portable_rows.py tests/test_mlx_portable_mixed_reductions.py tests/test_mlx_portable_columns.py tests/test_mlx_portable_small_rows.py
+        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py tests/test_mlx_portable_rows.py tests/test_mlx_portable_mixed_reductions.py tests/test_mlx_portable_columns.py tests/test_mlx_portable_small_rows.py tests/test_mlx_portable_empty_reductions.py
       - name: Validate software subgroup votes
         env:
           CROSTL_REQUIRE_SOFTWARE_SUBGROUP_VOTES: "1"
@@ -738,7 +740,7 @@ jobs:
     name: MLX small-row reductions (${{ matrix.target }})
     needs: portable-host
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 150
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -852,6 +854,24 @@ jobs:
           python tools/run_bounded_command.py --timeout-seconds 4000 --label "MLX small-row host verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_small_rows --mlx-root mlx-upstream \
               --packages .mlx-portable-small-rows/base/packages --output-dir .mlx-portable-small-rows/evidence 2>&1 | tee .mlx-portable-small-rows/verification.log
+      - name: Translate reduction initialization
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX initialization translation" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family init --jobs 4 --output-dir .mlx-portable-small-rows/init-packages \
+              2>&1 | tee .mlx-portable-small-rows/init-translation.log
+      - name: Execute empty host reductions
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX empty reduction verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_empty_reductions --mlx-root mlx-upstream \
+              --packages .mlx-portable-small-rows/base/packages --reductions .mlx-portable-small-rows/init-packages \
+              --output-dir .mlx-portable-small-rows/empty-evidence 2>&1 | tee .mlx-portable-small-rows/empty-verification.log
       - name: Retain small-row execution evidence
         if: always()
         uses: actions/upload-artifact@v4

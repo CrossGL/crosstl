@@ -48,7 +48,10 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
 from demos.integrations.mlx.portable_host.reduction_packages import (
     ENTRIES as REDUCTION_ENTRIES,
 )
-from demos.integrations.mlx.portable_host.reduction_packages import ROW_ENTRIES
+from demos.integrations.mlx.portable_host.reduction_packages import (
+    INIT_ENTRIES,
+    ROW_ENTRIES,
+)
 from demos.integrations.mlx.portable_host.reduction_packages import (
     load_index as load_reduction_index,
 )
@@ -239,6 +242,7 @@ class HostRuntime:
             return 1
 
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
+        initialization = entry in INIT_ENTRIES
         small_row = entry in SMALL_ROW_ENTRIES
         row_reduction = entry in ROW_ENTRIES or small_row
         column_reduction = entry in COLUMN_ENTRIES
@@ -246,7 +250,7 @@ class HostRuntime:
         layout_module = (
             column_reduction_layout if column_reduction else row_reduction_layout
         )
-        reduction = entry in REDUCTION_ENTRIES or shaped_reduction
+        reduction = entry in REDUCTION_ENTRIES or shaped_reduction or initialization
         if entry not in self.descriptors and not reduction:
             raise ValueError(f"No translated package for {entry}")
         if reduction and launch is None:
@@ -259,15 +263,26 @@ class HostRuntime:
         if (
             count
             != (
-                len(layout_module.signature(entry))
-                if shaped_reduction
-                else 8 if copy else 4 if binary_operation or reduction else 3
+                1
+                if initialization
+                else (
+                    len(layout_module.signature(entry))
+                    if shaped_reduction
+                    else 8 if copy else 4 if binary_operation or reduction else 3
+                )
             )
             or not buffers
             or not 0 < threads <= 65535
         ):
             raise ValueError("Invalid or unsupported native dispatch dimensions")
         execution = launch.execution() if launch is not None else None
+        if initialization and execution != {
+            "workgroupCount": [threads, 1, 1],
+            "workgroupSize": [1, 1, 1],
+        }:
+            raise ValueError(
+                "Reduction initialization requires one invocation per output"
+            )
         if reduction and not small_row:
             key = f'w{execution["workgroupSize"][0]}/{entry}'
             if key not in self.reduction_descriptors:
@@ -279,7 +294,9 @@ class HostRuntime:
             package_directory = self.directory / "package"
         logical_not = entry == LOGICAL_NOT_ENTRY
         unary = entry in UNARY_ENTRIES or logical_not
-        if shaped_reduction:
+        if initialization:
+            names = {"out"}
+        elif shaped_reduction:
             names = set(layout_module.signature(entry))
         elif reduction:
             names = {"in", "out", "in_size", "row_size"}
@@ -306,7 +323,13 @@ class HostRuntime:
                 or not buffer.data
             ):
                 raise ValueError("Invalid native buffer")
-            if reduction:
+            if initialization:
+                expected = threads
+                if dtype != INIT_ENTRIES[entry]:
+                    raise ValueError(
+                        "Reduction initialization dtype does not match its entry"
+                    )
+            elif reduction:
                 expected = {"in": threads, "out": execution["workgroupCount"][1]}.get(
                     name, 1
                 )
@@ -346,6 +369,7 @@ class HostRuntime:
             if (
                 reduction
                 and not shaped_reduction
+                and not initialization
                 and dtype
                 != (
                     "uint64"
@@ -362,7 +386,7 @@ class HostRuntime:
             shaped_metadata = layout_module.validate(
                 entry, supplied, threads, execution
             )
-        elif reduction:
+        elif reduction and not initialization:
             reduction_layout.validate(supplied, threads, execution)
         grid = (
             execution["workgroupCount"]
@@ -466,6 +490,10 @@ class HostRuntime:
                 if buffer.output
                 else [wire_value(value) for value in view]
             )
+            if initialization:
+                # Unwritten outputs must differ from the reduction identity.
+                initial_value = int("sum" in entry or entry == "init_reduce_orbool_")
+                values = [initial_value] * buffer.count
             if dtype == "bool_":
                 values = boolean_values(values, "uint32")
                 if storage == "bool":
@@ -572,21 +600,30 @@ class HostRuntime:
                         "artifact": descriptor["artifact"],
                         "details": result.details,
                         **(
+                            {"initializationValue": initial_value}
+                            if initialization
+                            else {}
+                        ),
+                        **(
                             {
                                 "reductionGuardValues": output["values"][
                                     buffer.count :
                                 ],
                                 "reductionValues": output["values"][: buffer.count],
                                 "reductionMetadata": (
-                                    shaped_metadata
-                                    if shaped_reduction
-                                    else {
-                                        name: ctypes.cast(
-                                            supplied[name].data,
-                                            ctypes.POINTER(ctypes.c_uint64),
-                                        )[0]
-                                        for name in ("in_size", "row_size")
-                                    }
+                                    {"outputSize": threads}
+                                    if initialization
+                                    else (
+                                        shaped_metadata
+                                        if shaped_reduction
+                                        else {
+                                            name: ctypes.cast(
+                                                supplied[name].data,
+                                                ctypes.POINTER(ctypes.c_uint64),
+                                            )[0]
+                                            for name in ("in_size", "row_size")
+                                        }
+                                    )
                                 ),
                             }
                             if reduction
