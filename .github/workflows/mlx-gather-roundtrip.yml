@@ -96,9 +96,16 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"
+      - name: Initialize DirectX execution evidence
+        run: |
+          mkdir -p .mlx-gather-directx
+          python --version > .mlx-gather-directx/python-version.txt
       - name: Install CrossTL and runtime dependencies
-        run: python -m pip install -e ".[directx-runtime]" pytest pytest-xdist numpy
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist numpy \
+            2>&1 | tee .mlx-gather-directx/dependencies.log
       - name: Install pinned DirectX tools
         shell: pwsh
         run: |

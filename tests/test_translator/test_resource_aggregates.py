@@ -517,6 +517,16 @@ def test_resource_aggregate_gate_requires_native_execution():
     assert "if:" not in step and "continue-on-error" not in workflow
     assert "runs-on: windows-2025" in workflow
     assert "Get-FileHash" in workflow and "d3d10warp.dll" in workflow
+    directx_job = workflow.split("  directx:", 1)[1]
+    assert 'python-version: "3.12"' in directx_job
+    assert directx_job.index(
+        "Initialize DirectX execution evidence"
+    ) < directx_job.index("Install CrossTL and runtime dependencies")
+    install = ci_coverage.workflow_step_section(
+        workflow, "Install CrossTL and runtime dependencies"
+    )
+    assert "set -euo pipefail" in install
+    assert "tee .mlx-gather-directx/dependencies.log" in install
     for event in ("push", "pull_request"):
         assert "tests/test_translator/**" in ci_coverage.workflow_event_path_filters(
             workflow, event
