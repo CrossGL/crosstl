@@ -283,7 +283,8 @@ def test_resource_aggregate_executes_natively(tmp_path, case):
         ("cursor.output[tid] += 4;", "compound-resource-write"),
     ],
 )
-def test_resource_aggregate_rejects_unproven_operations(tmp_path, body, reason):
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_resource_aggregate_rejects_unproven_operations(tmp_path, body, reason, target):
     source = _source("cursor").replace("cursor.output[tid] = cursor.input[tid];", body)
     path = tmp_path / "unsupported.metal"
     path.write_text(source)
@@ -291,10 +292,10 @@ def test_resource_aggregate_rejects_unproven_operations(tmp_path, body, reason):
         with pytest.raises(
             MetalSizeofResolutionError, match="aggregate object layout is not available"
         ):
-            translate(str(path), backend="directx", format_output=False)
+            translate(str(path), backend=target, format_output=False)
         return
     with pytest.raises(ResourceAggregateError) as error:
-        translate(str(path), backend="directx", format_output=False)
+        translate(str(path), backend=target, format_output=False)
     assert error.value.reason == reason
 
 

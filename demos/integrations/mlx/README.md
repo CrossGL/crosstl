@@ -71,9 +71,14 @@ The no-index specialization requires a valid zero-extent standard array.
 CrossTL retains that native object and its layout instead of emitting an illegal
 C-style array. Separate native controls exercise aliases, nested arrays,
 packed/narrow elements, copies and neighboring fields. DirectX/OpenGL empty-array
-representation and general-gather pointer aggregates remain unsupported
-([#2042](https://github.com/CrossGL/crosstl/issues/2042),
-[#1544](https://github.com/CrossGL/crosstl/issues/1544)).
+representation remains unsupported ([#2042](https://github.com/CrossGL/crosstl/issues/2042)).
+Private pointer-bearing aggregates use resource identities and signed offsets
+on DirectX and OpenGL, with concrete buffer specialization on OpenGL
+([#1544](https://github.com/CrossGL/crosstl/issues/1544)). Required Windows/Linux
+gates execute the 20 indexed workloads. OpenGL uses explicit allocation-derived
+index-range assertions; these bounded cases do not establish unrestricted
+64-bit addressing. Returned void helper calls retain their computation and
+argument effects ([#2043](https://github.com/CrossGL/crosstl/issues/2043)).
 These are direct kernel proofs, not integration of general Gather into the MLX
 host adapter or a passing complete upstream suite.
 

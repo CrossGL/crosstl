@@ -153,9 +153,10 @@ def _contains_storage_pointer(node):
 
 
 class _Lowering:
-    def __init__(self, ast, entry):
+    def __init__(self, ast, entry, storage_pointer_parameters=False):
         self.ast = ast
         self.entry = entry
+        self.storage_pointer_parameters = storage_pointer_parameters
         self.reserved = {
             node.name
             for node in ast.walk()
@@ -272,9 +273,35 @@ class _Lowering:
 
     def resource_parameters(self):
         return [
-            ParameterNode(name, deepcopy(param.param_type))
-            for param, _pointer, name in self.resources
+            ParameterNode(
+                name, **self.resource_declaration(param, pointer, "param_type")
+            )
+            for param, pointer, name in self.resources
         ]
+
+    def resource_declaration(self, param, pointer, field):
+        if not self.storage_pointer_parameters:
+            return {field: deepcopy(param.param_type)}
+        # GLSL specializes these references against concrete SSBO bindings;
+        # unsized buffer arrays cannot be ordinary function parameters.
+        access = (
+            "read_write"
+            if pointer.readable and pointer.writable
+            else ("read" if pointer.readable else "write")
+        )
+        return {
+            field: PointerType(
+                PrimitiveType(pointer.element),
+                is_mutable=pointer.writable,
+                address_space=pointer.space,
+                access_mode=access,
+            ),
+            "qualifiers": [
+                pointer.space,
+                *([] if pointer.writable else ["const"]),
+                *([] if pointer.readable else ["writeonly"]),
+            ],
+        }
 
     def resource_arguments(self):
         return [_id(name) for _param, _pointer, name in self.resources]
@@ -773,8 +800,12 @@ class _Lowering:
                     function.parameters.extend(self.resource_parameters())
                     function.return_type = self.target_type(self.returns[id(function)])
         self.entry.body.statements[:0] = [
-            VariableNode(name, deepcopy(param.param_type), _id(param.name))
-            for param, _pointer, name in self.resources
+            VariableNode(
+                name,
+                initial_value=_id(param.name),
+                **self.resource_declaration(param, pointer, "var_type"),
+            )
+            for param, pointer, name in self.resources
         ] + [
             VariableNode(
                 self.entry_handles[param.name],
@@ -900,7 +931,7 @@ class _Lowering:
                 del candidates[name]
 
 
-def lower_resource_aggregates(ast):
+def lower_resource_aggregates(ast, *, storage_pointer_parameters=False):
     """Lower a selected compute entry's private resource-reference aggregates."""
     if not isinstance(ast, ASTNode):
         return ast
@@ -914,4 +945,4 @@ def lower_resource_aggregates(ast):
         return ast
     result = deepcopy(ast)
     entry = list(result.stages.values())[0].entry_point
-    return _Lowering(result, entry).run()
+    return _Lowering(result, entry, storage_pointer_parameters).run()

@@ -219,7 +219,7 @@ kernel void member_pointer(device int* src [[buffer(0)]],
 @pytest.mark.parametrize(
     "target, code",
     [
-        ("opengl", "project.translate.opengl-storage-pointer-unsupported"),
+        ("opengl", "project.translate.opengl-index-type-unsupported"),
     ],
 )
 def test_pointer_free_targets_retain_aggregate_storage_diagnostics(

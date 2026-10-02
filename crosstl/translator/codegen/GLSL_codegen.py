@@ -330,6 +330,7 @@ from .pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
 )
+from .resource_aggregates import lower_resource_aggregates
 from .resource_arrays import (
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
@@ -6895,6 +6896,7 @@ class GLSLCodeGen:
 
     def generate_program(self, ast, target_stage=None):
         """Render an AST to GLSL, optionally filtering stage entry points."""
+        ast = lower_resource_aggregates(ast, storage_pointer_parameters=True)
         ast = self.with_glsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:
             ast = converge_subgroup_guarded_returns(
@@ -20056,13 +20058,6 @@ class GLSLCodeGen:
             return self.vertex_stage_output(func)
         return None
 
-    def is_void_stage_entry_return_value(self):
-        if self.current_stage_output is not None:
-            return False
-        if self.current_stage_entry_type is None:
-            return False
-        return self.current_function_return_type == "void"
-
     def vertex_stage_output(self, func):
         output_type = self.function_return_type(func)
         source_output_type = self.glsl_source_type_identifier_name(output_type)
@@ -21604,8 +21599,12 @@ class GLSLCodeGen:
                     f"{indent_str}{self.current_stage_output['name']} = {value};\n"
                     f"{indent_str}return;\n"
                 )
-            if self.is_void_stage_entry_return_value():
-                return f"{indent_str}return;\n"
+            if self.current_function_return_type == "void":
+                value = self.generate_expression_with_expected(stmt.value, None)
+                return (
+                    self.generate_glsl_statement_code(value, indent)
+                    + f"{indent_str}return;\n"
+                )
             if isinstance(stmt.value, list):
                 value = ", ".join(self.generate_expression(val) for val in stmt.value)
             else:

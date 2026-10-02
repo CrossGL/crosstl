@@ -210,7 +210,7 @@ def gather_package(request, tmp_path_factory, gather_root):
     return root, hashes, count, ndim, entry, source, descriptor, package
 
 
-def _package(root, count, ndim, retained, target):
+def _package(root, count, ndim, retained, target, *, index_range_assertions=()):
     entry, source = _source(root, count, ndim)
     (retained / "source.metal").write_text(source)
     with tempfile.TemporaryDirectory(prefix=".general-gather-", dir=root) as directory:
@@ -228,6 +228,7 @@ def _package(root, count, ndim, retained, target):
                 output_dir=f"{work.name}/out",
                 entry_points={relative: (entry,)},
                 workgroup_size=(1, 1, 1),
+                index_range_assertions=index_range_assertions,
             ),
             format_output=False,
         )

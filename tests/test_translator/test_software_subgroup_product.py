@@ -143,7 +143,16 @@ kernel void products(device uint* inputWords [[buffer(0)]],
 """
 
 
-def _package(root, target, kind, shape, *, source=None, software_subgroups=True):
+def _package(
+    root,
+    target,
+    kind,
+    shape,
+    *,
+    source=None,
+    software_subgroups=True,
+    index_range_assertions=(),
+):
     if source is None:
         source = _source(kind, math.prod(shape))
     (root / "products.metal").write_text(source, encoding="utf-8")
@@ -161,6 +170,7 @@ def _package(root, target, kind, shape, *, source=None, software_subgroups=True)
             output_dir="out",
             workgroup_size=shape,
             source_options=options,
+            index_range_assertions=index_range_assertions,
         ),
         format_output=False,
     )

@@ -5706,9 +5706,12 @@
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_aggregate_initializers",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_vector_initializers_without_repeating_values",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_partial_vector_initializers_validate_with_glslang_and_spirv_val",
-            "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_partial_aggregate_executes_on_vulkan"
+            "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_partial_aggregate_executes_on_vulkan",
+            "tests/test_translator/test_resource_aggregates_opengl.py::def test_opengl_resource_aggregate_executes_natively",
+            "tests/test_translator/test_resource_aggregates_opengl.py::def test_opengl_resource_aggregate_requires_index_range_proof",
+            "tests/test_translator/test_mlx_general_gather_opengl.py::def test_opengl_indexed_general_gather_executes_natively"
           ],
-          "notes": "OpenGL lowers struct declarations, member access, initialization, and return values. Contextual braced initializers preserve trailing value initialization recursively through nested structs, fixed arrays, and vectors; Metal-materialized partial vector constructors count supplied scalar and vector components and append type-correct zeros without repeating expression evaluation. Generated-code validation and native compute runtime coverage exercise the lowering.",
+          "notes": "OpenGL lowers struct declarations, member access, initialization, and return values. Contextual braced initializers preserve trailing value initialization recursively through nested structs, fixed arrays, and vectors; Metal-materialized partial vector constructors count supplied scalar and vector components and append type-correct zeros without repeating expression evaluation. Selected compute entries lower private storage-pointer aggregates through resource identities and signed offsets, specializing helpers against concrete buffer bindings. Final subscripts require proven ranges or explicit index-range assertions; external aggregate layouts and unproven escapes remain unsupported. Generated-code validation and required native compute controls exercise this bounded contract, not full MLX host integration.",
           "status": "supported"
         },
         "rust": {
@@ -6034,6 +6037,8 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_function_call",
+            "tests/test_translator/test_void_return_effects.py::def test_void_return_call_compiles",
+            "tests/test_translator/test_void_return_effects.py::def test_void_return_call_executes_natively",
             "tests/test_translator/test_metal_vector_constructors.py::def test_generic_vector_constructors_execute_natively",
             "tests/test_translator/test_metal_vector_constructors.py::def test_selected_vector_conversion_executes_natively",
             "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_compiles",

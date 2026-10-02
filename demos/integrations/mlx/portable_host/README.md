@@ -30,7 +30,14 @@ The required macOS gate covers 24 general-gather workloads, including zero-index
 specializations. DirectX now lowers private constant/device pointer aggregates
 to resource identities and element offsets. A required Windows gate covers the
 same 20 indexed workloads; the four zero-index cases remain unsupported there.
-OpenGL general gather still needs aggregate lowering with proven index ranges.
+OpenGL uses the same private resource identities and specializes helpers against
+concrete storage-buffer bindings. Its required Linux gate covers the 20 indexed
+workloads with explicit index-range assertions derived from their allocations.
+Offsets remain signed 64-bit values until a proven final subscript conversion;
+unbounded accesses still fail translation. These assertions describe the tested
+workloads, not arbitrary MLX inputs. Both targets preserve the wrapper's returned
+void helper call instead of omitting its writes. Separate controls check calls
+through helpers, conditional returns and single argument evaluation on each OS.
 These package-level controls do not implement MLX host Gather dispatch.
 Concrete float, half and integer vector
 constructors and declared vector conversions have a separate required native
