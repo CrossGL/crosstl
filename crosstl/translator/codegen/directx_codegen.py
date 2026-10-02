@@ -12728,7 +12728,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if contract is None:
             return None
         left, right = self.hlsl_wide_integer_operands(contract, "target", "value")
-        if (left, right) == ("target", "value"):
+        # A shift count keeps its independent type even when no conversion is
+        # needed; assignment-context rendering would impose the lvalue's shape.
+        if (left, right) == ("target", "value") and binary not in {"<<", ">>"}:
             return None
         lhs = lhs if lhs is not None else self.generate_expression(target)
         rhs = self.generate_expression_with_expected(value, None)

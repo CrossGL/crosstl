@@ -30256,7 +30256,16 @@ complex64_t crossgl_complex64_mod_assign(
         )
         if plan is None:
             return None
-        return plan.left_target_type, plan.right_target_type
+        right_target = plan.right_target_type
+        if operator in {"<<", ">>"} and self.GLSL_TARGET_DISPLAY_NAME == "OpenGL":
+            count_type = target_arithmetic_type(right_target)
+            if count_type is not None and count_type.bits == 64:
+                # Source-defined counts fit in 32 bits; native GL drivers may
+                # reject wide counts even when glslang accepts the expression.
+                right_target = arithmetic_type_name(
+                    count_type.kind, 32, count_type.lanes
+                )
+        return plan.left_target_type, right_target
 
     def glsl_unary_source_result_type(self, expression):
         operator = self.map_operator(expression.op)
@@ -32879,6 +32888,21 @@ complex64_t crossgl_complex64_mod_assign(
         )
         if complex_assignment is not None:
             return complex_assignment
+        if binary_operator in {"<<", ">>"}:
+            operand_types = self.glsl_binary_operand_conversion_types(
+                expected_type,
+                self.glsl_source_expression_type(right_node),
+                binary_operator,
+                source_node=node,
+                fail_closed=True,
+            )
+            if operand_types is not None and self.map_type(
+                operand_types[0]
+            ) == self.map_type(expected_type):
+                right = self.generate_expression_with_expected(
+                    right_node, operand_types[1]
+                )
+                return f"{left} {op} {right}"
         converted_assignment = self.glsl_converted_compound_assignment_value(
             left_node,
             right_node,

@@ -791,7 +791,8 @@ Metal-to-HLSL lowering explicitly applies source integer conversions before arit
 bitwise operations, comparisons and conditional selection. In particular,
 ``int64_t`` combined with ``uint`` uses signed 64-bit arithmetic, not HLSL's
 implicit unsigned conversion. Vector/scalar pairs retain the vector element
-type, and shifts preserve independent operand promotions. Compound assignments
+type, and shifts preserve independent operand promotions, including compound
+shifts with scalar counts and vector destinations. Compound assignments
 convert before narrowing back to the destination; typed helpers retain single
 evaluation of indexed destinations. A right operand that may modify a copied
 destination receives a diagnostic rather than an unproven copy-in/copy-out
@@ -812,11 +813,21 @@ retain constant expressions. Unsupported side-effecting compound destinations
 remain diagnostic. Zero divisors and signed-minimum divided by minus one are
 outside the source-defined numerical contract.
 
+OpenGL shifts convert 64-bit counts to matching signed or unsigned 32-bit scalar
+or vector operands for native driver compatibility. This does not change the
+promoted left operand or the result type. Compound shifts retain native indexed
+lvalues and evaluate both the index and count once. Negative counts and counts
+at least as large as the promoted left operand's bit width are outside the
+source-defined contract; this lowering does not assign them portable semantics.
+
 Required native CI checks scalar mixed-width arithmetic and scalar/vector signed
 remainder on Windows, Linux and macOS, including original Metal controls,
-unchanged inputs and guarded outputs. HLSL vector/scalar conversions and wide
-shift counts receive separate Windows/Metal controls. OpenGL wide shift counts
-remain tracked in `issue #2033 <https://github.com/CrossGL/crosstl/issues/2033>`_.
+unchanged inputs and guarded outputs. Wide shift counts cover both directions,
+32-bit and 64-bit left operands, vector widths two through four, scalar
+broadcasts and side-effecting binary and compound expressions on every target.
+The original Metal controls use representable, nonnegative signed left-shift
+operands and valid counts throughout. HLSL vector/scalar arithmetic conversions
+receive separate Windows/Metal controls.
 Native HLSL controls additionally compare generated results on each target and
 the original HLSL on Windows; optimized DXC checks cover direct and saved-CrossGL
 round trips. Metal scalar/vector arithmetic on OpenGL remains tracked in

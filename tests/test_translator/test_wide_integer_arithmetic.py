@@ -82,6 +82,114 @@ def test_shifts_keep_left_operand_type_in_nested_arithmetic():
     assert "((a >> b) / c)" in generated
 
 
+@pytest.mark.parametrize("operator", ["<<=", ">>="])
+@pytest.mark.parametrize(
+    "left", ["uint2", "int3", "int64_t4", "uint64_t2", "uint", "int"]
+)
+@pytest.mark.parametrize("right", ["int64_t", "uint64_t"])
+def test_hlsl_compound_shift_retains_independent_count_type(operator, left, right):
+    source = f"""shader Test {{
+        void combine({left} values[2], {right} count) {{
+            uint index = 0u;
+            values[index++] {operator} count++;
+        }}
+    }}"""
+    generated = HLSLCodeGen().generate(parse(source))
+    assert generated.count("index++") == 1
+    assert generated.count("count++") == 1
+    assert f"{operator} count++;" in generated
+
+
+@pytest.mark.parametrize("left,right", [("uint", "int64_t2"), ("uint2", "int64_t3")])
+def test_hlsl_compound_shift_rejects_incompatible_count_shapes(left, right):
+    source = f"shader Test {{ void combine({left} a, {right} b) {{ a >>= b; }} }}"
+    with pytest.raises(DirectXContextualConversionError, match="vector operands"):
+        HLSLCodeGen().generate(parse(source))
+
+
+@pytest.mark.parametrize("operator", ["<<", ">>"])
+@pytest.mark.parametrize("left", ["int", "uint", "int64_t", "uint64_t"])
+@pytest.mark.parametrize("right,narrowed", [("int64_t", "int"), ("uint64_t", "uint")])
+@pytest.mark.parametrize(
+    "width,broadcast",
+    [(1, False), (2, False), (3, False), (4, False), (2, True), (3, True), (4, True)],
+)
+def test_glsl_wide_shift_count_conversion_preserves_left_type(
+    operator, left, right, narrowed, width, broadcast
+):
+    def vector(kind, lanes):
+        if lanes == 1:
+            return kind
+        prefix = {
+            "int": "ivec",
+            "uint": "uvec",
+            "int64_t": "i64vec",
+            "uint64_t": "u64vec",
+        }[kind]
+        return f"{prefix}{lanes}"
+
+    left_type = vector(left, width)
+    count_width = 1 if broadcast else width
+    right_type = vector(right, count_width)
+    conversion = vector(narrowed, count_width)
+    source = f"shader Test {{ {left_type} combine({left_type} a, {right_type} b) {{ return a {operator} b; }} }}"
+    codegen = GLSLCodeGen()
+    generated = codegen.generate(parse(source))
+    assert f"return (a {operator} {conversion}(b));" in generated
+    plan = codegen.glsl_arithmetic_conversion_plan(left_type, right_type, operator)
+    assert plan.right_target_type == right_type
+    assert plan.result_type == left_type
+
+
+@pytest.mark.parametrize("operator", ["<<=", ">>="])
+def test_glsl_wide_shift_compound_evaluates_index_and_count_once(operator):
+    source = f"""shader Test {{ RWStructuredBuffer<uint> values;
+        void combine(int64_t count) {{
+            uint index = 0u;
+            values[index++] {operator} count++;
+        }}
+    }}"""
+    generated = GLSLCodeGen().generate(parse(source))
+    assert generated.count("index++") == 1
+    assert generated.count("count++") == 1
+    assert f"values[(index++)] {operator} int((count++));" in generated
+
+
+def test_glsl_wide_shift_retains_nested_unsigned_result():
+    source = "shader Test { uint combine(uint a, int64_t b, uint c) { return (a >> b) / c; } }"
+    assert "((a >> int(b)) / c)" in GLSLCodeGen().generate(parse(source))
+
+
+def test_glsl_wide_shift_preserves_constants_and_count_evaluation():
+    source = """shader Test {
+        const uint shifted = 1u << int64_t(3);
+        uint combine(uint a, uint64_t count) { return a >> count++; }
+    }"""
+    generated = GLSLCodeGen().generate(parse(source))
+    assert "const uint shifted = (1u << int(int64_t(3)));" in generated
+    assert "return (a >> uint((count++)));" in generated
+    assert generated.count("count++") == 1
+
+
+@pytest.mark.parametrize(
+    "left,right", [("uint", "i64vec2"), ("uvec2", "i64vec3"), ("uint", "double")]
+)
+def test_glsl_shift_rejects_unsupported_operand_shapes(left, right):
+    source = (
+        f"shader Test {{ {left} combine({left} a, {right} b) {{ return a << b; }} }}"
+    )
+    with pytest.raises(ValueError, match="arithmetic operator"):
+        GLSLCodeGen().generate(parse(source))
+
+
+def test_webgl_wide_shift_remains_unsupported():
+    from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
+
+    source = "shader Test { uint combine(uint a, int64_t b) { return a >> b; } }"
+    with pytest.raises(ValueError):
+        WebGLCodeGen().generate(parse(source))
+
+
 @pytest.mark.parametrize("operator", ["+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="])
 def test_compound_assignment_converts_rhs_without_repeating_lvalue(operator):
     source = f"shader Test {{ RWStructuredBuffer<int64_t> values; void combine(uint b) {{ uint index = 0u; values[index++] {operator} b; }} }}"
@@ -713,6 +821,192 @@ kernel void products(device long* numerators [[buffer(0)]],
         wanted,
         "int64",
         "uint32",
+    )
+
+
+@pytest.mark.parametrize(
+    "kind,dtype,bits",
+    [
+        ("int", "int32", 32),
+        ("uint", "uint32", 32),
+        ("long", "int64", 64),
+        ("ulong", "uint64", 64),
+    ],
+)
+@pytest.mark.parametrize(
+    "count_kind,count_dtype", [("long", "int64"), ("ulong", "uint64")]
+)
+def test_wide_shift_counts_execute_with_original_metal(
+    tmp_path, kind, dtype, bits, count_kind, count_dtype
+):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required wide shift execution")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    signed = dtype.startswith("int")
+    statements = []
+    expressions = []
+
+    def save(expression):
+        statements.append(f"outputs[base + {len(expressions)}u] = {expression};")
+        expressions.append(expression)
+
+    # Signed left shifts use nonnegative, representable values only.
+    positive = f"(a < 0 ? {kind}(0) : a)" if signed else "a"
+    statements.extend(
+        [
+            f"{kind} positive = {positive};",
+            f"{kind} left = positive >> b;" if signed else f"{kind} left = positive;",
+        ]
+    )
+    save("left << b")
+    save("a >> b")
+    statements.append(f"{count_kind} count = b;")
+    save("left << count++")
+    save("count")
+    statements.append("count = b;")
+    save("a >> count++")
+    save("count")
+    statements.extend(
+        [
+            f"{kind} pair[2] = {{left, a}};",
+            "uint index = 0u;",
+            "count = b;",
+            "pair[index++] <<= count++;",
+        ]
+    )
+    save("pair[0]")
+    save("count")
+    statements.extend(["count = b;", "pair[index++] >>= count++;"])
+    save("pair[1]")
+    save("count")
+    save("index")
+    resource_offset = len(expressions)
+    save("left")
+    save("a")
+    statements.extend(
+        [
+            f"uint resourceIndex = base + {resource_offset}u;",
+            "count = b;",
+            "outputs[resourceIndex++] <<= count++;",
+            "count = b;",
+            "outputs[resourceIndex++] >>= count++;",
+        ]
+    )
+    save(f"resourceIndex - base - {resource_offset}u")
+    for width in (2, 3, 4):
+        count_values = [
+            "b",
+            f"{count_kind}({bits - 1}) - b",
+            f"{count_kind}(0)",
+            f"{count_kind}({bits - 1})",
+        ][:width]
+        left_values = [
+            f"positive >> ({c})" if signed else "positive" for c in count_values
+        ]
+        vector = f"{kind}{width}"
+        statements.extend(
+            [
+                f"{count_kind}{width} counts{width} = {count_kind}{width}({', '.join(count_values)});",
+                f"{vector} left{width} = {vector}({', '.join(left_values)});",
+                f"{vector} right{width} = {vector}(a);",
+                f"{vector} shiftedLeft{width} = left{width} << counts{width};",
+                f"{vector} shiftedRight{width} = right{width} >> counts{width};",
+                f"left{width} <<= counts{width};",
+                f"right{width} >>= counts{width}++;",
+                f"{vector} broadcastLeft{width} = {vector}(left) << b;",
+                f"{vector} broadcastRight{width} = {vector}(a);",
+                f"broadcastRight{width} >>= b;",
+            ]
+        )
+        for name in (
+            "shiftedLeft",
+            "shiftedRight",
+            "left",
+            "right",
+            "broadcastLeft",
+            "broadcastRight",
+            "counts",
+        ):
+            for component in "xyzw"[:width]:
+                save(f"{name}{width}.{component}")
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+kernel void products(device {kind}* numerators [[buffer(0)]],
+                     device {count_kind}* denominators [[buffer(1)]],
+                     device {kind}* outputs [[buffer(2)]],
+                     uint tid [[thread_position_in_grid]]) {{
+    {kind} a = numerators[tid];
+    {count_kind} b = denominators[tid];
+    uint base = tid * {len(expressions)}u;
+    {chr(10).join(statements)}
+}}
+"""
+    source, descriptor, package = _package(
+        tmp_path, target, kind, (1, 1, 1), source=source, software_subgroups=False
+    )
+    mask = (1 << bits) - 1
+    maximum = (1 << (bits - int(signed))) - 1
+    numerators = [
+        0,
+        maximum,
+        -94 if signed else maximum - 2,
+        127,
+        -(1 << (bits - 1)) if signed else (1 << (bits - 1)),
+        maximum - 1,
+        -1 if signed else maximum,
+        maximum,
+    ]
+    denominators = [0, 1, 7, 15, 16, 31, bits - 2, bits - 1]
+    wanted = []
+    for a, b in zip(numerators, denominators):
+        left = max(a, 0) >> b if signed else a
+        shifted_left = (left << b) & mask
+        shifted_right = a >> b
+        wanted.extend(
+            [
+                shifted_left,
+                shifted_right,
+                shifted_left,
+                b + 1,
+                shifted_right,
+                b + 1,
+                shifted_left,
+                b + 1,
+                shifted_right,
+                b + 1,
+                2,
+                shifted_left,
+                shifted_right,
+                2,
+            ]
+        )
+        for width in (2, 3, 4):
+            counts = [b, bits - 1 - b, 0, bits - 1][:width]
+            lefts = [
+                ((max(a, 0) >> count) << count) if signed else ((a << count) & mask)
+                for count in counts
+            ]
+            rights = [a >> count for count in counts]
+            wanted.extend(
+                lefts
+                + rights
+                + lefts
+                + rights
+                + [shifted_left] * width
+                + [shifted_right] * width
+                + [count + 1 for count in counts]
+            )
+    _execute_integer_case(
+        tmp_path,
+        source,
+        descriptor,
+        package,
+        target,
+        numerators,
+        denominators,
+        wanted,
+        dtype,
+        count_dtype,
     )
 
 

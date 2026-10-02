@@ -80,6 +80,9 @@
             "tests/test_translator/test_wide_integer_arithmetic.py::def test_optimized_dxc_keeps_signed_division_remainder_and_comparison",
             "tests/test_translator/test_wide_integer_arithmetic.py::def test_mixed_integer_arithmetic_executes_with_source_signedness",
             "tests/test_translator/test_wide_integer_arithmetic.py::def test_hlsl_vector_scalar_arithmetic_matches_original_metal",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_hlsl_compound_shift_retains_independent_count_type",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_hlsl_compound_shift_rejects_incompatible_count_shapes",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_wide_shift_counts_execute_with_original_metal",
             "tests/test_translator/test_wide_integer_arithmetic.py::def test_compound_copy_in_rejects_potential_rhs_alias_modification",
             "tests/test_translator/test_wide_integer_arithmetic.py::def test_native_hlsl_integer_rank_survives_roundtrip",
             "tests/test_translator/test_wide_integer_arithmetic.py::def test_native_hlsl_arithmetic_preserves_source_results_on_each_target",
@@ -113,7 +116,11 @@
             "tests/test_translator/test_opengl_half_conversion.py::def test_half_unproven_conversions_fail_closed",
             "tests/test_translator/test_wide_integer_arithmetic.py::def test_glsl_signed_remainder_uses_truncating_division",
             "tests/test_translator/test_wide_integer_arithmetic.py::def test_signed_remainder_executes_for_both_operand_signs",
-            "tests/test_translator/test_wide_integer_arithmetic.py::def test_glsl_signed_remainder_evaluates_operands_once_and_avoids_collisions"
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_glsl_signed_remainder_evaluates_operands_once_and_avoids_collisions",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_glsl_wide_shift_count_conversion_preserves_left_type",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_glsl_wide_shift_compound_evaluates_index_and_count_once",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_glsl_shift_rejects_unsupported_operand_shapes",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_wide_shift_counts_execute_with_original_metal"
           ],
           "notes": "OpenGL target output applies deterministic, collision-free GLSL identifier remapping to user and generated symbols, including target-reserved gl_ and consecutive-underscore spellings, while preserving declared builtin interface names and source provenance, with warning-fatal glslang and SPIR-V validation coverage. Canonical Metal floating math and eager Boolean selection have typed lowering, explicit min/max NaN handling, source-helper ownership checks, and required bounded Linux numerical execution; this is not whole-repository runtime coverage.",
           "status": "supported"
