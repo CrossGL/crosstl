@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .runtime_value_encoding import validate_value_encoding
 from .runtime_verification import (
     NativeRuntimeBufferBinding,
     NativeRuntimeDispatchRequest,
@@ -43,6 +44,7 @@ class _PreparedDirectXBuffer:
     upload: bool = True
     writable: bool = False
     allocation_explicit: bool = False
+    readback_encoding: str | None = None
 
     @property
     def size(self) -> int:
@@ -85,6 +87,7 @@ class _PreparedVulkanBuffer:
     readback: bool
     output_name: str | None
     payload: bytes
+    readback_encoding: str | None = None
 
     @property
     def size(self) -> int:
@@ -116,6 +119,7 @@ class _PreparedOpenGLBuffer:
     upload: bool = True
     writable: bool = False
     allocation_explicit: bool = False
+    readback_encoding: str | None = None
 
     @property
     def size(self) -> int:
@@ -779,11 +783,13 @@ class DirectXComputeRuntime:
                         "binding": prepared.binding_index,
                     },
                 ) from exc
-            outputs[prepared.output_name or prepared.name] = {
-                "dtype": prepared.dtype,
-                "shape": list(prepared.shape),
-                "values": _unpack_values(payload, prepared.dtype, target="DirectX"),
-            }
+            outputs[prepared.output_name or prepared.name] = _buffer_readback(
+                payload,
+                prepared.dtype,
+                prepared.shape,
+                target="DirectX",
+                encoding=prepared.readback_encoding,
+            )
         return outputs
 
 
@@ -1841,11 +1847,13 @@ class OpenGLComputeRuntime:
                         "actualByteLength": len(payload),
                     },
                 )
-            outputs[prepared.output_name or prepared.name] = {
-                "dtype": prepared.dtype,
-                "shape": list(prepared.shape),
-                "values": _unpack_values(payload, prepared.dtype, target="OpenGL"),
-            }
+            outputs[prepared.output_name or prepared.name] = _buffer_readback(
+                payload,
+                prepared.dtype,
+                prepared.shape,
+                target="OpenGL",
+                encoding=prepared.readback_encoding,
+            )
         return outputs
 
 
@@ -2316,11 +2324,13 @@ class _VulkanDispatchContext:
             if not prepared.readback:
                 continue
             payload = self._read_memory(resource.memory, prepared.size)
-            outputs[prepared.output_name or prepared.name] = {
-                "dtype": prepared.dtype,
-                "shape": list(prepared.shape),
-                "values": _unpack_values(payload, prepared.dtype),
-            }
+            outputs[prepared.output_name or prepared.name] = _buffer_readback(
+                payload,
+                prepared.dtype,
+                prepared.shape,
+                target="Vulkan",
+                encoding=prepared.readback_encoding,
+            )
         return outputs
 
     def _cleanup(self) -> None:
@@ -2833,6 +2843,7 @@ def _prepare_directx_buffers(
             )
 
         dtype = _normalize_directx_dtype(binding.dtype, resource=name)
+        readback_encoding = _buffer_readback_encoding(binding, dtype)
         try:
             shape = tuple(int(value) for value in binding.shape)
         except (TypeError, ValueError) as exc:
@@ -2868,6 +2879,7 @@ def _prepare_directx_buffers(
                     dtype,
                     expected_count=element_count,
                     target="DirectX",
+                    encoding=binding.encoding,
                 )
             except (RuntimeExecutorUnavailable, struct.error) as exc:
                 raise _directx_setup_error(
@@ -2936,6 +2948,7 @@ def _prepare_directx_buffers(
                 upload=binding.value is not None,
                 writable=namespace == "uav",
                 allocation_explicit=binding.allocation is not None,
+                readback_encoding=readback_encoding,
             )
         )
     return tuple(
@@ -3971,6 +3984,7 @@ def _prepare_vulkan_buffers(
             )
         seen_bindings.add(descriptor)
         dtype = _normalize_dtype(binding.dtype, target="Vulkan")
+        readback_encoding = _buffer_readback_encoding(binding, dtype)
         shape = tuple(int(value) for value in binding.shape)
         element_count = (
             math.prod(shape) if shape else len(_flatten_values(binding.value))
@@ -3983,6 +3997,7 @@ def _prepare_vulkan_buffers(
                 dtype,
                 expected_count=element_count,
                 target="Vulkan",
+                encoding=binding.encoding,
             )
         prepared.append(
             _PreparedVulkanBuffer(
@@ -3996,6 +4011,7 @@ def _prepare_vulkan_buffers(
                 readback=readback,
                 output_name=_runtime_value_name(binding),
                 payload=payload,
+                readback_encoding=readback_encoding,
             )
         )
     return tuple(
@@ -4063,6 +4079,7 @@ def _prepare_opengl_buffers(
             )
         seen_bindings.add(descriptor)
         dtype = _normalize_dtype(binding.dtype, target="OpenGL")
+        readback_encoding = _buffer_readback_encoding(binding, dtype)
         shape = tuple(int(value) for value in binding.shape)
         element_count = (
             math.prod(shape) if shape else len(_flatten_values(binding.value))
@@ -4076,6 +4093,7 @@ def _prepare_opengl_buffers(
                 dtype,
                 expected_count=element_count,
                 target="OpenGL",
+                encoding=binding.encoding,
             )
         (
             allocation_id,
@@ -4135,6 +4153,7 @@ def _prepare_opengl_buffers(
                 upload=binding.value is not None,
                 writable=access in {"write", "read_write", "readwrite"},
                 allocation_explicit=binding.allocation is not None,
+                readback_encoding=readback_encoding,
             )
         )
     return tuple(
@@ -4448,6 +4467,25 @@ def _binding_requires_readback(binding: NativeRuntimeBufferBinding) -> bool:
     return binding.expected_output is not None or binding.source == "expectedOutput"
 
 
+def _buffer_readback_encoding(
+    binding: NativeRuntimeBufferBinding, dtype: str
+) -> str | None:
+    encoding = (
+        binding.expected_output.encoding
+        if binding.expected_output is not None
+        else (binding.encoding if binding.source == "expectedOutput" else None)
+    )
+    try:
+        validate_value_encoding(binding.encoding, dtype)
+        validate_value_encoding(encoding, dtype)
+    except ValueError as exc:
+        raise RuntimeAdapterSetupError(
+            str(exc),
+            details={"reasonKind": "value-encoding-invalid", "resource": binding.name},
+        ) from exc
+    return encoding
+
+
 def _workgroup_count(
     request: NativeRuntimeDispatchRequest,
     *,
@@ -4735,12 +4773,19 @@ def _pack_values(
     *,
     expected_count: int,
     target: str = "Vulkan",
+    encoding: str | None = None,
 ) -> bytes:
     values = _flatten_values(value)
+    try:
+        validate_value_encoding(encoding, dtype, values)
+    except ValueError as exc:
+        raise RuntimeExecutorUnavailable(str(exc)) from exc
     if len(values) != expected_count:
         raise RuntimeExecutorUnavailable(
             f"{target} compute runtime buffer value count does not match shape."
         )
+    if encoding is not None:
+        return struct.pack("<" + "I" * expected_count, *values)
     if dtype == "bool" and any(type(item) is not bool for item in values):
         raise RuntimeExecutorUnavailable(
             f"{target} boolean buffer values must be true or false."
@@ -4766,7 +4811,15 @@ def _unpack_values(
     dtype: str,
     *,
     target: str = "Vulkan",
+    encoding: str | None = None,
 ) -> list[Any]:
+    try:
+        validate_value_encoding(encoding, dtype)
+    except ValueError as exc:
+        raise RuntimeAdapterDispatchError(
+            str(exc),
+            details={"target": target.lower(), "reasonKind": "value-encoding-invalid"},
+        ) from exc
     size = _dtype_size(dtype)
     if dtype == "bool" and any(byte not in (0, 1) for byte in payload):
         raise RuntimeAdapterDispatchError(
@@ -4790,4 +4843,25 @@ def _unpack_values(
     count = len(payload) // size
     if count == 0:
         return []
-    return list(struct.unpack("<" + _dtype_format(dtype) * count, payload))
+    return list(
+        struct.unpack(
+            "<" + ("I" if encoding is not None else _dtype_format(dtype)) * count,
+            payload,
+        )
+    )
+
+
+def _buffer_readback(
+    payload: bytes,
+    dtype: str,
+    shape: Sequence[int],
+    *,
+    target: str,
+    encoding: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "dtype": dtype,
+        "shape": list(shape),
+        "values": _unpack_values(payload, dtype, target=target, encoding=encoding),
+        **({"encoding": encoding} if encoding is not None else {}),
+    }

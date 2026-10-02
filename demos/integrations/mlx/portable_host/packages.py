@@ -157,6 +157,32 @@ INTEGER64_ENTRIES = {
     **INTEGER64_BINARY_ENTRIES,
     **INTEGER64_COMPARISON_ENTRIES,
 }
+SLICE_UPDATE_TYPES = {
+    "float32": "float",
+    "int32": "int",
+    "uint32": "uint",
+    "bool_": "bool",
+    "int64": "long",
+    "uint64": "ulong",
+}
+SLICE_UPDATE_OPERATIONS = ("Sum", "Prod", "Min", "Max")
+SLICE_UPDATE_ENTRIES = {
+    f"slice_update_{operation.lower()}{dtype}": dtype
+    for operation in SLICE_UPDATE_OPERATIONS
+    for dtype in SLICE_UPDATE_TYPES
+}
+SLICE_UPDATE_SOURCE = (
+    '#include "mlx/backend/metal/kernels/utils.h"\n'
+    '#include "mlx/backend/metal/kernels/reduce_utils.h"\n'
+    '#include "mlx/backend/metal/kernels/indexing/scatter.h"\n\n'
+    + "\n".join(
+        f'template [[host_name("slice_update_{operation.lower()}{dtype}")]]\n'
+        f"[[kernel]] decltype(slice_update_op_impl<{kind}, int, {operation}<{kind}>, false, true, false, 1, 0>)\n"
+        f"slice_update_op_impl<{kind}, int, {operation}<{kind}>, false, true, false, 1, 0>;\n"
+        for operation in SLICE_UPDATE_OPERATIONS
+        for dtype, kind in SLICE_UPDATE_TYPES.items()
+    )
+)
 ENTRIES = (
     ARANGE_ENTRIES
     + UNARY_ENTRIES
@@ -179,6 +205,7 @@ def build_packages(root, output, target, *, family="base"):
         "selection": SELECTION_ENTRIES,
         "absolute": ABSOLUTE_ENTRIES,
         "integer64": INTEGER64_ENTRIES,
+        "slice-update": SLICE_UPDATE_ENTRIES,
     }
     if family not in families:
         raise ValueError(f"Unsupported package family: {family}")
@@ -206,6 +233,7 @@ def build_packages(root, output, target, *, family="base"):
             UNARY_SOURCE: tuple(INTEGER64_ABSOLUTE_ENTRIES),
             BINARY_SOURCE: (*INTEGER64_BINARY_ENTRIES, *INTEGER64_COMPARISON_ENTRIES),
         },
+        "slice-update": {},
     }[family]
     patterns = {
         SOURCE: "arange*",
@@ -238,9 +266,16 @@ def build_packages(root, output, target, *, family="base"):
     output.mkdir(parents=True)
     with tempfile.TemporaryDirectory(prefix=".portable-host-", dir=root) as directory:
         work = Path(directory)
+        source_roots = ["mlx/backend/metal/kernels"]
+        if family == "slice-update":
+            source = f"{work.name}/slice-update.metal"
+            (root / source).write_text(SLICE_UPDATE_SOURCE, encoding="utf-8")
+            source_roots = [work.name]
+            sources = {source: entries}
+            patterns[source] = "slice_update_*"
         config = work / "crosstl.toml"
         config.write_text(
-            '[project]\nsource_roots = ["mlx/backend/metal/kernels"]\n'
+            f"[project]\nsource_roots = {json.dumps(source_roots)}\n"
             f'include = {json.dumps(list(sources))}\ninclude_dirs = ["."]\n'
             f'targets = ["{target}"]\noutput_dir = "{work.name}/out"\n'
             "[project.entry_points]\n"
@@ -315,7 +350,14 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--family",
-        choices=("base", "bitwise", "selection", "absolute", "integer64"),
+        choices=(
+            "base",
+            "bitwise",
+            "selection",
+            "absolute",
+            "integer64",
+            "slice-update",
+        ),
         default="base",
     )
     args = parser.parse_args()

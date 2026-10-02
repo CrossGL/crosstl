@@ -19,11 +19,12 @@ from pathlib import Path
 from .native_loader_dispatch import NativeLoaderDispatchError, _validated_scalar_layout
 from .native_runtime_drivers import (
     _binding_requires_readback,
+    _buffer_readback,
+    _buffer_readback_encoding,
     _dtype_size,
     _normalize_dtype,
     _pack_values,
     _runtime_value_name,
-    _unpack_values,
 )
 from .runtime_verification import (
     RuntimeAdapterDispatchError,
@@ -241,15 +242,13 @@ class MetalComputeRuntime:
             if not isinstance(raw_outputs, dict) or set(raw_outputs) != set(outputs):
                 raise ValueError("Metal readback names do not match the request.")
             values = {}
-            for name, (dtype, shape, size) in outputs.items():
+            for name, (dtype, shape, size, encoding) in outputs.items():
                 data = base64.b64decode(raw_outputs[name], validate=True)
                 if len(data) != size:
                     raise ValueError(f"Metal readback size does not match {name}.")
-                values[name] = {
-                    "dtype": dtype,
-                    "shape": list(shape),
-                    "values": _unpack_values(data, dtype, target="Metal"),
-                }
+                values[name] = _buffer_readback(
+                    data, dtype, shape, target="Metal", encoding=encoding
+                )
         except (ValueError, TypeError, KeyError) as exc:
             raise RuntimeAdapterDispatchError(
                 "Metal worker returned invalid readback data.",
@@ -332,6 +331,7 @@ class MetalComputeRuntime:
                 )
             indices.add(index)
             dtype = _normalize_dtype(binding.dtype, target="Metal")
+            readback_encoding = _buffer_readback_encoding(binding, dtype)
             shape = tuple(binding.shape)
             if not shape or any(type(d) is not int or d <= 0 for d in shape):
                 raise _setup_error(
@@ -408,6 +408,7 @@ class MetalComputeRuntime:
                     dtype,
                     expected_count=math.prod(shape),
                     target="Metal",
+                    encoding=binding.encoding,
                 )
                 for previous_offset, previous in upload_ranges.get(allocation_id, ()):
                     start = max(offset, previous_offset)
@@ -440,7 +441,7 @@ class MetalComputeRuntime:
                     raise _setup_error(
                         "Metal readback names must be unique.", "output-name-ambiguous"
                     )
-                outputs[output_name] = (dtype, shape, length)
+                outputs[output_name] = (dtype, shape, length, readback_encoding)
             buffers.append(
                 {
                     "index": index,

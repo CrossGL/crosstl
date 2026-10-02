@@ -2025,6 +2025,44 @@ Unchanged output after a rejected submission cannot be reported as successful
 execution. These Python-driver checks do not add limit validation to generated
 C++ loader adapters or establish complete host-runtime integration.
 
+Lossless Float Buffer Storage
+----------------------------
+
+Typed float32 buffers can opt into ``encoding: "ieee754-binary32"`` in the
+Python native dispatch API and runtime-verification fixtures. Each ``values``
+element is then an unsigned 32-bit storage word, not a numeric float:
+
+.. code-block:: json
+
+   {
+     "dtype": "float32",
+     "shape": [3],
+     "encoding": "ieee754-binary32",
+     "values": [2143363909, 1065353216, 2147483648]
+   }
+
+These words represent a noncanonical quiet NaN, 1.0 and negative zero. Native
+packing and readback retain their bits without converting through host floats.
+The reflected buffer remains float32, so kernels still perform floating-point
+arithmetic. Encoding does not bypass physical-layout, size, binding or allocation
+checks. Other encodings, incompatible dtypes, Boolean words, fractional words
+and words outside the unsigned 32-bit range are rejected.
+
+Upload and readback choose their encodings independently, including an
+initialized read-write buffer. An output request may omit ``values`` and select
+encoded readback using only dtype, shape and encoding. Returned words describe
+actual native storage; no original input values are substituted after execution.
+Encoded expected outputs require exact word equality and matching encoding,
+regardless of numeric tolerance settings. This checks storage preservation, not
+a requirement that arithmetic NaN results preserve an operand's payload.
+
+Without ``encoding``, the existing numeric buffer and non-finite token contracts
+remain unchanged. Native regression gates exercise generated Metal, DirectX and
+OpenGL partial updates, with original Metal controls and shared-allocation
+DirectX/OpenGL sequences. Metal's process-isolated runtime has no sequence API.
+This representation currently covers binary32 buffers, not half/double storage
+or generated C++ adapter serialization.
+
 Shared Native Allocation Views
 ------------------------------
 

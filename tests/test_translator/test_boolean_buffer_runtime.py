@@ -176,7 +176,7 @@ def test_boolean_package_uses_target_physical_storage(tmp_path, target):
     if target == "metal":
         _, native = _native_request(request)
         payload, readbacks = MetalComputeRuntime()._prepare_request(native)
-        assert readbacks["results"] == ("bool", (15,), 15)
+        assert readbacks["results"] == ("bool", (15,), 15, None)
         assert sorted(item["length"] for item in payload["allocations"]) == [
             15,
             15,

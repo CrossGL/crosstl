@@ -17,6 +17,7 @@ from crosstl.project.native_runtime_drivers import (
     DirectXComputeRuntime,
     OpenGLComputeRuntime,
 )
+from crosstl.project.runtime_value_encoding import FLOAT32_BITS
 from crosstl.project.runtime_verification import (
     DirectXRuntimeParityAdapter,
     MetalRuntimeParityAdapter,
@@ -30,6 +31,7 @@ from demos.integrations.mlx.portable_host import (
     copy_layout,
     reduction_layout,
     row_reduction_layout,
+    slice_update_layout,
 )
 from demos.integrations.mlx.portable_host.packages import (
     ABSOLUTE_ENTRIES,
@@ -51,6 +53,7 @@ from demos.integrations.mlx.portable_host.packages import (
     INTEGER64_ENTRIES,
     LOGICAL_NOT_ENTRY,
     SELECTION_ENTRIES,
+    SLICE_UPDATE_ENTRIES,
     UNARY_ENTRIES,
 )
 from demos.integrations.mlx.portable_host.reduction_packages import (
@@ -122,6 +125,7 @@ CALLBACK = ctypes.CFUNCTYPE(
     ctypes.c_void_p,
     ctypes.c_size_t,
 )
+ENTRY_AVAILABLE = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_char_p)
 TYPES = {
     "bool_": ctypes.c_uint8,
     "float32": ctypes.c_float,
@@ -175,6 +179,7 @@ class HostRuntime:
         selection=None,
         absolute=None,
         integer64=None,
+        slice_updates=None,
     ):
         self.directory = Path(directory).resolve()
         self.trace = Path(trace).resolve()
@@ -200,11 +205,15 @@ class HostRuntime:
         self.integer64_directory = (
             Path(integer64).resolve() if integer64 is not None else None
         )
+        self.slice_update_directory = (
+            Path(slice_updates).resolve() if slice_updates is not None else None
+        )
         for family, directory, entries in (
             ("bitwise", self.bitwise_directory, BITWISE_PACKAGE_ENTRIES),
             ("selection", self.selection_directory, SELECTION_ENTRIES),
             ("absolute", self.absolute_directory, ABSOLUTE_ENTRIES),
             ("integer64", self.integer64_directory, INTEGER64_ENTRIES),
+            ("slice-update", self.slice_update_directory, SLICE_UPDATE_ENTRIES),
         ):
             if directory is None:
                 continue
@@ -269,7 +278,14 @@ class HostRuntime:
             runtime_adapter=adapter,
         )
         self.callback = CALLBACK(self._dispatch)
+        self.entry_available = ENTRY_AVAILABLE(self._entry_available)
         self.library = None
+
+    def _entry_available(self, entry):
+        try:
+            return int(entry.decode("ascii") in self.descriptors)
+        except (AttributeError, UnicodeDecodeError):
+            return 0
 
     def install(self):
         global _installed_runtime
@@ -283,10 +299,10 @@ class HostRuntime:
             else Path(mx.__file__)
         )
         self.library = ctypes.CDLL(str(library))
-        register = self.library.crosstl_mlx_register_dispatch
-        register.argtypes = [ctypes.c_uint32, CALLBACK]
+        register = self.library.crosstl_mlx_register_runtime
+        register.argtypes = [ctypes.c_uint32, CALLBACK, ENTRY_AVAILABLE]
         register.restype = ctypes.c_int
-        result = register(DISPATCH_VERSION, self.callback)
+        result = register(DISPATCH_VERSION, self.callback, self.entry_available)
         if result:
             raise RuntimeError(
                 f"MLX rejected the native callback registration: {result}"
@@ -324,6 +340,7 @@ class HostRuntime:
         if reduction and launch is None:
             raise ValueError("Native reductions require explicit launch geometry")
         copy = entry in ALL_COPY_ENTRIES
+        slice_update = entry in SLICE_UPDATE_ENTRIES
         invert = entry in BITWISE_INVERT_ENTRIES
         absolute = entry in ALL_ABSOLUTE_ENTRIES
         bitwise = entry in BITWISE_PACKAGE_ENTRIES
@@ -342,7 +359,7 @@ class HostRuntime:
                     if shaped_reduction
                     else (
                         8
-                        if copy
+                        if copy or slice_update
                         else (
                             5
                             if selection
@@ -372,15 +389,19 @@ class HostRuntime:
         elif not small_row:
             descriptor = self.descriptors[entry]
             package_directory = (
-                self.integer64_directory
-                if entry in INTEGER64_ENTRIES
+                self.slice_update_directory
+                if slice_update
                 else (
-                    self.bitwise_directory
-                    if bitwise
+                    self.integer64_directory
+                    if entry in INTEGER64_ENTRIES
                     else (
-                        self.selection_directory
-                        if selection
-                        else self.absolute_directory if absolute else self.directory
+                        self.bitwise_directory
+                        if bitwise
+                        else (
+                            self.selection_directory
+                            if selection
+                            else self.absolute_directory if absolute else self.directory
+                        )
                     )
                 )
             ) / "package"
@@ -394,6 +415,8 @@ class HostRuntime:
             names = {"in", "out", "in_size", "row_size"}
         elif copy:
             names = set(copy_layout.DTYPES)
+        elif slice_update:
+            names = set(slice_update_layout.DTYPES)
         elif binary_operation:
             names = {"a", "b", "c", "size"}
         elif selection:
@@ -442,12 +465,19 @@ class HostRuntime:
                     else 1
                 )
             directions = (
-                {1, copy_layout.INOUT}
-                if copy and name == output_name
-                else {int(name == output_name)}
+                {copy_layout.INOUT}
+                if slice_update and name == output_name
+                else (
+                    {1, copy_layout.INOUT}
+                    if copy and name == output_name
+                    else {int(name == output_name)}
+                )
             )
             if (
-                not copy and not shaped_reduction and buffer.count != expected
+                not copy
+                and not slice_update
+                and not shaped_reduction
+                and buffer.count != expected
             ) or buffer.output not in directions:
                 raise ValueError("Native buffer shape or direction does not match")
             if unary and dtype != (
@@ -517,6 +547,13 @@ class HostRuntime:
             if copy
             else None
         )
+        slice_metadata = (
+            slice_update_layout.validate(
+                supplied, threads, dtype=SLICE_UPDATE_ENTRIES[entry]
+            )
+            if slice_update
+            else None
+        )
         grid = (
             execution["workgroupCount"]
             if reduction
@@ -564,8 +601,10 @@ class HostRuntime:
             or invert
             or selection
             or absolute
+            or slice_update
         )
         output_dtype = supplied[output_name].dtype.decode("ascii")
+        bit_storage = slice_update and output_dtype == "float32"
         if output_dtype == "bool_":
             guard = (
                 BOOLEAN_GUARD
@@ -623,11 +662,18 @@ class HostRuntime:
                         "Subnormal float comparison parity is not established for "
                         f"{self.target}; see CrossGL/crosstl#2000"
                     )
-            values = (
-                [0] * buffer.count
-                if buffer.output == 1
-                else [wire_value(value) for value in view]
-            )
+            if bit_storage and dtype == "float32":
+                values = list(
+                    ctypes.cast(
+                        buffer.data, ctypes.POINTER(ctypes.c_uint32 * buffer.count)
+                    ).contents
+                )
+            else:
+                values = (
+                    [0] * buffer.count
+                    if buffer.output == 1
+                    else [wire_value(value) for value in view]
+                )
             if initialization:
                 # Unwritten outputs must differ from the reduction identity.
                 initial_value = int("sum" in entry or entry == "init_reduce_orbool_")
@@ -647,12 +693,18 @@ class HostRuntime:
                 "shape": [buffer.count],
                 "values": values,
             }
+            if bit_storage and dtype == "float32":
+                value["encoding"] = FLOAT32_BITS
             if guarded and buffer.output:
                 value["shape"] = [buffer.count + len(guard)]
                 value["values"].extend(guard)
                 inputs[binding["name"]] = value
             if buffer.output:
-                outputs[binding["name"]] = value
+                outputs[binding["name"]] = (
+                    {key: item for key, item in value.items() if key != "values"}
+                    if slice_update
+                    else value
+                )
                 destinations[binding["name"]] = (buffer, ctype)
             else:
                 inputs[binding["name"]] = value
@@ -719,6 +771,10 @@ class HostRuntime:
             storage = physical_dtype(dtype, self.target)
             if output["dtype"] != storage or output["shape"] != [size]:
                 raise RuntimeError("Native readback layout does not match the output")
+            if output.get("encoding") != (FLOAT32_BITS if bit_storage else None):
+                raise RuntimeError(
+                    "Native readback storage encoding does not match the output"
+                )
             if len(output["values"]) != size:
                 raise RuntimeError("Native readback size does not match the output")
             if dtype == "bool_":
@@ -727,6 +783,7 @@ class HostRuntime:
                 bitwise
                 or copy
                 or absolute
+                or slice_update
                 or (selection and dtype != "float32")
                 or dtype in {"int64", "uint64"}
             ):
@@ -745,20 +802,33 @@ class HostRuntime:
                     )
             if guarded and output["values"][buffer.count :] != guard:
                 raise RuntimeError("Native operation changed the output buffer guard")
-            if copy:
-                written = set(copy_layout.destination_indices(copy_metadata))
+            if copy or slice_update:
+                written = set(
+                    copy_layout.destination_indices(
+                        copy_metadata if copy else slice_metadata
+                    )
+                )
                 initial = inputs[name]["values"]
+
+                def storage_word(value):
+                    if dtype == "float32" and not bit_storage:
+                        return ctypes.c_uint32.from_buffer_copy(
+                            ctypes.c_float(float(value))
+                        ).value
+                    return value
+
                 if any(
-                    value != initial[index]
+                    storage_word(value) != storage_word(initial[index])
                     for index, value in enumerate(output["values"][: buffer.count])
                     if index not in written
                 ):
                     raise RuntimeError(
-                        "Native copy changed untouched destination storage"
+                        "Native operation changed untouched destination storage"
                     )
-            values = (ctype * buffer.count)(
+            storage_type = ctypes.c_uint32 if bit_storage else ctype
+            values = (storage_type * buffer.count)(
                 *(
-                    float(value) if ctype is ctypes.c_float else value
+                    float(value) if storage_type is ctypes.c_float else value
                     for value in output["values"][: buffer.count]
                 )
             )
@@ -774,6 +844,43 @@ class HostRuntime:
                         "dispatchVersion": DISPATCH_VERSION,
                         "artifact": descriptor["artifact"],
                         "details": result.details,
+                        **(
+                            {
+                                "sliceUpdateValues": output["values"][: buffer.count],
+                                "sliceUpdateGuardValues": output["values"][
+                                    buffer.count :
+                                ],
+                                "sliceUpdateMetadata": slice_metadata,
+                                **(
+                                    {
+                                        "sliceUpdateStorageWords": output["values"][
+                                            : buffer.count
+                                        ],
+                                        "sliceUpdateGuardWords": output["values"][
+                                            buffer.count :
+                                        ],
+                                        "sliceUpdateValues": [
+                                            wire_value(
+                                                ctypes.c_float.from_buffer_copy(
+                                                    ctypes.c_uint32(word)
+                                                ).value
+                                            )
+                                            for word in output["values"][: buffer.count]
+                                        ],
+                                        "sliceUpdateGuardValues": [
+                                            ctypes.c_float.from_buffer_copy(
+                                                ctypes.c_uint32(word)
+                                            ).value
+                                            for word in output["values"][buffer.count :]
+                                        ],
+                                    }
+                                    if bit_storage
+                                    else {}
+                                ),
+                            }
+                            if slice_update
+                            else {}
+                        ),
                         **(
                             {
                                 "integer64Values": output["values"][: buffer.count],

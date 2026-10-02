@@ -241,7 +241,7 @@ def test_metal_package_preserves_layouts_and_single_buffer_namespace(tmp_path):
     payload, outputs = MetalComputeRuntime()._prepare_request(native)
     assert payload["workgroupCount"] == [2, 2, 1]
     assert payload["workgroupSize"] == [2, 1, 1]
-    assert outputs == {"result": ("float32", (8, 2), 64)}
+    assert outputs == {"result": ("float32", (8, 2), 64, None)}
     assert len(payload["allocations"]) == 3
     assert state.adapter_steps
 

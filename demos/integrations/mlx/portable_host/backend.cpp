@@ -3,6 +3,7 @@
 #include <bit>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <type_traits>
 
@@ -18,10 +19,20 @@
 
 namespace {
 std::atomic<CrosstlMlxDispatch> dispatch_callback{nullptr};
+std::atomic<CrosstlMlxEntryAvailable> entry_available_callback{nullptr};
+std::mutex registration_mutex;
 
 void require_runtime() {
   if (!dispatch_callback.load()) {
     throw std::runtime_error("CrossTL host runtime is not registered.");
+  }
+}
+
+void require_entry(const std::string& entry) {
+  require_runtime();
+  const auto available = entry_available_callback.load();
+  if (!available || available(entry.c_str()) != 1) {
+    throw std::invalid_argument("No translated package for " + entry);
   }
 }
 
@@ -305,6 +316,51 @@ mlx::core::array dense_input(const mlx::core::array& in) {
   mlx::core::array dense(in.shape(), in.dtype(), nullptr, {});
   dispatch_copy(in, dense);
   return dense;
+}
+
+void dispatch_slice_update(
+    const mlx::core::array& updates,
+    mlx::core::array& out,
+    const std::string& entry,
+    std::vector<int64_t> output_strides,
+    int64_t output_offset) {
+  if (updates.size() == 0) {
+    return;
+  }
+  auto dense = dense_input(updates);
+  std::vector<int32_t> shape(dense.shape().begin(), dense.shape().end());
+  std::vector<int64_t> strides(shape.size());
+  int64_t stride = 1;
+  for (size_t axis = shape.size(); axis-- > 0;) {
+    strides[axis] = stride;
+    stride *= shape[axis];
+  }
+  if (shape.empty()) {
+    shape = {1};
+    strides = {1};
+    output_strides = {1};
+  }
+  int32_t ndim = static_cast<int32_t>(shape.size());
+  int64_t size = dense.size();
+  const char* dtype = storage_type(out.dtype());
+  CrosstlMlxBuffer buffers[] = {
+      {"updates", dtype, dense.data<void>(), dense.size(), 0},
+      {"out", dtype, out.data<void>(), out.size(), CROSTL_MLX_BUFFER_INOUT},
+      {"update_shape", "int32", shape.data(), uint64_t(ndim), 0},
+      {"update_strides", "int64", strides.data(), uint64_t(ndim), 0},
+      {"update_ndim", "int32", &ndim, 1, 0},
+      {"update_size", "int64", &size, 1, 0},
+      {"output_strides", "int64", output_strides.data(), uint64_t(ndim), 0},
+      {"output_offset", "int64", &output_offset, 1, 0},
+  };
+  char error[2048] = {};
+  const auto launch = elementwise_launch(dense.size());
+  const int status = dispatch_callback.load()(
+      entry.c_str(), buffers, 8, dense.size(), &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native slice update failed: ") + error);
+  }
 }
 
 void dispatch_all_reduce(
@@ -728,8 +784,25 @@ extern "C" MLX_API int crosstl_mlx_register_dispatch(
   if (version != CROSTL_MLX_DISPATCH_VERSION || !callback) {
     return 1;
   }
+  std::lock_guard<std::mutex> lock(registration_mutex);
   CrosstlMlxDispatch expected = nullptr;
   return dispatch_callback.compare_exchange_strong(expected, callback) ? 0 : 2;
+}
+
+extern "C" MLX_API int crosstl_mlx_register_runtime(
+    uint32_t version,
+    CrosstlMlxDispatch callback,
+    CrosstlMlxEntryAvailable available) {
+  if (version != CROSTL_MLX_DISPATCH_VERSION || !callback || !available) {
+    return 1;
+  }
+  std::lock_guard<std::mutex> lock(registration_mutex);
+  if (dispatch_callback.load()) {
+    return 2;
+  }
+  entry_available_callback.store(available);
+  dispatch_callback.store(callback);
+  return 0;
 }
 
 namespace mlx::core::gpu {
@@ -928,9 +1001,6 @@ void Pad::eval_gpu(const std::vector<array>& inputs, array& out) {
 
 void SliceUpdate::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
-  if (reduce_type_ != None) {
-    throw std::invalid_argument("CrossTL slice update reductions are not implemented.");
-  }
   if (inputs.size() != 2 || inputs[0].shape() != out.shape() ||
       inputs[1].ndim() != out.ndim() || inputs[0].dtype() != out.dtype() ||
       inputs[1].dtype() != out.dtype() || !storage_type(out.dtype()) ||
@@ -945,11 +1015,9 @@ void SliceUpdate::eval_gpu(const std::vector<array>& inputs, array& out) {
   std::vector<int64_t> destination_strides(out.ndim());
   for (int axis = 0; axis < out.ndim(); ++axis) {
     const int64_t step = strides_[axis], start = start_indices_[axis];
-    const int64_t distance = step > 0 ? int64_t(end_indices_[axis]) - start
-                                     : start - int64_t(end_indices_[axis]);
-    const int64_t magnitude = step < 0 ? -step : step;
-    if (!step || (std::max<int64_t>(distance, 0) + magnitude - 1) / magnitude != update.shape(axis)) {
-      throw std::invalid_argument("CrossTL slice update shape does not match its strides.");
+    // MLX normalizes starts and update shapes, but retains unnormalized stops.
+    if (!step) {
+      throw std::invalid_argument("CrossTL slice update strides must be nonzero.");
     }
     if (update.size()) {
       const int64_t last = start + (int64_t(update.shape(axis)) - 1) * step;
@@ -961,8 +1029,24 @@ void SliceUpdate::eval_gpu(const std::vector<array>& inputs, array& out) {
     destination_strides[axis] = step * out.strides()[axis];
   }
   // Keep the base and update allocations alive and distinct, including aliasing views.
+  std::string entry;
+  if (reduce_type_ != None && update.size()) {
+    const char* operation = reduce_type_ == Sum ? "sum"
+        : reduce_type_ == Prod ? "prod"
+        : reduce_type_ == Min ? "min"
+        : reduce_type_ == Max ? "max" : nullptr;
+    if (!operation) {
+      throw std::invalid_argument("Unknown CrossTL slice update reduction.");
+    }
+    entry = std::string("slice_update_") + operation + storage_type(out.dtype());
+    require_entry(entry);
+  }
   dispatch_copy(inputs[0], out);
-  dispatch_copy_into(update, out, std::move(destination_strides), offset, true);
+  if (reduce_type_ == None) {
+    dispatch_copy_into(update, out, std::move(destination_strides), offset, true);
+  } else {
+    dispatch_slice_update(update, out, entry, std::move(destination_strides), offset);
+  }
 }
 
 void Reshape::eval_gpu(const std::vector<array>& inputs, array& out) {

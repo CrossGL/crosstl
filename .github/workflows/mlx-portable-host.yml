@@ -22,6 +22,8 @@ on:
       - "tests/test_mlx_portable_selection.py"
       - "tests/test_mlx_portable_integer64.py"
       - "tests/test_mlx_portable_padding.py"
+      - "tests/test_mlx_portable_slice_updates.py"
+      - "tests/test_mlx_portable_slice_update_workloads.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
       - "tests/test_translator/test_directx_half_conversion.py"
@@ -51,6 +53,7 @@ on:
       - "tests/test_translator/test_metal_boolean_promotion.py"
       - "tests/test_translator/test_metal_float_selection.py"
       - "tests/test_translator/test_boolean_buffer_runtime.py"
+      - "tests/test_translator/test_float_storage_encoding.py"
       - "tests/test_translator/test_software_subgroup_votes.py"
       - "tests/test_translator/test_opengl_subgroup_wrappers.py"
       - "tests/test_translator/test_software_subgroup_product.py"
@@ -103,6 +106,8 @@ on:
       - "tests/test_mlx_portable_selection.py"
       - "tests/test_mlx_portable_integer64.py"
       - "tests/test_mlx_portable_padding.py"
+      - "tests/test_mlx_portable_slice_updates.py"
+      - "tests/test_mlx_portable_slice_update_workloads.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
       - "tests/test_translator/test_directx_half_conversion.py"
@@ -132,6 +137,7 @@ on:
       - "tests/test_translator/test_metal_boolean_promotion.py"
       - "tests/test_translator/test_metal_float_selection.py"
       - "tests/test_translator/test_boolean_buffer_runtime.py"
+      - "tests/test_translator/test_float_storage_encoding.py"
       - "tests/test_translator/test_software_subgroup_votes.py"
       - "tests/test_translator/test_opengl_subgroup_wrappers.py"
       - "tests/test_translator/test_software_subgroup_product.py"
@@ -262,7 +268,7 @@ jobs:
           Expand-Archive $warpArchive -DestinationPath $warpRoot
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Validate portable host contracts
-        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py tests/test_mlx_portable_rows.py tests/test_mlx_portable_reduction_shards.py tests/test_mlx_portable_mixed_reductions.py tests/test_mlx_portable_columns.py tests/test_mlx_portable_small_rows.py tests/test_mlx_portable_empty_reductions.py tests/test_mlx_portable_bitwise.py tests/test_mlx_portable_concatenate.py tests/test_mlx_portable_selection.py tests/test_mlx_portable_integer64.py tests/test_mlx_portable_padding.py tests/test_mlx_random_audit.py
+        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py tests/test_mlx_portable_rows.py tests/test_mlx_portable_reduction_shards.py tests/test_mlx_portable_mixed_reductions.py tests/test_mlx_portable_columns.py tests/test_mlx_portable_small_rows.py tests/test_mlx_portable_empty_reductions.py tests/test_mlx_portable_bitwise.py tests/test_mlx_portable_concatenate.py tests/test_mlx_portable_selection.py tests/test_mlx_portable_integer64.py tests/test_mlx_portable_padding.py tests/test_mlx_portable_slice_updates.py tests/test_mlx_portable_slice_update_workloads.py tests/test_mlx_random_audit.py
       - name: Validate software subgroup votes
         env:
           CROSTL_REQUIRE_SOFTWARE_SUBGROUP_VOTES: "1"
@@ -376,6 +382,21 @@ jobs:
               tests/test_translator/test_dispatch_regions.py \
               tests/test_translator/test_dispatch_region_project.py \
               2>&1 | tee .mlx-portable-host/dispatch-regions.log
+      - name: Validate lossless float storage
+        env:
+          CROSTL_REQUIRE_FLOAT_STORAGE_RUNTIME: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/float-storage
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Lossless float storage" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/float-storage/pytest \
+              --junitxml=.mlx-portable-host/float-storage/results.xml \
+              tests/test_translator/test_float_storage_encoding.py \
+              2>&1 | tee .mlx-portable-host/float-storage.log
       - name: Validate mixed-width integer arithmetic
         env:
           CROSTL_REQUIRE_WIDE_INTEGER_ARITHMETIC: "1"
@@ -1153,6 +1174,146 @@ jobs:
         with:
           name: mlx-portable-integer64-${{ matrix.target }}-${{ github.run_attempt }}
           path: .mlx-portable-integer64
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  slice-update-host:
+    name: MLX slice update host (${{ matrix.target }})
+    needs: integer64-host
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: opengl
+          - os: windows-2025
+            target: directx
+          - os: macos-26
+            target: metal
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Initialize slice update evidence
+        run: mkdir -p .mlx-portable-slice-update
+      - name: Install Linux build and graphics dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - name: Install CrossTL and MLX build dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging \
+            2>&1 | tee .mlx-portable-slice-update/dependencies.log
+      - name: Install OpenGL runtime dependencies
+        if: runner.os == 'Linux'
+        run: python -m pip install moderngl PyOpenGL
+      - name: Verify macOS Metal toolchain
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk macosx metal --version | tee .mlx-portable-slice-update/metal-version.txt
+          xcrun --sdk macosx swiftc --version | tee .mlx-portable-slice-update/swift-version.txt
+      - name: Install pinned DirectX tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $root = Join-Path $env:RUNNER_TEMP "dxc"
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4") {
+            throw "DXC archive checksum mismatch."
+          }
+          Expand-Archive $archive -DestinationPath $root
+          $bin = Join-Path $root "bin/x64"
+          if (-not (Test-Path "$bin/dxc.exe")) { throw "DXC executable missing." }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $warpArchive = Join-Path $env:RUNNER_TEMP "warp.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "warp"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg" -OutFile $warpArchive
+          if ((Get-FileHash $warpArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681") {
+            throw "WARP archive checksum mismatch."
+          }
+          Expand-Archive $warpArchive -DestinationPath $warpRoot
+          Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
+      - name: Select same-run integer64 packages
+        uses: actions/github-script@v7
+        id: host-artifact
+        env:
+          MLX_TARGET: ${{ matrix.target }}
+        with:
+          script: |
+            const prefix = `mlx-portable-integer64-${process.env.MLX_TARGET}-`;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
+            });
+            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
+              && /^\d+$/.test(item.name.slice(prefix.length)));
+            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
+            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
+            core.setOutput("id", candidates[0].id);
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.host-artifact.outputs.id }}
+          path: .mlx-portable-slice-update/base
+          merge-multiple: true
+      - name: Prepare pinned MLX
+        run: |
+          set -euo pipefail
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-slice-update/adaptation.json
+      - name: Build adapted upstream MLX
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX slice update host build" -- \
+            python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-slice-update/build.log
+      - name: Translate slice update kernels
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX slice update translation" -- \
+            python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family slice-update --output-dir .mlx-portable-slice-update/slice-update-packages \
+              2>&1 | tee .mlx-portable-slice-update/slice-update-translation.log
+      - name: Execute slice update reductions
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 3000 --label "MLX slice update verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_slice_updates --mlx-root mlx-upstream \
+              --packages .mlx-portable-slice-update/base/base/packages --integer64 .mlx-portable-slice-update/base/integer64-packages \
+              --slice-updates .mlx-portable-slice-update/slice-update-packages \
+              --reductions .mlx-portable-slice-update/base/reductions --reductions .mlx-portable-slice-update/base/padding-reductions \
+              --output-dir .mlx-portable-slice-update/slice-update-evidence \
+              2>&1 | tee .mlx-portable-slice-update/slice-update-verification.log
+      - name: Retain slice update execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-portable-slice-update-${{ matrix.target }}-${{ github.run_attempt }}
+          path: .mlx-portable-slice-update
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14

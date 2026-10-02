@@ -22,6 +22,7 @@ from crosstl.project.directx_toolchain import (
     dxc_compiler_arguments_for_source,
     dxc_profile_for_source,
 )
+from crosstl.project.runtime_value_encoding import validate_value_encoding
 from crosstl.translator.codegen import normalize_backend_name
 
 RUNTIME_VERIFICATION_FIXTURES_KIND = "crosstl-runtime-verification-fixtures"
@@ -200,6 +201,7 @@ class RuntimeValue:
     tolerance: RuntimeTolerance | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
     allocation: RuntimeAllocationView | None = None
+    encoding: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {"name": self.name, "kind": self.kind}
@@ -209,6 +211,8 @@ class RuntimeValue:
             payload["shape"] = list(self.shape)
         if self.values is not None:
             payload["values"] = self.values
+        if self.encoding is not None:
+            payload["encoding"] = self.encoding
         if self.tolerance is not None:
             payload["tolerance"] = self.tolerance.to_json()
         if self.metadata:
@@ -611,6 +615,7 @@ class NativeRuntimeBufferBinding:
     metadata: Mapping[str, Any] = field(default_factory=dict)
     expected_output: RuntimeValue | None = None
     allocation: RuntimeAllocationView | None = None
+    encoding: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -621,6 +626,8 @@ class NativeRuntimeBufferBinding:
             payload["source"] = self.source
         if self.dtype is not None:
             payload["dtype"] = self.dtype
+        if self.encoding is not None:
+            payload["encoding"] = self.encoding
         if self.shape:
             payload["shape"] = list(self.shape)
         if self.metadata:
@@ -1590,6 +1597,9 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                 ),
                 expected_output=expected_output,
                 allocation=resource.allocation,
+                encoding=(
+                    allocation_value.encoding if allocation_value is not None else None
+                ),
             )
         return bindings
 
@@ -4606,6 +4616,11 @@ def _parse_runtime_value(
     values = value.get("values")
     if "values" not in value and "value" in value:
         values = value.get("value")
+    encoding = value.get("encoding")
+    try:
+        validate_value_encoding(encoding, dtype, values)
+    except ValueError as exc:
+        raise RuntimeVerificationError(f"{field_name}.encoding: {exc}") from exc
     allocation = _parse_runtime_allocation_view(
         value.get("allocation"),
         field_name=f"{field_name}.allocation",
@@ -4619,6 +4634,7 @@ def _parse_runtime_value(
         tolerance=tolerance,
         metadata=metadata,
         allocation=allocation,
+        encoding=encoding,
     )
 
 
@@ -7082,6 +7098,8 @@ def _runtime_value_reference(value: RuntimeValue) -> dict[str, Any]:
     payload: dict[str, Any] = {"name": value.name, "kind": value.kind}
     if value.dtype is not None:
         payload["dtype"] = value.dtype
+    if value.encoding is not None:
+        payload["encoding"] = value.encoding
     shape = value.shape or _infer_shape(value.values)
     if shape:
         payload["shape"] = list(shape)
@@ -7283,7 +7301,10 @@ def _compare_runtime_value(
     *,
     default_tolerance: RuntimeTolerance,
 ) -> dict[str, Any]:
-    tolerance = expected.tolerance or default_tolerance
+    bitwise = expected.encoding is not None
+    tolerance = (
+        RuntimeTolerance() if bitwise else (expected.tolerance or default_tolerance)
+    )
     comparison = {
         "name": expected.name,
         "kind": expected.kind,
@@ -7304,6 +7325,18 @@ def _compare_runtime_value(
             }
         )
         return comparison
+    if bitwise or actual.encoding is not None:
+        comparison["comparison"] = "bitwise"
+        try:
+            validate_value_encoding(expected.encoding, expected.dtype, expected.values)
+            validate_value_encoding(actual.encoding, actual.dtype, actual.values)
+            if expected.encoding != actual.encoding:
+                raise ValueError("Output storage encoding mismatch.")
+        except ValueError as exc:
+            comparison.update(
+                status=COMPARISON_FAILED, message=str(exc), mismatchCount=1
+            )
+            return comparison
     if (
         expected.dtype is not None
         and actual.dtype is not None
@@ -7351,8 +7384,14 @@ def _compare_runtime_value(
     for index, (expected_item, actual_item) in enumerate(
         zip(expected_flat, actual_flat)
     ):
-        matches, absolute_error, relative_error = _values_match(
-            expected_item, actual_item, tolerance
+        matches, absolute_error, relative_error = (
+            (
+                expected_item == actual_item,
+                0.0 if expected_item == actual_item else 1.0,
+                0.0,
+            )
+            if bitwise
+            else _values_match(expected_item, actual_item, tolerance)
         )
         max_absolute = max(max_absolute, absolute_error)
         if not math.isinf(relative_error):
@@ -7374,7 +7413,11 @@ def _compare_runtime_value(
     comparison["maxRelativeError"] = _json_metric(max_relative)
     if mismatch_count:
         comparison["status"] = COMPARISON_FAILED
-        comparison["message"] = "Output values differ beyond tolerance."
+        comparison["message"] = (
+            "Output storage bits differ."
+            if bitwise
+            else "Output values differ beyond tolerance."
+        )
         comparison["firstMismatch"] = first_mismatch
     return comparison
 
@@ -7385,6 +7428,8 @@ def _value_metadata(value: RuntimeValue | None) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     if value.dtype is not None:
         payload["dtype"] = value.dtype
+    if value.encoding is not None:
+        payload["encoding"] = value.encoding
     shape = value.shape or _infer_shape(value.values)
     if shape:
         payload["shape"] = list(shape)

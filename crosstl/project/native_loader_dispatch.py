@@ -19,6 +19,7 @@ from crosstl.project.native_loader_abi import (
     NativeLoaderABIError,
     _validate_descriptor,
 )
+from crosstl.project.runtime_value_encoding import validate_value_encoding
 from crosstl.project.runtime_verification import (
     RuntimeAdapterContract,
     RuntimeArtifactIdentity,
@@ -125,7 +126,17 @@ _TARGET_STORAGE_LAYOUTS = {
     "opengl": {"buffer": "std430", "constant-buffer": "std140"},
 }
 _VALUE_FIELDS = frozenset(
-    ("name", "kind", "dtype", "shape", "values", "value", "tolerance", "metadata")
+    (
+        "name",
+        "kind",
+        "dtype",
+        "shape",
+        "values",
+        "value",
+        "tolerance",
+        "metadata",
+        "encoding",
+    )
 )
 _ALIAS_METADATA_FIELDS = frozenset(("aliases", "resourceAliases", "bindingAliases"))
 _ENTRY_POINT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -638,6 +649,7 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             values=value.get("values", value.get("value")),
             tolerance=tolerance,
             metadata=copy.deepcopy(dict(metadata)),
+            encoding=value.get("encoding"),
         )
     else:
         raise NativeLoaderDispatchError(
@@ -682,6 +694,15 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             details={"aliasFields": aliases, "name": runtime_value.name},
         )
     dtype = _buffer_dtype(runtime_value.dtype, path=f"{path}.dtype")
+    try:
+        validate_value_encoding(runtime_value.encoding, dtype, runtime_value.values)
+    except ValueError as exc:
+        raise NativeLoaderDispatchError(
+            "value-encoding-invalid",
+            str(exc),
+            path=f"{path}.encoding",
+            details={"name": runtime_value.name},
+        ) from exc
     shape = _value_shape(runtime_value.shape, path=f"{path}.shape")
     if not shape:
         raise NativeLoaderDispatchError(
@@ -712,13 +733,14 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
                     "actualCount": actual_count,
                 },
             )
-        _validate_buffer_values(
-            flattened_values,
-            dtype=dtype,
-            path=f"{path}.values",
-            name=runtime_value.name,
-            role=role,
-        )
+        if runtime_value.encoding is None:
+            _validate_buffer_values(
+                flattened_values,
+                dtype=dtype,
+                path=f"{path}.values",
+                name=runtime_value.name,
+                role=role,
+            )
     return RuntimeValue(
         name=runtime_value.name,
         kind="buffer",
@@ -727,6 +749,7 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
         values=runtime_value.values,
         tolerance=runtime_value.tolerance,
         metadata=copy.deepcopy(dict(metadata)),
+        encoding=runtime_value.encoding,
     )
 
 

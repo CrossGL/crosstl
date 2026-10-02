@@ -870,16 +870,16 @@ output allocation is populated.
 These hooks support float32, int32, uint32, bool, int64 and uint64, with at most
 65,535 output elements. The wider types require the optional `integer64` packages.
 MLX's unchanged edge, reflect and symmetric padding implementations compose these
-hooks with shared-buffer slices. Slice-update reductions such as indexed addition
-remain explicitly unsupported; replacement support does not imply scatter or
-general indexing support.
+hooks with shared-buffer slices. Slice-update reductions require the optional
+packages described below; replacement support does not imply scatter or general
+indexing support.
 
 `verify_padding` runs 102 workloads on CPU and generated GPU paths, checking exact
 storage bytes, intermediate copy readbacks, output guards, signed strides,
 broadcast inputs, aliased updates, empty regions and the maximum supported output
 size. Float copies include NaN payloads, subnormals and signed zero. Seven isolated
 negative workers reject missing packages, unsupported types, oversized outputs
-and slice-update reductions. The unchanged upstream `test_pad`,
+and reductions without the optional slice-update packages. The unchanged upstream `test_pad`,
 `test_pad_reflect_symmetric` and `test_slice_update_reversed` methods must also pass
 without skips; `test_pad` retains its gradient check. Their Boolean reductions
 require widths 32 and 64.
@@ -898,3 +898,51 @@ The three-OS integer64 CI job requires this additional proof using its existing
 host build and packages. It retains source hashes, compiler and dispatch identity,
 raw readbacks and failed worker logs. The three additional upstream methods do
 not establish full MLX test-suite or backend parity.
+
+### Slice Reductions
+
+The optional `slice-update` family instantiates the pinned upstream
+`indexing/scatter.h::slice_update_op_impl` for Sum, Prod, Min and Max across
+float32, int32, uint32, bool, int64 and uint64. Its 24-entry wrapper adds includes
+and template instantiations only; it does not replace kernel bodies. The generated
+wrapper and translation report are retained with the packages.
+
+The host adapter copies the base into a distinct output, materializes non-dense
+updates through translated copy kernels, then dispatches the unchanged reduction
+kernel with shape, stride and offset metadata. No CPU arithmetic or readback
+correction is used. Bounds checks use MLX's normalized start and update shape:
+upstream intentionally retains unnormalized stop indices. Negative bounds,
+clipped stops, reversed destinations and aliased inputs therefore retain upstream
+slice semantics.
+
+`crosstl_mlx_register_runtime` registers both dispatch and package-availability
+callbacks, retaining dispatch ABI version 3. This lets the adapter reject a
+missing reduction package before copying the base. The earlier dispatch-only
+registration entry point remains available, but cannot enable slice reductions.
+The Python adapter and prepared MLX build must be regenerated together.
+
+`verify_slice_updates` requires 304 CPU/native workloads, the unchanged
+`test_array_at_slice_update_extensive` method and eight isolated rejection
+checks. It checks exact result storage, source preservation, native copy
+and reduction readbacks, destination metadata, guards and artifact hashes.
+The separate three-OS slice-update job requires the same verifier after building
+its matching host adapter and downloading the same-run integer64 packages.
+
+```bash
+python -m demos.integrations.mlx.portable_host.packages \
+  --mlx-root mlx-upstream --target opengl --family slice-update --output-dir slice-update-packages
+python -m demos.integrations.mlx.portable_host.verify_slice_updates \
+  --mlx-root mlx-upstream --packages host-packages --integer64 integer64-packages \
+  --slice-updates slice-update-packages --reductions concatenate-reductions \
+  --reductions padding-reductions --output-dir slice-update-evidence
+```
+
+Float slice updates use the public `ieee754-binary32` storage encoding while
+retaining float32 shader arithmetic. Untouched NaN sign/payload bits, signed
+zeros, infinities and subnormals are checked byte-for-byte; traces retain actual
+native storage words alongside display values. Special-value storage cases do
+not impose payload-preservation rules on arithmetic NaN results.
+
+This bounded integration does not establish full upstream suite parity.
+General scatter, other storage widths, outputs above 65,535
+elements and asynchronous device-resident execution remain separate work.

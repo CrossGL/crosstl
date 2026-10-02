@@ -1383,6 +1383,7 @@ def test_registration_retains_callback_and_uses_platform_library(
 ):
     host = runtime.HostRuntime.__new__(runtime.HostRuntime)
     host.callback = runtime.CALLBACK(lambda *args: 0)
+    host.entry_available = runtime.ENTRY_AVAILABLE(lambda entry: 0)
     module = SimpleNamespace(__file__=str(tmp_path / "core.pyd"), gpu="gpu")
     selected, loaded, registered = [], [], []
     module.set_default_device = selected.append
@@ -1391,20 +1392,20 @@ def test_registration_retains_callback_and_uses_platform_library(
     monkeypatch.setattr(runtime.sys, "platform", platform)
     monkeypatch.setattr(runtime, "_installed_runtime", None)
 
-    def register(version, callback):
-        registered.append((version, callback))
+    def register(version, callback, available):
+        registered.append((version, callback, available))
         return 0
 
     def load(path):
         loaded.append(path)
-        return SimpleNamespace(crosstl_mlx_register_dispatch=register)
+        return SimpleNamespace(crosstl_mlx_register_runtime=register)
 
     monkeypatch.setattr(runtime.ctypes, "CDLL", load)
     host.install()
     assert runtime._installed_runtime is host
-    assert registered == [(runtime.DISPATCH_VERSION, host.callback)] and selected == [
-        "gpu"
-    ]
+    assert registered == [
+        (runtime.DISPATCH_VERSION, host.callback, host.entry_available)
+    ] and selected == ["gpu"]
     assert loaded == [
         str(tmp_path / ("mlx.dll" if platform == "win32" else "core.pyd"))
     ]

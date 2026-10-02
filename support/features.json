@@ -11879,7 +11879,7 @@
       "id": "project.native_loader_dispatch_request",
       "category": "project",
       "name": "Native loader dispatch request",
-      "description": "Construct and preflight one DirectX, OpenGL or Metal compute runtime request from a complete native loader ABI descriptor without scheduling or executing device work.",
+      "description": "Construct and preflight one DirectX, OpenGL or Metal compute runtime request from a complete native loader ABI descriptor without scheduling or executing device work. Optional ieee754-binary32 buffer encoding preserves float32 storage words through uploads, readbacks and exact comparisons without changing reflected dtype or layout checks.",
       "support": {
         "directx": {
           "status": "supported",
@@ -11902,6 +11902,9 @@
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incompatible_initialized_read_write_value_contracts",
             "tests/test_translator/test_native_runtime_drivers.py::def test_directx_compute_runtime_uploads_and_reads_initialized_output",
             "tests/test_translator/test_initialized_read_write_runtime.py::def test_directx_initialized_read_write_resource_executes_on_device",
+            "tests/test_translator/test_float_storage_encoding.py::def test_public_dispatch_rejects_invalid_storage",
+            "tests/test_translator/test_float_storage_encoding.py::def test_encoded_payload_cannot_reinterpret_reflected_storage",
+            "tests/test_translator/test_float_storage_encoding.py::def test_float_storage_executes_natively",
             "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_directx_native_loader"
           ]
         },
@@ -11926,6 +11929,9 @@
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incompatible_initialized_read_write_value_contracts",
             "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_runtime_uploads_and_reads_initialized_output",
             "tests/test_translator/test_initialized_read_write_runtime.py::def test_opengl_initialized_read_write_resource_executes_on_device",
+            "tests/test_translator/test_float_storage_encoding.py::def test_public_dispatch_rejects_invalid_storage",
+            "tests/test_translator/test_float_storage_encoding.py::def test_encoded_payload_cannot_reinterpret_reflected_storage",
+            "tests/test_translator/test_float_storage_encoding.py::def test_float_storage_executes_natively",
             "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_opengl_native_loader"
           ]
         },
@@ -11958,6 +11964,9 @@
             "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_function_constant_types_and_ids",
             "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_native_readback",
             "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_native_function_constants",
+            "tests/test_translator/test_float_storage_encoding.py::def test_runtime_value_serialization_retains_exact_storage",
+            "tests/test_translator/test_float_storage_encoding.py::def test_storage_comparison_is_exact_even_with_large_numeric_tolerance",
+            "tests/test_translator/test_float_storage_encoding.py::def test_float_storage_executes_natively",
             "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity"
           ]
         },

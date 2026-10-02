@@ -8,7 +8,7 @@ typedef struct {
   const char* dtype;
   void* data;
   uint64_t count;
-  // 0: input, 1: output, 2: initialized input/output for strided copies.
+  // 0: input, 1: output, 2: initialized input/output.
   uint32_t output;
 } CrosstlMlxBuffer;
 
@@ -30,3 +30,6 @@ typedef int (*CrosstlMlxDispatch)(
     const CrosstlMlxLaunch* launch,
     char* error,
     size_t error_capacity);
+
+// Return one only when the named entry is available in the registered runtime.
+typedef int (*CrosstlMlxEntryAvailable)(const char* entry);
