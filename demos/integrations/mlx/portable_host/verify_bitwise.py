@@ -14,8 +14,8 @@ from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
 
 NEGATIVE_CHECKS = {
     "missing": "No translated package for vv_BitwiseAndint32",
-    "int64": "supported 32-bit dtype",
-    "uint8": "supported 32-bit dtype",
+    "int64": "supported dtype",
+    "uint8": "supported dtype",
     "over-limit": "at most 65535",
     "negative-shift": "counts in [0, 31]",
     "large-shift": "counts in [0, 31]",

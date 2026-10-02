@@ -43,6 +43,12 @@ from demos.integrations.mlx.portable_host.packages import (
     COMPARISON_ENTRIES,
     COPY_ENTRY,
     ENTRIES,
+    INTEGER64_ABSOLUTE_ENTRIES,
+    INTEGER64_BINARY_ENTRIES,
+    INTEGER64_CAST_ENTRIES,
+    INTEGER64_COMPARISON_ENTRIES,
+    INTEGER64_COPY_ENTRIES,
+    INTEGER64_ENTRIES,
     LOGICAL_NOT_ENTRY,
     SELECTION_ENTRIES,
     UNARY_ENTRIES,
@@ -127,8 +133,15 @@ TYPES = {
 _installed_runtime = None
 COPY_GUARD = [0x6A15BEEF] * 32
 BOOLEAN_GUARD = [index % 2 == 0 for index in range(32)]
-ALL_CAST_ENTRIES = {**CAST_ENTRIES, **BOOLEAN_CAST_ENTRIES}
-ALL_BINARY_ENTRIES = {**BINARY_ENTRIES, **BITWISE_ENTRIES}
+ALL_CAST_ENTRIES = {**CAST_ENTRIES, **BOOLEAN_CAST_ENTRIES, **INTEGER64_CAST_ENTRIES}
+ALL_BINARY_ENTRIES = {**BINARY_ENTRIES, **BITWISE_ENTRIES, **INTEGER64_BINARY_ENTRIES}
+ALL_COMPARISON_ENTRIES = {**COMPARISON_ENTRIES, **INTEGER64_COMPARISON_ENTRIES}
+ALL_ABSOLUTE_ENTRIES = {**ABSOLUTE_ENTRIES, **INTEGER64_ABSOLUTE_ENTRIES}
+ALL_COPY_ENTRIES = {
+    COPY_ENTRY: "uint32",
+    BOOLEAN_COPY_ENTRY: "bool_",
+    **INTEGER64_COPY_ENTRIES,
+}
 
 
 def physical_dtype(dtype, target):
@@ -161,6 +174,7 @@ class HostRuntime:
         bitwise=None,
         selection=None,
         absolute=None,
+        integer64=None,
     ):
         self.directory = Path(directory).resolve()
         self.trace = Path(trace).resolve()
@@ -183,10 +197,14 @@ class HostRuntime:
         self.absolute_directory = (
             Path(absolute).resolve() if absolute is not None else None
         )
+        self.integer64_directory = (
+            Path(integer64).resolve() if integer64 is not None else None
+        )
         for family, directory, entries in (
             ("bitwise", self.bitwise_directory, BITWISE_PACKAGE_ENTRIES),
             ("selection", self.selection_directory, SELECTION_ENTRIES),
             ("absolute", self.absolute_directory, ABSOLUTE_ENTRIES),
+            ("integer64", self.integer64_directory, INTEGER64_ENTRIES),
         ):
             if directory is None:
                 continue
@@ -305,12 +323,12 @@ class HostRuntime:
             raise ValueError(f"No translated package for {entry}")
         if reduction and launch is None:
             raise ValueError("Native reductions require explicit launch geometry")
-        copy = entry in {COPY_ENTRY, BOOLEAN_COPY_ENTRY}
+        copy = entry in ALL_COPY_ENTRIES
         invert = entry in BITWISE_INVERT_ENTRIES
-        absolute = entry in ABSOLUTE_ENTRIES
+        absolute = entry in ALL_ABSOLUTE_ENTRIES
         bitwise = entry in BITWISE_PACKAGE_ENTRIES
         binary = entry in ALL_BINARY_ENTRIES
-        comparison = entry in COMPARISON_ENTRIES
+        comparison = entry in ALL_COMPARISON_ENTRIES
         binary_operation = binary or comparison
         selection = entry in SELECTION_ENTRIES
         cast = entry in ALL_CAST_ENTRIES
@@ -354,12 +372,16 @@ class HostRuntime:
         elif not small_row:
             descriptor = self.descriptors[entry]
             package_directory = (
-                self.bitwise_directory
-                if bitwise
+                self.integer64_directory
+                if entry in INTEGER64_ENTRIES
                 else (
-                    self.selection_directory
-                    if selection
-                    else self.absolute_directory if absolute else self.directory
+                    self.bitwise_directory
+                    if bitwise
+                    else (
+                        self.selection_directory
+                        if selection
+                        else self.absolute_directory if absolute else self.directory
+                    )
                 )
             ) / "package"
         logical_not = entry == LOGICAL_NOT_ENTRY
@@ -435,7 +457,7 @@ class HostRuntime:
                     BITWISE_INVERT_ENTRIES[entry]
                     if invert
                     else (
-                        ABSOLUTE_ENTRIES[entry]
+                        ALL_ABSOLUTE_ENTRIES[entry]
                         if absolute
                         else "bool_" if logical_not else "float32"
                     )
@@ -449,7 +471,7 @@ class HostRuntime:
             if comparison and dtype != (
                 "uint32"
                 if name == "size"
-                else "bool_" if name == "c" else COMPARISON_ENTRIES[entry]
+                else "bool_" if name == "c" else ALL_COMPARISON_ENTRIES[entry]
             ):
                 raise ValueError("Native comparison buffer dtype does not match")
             if selection and dtype != (
@@ -490,7 +512,7 @@ class HostRuntime:
             copy_layout.validate(
                 supplied,
                 threads,
-                dtype="bool_" if entry == BOOLEAN_COPY_ENTRY else "uint32",
+                dtype=ALL_COPY_ENTRIES[entry],
             )
             if copy
             else None
@@ -701,9 +723,18 @@ class HostRuntime:
                 raise RuntimeError("Native readback size does not match the output")
             if dtype == "bool_":
                 boolean_values(output["values"], storage)
-            elif bitwise or copy or absolute or (selection and dtype != "float32"):
+            elif (
+                bitwise
+                or copy
+                or absolute
+                or (selection and dtype != "float32")
+                or dtype in {"int64", "uint64"}
+            ):
+                bits = ctypes.sizeof(ctype) * 8
                 low, high = (
-                    (-(2**31), 2**31 - 1) if dtype == "int32" else (0, 2**32 - 1)
+                    (-(2 ** (bits - 1)), 2 ** (bits - 1) - 1)
+                    if dtype.startswith("int")
+                    else (0, 2**bits - 1)
                 )
                 if any(
                     type(value) is not int or not low <= value <= high
@@ -743,6 +774,16 @@ class HostRuntime:
                         "dispatchVersion": DISPATCH_VERSION,
                         "artifact": descriptor["artifact"],
                         "details": result.details,
+                        **(
+                            {
+                                "integer64Values": output["values"][: buffer.count],
+                                "integer64GuardValues": output["values"][
+                                    buffer.count :
+                                ],
+                            }
+                            if entry in INTEGER64_ENTRIES
+                            else {}
+                        ),
                         **(
                             {
                                 "selectionValues": output["values"][: buffer.count],

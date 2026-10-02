@@ -24,7 +24,7 @@ NEGATIVE_CHECKS = {
     "float16": "matching float32/int32/uint32/bool values",
     "over-limit": "at most 65535 elements",
     "absolute-missing": "No translated package for v_Absint32int32",
-    "absolute-int64": "unary dispatch requires float32 arrays",
+    "absolute-int16": "unary dispatch requires float32 arrays",
     "absolute-over-limit": "at most 65535 stored elements",
 }
 
@@ -59,7 +59,7 @@ def worker(args):
         host.install()
     if args.worker in NEGATIVE_CHECKS:
         check = args.worker.removeprefix("absolute-")
-        dtype = check if check in {"int64", "uint8", "float16"} else "int32"
+        dtype = check if check in {"int64", "int16", "uint8", "float16"} else "int32"
         count = 65536 if check == "over-limit" else 3
         values = mx.array(np.arange(count).astype(dtype))
         condition = mx.array(np.ones(count, dtype="bool"))

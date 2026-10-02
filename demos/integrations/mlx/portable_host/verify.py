@@ -77,15 +77,15 @@ NEGATIVE_CHECKS = {
     "unary-allocation": "exceeds its allocation",
     "unary-strided-allocation": "exceeds its allocation",
     "unary-over-limit": "65535",
-    "copy-dtype": "matching float32, int32, uint32 or bool",
+    "copy-dtype": "matching float32, int32, uint32, int64, uint64 or bool",
     "copy-limit": "65535",
     "copy-allocation": "exceeds its allocation",
-    "binary-dtype": "supported 32-bit dtype",
+    "binary-dtype": "supported dtype",
     "binary-limit": "65535",
-    "cast-dtype": "casts require float32, int32, uint32 or bool",
+    "cast-dtype": "casts require float32, int32, uint32, int64, uint64 or bool",
     "cast-limit": "65535",
     "cast-allocation": "exceeds its allocation",
-    "full-dtype": "matching float32, int32, uint32 or bool",
+    "full-dtype": "matching float32, int32, uint32, int64, uint64 or bool",
     "full-limit": "65535",
     "full-allocation": "exceeds its allocation",
 }
@@ -135,7 +135,7 @@ def worker(args):
             elif args.worker == "over-limit":
                 value = mx.arange(65536, stream=mx.gpu)
             elif args.worker == "unary-dtype":
-                value = mx.abs(mx.array([-3, 2], dtype=mx.int64), stream=mx.gpu)
+                value = mx.abs(mx.array([-3, 2], dtype=mx.int16), stream=mx.gpu)
             elif args.worker == "unary-allocation":
                 source = mx.as_strided(
                     mx.array([1.0, 2.0, 3.0]), (2,), (1,), 2, stream=mx.gpu
@@ -149,7 +149,7 @@ def worker(args):
                     mx.array(np.ones(65536, dtype=np.float32)), stream=mx.gpu
                 )
             elif args.worker == "copy-dtype":
-                source = mx.array(np.arange(12, dtype=np.int64).reshape(3, 4))
+                source = mx.array(np.arange(12, dtype=np.int16).reshape(3, 4))
                 value = mx.reshape(mx.transpose(source), (12,), stream=mx.gpu)
             elif args.worker == "copy-limit":
                 source = mx.array(np.arange(65792, dtype=np.float32).reshape(257, 256))
@@ -159,13 +159,13 @@ def worker(args):
                 value = mx.contiguous(source, stream=mx.gpu)
             elif args.worker == "binary-dtype":
                 value = mx.add(
-                    mx.array([1, 2], dtype=mx.int64), mx.array([2, 3], dtype=mx.int64)
+                    mx.array([1, 2], dtype=mx.int16), mx.array([2, 3], dtype=mx.int16)
                 )
             elif args.worker == "binary-limit":
                 source = mx.array(np.ones(65536, dtype=np.float32))
                 value = mx.add(source, source, stream=mx.gpu)
             elif args.worker == "cast-dtype":
-                value = mx.array([1, 2], dtype=mx.int64).astype(mx.float32)
+                value = mx.array([1, 2], dtype=mx.int16).astype(mx.float32)
             elif args.worker == "cast-limit":
                 value = mx.array(np.ones(65536, dtype=np.int32)).astype(mx.float32)
             elif args.worker == "cast-allocation":
@@ -174,7 +174,7 @@ def worker(args):
                 )
                 value = source.astype(mx.float32)
             elif args.worker == "full-dtype":
-                value = mx.full((3, 5), mx.array(1, dtype=mx.int64))
+                value = mx.full((3, 5), mx.array(1, dtype=mx.int16))
             elif args.worker == "full-limit":
                 value = mx.ones((65536,), dtype=mx.float32)
             elif args.worker == "full-allocation":

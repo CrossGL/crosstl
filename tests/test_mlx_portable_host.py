@@ -1417,7 +1417,7 @@ def test_unary_dtype_rejection_uses_unsupported_width(tmp_path, monkeypatch):
     arrays = []
     module = SimpleNamespace(
         gpu="gpu",
-        int64="int64",
+        int16="int16",
         metal=SimpleNamespace(is_available=lambda: False),
         is_available=lambda device: bool(installed),
         default_device=lambda: "gpu",
@@ -1426,7 +1426,7 @@ def test_unary_dtype_rejection_uses_unsupported_width(tmp_path, monkeypatch):
     )
 
     def evaluate(value):
-        assert arrays == [([-3, 2], "int64")]
+        assert arrays == [([-3, 2], "int16")]
         raise ValueError("CrossTL unary dispatch requires float32 arrays")
 
     module.eval = evaluate

@@ -125,6 +125,38 @@ SELECTION_ENTRIES = {
 ABSOLUTE_ENTRIES = {
     f"v_Abs{dtype}{dtype}": dtype for dtype in ("int32", "uint32", "bool_")
 }
+INTEGER64_TYPES = ("int64", "uint64")
+INTEGER64_COPY_ENTRIES = {
+    f"ggn2_dynamic_copy{dtype}{dtype}": dtype for dtype in INTEGER64_TYPES
+}
+INTEGER64_CAST_ENTRIES = {
+    f"v_copy{source}{destination}": (source, destination)
+    for source in ("float32", "int32", "uint32", "bool_", *INTEGER64_TYPES)
+    for destination in ("float32", "int32", "uint32", "bool_", *INTEGER64_TYPES)
+    if source != destination
+    and (source in INTEGER64_TYPES or destination in INTEGER64_TYPES)
+}
+INTEGER64_ABSOLUTE_ENTRIES = {
+    f"v_Abs{dtype}{dtype}": dtype for dtype in INTEGER64_TYPES
+}
+INTEGER64_BINARY_ENTRIES = {
+    f"vv_{operation}{dtype}": dtype
+    for operation in BINARY_OPERATIONS
+    for dtype in INTEGER64_TYPES
+    if operation != "Divide"
+}
+INTEGER64_COMPARISON_ENTRIES = {
+    f"vv_{operation}{dtype}": dtype
+    for operation in COMPARISON_OPERATIONS
+    for dtype in INTEGER64_TYPES
+}
+INTEGER64_ENTRIES = {
+    **INTEGER64_COPY_ENTRIES,
+    **INTEGER64_CAST_ENTRIES,
+    **INTEGER64_ABSOLUTE_ENTRIES,
+    **INTEGER64_BINARY_ENTRIES,
+    **INTEGER64_COMPARISON_ENTRIES,
+}
 ENTRIES = (
     ARANGE_ENTRIES
     + UNARY_ENTRIES
@@ -146,6 +178,7 @@ def build_packages(root, output, target, *, family="base"):
         "bitwise": BITWISE_PACKAGE_ENTRIES,
         "selection": SELECTION_ENTRIES,
         "absolute": ABSOLUTE_ENTRIES,
+        "integer64": INTEGER64_ENTRIES,
     }
     if family not in families:
         raise ValueError(f"Unsupported package family: {family}")
@@ -168,6 +201,11 @@ def build_packages(root, output, target, *, family="base"):
         },
         "selection": {SELECTION_SOURCE: tuple(SELECTION_ENTRIES)},
         "absolute": {UNARY_SOURCE: tuple(ABSOLUTE_ENTRIES)},
+        "integer64": {
+            COPY_SOURCE: (*INTEGER64_COPY_ENTRIES, *INTEGER64_CAST_ENTRIES),
+            UNARY_SOURCE: tuple(INTEGER64_ABSOLUTE_ENTRIES),
+            BINARY_SOURCE: (*INTEGER64_BINARY_ENTRIES, *INTEGER64_COMPARISON_ENTRIES),
+        },
     }[family]
     patterns = {
         SOURCE: "arange*",
@@ -276,7 +314,9 @@ if __name__ == "__main__":
         "--target", choices=["opengl", "directx", "metal"], required=True
     )
     parser.add_argument(
-        "--family", choices=("base", "bitwise", "selection", "absolute"), default="base"
+        "--family",
+        choices=("base", "bitwise", "selection", "absolute", "integer64"),
+        default="base",
     )
     args = parser.parse_args()
     build_packages(args.mlx_root, args.output_dir, args.target, family=args.family)

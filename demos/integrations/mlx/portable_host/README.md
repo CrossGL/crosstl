@@ -21,8 +21,10 @@ outputs and stop-gradient. Integer and array indexing still require the
 unimplemented Gather primitive. Contiguous conversion, reshape, flatten and unflatten
 dispatch translated copies when sharing storage is insufficient. Copies support
 matching float32, int32, uint32 and bool arrays, including negative and zero strides.
+The optional integer64 packages extend copies to int64 and uint64.
 `Full`, including `zeros`, `ones` and `full_like`, uses those copies to materialize
-broadcast values in the same four types. Other storage widths are not yet
+broadcast values in these types, including int64 and uint64 with the optional
+packages. Other storage widths are not yet
 supported by this copy path.
 Binary addition, subtraction, multiplication, minimum and maximum support
 float32, int32 and uint32; division supports float32. Broadcasts and non-row-contiguous binary
@@ -30,8 +32,9 @@ inputs are materialized by translated copies before the unchanged vector-vector
 binary entry executes. Casts between float32, int32 and uint32 use six unchanged
 `v_copy` entries, including automatic promotion before mixed-type arithmetic.
 Six additional casts convert between bool and those three numeric types.
-Strided cast inputs are materialized through translated copies. Casts involving
-other types still fail explicitly. Equal, not-equal and ordered comparisons
+Strided cast inputs are materialized through translated copies. Optional integer64
+packages extend these casts, basic arithmetic and comparisons to int64 and uint64.
+Casts involving other types still fail explicitly. Equal, not-equal and ordered comparisons
 support float32, int32, uint32 and bool inputs with bool outputs. Logical and,
 or and not use bool inputs, including upstream casts from numeric inputs.
 The NaN-equality entry supports float32; the maintained host workloads exercise
@@ -42,7 +45,7 @@ Concatenate supports float32, int32, uint32 and bool inputs through destination-
 Optional selection packages support `where` with Boolean conditions and
 float32, int32, uint32 or bool values. Optional absolute-value packages extend
 `abs` to int32, uint32 and bool. Other primitives retain MLX's explicit
-unsupported-GPU errors. Other unary inputs except LogicalNot and BitwiseInvert
+unsupported-GPU errors. Other unary inputs except Abs, LogicalNot and BitwiseInvert
 must be float32. Stored-contiguous broadcasts and column-major views retain
 their metadata; noncontiguous inputs use translated copies before unary dispatch.
 Dispatch is synchronous and uses host staging buffers. Individual copy inputs and
@@ -645,7 +648,7 @@ strided unary inputs that exceed their allocations, and
 copies with unsupported dtype, excessive size or an invalid source allocation.
 Binary inputs with unsupported dtype or excessive size are also rejected, as
 are casts with unsupported types, excessive size or an invalid source span.
-Full also rejects unsupported int64 storage, excessive output size and a source
+Full also rejects unsupported int16 storage, excessive output size and a source
 view extending before its allocation.
 The native worker has a hard 300-second process-tree deadline; the CPU reference
 and eighteen negative processes each retain a 180-second deadline. All are
@@ -805,3 +808,51 @@ Eight separate processes check missing packages, unsupported types and oversized
 inputs without dispatch. Before/after source checks require byte-identical
 upstream tests and unchanged prepared sources. These 69 workloads and one
 upstream test extend coverage; they do not establish full-suite parity.
+
+## 64-Bit Integer Operations
+
+The optional `integer64` package family selects 44 unchanged upstream entries:
+two general copies, 18 casts, two absolute-value kernels, ten arithmetic kernels
+and twelve comparisons. The host adapter retains MLX's dtype promotion and layout
+handling. Casts connect int64 and uint64 with float32, int32, uint32 and bool;
+arithmetic covers addition, subtraction, multiplication, minimum and maximum.
+The base 93-entry package and callback ABI are unchanged.
+
+The required three-OS CI job runs 360 workloads: each entry across empty,
+scalar, vector, tail, matrix, transposed, reversed and broadcast layouts,
+plus eight scalar/broadcast `full`, `zeros` and `ones` cases.
+Already-contiguous copies and empty outputs need no dispatch. All 44 entries
+must execute in the remaining cases. Checks include exact high-bit values,
+input preservation, output guards, native compilation, artifact identity and
+launch geometry. References use NumPy with exact result bytes, including casts;
+float-to-integer cases remain inside the representable destination range.
+The original Metal absolute-value kernel preserves `INT64_MIN`, and the
+translated path must do the same.
+
+Both workers also run the unchanged upstream `test_clip` and `test_meshgrid`
+methods. These exercise integer promotion and composite comparisons through
+the host adapter. The required companion packages provide 32-bit absolute
+value, width-32 Boolean whole reductions and width-1 Boolean initialization.
+Source checks reject altered upstream tests or adapter files.
+
+```bash
+python -m demos.integrations.mlx.portable_host.packages \
+  --mlx-root mlx-upstream --target opengl --family integer64 --output-dir integer64-packages
+python -m demos.integrations.mlx.portable_host.reduction_packages \
+  --mlx-root mlx-upstream --target opengl --family init --entry init_reduce_andbool_ \
+  --width 1 --output-dir integer64-init
+python -m demos.integrations.mlx.portable_host.verify_integer64 \
+  --mlx-root mlx-upstream --packages host-packages --integer64 integer64-packages \
+  --absolute absolute-packages --reductions concatenate-reductions \
+  --reductions integer64-init --output-dir integer64-evidence
+```
+
+Use the matching Windows/DirectX or macOS/Metal target. Build the base,
+absolute-value and Boolean whole-reduction packages as described above.
+The verifier also requires five rejection controls for missing packages,
+unsupported int16 absolute value, oversized inputs, and unsupported 64-bit
+reductions and bitwise operations.
+
+This does not add 64-bit division, selection, concatenation or general unary
+operations. The 65,535-element bounds and synchronous host-staging model remain.
+The two upstream tests are additional coverage, not full-suite parity.
