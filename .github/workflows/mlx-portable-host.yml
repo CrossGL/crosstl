@@ -56,6 +56,7 @@ on:
       - "tests/test_translator/test_software_subgroup_product.py"
       - "tests/test_translator/test_subgroup_guarded_returns.py"
       - "tests/test_translator/test_directx_self_comparisons.py"
+      - "tests/test_translator/test_wide_integer_arithmetic.py"
       - "tests/test_translator/test_opengl_vector_comparisons.py"
       - "tests/test_translator/test_subgroup_uniform_arguments.py"
       - "tests/test_translator/test_software_subgroup_partial.py"
@@ -135,6 +136,7 @@ on:
       - "tests/test_translator/test_software_subgroup_product.py"
       - "tests/test_translator/test_subgroup_guarded_returns.py"
       - "tests/test_translator/test_directx_self_comparisons.py"
+      - "tests/test_translator/test_wide_integer_arithmetic.py"
       - "tests/test_translator/test_opengl_vector_comparisons.py"
       - "tests/test_translator/test_subgroup_uniform_arguments.py"
       - "tests/test_translator/test_software_subgroup_partial.py"
@@ -372,6 +374,21 @@ jobs:
               tests/test_translator/test_dispatch_regions.py \
               tests/test_translator/test_dispatch_region_project.py \
               2>&1 | tee .mlx-portable-host/dispatch-regions.log
+      - name: Validate mixed-width integer arithmetic
+        env:
+          CROSTL_REQUIRE_WIDE_INTEGER_ARITHMETIC: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/integer-arithmetic
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Mixed-width integer arithmetic" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/integer-arithmetic/pytest \
+              --junitxml=.mlx-portable-host/integer-arithmetic/results.xml \
+              tests/test_translator/test_wide_integer_arithmetic.py \
+              2>&1 | tee .mlx-portable-host/integer-arithmetic.log
       - name: Validate Metal argument inference
         env:
           CROSTL_REQUIRE_METAL_ARGUMENT_INFERENCE: "1"

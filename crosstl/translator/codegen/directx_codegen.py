@@ -2174,6 +2174,8 @@ class HLSLCodeGen:
         self.required_hlsl_explicit_bitcast_helpers = set()
         self.required_hlsl_trailing_zero_helpers = set()
         self.hlsl_trailing_zero_helper_names = {}
+        self.hlsl_wide_integer_compound_helpers = {}
+        self.hlsl_wide_integer_reserved_names = set()
         self.required_hlsl_inverse_hyperbolic_helpers = set()
         self.hlsl_inverse_hyperbolic_helper_names = {}
         self.required_hlsl_atan2_helpers = set()
@@ -3133,6 +3135,8 @@ class HLSLCodeGen:
         self.required_hlsl_explicit_bitcast_helpers = set()
         self.required_hlsl_trailing_zero_helpers = set()
         self.hlsl_trailing_zero_helper_names = {}
+        self.hlsl_wide_integer_compound_helpers = {}
+        self.hlsl_wide_integer_reserved_names = set()
         self.required_hlsl_inverse_hyperbolic_helpers = set()
         self.hlsl_inverse_hyperbolic_helper_names = {}
         self.required_hlsl_atan2_helpers = set()
@@ -3333,6 +3337,9 @@ class HLSLCodeGen:
             functions
         )
         self.prepare_hlsl_trailing_zero_helper_names(functions)
+        self.hlsl_wide_integer_reserved_names = self.hlsl_helper_reserved_names(
+            functions
+        )
         self.prepare_hlsl_inverse_hyperbolic_helper_names(functions)
         self.prepare_hlsl_atan2_helper_names(functions)
         self.prepare_hlsl_half_helper_names(functions)
@@ -4419,6 +4426,7 @@ class HLSLCodeGen:
         code += self.generate_hlsl_fragment_shading_rate_helper()
         code += self.generate_hlsl_wave_shuffle_and_fill_up_helpers()
         code += self.generate_hlsl_trailing_zero_helpers()
+        code += self.generate_hlsl_wide_integer_compound_helpers()
         code += self.generate_hlsl_inverse_hyperbolic_helpers()
         code += self.generate_hlsl_atan2_helpers()
         code += self.generate_hlsl_complex64_helpers()
@@ -12595,6 +12603,186 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             right = f"{contract['integer_float_type']}({right})"
         return f"({left} {operator} {right})"
 
+    def hlsl_wide_integer_arithmetic_contract(
+        self, node, operator, left_type, right_type
+    ):
+        if operator not in {
+            "+",
+            "-",
+            "*",
+            "/",
+            "%",
+            "&",
+            "|",
+            "^",
+            "<<",
+            ">>",
+            "==",
+            "!=",
+            "<",
+            "<=",
+            ">",
+            ">=",
+            "?:",
+        }:
+            return None
+        left = self.hlsl_integer_arithmetic_type_info(left_type)
+        right = self.hlsl_integer_arithmetic_type_info(right_type)
+        if (
+            left is None
+            or right is None
+            or not any(
+                info["base_type"] in {"int64_t", "uint64_t"} for info in (left, right)
+            )
+        ):
+            return None
+
+        reason = None
+        if left["width"] > 1 and right["width"] > 1:
+            if left["width"] != right["width"]:
+                reason = "wide-integer-vector-width-mismatch"
+            elif (
+                operator not in {"<<", ">>"}
+                and left["mapped_type"] != right["mapped_type"]
+            ):
+                reason = "wide-integer-vector-element-mismatch"
+        if operator in {"<<", ">>"} and left["width"] == 1 and right["width"] > 1:
+            reason = "wide-integer-scalar-vector-shift"
+        if reason is not None:
+            raise DirectXContextualConversionError(
+                f"DirectX cannot preserve '{operator}' between '{left_type}' and "
+                f"'{right_type}': incompatible source vector operands",
+                source_type=left["mapped_type"],
+                target_type=right["mapped_type"],
+                reason=reason,
+                source_location=getattr(node, "source_location", None),
+            )
+
+        # Metal converts a scalar to a vector's element type, but scalar pairs
+        # use the usual arithmetic conversions. Shift operands promote separately.
+        if operator in {"<<", ">>"}:
+            left_base = self.hlsl_promoted_integer_arithmetic_base_type(left)
+            right_base = self.hlsl_promoted_integer_arithmetic_base_type(right)
+            width = left["width"]
+        else:
+            if left["width"] > 1 or right["width"] > 1:
+                vector = left if left["width"] > 1 else right
+                left_base = vector["base_type"]
+            else:
+                left_base = self.hlsl_common_integer_arithmetic_base_type(left, right)
+            right_base = left_base
+            width = max(left["width"], right["width"])
+        return {
+            "left": left,
+            "right": right,
+            "left_base": left_base,
+            "right_base": right_base,
+            "operation_type": left_base + (str(width) if width > 1 else ""),
+        }
+
+    def hlsl_wide_integer_operands(self, contract, left, right):
+        return (
+            self.hlsl_widened_integer_operand(
+                left, contract["left"], contract["left_base"]
+            ),
+            self.hlsl_widened_integer_operand(
+                right, contract["right"], contract["right_base"]
+            ),
+        )
+
+    def hlsl_wide_integer_binary_expression(self, expr, left, right, operator):
+        contract = self.hlsl_wide_integer_arithmetic_contract(
+            expr,
+            operator,
+            self.expression_result_type(expr.left),
+            self.expression_result_type(expr.right),
+        )
+        if contract is None:
+            return None
+        left, right = self.hlsl_wide_integer_operands(contract, left, right)
+        return f"({left} {operator} {right})"
+
+    def generate_hlsl_wide_integer_compound_assignment(
+        self, node, target, value, operator, *, target_type=None, lhs=None
+    ):
+        operator = self.map_operator(operator)
+        if operator not in {
+            "+=",
+            "-=",
+            "*=",
+            "/=",
+            "%=",
+            "&=",
+            "|=",
+            "^=",
+            "<<=",
+            ">>=",
+        }:
+            return None
+        binary = operator[:-1]
+        target_type = target_type or self.expression_result_type(target)
+        value_type = self.expression_result_type(value)
+        contract = self.hlsl_wide_integer_arithmetic_contract(
+            node, binary, target_type, value_type
+        )
+        if contract is None:
+            return None
+        left, right = self.hlsl_wide_integer_operands(contract, "target", "value")
+        if (left, right) == ("target", "value"):
+            return None
+        lhs = lhs if lhs is not None else self.generate_expression(target)
+        rhs = self.generate_expression_with_expected(value, None)
+        if left == "target":
+            # Native compound assignment already evaluates its lvalue once.
+            rhs = self.hlsl_widened_integer_operand(
+                rhs, contract["right"], contract["right_base"]
+            )
+            return f"{lhs} {operator} {rhs}"
+        if self.hlsl_expression_has_observable_side_effects(
+            value, allow_integer_constructors=True
+        ):
+            raise DirectXContextualConversionError(
+                "DirectX cannot preserve mixed-width compound assignment when "
+                "the right operand may modify the copied assignment target; "
+                "materialize the right operand before assignment",
+                source_type=self.map_type(value_type),
+                target_type=self.map_type(target_type),
+                reason="wide-integer-compound-copy-in-alias",
+                source_location=getattr(node, "source_location", None),
+            )
+        target_mapped = contract["left"]["mapped_type"]
+        value_mapped = contract["right"]["mapped_type"]
+        key = (target_mapped, value_mapped, binary, left, right)
+        name = self.hlsl_wide_integer_compound_helpers.get(key)
+        if name is None:
+            used = self.hlsl_wide_integer_reserved_names | set(
+                self.local_variable_types
+            )
+            used.update(self.global_variable_types)
+            used.update(self.function_return_types)
+            used.update(self.hlsl_wide_integer_compound_helpers.values())
+            name = "__crossgl_integer_compound"
+            while name in used:
+                name += "_"
+            self.hlsl_wide_integer_compound_helpers[key] = name
+        return f"{name}({lhs}, {rhs})"
+
+    def generate_hlsl_wide_integer_compound_helpers(self):
+        code = ""
+        for (
+            target,
+            value,
+            operator,
+            left,
+            right,
+        ), name in self.hlsl_wide_integer_compound_helpers.items():
+            code += (
+                f"{target} {name}(inout {target} target, {value} value) {{\n"
+                f"    target = {target}({left} {operator} {right});\n"
+                "    return target;\n}\n\n"
+            )
+        return code
+
     def hlsl_native_16_bit_arithmetic_error(
         self,
         node,
@@ -14189,6 +14377,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if native_16_bit_contract is not None:
                 return native_16_bit_contract["operation_type"]
+            wide_integer_contract = self.hlsl_wide_integer_arithmetic_contract(
+                expr, mapped_operator, left_type, right_type
+            )
+            if wide_integer_contract is not None:
+                return wide_integer_contract["operation_type"]
             if mapped_operator in {"/", "%"}:
                 integer_contract = (
                     self.hlsl_minimum_precision_integer_operation_contract(
@@ -14236,6 +14429,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             true_type = self.expression_result_type(getattr(expr, "true_expr", None))
             false_type = self.expression_result_type(getattr(expr, "false_expr", None))
+            wide_integer_contract = self.hlsl_wide_integer_arithmetic_contract(
+                expr, "?:", true_type, false_type
+            )
+            if wide_integer_contract is not None:
+                return wide_integer_contract["operation_type"]
             if self.is_vector_value_type(true_type):
                 return true_type
             if self.is_vector_value_type(false_type):
@@ -19712,6 +19910,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if compound_assignment is not None:
             return compound_assignment
         target_type = binding.get("element_type") if binding else None
+        compound_assignment = self.generate_hlsl_wide_integer_compound_assignment(
+            target, target, value, op, lhs=lhs, target_type=target_type
+        )
+        if compound_assignment is not None:
+            return compound_assignment
         rhs = self.generate_expression_with_expected(
             value,
             target_type,
@@ -19931,6 +20134,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if compound_assignment is not None:
                 return compound_assignment
             target_type = binding.get("element_type") if binding else None
+            compound_assignment = self.generate_hlsl_wide_integer_compound_assignment(
+                node, target, value, op, lhs=lhs, target_type=target_type
+            )
+            if compound_assignment is not None:
+                return compound_assignment
             rhs = self.generate_expression_with_expected(
                 value,
                 target_type,
@@ -20009,6 +20217,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if compound_assignment is not None:
             return compound_assignment
 
+        compound_assignment = self.generate_hlsl_wide_integer_compound_assignment(
+            node, target, value, op, target_type=target_type
+        )
+        if compound_assignment is not None:
+            return compound_assignment
         lhs = self.generate_expression(target)
         rhs = self.generate_expression_with_expected(
             value,
@@ -21501,6 +21714,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if wide_integer_floating is not None:
                 return wide_integer_floating
+            wide_integer = self.hlsl_wide_integer_binary_expression(
+                expr, left, right, mapped_op
+            )
+            if wide_integer is not None:
+                return wide_integer
             bool_arithmetic = self.hlsl_bool_arithmetic_expression(
                 expr,
                 left,
@@ -22161,12 +22379,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             condition = self.generate_expression_with_expected(
                 getattr(expr, "condition", ""), "bool"
             )
+            wide_integer_contract = self.hlsl_wide_integer_arithmetic_contract(
+                expr,
+                "?:",
+                self.expression_result_type(getattr(expr, "true_expr", None)),
+                self.expression_result_type(getattr(expr, "false_expr", None)),
+            )
+            if wide_integer_contract is not None:
+                expected_type = None
             true_expr = self.generate_expression_with_expected(
                 getattr(expr, "true_expr", ""), expected_type
             )
             false_expr = self.generate_expression_with_expected(
                 getattr(expr, "false_expr", ""), expected_type
             )
+            if wide_integer_contract is not None:
+                true_expr, false_expr = self.hlsl_wide_integer_operands(
+                    wide_integer_contract, true_expr, false_expr
+                )
             return f"({condition} ? {true_expr} : {false_expr})"
         else:
             return str(expr)
@@ -42198,7 +42428,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             source_location=getattr(expr, "source_location", None),
         )
 
-    def hlsl_expression_has_observable_side_effects(self, expr):
+    def hlsl_expression_has_observable_side_effects(
+        self, expr, *, allow_integer_constructors=False
+    ):
         for node in self.walk_ast(expr):
             if isinstance(node, AssignmentNode):
                 return True
@@ -42210,6 +42442,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if isinstance(node, FunctionCallNode) or (
                 hasattr(node, "__class__") and "FunctionCall" in str(node.__class__)
             ):
+                function = getattr(node, "function", getattr(node, "name", None))
+                name = getattr(function, "name", function)
+                if (
+                    allow_integer_constructors
+                    and isinstance(name, str)
+                    and not self.hlsl_function_name_is_shadowed(name)
+                    and self.hlsl_integer_arithmetic_type_info(name) is not None
+                ):
+                    continue
                 return True
         return False
 

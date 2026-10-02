@@ -18038,8 +18038,8 @@ float {scalar}(float value) {{
             binary_op = compound_ops.get(operator)
             if binary_op is None:
                 return None
-            current_value = f"buffer_load({buffer}, {index})"
-            rendered_value = f"{current_value} {binary_op} {rendered_value}"
+            # Keep the lvalue intact so target lowering evaluates its index once.
+            return f"{buffer}[{index}] {operator} {rendered_value}"
         return f"buffer_store({buffer}, {index}, {rendered_value})"
 
     def is_storage_image_expression(self, expr):

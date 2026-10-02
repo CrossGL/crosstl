@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from crosstl.backend import common_ast as ast
+from crosstl.backend.DirectX.DirectxAst import IntegerLiteral
 from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
@@ -224,6 +225,8 @@ class _FootprintAnalyzer:
             return environment[name]
         if type(node) in (int, str):
             return _integer(node)
+        if isinstance(node, IntegerLiteral):
+            return _integer(int(node))
         if type(node).__name__ == "NumberNode":
             return _integer(node.value)
         if isinstance(node, ast.VariableNode):

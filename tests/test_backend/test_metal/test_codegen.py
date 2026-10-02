@@ -98,6 +98,32 @@ def convert_without_preprocessing(code: str, file_path=None) -> str:
     return generate_code(ast)
 
 
+@pytest.mark.parametrize(
+    "operator", ["+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="]
+)
+@pytest.mark.parametrize("expression_result", [False, True])
+def test_buffer_compound_assignment_preserves_single_index_evaluation(
+    operator, expression_result
+):
+    operation = f"values[index++] {operator} divisor"
+    statement = (
+        f"uint result = ({operation}); values[2] = result;"
+        if expression_result
+        else f"{operation};"
+    )
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+kernel void update(device uint* values [[buffer(0)]], uint divisor [[thread_position_in_grid]]) {{
+    uint index = 0u;
+    {statement}
+}}
+"""
+    generated = convert(source)
+    assert generated.count("index++") == 1
+    assert f"values[index++] {operator} divisor" in generated
+    assert "buffer_load(values, index++)" not in generated
+
+
 def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 

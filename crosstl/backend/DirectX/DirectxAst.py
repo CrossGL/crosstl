@@ -65,6 +65,20 @@ _COMMON_NODES = (
 # DirectX-specific nodes
 
 
+class IntegerLiteral(int):
+    """Integer value retaining its explicit source suffix for conversions."""
+
+    def __new__(cls, value, suffix=""):
+        literal = super().__new__(cls, value)
+        literal.suffix = suffix.lower()
+        return literal
+
+    @property
+    def source_type(self):
+        prefix = "uint" if "u" in self.suffix else "int"
+        return prefix + ("64_t" if "l" in self.suffix else "")
+
+
 class CbufferNode(StructNode):
     """HLSL constant-buffer declaration with named member variables."""
 

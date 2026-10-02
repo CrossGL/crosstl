@@ -30,7 +30,17 @@
             "tests/test_translator/test_directx_atan2.py::def test_atan2_rejects_unproven_contracts",
             "tests/test_translator/test_directx_half_conversion.py::def test_public_metal_half_conversion",
             "tests/test_translator/test_directx_half_conversion.py::def test_directx_half_rounding_native",
-            "tests/test_translator/test_directx_half_conversion.py::def test_half_double_rounding_is_rejected"
+            "tests/test_translator/test_directx_half_conversion.py::def test_half_double_rounding_is_rejected",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_signed_wide_and_unsigned_narrow_operands_use_signed_arithmetic",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_optimized_dxc_keeps_signed_division_remainder_and_comparison",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_mixed_integer_arithmetic_executes_with_source_signedness",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_hlsl_vector_scalar_arithmetic_matches_original_metal",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_compound_copy_in_rejects_potential_rhs_alias_modification",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_native_hlsl_integer_rank_survives_roundtrip",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_native_hlsl_arithmetic_preserves_source_results_on_each_target",
+            "tests/test_backend/test_directx/test_codegen.py::def test_wide_integer_source_rank_is_explicit",
+            "tests/test_backend/test_directx/test_codegen.py::def test_wide_integer_compound_vector_index_evaluated_once",
+            "tests/test_backend/test_directx/test_codegen.py::def test_wide_integer_compound_rejects_unproven_copy_in_alias"
           ]
         },
         "opengl": {
@@ -48,7 +58,10 @@
             "tests/test_translator/test_opengl_metal_math.py::def test_opengl_metal_math_preserves_source_helpers",
             "tests/test_translator/test_opengl_half_conversion.py::def test_public_metal_half_cast_rounds_before_widening",
             "tests/test_translator/test_opengl_half_conversion.py::def test_half_rounding_native",
-            "tests/test_translator/test_opengl_half_conversion.py::def test_half_unproven_conversions_fail_closed"
+            "tests/test_translator/test_opengl_half_conversion.py::def test_half_unproven_conversions_fail_closed",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_glsl_signed_remainder_uses_truncating_division",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_signed_remainder_executes_for_both_operand_signs",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_glsl_signed_remainder_evaluates_operands_once_and_avoids_collisions"
           ]
         },
         "metal": {
@@ -135,6 +148,7 @@
           "notes": "Qualified Metal math builtins retain ownership across colliding source helpers, explicit global calls, imported names, and source-owned namespace extensions through collision-safe overload transport. Required bounded numerical CI executes the reduced fixture on DirectX, OpenGL, and Metal, with original-source Metal parity; this does not establish general C++ namespace conformance or whole-repository runtime coverage.",
           "evidence": [
             "tests/test_backend/test_metal/test_parser.py::def test_",
+            "tests/test_backend/test_metal/test_codegen.py::def test_buffer_compound_assignment_preserves_single_index_evaluation",
             "tests/test_translator/test_metal_builtin_ownership.py::def test_qualified_metal_builtin_and_source_overloads_compile",
             "tests/test_translator/test_metal_builtin_ownership.py::def test_imported_builtin_does_not_bind_unrelated_namespace_helper",
             "tests/test_translator/test_metal_builtin_ownership.py::def test_builtin_transport_avoids_source_identifiers",

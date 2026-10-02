@@ -2492,6 +2492,7 @@ class GLSLCodeGen:
         self.required_glsl_metal_math_helpers = set()
         self.glsl_half_helper_names = {}
         self.glsl_float_selection_helper_names = {}
+        self.glsl_signed_remainder_helper_names = {}
         self.glsl_generating_global_initializer = False
         self.required_glsl_trailing_zero_helpers = set()
         self.glsl_trailing_zero_helper_names = {}
@@ -7123,6 +7124,7 @@ class GLSLCodeGen:
         self.required_glsl_metal_math_helpers = set()
         self.glsl_half_helper_names = {}
         self.glsl_float_selection_helper_names = {}
+        self.glsl_signed_remainder_helper_names = {}
         self.glsl_generating_global_initializer = False
         self.required_glsl_trailing_zero_helpers = set()
         self.glsl_trailing_zero_helper_names = {}
@@ -8316,6 +8318,7 @@ class GLSLCodeGen:
             + self.generate_glsl_metal_math_helpers()
             + self.generate_glsl_half_helpers()
             + self.generate_glsl_float_selection_helpers()
+            + self.generate_glsl_signed_remainder_helpers()
             + self.generate_glsl_complex64_helpers()
         )
         if generated_helpers:
@@ -31359,6 +31362,8 @@ complex64_t crossgl_complex64_mod_assign(
             # to a diagnostic comment instead of real GLSL.
             if array_type and array_type.rstrip().endswith("*"):
                 return array_type.rstrip()[:-1].strip()
+            if self.is_structured_buffer_type(array_type):
+                return self.structured_buffer_source_element_type(array_type)
             component_type = self.vector_component_type(array_type)
             if component_type is not None:
                 return component_type
@@ -32644,14 +32649,36 @@ complex64_t crossgl_complex64_mod_assign(
         if conversion_types is None:
             return None
         target_operand_type, value_operand_type = conversion_types
-        if self.map_type(target_operand_type) == self.map_type(
-            expected_type
-        ) and self.map_type(value_operand_type) == self.map_type(value_type):
+        signed_remainder = (
+            binary_operator == "%"
+            and self.glsl_signed_remainder_type(expected_type, value_type) is not None
+        )
+        if (
+            not signed_remainder
+            and self.map_type(target_operand_type) == self.map_type(expected_type)
+            and self.map_type(value_operand_type) == self.map_type(value_type)
+        ):
             return None
 
         common_type = self.glsl_common_arithmetic_type(
             expected_type, value_type, binary_operator
         )
+        if (
+            signed_remainder
+            and not self.glsl_side_effect_free_expression(value)
+            and not isinstance(target, (IdentifierNode, VariableNode))
+        ):
+            raise OpenGLCompoundAssignmentError(
+                "OpenGL cannot safely lower signed remainder assignment when the "
+                "right operand may change the assignment target",
+                operator="%=",
+                target=expression_debug_name(target),
+                target_type=self.type_name_string(expected_type),
+                value_type=self.type_name_string(value_type),
+                common_type=self.type_name_string(common_type),
+                reason="rhs-may-change-assignment-target",
+                source_location=getattr(source_node, "source_location", None),
+            )
         if not self.glsl_stable_update_target(target):
             target_name = expression_debug_name(target)
             raise OpenGLCompoundAssignmentError(
@@ -33972,6 +33999,12 @@ complex64_t crossgl_complex64_mod_assign(
                     right = self.cast_integer_vector_expression_for_expected_float(
                         right, right_type, expected_vector
                     )
+            if op == "%":
+                remainder = self.generate_glsl_signed_remainder(
+                    expr, left, right, left_type, right_type
+                )
+                if remainder is not None:
+                    return remainder
             return self.glsl_apply_half_contract(
                 f"({left} {op} {right})", self.glsl_source_expression_type(expr), expr
             )
@@ -34607,6 +34640,57 @@ complex64_t crossgl_complex64_mod_assign(
             return f"({condition} ? {true_expr} : {false_expr})"
         else:
             return str(expr)
+
+    def glsl_signed_remainder_type(self, left_type, right_type):
+        common = self.glsl_common_arithmetic_type(left_type, right_type, "%")
+        info = self.glsl_value_type_info(common)
+        if info is None or info["family"] != "int":
+            return None
+        return self.map_type(common)
+
+    def generate_glsl_signed_remainder(self, node, left, right, left_type, right_type):
+        mapped = self.glsl_signed_remainder_type(left_type, right_type)
+        if mapped is None:
+            return None
+        width = self.glsl_value_type_info(mapped)["width"]
+        if width > 1:
+            if self.glsl_value_type_info(left_type)["width"] == 1:
+                left = f"{mapped}({left})"
+            if self.glsl_value_type_info(right_type)["width"] == 1:
+                right = f"{mapped}({right})"
+        if self.glsl_generating_global_initializer:
+            if not all(
+                self.glsl_side_effect_free_expression(operand)
+                for operand in (node.left, node.right)
+            ):
+                self.glsl_arithmetic_conversion_error(
+                    node,
+                    "%",
+                    left_type,
+                    right_type,
+                    mapped,
+                    "signed-remainder-global-side-effects",
+                )
+            return f"({left} - ({left} / {right}) * {right})"
+        name = self.glsl_signed_remainder_helper_names.get(mapped)
+        if name is None:
+            used_names = self.glsl_module_used_identifier_names | getattr(
+                self, "glsl_numeric_helper_reserved_names", set()
+            )
+            name = self.glsl_unique_identifier(
+                f"crossgl_signed_remainder_{mapped}", used_names
+            )
+            self.glsl_module_used_identifier_names.add(name)
+            self.glsl_signed_remainder_helper_names[mapped] = name
+        return f"{name}({left}, {right})"
+
+    def generate_glsl_signed_remainder_helpers(self):
+        # GLSL '%' does not guarantee the C-like sign for negative operands.
+        return "".join(
+            f"{mapped} {name}({mapped} left, {mapped} right) {{\n"
+            "    return left - (left / right) * right;\n}\n\n"
+            for mapped, name in sorted(self.glsl_signed_remainder_helper_names.items())
+        )
 
     def generate_glsl_float_selection(self, node, condition, true_expr, false_expr):
         # Only already-evaluated values may cross the helper call boundary.
@@ -37960,6 +38044,8 @@ complex64_t crossgl_complex64_mod_assign(
                 return element_type
             if type_name.rstrip().endswith(("*", "&")):
                 return type_name.rstrip()[:-1].strip()
+            if self.is_structured_buffer_type(type_name):
+                return self.structured_buffer_source_element_type(type_name)
             component_type = self.vector_component_type(type_name)
             if component_type is not None:
                 return component_type

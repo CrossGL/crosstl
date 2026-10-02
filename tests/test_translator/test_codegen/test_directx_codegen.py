@@ -4566,7 +4566,7 @@ def test_hlsl_codegen_narrows_64_bit_initializer_to_declared_int():
 
     generated = generate_code(ast)
 
-    assert "int edge_bytes = int((bytes_per_key % 4u));" in generated
+    assert "int edge_bytes = int((bytes_per_key % uint64_t(4u)));" in generated
 
 
 def test_hlsl_codegen_lowers_metal_simd_shuffle_helpers_to_wave_reads():
@@ -9134,7 +9134,7 @@ def test_hlsl_metal_resource_pointer_offsets_apply_to_buffer_helpers(tmp_path):
     assert "out_ +=" not in generated_code
     assert "buffer_store" not in generated_code
     assert "int64_t out__offset = int64_t(0);" in generated_code
-    assert "out__offset += uint((uint64_t(index) * 4));" in generated_code
+    assert "out__offset += uint((uint64_t(index) * uint64_t(4)));" in generated_code
     assert "out_[uint((out__offset + 1))] = 7u;" in generated_code
     assert "out_[uint(out__offset)] = 9u;" in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
@@ -13558,7 +13558,7 @@ def test_hlsl_typed_buffer_store_contextually_narrows_wide_integers(tmp_path):
 
     assert (
         "unsignedOutput[index] = "
-        "uint(((packed & 1095216660480ull) >> 32));" in generated_code
+        "uint(((uint64_t(packed) & 1095216660480ull) >> 32));" in generated_code
     )
     assert "signedOutput[index] = int((signedWide >> 32));" in generated_code
     assert "unsignedOutput[index] = unsignedSame;" in generated_code
@@ -13599,7 +13599,7 @@ def test_hlsl_typed_resource_assignment_contextually_narrows_wide_integers(
     assert "RWStructuredBuffer<uint> unsignedOutput : register(u0);" in generated_code
     assert (
         "unsignedOutput[index] = "
-        "uint(((packed & 1095216660480ull) >> 32));" in generated_code
+        "uint(((uint64_t(packed) & 1095216660480ull) >> 32));" in generated_code
     )
     assert "signedOutput[index] = int((signedWide >> 32));" in generated_code
     assert "unsignedOutput[index] = packed;" in generated_code

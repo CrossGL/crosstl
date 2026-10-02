@@ -781,6 +781,48 @@ close complete discovered-unary translation, reflection, and native compiler
 coverage on both targets; they do not claim numerical execution, MLX host
 runtime redirection, or MLX test-suite parity.
 
+**Mixed-width integer arithmetic.**
+
+The Metal frontend retains structured-buffer compound assignments as lvalues in
+the intermediate representation, including side-effecting indices. It does not
+expand them into a load/store pair that evaluates the index twice.
+
+Metal-to-HLSL lowering explicitly applies source integer conversions before arithmetic,
+bitwise operations, comparisons and conditional selection. In particular,
+``int64_t`` combined with ``uint`` uses signed 64-bit arithmetic, not HLSL's
+implicit unsigned conversion. Vector/scalar pairs retain the vector element
+type, and shifts preserve independent operand promotions. Compound assignments
+convert before narrowing back to the destination; typed helpers retain single
+evaluation of indexed destinations. A right operand that may modify a copied
+destination receives a diagnostic rather than an unproven copy-in/copy-out
+translation.
+
+Native HLSL input retains its DXC integer conversion rules instead: the frontend
+records explicit common operand types in CrossGL, including unsigned preference
+across widths and scalar/vector conversions. Nested expressions, conditional
+arms, aliases, uniquely resolved function results and compound assignments carry
+those types through a saved intermediate file. Integer literal suffixes and
+canonical 64-bit vector types are retained. Ambiguous wide return types and
+unproven compound-assignment copy-in aliases remain diagnostic.
+
+OpenGL signed remainder uses truncating division and multiplication rather than
+relying on ``%`` for negative operands. Typed helpers evaluate operands once and
+broadcast scalar operands to the result vector shape. Constant initializers
+retain constant expressions. Unsupported side-effecting compound destinations
+remain diagnostic. Zero divisors and signed-minimum divided by minus one are
+outside the source-defined numerical contract.
+
+Required native CI checks scalar mixed-width arithmetic and scalar/vector signed
+remainder on Windows, Linux and macOS, including original Metal controls,
+unchanged inputs and guarded outputs. HLSL vector/scalar conversions and wide
+shift counts receive separate Windows/Metal controls. OpenGL wide shift counts
+remain tracked in `issue #2033 <https://github.com/CrossGL/crosstl/issues/2033>`_.
+Native HLSL controls additionally compare generated results on each target and
+the original HLSL on Windows; optimized DXC checks cover direct and saved-CrossGL
+round trips. Metal scalar/vector arithmetic on OpenGL remains tracked in
+`issue #2035 <https://github.com/CrossGL/crosstl/issues/2035>`_.
+These checks do not establish full MLX-suite parity.
+
 **Fused arithmetic profiles.**
 
 ``crosstl.translator.fused_math`` provides an internal binary32 fused
