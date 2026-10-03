@@ -134,7 +134,19 @@ def audit_event(np, event):
             expected[destination] = updates[coordinate]
         else:
             expected[destination] += updates[coordinate]
-    actual = event["scatterValues"]
+    readback = event["scatterValues"]
+    limits = np.iinfo(dtype)
+    require(
+        isinstance(readback, list)
+        and len(readback) == size
+        and all(
+            type(value) is int and limits.min <= value <= limits.max
+            for value in readback
+        ),
+        "Axis-scatter readback is outside its storage type",
+    )
+    raw = np.array(readback, dtype=dtype)
+    actual = words(np, raw)
     require(
         actual == words(np, expected),
         "Axis-scatter native readback disagrees with uploads",
@@ -179,8 +191,7 @@ def audit_event(np, event):
         "Axis-scatter native request changed",
     )
     require(
-        hashlib.sha256(np.array(actual, dtype=dtype).tobytes()).hexdigest()
-        == event["outputHash"],
+        hashlib.sha256(raw.tobytes()).hexdigest() == event["outputHash"],
         "Axis-scatter host output hash changed",
     )
     audit_native_execution(event)

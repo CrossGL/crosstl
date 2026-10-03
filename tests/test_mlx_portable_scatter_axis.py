@@ -21,6 +21,60 @@ from demos.integrations.mlx.portable_host import verify_scatter_axis
 from demos.integrations.mlx.portable_host.gather_workloads import words
 
 
+def test_axis_scatter_retains_existing_workloads_and_adds_signed_layouts():
+    cases = list(workloads.cases())
+    digest = hashlib.sha256()
+    for case in cases[:56]:
+        digest.update(json.dumps(case, sort_keys=True).encode())
+        for array in workloads.reference(np, case):
+            digest.update(
+                json.dumps([array.dtype.str, array.shape, array.strides]).encode()
+            )
+            digest.update(array.tobytes())
+    assert digest.hexdigest() == (
+        "b45dd7465484e9604282442e9ce6ef87902be69d3a2a541c51d34c7a4020a64d"
+    )
+    signed = cases[56:]
+    assert len(cases) == len({case["id"] for case in cases}) == 84
+    assert all(
+        case["dtype"] == "int32" and case["values"] == "signed" for case in signed
+    )
+    assert {(case["operation"], case["layout"]) for case in signed} == {
+        (operation, layout)
+        for operation in ("none", "sum")
+        for layout in workloads.LAYOUTS
+    }
+    assert {case["index_dtype"] for case in signed} == {
+        "int32",
+        "uint32",
+        "int64",
+        "uint64",
+    }
+
+
+@pytest.mark.parametrize("case", list(workloads.cases()), ids=lambda case: case["id"])
+def test_axis_scatter_reference_matches_independent_indexed_updates(case):
+    source, indices, updates, expected = workloads.reference(np, case)
+    axis = 0 if case["axis"] is None else case["axis"] % source.ndim
+    independent = (
+        source.copy() if case["operation"] == "none" else np.zeros_like(source)
+    )
+    if case["operation"] == "none":
+        np.put_along_axis(independent, indices, updates, axis=axis)
+    else:
+        coordinates = list(np.indices(indices.shape))
+        coordinates[axis] = indices.astype(np.int64) % source.shape[axis]
+        np.add.at(independent, tuple(coordinates), updates)
+        bounds = np.zeros_like(source, dtype=object)
+        np.add.at(bounds, tuple(coordinates), np.abs(updates.astype(object)))
+        assert np.all(bounds <= np.iinfo(case["dtype"]).max)
+    assert np.array_equal(expected, independent)
+    if case.get("values") == "signed":
+        assert np.any(source < 0)
+        if case["layout"] != "empty":
+            assert np.any(updates < 0) and np.any(expected < 0)
+
+
 def buffers(case):
     source, indices, updates, expected = workloads.reference(np, case)
     if any(step < 0 for step in indices.strides):
@@ -366,7 +420,7 @@ def scatter_event(tmp_path, case, target="metal"):
     event["scatterMetadata"] = layout.validate(
         entry, supplied, expected.size, execution
     )
-    event["scatterValues"] = words(np, expected)
+    event["scatterValues"] = expected.reshape(-1).tolist()
     event["scatterGuardValues"] = runtime.COPY_GUARD.copy()
     event["scatterStorageType"] = case["dtype"]
     event["outputHash"] = hashlib.sha256(expected.tobytes()).hexdigest()
@@ -542,6 +596,35 @@ def test_axis_scatter_audit_reconstructs_every_workload(tmp_path, target, case):
     assert actual == words(np, expected)
 
 
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+@pytest.mark.parametrize("operation", ("none", "sum"))
+@pytest.mark.parametrize(
+    "fault", ("unsigned-word", "float", "bool", "missing", "underflow")
+)
+def test_axis_scatter_audit_requires_typed_signed_native_readback(
+    tmp_path, target, operation, fault
+):
+    case = next(
+        case
+        for case in workloads.cases()
+        if case["id"] == f"int32-{operation}-dense-signed"
+    )
+    event = scatter_event(tmp_path, case, target)
+    assert event["scatterValues"][0] < 0
+    if fault == "unsigned-word":
+        event["scatterValues"][0] &= 0xFFFFFFFF
+    elif fault == "float":
+        event["scatterValues"][0] = float(event["scatterValues"][0])
+    elif fault == "bool":
+        event["scatterValues"][0] = False
+    elif fault == "underflow":
+        event["scatterValues"][0] = -(2**31) - 1
+    else:
+        event["scatterValues"].pop()
+    with pytest.raises(ValueError, match="outside its storage type"):
+        scatter_axis_evidence.audit_event(np, event)
+
+
 @pytest.mark.parametrize(
     "fault",
     (
@@ -668,6 +751,7 @@ def test_axis_scatter_requires_complete_workload_traces(tmp_path, monkeypatch, f
         if case["dtype"] == "int32"
         and case["operation"] == "none"
         and case["layout"] in {"dense", "empty"}
+        and "values" not in case
     ]
     monkeypatch.setattr(workloads, "cases", lambda: iter(cases))
     event = scatter_event(tmp_path, cases[0])

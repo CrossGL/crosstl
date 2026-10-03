@@ -19,10 +19,11 @@ LAYOUTS = (
 
 
 def cases():
+    signed = []
     for dtype in ("int32", "uint32"):
         for operation in ("none", "sum"):
             for i, layout in enumerate(LAYOUTS):
-                yield {
+                case = {
                     "id": f"{dtype}-{operation}-{layout}",
                     "dtype": dtype,
                     "operation": operation,
@@ -34,10 +35,19 @@ def cases():
                     ),
                     "index_dtype": ("int32", "uint32", "int64", "uint64")[i % 4],
                 }
+                yield case
+                if dtype == "int32":
+                    signed.append(
+                        {**case, "id": case["id"] + "-signed", "values": "signed"}
+                    )
+    yield from signed
 
 
 def arrays(xp, np, case):
-    source = xp.array(np.arange(48).reshape(4, 3, 4).astype(case["dtype"]))
+    signed = case.get("values") == "signed"
+    source = xp.array(
+        (np.arange(48).reshape(4, 3, 4) - (24 if signed else 0)).astype(case["dtype"])
+    )
     layout = case["layout"]
     if layout == "transposed":
         source = xp.transpose(source, (1, 0, 2))
@@ -65,6 +75,8 @@ def arrays(xp, np, case):
     updates = (indices + 17 if case["operation"] == "none" else raw % 11 + 1).astype(
         case["dtype"]
     )
+    if signed:
+        updates = -updates
     if case["index_dtype"].startswith("int"):
         indices = np.where(raw % 2, indices - source.shape[axis], indices)
     indices = indices.astype(case["index_dtype"])
@@ -72,7 +84,7 @@ def arrays(xp, np, case):
         updates = xp.array(np.repeat(updates, 2, axis=-1))[..., ::2]
     elif layout == "update-broadcast":
         updates = xp.broadcast_to(
-            xp.array(np.array(23, dtype=case["dtype"])), tuple(shape)
+            xp.array(np.array(-23 if signed else 23, dtype=case["dtype"])), tuple(shape)
         )
     else:
         updates = xp.array(updates)

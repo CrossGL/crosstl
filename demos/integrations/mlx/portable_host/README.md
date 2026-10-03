@@ -283,13 +283,20 @@ python -m demos.integrations.mlx.portable_host.verify_scatter_axis \
   --integer64 integer64-packages --output-dir scatter-axis-evidence
 ```
 
-The required three-OS CI step runs 56 workloads in separate CPU and native
+The required three-OS CI step runs 84 workloads in separate CPU and native
 processes. They cover both operations and storage types, all four index types,
 dense and transposed sources, strided and broadcast views, reversed views,
 negative indices, flattened inputs, aliasing updates and empty updates. Duplicate
 replacement indices carry identical values so the expected result does not
 depend on thread ordering. Additive cases retain duplicate destinations to
 exercise atomic accumulation.
+
+The original 56 workloads are retained unchanged. Another 28 int32 workloads
+exercise negative source values, updates and results across both operations and
+every layout, including aliases and empty updates. Native readbacks retain signed
+numeric values; the verifier checks their declared storage range before deriving
+bit patterns for comparison. Unsigned substitutions, floating-point values,
+Booleans and incomplete readbacks are rejected.
 
 The verifier reconstructs each result from retained uploads and checks the
 native readback against the final MLX result. It also checks source preservation,
@@ -310,7 +317,7 @@ Twenty-eight required native controls cover signed and unsigned updates, returne
 old values, stores, aliases, resource selection, argument evaluation and contention
 across workgroups. Ordinary functions with atomic-like names retain their own
 semantics. Unsupported storage types and member-array destinations fail explicitly.
-Floating-point atomics and Metal compare-exchange remain separate contracts;
+Floating-point atomic load and compare-exchange remain separate contracts;
 this does not establish the full atomic scope of
 [#2051](https://github.com/CrossGL/crosstl/issues/2051).
 
@@ -318,9 +325,9 @@ Two required native general-scatter cases use the unchanged pinned JIT wrapper a
 `indexing/scatter.h`: one strided index/update input with `NWORK=1`, and two
 contiguous index inputs with `NWORK=4`, including a partial final chunk. Both use
 integer additive updates, duplicate and negative indices, and guarded output
-storage. These are kernel-execution checks. General `Scatter::eval_gpu` host
-integration, floating-point scatter and full indexing-suite parity remain outside
-the current proof.
+storage. These are kernel-execution checks, separate from the integer
+`Scatter::eval_gpu` host integration described above. Floating-point scatter and
+full indexing-suite parity remain outside the current proof.
 
 ## Upstream Adaptations
 
