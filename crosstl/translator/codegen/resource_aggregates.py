@@ -354,10 +354,13 @@ class _Lowering:
                 return self.returns[id(callee)]
         if isinstance(node, BinaryOpNode) and node.operator in {"+", "-"}:
             left = self.infer(node.left, env)
+            right = self.infer(node.right, env)
             if isinstance(left, _Pointer):
-                if isinstance(self.infer(node.right, env), _Pointer):
+                if isinstance(right, _Pointer):
                     return PrimitiveType("int64_t")
                 return left
+            if node.operator == "+" and isinstance(right, _Pointer):
+                return right
         if isinstance(node, UnaryOpNode):
             if node.operator == "&" and isinstance(node.operand, ArrayAccessNode):
                 return self.infer(node.operand.array_expr, env)
@@ -608,7 +611,7 @@ class _Lowering:
             _id(name),
             [
                 self.expression(owner, env),
-                self.expression(index, env),
+                _call("int64_t", [self.expression(index, env)]),
                 *(self.expression(value, env) for value in node.arguments[1:]),
                 *self.resource_arguments(),
             ],
@@ -637,7 +640,7 @@ class _Lowering:
                     self.helper(pointer, "store"),
                     [
                         self.expression(owner, env),
-                        self.expression(index, env),
+                        _call("int64_t", [self.expression(index, env)]),
                         self.expression(node.value, env),
                         *self.resource_arguments(),
                     ],
@@ -662,7 +665,7 @@ class _Lowering:
                 self.helper(pointer, "load"),
                 [
                     self.expression(owner, env),
-                    self.expression(index, env),
+                    _call("int64_t", [self.expression(index, env)]),
                     *self.resource_arguments(),
                 ],
             )
@@ -681,7 +684,15 @@ class _Lowering:
                     [self.expression(node.left, env), delta],
                 )
             if isinstance(right_type, _Pointer):
-                raise ResourceAggregateError("pointer-binary-operator", node)
+                if node.operator != "+":
+                    raise ResourceAggregateError("pointer-binary-operator", node)
+                return _call(
+                    self.helper(right_type, "shift"),
+                    [
+                        self.expression(node.right, env),
+                        _call("int64_t", [self.expression(node.left, env)]),
+                    ],
+                )
             return BinaryOpNode(
                 self.expression(node.left, env),
                 node.operator,
@@ -697,7 +708,10 @@ class _Lowering:
                     pointer, owner, index = access
                     return _call(
                         self.helper(pointer, "shift"),
-                        [self.expression(owner, env), self.expression(index, env)],
+                        [
+                            self.expression(owner, env),
+                            _call("int64_t", [self.expression(index, env)]),
+                        ],
                     )
             if isinstance(self.infer(node.operand, env), _Pointer):
                 raise ResourceAggregateError("pointer-unary-operator", node)
@@ -755,7 +769,9 @@ class _Lowering:
                 return _call(
                     self.helper(self.infer(node.arguments[0], env), "store"),
                     [
-                        *(self.expression(value, env) for value in node.arguments),
+                        self.expression(node.arguments[0], env),
+                        _call("int64_t", [self.expression(node.arguments[1], env)]),
+                        self.expression(node.arguments[2], env),
                         *self.resource_arguments(),
                     ],
                 )

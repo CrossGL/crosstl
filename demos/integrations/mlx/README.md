@@ -82,6 +82,22 @@ argument effects ([#2043](https://github.com/CrossGL/crosstl/issues/2043)).
 These are direct kernel proofs, not integration of general Gather into the MLX
 host adapter or a passing complete upstream suite.
 
+The same workflow requires pointer-offset execution controls: 13 cases on Metal
+and 11 on DirectX/OpenGL, with exact outputs and neighboring guards. Metal also
+executes the original source. Offset values, including struct members and
+conditional scalar loads, do not change a pointer's address space. Both operand
+orders preserve resource-backed aggregate pointers without repeating offset
+side effects. Incompatible Metal helper arguments fail project translation
+instead of replacing a reachable computation with zero
+([#2053](https://github.com/CrossGL/crosstl/issues/2053)). DirectX/OpenGL still
+reject same-buffer conditional pointers
+([#2054](https://github.com/CrossGL/crosstl/issues/2054)) and local struct-pointer
+aliases ([#2055](https://github.com/CrossGL/crosstl/issues/2055)); explicit negative
+controls retain those diagnostics. These cases do not count as native passes.
+Generated resource helpers use explicit 64-bit index arguments; native OpenGL
+execution checks this contract independently of glslang acceptance
+([#2056](https://github.com/CrossGL/crosstl/issues/2056)).
+
 The [Metal host integration harness](METAL_HOST.md) redirects selected current-pinned
 complex-power kernels through MLX's own runtime and runs its unchanged upstream
 operations tests. Its dispatch trace distinguishes actual host execution from

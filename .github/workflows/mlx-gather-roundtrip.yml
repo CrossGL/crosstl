@@ -70,6 +70,7 @@ jobs:
           CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
           CROSTL_REQUIRE_FUNCTOR_MEMBER_RUNTIME: "1"
           CROSTL_REQUIRE_CONSTRAINED_SPECIALIZATION_RUNTIME: "1"
+          CROSTL_REQUIRE_POINTER_OFFSET_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_RESOURCE_RUNTIME: "1"
           CROSTL_REQUIRE_MLX_GENERAL_SCATTER: "1"
           CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
@@ -90,6 +91,7 @@ jobs:
               tests/test_translator/test_template_wrapper_runtime.py \
               tests/test_translator/test_functor_member_runtime.py \
               tests/test_translator/test_constrained_specialization_runtime.py \
+              tests/test_translator/test_pointer_offset_address_spaces.py \
               tests/test_translator/test_atomic_resource_runtime.py \
               tests/test_translator/test_mlx_general_scatter_runtime.py \
               tests/test_translator/test_atomic_store_runtime.py \
@@ -135,6 +137,7 @@ jobs:
           CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
           CROSTL_REQUIRE_FUNCTOR_MEMBER_RUNTIME: "1"
           CROSTL_REQUIRE_CONSTRAINED_SPECIALIZATION_RUNTIME: "1"
+          CROSTL_REQUIRE_POINTER_OFFSET_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_RESOURCE_RUNTIME: "1"
           CROSTL_REQUIRE_MLX_GENERAL_SCATTER: "1"
           CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
@@ -154,6 +157,7 @@ jobs:
               tests/test_translator/test_template_wrapper_runtime.py \
               tests/test_translator/test_functor_member_runtime.py \
               tests/test_translator/test_constrained_specialization_runtime.py \
+              tests/test_translator/test_pointer_offset_address_spaces.py \
               tests/test_translator/test_atomic_resource_runtime.py \
               tests/test_translator/test_mlx_general_scatter_runtime.py \
               tests/test_translator/test_atomic_store_runtime.py \
@@ -231,6 +235,7 @@ jobs:
           CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
           CROSTL_REQUIRE_FUNCTOR_MEMBER_RUNTIME: "1"
           CROSTL_REQUIRE_CONSTRAINED_SPECIALIZATION_RUNTIME: "1"
+          CROSTL_REQUIRE_POINTER_OFFSET_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_RESOURCE_RUNTIME: "1"
           CROSTL_REQUIRE_MLX_GENERAL_SCATTER: "1"
           CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
@@ -249,6 +254,7 @@ jobs:
               tests/test_translator/test_template_wrapper_runtime.py \
               tests/test_translator/test_functor_member_runtime.py \
               tests/test_translator/test_constrained_specialization_runtime.py \
+              tests/test_translator/test_pointer_offset_address_spaces.py \
               tests/test_translator/test_atomic_resource_runtime.py \
               tests/test_translator/test_mlx_general_scatter_runtime.py \
               tests/test_translator/test_atomic_store_runtime.py \

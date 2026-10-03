@@ -9098,6 +9098,11 @@ class MetalCodeGen:
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
             operator = self.map_operator(getattr(expr, "op", ""))
+            pointer_operand = self.pointer_arithmetic_operand(
+                expr, (left_type, right_type)
+            )
+            if pointer_operand is not None:
+                return left_type if pointer_operand is expr.left else right_type
             if operator in {"<", ">", "<=", ">=", "==", "!=", "&&", "||"}:
                 for candidate_type in (left_type, right_type):
                     mapped_type = self.map_type(candidate_type)
@@ -9121,6 +9126,8 @@ class MetalCodeGen:
             operand_type = self.expression_result_type(expr.operand)
             if getattr(expr, "operator", None) == "*":
                 return self.pointer_pointee_type_name(operand_type) or operand_type
+            if getattr(expr, "operator", None) == "&" and operand_type is not None:
+                return f"{self.type_name_string(operand_type)}*"
             return operand_type
         if isinstance(expr, TernaryOpNode):
             true_type = self.expression_result_type(getattr(expr, "true_expr", None))
@@ -10959,11 +10966,7 @@ class MetalCodeGen:
             )
             if mesh_context_call is not None:
                 return mesh_context_call
-            address_space_call = self.address_space_call_diagnostic(
-                argument_func_name, expr.args
-            )
-            if address_space_call is not None:
-                return address_space_call
+            self.validate_address_space_call(argument_func_name, expr.args)
             wave_lane_call = self.metal_wave_lane_helper_call_diagnostic(func_name)
             if wave_lane_call is not None:
                 return wave_lane_call
@@ -15201,7 +15204,9 @@ class MetalCodeGen:
             address_spaces.append("object_data")
         if qualifiers & {"ray_data", "raydata"}:
             address_spaces.append("ray_data")
-        if qualifiers & {"device", "global", "storage"}:
+        if qualifiers & {"device", "global", "storage"} or "buffer" in (
+            getattr(node, "qualifiers", []) or []
+        ):
             address_spaces.append("device")
         if "threadgroup_imageblock" in qualifiers:
             address_spaces.append("threadgroup_imageblock")
@@ -15605,7 +15610,32 @@ class MetalCodeGen:
             return f"{self.diagnostic_zero_value_for_type(return_type)} {diagnostic}"
         return None
 
+    def pointer_arithmetic_operand(self, expr, operand_types=None):
+        if not isinstance(expr, BinaryOpNode) or expr.operator not in {"+", "-"}:
+            return None
+        if operand_types is None:
+            operand_types = (
+                self.expression_result_type(expr.left),
+                self.expression_result_type(expr.right),
+            )
+        left_pointer, right_pointer = map(
+            self.metal_type_is_pointer_like, operand_types
+        )
+        if left_pointer and not right_pointer:
+            return expr.left
+        if right_pointer and not left_pointer and expr.operator == "+":
+            return expr.right
+        return None
+
     def argument_address_space(self, arg):
+        pointer_operand = self.pointer_arithmetic_operand(arg)
+        if pointer_operand is not None:
+            # Offset values do not contribute storage to the resulting pointer.
+            return self.argument_address_space(pointer_operand)
+        if isinstance(arg, UnaryOpNode) and arg.operator in {"&", "*"}:
+            return self.argument_address_space(arg.operand)
+        if isinstance(arg, ArrayAccessNode):
+            return self.argument_address_space(arg.array)
         if isinstance(arg, TernaryOpNode):
             if self.argument_address_space_conflict(arg) is not None:
                 return None
@@ -15637,11 +15667,8 @@ class MetalCodeGen:
             "+",
             "-",
         }:
-            return self.address_space_qualified_member_address_space(
-                getattr(expr, "left", None)
-            ) or self.address_space_qualified_member_address_space(
-                getattr(expr, "right", None)
-            )
+            pointer_operand = self.pointer_arithmetic_operand(expr)
+            return self.address_space_qualified_member_address_space(pointer_operand)
         if isinstance(expr, ArrayAccessNode):
             return self.address_space_qualified_member_address_space(
                 getattr(expr, "array", getattr(expr, "array_expr", None))
@@ -15699,8 +15726,8 @@ class MetalCodeGen:
             "-",
         }:
             return self.argument_address_space_conflict(
-                getattr(arg, "left", None)
-            ) or self.argument_address_space_conflict(getattr(arg, "right", None))
+                self.pointer_arithmetic_operand(arg)
+            )
         if isinstance(arg, ArrayAccessNode):
             return self.argument_address_space_conflict(
                 getattr(arg, "array", getattr(arg, "array_expr", None))
@@ -15748,7 +15775,7 @@ class MetalCodeGen:
             return arity_matches[0]
         return None
 
-    def address_space_call_diagnostic(self, func_name, call_args):
+    def validate_address_space_call(self, func_name, call_args):
         if func_name not in self.user_function_names:
             return None
         overloads = self.function_overloads_by_name.get(func_name, [])
@@ -15769,10 +15796,8 @@ class MetalCodeGen:
                 )
                 or []
             )
-            return_type = self.metal_effective_function_return_type(selected_function)
         else:
             parameter_nodes = self.function_parameter_nodes.get(func_name, [])
-            return_type = self.function_return_types.get(func_name)
         for index, arg in enumerate(call_args):
             if index >= len(parameter_nodes):
                 continue
@@ -15789,17 +15814,19 @@ class MetalCodeGen:
             if address_space_conflict is not None:
                 arg_name = self.assignment_target_display_name(arg) or "<expr>"
                 parameter_name = getattr(parameter, "name", f"arg{index}")
-                diagnostic = (
-                    "/* unsupported Metal address-space call: argument "
+                message = (
+                    "Unsupported Metal address-space call: argument "
                     f"'{arg_name}' mixes "
                     f"{self.address_space_conflict_description(address_space_conflict)} "
                     f"but parameter '{parameter_name}' of '{func_name}' requires "
-                    f"{expected_address_space} */"
+                    f"{expected_address_space}"
                 )
-                if self.map_type(return_type) == "void":
-                    return diagnostic
-                return (
-                    f"{self.diagnostic_zero_value_for_type(return_type)} {diagnostic}"
+                raise UnsupportedMetalFeatureError(
+                    "address-space call",
+                    message,
+                    operation=func_name,
+                    reason="mixed-pointer-address-spaces",
+                    source_location=getattr(arg, "source_location", None),
                 )
             actual_address_space = self.argument_address_space(arg)
             if (
@@ -15809,15 +15836,19 @@ class MetalCodeGen:
                 continue
             arg_name = self.assignment_target_display_name(arg)
             parameter_name = getattr(parameter, "name", f"arg{index}")
-            diagnostic = (
-                "/* unsupported Metal address-space call: argument "
+            message = (
+                "Unsupported Metal address-space call: argument "
                 f"'{arg_name}' uses {actual_address_space} address space but "
                 f"parameter '{parameter_name}' of '{func_name}' requires "
-                f"{expected_address_space} */"
+                f"{expected_address_space}"
             )
-            if self.map_type(return_type) == "void":
-                return diagnostic
-            return f"{self.diagnostic_zero_value_for_type(return_type)} {diagnostic}"
+            raise UnsupportedMetalFeatureError(
+                "address-space call",
+                message,
+                operation=func_name,
+                reason="incompatible-pointer-address-space",
+                source_location=getattr(arg, "source_location", None),
+            )
         return None
 
     def pointer_pointee_type_name(self, vtype):
