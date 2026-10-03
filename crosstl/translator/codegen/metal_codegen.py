@@ -13432,16 +13432,24 @@ class MetalCodeGen:
         target_expr = self.generate_expression(target)
         if not self.is_metal_address_expression(target, target_expr):
             target_expr = f"&{target_expr}"
-        atomic_type = f"atomic_{mapped_target_type}"
+        bitwise_float = (
+            mapped_target_type == "float"
+            and address_space == "threadgroup"
+            and operation in {"load", "store", "compare_exchange_expected"}
+        )
+        atomic_type = f"atomic_{'uint' if bitwise_float else mapped_target_type}"
         qualifier = "const " if readonly else ""
         atomic_target = f"reinterpret_cast<{qualifier}{address_space} {atomic_type}*>({target_expr})"
         if operation == "load":
-            return f"atomic_load_explicit({atomic_target}, memory_order_relaxed)"
+            load = f"atomic_load_explicit({atomic_target}, memory_order_relaxed)"
+            return f"as_type<float>({load})" if bitwise_float else load
         if operation == "compare_exchange_expected":
             return self.generate_metal_expected_compare_exchange(
-                atomic_target, args, mapped_target_type
+                atomic_target, args, mapped_target_type, bitwise_float=bitwise_float
             )
         value = self.generate_expression_with_expected(args[1], mapped_target_type)
+        if bitwise_float:
+            value = f"as_type<uint>({value})"
         return (
             f"atomic_{operation}_explicit("
             f"{atomic_target}, {value}, memory_order_relaxed)"
@@ -13459,7 +13467,7 @@ class MetalCodeGen:
         )
 
     def generate_metal_expected_compare_exchange(
-        self, atomic_target, args, scalar_type
+        self, atomic_target, args, scalar_type, *, bitwise_float=False
     ):
         expected_type = self.map_type(self.expression_result_type(args[1]))
         if expected_type != scalar_type or self.argument_address_space(args[1]) not in {
@@ -13471,8 +13479,12 @@ class MetalCodeGen:
             )
         expected = self.generate_expression(args[1])
         desired = self.generate_expression_with_expected(args[2], scalar_type)
+        expected_pointer = f"&({expected})"
+        if bitwise_float:
+            expected_pointer = f"reinterpret_cast<thread uint*>({expected_pointer})"
+            desired = f"as_type<uint>({desired})"
         return (
-            f"atomic_compare_exchange_weak_explicit({atomic_target}, &({expected}), "
+            f"atomic_compare_exchange_weak_explicit({atomic_target}, {expected_pointer}, "
             f"{desired}, memory_order_relaxed, memory_order_relaxed)"
         )
 
@@ -21474,7 +21486,8 @@ class MetalCodeGen:
     def buffer_atomic_supports_scalar_type(operation, component_type):
         return component_type in {"int", "uint"} or (
             component_type == "float"
-            and operation in {"load", "store", "fetch_add", "exchange"}
+            and operation
+            in {"load", "store", "fetch_add", "exchange", "compare_exchange_expected"}
         )
 
     def glsl_buffer_block_atomic_access(self, target):

@@ -174,6 +174,7 @@ def _execute(
             outputs = executor.runtime_adapter.runtime.dispatch(None, state, control)
             records["originalMetal"] = {
                 "outputs": outputs,
+                "compileFlags": ["-fno-fast-math", *metal_compile_flags],
                 "moduleFile": str(library.relative_to(work)),
                 "sourceFile": str(source.relative_to(work)),
                 "sourceSha256": hashlib.sha256(source.read_bytes()).hexdigest(),

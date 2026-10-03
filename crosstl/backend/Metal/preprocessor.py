@@ -20610,6 +20610,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         literal_type = self._infer_literal_type(expr)
         if literal_type is not None:
             return literal_type
+        # A unary sign preserves these numeric literal types. Do not infer
+        # user-defined operators or compound expressions from their first token.
+        if expr[0] in {"+", "-"}:
+            signed_literal_type = self._infer_literal_type(expr[1:].strip())
+            if signed_literal_type not in {None, "bool"}:
+                return signed_literal_type
 
         # Functor construction-and-call temporary `F{}(args)` / `F{...}(args)` /
         # `F()(args)` -> the result type of `F::operator()` for those arguments.

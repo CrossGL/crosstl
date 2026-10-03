@@ -42207,9 +42207,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "DirectX atomicCompareExchangeWeak requires target, expected and desired"
             )
         kind = self.scalar_expression_kind(args[0])
-        if kind not in {"int", "uint"} or self.scalar_expression_kind(args[1]) != kind:
+        if (
+            kind not in {"int", "uint", "float"}
+            or self.scalar_expression_kind(args[1]) != kind
+        ):
             raise ValueError(
-                "DirectX atomicCompareExchangeWeak requires matching integer target and expected"
+                "DirectX atomicCompareExchangeWeak requires matching int, uint or float target and expected"
             )
         storage = self.hlsl_buffer_atomic_storage(args[0], allow_workgroup=True)
         if storage is None or (
@@ -42286,11 +42289,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             suffix = helper["suffix"]
             for i in range(len(helper["index_types"])):
                 suffix = suffix.replace(f"[index{i}]", f"[{names[f'index{i}']}]")
+            intrinsic = "InterlockedCompareExchange"
+            comparison = f"{names['observed']} == {names['expected']}"
+            if kind == "float":
+                intrinsic += "FloatBitwise"
+                comparison = (
+                    f"asuint({names['observed']}) == asuint({names['expected']})"
+                )
             code += (
                 f"bool {helper['name']}({', '.join(parameters)}) {{\n"
                 f"    {kind} {names['observed']};\n"
-                f"    InterlockedCompareExchange({root}{suffix}, {names['expected']}, {names['desired']}, {names['observed']});\n"
-                f"    bool {names['matched']} = {names['observed']} == {names['expected']};\n"
+                f"    {intrinsic}({root}{suffix}, {names['expected']}, {names['desired']}, {names['observed']});\n"
+                f"    bool {names['matched']} = {comparison};\n"
                 f"    if (!{names['matched']}) {names['expected']} = {names['observed']};\n"
                 f"    return {names['matched']};\n"
                 "}\n\n"

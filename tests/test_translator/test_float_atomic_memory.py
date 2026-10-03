@@ -10,6 +10,9 @@ import pytest
 
 from crosstl.project import build_native_loader_dispatch_request
 from crosstl.project.runtime_value_encoding import FLOAT32_BITS
+from tests.test_translator.metal_float_atomic_reference import (
+    shared_float_reference_flags,
+)
 from tests.test_translator.test_atomic_load_runtime import GUARD, _report
 from tests.test_translator.test_atomic_resource_runtime import (
     _source as _resource_source,
@@ -225,7 +228,12 @@ def test_float_atomic_memory_translates_and_compiles(tmp_path, target, operation
         else "InterlockedCompareExchangeFloatBitwise"
     ) in generated
     if shutil.which("xcrun" if target == "metal" else "dxc"):
-        _, module = _compile(generated, target, tmp_path)
+        _, module = _compile(
+            generated,
+            target,
+            tmp_path,
+            metal_compile_flags=("-std=metal4.0",) if target == "metal" else (),
+        )
         assert module.is_file() and module.stat().st_size
 
 
@@ -246,6 +254,9 @@ def test_float_atomic_memory_executes_natively(tmp_path, operation, case):
         tmp_path,
         original_source=source,
         original_entry="atomic_memory",
+        metal_compile_flags=(
+            shared_float_reference_flags(tmp_path) if case in SHARED_CASES else ()
+        ),
     )
 
 

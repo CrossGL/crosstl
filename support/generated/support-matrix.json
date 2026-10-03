@@ -665,7 +665,7 @@
           "tests/test_translator/test_mlx_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2030
+        "test_count": 2033
       },
       "translator_codegen": {
         "exists": true,
@@ -6256,6 +6256,8 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics",
+            "tests/test_translator/test_float_atomic_compare_exchange.py::def test_float_compare_exchange_",
+            "tests/test_translator/test_mlx_float_atomic_compare_exchange.py::def test_",
             "tests/test_translator/test_float_atomic_memory.py::def test_float_atomic_memory_",
             "tests/test_translator/test_mlx_float_atomic_memory.py::def test_pinned_float_atomic_memory_",
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_translates",
@@ -6291,6 +6293,8 @@
         "metal": {
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_synchronization_builtins_lower_to_threadgroup_barriers",
+            "tests/test_translator/test_float_atomic_compare_exchange.py::def test_float_compare_exchange_",
+            "tests/test_translator/test_mlx_float_atomic_compare_exchange.py::def test_",
             "tests/test_translator/test_float_atomic_memory.py::def test_float_atomic_memory_",
             "tests/test_translator/test_mlx_float_atomic_memory.py::def test_pinned_float_atomic_memory_",
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_translates",
@@ -6333,6 +6337,7 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_workgroup_barrier_builtin_lowers_to_native_barrier",
+            "tests/test_translator/test_float_atomic_compare_exchange.py::def test_float_compare_exchange_opengl_rejects_unsupported_storage",
             "tests/test_translator/test_float_atomic_memory.py::def test_float_atomic_memory_opengl_does_not_publish_unsupported_storage",
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_translates",
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_executes_natively",

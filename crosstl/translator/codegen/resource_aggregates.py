@@ -547,7 +547,13 @@ class _Lowering:
         if _name(element) not in {"int", "uint"} and not (
             _name(element) == "float"
             and operation
-            in {"atomicLoad", "atomicStore", "atomicAdd", "atomicExchange"}
+            in {
+                "atomicLoad",
+                "atomicStore",
+                "atomicAdd",
+                "atomicExchange",
+                "atomicCompareExchangeWeak",
+            }
         ):
             raise ResourceAggregateError("atomic-resource-element", node)
         key = pointer, operation, tuple(members)

@@ -11378,11 +11378,11 @@ class MetalToCrossGLConverter:
             if (
                 target_type is None
                 or expected_type is None
-                or self.map_type(target_type) not in {"int", "uint"}
+                or self.map_type(target_type) not in {"int", "uint", "float"}
                 or self.map_type(expected_type) != self.map_type(target_type)
             ):
                 raise error(
-                    "requires matching scalar int or uint target and expected storage",
+                    "requires matching scalar int, uint or float target and expected storage",
                     source_location,
                 )
             if "atomicCompareExchangeWeak" in self.user_function_names:

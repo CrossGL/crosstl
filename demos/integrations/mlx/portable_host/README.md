@@ -241,6 +241,27 @@ OpenGL's helper offsets use explicit workload bounds, not general allocation
 inference. Unsupported orders, mismatched types, read-only destinations and
 untracked expected-value pointers produce diagnostics.
 
+Float compare-exchange has a required Metal/DirectX gate covering eight storage
+and call shapes. It checks Boolean success, expected-value writeback, single
+evaluation, signed zero, subnormals, infinities and NaN payloads through raw
+binary32 words. DirectX uses bitwise compare-exchange and integer equality of
+the observed and expected payloads. Five additional controls execute the pinned
+MLX compare, multiplication, minimum and maximum helpers, including eight
+contending multiply-by-two updates. Multiplication inputs are finite values,
+signed zeros and infinities; these controls do not establish arbitrary NaN
+arithmetic semantics. The upstream header and tests remain unchanged.
+
+OpenGL float atomic storage is still unsupported. These controls do not enable
+float scatter in the host adapter or establish complete upstream-suite parity.
+
+Generated Metal shared float loads, stores and compare-exchange use atomic uint
+storage with bitcasts, so they also compile under Metal 4.0. Native shared float
+overloads require Metal 4.1. On the older CI toolchain, the owned reduced fixtures
+use reference-only uint-atomic overloads for their original-source control;
+the evidence retains that header and the compile flags. All operations and raw
+word expectations remain enabled. No compatibility header is injected into
+translated input, generated output or the pinned upstream MLX helpers.
+
 The multiplication controls also exercise transitive constrained helper
 specialization and compile-time branch selection. Separate native cases check
 namespace ownership, explicit specializations, reused helpers, mixed runtime

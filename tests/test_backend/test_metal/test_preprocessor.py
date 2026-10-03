@@ -12364,6 +12364,55 @@ def test_inferred_bitcast_respects_source_declarations_and_reuse(declaration):
     )
 
 
+@pytest.mark.parametrize("sign", ("+", "-"))
+@pytest.mark.parametrize(
+    "literal,kind",
+    (
+        ("1.5f", "float"),
+        ("1e-2", "float"),
+        ("2.5h", "half"),
+        ("3", "int"),
+        ("0x4", "int"),
+        ("5u", "uint"),
+    ),
+)
+def test_infer_argument_type_signed_numeric_literal(sign, literal, kind):
+    assert (
+        MetalPreprocessor()._infer_argument_type(f"({sign} {literal})", {}, {}) == kind
+    )
+
+
+@pytest.mark.parametrize(
+    "expression",
+    (
+        "-Custom{}",
+        "+value",
+        "--1",
+        "++2",
+        "-true",
+        "-1.0f; extra",
+        "-as_type<float>(bits)",
+    ),
+)
+def test_infer_argument_type_signed_literal_does_not_guess_operators(expression):
+    assert (
+        MetalPreprocessor()._infer_argument_type(expression, {}, {"value": "Custom"})
+        is None
+    )
+
+
+def test_constrained_signed_literal_retains_operand_and_specialization():
+    output = MetalPreprocessor().preprocess("""#include <metal_stdlib>
+    using namespace metal;
+    template<typename T, enable_if_t<is_floating_point_v<T>, bool> = true>
+    T take(T value) { return value; }
+    kernel void k(device float* output [[buffer(0)]]) {
+        output[0] = take(-1.5f);
+    }
+    """)
+    assert "take_float(-1.5f)" in output
+
+
 def test_infer_argument_type_builtin_vector_swizzle():
     pp = MetalPreprocessor()
     locals_ = {"dims": "short2", "color": "const float4"}
