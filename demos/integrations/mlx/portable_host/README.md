@@ -206,10 +206,21 @@ records no upstream test-suite run and no complete-backend parity.
 Five additional native controls check concrete function-object member forwarding,
 nested call operators, receiver state and single argument evaluation. They are
 required on all three operating systems, with original Metal comparisons on macOS.
-General scatter still needs resource-reference lowering that preserves atomic
-destinations as storage lvalues ([#2051](https://github.com/CrossGL/crosstl/issues/2051));
-successful template materialization alone does
-not establish native compilation or execution. General `Scatter::eval_gpu` host
+Resource-reference lowering preserves integer atomic destinations as storage
+lvalues, including buffer identity, element offsets and scalar aggregate fields.
+Twenty-eight required native controls cover signed and unsigned updates, returned
+old values, stores, aliases, resource selection, argument evaluation and contention
+across workgroups. Ordinary functions with atomic-like names retain their own
+semantics. Unsupported storage types and member-array destinations fail explicitly.
+Floating-point atomics and Metal load/compare-exchange remain separate contracts;
+this does not establish the full atomic scope of
+[#2051](https://github.com/CrossGL/crosstl/issues/2051).
+
+Two required native general-scatter cases use the unchanged pinned JIT wrapper and
+`indexing/scatter.h`: one strided index/update input with `NWORK=1`, and two
+contiguous index inputs with `NWORK=4`, including a partial final chunk. Both use
+integer additive updates, duplicate and negative indices, and guarded output
+storage. These are kernel-execution checks. General `Scatter::eval_gpu` host
 integration, floating-point scatter and full indexing-suite parity remain outside
 the current proof.
 

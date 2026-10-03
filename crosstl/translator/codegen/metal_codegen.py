@@ -15650,9 +15650,10 @@ class MetalCodeGen:
             object_expr = getattr(expr, "object", getattr(expr, "object_expr", None))
             object_type = self.expression_result_type(object_expr)
             object_type = self.member_lookup_type_name(object_type)
-            return self.struct_member_address_spaces.get(
+            member_space = self.struct_member_address_spaces.get(
                 self.type_name_string(object_type), {}
             ).get(str(getattr(expr, "member", "")))
+            return member_space or self.argument_address_space(object_expr)
         if isinstance(expr, PointerAccessNode):
             object_expr = getattr(expr, "pointer_expr", None)
             object_type = self.expression_result_type(object_expr)

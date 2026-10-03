@@ -497,6 +497,124 @@ class _Lowering:
                 return pointer, node.operand, _integer(0)
         return None
 
+    def atomic_call(self, node, env):
+        operation = _name(node.function)
+        arity = {
+            "atomicStore": 2,
+            "atomicAdd": 2,
+            "atomicMin": 2,
+            "atomicMax": 2,
+            "atomicAnd": 2,
+            "atomicOr": 2,
+            "atomicXor": 2,
+            "atomicExchange": 2,
+            "atomicCompSwap": 3,
+            "atomicCompareExchange": 3,
+        }.get(operation)
+        if arity is None or operation in self.functions or not node.arguments:
+            return None
+        target = node.arguments[0]
+        members = []
+        while isinstance(target, MemberAccessNode):
+            members.insert(0, target.member)
+            target = target.object_expr
+        access = self.access(target, env)
+        if access is None:
+            if any(self.access(child, env) is not None for child in target.walk()):
+                raise ResourceAggregateError("atomic-resource-member-path", node)
+            return None
+        if len(node.arguments) != arity:
+            raise ResourceAggregateError("atomic-resource-argument-count", node)
+        source_pointer, owner, index = access
+        pointer = _Pointer(
+            source_pointer.element,
+            source_pointer.space,
+            source_pointer.writable,
+            source_pointer.readable,
+        )
+        store = operation == "atomicStore"
+        if not pointer.writable or (not store and not pointer.readable):
+            raise ResourceAggregateError("atomic-resource-access", node)
+        element = PrimitiveType(pointer.element)
+        for member in members:
+            element = self.fields.get(_name(element), {}).get(member)
+        if _name(element) not in {"int", "uint"}:
+            raise ResourceAggregateError("atomic-resource-element", node)
+        key = pointer, operation, tuple(members)
+        name = self.helpers.get(key)
+        if name is None:
+            name = self.fresh(f"crosstl_resource_{operation}_{pointer.element}")
+            self.helpers[key] = name
+            params = [
+                ParameterNode("reference", self.target_type(pointer)),
+                ParameterNode("index", PrimitiveType("int64_t")),
+                *(
+                    ParameterNode(f"value{i}", deepcopy(element))
+                    for i in range(arity - 1)
+                ),
+                *self.resource_parameters(),
+            ]
+            candidates = [
+                (identity, resource_name)
+                for identity, (_param, resource, resource_name) in enumerate(
+                    self.resources
+                )
+                if resource.element == pointer.element
+                and resource.space == pointer.space
+                and resource.writable
+                and (store or resource.readable)
+            ]
+            if not candidates:
+                raise ResourceAggregateError("missing-compatible-resource", node)
+            body = []
+            for identity, resource_name in candidates:
+                destination = ArrayAccessNode(
+                    _id(resource_name),
+                    BinaryOpNode(
+                        _member(_id("reference"), "offset"), "+", _id("index")
+                    ),
+                )
+                for member in members:
+                    destination = _member(destination, member)
+                call = _call(
+                    operation,
+                    [destination, *(_id(f"value{i}") for i in range(arity - 1))],
+                )
+                statements = [call, ReturnNode()] if store else [ReturnNode(call)]
+                if identity == candidates[-1][0]:
+                    body.extend(statements)
+                else:
+                    body.append(
+                        IfNode(
+                            BinaryOpNode(
+                                _member(_id("reference"), "identity"),
+                                "==",
+                                _integer(identity),
+                            ),
+                            BlockNode(statements),
+                        )
+                    )
+            # Branch on the handle, then perform the atomic on the actual buffer.
+            # A value-returning load helper would destroy the storage identity.
+            self.generated.append(
+                FunctionNode(
+                    name,
+                    PrimitiveType("void") if store else deepcopy(element),
+                    params,
+                    BlockNode(body),
+                )
+            )
+        return FunctionCallNode(
+            _id(name),
+            [
+                self.expression(owner, env),
+                self.expression(index, env),
+                *(self.expression(value, env) for value in node.arguments[1:]),
+                *self.resource_arguments(),
+            ],
+            source_location=node.source_location,
+        )
+
     def expression(self, node, env, expected=None):
         if node is None:
             return None
@@ -625,6 +743,9 @@ class _Lowering:
                 source_location=location,
             )
         if isinstance(node, FunctionCallNode):
+            atomic = self.atomic_call(node, env)
+            if atomic is not None:
+                return atomic
             if (
                 _name(node.function) == "buffer_store"
                 and "buffer_store" not in self.functions
