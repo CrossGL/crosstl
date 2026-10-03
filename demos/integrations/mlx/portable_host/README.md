@@ -172,7 +172,7 @@ Compiler acceptance alone does not establish numerical correctness: the required
 verifier retains every operation and fails on unsupported or incorrect results.
 
 The adapter implements indexed `Scatter::eval_gpu` for int32 and uint32
-replacement, addition, minimum and maximum. It translates the exact pinned JIT
+replacement, addition, multiplication, minimum and maximum. It translates the exact pinned JIT
 wrapper and `indexing/scatter.h`; the upstream kernels and Python tests remain
 unchanged. Indexed assignment and `array.at` updates reach this path through
 MLX's normal primitive selection.
@@ -196,17 +196,23 @@ python -m demos.integrations.mlx.portable_host.verify_scatter \
   --integer64 integer64-packages --output-dir scatter-evidence
 ```
 
-The verifier runs 112 workloads and unchanged upstream
+The verifier runs 144 workloads and unchanged upstream
 `test_array.TestArray.test_setitem_with_list` in separate CPU and generated-backend
 processes. Retained evidence includes initial output storage, update and index
 uploads, metadata, launch geometry, native compilation, readbacks and 32 trailing
 guard elements. The audit reconstructs each indexed update from those uploads
 and reconciles it with the public MLX result. Duplicate replacements use identical
 values so the expected result does not assume a particular thread ordering.
+The original 112 workloads are retained. An additional 32 signed and unsigned
+product cases cover the same views and all five work-per-thread settings, with
+zero and negative factors, repeated destinations, source/update aliases and
+partial chunks. Factors keep every intermediate product representable regardless
+of update order. The independent audit hashes raw storage words so negative
+signed results retain their exact bit patterns.
 A separate three-OS CI job requires this proof without extending the existing
 indexing job's execution budget.
 
-Host-level product updates, float and packed storage, zero-index specializations, larger
+Float and packed storage, zero-index specializations, larger
 allocations and the complete upstream indexing/autodiff suite remain unsupported.
 
 Integer atomic loads have a separate required numerical gate on all three native
@@ -243,12 +249,12 @@ calls with proven class arguments also retain their associated source namespaces
 after specialization, so a later helper declaration can be found without making
 unrelated namespaces or later primitive-only overloads visible. The scatter gate
 includes unchanged `Prod<int>` policies with duplicate indices, negative and zero
-factors, strided updates and partial chunks. These
-kernel-level contracts do not yet redirect MLX host product updates or implement
-packed storage. They do not establish full upstream-suite parity.
+factors, strided updates and partial chunks. The host integration above uses
+these same policies for integer product updates. Packed storage and full
+upstream-suite parity remain unimplemented.
 
 In particular, the full `test_array_at` method also needs random generation,
-floating-point atomics and product updates; passing the list-index assignment
+floating-point atomics and floating-point product updates; passing the list-index assignment
 test does not establish that broader coverage. No output is computed or corrected
 on the CPU by this adapter.
 

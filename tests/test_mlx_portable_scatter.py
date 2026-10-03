@@ -20,6 +20,62 @@ from demos.integrations.mlx.portable_host import verify_scatter
 from demos.integrations.mlx.portable_host.gather_workloads import words
 
 
+def test_scatter_retains_existing_workloads_and_adds_product_layouts():
+    cases = list(workloads.cases())
+    legacy = cases[:112]
+    digest = hashlib.sha256()
+    for case in legacy:
+        digest.update(case["id"].encode())
+        source, indices, updates, expected = workloads.reference(np, case)
+        for array in (source, *indices, updates, expected):
+            digest.update(str((str(array.dtype), array.shape, array.strides)).encode())
+            digest.update(array.tobytes())
+    assert digest.hexdigest() == (
+        "0866069c11124bfa9d5295f6e67beda7ebb8adabada57aa27021950801836021"
+    )
+    products = cases[112:]
+    assert len(cases) == len({case["id"] for case in cases}) == 144
+    assert all(case["operation"] == "prod" for case in products)
+    assert {(case["dtype"], case["layout"]) for case in products} == {
+        (dtype, layout)
+        for dtype in ("int32", "uint32")
+        for layout in (*workloads.LAYOUTS, "work4", "work8", "work16", "work32")
+    }
+    assert {case["index_dtype"] for case in products} == {
+        "int32",
+        "uint32",
+        "int64",
+        "uint64",
+    }
+
+
+@pytest.mark.parametrize(
+    "case",
+    [case for case in workloads.cases() if case["operation"] == "prod"],
+    ids=lambda case: case["id"],
+)
+def test_scatter_product_reference_and_all_order_intermediate_bounds(case):
+    source, indices, updates, expected = workloads.reference(np, case)
+    independent = source.copy()
+    np.multiply.at(independent, tuple(indices), updates)
+    assert np.array_equal(expected, independent)
+    # Python integers bound all partial products, even if zero arrives last.
+    bounds = np.abs(source.astype(object))
+    for coordinate in np.ndindex(indices[0].shape):
+        destination = tuple(int(index[coordinate]) for index in indices)
+        bounds[destination] *= np.maximum(1, np.abs(updates[coordinate].astype(object)))
+    assert np.all(bounds <= np.iinfo(case["dtype"]).max)
+    if case["layout"] not in {"empty", "alias", "update-broadcast"}:
+        assert 0 in expected
+        assert np.any(expected != 0)
+        assert not np.array_equal(source, expected)
+        if case["dtype"] == "int32":
+            assert np.any(updates < 0)
+    if case["layout"].startswith("work"):
+        assert indices[0].size % int(case["layout"][4:]) != 0
+        assert len(set(zip(*(index.flat for index in indices)))) < indices[0].size
+
+
 def buffers(case, *, normalize_scalar=False):
     source, indices, updates, expected = workloads.reference(np, case)
     if normalize_scalar and indices[0].ndim == 0:
@@ -210,7 +266,7 @@ def test_scatter_rejects_invalid_layout_before_translation(fault):
     "entry",
     (
         "scatterfloat32int32_sum_1_updc_true_nwork1_int",
-        "scatterint32int32_prod_1_updc_true_nwork1_int",
+        "scatterint32int32_median_1_updc_true_nwork1_int",
         "scatterint32int32_sum_0_updc_true_nwork1_int",
         "scatterint32int32_sum_01_updc_true_nwork1_int",
         "scatterint32int32_sum_11_updc_true_nwork1_int",
@@ -308,8 +364,9 @@ def test_scatter_preserves_initialized_output_and_guards_writeback(
         assert host.dispatch_count == 1
 
 
-def test_scatter_source_requires_original_jit_definition(tmp_path):
-    entry = "scatterint32int64_max_2_updc_false_nwork4_int"
+@pytest.mark.parametrize("operation", ("sum", "prod", "min", "max"))
+def test_scatter_source_requires_original_jit_definition(tmp_path, operation):
+    entry = f"scatterint32int64_{operation}_2_updc_false_nwork4_int"
     header = tmp_path / gather_packages.JIT_HEADER
     header.parent.mkdir(parents=True)
     header.write_text(
@@ -317,7 +374,7 @@ def test_scatter_source_requires_original_jit_definition(tmp_path):
     )
     text = gather_packages.source(tmp_path, entry)
     assert '#include "mlx/backend/metal/kernels/indexing/scatter.h"' in text
-    assert "int32int64_max int int64_t Max<int> 2" in text
+    assert f"int32int64_{operation} int int64_t {operation.title()}<int> 2" in text
     assert "idx0 [[buffer(20)]]" in text and "idx1 [[buffer(21)]]" in text
     assert "idx0, idx1 false 4 int" in text
     header.write_text("missing")
@@ -348,7 +405,7 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
     event.update(entry=entry, target=target, threads=expected.size, **execution)
     event.update(
         scatterMetadata=layout.validate(entry, supplied, expected.size, execution),
-        scatterValues=words(np, expected),
+        scatterValues=expected.reshape(-1).tolist(),
         scatterGuardValues=runtime.COPY_GUARD.copy(),
         scatterStorageType=case["dtype"],
         outputHash=hashlib.sha256(expected.tobytes()).hexdigest(),
@@ -424,7 +481,7 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
 
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
-@pytest.mark.parametrize("operation", ("none", "sum", "min", "max"))
+@pytest.mark.parametrize("operation", ("none", "sum", "prod", "min", "max"))
 @pytest.mark.parametrize("fault", (None, "rank", "dtype", "value"))
 def test_scatter_workload_audit_requires_upstream_scalar_index_shape(
     tmp_path, monkeypatch, target, operation, fault
@@ -491,6 +548,24 @@ def test_scatter_audit_reconstructs_workload_from_uploads(tmp_path, target, case
     assert actual == words(np, expected)
 
 
+@pytest.mark.parametrize("fault", ("unsigned-word", "float", "bool", "missing"))
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+def test_scatter_audit_requires_signed_native_readback(tmp_path, target, fault):
+    case = next(case for case in workloads.cases() if case["id"] == "int32-prod-dense")
+    event = scatter_event(tmp_path, case, target)
+    assert event["scatterValues"][1] == -22
+    if fault == "unsigned-word":
+        event["scatterValues"][1] &= 0xFFFFFFFF
+    elif fault == "float":
+        event["scatterValues"][1] = -22.0
+    elif fault == "bool":
+        event["scatterValues"][0] = False
+    else:
+        event["scatterValues"].pop()
+    with pytest.raises(ValueError, match="outside its storage type"):
+        scatter_evidence.audit_event(np, event)
+
+
 @pytest.mark.parametrize(
     "fault",
     (
@@ -522,10 +597,11 @@ def test_scatter_audit_reconstructs_workload_from_uploads(tmp_path, target, case
         "index-shape",
     ),
 )
-def test_scatter_audit_rejects_corrupt_execution_evidence(tmp_path, fault):
+@pytest.mark.parametrize("operation", ("sum", "prod"))
+def test_scatter_audit_rejects_corrupt_execution_evidence(tmp_path, fault, operation):
     event = scatter_event(
         tmp_path,
-        dict(next(workloads.cases()), operation="sum", layout="update-strided"),
+        dict(next(workloads.cases()), operation=operation, layout="update-strided"),
     )
     inputs, details = event["inputs"], event["details"]
     request = details["request"]
@@ -540,7 +616,7 @@ def test_scatter_audit_rejects_corrupt_execution_evidence(tmp_path, fault):
     elif fault == "update":
         inputs["updates"]["values"][0] += 1
     elif fault == "initial":
-        inputs["out"]["values"][0] += 1
+        inputs["out"]["values"][1 if operation == "prod" else 0] += 1
     elif fault == "axis":
         inputs["axes"]["values"][0] = 2
     elif fault == "stride":

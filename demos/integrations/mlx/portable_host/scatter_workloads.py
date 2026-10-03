@@ -36,6 +36,15 @@ def cases():
                 "layout": f"work{work}",
                 "index_dtype": "int64",
             }
+    for dtype in ("int32", "uint32"):
+        for i, layout in enumerate((*LAYOUTS, "work4", "work8", "work16", "work32")):
+            yield {
+                "id": f"{dtype}-prod-{layout}",
+                "dtype": dtype,
+                "operation": "prod",
+                "layout": layout,
+                "index_dtype": ("int32", "uint32", "int64", "uint64")[i % 4],
+            }
 
 
 def arrays(xp, np, case):
@@ -85,14 +94,24 @@ def arrays(xp, np, case):
             + 20
         )
     # Repeated replacements have identical values, independent of thread order.
-    if case["operation"] != "none":
+    if case["operation"] == "prod":
+        positions = np.arange(update.size).reshape(update.shape)
+        # Bound intermediate products independently of contending update order.
+        update = np.where(positions < 8, 2, 1)
+        if case["dtype"] == "int32":
+            update = np.where(positions % 7 == 1, -update, update)
+        update = np.where(positions == 0, 0, update)
+    elif case["operation"] != "none":
         update = np.arange(update.size).reshape(update.shape) % 19 + 1
     update = update.astype(case["dtype"])
     if layout == "update-strided":
         update = xp.array(np.repeat(update, 2, axis=-1))[..., ::2]
     elif layout == "update-broadcast":
         update = xp.broadcast_to(
-            xp.array(np.array(7, dtype=case["dtype"])), update.shape
+            xp.array(
+                np.array(2 if case["operation"] == "prod" else 7, dtype=case["dtype"])
+            ),
+            update.shape,
         )
     elif layout == "alias":
         update = source[:2]
@@ -115,6 +134,8 @@ def reference(np, case):
             expected[destination] = updates[coordinate]
         elif operation == "sum":
             expected[destination] += updates[coordinate]
+        elif operation == "prod":
+            expected[destination] *= updates[coordinate]
         elif operation == "min":
             expected[destination] = np.minimum(
                 expected[destination], updates[coordinate]
@@ -133,6 +154,8 @@ def expression(mx, np, case):
         result = mx.array(source)
         result[index] = updates
     else:
-        method = {"sum": "add", "min": "minimum", "max": "maximum"}[case["operation"]]
+        method = {"sum": "add", "prod": "multiply", "min": "minimum", "max": "maximum"}[
+            case["operation"]
+        ]
         result = getattr(source.at[index], method)(updates)
     return source, result

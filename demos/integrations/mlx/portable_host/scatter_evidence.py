@@ -182,6 +182,8 @@ def audit_event(np, event):
                 expected[destination] = value
             elif operation == "sum":
                 expected[destination] += value
+            elif operation == "prod":
+                expected[destination] *= value
             elif operation == "min":
                 expected[destination] = min(expected[destination], value)
             else:
@@ -214,7 +216,19 @@ def audit_event(np, event):
             - 1
         ),
     }
-    actual = event["scatterValues"]
+    readback = event["scatterValues"]
+    limits = np.iinfo(dtype)
+    require(
+        isinstance(readback, list)
+        and len(readback) == size
+        and all(
+            type(value) is int and limits.min <= value <= limits.max
+            for value in readback
+        ),
+        "Scatter readback is outside its storage type",
+    )
+    raw = np.array(readback, dtype=dtype)
+    actual = words(np, raw)
     require(
         actual == words(np, expected), "Scatter native readback disagrees with uploads"
     )
@@ -244,8 +258,7 @@ def audit_event(np, event):
         "Scatter native request changed",
     )
     require(
-        hashlib.sha256(np.array(actual, dtype=dtype).tobytes()).hexdigest()
-        == event["outputHash"],
+        hashlib.sha256(raw.tobytes()).hexdigest() == event["outputHash"],
         "Scatter output hash changed",
     )
     audit_native_execution(event)

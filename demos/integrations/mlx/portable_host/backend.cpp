@@ -1100,7 +1100,8 @@ void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
       inputs[0].dtype() != out.dtype() || inputs.back().dtype() != out.dtype() ||
       inputs[0].shape() != out.shape() || out.ndim() == 0 || out.ndim() > 64 ||
       out.size() > 65535 || inputs.back().size() > 65535 ||
-      (reduce_type_ != None && reduce_type_ != Sum && reduce_type_ != Min && reduce_type_ != Max)) {
+      (reduce_type_ != None && reduce_type_ != Sum && reduce_type_ != Prod &&
+       reduce_type_ != Min && reduce_type_ != Max)) {
     throw std::invalid_argument("CrossTL scatter requires bounded int32 or uint32 indexed updates.");
   }
   const auto index_dtype = inputs[1].dtype();
@@ -1138,7 +1139,8 @@ void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
   const int work = index_rank <= 1 || ratio < 1 ? 1 :
       ratio <= 4 ? 4 : ratio < 16 ? 8 : ratio < 32 ? 16 : 32;
   const char* operation = reduce_type_ == None ? "none" :
-      reduce_type_ == Sum ? "sum" : reduce_type_ == Min ? "min" : "max";
+      reduce_type_ == Sum ? "sum" : reduce_type_ == Prod ? "prod" :
+      reduce_type_ == Min ? "min" : "max";
   const auto count = axes_.size();
   const std::string entry = std::string("scatter") + storage_type(out.dtype()) +
       storage_type(index_dtype) + "_" + operation + "_" + std::to_string(count) +
