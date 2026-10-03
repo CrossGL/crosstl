@@ -25,6 +25,10 @@ from typing import (
 
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
+from .function_specialization import (
+    _explicit_template_function_specialization_for_selected_overload,
+    _metal_function_parameter_declarations,
+)
 from .type_layout import metal_type_layout, metal_type_size
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_METAL_PRESERVED_INCLUDE__ "
@@ -1338,12 +1342,20 @@ class MetalPreprocessor(HLSLPreprocessor):
         context = self._reachability_type_context(code, template_spans, structs)
         namespace_visibility = self._metal_namespace_visibility(code)
         boolean_templates = self._find_boolean_variable_templates(code)
+        explicit_specializations = (
+            self._find_explicit_template_function_specializations(code)
+        )
+        explicit_spans = sorted(
+            specialization["span"]
+            for specialization in explicit_specializations.values()
+        )
         competing_declarations = self._find_free_function_overload_declarations(
             code,
             references,
             excluded_spans=sorted(
                 aggregate_spans
                 + all_body_spans
+                + explicit_spans
                 + [(template.body_start, template.span[1]) for template in templates]
                 + [template.span for template in constrained]
             ),
@@ -1418,26 +1430,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             enabled: List[Tuple[_MetalTemplateFunction, Dict[str, str]]] = []
             saw_unrecognized_constraint = False
             for template, parameters in argument_count_candidates:
-                method = _MetalStructMethod(
-                    name=template.name,
-                    free_name="",
-                    is_static=True,
-                    is_operator_call=False,
-                    return_type="",
-                    parameters=parameters,
-                    parameter_names=[],
-                    body="",
-                    span=template.span,
-                    template_parameters=list(template.template_parameters),
-                    template_parameter_types=dict(template.template_parameter_types),
-                    variadic_template_parameters=set(
-                        template.variadic_template_parameters
-                    ),
-                    template_parameter_defaults=dict(
-                        template.template_parameter_defaults
-                    ),
-                    template_constraints=list(template.template_constraints),
-                )
+                method = self._template_function_method_signature(template, parameters)
                 bindings = self._bind_template_method_parameters(
                     method,
                     list(argument_types),
@@ -1535,6 +1528,28 @@ class MetalPreprocessor(HLSLPreprocessor):
             ordered_arguments = tuple(
                 bindings[name] for name in template.template_parameters
             )
+            parameters = self._template_function_parameter_text(template)
+            specialization = (
+                _explicit_template_function_specialization_for_selected_overload(
+                    preprocessor=self,
+                    explicit_specializations={
+                        key: value
+                        for key, value in explicit_specializations.items()
+                        if not template.namespace and value["span"][0] <= call.span[0]
+                    },
+                    template=template,
+                    function_name=template.name,
+                    arguments=ordered_arguments,
+                    parameter_declarations=_metal_function_parameter_declarations(
+                        self, f"{template.name}({parameters})"
+                    ),
+                    declaration_source=code,
+                    declaration_type_aliases=context.source_type_aliases,
+                    argument_alias_contexts=(
+                        (context.source_type_aliases, call.argument_open, code),
+                    ),
+                )
+            )
             key = (template.span, ordered_arguments)
             specialized_name = materialized_names.get(key)
             if specialized_name is None:
@@ -1554,12 +1569,19 @@ class MetalPreprocessor(HLSLPreprocessor):
                 while specialized_name in reserved_identifiers:
                     specialized_name = f"{preferred_name}_{suffix}"
                     suffix += 1
-                materialized = self._materialize_template_function_with_name(
-                    template,
-                    list(ordered_arguments),
-                    specialized_name,
-                    host_name=None,
-                )
+                if specialization is not None:
+                    materialized = (
+                        self._materialize_explicit_template_function_specialization(
+                            specialization, specialized_name
+                        )
+                    )
+                else:
+                    materialized = self._materialize_template_function_with_name(
+                        template,
+                        list(ordered_arguments),
+                        specialized_name,
+                        host_name=None,
+                    )
                 if not materialized:
                     self._raise_constrained_free_function_error(
                         code,
@@ -1644,6 +1666,27 @@ class MetalPreprocessor(HLSLPreprocessor):
         if parameter_end is None:
             return None
         return header[parameter_start + 1 : parameter_end]
+
+    def _template_function_method_signature(
+        self, template: _MetalTemplateFunction, parameters: str
+    ) -> _MetalStructMethod:
+        """Share signature deduction between free calls and explicit bodies."""
+        return _MetalStructMethod(
+            name=template.name,
+            free_name="",
+            is_static=True,
+            is_operator_call=False,
+            return_type="",
+            parameters=parameters,
+            parameter_names=[],
+            body="",
+            span=template.span,
+            template_parameters=list(template.template_parameters),
+            template_parameter_types=dict(template.template_parameter_types),
+            variadic_template_parameters=set(template.variadic_template_parameters),
+            template_parameter_defaults=dict(template.template_parameter_defaults),
+            template_constraints=list(template.template_constraints),
+        )
 
     def _raise_constrained_free_function_error(
         self,
@@ -22376,11 +22419,18 @@ class MetalPreprocessor(HLSLPreprocessor):
                         callee_template=function_name,
                         requested_arguments=tuple(resolved_arguments),
                     )
-                if canonical_specialization_arguments == canonical_call_arguments:
+                explicit_count = min(
+                    len(canonical_specialization_arguments),
+                    len(canonical_call_arguments),
+                )
+                if (
+                    canonical_specialization_arguments[:explicit_count]
+                    == canonical_call_arguments[:explicit_count]
+                ):
                     alias_equivalent_specialization = True
                     break
             if alias_equivalent_specialization:
-                # Leave this call for the project-level full-signature selector.
+                # Deduced/default arguments need the full-signature selector.
                 # Another overload may own the explicit body, in which case that
                 # selector safely materializes the chosen primary instead.
                 continue

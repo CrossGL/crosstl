@@ -532,6 +532,17 @@ Generated helper names reserve existing source identifiers, including local
 variables and parameters. A deterministic suffix avoids name collisions while
 repeated calls to the same specialization reuse one helper.
 
+Global explicit free-function specializations are selected after the constrained
+primary is resolved; they are not competing overloads. Selection compares
+canonical template arguments and concrete parameter signatures, including
+visible aliases and deduced or defaulted arguments. A matching specialization
+keeps its own body, while an unrelated specialization does not displace the
+primary. Ambiguous canonical identities and unproven ordinary-overload
+precedence still produce diagnostics. Namespaced explicit specializations remain
+outside this global selection path. Required Metal, DirectX and OpenGL execution
+tests distinguish primary addition from specialized subtraction and verify both
+default and non-default template arguments.
+
 The two current-tree DirectX float32 entries explicitly select
 ``software_subgroup_width = 32``. Their shuffle helpers use shared storage and
 workgroup barriers instead of hardware wave instructions. A private

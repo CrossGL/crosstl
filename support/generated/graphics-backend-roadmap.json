@@ -1549,6 +1549,8 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_function_call",
+            "tests/test_translator/test_constrained_specialization_runtime.py::def test_project_selects_constrained_specialization",
+            "tests/test_translator/test_constrained_specialization_runtime.py::def test_constrained_specializations_",
             "tests/test_translator/test_functor_member_runtime.py::def test_project_",
             "tests/test_translator/test_functor_member_runtime.py::def test_forwarded_functor_members_",
             "tests/test_translator/test_template_wrapper_runtime.py::def test_project_",
@@ -1567,6 +1569,8 @@
         "metal": {
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_function_call",
+            "tests/test_translator/test_constrained_specialization_runtime.py::def test_project_selects_constrained_specialization",
+            "tests/test_translator/test_constrained_specialization_runtime.py::def test_constrained_specializations_",
             "tests/test_backend/test_metal/test_functor_member_forwarding.py::def test_preprocessor_",
             "tests/test_translator/test_functor_member_runtime.py::def test_project_",
             "tests/test_translator/test_functor_member_runtime.py::def test_forwarded_functor_members_",
@@ -1595,6 +1599,8 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_function_call",
+            "tests/test_translator/test_constrained_specialization_runtime.py::def test_project_selects_constrained_specialization",
+            "tests/test_translator/test_constrained_specialization_runtime.py::def test_constrained_specializations_",
             "tests/test_translator/test_functor_member_runtime.py::def test_project_",
             "tests/test_translator/test_functor_member_runtime.py::def test_forwarded_functor_members_",
             "tests/test_translator/test_template_wrapper_runtime.py::def test_project_",
