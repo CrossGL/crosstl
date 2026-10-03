@@ -8,18 +8,25 @@ import sys
 import unittest
 from pathlib import Path
 
-from demos.integrations.mlx.portable_host import gather_evidence, gather_workloads
+from demos.integrations.mlx.portable_host import (
+    gather_axis_workloads,
+    gather_evidence,
+    gather_workloads,
+)
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
 from demos.integrations.mlx.portable_host.verify import upstream_test_sources
 
 UPSTREAM_TESTS = ("test_ops.TestOps.test_take",)
+AXIS_UPSTREAM_TESTS = ("test_ops.TestOps.test_take_along_axis",)
 
 
 def worker(args):
     import mlx.core as mx
     import numpy as np
 
+    workloads = gather_axis_workloads if args.axis else gather_workloads
+    upstream_tests = AXIS_UPSTREAM_TESTS if args.axis else UPSTREAM_TESTS
     args.output_dir.mkdir(parents=True)
     if mx.is_available(mx.gpu):
         raise RuntimeError("A different GPU backend is already available")
@@ -37,10 +44,10 @@ def worker(args):
         mx.set_default_device(mx.cpu)
     os.environ["DEVICE"] = "gpu" if host else "cpu"
     records = []
-    for case in gather_workloads.cases():
+    for case in workloads.cases():
         start = host.dispatch_count if host else 0
-        source, result = gather_workloads.expression(mx, np, case)
-        expected_source, _, expected = gather_workloads.reference(np, case)
+        source, result = workloads.expression(mx, np, case)
+        expected_source, _, expected = workloads.reference(np, case)
         actual = np.array(result)
         record = {
             **case,
@@ -66,7 +73,7 @@ def worker(args):
             raise RuntimeError(f"Gather numerical mismatch: {case['id']}")
         print(case["id"], flush=True)
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
-    suite = unittest.defaultTestLoader.loadTestsFromNames(UPSTREAM_TESTS)
+    suite = unittest.defaultTestLoader.loadTestsFromNames(upstream_tests)
     start = host.dispatch_count if host else 0
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     summary = {
@@ -78,12 +85,12 @@ def worker(args):
         "dispatchCount": host.dispatch_count - start if host else 0,
     }
     (args.output_dir / "upstream.json").write_text(json.dumps(summary))
-    validate_upstream(summary, native=host is not None)
+    validate_upstream(summary, native=host is not None, tests=upstream_tests)
 
 
-def validate_upstream(summary, *, native):
+def validate_upstream(summary, *, native, tests=UPSTREAM_TESTS):
     expected = {
-        "testsRun": len(UPSTREAM_TESTS),
+        "testsRun": len(tests),
         "failures": 0,
         "errors": 0,
         "skipped": 0,
@@ -100,15 +107,20 @@ def validate_upstream(summary, *, native):
             raise ValueError("Upstream gather dispatch accounting is incomplete")
 
 
-def validate_records(np, records, *, native):
-    cases = list(gather_workloads.cases())
+def validate_records(np, records, *, native, axis=False):
+    workloads = gather_axis_workloads if axis else gather_workloads
+    cases = list(workloads.cases())
     if len(records) != len(cases):
         raise ValueError("Gather evidence does not cover every required workload")
     cursor = 0
     for case, record in zip(cases, records):
-        _, _, expected = gather_workloads.reference(np, case)
+        _, _, expected = workloads.reference(np, case)
         if (
-            any(record.get(key) != case[key] for key in ("id", "layout"))
+            any(
+                record.get(key) != value
+                for key, value in case.items()
+                if key != "dtype"
+            )
             or record.get("actual") != gather_workloads.words(np, expected)
             or record.get("expected") != record["actual"]
             or record.get("shape") != list(expected.shape)
@@ -126,6 +138,8 @@ def validate_records(np, records, *, native):
 def verify(args):
     import numpy as np
 
+    workloads = gather_axis_workloads if args.axis else gather_workloads
+    upstream_tests = AXIS_UPSTREAM_TESTS if args.axis else UPSTREAM_TESTS
     args.output_dir.mkdir(parents=True)
     before = verify_prepared(args.mlx_root)
     test_sources = upstream_test_sources(args.mlx_root)
@@ -155,6 +169,8 @@ def verify(args):
             "--output-dir",
             str(args.output_dir.resolve() / mode),
         ]
+        if args.axis:
+            command.append("--axis")
         with (args.output_dir / f"{mode}.stdout").open("w") as stdout, (
             args.output_dir / f"{mode}.stderr"
         ).open("w") as stderr:
@@ -169,16 +185,18 @@ def verify(args):
         records[mode] = json.loads(
             (args.output_dir / mode / "results.json").read_text()
         )
-        validate_records(np, records[mode], native=mode == "native")
+        validate_records(np, records[mode], native=mode == "native", axis=args.axis)
         upstream[mode] = json.loads(
             (args.output_dir / mode / "upstream.json").read_text()
         )
-        validate_upstream(upstream[mode], native=mode == "native")
+        validate_upstream(upstream[mode], native=mode == "native", tests=upstream_tests)
     trace = [
         json.loads(line)
         for line in (args.output_dir / "native/dispatch.jsonl").read_text().splitlines()
     ]
-    audit = gather_evidence.validate(np, records["native"], trace, upstream["native"])
+    audit = gather_evidence.validate(
+        np, records["native"], trace, upstream["native"], workloads=workloads
+    )
     if (
         verify_prepared(args.mlx_root) != before
         or upstream_test_sources(args.mlx_root) != test_sources
@@ -189,9 +207,9 @@ def verify(args):
         **audit,
         "adaptation": before,
         "upstreamTestSources": test_sources,
-        "upstreamTests": list(UPSTREAM_TESTS),
+        "upstreamTests": list(upstream_tests),
         "casesPerPath": len(records["native"]),
-        "upstreamTestsPerPath": len(UPSTREAM_TESTS),
+        "upstreamTestsPerPath": len(upstream_tests),
         "numericalParity": True,
         "fullTranslatedBackend": False,
         "fullUpstreamSuite": False,
@@ -205,5 +223,8 @@ if __name__ == "__main__":
     for name in ("mlx-root", "packages", "reductions", "integer64", "output-dir"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--worker", choices=("cpu", "native"))
+    parser.add_argument(
+        "--axis", action="store_true", help="Verify GatherAxis and take_along_axis"
+    )
     args = parser.parse_args()
     worker(args) if args.worker else verify(args)

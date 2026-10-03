@@ -18,7 +18,8 @@ from crosstl.project import (
     translate_project,
 )
 from crosstl.translator.dispatch_region_identity import translation_implementation_hash
-from demos.integrations.mlx.portable_host.gather_layout import MAX_ELEMENTS, signature
+from demos.integrations.mlx.portable_host import gather_axis_layout, gather_layout
+from demos.integrations.mlx.portable_host.gather_layout import MAX_ELEMENTS
 from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
 
 JIT_HEADER = "mlx/backend/metal/jit/indexing.h"
@@ -32,7 +33,29 @@ SOURCE_TYPES = {
 }
 
 
+def signature(entry):
+    layout = gather_axis_layout if entry.startswith("gather_axis") else gather_layout
+    return layout.signature(entry)
+
+
 def source(root, entry):
+    if entry.startswith("gather_axis"):
+        dtype, index_dtype, source_contiguous, index_contiguous = signature(entry)
+        arguments = ", ".join(
+            (
+                SOURCE_TYPES[dtype],
+                SOURCE_TYPES[index_dtype],
+                "int",
+                str(source_contiguous).lower(),
+                str(index_contiguous).lower(),
+            )
+        )
+        return (
+            '#include "mlx/backend/metal/kernels/utils.h"\n'
+            '#include "mlx/backend/metal/kernels/indexing/gather_axis.h"\n'
+            f'template [[host_name("{entry}")]] [[kernel]]\n'
+            f"decltype(gather_axis<{arguments}>) gather_axis<{arguments}>;\n"
+        )
     dtype, index_dtype, count, ndim = signature(entry)
     template = re.search(
         r'gather_kernels = R"\((.*?)\)";', (root / JIT_HEADER).read_text(), re.S
@@ -192,7 +215,7 @@ class GatherPackageCache:
                             "maximum": identity["maximumIndex"],
                         },
                     )
-                    if self.target == "opengl"
+                    if self.target == "opengl" and not entry.startswith("gather_axis")
                     else ()
                 ),
             )

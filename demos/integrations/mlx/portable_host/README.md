@@ -138,9 +138,25 @@ readbacks and the MLX result. Missing dispatches, changed modules, corrupt guard
 and incomplete upstream results fail verification. Three-OS CI requires this
 check after building MLX with its original GPU backends disabled.
 
-`GatherAxis`, used by `take_along_axis`, is a separate primitive and remains
-unsupported by this adapter. Zero-index specializations, additional storage
-types, larger allocations and full indexing/autodiff coverage are not claimed.
+`GatherAxis`, used by `take_along_axis`, dispatches the unchanged
+`indexing/gather_axis.h` specialization. Its source and index contiguity flags,
+removed-axis shape and strides, axis extent and three-dimensional grid follow
+the pinned upstream host implementation. It uses the same six source storage
+types, four index types and allocation bounds as general Gather. Negative
+source or index storage strides are materialized through translated copies;
+positive and zero strides retain their views. Index values, allocation spans
+and contiguity claims are checked before native submission.
+
+Add `--axis` to the command above to run 60 axis-gather workloads and unchanged
+upstream `test_take_along_axis` in separate CPU and native processes. Coverage
+includes each axis, flattened input, noncontiguous source/index combinations,
+broadcasts, negative indices, reversed views, exact floating-point payloads and
+64-bit values beyond binary64's exact integer range. The required three-OS gate
+retains the same compiled-module, upload, readback and guard evidence as general
+Gather. No extra OpenGL index-range assertion is needed for this kernel.
+
+Zero-index general-gather specializations, additional storage types, larger
+allocations and full indexing/autodiff coverage are not claimed.
 These workloads and the additional upstream test do not establish full-suite
 or complete-backend parity.
 

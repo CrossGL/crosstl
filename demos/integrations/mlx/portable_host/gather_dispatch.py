@@ -11,7 +11,7 @@ from crosstl.project.runtime_verification import (
     RuntimeExecutionState,
     RuntimeExecutorResult,
 )
-from demos.integrations.mlx.portable_host import gather_layout
+from demos.integrations.mlx.portable_host import gather_axis_layout, gather_layout
 
 
 def execute(host, request):
@@ -72,8 +72,10 @@ def dispatch(host, entry, buffers, count, threads, launch):
         raise ValueError(
             "Gather dispatch requires the pinned source root and launch geometry"
         )
-    dtype, _index_dtype, indices, _ndim = gather_layout.signature(entry)
-    if count != 11 + indices or not buffers:
+    axis = entry.startswith("gather_axis")
+    layout_module = gather_axis_layout if axis else gather_layout
+    dtype, _index_dtype, indices, _ndim = layout_module.signature(entry)
+    if count != (11 if axis else 11 + indices) or not buffers:
         raise ValueError("Native gather buffer count does not match its entry")
     supplied = {}
     for i in range(count):
@@ -85,7 +87,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
             raise ValueError("Native gather buffer names must be unique")
         supplied[name] = buffer
     execution = launch.execution()
-    metadata = gather_layout.validate(entry, supplied, threads, execution)
+    metadata = layout_module.validate(entry, supplied, threads, execution)
     descriptor, directory = host.gathers.get(entry, metadata["maximumIndex"])
     inputs, outputs, matched = {}, {}, set()
     guard = list(BOOLEAN_GUARD if dtype == "bool_" else COPY_GUARD)

@@ -30,12 +30,16 @@ from demos.integrations.mlx.portable_host import (
     column_reduction_layout,
     copy_layout,
     gather_dispatch,
-    gather_layout,
     reduction_layout,
     row_reduction_layout,
     slice_update_layout,
 )
-from demos.integrations.mlx.portable_host.gather_packages import GatherPackageCache
+from demos.integrations.mlx.portable_host.gather_packages import (
+    GatherPackageCache,
+)
+from demos.integrations.mlx.portable_host.gather_packages import (
+    signature as gather_signature,
+)
 from demos.integrations.mlx.portable_host.packages import (
     ABSOLUTE_ENTRIES,
     BINARY_ENTRIES,
@@ -295,7 +299,7 @@ class HostRuntime:
             if name in self.descriptors:
                 return 1
             if name.startswith("gather") and self.gathers is not None:
-                gather_layout.signature(name)
+                gather_signature(name)
                 return 1
             return 0
         except (AttributeError, UnicodeDecodeError, ValueError):

@@ -262,7 +262,7 @@ def test_slice_update_ci_requires_native_execution_and_evidence():
         for step in job["steps"]
         for value in re.findall(r"--timeout-seconds (\d+)", step.get("run", ""))
     ]
-    assert sorted(deadlines) == [900, 1800, 3000, 3600]
+    assert sorted(deadlines) == [900, 1800, 3000, 3600, 3600]
     assert sum(deadlines) + 1800 < job["timeout-minutes"] * 60 <= 360 * 60
     selector = next(
         step

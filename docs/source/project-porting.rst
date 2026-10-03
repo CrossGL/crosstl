@@ -4130,8 +4130,12 @@ Six source storage types and signed/unsigned 32-bit and 64-bit indices are
 supported within the documented rank and allocation bounds. The required host
 gate compares 42 indexing workloads and unchanged upstream ``test_take`` on
 separate CPU and native paths, retaining uploaded storage, module identities,
-native readbacks and output guards. ``GatherAxis`` and full indexing/autodiff
-coverage remain separate work; this is not full upstream-suite parity. See
+native readbacks and output guards. ``GatherAxis::eval_gpu`` uses the unchanged
+axis-gather template with validated source/index contiguity and upstream grid
+geometry. A separate required host step compares 60 workloads and unchanged
+``test_take_along_axis`` on each target, including noncontiguous indices and exact
+64-bit storage. Larger allocations, additional storage types and full
+indexing/autodiff coverage remain separate work; this is not full upstream-suite parity. See
 ``demos/integrations/mlx/portable_host/README.md`` for the exact host contract.
 
 Zero-extent Metal standard arrays retain native array objects rather than

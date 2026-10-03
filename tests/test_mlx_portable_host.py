@@ -40,6 +40,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "Concatenate",
                     "Select",
                     "Gather",
+                    "GatherAxis",
                     "Power",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,

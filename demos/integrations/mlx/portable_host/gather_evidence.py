@@ -49,6 +49,12 @@ def view(np, array, shape, strides):
 
 
 def audit_event(np, event):
+    if event["entry"].startswith("gather_axis"):
+        from demos.integrations.mlx.portable_host.gather_axis_evidence import (
+            audit_event as audit_axis,
+        )
+
+        return audit_axis(np, event)
     dtype, index_dtype, count, ndim = signature(event["entry"])
     target = event["target"]
     require(target in {"metal", "directx", "opengl"}, "Unknown gather target")
@@ -138,6 +144,37 @@ def audit_event(np, event):
         ]
         expected.extend(gather_workloads.words(np, part))
     grid = [idx_shape[0] if ndim else 1, math.prod(idx_shape[1:]), math.prod(slices)]
+    metadata = {
+        "sourceShape": shape,
+        "sourceStrides": strides,
+        "sliceSizes": slices,
+        "axes": axes,
+        "indexShape": idx_shape,
+        "indexStrides": steps,
+        "indexContiguous": arrays["idx_contigs"].tolist(),
+        "sourceCount": arrays["src"].size,
+        "outputCount": len(expected),
+        "maximumIndex": (
+            max(
+                value.size if name != "out" else len(expected)
+                for name, value in arrays.items()
+            )
+            - 1
+        ),
+    }
+    return audit_result(np, event, inputs, source, indices, expected, grid, metadata)
+
+
+def audit_result(np, event, inputs, source, indices, expected, grid, metadata):
+    """Check native execution evidence independently of the indexing reference."""
+    from demos.integrations.mlx.portable_host.gather_packages import (
+        signature as entry_signature,
+    )
+
+    dtype = entry_signature(event["entry"])[0]
+    target = event["target"]
+    require(target in {"metal", "directx", "opengl"}, "Unknown gather target")
+    request = event["details"]["request"]
     physical = (
         ("bool" if target == "metal" else "uint32") if dtype == "bool_" else dtype
     )
@@ -188,24 +225,6 @@ def audit_event(np, event):
         hashlib.sha256(raw.tobytes()).hexdigest() == event["outputHash"],
         "Gather host output hash changed",
     )
-    metadata = {
-        "sourceShape": shape,
-        "sourceStrides": strides,
-        "sliceSizes": slices,
-        "axes": axes,
-        "indexShape": idx_shape,
-        "indexStrides": steps,
-        "indexContiguous": arrays["idx_contigs"].tolist(),
-        "sourceCount": arrays["src"].size,
-        "outputCount": len(actual),
-        "maximumIndex": (
-            max(
-                value.size if name != "out" else len(actual)
-                for name, value in arrays.items()
-            )
-            - 1
-        ),
-    }
     require(event["gatherMetadata"] == metadata, "Gather metadata and uploads disagree")
     modules = [event["details"]["module"], *event["details"]["validationModules"]]
     extensions = {Path(module["file"]).suffix for module in modules}
@@ -252,13 +271,13 @@ def audit_event(np, event):
     return source, indices, expected
 
 
-def validate(np, records, trace, upstream):
+def validate(np, records, trace, upstream, *, workloads=gather_workloads):
     require(
-        len(records) == len(list(gather_workloads.cases())),
+        len(records) == len(list(workloads.cases())),
         "Gather workload set is incomplete",
     )
     cursor, targets = 0, set()
-    for case, record in zip(gather_workloads.cases(), records):
+    for case, record in zip(workloads.cases(), records):
         require(
             record["dispatchStart"] == cursor,
             "Gather workload dispatch boundary changed",
@@ -272,12 +291,10 @@ def validate(np, records, trace, upstream):
         )
         event = events[0]
         source, indices, actual = audit_event(np, event)
-        expected_source, expected_indices, expected = gather_workloads.reference(
-            np, case
-        )
+        expected_source, expected_indices, expected = workloads.reference(np, case)
         layout_source = (
             np.ascontiguousarray(expected_source)
-            if case["layout"] == "reversed"
+            if any(stride < 0 for stride in expected_source.strides)
             else expected_source
         )
         require(
@@ -298,6 +315,26 @@ def validate(np, records, trace, upstream):
                 for left, right in zip(indices, expected_indices)
             ),
             "Gather index upload does not belong to its workload",
+        )
+        index_layouts = [
+            (
+                np.ascontiguousarray(index)
+                if any(stride < 0 for stride in index.strides)
+                else index
+            )
+            for index in expected_indices
+        ]
+        require(
+            event["gatherMetadata"]["indexStrides"]
+            == (
+                [
+                    stride // index.itemsize
+                    for index in index_layouts
+                    for stride in index.strides
+                ]
+                or [0]
+            ),
+            "Gather workload index layout changed",
         )
         require(
             actual == record["actual"] == gather_workloads.words(np, expected),

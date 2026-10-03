@@ -1017,6 +1017,82 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
 }
 
+void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() != 2 || !storage_type(out.dtype()) ||
+      inputs[0].dtype() != out.dtype() || inputs[0].ndim() == 0 ||
+      inputs[0].ndim() > 64 || inputs[0].ndim() != inputs[1].ndim() ||
+      axis_ < 0 || axis_ >= inputs[0].ndim() ||
+      out.shape() != inputs[1].shape() || out.size() > 65535) {
+    throw std::invalid_argument("CrossTL axis gather requires matching bounded array layouts.");
+  }
+  const auto index_dtype = inputs[1].dtype();
+  if (index_dtype != int32 && index_dtype != uint32 &&
+      index_dtype != int64 && index_dtype != uint64) {
+    throw std::invalid_argument("CrossTL axis gather requires 32-bit or 64-bit integer indices.");
+  }
+  for (size_t i = 0; i < inputs[0].ndim(); ++i) {
+    if (i != axis_ && inputs[0].shape(i) != inputs[1].shape(i)) {
+      throw std::invalid_argument("CrossTL axis gather requires broadcast input shapes.");
+    }
+  }
+  out.set_data(allocator::malloc(out.nbytes()));
+  if (out.size() == 0) {
+    return;
+  }
+  auto src = gather_input(inputs[0]);
+  auto idx = gather_input(inputs[1]);
+  const auto source_span = gather_span(src);
+  const auto index_span = gather_span(idx);
+  const std::string entry = std::string("gather_axis") + storage_type(out.dtype()) +
+      storage_type(index_dtype) + "_int" + (src.flags().row_contiguous ? "c" : "nc") +
+      (idx.flags().row_contiguous ? "c" : "nc");
+  require_entry(entry);
+  std::vector<int32_t> shape;
+  std::vector<int64_t> source_strides, index_strides;
+  uint64_t before = 1, after = 1;
+  for (size_t i = 0; i < src.ndim(); ++i) {
+    if (i == axis_) {
+      continue;
+    }
+    shape.push_back(idx.shape(i));
+    source_strides.push_back(src.strides()[i]);
+    index_strides.push_back(idx.strides()[i]);
+    (i < axis_ ? before : after) *= idx.shape(i);
+  }
+  uint64_t ndim = src.ndim() - 1;
+  if (shape.empty()) {
+    shape.push_back(1);
+    source_strides.push_back(0);
+    index_strides.push_back(0);
+  }
+  int32_t axis = axis_, axis_size = src.shape(axis_);
+  uint64_t source_step = src.strides()[axis_], index_step = idx.strides()[axis_];
+  CrosstlMlxBuffer buffers[] = {
+      {"src", storage_type(src.dtype()), const_cast<void*>(src.data<void>()), source_span, 0},
+      {"indices", storage_type(idx.dtype()), const_cast<void*>(idx.data<void>()), index_span, 0},
+      {"out", storage_type(out.dtype()), out.data<void>(), out.size(), 1},
+      {"shape", "int32", shape.data(), shape.size(), 0},
+      {"src_strides", "int64", source_strides.data(), source_strides.size(), 0},
+      {"idx_strides", "int64", index_strides.data(), index_strides.size(), 0},
+      {"ndim", "uint64", &ndim, 1, 0},
+      {"axis", "int32", &axis, 1, 0},
+      {"axis_size", "int32", &axis_size, 1, 0},
+      {"src_ax_stride", "uint64", &source_step, 1, 0},
+      {"idx_ax_stride", "uint64", &index_step, 1, 0},
+  };
+  const CrosstlMlxLaunch launch{
+      {static_cast<uint32_t>(after), static_cast<uint32_t>(idx.shape(axis_)),
+       static_cast<uint32_t>(before)}, {1, 1, 1}};
+  char error[2048] = {};
+  const int status = dispatch_callback.load()(
+      entry.c_str(), buffers, 11, out.size(), &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native axis gather failed: ") + error);
+  }
+}
+
 void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   if (inputs.size() != 1 || axes_.empty()) {
