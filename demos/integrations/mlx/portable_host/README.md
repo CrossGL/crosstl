@@ -17,11 +17,11 @@ erf, trigonometric functions and their hyperbolic and inverse forms. The exact
 entry list is in `packages.py`. Shared-buffer views reuse upstream MLX's
 shape, stride and ownership logic: strided views, broadcasts, copy aliases,
 dimension insertion/removal, transpose, slicing, split, dependency/custom-transform
-outputs and stop-gradient. Integer and array indexing still require the
-unimplemented Gather primitive. A separate required native CI proof executes
+outputs and stop-gradient. Bounded integer and array indexing use the Gather
+integration described below. A separate required native CI proof executes
 unchanged `gather_front<float, int, int, N>` specializations for `N = 1, 4, 8`,
 including negative/duplicate indices, partial chunks and exact storage words.
-It does not yet connect Python indexing to the portable host adapter.
+That separate kernel proof does not itself establish Python indexing coverage.
 General gather now resolves template arguments from concrete array-member
 elements, including its nested index-buffer access, and preserves address-space
 qualifiers when passing addresses through pointer members. The unchanged wrapper
@@ -38,7 +38,8 @@ unbounded accesses still fail translation. These assertions describe the tested
 workloads, not arbitrary MLX inputs. Both targets preserve the wrapper's returned
 void helper call instead of omitting its writes. Separate controls check calls
 through helpers, conditional returns and single argument evaluation on each OS.
-These package-level controls do not implement MLX host Gather dispatch.
+Host Gather dispatch validates the actual source and index allocations before
+building its specialization and supplying those range assertions.
 Concrete float, half and integer vector
 constructors and declared vector conversions have a separate required native
 gate on all three platforms. It covers aliases, splats, mixed constructors,
@@ -47,8 +48,8 @@ controls. A separate required macOS gate verifies native bfloat vector aliases,
 declared conversions, rounding, raw payload copies, indexing, swizzles and vector
 sizes against the original source. It does not establish DirectX/OpenGL bfloat
 parity or complete arithmetic coverage. Aggregate lowering and host dispatch
-remain incomplete; the `gather_front` proof does not
-establish general gather support.
+remain bounded; the `gather_front` proof alone does not establish general
+gather support.
 Contiguous conversion, reshape, flatten and unflatten
 dispatch translated copies when sharing storage is insufficient. Copies support
 matching float32, int32, uint32 and bool arrays, including negative and zero strides.
@@ -93,6 +94,55 @@ dedicated GPU runners. The macOS path uses the same callback adapter with genera
 Metal packages, not MLX's original Metal backend. DirectX 10/11, Vulkan,
 asynchronous queues, persistent GPU allocations, automatic operation
 selection, and the complete MLX suite are not covered here.
+
+## General Gather
+
+The adapter implements MLX's `Gather::eval_gpu` using the unchanged pinned JIT
+wrapper and `indexing/gather.h`. `HostRuntime(..., mlx_root=...)` enables on-demand
+translation and packaging for the selected target. Cache identity includes the
+upstream revision, translator implementation, packaging recipe, entry point and
+validated index bound. Changed kernels or JIT definitions are rejected, including
+when loading an existing cached package.
+
+Supported source storage is float32, int32, uint32, int64, uint64 and bool;
+indices may be signed or unsigned 32-bit or 64-bit integers. The current contract
+allows one through ten index arrays, rank at most 64, and at most 65,535 elements
+in each input storage span and output. Scalar indices, multiple indices,
+negative index values, transposed and strided sources, and broadcast views retain
+their MLX semantics. Negative storage strides are materialized by translated GPU
+copies; source and output values are never computed or corrected on the CPU.
+Metadata and index values are checked on the host before submission to establish
+allocation safety. Empty results do not dispatch.
+
+Each invocation retains its source artifact identity, submitted module, compiler
+validation steps, available compiled binaries, buffer
+uploads, launch geometry, result storage words and 32 trailing guard elements.
+Floating-point values travel as binary32 words, preserving signed zero and NaN
+payloads. Reflection must match every supplied binding and physical storage type;
+invalid metadata or readbacks are rejected before writing into the MLX output.
+
+```sh
+python -m demos.integrations.mlx.portable_host.verify_gather \
+  --mlx-root mlx-upstream --packages host-packages \
+  --integer64 integer64-packages --reductions equality-reductions \
+  --output-dir gather-evidence
+```
+
+The equality companion is `all_reduce_andbool_` at width 32. The verifier runs
+42 workloads in separate CPU and native processes: six source storage types
+times dense, transposed, strided, broadcast, reversed, scalar-index and
+multiple-index layouts. It also runs unchanged upstream
+`test_ops.TestOps.test_take` on each path, without skips. Retained uploads are
+independently reconstructed into reference views and compared to native
+readbacks and the MLX result. Missing dispatches, changed modules, corrupt guards
+and incomplete upstream results fail verification. Three-OS CI requires this
+check after building MLX with its original GPU backends disabled.
+
+`GatherAxis`, used by `take_along_axis`, is a separate primitive and remains
+unsupported by this adapter. Zero-index specializations, additional storage
+types, larger allocations and full indexing/autodiff coverage are not claimed.
+These workloads and the additional upstream test do not establish full-suite
+or complete-backend parity.
 
 ## Upstream Adaptations
 

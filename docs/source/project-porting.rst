@@ -4088,8 +4088,11 @@ original/generated Metal controls. Unknown pointer escapes, incompatible access
 contracts, local reference aliases, reference returns, pointer identity operations,
 compound pointee updates and external
 aggregate buffer layouts remain diagnostic. This representation does not yet
-cover thread/threadgroup pointer members or OpenGL index-range proofs, and it
+cover thread/threadgroup pointer members, and it
 does not change the source buffer ABI to store these private handles.
+OpenGL specializes the same private handles against concrete storage buffers;
+final subscripts require proven bounds or explicit allocation-derived range
+assertions. Unsupported aggregate escapes remain diagnostic on both targets.
 
 Concrete Metal ``vec<T, N>`` constructors preserve scalar splats, copied vectors
 and mixed component arguments for float, half and integer widths two through
@@ -4113,13 +4116,23 @@ The unchanged pinned general-gather wrapper executes as original and generated
 Metal in a required macOS gate. Six specializations cover zero, one or two index
 buffers and scalar through three-dimensional indices across dense, transposed,
 strided and broadcast layouts. The 24 workloads retain negative and repeated
-indices, exact binary32 storage payloads and trailing output guards. General
-gather still lacks MLX host dispatch integration. A separate required Windows
-gate compiles and executes the same twenty indexed workloads through DirectX
-packages. The four zero-index workloads retain their Metal gate; their empty
-pointer-array representation remains unsupported on DirectX. OpenGL general
-gather and foreign-target bfloat parity remain unfinished. Compiler success is
+indices, exact binary32 storage payloads and trailing output guards. Separate
+required Windows and Linux gates execute the same twenty indexed workloads
+through DirectX and OpenGL packages. The four zero-index workloads retain their
+Metal gate; their empty pointer-array representation remains unsupported on
+the foreign targets. Foreign-target bfloat parity remains unfinished. Compiler success is
 not a substitute for the required native readback evidence.
+
+The portable MLX host adapter additionally connects ``Gather::eval_gpu`` to
+on-demand packages built from that unchanged wrapper. It validates index values,
+allocation spans, shapes, strides and dispatch dimensions before submission.
+Six source storage types and signed/unsigned 32-bit and 64-bit indices are
+supported within the documented rank and allocation bounds. The required host
+gate compares 42 indexing workloads and unchanged upstream ``test_take`` on
+separate CPU and native paths, retaining uploaded storage, module identities,
+native readbacks and output guards. ``GatherAxis`` and full indexing/autodiff
+coverage remain separate work; this is not full upstream-suite parity. See
+``demos/integrations/mlx/portable_host/README.md`` for the exact host contract.
 
 Zero-extent Metal standard arrays retain native array objects rather than
 illegal C-style zero-length arrays. Layout calculations retain the element

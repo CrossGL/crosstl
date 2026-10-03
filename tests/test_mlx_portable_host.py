@@ -39,6 +39,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "BitwiseInvert",
                     "Concatenate",
                     "Select",
+                    "Gather",
                     "Power",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,

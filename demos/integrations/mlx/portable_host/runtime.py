@@ -29,10 +29,13 @@ from crosstl.project.runtime_verification import (
 from demos.integrations.mlx.portable_host import (
     column_reduction_layout,
     copy_layout,
+    gather_dispatch,
+    gather_layout,
     reduction_layout,
     row_reduction_layout,
     slice_update_layout,
 )
+from demos.integrations.mlx.portable_host.gather_packages import GatherPackageCache
 from demos.integrations.mlx.portable_host.packages import (
     ABSOLUTE_ENTRIES,
     BINARY_ENTRIES,
@@ -190,6 +193,11 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        self.gathers = (
+            GatherPackageCache(mlx_root, self.directory / "gather", self.target)
+            if mlx_root is not None
+            else None
+        )
         self.descriptors = index["descriptors"]
         if set(self.descriptors) != set(ENTRIES):
             raise ValueError("Packages must contain the exact supported entry set")
@@ -283,8 +291,14 @@ class HostRuntime:
 
     def _entry_available(self, entry):
         try:
-            return int(entry.decode("ascii") in self.descriptors)
-        except (AttributeError, UnicodeDecodeError):
+            name = entry.decode("ascii")
+            if name in self.descriptors:
+                return 1
+            if name.startswith("gather") and self.gathers is not None:
+                gather_layout.signature(name)
+                return 1
+            return 0
+        except (AttributeError, UnicodeDecodeError, ValueError):
             return 0
 
     def install(self):
@@ -326,6 +340,10 @@ class HostRuntime:
             return 1
 
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
+        if entry.startswith("gather"):
+            return gather_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         initialization = entry in INIT_ENTRIES
         small_row = entry in SMALL_ROW_ENTRIES
         row_reduction = entry in ROW_ENTRIES or small_row
