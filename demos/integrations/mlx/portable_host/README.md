@@ -203,6 +203,16 @@ that test includes floating-point scatter, still tracked by
 [#1986](https://github.com/CrossGL/crosstl/issues/1986). Its evidence explicitly
 records no upstream test-suite run and no complete-backend parity.
 
+Five additional native controls check concrete function-object member forwarding,
+nested call operators, receiver state and single argument evaluation. They are
+required on all three operating systems, with original Metal comparisons on macOS.
+General scatter still needs resource-reference lowering that preserves atomic
+destinations as storage lvalues ([#2051](https://github.com/CrossGL/crosstl/issues/2051));
+successful template materialization alone does
+not establish native compilation or execution. General `Scatter::eval_gpu` host
+integration, floating-point scatter and full indexing-suite parity remain outside
+the current proof.
+
 ## Upstream Adaptations
 
 Configure `core.autocrlf=false` before checking out MLX, including on Windows.

@@ -665,7 +665,7 @@
           "tests/test_translator/test_mlx_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2015
+        "test_count": 2016
       },
       "translator_codegen": {
         "exists": true,
@@ -5986,6 +5986,8 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_function_call",
+            "tests/test_translator/test_functor_member_runtime.py::def test_project_",
+            "tests/test_translator/test_functor_member_runtime.py::def test_forwarded_functor_members_",
             "tests/test_translator/test_template_wrapper_runtime.py::def test_project_",
             "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_compiles",
             "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_executes_natively",
@@ -6010,6 +6012,9 @@
         "metal": {
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_function_call",
+            "tests/test_backend/test_metal/test_functor_member_forwarding.py::def test_preprocessor_",
+            "tests/test_translator/test_functor_member_runtime.py::def test_project_",
+            "tests/test_translator/test_functor_member_runtime.py::def test_forwarded_functor_members_",
             "tests/test_translator/test_template_wrapper_runtime.py::def test_project_",
             "tests/test_backend/test_metal/test_template_wrapper_deduction.py::def test_",
             "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_compiles",
@@ -6044,6 +6049,8 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_function_call",
+            "tests/test_translator/test_functor_member_runtime.py::def test_project_",
+            "tests/test_translator/test_functor_member_runtime.py::def test_forwarded_functor_members_",
             "tests/test_translator/test_template_wrapper_runtime.py::def test_project_",
             "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_compiles",
             "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_executes_natively",

@@ -22595,6 +22595,10 @@ def _project_template_materialization_for_artifact(
             if instantiation.host_name == entry_point
         ]
     )
+    if templates:
+        # A concrete functor used as a helper argument can be materialized below.
+        # Diagnose any residue after specialization, not before it has run.
+        unsupported_type_records = unresolved_type_records
     if unsupported_type_records and not source_instantiations:
         metadata = _template_materialization_metadata(
             specializations=[],
@@ -23485,6 +23489,12 @@ def _project_template_materialization_for_artifact(
         if record.get("name") not in late_materialized_template_names
     )
     post_materialization_unsupported = [
+        *_unmaterialized_metal_template_functor_records(
+            preprocessor=preprocessor,
+            unit=unit,
+            source=materialized,
+            target=target,
+        ),
         *_post_materialization_unresolved_metal_template_type_records(
             preprocessor=preprocessor,
             unit=unit,

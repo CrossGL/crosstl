@@ -950,6 +950,11 @@ class MetalPreprocessor(HLSLPreprocessor):
         processed = super().preprocess(code, file_path=file_path)
         self._configure_integral_constant_contracts(processed)
         processed = self._materialize_project_template_instantiations(processed)
+        # Concrete helper bodies must exist while their receiver's methods are
+        # still present; lowering the struct first loses those later call sites.
+        processed = self._materialize_explicit_template_function_calls(
+            processed, include_struct_members=False
+        )
         processed = self._materialize_explicit_template_struct_instantiations(processed)
         processed = self._materialize_free_operator_overloads(processed)
         processed = self._elide_stateless_compile_time_globals(processed)
@@ -1112,6 +1117,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         work_budget: Optional[object] = None,
         materialized_names: Optional[Dict[Tuple[str, Tuple[str, ...]], str]] = None,
         excluded_template_names: Optional[Set[str]] = None,
+        include_struct_members: bool = True,
     ) -> str:
         materialized_names = (
             materialized_names if materialized_names is not None else {}
@@ -1121,6 +1127,16 @@ class MetalPreprocessor(HLSLPreprocessor):
 
         while True:
             templates = self._find_template_functions(working)
+            if not include_struct_members:
+                struct_spans = [
+                    struct.span
+                    for struct in self._find_concrete_struct_definitions(working)
+                ]
+                templates = [
+                    template
+                    for template in templates
+                    if self._containing_span(template.span[0], struct_spans) is None
+                ]
             if not templates:
                 return working
 
@@ -18054,11 +18070,10 @@ class MetalPreprocessor(HLSLPreprocessor):
             arg_close,
         )
         args = code[arg_open + 1 : arg_close].strip()
-        if args:
-            replacement = f"{method.free_name}({receiver}, {args})"
-        else:
-            replacement = f"{method.free_name}({receiver})"
-        return arg_close + 1, replacement
+        # Leave arguments in the scanner's input so nested member/functor calls
+        # are rewritten in their original lexical scope as well.
+        separator = ", " if args else ""
+        return arg_open + 1, f"{method.free_name}({receiver}{separator}"
 
     def _reject_readonly_pointer_result_write(
         self,
