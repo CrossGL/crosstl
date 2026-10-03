@@ -5,6 +5,7 @@ import math
 
 from demos.integrations.mlx.portable_host import scatter_axis_workloads as workloads
 from demos.integrations.mlx.portable_host.gather_evidence import (
+    audit_input_bindings,
     audit_native_execution,
     require,
     view,
@@ -22,10 +23,7 @@ def audit_event(np, event):
         event["target"] in {"metal", "directx", "opengl"}, "Unknown axis-scatter target"
     )
     request = event["details"]["request"]
-    require(
-        set(request["buffers"]) == set(event["inputs"]),
-        "Axis-scatter request bindings changed",
-    )
+    audit_input_bindings(event)
     inputs = {}
     for name, value in event["inputs"].items():
         binding = request["buffers"][name]

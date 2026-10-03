@@ -441,6 +441,89 @@ def scatter_event(tmp_path, case, target="metal"):
     return event
 
 
+def generated_dispatch_input():
+    execution = {
+        "coordinateSpace": "physical",
+        "dimensions": 3,
+        "kind": "dispatch-workgroup-count",
+        "memberName": "crossglNumWorkGroups",
+        "valueSource": "dispatch.workgroupCount",
+    }
+    return {
+        "name": "CrossGLDispatchInfo",
+        "source": "input",
+        "dtype": "uint32",
+        "shape": [3],
+        "metadata": {
+            "source": "dispatch.workgroupCount",
+            "executionInput": execution,
+            "runtimeValueName": "CrossGLDispatchInfo",
+        },
+        "binding": {
+            "name": "CrossGLDispatchInfo",
+            "kind": "constant-buffer",
+            "access": "read",
+            "metadata": {
+                "provenance": {
+                    "kind": "generated-execution-input",
+                    "executionInput": execution,
+                },
+                "scalarLayout": {
+                    "elementType": "uint32",
+                    "vectorWidth": 3,
+                    "memberName": "crossglNumWorkGroups",
+                    "memberOffsetBytes": 0,
+                    "elementStrideBytes": 12,
+                    "blockSizeBytes": 16,
+                    "storageLayout": "hlsl-constant-buffer",
+                },
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "fault",
+    (
+        None,
+        "dtype",
+        "shape",
+        "provenance",
+        "source",
+        "layout",
+        "count",
+        "target",
+        "duplicate",
+    ),
+)
+def test_axis_scatter_audit_accounts_for_generated_dispatch_input(tmp_path, fault):
+    event = scatter_event(tmp_path, next(workloads.cases()), "directx")
+    request = event["details"]["request"]
+    buffer = generated_dispatch_input()
+    request["buffers"]["CrossGLDispatchInfo"] = buffer
+    if fault == "dtype":
+        buffer["dtype"] = "int32"
+    elif fault == "shape":
+        buffer["shape"] = [4]
+    elif fault == "provenance":
+        del buffer["binding"]["metadata"]["provenance"]
+    elif fault == "source":
+        buffer["metadata"]["source"] = "dispatch.workgroupSize"
+    elif fault == "layout":
+        buffer["binding"]["metadata"]["scalarLayout"]["memberOffsetBytes"] = 4
+    elif fault == "count":
+        request["dispatch"]["workgroupCount"] = [2, 3, 4]
+    elif fault == "target":
+        event["target"] = "metal"
+    elif fault == "duplicate":
+        request["buffers"]["extra"] = generated_dispatch_input()
+    if fault:
+        with pytest.raises(ValueError):
+            scatter_axis_evidence.audit_event(np, event)
+    else:
+        scatter_axis_evidence.audit_event(np, event)
+
+
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
 @pytest.mark.parametrize(
     "case",

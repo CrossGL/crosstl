@@ -48,6 +48,54 @@ def view(np, array, shape, strides):
     )
 
 
+def audit_input_bindings(event):
+    """Account for uploaded storage and generated dispatch geometry separately."""
+    request = event["details"]["request"]
+    buffers = request["buffers"]
+    require(set(event["inputs"]) <= set(buffers), "Indexing request bindings changed")
+    generated = set(buffers) - set(event["inputs"])
+    require(len(generated) <= 1, "Duplicate indexing generated dispatch bindings")
+    for name in generated:
+        buffer = buffers[name]
+        binding = buffer["binding"]
+        metadata = binding.get("metadata", {})
+        layout = metadata.get("scalarLayout", {})
+        execution_input = {
+            "coordinateSpace": "physical",
+            "dimensions": 3,
+            "kind": "dispatch-workgroup-count",
+            "memberName": "crossglNumWorkGroups",
+            "valueSource": "dispatch.workgroupCount",
+        }
+        require(
+            event["target"] == "directx"
+            and buffer["name"] == binding["name"] == name
+            and buffer["source"] == "input"
+            and buffer["dtype"] == "uint32"
+            and buffer["shape"] == [3]
+            and buffer.get("encoding") is None
+            and binding["kind"] == "constant-buffer"
+            and binding["access"] == "read"
+            and metadata.get("provenance")
+            == {"kind": "generated-execution-input", "executionInput": execution_input}
+            and buffer.get("metadata")
+            == {
+                "source": "dispatch.workgroupCount",
+                "executionInput": execution_input,
+                "runtimeValueName": name,
+            }
+            and layout.get("elementType") == "uint32"
+            and layout.get("vectorWidth") == 3
+            and layout.get("memberName") == "crossglNumWorkGroups"
+            and layout.get("memberOffsetBytes") == 0
+            and layout.get("elementStrideBytes") == 12
+            and layout.get("blockSizeBytes") == 16
+            and layout.get("storageLayout") == "hlsl-constant-buffer"
+            and request["dispatch"]["workgroupCount"] == event["workgroupCount"],
+            "Indexing generated dispatch binding changed",
+        )
+
+
 def audit_event(np, event):
     if event["entry"].startswith("gather_axis"):
         from demos.integrations.mlx.portable_host.gather_axis_evidence import (
