@@ -298,7 +298,7 @@ class HostRuntime:
             name = entry.decode("ascii")
             if name in self.descriptors:
                 return 1
-            if name.startswith("gather") and self.gathers is not None:
+            if name.startswith(("gather", "scatter_axis")) and self.gathers is not None:
                 gather_signature(name)
                 return 1
             return 0
@@ -344,7 +344,7 @@ class HostRuntime:
             return 1
 
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
-        if entry.startswith("gather"):
+        if entry.startswith(("gather", "scatter_axis")):
             return gather_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
             )

@@ -226,6 +226,14 @@ def audit_result(np, event, inputs, source, indices, expected, grid, metadata):
         "Gather host output hash changed",
     )
     require(event["gatherMetadata"] == metadata, "Gather metadata and uploads disagree")
+    audit_native_execution(event)
+    return source, indices, expected
+
+
+def audit_native_execution(event):
+    """Verify retained native modules and artifact identity for indexing dispatch."""
+    target = event["target"]
+    request = event["details"]["request"]
     modules = [event["details"]["module"], *event["details"]["validationModules"]]
     extensions = {Path(module["file"]).suffix for module in modules}
     require(
@@ -268,7 +276,6 @@ def audit_result(np, event, inputs, source, indices, expected, grid, metadata):
         and compiler <= {step.get("action") for step in steps},
         "Gather native compilation or artifact verification is incomplete",
     )
-    return source, indices, expected
 
 
 def validate(np, records, trace, upstream, *, workloads=gather_workloads):

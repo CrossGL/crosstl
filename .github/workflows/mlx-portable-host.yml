@@ -26,6 +26,7 @@ on:
       - "tests/test_mlx_portable_slice_update_workloads.py"
       - "tests/test_mlx_portable_gather.py"
       - "tests/test_mlx_portable_gather_axis.py"
+      - "tests/test_mlx_portable_scatter_axis.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
       - "tests/test_translator/test_directx_half_conversion.py"
@@ -116,6 +117,7 @@ on:
       - "tests/test_mlx_portable_slice_update_workloads.py"
       - "tests/test_mlx_portable_gather.py"
       - "tests/test_mlx_portable_gather_axis.py"
+      - "tests/test_mlx_portable_scatter_axis.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
       - "tests/test_translator/test_directx_half_conversion.py"
@@ -1253,10 +1255,10 @@ jobs:
           retention-days: 14
 
   slice-update-host:
-    name: MLX slice update and gather host (${{ matrix.target }})
+    name: MLX slice update and indexing host (${{ matrix.target }})
     needs: integer64-host
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 255
+    timeout-minutes: 315
     strategy:
       fail-fast: false
       matrix:
@@ -1408,6 +1410,18 @@ jobs:
               --reductions .mlx-portable-slice-update/base/reductions \
               --output-dir .mlx-portable-slice-update/gather-axis-evidence \
               2>&1 | tee .mlx-portable-slice-update/gather-axis-verification.log
+      - name: Execute axis scatter host operations
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 3600 --label "MLX axis scatter verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_scatter_axis --mlx-root mlx-upstream \
+              --packages .mlx-portable-slice-update/base/base/packages --integer64 .mlx-portable-slice-update/base/integer64-packages \
+              --output-dir .mlx-portable-slice-update/scatter-axis-evidence \
+              2>&1 | tee .mlx-portable-slice-update/scatter-axis-verification.log
       - name: Retain slice update execution evidence
         if: always()
         uses: actions/upload-artifact@v4

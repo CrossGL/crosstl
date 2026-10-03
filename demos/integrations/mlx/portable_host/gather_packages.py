@@ -1,4 +1,4 @@
-"""Build exact pinned general-gather JIT specializations on demand."""
+"""Build exact pinned indexing JIT specializations on demand."""
 
 import hashlib
 import json
@@ -18,7 +18,11 @@ from crosstl.project import (
     translate_project,
 )
 from crosstl.translator.dispatch_region_identity import translation_implementation_hash
-from demos.integrations.mlx.portable_host import gather_axis_layout, gather_layout
+from demos.integrations.mlx.portable_host import (
+    gather_axis_layout,
+    gather_layout,
+    scatter_axis_layout,
+)
 from demos.integrations.mlx.portable_host.gather_layout import MAX_ELEMENTS
 from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
 
@@ -34,11 +38,34 @@ SOURCE_TYPES = {
 
 
 def signature(entry):
+    if entry.startswith("scatter_axis"):
+        return scatter_axis_layout.signature(entry)
     layout = gather_axis_layout if entry.startswith("gather_axis") else gather_layout
     return layout.signature(entry)
 
 
 def source(root, entry):
+    if entry.startswith("scatter_axis"):
+        dtype, index_dtype, operation, update_contiguous, index_contiguous = signature(
+            entry
+        )
+        arguments = ", ".join(
+            (
+                SOURCE_TYPES[dtype],
+                SOURCE_TYPES[index_dtype],
+                "int",
+                "None" if operation == "none" else f"Sum<{SOURCE_TYPES[dtype]}>",
+                str(update_contiguous).lower(),
+                str(index_contiguous).lower(),
+            )
+        )
+        return (
+            '#include "mlx/backend/metal/kernels/utils.h"\n'
+            '#include "mlx/backend/metal/kernels/reduce_utils.h"\n'
+            '#include "mlx/backend/metal/kernels/indexing/scatter_axis.h"\n'
+            f'template [[host_name("{entry}")]] [[kernel]]\n'
+            f"decltype(scatter_axis<{arguments}>) scatter_axis<{arguments}>;\n"
+        )
     if entry.startswith("gather_axis"):
         dtype, index_dtype, source_contiguous, index_contiguous = signature(entry)
         arguments = ", ".join(
@@ -210,7 +237,11 @@ class GatherPackageCache:
                     (
                         {
                             "source": relative,
-                            "expression": "reference.offset + index",
+                            "expression": (
+                                "offset"
+                                if entry.startswith("scatter_axis")
+                                else "reference.offset + index"
+                            ),
                             "minimum": 0,
                             "maximum": identity["maximumIndex"],
                         },

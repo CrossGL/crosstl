@@ -55,6 +55,7 @@ def adapted_sources(original, primitives, events):
         "Select",
         "Gather",
         "GatherAxis",
+        "ScatterAxis",
         *UNARY_OPERATIONS,
         *VIEW_PRIMITIVES,
         *COPY_PRIMITIVES,

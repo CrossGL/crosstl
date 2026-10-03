@@ -1,4 +1,4 @@
-"""Dispatch validated gather metadata and copy back only native result storage."""
+"""Dispatch validated indexing metadata and copy back native result storage."""
 
 import ctypes
 import hashlib
@@ -11,7 +11,11 @@ from crosstl.project.runtime_verification import (
     RuntimeExecutionState,
     RuntimeExecutorResult,
 )
-from demos.integrations.mlx.portable_host import gather_axis_layout, gather_layout
+from demos.integrations.mlx.portable_host import (
+    gather_axis_layout,
+    gather_layout,
+    scatter_axis_layout,
+)
 
 
 def execute(host, request):
@@ -72,9 +76,15 @@ def dispatch(host, entry, buffers, count, threads, launch):
         raise ValueError(
             "Gather dispatch requires the pinned source root and launch geometry"
         )
-    axis = entry.startswith("gather_axis")
-    layout_module = gather_axis_layout if axis else gather_layout
-    dtype, _index_dtype, indices, _ndim = layout_module.signature(entry)
+    scatter = entry.startswith("scatter_axis")
+    axis = entry.startswith("gather_axis") or scatter
+    layout_module = (
+        scatter_axis_layout
+        if scatter
+        else gather_axis_layout if axis else gather_layout
+    )
+    parameters = layout_module.signature(entry)
+    dtype, indices = parameters[0], parameters[2]
     if count != (11 if axis else 11 + indices) or not buffers:
         raise ValueError("Native gather buffer count does not match its entry")
     supplied = {}
@@ -111,7 +121,9 @@ def dispatch(host, entry, buffers, count, threads, launch):
         if layout["elementType"] != storage or layout["elementStrideBytes"] != size:
             raise ValueError("Native and reflected gather layouts disagree")
         if name == "out":
-            values = [guard[0]] * buffer.count + guard
+            values = (
+                gather_layout.values(buffer) if scatter else [guard[0]] * buffer.count
+            ) + guard
         elif kind == "float32":
             values = list(
                 ctypes.cast(
@@ -125,7 +137,24 @@ def dispatch(host, entry, buffers, count, threads, launch):
             values = [
                 bool(value) if storage == "bool" else int(value) for value in values
             ]
-        value = {"dtype": storage, "shape": [len(values)], "values": values}
+        shape = [len(values), 1] if scatter and name == "out" else [len(values)]
+        if (
+            scatter
+            and name == "out"
+            and (
+                layout.get("componentCount") != 1
+                or layout.get("structMembers")
+                != [
+                    {
+                        "name": "val",
+                        "offsetBytes": 0,
+                        "physicalType": "int" if dtype == "int32" else "uint",
+                    }
+                ]
+            )
+        ):
+            raise ValueError("Native scatter atomic storage layout does not match")
+        value = {"dtype": storage, "shape": shape, "values": values}
         if kind == "float32":
             value["encoding"] = FLOAT32_BITS
         inputs[binding["name"]] = value
@@ -152,7 +181,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
     size = threads + len(guard)
     if (
         output.get("dtype") != storage
-        or output.get("shape") != [size]
+        or output.get("shape") != ([size, 1] if scatter else [size])
         or output.get("encoding") != (FLOAT32_BITS if dtype == "float32" else None)
         or not isinstance(output.get("values"), list)
         or len(output["values"]) != size
@@ -187,10 +216,10 @@ def dispatch(host, entry, buffers, count, threads, launch):
         "artifact": descriptor["artifact"],
         "packageRoot": str(directory),
         "details": result.details,
-        "gatherMetadata": metadata,
-        "gatherStorageType": dtype,
-        "gatherValues": readback[:threads],
-        "gatherGuardValues": readback[threads:],
+        ("scatterMetadata" if scatter else "gatherMetadata"): metadata,
+        ("scatterStorageType" if scatter else "gatherStorageType"): dtype,
+        ("scatterValues" if scatter else "gatherValues"): readback[:threads],
+        ("scatterGuardValues" if scatter else "gatherGuardValues"): readback[threads:],
         "inputs": inputs,
         "outputHash": hashlib.sha256(bytes(native)).hexdigest(),
     }
