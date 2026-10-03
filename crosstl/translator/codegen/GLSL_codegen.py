@@ -2225,6 +2225,7 @@ class GLSLCodeGen:
         "triangles": "uvec3",
     }
     GLSL_MEMORY_ATOMIC_FUNCTIONS = {
+        "atomicLoad",
         "atomicStore",
         "atomicAdd",
         "atomicMin",
@@ -38894,8 +38895,33 @@ complex64_t crossgl_complex64_mod_assign(
             return None
         if func_name in self.function_return_types:
             return None
+        if func_name == "atomicLoad" and len(args) != 1:
+            raise ValueError("OpenGL atomicLoad requires exactly one target")
         if func_name == "atomicStore" and len(args) != 2:
             raise ValueError("OpenGL atomicStore requires a target and value")
+        if func_name == "atomicLoad":
+            self.validate_glsl_storage_pointer_mutation_target(args[0])
+            root = args[0]
+            while True:
+                if isinstance(root, MemberAccessNode):
+                    root = root.object
+                elif isinstance(root, ArrayAccessNode):
+                    root = root.array_expr
+                elif (
+                    isinstance(root, FunctionCallNode)
+                    and self.function_call_name(root) == "buffer_load"
+                    and "buffer_load" not in self.function_return_types
+                    and len(root.arguments) == 2
+                ):
+                    root = root.arguments[0]
+                else:
+                    break
+            access = self.structured_buffer_resource_access(root)
+            if not image_access_satisfies_requirement("read_write", access):
+                raise ValueError(
+                    "OpenGL atomicLoad requires read-write storage for its "
+                    "unchanged-value atomic operation"
+                )
 
         self.validate_glsl_buffer_block_atomic_call(func_name, args)
 
@@ -38925,8 +38951,11 @@ complex64_t crossgl_complex64_mod_assign(
                 self.map_type(target_type) if target_type is not None else None
             )
             target_expression = self.generate_expression(args[0])
-        if func_name == "atomicStore" and target_type not in {"int", "uint"}:
-            raise ValueError("OpenGL atomicStore requires a scalar int or uint target")
+        if func_name in {"atomicLoad", "atomicStore"} and target_type not in {
+            "int",
+            "uint",
+        }:
+            raise ValueError(f"OpenGL {func_name} requires a scalar int or uint target")
         rendered_args = [target_expression]
         value_arg_ids = {
             id(value_arg)
@@ -38944,6 +38973,9 @@ complex64_t crossgl_complex64_mod_assign(
                 rendered_args.append(self.generate_expression(arg))
 
         native_name = "atomicExchange" if func_name == "atomicStore" else func_name
+        if func_name == "atomicLoad":
+            native_name = "atomicOr"
+            rendered_args.append("0u" if target_type == "uint" else "0")
         return f"{native_name}({', '.join(rendered_args)})"
 
     def generate_glsl_memory_atomic_value_argument(self, arg, target_type):

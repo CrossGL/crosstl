@@ -503,6 +503,7 @@ class _Lowering:
     def atomic_call(self, node, env):
         operation = _name(node.function)
         arity = {
+            "atomicLoad": 1,
             "atomicStore": 2,
             "atomicAdd": 2,
             "atomicMin": 2,

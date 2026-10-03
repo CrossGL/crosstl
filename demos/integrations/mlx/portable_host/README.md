@@ -208,6 +208,24 @@ indexing job's execution budget.
 
 Product updates, float and packed storage, zero-index specializations, larger
 allocations and the complete upstream indexing/autodiff suite remain unsupported.
+
+Integer atomic loads have a separate required numerical gate on all three native
+targets. It covers signed and unsigned boundaries, buffer members, pointer and
+resource-reference helpers, conditional calls, address side effects and a
+32-thread shared counter. Two additional controls execute the unchanged signed
+and unsigned `mlx_atomic_load_explicit` helpers from the pinned `atomic.h`,
+preserving the input buffers and output guards. The OpenGL fixture explicitly
+bounds the helper's 64-bit offset to the three elements it dispatches; this is
+not an arbitrary-allocation guarantee. Metal retains `atomic_load_explicit`; DirectX and
+OpenGL use an atomic OR with zero and return the observed value without changing
+the stored bits. Those foreign operations require writable storage; read-only
+inputs are diagnosed instead of silently changing their access contract. Only
+explicit relaxed ordering is supported. Unsupported orders, element types and
+untracked storage fail translation. This load contract does not yet implement
+compare-exchange's Boolean result and expected-value writeback, so it does not
+resolve the product and packed-update requirements in
+[#2048](https://github.com/CrossGL/crosstl/issues/2048).
+
 In particular, the full `test_array_at` method also needs random generation,
 floating-point atomics and product updates; passing the list-index assignment
 test does not establish that broader coverage. No output is computed or corrected
@@ -265,7 +283,7 @@ Twenty-eight required native controls cover signed and unsigned updates, returne
 old values, stores, aliases, resource selection, argument evaluation and contention
 across workgroups. Ordinary functions with atomic-like names retain their own
 semantics. Unsupported storage types and member-array destinations fail explicitly.
-Floating-point atomics and Metal load/compare-exchange remain separate contracts;
+Floating-point atomics and Metal compare-exchange remain separate contracts;
 this does not establish the full atomic scope of
 [#2051](https://github.com/CrossGL/crosstl/issues/2051).
 

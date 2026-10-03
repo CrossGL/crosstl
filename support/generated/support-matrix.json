@@ -559,7 +559,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 595,
+        "unsupported_marker_count": 596,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -6254,6 +6254,9 @@
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_executes_natively",
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_order_is_not_silently_weakened",
             "tests/test_translator/test_atomic_store_runtime.py::def test_unsupported_atomic_store_type_does_not_publish_a_noop",
+            "tests/test_translator/test_atomic_load_runtime.py::def test_atomic_load_",
+            "tests/test_translator/test_atomic_load_runtime.py::def test_unsupported_atomic_load_type_does_not_publish_a_noop",
+            "tests/test_translator/test_mlx_atomic_load_runtime.py::def test_pinned_atomic_load_executes_natively",
             "tests/test_translator/test_mlx_scatter_axis_runtime.py::def test_pinned_scatter_axis_executes_natively",
             "tests/test_translator/test_atomic_resource_runtime.py::def test_resource_atomics_",
             "tests/test_translator/test_mlx_general_scatter_runtime.py::def test_pinned_general_scatter_executes_natively",
@@ -6282,6 +6285,9 @@
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_executes_natively",
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_order_is_not_silently_weakened",
             "tests/test_translator/test_atomic_store_runtime.py::def test_unsupported_atomic_store_type_does_not_publish_a_noop",
+            "tests/test_translator/test_atomic_load_runtime.py::def test_atomic_load_",
+            "tests/test_translator/test_atomic_load_runtime.py::def test_unsupported_atomic_load_type_does_not_publish_a_noop",
+            "tests/test_translator/test_mlx_atomic_load_runtime.py::def test_pinned_atomic_load_executes_natively",
             "tests/test_translator/test_mlx_scatter_axis_runtime.py::def test_pinned_scatter_axis_executes_natively",
             "tests/test_translator/test_atomic_resource_runtime.py::def test_resource_atomics_",
             "tests/test_translator/test_mlx_general_scatter_runtime.py::def test_pinned_general_scatter_executes_natively",
@@ -6317,6 +6323,9 @@
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_executes_natively",
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_order_is_not_silently_weakened",
             "tests/test_translator/test_atomic_store_runtime.py::def test_unsupported_atomic_store_type_does_not_publish_a_noop",
+            "tests/test_translator/test_atomic_load_runtime.py::def test_atomic_load_",
+            "tests/test_translator/test_atomic_load_runtime.py::def test_unsupported_atomic_load_type_does_not_publish_a_noop",
+            "tests/test_translator/test_mlx_atomic_load_runtime.py::def test_pinned_atomic_load_executes_natively",
             "tests/test_translator/test_mlx_scatter_axis_runtime.py::def test_pinned_scatter_axis_executes_natively",
             "tests/test_translator/test_atomic_resource_runtime.py::def test_resource_atomics_",
             "tests/test_translator/test_mlx_general_scatter_runtime.py::def test_pinned_general_scatter_executes_natively",

@@ -697,6 +697,21 @@ class MetalAtomicStoreLoweringError(ValueError):
         )
 
 
+class MetalAtomicLoadLoweringError(ValueError):
+    """Raised when an atomic load's ordering cannot be preserved."""
+
+    project_diagnostic_code = "project.translate.metal-atomic-load-unsupported"
+    missing_capabilities = ("metal.atomic-load-contract-lowering",)
+
+    def __init__(self, reason, source_location=None):
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(
+            "Cannot lower Metal atomic_load_explicit without changing its "
+            f"semantics: {reason}"
+        )
+
+
 class MetalToCrossGLConverter:
     """Serialize Metal backend AST nodes back into CrossGL source."""
 
@@ -11234,6 +11249,45 @@ class MetalToCrossGLConverter:
 
     def metal_atomic_function_call(self, name, args, is_main, source_location=None):
         function_name = str(name).lstrip(":")
+        if function_name in {"atomic_load_explicit", "metal::atomic_load_explicit"}:
+            if self.metal_user_function_overloads(name):
+                return None
+            if len(args) != 2:
+                raise MetalAtomicLoadLoweringError(
+                    "requires a target and explicit memory order", source_location
+                )
+            order = str(getattr(args[1], "name", args[1])).lstrip(":")
+            shadowed_order = order == "memory_order_relaxed" and (
+                order in self.current_variable_types
+                or order in self.global_variable_types
+            )
+            if shadowed_order or order not in {
+                "memory_order_relaxed",
+                "metal::memory_order_relaxed",
+            }:
+                raise MetalAtomicLoadLoweringError(
+                    "only memory_order_relaxed has a portable load contract",
+                    source_location,
+                )
+            qualifiers = set(self.expression_metal_type_qualifiers(args[0]))
+            if not qualifiers.intersection({"device", "threadgroup"}):
+                raise MetalAtomicLoadLoweringError(
+                    "requires tracked device or threadgroup storage", source_location
+                )
+            pointee = self.metal_pointer_pointee_type_once(
+                self.expression_metal_type(args[0])
+            )
+            if pointee is None or self.map_type(pointee) not in {"int", "uint"}:
+                raise MetalAtomicLoadLoweringError(
+                    "requires a scalar int or uint atomic target", source_location
+                )
+            if "atomicLoad" in self.user_function_names:
+                raise MetalAtomicLoadLoweringError(
+                    "canonical atomicLoad conflicts with a source function",
+                    source_location,
+                )
+            target = self.generate_metal_atomic_target(args[0], is_main)
+            return f"atomicLoad({target})"
         if function_name in {"atomic_store_explicit", "metal::atomic_store_explicit"}:
             if self.metal_user_function_overloads(name):
                 return None

@@ -25229,7 +25229,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"RWStructuredBuffer, got {resource_type}"
             )
 
-    def generate_buffer_call(self, func_name, args):
+    def generate_buffer_call(self, func_name, args, *, rendered_value=None):
         """Render canonical CrossGL buffer operations as HLSL resource methods."""
         if func_name not in self.hlsl_buffer_helper_names():
             return None
@@ -25328,7 +25328,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     "RasterizerOrderedStructuredBuffer",
                 },
             )
-            if logical_bfloat_type is not None and physical_element_type == "uint16_t":
+            if rendered_value is not None:
+                value = rendered_value
+            elif (
+                logical_bfloat_type is not None and physical_element_type == "uint16_t"
+            ):
                 value = self.generate_expression(args[2])
                 storage_type = self.hlsl_bfloat16_storage_type(
                     logical_bfloat_type,
@@ -41992,6 +41996,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def hlsl_typed_buffer_atomic_operations(self):
         return {
+            "atomicLoad": ("InterlockedOr", 0),
             "atomicStore": ("InterlockedExchange", 1),
             "atomicAdd": ("InterlockedAdd", 1),
             "atomicMin": ("InterlockedMin", 1),
@@ -42248,12 +42253,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     f"DirectX typed buffer atomic '{func_name}' cannot write "
                     f"readonly {self.resource_base_type(readonly_resource_type)}"
                 )
+            if func_name == "atomicLoad":
+                raise ValueError(
+                    "DirectX atomicLoad requires writable buffer or groupshared storage"
+                )
             return None
 
         intrinsic, value_arg_count = operation_info
         min_args = 1 + value_arg_count
         max_args = min_args + 1
-        if func_name == "atomicStore":
+        if func_name in {"atomicLoad", "atomicStore"}:
             max_args = min_args
         if not min_args <= len(args) <= max_args:
             raise ValueError(
@@ -42303,6 +42312,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.generate_expression_with_expected(value_arg, target_type)
             for value_arg in value_args
         ]
+        if func_name == "atomicLoad":
+            # An unchanged-value RMW supplies an atomic read without a plain load.
+            rendered_values = ["0u" if target_kind == "uint" else "0"]
         original_arg = args[min_args] if len(args) > min_args else None
         if original_arg is not None:
             original_kind = self.scalar_expression_kind(original_arg)
@@ -44059,6 +44071,29 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if parts is not None:
                     return self.render_hlsl_typed_buffer_atomic_call_value(
                         parts, indent, expected_type
+                    )
+
+                if (
+                    func_name == "buffer_store"
+                    and func_name not in self.function_return_types
+                    and len(args) == 3
+                ):
+                    self.validate_buffer_call_access(func_name, args)
+                    resource_type = self.hlsl_buffer_helper_resource_type(args[0])
+                    element_type = self.hlsl_typed_buffer_element_type(
+                        resource_type,
+                        {
+                            "RWBuffer",
+                            "RWStructuredBuffer",
+                            "RasterizerOrderedBuffer",
+                            "RasterizerOrderedStructuredBuffer",
+                        },
+                    )
+                    code, value = self.render_hlsl_typed_buffer_atomic_value_expression(
+                        args[2], element_type, indent
+                    )
+                    return code, self.generate_buffer_call(
+                        func_name, args, rendered_value=value
                     )
 
                 if self.value_component_count(func_name) is not None:

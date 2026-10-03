@@ -13416,14 +13416,15 @@ class MetalCodeGen:
             )
 
         root_name = self.assignment_target_root_name(target)
-        if (
+        readonly = (
             root_name in self.current_readonly_metal_parameters
             or root_name in self.current_readonly_raw_buffer_parameters
             or self.structured_buffer_type_name(
                 self.local_variable_types.get(root_name)
             )
             == "StructuredBuffer"
-        ):
+        )
+        if readonly and operation != "load":
             return self.unsupported_metal_buffer_resource_atomic_call(
                 func_name, target, "requires writable storage"
             )
@@ -13431,19 +13432,20 @@ class MetalCodeGen:
         target_expr = self.generate_expression(target)
         if not self.is_metal_address_expression(target, target_expr):
             target_expr = f"&{target_expr}"
-        value = self.generate_expression_with_expected(args[1], mapped_target_type)
         atomic_type = f"atomic_{mapped_target_type}"
-        atomic_target = (
-            f"reinterpret_cast<{address_space} {atomic_type}*>({target_expr})"
-        )
+        qualifier = "const " if readonly else ""
+        atomic_target = f"reinterpret_cast<{qualifier}{address_space} {atomic_type}*>({target_expr})"
+        if operation == "load":
+            return f"atomic_load_explicit({atomic_target}, memory_order_relaxed)"
+        value = self.generate_expression_with_expected(args[1], mapped_target_type)
         return (
             f"atomic_{operation}_explicit("
             f"{atomic_target}, {value}, memory_order_relaxed)"
         )
 
     def unsupported_metal_buffer_resource_atomic_call(self, func_name, target, reason):
-        if func_name == "atomicStore":
-            raise ValueError(f"Metal atomicStore {reason}")
+        if func_name in {"atomicLoad", "atomicStore"}:
+            raise ValueError(f"Metal {func_name} {reason}")
         return_type = (
             self.expression_result_type(target) or self.current_expression_expected_type
         )
@@ -21433,6 +21435,7 @@ class MetalCodeGen:
 
     def buffer_atomic_operations(self):
         return {
+            "atomicLoad": ("load", 1),
             "atomicStore": ("store", 2),
             "atomicAdd": ("fetch_add", 2),
             "atomicMin": ("fetch_min", 2),
@@ -21462,6 +21465,8 @@ class MetalCodeGen:
     def unsupported_glsl_buffer_block_atomic_call(
         self, target, operation, reason, access=None
     ):
+        if operation == "atomicLoad":
+            raise ValueError(f"Metal atomicLoad {reason}")
         result_type = self.expression_result_type(target) or "uint"
         component_type = access.get("component_type") if access else None
         if component_type is not None:
@@ -21531,6 +21536,8 @@ class MetalCodeGen:
         atomic_target = (
             f"reinterpret_cast<device {atomic_type}*>({access['buffer']} + {offset})"
         )
+        if operation == "load":
+            return f"atomic_load_explicit({atomic_target}, memory_order_relaxed)"
         value = self.generate_expression_with_expected(args[1], access["type"])
         return f"atomic_{operation}_explicit({atomic_target}, {value}, memory_order_relaxed)"
 
