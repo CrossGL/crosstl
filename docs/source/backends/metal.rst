@@ -34,6 +34,18 @@ The backend focuses on Apple GPU shader integration:
   mappings
 * Metal-specific handling for char-like types through ``CharTypeMapper``
 
+Member-template deduction retains the primary argument list of materialized
+structs, including when an enabled partial specialization supplies the body.
+Omitted arguments are expanded from that primary declaration's defaults before
+matching pointer types. Named, anonymous, dependent and integral defaults retain
+their positions; conflicting pointee types, address spaces and excess arguments
+are rejected. Project translation retains concrete struct materialization even
+when no free-function template is instantiated. Required native controls exercise
+guarded integer writes through these wrappers on generated Metal, HLSL and GLSL,
+with original Metal controls.
+This does not establish arbitrary partial-specialization ordering or atomic
+operations on every target.
+
 Implementation Notes
 --------------------
 

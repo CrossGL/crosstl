@@ -23561,7 +23561,12 @@ def _project_template_materialization_for_artifact(
         unsupported=unsupported,
         accounting=accounting,
     )
-    if not specializations and not unsupported and not stripped_diagnostic_helpers:
+    if (
+        not specializations
+        and not preprocessor._materialized_struct_specializations
+        and not unsupported
+        and not stripped_diagnostic_helpers
+    ):
         return None
 
     if unsupported:

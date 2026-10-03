@@ -8,6 +8,7 @@ on:
       - "crosstl/**"
       - "demos/integrations/mlx/portable_host/**"
       - "tests/test_translator/**"
+      - "tests/test_backend/test_metal/**"
       - "tests/fixtures/runtime_verification/**"
       - "tools/run_bounded_command.py"
       - "pyproject.toml"
@@ -18,6 +19,7 @@ on:
       - "crosstl/**"
       - "demos/integrations/mlx/portable_host/**"
       - "tests/test_translator/**"
+      - "tests/test_backend/test_metal/**"
       - "tests/fixtures/runtime_verification/**"
       - "tools/run_bounded_command.py"
       - "pyproject.toml"
@@ -64,6 +66,7 @@ jobs:
           CROSTL_REQUIRE_MLX_OPENGL_GENERAL_GATHER: "1"
           CROSTL_REQUIRE_OPENGL_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
+          CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
@@ -77,6 +80,7 @@ jobs:
               tests/test_translator/test_mlx_general_gather_opengl.py \
               tests/test_translator/test_resource_aggregates_opengl.py \
               tests/test_translator/test_void_return_effects.py \
+              tests/test_translator/test_template_wrapper_runtime.py \
               2>&1 | tee .mlx-gather-opengl/execution.log
       - name: Retain OpenGL execution evidence
         if: always()
@@ -114,6 +118,7 @@ jobs:
           CROSTL_REQUIRE_METAL_EMPTY_ARRAYS: "1"
           CROSTL_REQUIRE_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
+          CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
         run: |
           set -euo pipefail
@@ -126,6 +131,7 @@ jobs:
               tests/test_translator/test_metal_empty_arrays.py \
               tests/test_translator/test_resource_aggregates.py \
               tests/test_translator/test_void_return_effects.py \
+              tests/test_translator/test_template_wrapper_runtime.py \
               2>&1 | tee .mlx-gather/execution.log
       - name: Retain original and translated execution evidence
         if: always()
@@ -195,6 +201,7 @@ jobs:
           CROSTL_REQUIRE_MLX_DIRECTX_GENERAL_GATHER: "1"
           CROSTL_REQUIRE_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
+          CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
         run: |
           set -euo pipefail
@@ -206,6 +213,7 @@ jobs:
               tests/test_translator/test_mlx_general_gather_directx.py \
               tests/test_translator/test_resource_aggregates.py \
               tests/test_translator/test_void_return_effects.py \
+              tests/test_translator/test_template_wrapper_runtime.py \
               2>&1 | tee .mlx-gather-directx/execution.log
       - name: Retain DirectX execution evidence
         if: always()

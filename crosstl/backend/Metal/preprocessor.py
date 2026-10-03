@@ -882,6 +882,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             str, Tuple[str, Tuple[str, ...]]
         ] = {}
         self._materialized_struct_specialization_namespaces: Dict[str, str] = {}
+        self._materialized_struct_primary_templates: Dict[str, _MetalTemplateStruct] = (
+            {}
+        )
         self._known_member_function_return_types: Dict[str, str] = {}
         self._instantiated_template_member_calls: Dict[
             str,
@@ -928,6 +931,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._lexical_scope_lookup_cache.clear()
         self._materialized_struct_specializations.clear()
         self._materialized_struct_specialization_namespaces.clear()
+        self._materialized_struct_primary_templates.clear()
         self._known_member_function_return_types.clear()
         self._instantiated_template_member_calls.clear()
         self._materialized_function_names.clear()
@@ -1872,6 +1876,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                     self._materialized_struct_specializations[specialized_name] = (
                         struct_name,
                         tuple(key[1]),
+                    )
+                    self._materialized_struct_primary_templates[specialized_name] = (
+                        primary_template
                     )
                     selected_source_template = (
                         primary_template
@@ -15209,7 +15216,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             if resolved_declared_type is None or concrete_value_type is None:
                 return None
             resolved_declared_type = self._canonical_template_binding_pointee_type(
-                resolved_declared_type
+                resolved_declared_type, context=concrete_value_type
             )
             concrete_value_type = self._canonical_template_binding_pointee_type(
                 concrete_value_type
@@ -19952,15 +19959,40 @@ class MetalPreprocessor(HLSLPreprocessor):
         pointee = self._normalize_inferred_type(normalized[:-1])
         return pointee or None
 
-    def _canonical_template_binding_pointee_type(self, type_text: str) -> str:
+    def _canonical_template_binding_pointee_type(
+        self, type_text: str, *, context: Optional[str] = None
+    ) -> str:
         normalized = self._normalize_inferred_type(type_text)
         specialization = self._materialized_struct_specializations.get(normalized)
-        if specialization is None:
-            return normalized
-        source_name, source_arguments = specialization
-        return self._normalize_template_argument_text(
-            f"{source_name}<{', '.join(source_arguments)}>"
+        primary = self._materialized_struct_primary_templates.get(
+            normalized
+            if specialization is not None
+            else self._normalize_inferred_type(context or "")
         )
+        if specialization is not None:
+            source_name, source_arguments = specialization
+            normalized = f"{source_name}<{', '.join(source_arguments)}>"
+        template_id = self._exact_template_type_id(normalized)
+        if primary is not None and template_id is not None:
+            name, arguments = template_id
+            qualified_name = (
+                f"{primary.namespace}::{primary.name}"
+                if primary.namespace
+                else primary.name
+            )
+            if name in {primary.name, qualified_name}:
+                if not primary.variadic_template_parameters and len(arguments) > len(
+                    primary.template_parameters
+                ):
+                    return self._normalize_template_argument_text(normalized)
+                # Deduction must compare the primary's argument slots, even when
+                # materialization selected a partial specialization's body.
+                resolved = self._template_arguments_with_resolved_defaults(
+                    primary, arguments
+                )
+                if resolved is not None:
+                    normalized = f"{primary.name}<{', '.join(resolved)}>"
+        return self._normalize_template_argument_text(normalized)
 
     @staticmethod
     def _pointer_argument_matches_declared_type(
@@ -23994,11 +24026,23 @@ class MetalPreprocessor(HLSLPreprocessor):
             self._normalize_inferred_type(concrete_type)
         )
         if specialization is not None:
-            source_name, source_arguments = specialization
+            source_name = specialization[0]
             if re.search(
                 rf"(?<![A-Za-z0-9_]){re.escape(source_name)}\s*<", template_type
             ):
-                concrete_type = f"{source_name}<{', '.join(source_arguments)}>"
+                template_type = self._canonical_template_binding_pointee_type(
+                    template_type, context=concrete_type
+                )
+                concrete_type = self._canonical_template_binding_pointee_type(
+                    concrete_type
+                )
+        template_id = self._exact_template_type_id(template_type)
+        concrete_id = self._exact_template_type_id(concrete_type)
+        if template_id is not None and concrete_id is not None:
+            if template_id[0] != concrete_id[0] or len(template_id[1]) != len(
+                concrete_id[1]
+            ):
+                return
         captures: List[str] = []
         pattern_parts: List[str] = []
         position = 0
@@ -26073,7 +26117,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             if name not in defaults:
                 return False
-        return True
+        return argument_index == len(template_arguments)
 
     def _resolve_template_default_argument(
         self,

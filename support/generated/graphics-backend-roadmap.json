@@ -1549,6 +1549,9 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_function_call",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_project_",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_compiles",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_executes_natively",
             "tests/test_translator/test_metal_vector_constructors.py::def test_generic_vector_constructors_execute_natively",
             "tests/test_translator/test_metal_vector_constructors.py::def test_selected_vector_conversion_executes_natively",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_resolves_vector_type_alias_declarations",
@@ -1562,6 +1565,10 @@
         "metal": {
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_function_call",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_project_",
+            "tests/test_backend/test_metal/test_template_wrapper_deduction.py::def test_",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_compiles",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_executes_natively",
             "tests/test_translator/test_metal_bfloat_vectors.py::def test_bfloat_vectors_execute_natively",
             "tests/test_translator/test_metal_vector_constructors.py::def test_generic_vector_constructors_execute_natively",
             "tests/test_translator/test_metal_vector_constructors.py::def test_selected_vector_conversion_executes_natively",
@@ -1583,6 +1590,9 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_function_call",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_project_",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_compiles",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_executes_natively",
             "tests/test_translator/test_void_return_effects.py::def test_void_return_call_compiles",
             "tests/test_translator/test_void_return_effects.py::def test_void_return_call_executes_natively",
             "tests/test_translator/test_metal_vector_constructors.py::def test_generic_vector_constructors_execute_natively",
