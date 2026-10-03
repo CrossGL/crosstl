@@ -31,9 +31,9 @@ ROOT = Path(__file__).resolve().parents[2]
 COPY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "copy.metal-roundtrip.json"
 )
-# Installed from the terminal exhaustive proof before this harness is committed.
+# Pinned after the exhaustive compiler-gated reference refresh.
 COPY_METAL_CONTRACT_SHA256 = (
-    "648e989cacb5e9567ef889531c7bf9d3dd488bb0fb77f2aa924a9b032c47d564"
+    "3ec6b3b2e1999aa3534cc0312271fe49ab747eb44098f2bcb1bd67291f7eb316"
 )
 
 
@@ -688,6 +688,55 @@ def test_current_mlx_copy_metal_contract_is_complete_and_classified():
         assert len(entry["sha256"]) == 64
         int(entry["sha256"], 16)
         assert entry["sizeBytes"] > 0
+
+
+def test_copy_metal_identity_refresh_preserves_proof_scope():
+    refresh = COPY_METAL_CONTRACT["artifactIdentityRefresh"]
+    assert refresh["kind"] == "compiler-validated-linkage-refresh"
+    assert refresh["artifactCount"] == len(COPY_METAL_ENTRIES) == 2496
+    assert 0 < refresh["changedArtifactCount"] <= refresh["artifactCount"]
+    assert refresh["previousContractSha256"] == (
+        "648e989cacb5e9567ef889531c7bf9d3dd488bb0fb77f2aa924a9b032c47d564"
+    )
+    assert (
+        refresh["translatorIdentity"]
+        != COPY_METAL_CONTRACT["proof"]["translatorIdentity"]
+    )
+    assert len(refresh["translatorIdentity"]) == 40
+    int(refresh["translatorIdentity"], 16)
+    for field in (
+        "auditSha256",
+        "compiledIdentityManifestSha256",
+        "linkageComparisonSha256",
+        "materializationAuditSha256",
+    ):
+        assert len(refresh[field]) == 64
+        int(refresh[field], 16)
+    assert refresh["compiler"]["command"] == [
+        "xcrun",
+        "-sdk",
+        "macosx",
+        "metal",
+        "-Werror",
+        "-c",
+        "{artifact}",
+        "-o",
+        "{output}",
+    ]
+    assert refresh["compiler"]["version"].startswith("Apple metal version ")
+    assert len(refresh["compiler"]["sha256"]) == 64
+    int(refresh["compiler"]["sha256"], 16)
+    for field in (
+        "allCompilerStdoutEmpty",
+        "allCompilerStderrEmpty",
+        "allAirArtifactsNonempty",
+        "sourceCoverageAndAbiUnchanged",
+        "onlyHelperLinkageQualifiersChanged",
+        "previousProofPreserved",
+    ):
+        assert refresh[field] is True
+    assert refresh["numericalExecution"] is False
+    assert refresh["fullUpstreamSuite"] is False
 
 
 def _partition_copy_metal_workloads(

@@ -1,0 +1,301 @@
+name: MLX Gather Round Trip
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/mlx-gather-roundtrip.yml"
+      - "crosstl/**"
+      - "demos/integrations/mlx/portable_host/**"
+      - "tests/test_translator/**"
+      - "tests/test_backend/test_metal/**"
+      - "tests/fixtures/runtime_verification/**"
+      - "tools/run_bounded_command.py"
+      - "pyproject.toml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/mlx-gather-roundtrip.yml"
+      - "crosstl/**"
+      - "demos/integrations/mlx/portable_host/**"
+      - "tests/test_translator/**"
+      - "tests/test_backend/test_metal/**"
+      - "tests/fixtures/runtime_verification/**"
+      - "tools/run_bounded_command.py"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+  PYTHONUNBUFFERED: "1"
+
+concurrency:
+  group: mlx-gather-roundtrip-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  opengl:
+    name: Translated OpenGL indexed gather
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install OpenGL runtime and validation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+          python -m pip install -e . pytest pytest-xdist numpy moderngl PyOpenGL "PyYAML>=6,<7"
+      - name: Checkout pinned upstream MLX
+        run: |
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+      - name: Validate indexed OpenGL gather and resource aggregates
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_REQUIRE_MLX_OPENGL_GENERAL_GATHER: "1"
+          CROSTL_REQUIRE_OPENGL_RESOURCE_AGGREGATES: "1"
+          CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
+          CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
+          CROSTL_REQUIRE_FUNCTOR_MEMBER_RUNTIME: "1"
+          CROSTL_REQUIRE_CONSTRAINED_SPECIALIZATION_RUNTIME: "1"
+          CROSTL_REQUIRE_POINTER_OFFSET_RUNTIME: "1"
+          CROSTL_REQUIRE_ATOMIC_RESOURCE_RUNTIME: "1"
+          CROSTL_REQUIRE_MLX_GENERAL_SCATTER: "1"
+          CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
+          CROSTL_REQUIRE_ATOMIC_LOAD_RUNTIME: "1"
+          CROSTL_REQUIRE_ATOMIC_COMPARE_EXCHANGE_RUNTIME: "1"
+          CROSTL_REQUIRE_METAL_CONSTEXPR_RUNTIME: "1"
+          CROSTL_REQUIRE_METAL_CONSTRAINED_RUNTIME: "1"
+          CROSTL_REQUIRE_MLX_SCATTER_AXIS: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-gather-opengl
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "Native OpenGL indexed gather" -- \
+            python -m pytest -q -n auto --dist loadgroup --durations=20 \
+              --basetemp=.mlx-gather-opengl/pytest \
+              --junitxml=.mlx-gather-opengl/results.xml \
+              tests/test_translator/test_mlx_general_gather_opengl.py \
+              tests/test_translator/test_resource_aggregates_opengl.py \
+              tests/test_translator/test_void_return_effects.py \
+              tests/test_translator/test_template_wrapper_runtime.py \
+              tests/test_translator/test_functor_member_runtime.py \
+              tests/test_translator/test_constrained_specialization_runtime.py \
+              tests/test_translator/test_pointer_offset_address_spaces.py \
+              tests/test_translator/test_atomic_resource_runtime.py \
+              tests/test_translator/test_mlx_general_scatter_runtime.py \
+              tests/test_translator/test_atomic_store_runtime.py \
+              tests/test_translator/test_atomic_load_runtime.py \
+              tests/test_translator/test_mlx_atomic_load_runtime.py \
+              tests/test_translator/test_atomic_compare_exchange_runtime.py \
+              tests/test_translator/test_mlx_atomic_compare_exchange_runtime.py \
+              tests/test_translator/test_metal_constexpr_branches.py \
+              tests/test_translator/test_metal_constrained_calls.py \
+              tests/test_translator/test_mlx_scatter_axis_runtime.py \
+              2>&1 | tee .mlx-gather-opengl/execution.log
+      - name: Retain OpenGL execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-gather-opengl-${{ github.run_attempt }}
+          path: .mlx-gather-opengl
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  metal:
+    name: Original and translated Metal gather
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install CrossTL and test dependencies
+        run: python -m pip install -e . pytest pytest-xdist numpy
+      - name: Checkout pinned upstream MLX
+        run: |
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+      - name: Validate general gather and empty arrays
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_REQUIRE_MLX_GENERAL_GATHER: "1"
+          CROSTL_REQUIRE_METAL_EMPTY_ARRAYS: "1"
+          CROSTL_REQUIRE_RESOURCE_AGGREGATES: "1"
+          CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
+          CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
+          CROSTL_REQUIRE_FUNCTOR_MEMBER_RUNTIME: "1"
+          CROSTL_REQUIRE_CONSTRAINED_SPECIALIZATION_RUNTIME: "1"
+          CROSTL_REQUIRE_POINTER_OFFSET_RUNTIME: "1"
+          CROSTL_REQUIRE_ATOMIC_RESOURCE_RUNTIME: "1"
+          CROSTL_REQUIRE_MLX_GENERAL_SCATTER: "1"
+          CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
+          CROSTL_REQUIRE_ATOMIC_LOAD_RUNTIME: "1"
+          CROSTL_REQUIRE_ATOMIC_COMPARE_EXCHANGE_RUNTIME: "1"
+          CROSTL_REQUIRE_METAL_CONSTEXPR_RUNTIME: "1"
+          CROSTL_REQUIRE_METAL_CONSTRAINED_RUNTIME: "1"
+          CROSTL_REQUIRE_MLX_SCATTER_AXIS: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-gather
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "Native gather round trip" -- \
+            python -m pytest -q -n auto --dist loadgroup --durations=20 \
+              --basetemp=.mlx-gather/pytest \
+              --junitxml=.mlx-gather/results.xml \
+              tests/test_translator/test_mlx_general_gather.py \
+              tests/test_translator/test_metal_empty_arrays.py \
+              tests/test_translator/test_resource_aggregates.py \
+              tests/test_translator/test_void_return_effects.py \
+              tests/test_translator/test_template_wrapper_runtime.py \
+              tests/test_translator/test_functor_member_runtime.py \
+              tests/test_translator/test_constrained_specialization_runtime.py \
+              tests/test_translator/test_pointer_offset_address_spaces.py \
+              tests/test_translator/test_atomic_resource_runtime.py \
+              tests/test_translator/test_mlx_general_scatter_runtime.py \
+              tests/test_translator/test_atomic_store_runtime.py \
+              tests/test_translator/test_atomic_load_runtime.py \
+              tests/test_translator/test_mlx_atomic_load_runtime.py \
+              tests/test_translator/test_atomic_compare_exchange_runtime.py \
+              tests/test_translator/test_mlx_atomic_compare_exchange_runtime.py \
+              tests/test_translator/test_metal_constexpr_branches.py \
+              tests/test_translator/test_metal_constrained_calls.py \
+              tests/test_translator/test_mlx_scatter_axis_runtime.py \
+              2>&1 | tee .mlx-gather/execution.log
+      - name: Retain original and translated execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-gather-metal-${{ github.run_attempt }}
+          path: .mlx-gather
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  directx:
+    name: Translated DirectX indexed gather
+    runs-on: windows-2025
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Initialize DirectX execution evidence
+        run: |
+          mkdir -p .mlx-gather-directx
+          python --version > .mlx-gather-directx/python-version.txt
+      - name: Install CrossTL and runtime dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist numpy \
+            2>&1 | tee .mlx-gather-directx/dependencies.log
+      - name: Install pinned DirectX tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $root = Join-Path $env:RUNNER_TEMP "dxc"
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4") {
+            throw "DXC archive checksum mismatch."
+          }
+          Expand-Archive $archive -DestinationPath $root
+          $bin = Join-Path $root "bin/x64"
+          if (-not (Test-Path "$bin/dxc.exe")) { throw "DXC executable missing." }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $warpArchive = Join-Path $env:RUNNER_TEMP "warp.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "warp"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg" -OutFile $warpArchive
+          if ((Get-FileHash $warpArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681") {
+            throw "WARP archive checksum mismatch."
+          }
+          Expand-Archive $warpArchive -DestinationPath $warpRoot
+          Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
+      - name: Checkout pinned upstream MLX
+        run: |
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+      - name: Validate indexed DirectX gather and resource aggregates
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_REQUIRE_MLX_DIRECTX_GENERAL_GATHER: "1"
+          CROSTL_REQUIRE_RESOURCE_AGGREGATES: "1"
+          CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
+          CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
+          CROSTL_REQUIRE_FUNCTOR_MEMBER_RUNTIME: "1"
+          CROSTL_REQUIRE_CONSTRAINED_SPECIALIZATION_RUNTIME: "1"
+          CROSTL_REQUIRE_POINTER_OFFSET_RUNTIME: "1"
+          CROSTL_REQUIRE_ATOMIC_RESOURCE_RUNTIME: "1"
+          CROSTL_REQUIRE_MLX_GENERAL_SCATTER: "1"
+          CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
+          CROSTL_REQUIRE_ATOMIC_LOAD_RUNTIME: "1"
+          CROSTL_REQUIRE_ATOMIC_COMPARE_EXCHANGE_RUNTIME: "1"
+          CROSTL_REQUIRE_METAL_CONSTEXPR_RUNTIME: "1"
+          CROSTL_REQUIRE_METAL_CONSTRAINED_RUNTIME: "1"
+          CROSTL_REQUIRE_MLX_SCATTER_AXIS: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-gather-directx
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "Native DirectX indexed gather" -- \
+            python -m pytest -q -n auto --dist loadgroup --durations=20 \
+              --basetemp=.mlx-gather-directx/pytest \
+              --junitxml=.mlx-gather-directx/results.xml \
+              tests/test_translator/test_mlx_general_gather_directx.py \
+              tests/test_translator/test_resource_aggregates.py \
+              tests/test_translator/test_void_return_effects.py \
+              tests/test_translator/test_template_wrapper_runtime.py \
+              tests/test_translator/test_functor_member_runtime.py \
+              tests/test_translator/test_constrained_specialization_runtime.py \
+              tests/test_translator/test_pointer_offset_address_spaces.py \
+              tests/test_translator/test_atomic_resource_runtime.py \
+              tests/test_translator/test_mlx_general_scatter_runtime.py \
+              tests/test_translator/test_atomic_store_runtime.py \
+              tests/test_translator/test_atomic_load_runtime.py \
+              tests/test_translator/test_mlx_atomic_load_runtime.py \
+              tests/test_translator/test_atomic_compare_exchange_runtime.py \
+              tests/test_translator/test_mlx_atomic_compare_exchange_runtime.py \
+              tests/test_translator/test_metal_constexpr_branches.py \
+              tests/test_translator/test_metal_constrained_calls.py \
+              tests/test_translator/test_mlx_scatter_axis_runtime.py \
+              2>&1 | tee .mlx-gather-directx/execution.log
+      - name: Retain DirectX execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-gather-directx-${{ github.run_attempt }}
+          path: .mlx-gather-directx
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

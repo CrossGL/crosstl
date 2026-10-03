@@ -1,0 +1,360 @@
+name: MLX Metal Host Integration
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/mlx-metal-host.yml"
+      - "crosstl/**"
+      - "demos/integrations/mlx/**"
+      - "tests/test_mlx_metal_host.py"
+      - "tests/test_translator/test_project_metal_discovery.py"
+      - "tests/test_translator/test_fused_math.py"
+      - "tests/test_translator/test_metal_builtin_ownership.py"
+      - "tests/test_translator/test_metal_bfloat_vectors.py"
+      - "tests/test_translator/test_metal_member_pointer_provenance.py"
+      - "tests/test_translator/test_metal_precise_acosh.py"
+      - "tests/test_translator/test_metal_precise_atan.py"
+      - "tests/test_translator/test_metal_boolean_promotion.py"
+      - "tests/test_translator/test_metal_float_selection.py"
+      - "tests/test_translator/test_boolean_buffer_runtime.py"
+      - "tests/test_translator/test_mlx_current_unary_sign.py"
+      - "tests/test_translator/test_mlx_current_unary_atan.py"
+      - "tests/test_translator/test_mlx_current_unary_acosh.py"
+      - "tests/test_translator/test_mlx_current_copy.py"
+      - "tests/test_translator/test_metal_precise_trig.py"
+      - "tests/test_translator/test_mlx_current_unary_fma.py"
+      - "tests/test_translator/test_metal_float_atomics.py"
+      - "tests/test_translator/test_directx_float_atomics.py"
+      - "tests/test_translator/test_mlx_gated_delta_metal.py"
+      - "tests/test_translator/test_mlx_gated_delta_runtime.py"
+      - "tests/test_translator/test_opengl_half_conversion.py"
+      - "tests/test_translator/test_mlx_attention_odo_runtime.py"
+      - "tests/test_translator/test_mlx_attention_ds_runtime.py"
+      - "tests/test_translator/test_mlx_attention_reduce_runtime.py"
+      - "tests/fixtures/runtime_verification/metal_dispatch_sequence.swift"
+      - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
+      - "tests/fixtures/runtime_verification/metal_raw_buffers.swift"
+      - "tests/fixtures/runtime_verification/metal_uint32_buffers.swift"
+      - "tools/run_bounded_command.py"
+      - "pyproject.toml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/mlx-metal-host.yml"
+      - "crosstl/**"
+      - "demos/integrations/mlx/**"
+      - "tests/test_mlx_metal_host.py"
+      - "tests/test_translator/test_project_metal_discovery.py"
+      - "tests/test_translator/test_fused_math.py"
+      - "tests/test_translator/test_metal_builtin_ownership.py"
+      - "tests/test_translator/test_metal_bfloat_vectors.py"
+      - "tests/test_translator/test_metal_member_pointer_provenance.py"
+      - "tests/test_translator/test_metal_precise_acosh.py"
+      - "tests/test_translator/test_metal_precise_atan.py"
+      - "tests/test_translator/test_metal_boolean_promotion.py"
+      - "tests/test_translator/test_metal_float_selection.py"
+      - "tests/test_translator/test_boolean_buffer_runtime.py"
+      - "tests/test_translator/test_mlx_current_unary_sign.py"
+      - "tests/test_translator/test_mlx_current_unary_atan.py"
+      - "tests/test_translator/test_mlx_current_unary_acosh.py"
+      - "tests/test_translator/test_mlx_current_copy.py"
+      - "tests/test_translator/test_metal_precise_trig.py"
+      - "tests/test_translator/test_mlx_current_unary_fma.py"
+      - "tests/test_translator/test_metal_float_atomics.py"
+      - "tests/test_translator/test_directx_float_atomics.py"
+      - "tests/test_translator/test_mlx_gated_delta_metal.py"
+      - "tests/test_translator/test_mlx_gated_delta_runtime.py"
+      - "tests/test_translator/test_opengl_half_conversion.py"
+      - "tests/test_translator/test_mlx_attention_odo_runtime.py"
+      - "tests/test_translator/test_mlx_attention_ds_runtime.py"
+      - "tests/test_translator/test_mlx_attention_reduce_runtime.py"
+      - "tests/fixtures/runtime_verification/metal_dispatch_sequence.swift"
+      - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
+      - "tests/fixtures/runtime_verification/metal_raw_buffers.swift"
+      - "tests/fixtures/runtime_verification/metal_uint32_buffers.swift"
+      - "tools/run_bounded_command.py"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+  PYTHONUNBUFFERED: "1"
+  CMAKE_BUILD_PARALLEL_LEVEL: "4"
+
+concurrency:
+  group: mlx-metal-host-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  metal-host:
+    name: MLX translated Metal host execution
+    runs-on: macos-26
+    timeout-minutes: 185
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install CrossTL and test dependencies
+        run: python -m pip install -e . pytest pytest-xdist numpy
+      - name: Validate host harness contracts
+        env:
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: python -m pytest -q -n auto tests/test_mlx_metal_host.py
+      - name: Validate Metal argument inference
+        env:
+          CROSTL_REQUIRE_METAL_ARGUMENT_INFERENCE: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/argument-inference
+          python tools/run_bounded_command.py --timeout-seconds 120 --label "Native argument inference" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/argument-inference/pytest \
+              --junitxml=.mlx-metal-host/argument-inference/results.xml \
+              tests/test_translator/test_project_metal_discovery.py \
+              2>&1 | tee .mlx-metal-host/argument-inference.log
+      - name: Validate pointer member round trips
+        env:
+          CROSTL_REQUIRE_MEMBER_POINTER_METAL: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/member-pointers
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Pointer member round trips" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/member-pointers/pytest \
+              --junitxml=.mlx-metal-host/member-pointers/results.xml \
+              tests/test_translator/test_metal_member_pointer_provenance.py \
+              2>&1 | tee .mlx-metal-host/member-pointers.log
+      - name: Validate bfloat vector round trips
+        env:
+          CROSTL_REQUIRE_METAL_BFLOAT_VECTORS: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/bfloat-vectors
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Bfloat vector round trips" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/bfloat-vectors/pytest \
+              --junitxml=.mlx-metal-host/bfloat-vectors/results.xml \
+              tests/test_translator/test_metal_bfloat_vectors.py \
+              2>&1 | tee .mlx-metal-host/bfloat-vectors.log
+      - name: Validate half conversion reference
+        env:
+          CROSTL_REQUIRE_HALF_CONVERSION_RUNTIME: "1"
+          CROSTL_HALF_CONVERSION_TARGET: metal
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/half-conversions
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Metal half conversion reference" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/half-conversions/pytest \
+              --junitxml=.mlx-metal-host/half-conversions/results.xml \
+              tests/test_translator/test_opengl_half_conversion.py -k half_rounding_native \
+              2>&1 | tee .mlx-metal-host/half-conversions.log
+      - name: Validate native float atomics
+        env:
+          CROSTL_REQUIRE_METAL_FLOAT_ATOMICS: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/float-atomics
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Native float atomics" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/float-atomics/pytest \
+              --junitxml=.mlx-metal-host/float-atomics/results.xml \
+              tests/test_translator/test_metal_float_atomics.py \
+              tests/test_translator/test_directx_float_atomics.py::test_original_metal_matches_atomic_oracle \
+              2>&1 | tee .mlx-metal-host/float-atomics.log
+      - name: Checkout pinned upstream MLX
+        run: |
+          git init mlx-upstream
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+      - name: Validate pinned inverse hyperbolic cosine
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: metal
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_ACOSH: "1"
+          CROSTL_REQUIRE_METAL_PRECISE_ACOSH: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/acosh
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Pinned inverse hyperbolic cosine" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/acosh/pytest \
+              --junitxml=.mlx-metal-host/acosh/results.xml \
+              tests/test_translator/test_metal_precise_acosh.py \
+              tests/test_translator/test_mlx_current_unary_acosh.py \
+              2>&1 | tee .mlx-metal-host/acosh.log
+      - name: Validate pinned arctangent
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: metal
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_ATAN: "1"
+          CROSTL_REQUIRE_METAL_PRECISE_ATAN: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/atan
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Pinned arctangent" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/atan/pytest \
+              --junitxml=.mlx-metal-host/atan/results.xml \
+              tests/test_translator/test_metal_precise_atan.py \
+              tests/test_translator/test_mlx_current_unary_atan.py \
+              2>&1 | tee .mlx-metal-host/atan.log
+      - name: Validate pinned comparison arithmetic
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: metal
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_SIGN: "1"
+          CROSTL_REQUIRE_METAL_BOOLEAN_PROMOTION: "1"
+          CROSTL_REQUIRE_METAL_FLOAT_SELECTION: "1"
+          CROSTL_REQUIRE_BOOLEAN_BUFFER_RUNTIME: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/boolean-promotion
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Pinned comparison arithmetic" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/boolean-promotion/pytest \
+              --junitxml=.mlx-metal-host/boolean-promotion/results.xml \
+              tests/test_translator/test_metal_boolean_promotion.py \
+              tests/test_translator/test_metal_float_selection.py \
+              tests/test_translator/test_boolean_buffer_runtime.py \
+              tests/test_translator/test_mlx_current_unary_sign.py \
+              2>&1 | tee .mlx-metal-host/boolean-promotion.log
+      - name: Validate pinned copy layouts
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: metal
+          CROSTL_REQUIRE_MLX_CURRENT_COPY: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/copy-layouts
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "Pinned copy layouts" -- \
+            python -m pytest -q -n auto -vv \
+              --basetemp=.mlx-metal-host/copy-layouts/pytest \
+              --junitxml=.mlx-metal-host/copy-layouts/results.xml \
+              tests/test_translator/test_mlx_current_copy.py \
+              2>&1 | tee .mlx-metal-host/copy-layouts.log
+      - name: Compile pinned MLX gated-delta backward entry
+        env:
+          CROSTL_REQUIRE_MLX_GATED_DELTA_METAL: "1"
+          CROSTL_MLX_CURRENT_ROOT: mlx-upstream
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/gated-delta
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "MLX gated-delta compilation" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/gated-delta/pytest \
+              --junitxml=.mlx-metal-host/gated-delta/results.xml \
+              tests/test_translator/test_mlx_gated_delta_metal.py \
+              2>&1 | tee .mlx-metal-host/gated-delta.log
+      - name: Execute pinned MLX gated-delta gradients
+        env:
+          CROSTL_REQUIRE_MLX_GATED_DELTA_RUNTIME: "1"
+          CROSTL_MLX_CURRENT_ROOT: mlx-upstream
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/gated-delta-runtime
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX gated-delta gradients" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/gated-delta-runtime/pytest \
+              --junitxml=.mlx-metal-host/gated-delta-runtime/results.xml \
+              tests/test_translator/test_mlx_gated_delta_runtime.py \
+              2>&1 | tee .mlx-metal-host/gated-delta-runtime.log
+      - name: Execute pinned MLX attention row dots
+        env:
+          CROSTL_REQUIRE_MLX_ATTENTION_RUNTIME: "1"
+          CROSTL_MLX_ATTENTION_TARGET: metal
+          CROSTL_MLX_CURRENT_ROOT: mlx-upstream
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/attention-odo
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX Metal attention row dots" -- \
+            python -m pytest -q -n auto --dist loadscope \
+              --basetemp=.mlx-metal-host/attention-odo/pytest \
+              --junitxml=.mlx-metal-host/attention-odo/results.xml \
+              tests/test_translator/test_mlx_attention_odo_runtime.py \
+              2>&1 | tee .mlx-metal-host/attention-odo.log
+      - name: Execute pinned MLX attention derivatives
+        env:
+          CROSTL_REQUIRE_MLX_ATTENTION_DS_RUNTIME: "1"
+          CROSTL_MLX_ATTENTION_DS_TARGET: metal
+          CROSTL_MLX_CURRENT_ROOT: mlx-upstream
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/attention-ds
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX Metal attention derivatives" -- \
+            python -m pytest -q -n auto --dist loadscope \
+              --basetemp=.mlx-metal-host/attention-ds/pytest \
+              --junitxml=.mlx-metal-host/attention-ds/results.xml \
+              tests/test_translator/test_mlx_attention_ds_runtime.py \
+              2>&1 | tee .mlx-metal-host/attention-ds.log
+      - name: Execute pinned resident attention reductions
+        env:
+          CROSTL_REQUIRE_MLX_ATTENTION_REDUCE_RUNTIME: "1"
+          CROSTL_MLX_ATTENTION_REDUCE_TARGET: metal
+          CROSTL_MLX_CURRENT_ROOT: mlx-upstream
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/attention-reduce
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Metal resident attention reductions" -- \
+            python -m pytest -q -n auto --dist loadscope \
+              --basetemp=.mlx-metal-host/attention-reduce/pytest \
+              --junitxml=.mlx-metal-host/attention-reduce/results.xml \
+              tests/test_translator/test_mlx_attention_reduce_runtime.py \
+              2>&1 | tee .mlx-metal-host/attention-reduce.log
+      - name: Prepare isolated MLX build
+        run: |
+          python -m venv mlx-env
+          mlx-env/bin/python -m pip install setuptools wheel cmake ninja nanobind numpy packaging
+          python demos/integrations/mlx/run_mlx_metal_host.py prepare \
+            --mlx-root mlx-upstream --output-dir .mlx-metal-host/preparation
+      - name: Build adapted upstream MLX
+        env:
+          CMAKE_ARGS: "-DMLX_METAL_JIT=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 \
+            --label "MLX adapted host build" -- \
+            mlx-env/bin/python -m pip install -e ./mlx-upstream --no-build-isolation -v \
+            2>&1 | tee .mlx-metal-host/build.log
+      - name: Execute unchanged upstream operations with translated Metal
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 3300 \
+            --label "MLX translated host verification" -- \
+            python demos/integrations/mlx/run_mlx_metal_host.py verify \
+              --mlx-root mlx-upstream --python mlx-env/bin/python \
+              --output-dir .mlx-metal-host/evidence \
+              2>&1 | tee .mlx-metal-host/verification.log
+      - name: Retain native host execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-metal-host-${{ github.run_attempt }}
+          path: |
+            .mlx-metal-host
+            mlx-upstream/.host-metal-*/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

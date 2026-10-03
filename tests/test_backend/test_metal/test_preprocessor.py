@@ -294,6 +294,179 @@ def test_alias_free_struct_families_skip_detailed_scope_scans(monkeypatch):
     assert scan_counts == {"comments": 1, "scopes": 1}
 
 
+def test_discovery_records_reuse_content_without_sharing_mutations(monkeypatch):
+    preprocessor = MetalPreprocessor()
+    source = """
+    namespace example {
+    template <typename T> struct Scalar { using type = T; };
+    template <typename T> T identity(T value) { return value; }
+    template [[host_name("identity_float")]] float identity<float>(float);
+    float plain(float value) { return value; }
+    }
+    """
+    equal_source = source.encode().decode()
+    assert equal_source == source and equal_source is not source
+    scans = (
+        "_scan_template_functions",
+        "_scan_non_template_function_definitions",
+        "_scan_template_type_traits",
+    )
+    counts = dict.fromkeys(scans, 0)
+    for name in scans:
+        original = getattr(preprocessor, name)
+
+        def counted(*args, _name=name, _original=original):
+            counts[_name] += 1
+            return _original(*args)
+
+        monkeypatch.setattr(preprocessor, name, counted)
+
+    templates = preprocessor._find_template_functions(source)
+    assert len(templates) == 1 and templates[0].name == "identity"
+    templates[0].materializations.append("unrelated")
+    templates[0].template_parameters.append("Unexpected")
+    templates[0].template_type_traits["example::Scalar"]["parameters"].clear()
+    instantiations = preprocessor._find_project_template_instantiations(source)
+    assert len(instantiations) == 1
+    instantiations[0].template_arguments.append("Unexpected")
+    excluded = preprocessor._find_template_declaration_spans(source)
+    definitions = preprocessor._find_non_template_function_definitions(source, excluded)
+    assert [item.name for item in definitions] == ["plain"]
+    definitions.clear()
+    traits = preprocessor._find_template_type_traits(source)
+    traits["example::Scalar"]["parameters"].clear()
+
+    fresh_templates = preprocessor._find_template_functions(equal_source)
+    assert fresh_templates[0].materializations == []
+    assert fresh_templates[0].template_parameters == ["T"]
+    assert fresh_templates[0].template_type_traits["example::Scalar"]["parameters"] == [
+        "T"
+    ]
+    fresh_instantiations = preprocessor._find_project_template_instantiations(
+        equal_source
+    )
+    assert fresh_instantiations[0].template_arguments == ["float"]
+    assert [
+        item.name
+        for item in preprocessor._find_non_template_function_definitions(
+            equal_source, list(excluded)
+        )
+    ] == ["plain"]
+    assert preprocessor._find_template_type_traits(equal_source)["example::Scalar"][
+        "parameters"
+    ] == ["T"]
+    assert counts == dict.fromkeys(scans, 1)
+
+
+@pytest.mark.parametrize(
+    "finder,scanner,args",
+    [
+        ("_find_template_functions", "_scan_template_functions", ()),
+        (
+            "_find_non_template_function_definitions",
+            "_scan_non_template_function_definitions",
+            ([],),
+        ),
+        ("_find_template_type_traits", "_scan_template_type_traits", ()),
+    ],
+)
+def test_discovery_caches_empty_results_and_changed_source(
+    monkeypatch, finder, scanner, args
+):
+    preprocessor = MetalPreprocessor()
+    scans = []
+    original = getattr(preprocessor, scanner)
+
+    def counted(code, *other):
+        scans.append(code)
+        return original(code, *other)
+
+    monkeypatch.setattr(preprocessor, scanner, counted)
+    find = getattr(preprocessor, finder)
+    assert not find("int x;", *args)
+    assert not find("int x;", *args)
+    assert not find("int y;", *args)
+    assert scans == ["int x;", "int y;"]
+
+
+def test_function_discovery_keys_every_excluded_span_and_bounds_retention():
+    preprocessor = MetalPreprocessor()
+    source = "float first() { return 1; } float second() { return 2; }"
+    second = source.index("float second")
+    spans = [(-2, -1), (0, second), (len(source), len(source) + 1)]
+    assert [
+        item.name
+        for item in preprocessor._find_non_template_function_definitions(source, spans)
+    ] == ["second"]
+    spans[1] = (second, len(source))
+    assert [
+        item.name
+        for item in preprocessor._find_non_template_function_definitions(source, spans)
+    ] == ["first"]
+    for offset in range(SOURCE_ANALYSIS_CACHE_LIMIT + 2):
+        preprocessor._find_non_template_function_definitions(source, [(0, offset)])
+    cache = preprocessor._source_analysis(source).function_definitions
+    assert len(cache) == SOURCE_ANALYSIS_CACHE_LIMIT
+    assert ((0, 0),) not in cache
+
+
+def test_type_trait_discovery_keys_namespace_content_and_bounds_retention():
+    preprocessor = MetalPreprocessor()
+    source = "template <typename T> struct Scalar { using type = T; };"
+    spans = [(0, len(source), "first")]
+    assert "first::Scalar" in preprocessor._find_template_type_traits(source, spans)
+    spans[0] = (0, len(source), "second")
+    assert "second::Scalar" in preprocessor._find_template_type_traits(source, spans)
+    for index in range(SOURCE_ANALYSIS_CACHE_LIMIT + 2):
+        preprocessor._find_template_type_traits(
+            source, [(0, len(source), f"ns{index}")]
+        )
+    cache = preprocessor._source_analysis(source).template_type_traits
+    assert len(cache) == SOURCE_ANALYSIS_CACHE_LIMIT
+    assert ((0, len(source), "first"),) not in cache
+
+
+def test_discovery_records_are_evicted_with_source_snapshots():
+    preprocessor = MetalPreprocessor()
+    first = "template <typename T> T identity(T x) { return x; }"
+    preprocessor._find_template_functions(first)
+    for index in range(SOURCE_ANALYSIS_CACHE_LIMIT + 2):
+        preprocessor._find_template_functions(first + f"\nint value{index};")
+    assert len(preprocessor._source_analysis_cache) == SOURCE_ANALYSIS_CACHE_LIMIT
+    assert first not in preprocessor._source_analysis_cache
+
+
+def test_entry_discovery_observes_new_struct_specializations():
+    preprocessor = MetalPreprocessor()
+    source = (
+        "template <typename T> void consume(Box<T> value) {}\n"
+        "template void consume(Box_float value);\n"
+    )
+    assert preprocessor._find_project_template_instantiations(source) == []
+    preprocessor._materialized_struct_specializations["Box_float"] = (
+        "Box",
+        ("float",),
+    )
+    entries = preprocessor._find_project_template_instantiations(source)
+    assert len(entries) == 1
+    assert entries[0].template_arguments == ["float"]
+    preprocessor._materialized_struct_specializations.clear()
+    assert preprocessor._find_project_template_instantiations(source) == []
+
+
+@pytest.mark.parametrize("entry_discovery", [False, True])
+def test_preprocessing_resets_discovery_records(entry_discovery):
+    preprocessor = MetalPreprocessor()
+    source = "template <typename T> T identity(T x) { return x; }"
+    preprocessor._find_template_functions(source)
+    assert source in preprocessor._source_analysis_cache
+    if entry_discovery:
+        preprocessor.preprocess_for_entry_discovery("float value;")
+    else:
+        preprocessor.preprocess("float value;")
+    assert source not in preprocessor._source_analysis_cache
+
+
 def test_preprocessor_conditional_expansion():
     code = """
     #define ENABLED 1
@@ -6413,6 +6586,126 @@ def test_preprocessor_preserves_mutating_conversion_on_named_receiver():
     assert "return Value__operator_float(value);" in output
 
 
+@pytest.mark.parametrize(
+    "declared", ["float2", "vec<float, 2>", "metal::vec<float, 2>"]
+)
+@pytest.mark.parametrize(
+    "cast",
+    [
+        "static_cast<float2>",
+        "static_cast<vec<float, 2>>",
+        "float2",
+        "vec<float, 2>",
+        "metal::vec<float, 2>",
+        "Pair",
+        "static_cast<Pair>",
+    ],
+)
+def test_preprocessor_selects_declared_vector_conversion(declared, cast):
+    code = f"""
+    using Pair = metal::vec<float, 2>;
+    struct Components {{
+        float base;
+        operator {declared}() const {{ return float2(base + 1, base + 7); }}
+    }};
+    float2 convert(Components item) {{ return {cast}(item); }}
+    """
+    output = MetalPreprocessor().preprocess(code)
+    helper = re.search(
+        r"(Components__operator_\w+)\(thread const Components& self\)", output
+    )
+    assert helper is not None, output
+    assert f"return {helper.group(1)}(item);" in output
+    assert "self.base + 1" in output and "self.base + 7" in output
+
+
+@pytest.mark.parametrize(
+    "qualifiers,receiver",
+    [("", "const thread"), ("device", "thread"), ("&", "temporary")],
+)
+def test_preprocessor_rejects_incompatible_vector_conversion_receiver(
+    qualifiers, receiver
+):
+    value = "Components{1}" if receiver == "temporary" else "item"
+    declaration = "" if receiver == "temporary" else f"{receiver} Components& item"
+    code = f"""
+    struct Components {{
+        float base;
+        operator float2() {qualifiers} {{ return float2(base + 1, base + 7); }}
+    }};
+    float2 convert({declaration}) {{ return static_cast<float2>({value}); }}
+    """
+    with pytest.raises(MetalStructMethodError) as exc_info:
+        MetalPreprocessor().preprocess(code)
+    error = exc_info.value
+    assert error.reason == "conversion-operator-no-viable"
+    assert error.candidate_signatures
+    assert error.candidate_mismatches[0]["mismatches"]
+    assert error.source_location
+
+
+def test_preprocessor_vector_conversion_alias_uses_declaration_scope():
+    code = """
+    using Pair = float2;
+    struct Components {
+        float base;
+        operator Pair() const { return Pair(base + 1, base + 7); }
+    };
+    float2 convert(Components item) {
+        using Pair = int2;
+        return static_cast<float2>(item);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "return Components__operator_Pair(item);" in output
+
+
+def test_preprocessor_vector_conversion_prefers_receiver_qualifiers():
+    code = """
+    struct Components {
+        float base;
+        operator float2() { return float2(base + 1, base + 7); }
+        operator float2() const { return float2(base + 3, base + 9); }
+    };
+    float2 first(Components item) { return static_cast<float2>(item); }
+    float2 second(const Components item) { return static_cast<float2>(item); }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    calls = re.findall(r"return (Components__operator_\w+)\(item\);", output)
+    assert len(calls) == 2 and calls[0] != calls[1], output
+
+
+def test_preprocessor_rejects_ambiguous_vector_conversion_receiver():
+    source = """
+    struct Components {
+        float base;
+        operator float2() const { return float2(base + 1, base + 7); }
+        operator float2() volatile { return float2(base + 3, base + 9); }
+    };
+    float2 convert(Components item) { return static_cast<float2>(item); }
+    """
+    with pytest.raises(MetalStructMethodError) as exc_info:
+        MetalPreprocessor().preprocess(source)
+    error = exc_info.value
+    assert error.reason == "conversion-operator-ambiguous"
+    assert len(error.candidate_signatures) == 2
+    assert all(record["viable"] for record in error.candidate_mismatches)
+
+
+@pytest.mark.parametrize("space", ["thread", "device", "constant", "threadgroup"])
+def test_preprocessor_vector_conversion_retains_receiver_address_space(space):
+    source = f"""
+    struct Components {{
+        float base;
+        operator float2() const {space} {{ return float2(base + 1, base + 7); }}
+    }};
+    float2 convert(const {space} Components& item) {{ return static_cast<float2>(item); }}
+    """
+    output = MetalPreprocessor().preprocess(source)
+    assert "return Components__operator_float2(item);" in output
+    assert f"{space} const Components& self" in output
+
+
 def test_preprocessor_lowers_materialized_template_functor():
     # After the struct-template materializer produces a concrete `Sum_float`, the
     # member-function lowering pass lowers its `operator()` and rewrites the call.
@@ -11250,6 +11543,55 @@ def test_preprocessor_instantiates_template_method_from_stdint_array_subscript()
     assert "Sum__reduce__int32_t(op, values[i])" in output
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize(
+    "comment",
+    ["// output", "// punctuation: , < > ( ) [ ] { }", '// "unterminated'],
+)
+def test_parameter_split_continues_after_line_comments(newline, comment):
+    text = f"first, {comment}{newline}second, third"
+    assert MetalPreprocessor()._split_top_level_commas(text) == [
+        "first",
+        f"{comment}{newline}second",
+        "third",
+    ]
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        (
+            "first, second // trailing, comment",
+            ["first", "second // trailing, comment"],
+        ),
+        ('"// ,", last', ['"// ,"', "last"]),
+        ('"/* , */", last', ['"/* , */"', "last"]),
+        ("'/', last", ["'/'", "last"]),
+        ("call(first, // ) ,\nsecond), last", ["call(first, // ) ,\nsecond)", "last"]),
+        ("Box<int, // > ,\nfloat>, last", ["Box<int, // > ,\nfloat>", "last"]),
+        ("value /* , */ , last", ["value /* , */", "last"]),
+    ],
+)
+def test_parameter_split_preserves_nested_comments_and_literals(text, expected):
+    assert MetalPreprocessor()._split_top_level_commas(text) == expected
+
+
+def test_constrained_call_infers_parameters_after_line_comments():
+    source = """
+    template <typename T, enable_if_t<is_same_v<T, uint>, bool> = true>
+    T identity(T value) { return value; }
+    kernel void copy_index(
+        device uint* out [[buffer(0)]], // output, [B, T]
+        constant uint& count [[buffer(1)]], // number of elements
+        uint tid [[thread_position_in_grid]]) {
+        out[tid] = identity(tid) + count;
+    }
+    """
+    output = MetalPreprocessor().preprocess(source)
+    assert "uint identity_uint(uint value)" in output
+    assert "identity_uint(tid) + count" in output
+
+
 def test_infer_argument_type_recognizes_stdint_scalar_aliases():
     # stdint scalar aliases infer as themselves across the subscript / cast /
     # bare-local shapes (they carry known sizes for SFINAE `sizeof(T)`).
@@ -11257,6 +11599,79 @@ def test_infer_argument_type_recognizes_stdint_scalar_aliases():
     assert pp._infer_argument_type("vals[i]", {"vals": "int32_t"}, {}) == "int32_t"
     assert pp._infer_argument_type("uint8_t(x)", {}, {}) == "uint8_t"
     assert pp._infer_argument_type("v", {}, {"v": "int64_t"}) == "int64_t"
+
+
+@pytest.mark.parametrize("operator", ["+", "-", "*", "/", "%"])
+@pytest.mark.parametrize(
+    "left,right,expected",
+    [
+        ("bool", "bool", "int"),
+        ("char", "char", "int"),
+        ("uchar", "short", "int"),
+        ("ushort", "ushort", "int"),
+        ("int", "uint", "uint"),
+        ("uint", "int", "uint"),
+        ("int32_t", "uint32_t", "uint"),
+        ("uint32_t", "int64_t", "long"),
+        ("long", "uint", "long"),
+        ("long", "ulong", "ulong"),
+        ("size_t", "int", "ulong"),
+        ("uint64_t", "long", "ulong"),
+        ("short2", "short2", "short2"),
+        ("uint3", "uint3", "uint3"),
+        ("int4", "int4", "int4"),
+    ],
+)
+def test_integral_arithmetic_inference_preserves_result_type(
+    operator, left, right, expected
+):
+    assert (
+        MetalPreprocessor()._infer_argument_type(
+            f"left {operator} right", {}, {"left": left, "right": right}
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "left,right",
+    [
+        ("float", "float"),
+        ("float", "int"),
+        ("half", "uint"),
+        ("Value", "int"),
+        ("Value", "Value"),
+        ("device int*", "int"),
+        ("uint2", "int2"),
+        ("uint2", "uint3"),
+        ("bool2", "bool2"),
+    ],
+)
+def test_remainder_inference_rejects_unproven_operators(left, right):
+    assert (
+        MetalPreprocessor()._infer_argument_type(
+            "left % right", {}, {"left": left, "right": right}
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "expression,expected",
+    [
+        ("n % 24", "uint"),
+        ("(n % 24) * 2", "uint"),
+        ("n / 24 % 3", "uint"),
+        ("n % (3 * 2)", "uint"),
+        ("n %= 24", None),
+        ("n % 1.0f", None),
+    ],
+)
+def test_remainder_inference_preserves_grouping(expression, expected):
+    assert (
+        MetalPreprocessor()._infer_argument_type(expression, {}, {"n": "uint"})
+        == expected
+    )
 
 
 def test_infer_argument_type_recognizes_pointer_arguments_and_offsets():
@@ -11563,6 +11978,36 @@ def test_infer_argument_type_rejects_address_without_pointer_metadata():
     )
 
 
+@pytest.mark.parametrize(
+    "declaration, expected",
+    [
+        ("int value = 1;", "thread int*"),
+        ("const uint value = 1u;", "thread const uint*"),
+        ("threadgroup int value;", "threadgroup int*"),
+    ],
+)
+def test_infer_argument_type_preserves_addressed_local_storage(declaration, expected):
+    pp = MetalPreprocessor()
+    code = f"kernel void k() {{ {declaration} use(&value); }}"
+    declarations = pp._collect_local_variable_types(code, [])
+    locals_ = pp._flatten_types_at(declarations, code.index("use(&value)"))
+    assert pp._infer_argument_type("&(value)", {}, locals_) == expected
+    assert (
+        pp._infer_argument_type(
+            "&value", {}, pp._flatten_types_at(declarations, len(code))
+        )
+        is None
+    )
+    assert pp._infer_argument_type("&value", {}, {"value": "int"}) is None
+    global_types = pp._collect_local_variable_types(declaration, [])
+    assert (
+        pp._infer_argument_type(
+            "&value", {}, pp._flatten_types_at(global_types, len(declaration))
+        )
+        is None
+    )
+
+
 def test_infer_argument_type_simd_group_builtin_returns_first_arg_type():
     # A SIMD/quad group built-in that moves/combines lane values returns the type
     # of its first argument, so scan's
@@ -11750,7 +12195,7 @@ def test_infer_argument_type_local_array_and_member_subscript():
     pp = MetalPreprocessor()
     buffers = {"totals": "float", "buf": "uint"}
     locals_ = {"acc": "half", "update": "bool4_or_uint"}
-    fields = {"init": {"data": "float", "scale": "half"}}
+    fields = {"init": {"data": "float[4]", "scale": "half"}}
     # Local array / buffer subscript -> element type.
     assert pp._infer_argument_type("totals[i]", buffers, locals_, fields) == "float"
     assert pp._infer_argument_type("buf[i + 1]", buffers, locals_, fields) == "uint"
@@ -11760,7 +12205,7 @@ def test_infer_argument_type_local_array_and_member_subscript():
     )
     # Bare member access -> field type.
     assert pp._infer_argument_type("init.scale", buffers, locals_, fields) == "half"
-    pointer_fields = {"params->": {"stride": "int", "data": "float*"}}
+    pointer_fields = {"params->": {"stride": "int", "data": "const device float*"}}
     assert (
         pp._infer_argument_type("params->stride", buffers, locals_, pointer_fields)
         == "int"
@@ -11771,7 +12216,7 @@ def test_infer_argument_type_local_array_and_member_subscript():
     )
     assert (
         pp._infer_argument_type("params->data", buffers, locals_, pointer_fields)
-        is None
+        == "const device float*"
     )
     assert (
         pp._infer_argument_type("params.stride", buffers, locals_, pointer_fields)
@@ -11786,6 +12231,41 @@ def test_infer_argument_type_local_array_and_member_subscript():
     assert pp._infer_argument_type("missing[i]", buffers, locals_, fields) is None
     assert pp._infer_argument_type("init.unknown", buffers, locals_, fields) is None
     assert pp._infer_argument_type("foo()", buffers, locals_, fields) is None
+
+
+@pytest.mark.parametrize(
+    "declaration, expression, expected",
+    [
+        ("float[2][3]", "data.values[1]", "float[3]"),
+        ("float[2][3]", "data.values[1][2]", "float"),
+        ("float[2][3]", "data.values[1][2][0]", None),
+        ("array<int, 4>", "data.values[i++]", "int"),
+        ("const metal::array<int, 4>", "data.values[i]", "int"),
+        ("array<array<uint, 2>, 3>", "data.values[i][j]", "uint"),
+        ("array<const device float*, 2>", "data.values[i]", "const device float*"),
+        ("array<const device float*, 2>", "data.values[i][j]", "float"),
+        ("const device float*[2]", "data.values[i]", "const device float*"),
+        ("const device float*[2]", "data.values[i][j]", "float"),
+        ("array<const constant int*, 2>", "data.values[i][j]", "int"),
+        ("array<threadgroup uint*, 2>", "data.values[i]", "threadgroup uint*"),
+        ("float", "data.values[i]", None),
+        ("Other<int, 4>", "data.values[i]", None),
+        ("array<int>", "data.values[i]", None),
+        ("array<int, 4>", "data.values[]", None),
+        ("array<int, 4>", "data.values[i]garbage[j]", None),
+        ("array<int, 4>", "data.values[i][", None),
+        ("array<int, 4>", "data->values[i]", None),
+    ],
+)
+def test_infer_argument_type_preserves_member_array_layers(
+    declaration, expression, expected
+):
+    assert (
+        MetalPreprocessor()._infer_argument_type(
+            expression, {}, {}, {"data": {"values": declaration}}
+        )
+        == expected
+    )
 
 
 def test_infer_argument_type_builtin_vector_swizzle():

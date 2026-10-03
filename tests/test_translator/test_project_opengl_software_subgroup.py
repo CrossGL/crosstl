@@ -149,7 +149,7 @@ def test_project_rejects_software_subgroup_workgroup_mismatch(tmp_path):
     _write_fixture(repo)
 
     payload = translate_project(
-        _config(repo, workgroup_size=(16, 1, 1)),
+        _config(repo, workgroup_size=(32, 33, 1)),
         format_output=False,
     ).to_json()
 
@@ -161,5 +161,5 @@ def test_project_rejects_software_subgroup_workgroup_mismatch(tmp_path):
         "reason": "workgroup-size-mismatch",
         "softwareSubgroupWidth": 32,
         "sourceEntryPoints": [],
-        "workgroupSize": ["16", "1", "1"],
+        "workgroupSize": ["32", "33", "1"],
     }

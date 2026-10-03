@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -20,6 +19,7 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from tests.test_translator.metal_contract import operator_implementations
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_BINARY_SOURCE = "mlx/backend/metal/kernels/binary.metal"
@@ -729,22 +729,12 @@ def _translate_binary_metal_artifact(
     assert generated.count("kernel void ") == 1
     assert f"kernel void {workload.entry_point}" in generated
     assert generated.count(f"struct {workload.operator_type} {{") == 1
-    selected_implementation = re.compile(
-        rf"(?m)^[A-Za-z_][A-Za-z0-9_]*\s+"
-        rf"{re.escape(workload.operator_type)}__operator_call"
-        rf"(?:__[A-Za-z0-9_]+)*(?<!__temporary)\("
+    implementations = operator_implementations(generated, workload.operator_type)
+    assert (
+        len([name for name in implementations if not name.endswith("__temporary")]) == 1
     )
-    assert len(selected_implementation.findall(generated)) == 1
     for pruned_operator in BINARY_METAL_OPERATOR_TYPES - {workload.operator_type}:
-        assert (
-            re.search(
-                rf"(?m)^[A-Za-z_][A-Za-z0-9_]*\s+"
-                rf"{re.escape(pruned_operator)}__operator_call"
-                rf"(?:__[A-Za-z0-9_]+)*\(",
-                generated,
-            )
-            is None
-        )
+        assert operator_implementations(generated, pruned_operator) == ()
         marker = f"struct {pruned_operator} {{"
         cursor = 0
         while (start := generated.find(marker, cursor)) != -1:

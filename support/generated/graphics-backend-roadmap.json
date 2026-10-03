@@ -68,9 +68,36 @@
             "tests/test_translator/test_directx_metal_math.py::def test_metal_math_translates_and_compiles_for_directx",
             "tests/test_translator/test_directx_metal_math.py::def test_directx_metal_math_executes",
             "tests/test_translator/test_directx_metal_math.py::def test_directx_metal_math_rejects_shadowed_target",
-            "tests/test_translator/test_directx_metal_math.py::def test_hlsl_select_roundtrip_retains_hlsl_argument_order"
+            "tests/test_translator/test_directx_metal_math.py::def test_hlsl_select_roundtrip_retains_hlsl_argument_order",
+            "tests/test_translator/test_directx_atan2.py::def test_directx_atan2_executes",
+            "tests/test_translator/test_directx_atan2.py::def test_original_metal_atan2_executes",
+            "tests/test_translator/test_directx_atan2.py::def test_hlsl_atan2_roundtrip_keeps_native_intrinsic",
+            "tests/test_translator/test_directx_atan2.py::def test_atan2_rejects_unproven_contracts",
+            "tests/test_translator/test_directx_half_conversion.py::def test_public_metal_half_conversion",
+            "tests/test_translator/test_directx_half_conversion.py::def test_directx_half_rounding_native",
+            "tests/test_translator/test_directx_half_conversion.py::def test_half_double_rounding_is_rejected",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_signed_wide_and_unsigned_narrow_operands_use_signed_arithmetic",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_optimized_dxc_keeps_signed_division_remainder_and_comparison",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_mixed_integer_arithmetic_executes_with_source_signedness",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_indexed_compound_copyback_executes_once",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_optimized_dxc_preserves_indexed_copyback_values",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_compound_indices_are_scoped_collision_safe_and_expression_local",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_original_integer_control_uses_selected_runtime_adapter",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_vector_scalar_integer_arithmetic_matches_original_metal",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_hlsl_compound_shift_retains_independent_count_type",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_hlsl_compound_shift_rejects_incompatible_count_shapes",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_wide_shift_counts_execute_with_original_metal",
+            "tests/test_translator/test_metal_vector_scalar_arithmetic.py::def test_vector_scalar_conversions_execute_before_arithmetic",
+            "tests/test_translator/test_metal_vector_scalar_arithmetic.py::def test_vector_scalar_conversions_survive_saved_crossgl",
+            "tests/test_backend/test_metal/test_codegen.py::def test_integer_vector_scalar_operands_convert_before_operation",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_compound_copy_in_rejects_potential_rhs_alias_modification",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_native_hlsl_integer_rank_survives_roundtrip",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_native_hlsl_arithmetic_preserves_source_results_on_each_target",
+            "tests/test_backend/test_directx/test_codegen.py::def test_wide_integer_source_rank_is_explicit",
+            "tests/test_backend/test_directx/test_codegen.py::def test_wide_integer_compound_vector_index_evaluated_once",
+            "tests/test_backend/test_directx/test_codegen.py::def test_wide_integer_compound_rejects_unproven_copy_in_alias"
           ],
-          "notes": "Canonical Metal fabs/fmin/fmax lower to native HLSL intrinsics; Boolean scalar/vector select preserves argument order and eager evaluation. Source helper names avoid the HLSL select intrinsic. Unsupported condition types, alias target shadowing, and unresolved HLSL source select overload ownership fail closed. Bounded Windows numerical tests are required by CI; this is not whole-repository runtime coverage.",
+          "notes": "Canonical Metal fabs/fmin/fmax lower to native HLSL intrinsics; Boolean scalar/vector select preserves argument order and eager evaluation. Canonical atan2 preserves signed-zero quadrants, infinity angles and NaN classification through typed helpers; finite angles use exponent-scaled, range-reduced arithmetic with precise intermediates. Native HLSL atan2 round trips remain native. Source helpers retain their ownership. Unsupported operand types, alias target shadowing, and unresolved HLSL source select overload ownership fail closed. Bounded Windows numerical tests and original precise Metal atan2 controls are required by CI; this is not whole-repository runtime coverage.",
           "status": "supported"
         },
         "metal": {
@@ -90,7 +117,21 @@
             "tests/test_translator/test_opengl_metal_math.py::def test_metal_math_translates_and_compiles_for_opengl",
             "tests/test_translator/test_opengl_metal_math.py::def test_opengl_metal_math_executes",
             "tests/test_translator/test_opengl_metal_math.py::def test_opengl_metal_math_diagnostics",
-            "tests/test_translator/test_opengl_metal_math.py::def test_opengl_metal_math_preserves_source_helpers"
+            "tests/test_translator/test_opengl_metal_math.py::def test_opengl_metal_math_preserves_source_helpers",
+            "tests/test_translator/test_opengl_half_conversion.py::def test_public_metal_half_cast_rounds_before_widening",
+            "tests/test_translator/test_opengl_half_conversion.py::def test_half_rounding_native",
+            "tests/test_translator/test_opengl_half_conversion.py::def test_half_unproven_conversions_fail_closed",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_glsl_signed_remainder_uses_truncating_division",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_signed_remainder_executes_for_both_operand_signs",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_glsl_signed_remainder_evaluates_operands_once_and_avoids_collisions",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_glsl_wide_shift_count_conversion_preserves_left_type",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_glsl_wide_shift_compound_evaluates_index_and_count_once",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_glsl_shift_rejects_unsupported_operand_shapes",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_wide_shift_counts_execute_with_original_metal",
+            "tests/test_translator/test_wide_integer_arithmetic.py::def test_vector_scalar_integer_arithmetic_matches_original_metal",
+            "tests/test_translator/test_metal_vector_scalar_arithmetic.py::def test_vector_scalar_conversions_execute_before_arithmetic",
+            "tests/test_translator/test_metal_vector_scalar_arithmetic.py::def test_vector_scalar_conversions_survive_saved_crossgl",
+            "tests/test_backend/test_metal/test_codegen.py::def test_integer_vector_scalar_auto_keeps_source_type_for_overloads"
           ],
           "notes": "OpenGL target output applies deterministic, collision-free GLSL identifier remapping to user and generated symbols, including target-reserved gl_ and consecutive-underscore spellings, while preserving declared builtin interface names and source provenance, with warning-fatal glslang and SPIR-V validation coverage. Canonical Metal floating math and eager Boolean selection have typed lowering, explicit min/max NaN handling, source-helper ownership checks, and required bounded Linux numerical execution; this is not whole-repository runtime coverage.",
           "status": "supported"
@@ -113,6 +154,7 @@
         "metal": {
           "evidence": [
             "tests/test_backend/test_metal/test_parser.py::def test_",
+            "tests/test_backend/test_metal/test_codegen.py::def test_buffer_compound_assignment_preserves_single_index_evaluation",
             "tests/test_translator/test_metal_builtin_ownership.py::def test_qualified_metal_builtin_and_source_overloads_compile",
             "tests/test_translator/test_metal_builtin_ownership.py::def test_imported_builtin_does_not_bind_unrelated_namespace_helper",
             "tests/test_translator/test_metal_builtin_ownership.py::def test_builtin_transport_avoids_source_identifiers",
@@ -1368,14 +1410,23 @@
       "support": {
         "directx": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_struct"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_struct",
+            "tests/test_translator/test_resource_aggregates.py::def test_resource_aggregate_compiles",
+            "tests/test_translator/test_resource_aggregates.py::def test_resource_aggregate_executes_natively",
+            "tests/test_translator/test_resource_aggregates.py::def test_resource_aggregate_rejects_unproven_operations",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_project_preserves_pointer_offset_calls",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_pointer_offsets_execute_natively",
+            "tests/test_translator/test_mlx_general_gather_directx.py::def test_indexed_general_gather_executes_natively"
           ],
-          "notes": "",
+          "notes": "Selected compute entries lower private constant/device pointer-bearing aggregates to resource identity and signed element offsets, including nested owners, fixed pointer arrays, copies, rebasing and helper calls. Native Windows controls are required. External aggregate buffer layouts, thread/workgroup pointer fields, pointer identity operations and unproven escapes remain unsupported; this is not full MLX host integration.",
           "status": "supported"
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_struct"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_struct",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_pointer_arithmetic_uses_only_pointer_storage",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_project_rejects_incompatible_pointer_call_without_artifact",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_pointer_offsets_execute_natively"
           ],
           "notes": "",
           "status": "supported"
@@ -1386,9 +1437,14 @@
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_aggregate_initializers",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_vector_initializers_without_repeating_values",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_partial_vector_initializers_validate_with_glslang_and_spirv_val",
-            "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_partial_aggregate_executes_on_vulkan"
+            "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_partial_aggregate_executes_on_vulkan",
+            "tests/test_translator/test_resource_aggregates_opengl.py::def test_opengl_resource_aggregate_executes_natively",
+            "tests/test_translator/test_resource_aggregates_opengl.py::def test_opengl_resource_aggregate_requires_index_range_proof",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_project_preserves_pointer_offset_calls",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_pointer_offsets_execute_natively",
+            "tests/test_translator/test_mlx_general_gather_opengl.py::def test_opengl_indexed_general_gather_executes_natively"
           ],
-          "notes": "OpenGL lowers struct declarations, member access, initialization, and return values. Contextual braced initializers preserve trailing value initialization recursively through nested structs, fixed arrays, and vectors; Metal-materialized partial vector constructors count supplied scalar and vector components and append type-correct zeros without repeating expression evaluation. Generated-code validation and native compute runtime coverage exercise the lowering.",
+          "notes": "OpenGL lowers struct declarations, member access, initialization, and return values. Contextual braced initializers preserve trailing value initialization recursively through nested structs, fixed arrays, and vectors; Metal-materialized partial vector constructors count supplied scalar and vector components and append type-correct zeros without repeating expression evaluation. Selected compute entries lower private storage-pointer aggregates through resource identities and signed offsets, specializing helpers against concrete buffer bindings. Final subscripts require proven ranges or explicit index-range assertions; external aggregate layouts and unproven escapes remain unsupported. Generated-code validation and required native compute controls exercise this bounded contract, not full MLX host integration.",
           "status": "supported"
         }
       }
@@ -1402,6 +1458,7 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_array_handling",
+            "tests/test_translator/test_metal_empty_arrays.py::def test_unsupported_empty_array_targets_report_a_diagnostic",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_codegen_lowers_fixed_array_value_locals_and_indexing",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_workgroup_pointer_aliases_compose_offsets_and_forward_writes",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_workgroup_pointer_nested_helpers_specialize_by_backing_identity",
@@ -1415,7 +1472,9 @@
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_array_handling"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_array_handling",
+            "tests/test_translator/test_metal_empty_arrays.py::def test_zero_extent_standard_arrays_execute_natively",
+            "tests/test_translator/test_mlx_general_gather.py::def test_pinned_general_gather_executes_original_and_generated"
           ],
           "notes": "",
           "status": "supported"
@@ -1423,6 +1482,7 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_array_handling",
+            "tests/test_translator/test_metal_empty_arrays.py::def test_unsupported_empty_array_targets_report_a_diagnostic",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_aggregate_initializers",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_aggregate_initializer_reports_excess_fixed_array_elements",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_threadgroup_pointer_alias_composes_dynamic_offset_into_accesses",
@@ -1495,21 +1555,77 @@
       "support": {
         "directx": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_function_call"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_function_call",
+            "tests/test_translator/test_constrained_specialization_runtime.py::def test_project_selects_constrained_specialization",
+            "tests/test_translator/test_constrained_specialization_runtime.py::def test_constrained_specializations_",
+            "tests/test_translator/test_metal_constrained_calls.py::def test_",
+            "tests/test_translator/test_metal_constexpr_branches.py::def test_",
+            "tests/test_translator/test_functor_member_runtime.py::def test_project_",
+            "tests/test_translator/test_functor_member_runtime.py::def test_forwarded_functor_members_",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_project_",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_compiles",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_executes_natively",
+            "tests/test_translator/test_metal_vector_constructors.py::def test_generic_vector_constructors_execute_natively",
+            "tests/test_translator/test_metal_vector_constructors.py::def test_selected_vector_conversion_executes_natively",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_resolves_vector_type_alias_declarations",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_compiles",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_executes_natively",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_materialization_preserves_concrete_element_type"
           ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_function_call"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_function_call",
+            "tests/test_translator/test_constrained_specialization_runtime.py::def test_project_selects_constrained_specialization",
+            "tests/test_translator/test_constrained_specialization_runtime.py::def test_constrained_specializations_",
+            "tests/test_translator/test_metal_constrained_calls.py::def test_",
+            "tests/test_translator/test_metal_constexpr_branches.py::def test_",
+            "tests/test_backend/test_metal/test_functor_member_forwarding.py::def test_preprocessor_",
+            "tests/test_translator/test_functor_member_runtime.py::def test_project_",
+            "tests/test_translator/test_functor_member_runtime.py::def test_forwarded_functor_members_",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_project_",
+            "tests/test_backend/test_metal/test_template_wrapper_deduction.py::def test_",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_compiles",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_executes_natively",
+            "tests/test_translator/test_metal_bfloat_vectors.py::def test_bfloat_vectors_execute_natively",
+            "tests/test_translator/test_metal_vector_constructors.py::def test_generic_vector_constructors_execute_natively",
+            "tests/test_translator/test_metal_vector_constructors.py::def test_selected_vector_conversion_executes_natively",
+            "tests/test_backend/test_metal/test_preprocessor.py::def test_preprocessor_rejects_incompatible_vector_conversion_receiver",
+            "tests/test_translator/test_metal_helper_linkage.py::def test_source_function_qualifiers_survive_intermediate_ir",
+            "tests/test_translator/test_metal_helper_linkage.py::def test_materialized_anonymous_template_remains_private",
+            "tests/test_translator/test_metal_helper_linkage.py::def test_private_helpers_and_exported_functions_keep_distinct_linkage",
+            "tests/test_translator/test_metal_helper_linkage.py::def test_independent_metal_modules_link_and_execute_distinct_helpers",
+            "tests/test_translator/test_metal_member_pointer_provenance.py::def test_member_pointer_address_round_trip_compiles",
+            "tests/test_translator/test_metal_member_pointer_provenance.py::def test_member_pointer_address_executes_natively",
+            "tests/test_translator/test_metal_member_pointer_provenance.py::def test_const_pointer_member_keeps_writable_pointee",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_compiles",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_executes_natively",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_materialization_preserves_concrete_element_type"
           ],
-          "notes": "",
+          "notes": "Metal roundtrips preserve static and anonymous-namespace helper linkage, including materialized templates. Inline definitions and implicit template instantiations retain repeatable linkage. Generated constructor and lowered member helpers are artifact-private. Required macOS coverage links independent translated units with colliding private names and executes distinct computations while retaining visible callable functions and kernel names. The MLX host gate links all 15 selected complex-power entries into one library; this is not whole-repository link coverage.",
           "status": "supported"
         },
         "opengl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_function_call"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_function_call",
+            "tests/test_translator/test_constrained_specialization_runtime.py::def test_project_selects_constrained_specialization",
+            "tests/test_translator/test_constrained_specialization_runtime.py::def test_constrained_specializations_",
+            "tests/test_translator/test_metal_constrained_calls.py::def test_",
+            "tests/test_translator/test_metal_constexpr_branches.py::def test_",
+            "tests/test_translator/test_functor_member_runtime.py::def test_project_",
+            "tests/test_translator/test_functor_member_runtime.py::def test_forwarded_functor_members_",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_project_",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_compiles",
+            "tests/test_translator/test_template_wrapper_runtime.py::def test_template_wrapper_executes_natively",
+            "tests/test_translator/test_void_return_effects.py::def test_void_return_call_compiles",
+            "tests/test_translator/test_void_return_effects.py::def test_void_return_call_executes_natively",
+            "tests/test_translator/test_metal_vector_constructors.py::def test_generic_vector_constructors_execute_natively",
+            "tests/test_translator/test_metal_vector_constructors.py::def test_selected_vector_conversion_executes_natively",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_compiles",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_deduction_executes_natively",
+            "tests/test_translator/test_metal_member_array_inference.py::def test_member_array_materialization_preserves_concrete_element_type"
           ],
           "notes": "",
           "status": "supported"
@@ -1529,14 +1645,20 @@
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_reduced_side_effecting_subarray_selector_is_evaluated_once",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_unknown_or_user_defined_iterables_are_structured_diagnostics",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_mutable_reference_binding_is_structured_diagnostic",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fixed_array_for_in_validates_with_dxc"
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fixed_array_for_in_validates_with_dxc",
+            "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_translate_and_compile",
+            "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_execute_natively",
+            "tests/test_translator/test_mlx_current_gather.py::def test_pinned_gather_front_native_parity"
           ],
           "notes": "DirectX control-flow lowering preserves integer-bound counted loops and lowers fixed-array for-in iteration by source element value across scalar, vector, struct, and nested-array elements. Fixed-array container expressions are materialized once, immutable binding qualifiers are preserved, and mutable-reference, unknown-extent, unresolved, and user-defined iterable contracts produce structured diagnostics. Official DXC validation covers the generated compute shader.",
           "status": "supported"
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax",
+            "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_translate_and_compile",
+            "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_execute_natively",
+            "tests/test_translator/test_mlx_current_gather.py::def test_pinned_gather_front_native_parity"
           ],
           "notes": "",
           "status": "supported"
@@ -1547,7 +1669,10 @@
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_for_in_fixed_arrays_bind_source_element_types_and_evaluate_once",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_for_in_unknown_or_user_defined_iterables_are_structured_diagnostics",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_for_in_mutable_reference_binding_is_structured_diagnostic",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_fixed_array_for_in_validates_with_glslang_and_spirv_val"
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_fixed_array_for_in_validates_with_glslang_and_spirv_val",
+            "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_translate_and_compile",
+            "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_execute_natively",
+            "tests/test_translator/test_mlx_current_gather.py::def test_pinned_gather_front_native_parity"
           ],
           "notes": "GLSL control-flow lowering includes fixed-array for-in iteration by source element value across scalar, vector, struct, and nested-array elements. Container expressions are evaluated once, source element types and immutable binding qualifiers are preserved, mutable-reference and unresolved iterable contracts are structured diagnostics, WebGL reuses the same lowering, and glslang/spirv-val validation covers the generated compute shader.",
           "status": "supported"
@@ -1563,6 +1688,18 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_translates",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_executes_natively",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_order_is_not_silently_weakened",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_unsupported_atomic_store_type_does_not_publish_a_noop",
+            "tests/test_translator/test_atomic_load_runtime.py::def test_atomic_load_",
+            "tests/test_translator/test_atomic_load_runtime.py::def test_unsupported_atomic_load_type_does_not_publish_a_noop",
+            "tests/test_translator/test_mlx_atomic_load_runtime.py::def test_pinned_atomic_load_executes_natively",
+            "tests/test_translator/test_atomic_compare_exchange_runtime.py::def test_",
+            "tests/test_translator/test_mlx_atomic_compare_exchange_runtime.py::def test_",
+            "tests/test_translator/test_mlx_scatter_axis_runtime.py::def test_pinned_scatter_axis_executes_natively",
+            "tests/test_translator/test_atomic_resource_runtime.py::def test_resource_atomics_",
+            "tests/test_translator/test_mlx_general_scatter_runtime.py::def test_pinned_general_scatter_executes_natively",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_user_defined_synchronization_names_are_not_lowered",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_hlsl_compute_synchronization_compiles_with_dxc"
           ],
@@ -1572,6 +1709,18 @@
         "metal": {
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_synchronization_builtins_lower_to_threadgroup_barriers",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_translates",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_executes_natively",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_order_is_not_silently_weakened",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_unsupported_atomic_store_type_does_not_publish_a_noop",
+            "tests/test_translator/test_atomic_load_runtime.py::def test_atomic_load_",
+            "tests/test_translator/test_atomic_load_runtime.py::def test_unsupported_atomic_load_type_does_not_publish_a_noop",
+            "tests/test_translator/test_mlx_atomic_load_runtime.py::def test_pinned_atomic_load_executes_natively",
+            "tests/test_translator/test_atomic_compare_exchange_runtime.py::def test_",
+            "tests/test_translator/test_mlx_atomic_compare_exchange_runtime.py::def test_",
+            "tests/test_translator/test_mlx_scatter_axis_runtime.py::def test_pinned_scatter_axis_executes_natively",
+            "tests/test_translator/test_atomic_resource_runtime.py::def test_resource_atomics_",
+            "tests/test_translator/test_mlx_general_scatter_runtime.py::def test_pinned_general_scatter_executes_natively",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_threadgroup_array_helpers_preserve_address_space_and_barriers",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_threadgroup_atomic_array_elements_use_address_arguments",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_atomic_compare_exchange_addresses_targets_and_expected_values",
@@ -1591,6 +1740,18 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_workgroup_barrier_builtin_lowers_to_native_barrier",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_translates",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_executes_natively",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_order_is_not_silently_weakened",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_unsupported_atomic_store_type_does_not_publish_a_noop",
+            "tests/test_translator/test_atomic_load_runtime.py::def test_atomic_load_",
+            "tests/test_translator/test_atomic_load_runtime.py::def test_unsupported_atomic_load_type_does_not_publish_a_noop",
+            "tests/test_translator/test_mlx_atomic_load_runtime.py::def test_pinned_atomic_load_executes_natively",
+            "tests/test_translator/test_atomic_compare_exchange_runtime.py::def test_",
+            "tests/test_translator/test_mlx_atomic_compare_exchange_runtime.py::def test_",
+            "tests/test_translator/test_mlx_scatter_axis_runtime.py::def test_pinned_scatter_axis_executes_natively",
+            "tests/test_translator/test_atomic_resource_runtime.py::def test_resource_atomics_",
+            "tests/test_translator/test_mlx_general_scatter_runtime.py::def test_pinned_general_scatter_executes_natively",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_user_defined_workgroup_barrier_is_not_lowered",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_glsl_compute_synchronization_validates_with_glslangvalidator"
           ],
@@ -2655,7 +2816,14 @@
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_report_rejects_rehashed_parameter_tampering",
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_entry_workgroup_rules_override_mixed_template_families",
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_entry_workgroup_rules_reject_unmatched_entry_pattern",
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_compute_workgroup_size_projects_declared_source_shape"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_compute_workgroup_size_projects_declared_source_shape",
+            "tests/test_translator/test_dispatch_regions.py::def test_region_plan_exhaustively_covers_small_3d_grids",
+            "tests/test_translator/test_dispatch_regions.py::def test_region_specialization_compiles_without_changing_source_ast",
+            "tests/test_translator/test_dispatch_region_project.py::def test_project_region_package_and_launch_contract",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_identity_includes_source_grid_and_offset",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_selection_preserves_program_and_complete_coverage",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_selection_rejects_mixed_programs",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_preparation_checks_all_artifacts_before_compilation"
           ],
           "notes": "A fixed project.workgroup_size or named-variant workgroup_size is joined to every deterministic host-named Metal materialization. Source-wide [project.workgroup_size_rules] expressions are evaluated against each entry's template parameters, and [project.entry_workgroup_size_rules] can override the formula for distinct host entry families while retaining the source-wide fallback. Ordinary ambiguous multi-entry sources, unmatched configured entry patterns, uncovered entries without a fallback, and incomplete materialization joins fail closed. DirectX emits one HLSL library artifact with independent numthreads values per entry, while execution metadata, source-to-target identities, selected rule provenance, and report validation preserve each dispatch contract. This support covers generated shader/kernel artifacts and reported dispatch contracts only; runtime execution and numerical parity are not claimed.",
           "status": "supported"
@@ -2678,7 +2846,14 @@
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_report_rejects_missing_opengl_split",
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_reuses_one_materialized_ast_per_target",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_compute_workgroup_size_projects_declared_source_shape",
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_keeps_only_selected_interface_and_helpers"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_keeps_only_selected_interface_and_helpers",
+            "tests/test_translator/test_dispatch_regions.py::def test_region_plan_exhaustively_covers_small_3d_grids",
+            "tests/test_translator/test_dispatch_regions.py::def test_region_specialization_compiles_without_changing_source_ast",
+            "tests/test_translator/test_dispatch_region_project.py::def test_project_region_package_and_launch_contract",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_identity_includes_source_grid_and_offset",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_selection_preserves_program_and_complete_coverage",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_selection_rejects_mixed_programs",
+            "tests/test_translator/test_dispatch_region_project.py::def test_region_preparation_checks_all_artifacts_before_compilation"
           ],
           "notes": "A fixed project.workgroup_size or named-variant workgroup_size is joined to every deterministic host-named Metal materialization. Source-wide [project.workgroup_size_rules] expressions are evaluated against each entry's template parameters, and [project.entry_workgroup_size_rules] can override the formula for distinct host entry families while retaining the source-wide fallback. Ordinary ambiguous multi-entry sources, unmatched configured entry patterns, uncovered entries without a fallback, and incomplete materialization joins fail closed. OpenGL splits materialized entries into deterministic standalone GLSL artifacts with runnable main entry points and entry-specific local-size layouts, while execution metadata, selected rule provenance, and report validation preserve each dispatch contract and reject missing splits. This support covers generated shader/kernel artifacts and reported dispatch contracts only; runtime execution and numerical parity are not claimed.",
           "status": "supported"
@@ -3605,6 +3780,39 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_host_reflection.py::def test_hlsl_reflection_preserves_entry_points_resources_and_constants",
+            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_validates_update_and_output_geometry",
+            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_uploads_initialized_output_and_guards_writeback",
+            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_audit_rejects_corrupt_native_evidence",
+            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_requires_complete_workload_traces",
+            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_ci_requires_native_execution_on_all_targets",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_validates_workload_allocations_and_launch",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_rejects_invalid_layout_before_translation",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_preserves_initialized_output_and_guards_writeback",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_audit_rejects_corrupt_execution_evidence",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_requires_complete_workload_and_upstream_traces",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_ci_requires_separate_three_os_host_execution",
+            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_preserves_all_workload_layouts",
+            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_rejects_invalid_layout_before_dispatch",
+            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_audit_reconstructs_outputs_and_rejects_corruption",
+            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_ci_requires_native_unchanged_upstream_test",
+            "tests/test_mlx_portable_gather.py::def test_gather_layout_matches_all_supported_storage_types",
+            "tests/test_mlx_portable_gather.py::def test_gather_host_writeback_requires_valid_native_readback",
+            "tests/test_mlx_portable_gather.py::def test_gather_audit_reconciles_native_storage_and_rejects_corruption",
+            "tests/test_mlx_portable_gather.py::def test_gather_ci_requires_unchanged_tests_on_all_three_targets",
+            "tests/test_mlx_portable_host.py::def test_translated_binding_contract_and_typed_readback",
+            "tests/test_mlx_portable_host.py::def test_invalid_dispatch_never_reaches_executor",
+            "tests/test_mlx_portable_host.py::def test_unary_dispatch_contract",
+            "tests/test_mlx_portable_host.py::def test_unary_nonfinite_transport",
+            "tests/test_mlx_portable_host.py::def test_unary_verifier_requires_complete_independent_results",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_reflection_retains_exact_members",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_dispatch_rejects_forged_layout",
+            "tests/test_translator/test_buffer_requirements.py::def test_package_dispatch_enforces_minimum_not_exact_extent",
+            "tests/test_translator/test_buffer_requirements.py::def test_minimum_applies_to_view_not_larger_allocation",
+            "tests/test_translator/test_buffer_requirements.py::def test_minimum_footprint_native_readback",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_buffer_native_readback",
+            "tests/test_translator/test_mlx_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
             "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
@@ -3612,19 +3820,85 @@
             "tests/test_translator/test_native_runtime_drivers.py::def test_prepare_directx_buffers_uses_reflected_block_size_as_allocation_minimum",
             "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_directx_native_loader"
           ],
-          "notes": "HLSL host reflection emits scalarLayout for float, int, and uint StructuredBuffer/RWStructuredBuffer resources and one-member scalar cbuffer declarations. The contract records physicalType, elementType, elementSizeBytes, elementStrideBytes, alignmentBytes, memberOffsetBytes, storageLayout, runtimeSized, optional memberName, and blockSizeBytes for fixed blocks. Native loader ABI packaging preserves these fields, request construction rejects missing or mismatched layouts, and DirectX CBV preparation validates the fixed block before allocating at least blockSizeBytes with 256-byte API alignment. Windows Direct3D CI translates, reflects, packages, dispatches, and executes pinned MLX arangeuint32 with exact output [3, 5, 7, 9]. Vectors, matrices, fixed arrays, aggregates, packed or widened types, arbitrary offsets, and multi-member blocks are not inferred.",
+          "notes": "HLSL host reflection records exact supported scalar and vector structured-buffer layouts and one-member constant blocks. Flat homogeneous structs with 1-64 float, int, uint, int64_t or uint64_t members retain their actual type, member names, offsets, scalar alignment and stride through packaging and dispatch. Allocation sizing uses complete struct elements, and request validation rejects mixed, nested, padded or malformed layouts rather than treating structs as native vectors. Windows CI requires generic struct-buffer readback and the current-pinned MLX complex-power kernel through the public native-loader path. Existing MLX arange scalar execution remains covered. This is bounded layout and kernel execution support, not whole-repository runtime redirection.",
           "status": "supported"
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_scalar_layouts",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_vector_alignment",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_homogeneous_struct_is_not_a_vector",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_unproven_layouts_remain_unavailable",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_preserves_layouts_and_single_buffer_namespace",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_native_readback",
+            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_validates_update_and_output_geometry",
+            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_uploads_initialized_output_and_guards_writeback",
+            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_audit_rejects_corrupt_native_evidence",
+            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_requires_complete_workload_traces",
+            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_ci_requires_native_execution_on_all_targets",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_validates_workload_allocations_and_launch",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_rejects_invalid_layout_before_translation",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_preserves_initialized_output_and_guards_writeback",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_audit_rejects_corrupt_execution_evidence",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_requires_complete_workload_and_upstream_traces",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_ci_requires_separate_three_os_host_execution",
+            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_preserves_all_workload_layouts",
+            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_rejects_invalid_layout_before_dispatch",
+            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_audit_reconstructs_outputs_and_rejects_corruption",
+            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_ci_requires_native_unchanged_upstream_test",
+            "tests/test_mlx_portable_gather.py::def test_gather_layout_matches_all_supported_storage_types",
+            "tests/test_mlx_portable_gather.py::def test_gather_host_writeback_requires_valid_native_readback",
+            "tests/test_mlx_portable_gather.py::def test_gather_audit_reconciles_native_storage_and_rejects_corruption",
+            "tests/test_mlx_portable_gather.py::def test_gather_ci_requires_unchanged_tests_on_all_three_targets",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity"
           ],
-          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX and OpenGL. Native loader request construction rejects Metal descriptors with a structured target-unsupported diagnostic; no Metal physical-layout allocation or execution support is claimed.",
-          "status": "validated_rejection"
+          "notes": "Metal reflection preserves exact scalar, tightly packed 32-bit vector and flat homogeneous struct buffer layouts through package inspection, loader descriptors and native dispatch. Constant pointers remain read-only runtime buffers, while supported constant scalar/vector references are fixed values. Native execution validates compiled argument presence, alignment, allocation views and device threadgroup limits. Required macOS CI exercises public package readback and all 15 current MLX complex-power shapes. Unsupported physical layouts remain fail-closed; this does not establish MLX host redirection or full-suite parity.",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [
+            "tests/test_translator/test_uniform_block_layouts.py::def test_uniform_reflection_retains_physical_layout",
+            "tests/test_translator/test_uniform_block_layouts.py::def test_uniform_dispatch_rejects_malformed_block",
+            "tests/test_translator/test_uniform_block_layouts.py::def test_uniform_dispatch_rejects_malformed_member",
+            "tests/test_translator/test_uniform_block_layouts.py::def test_uniform_dispatch_requires_complete_word_payload",
+            "tests/test_translator/test_uniform_block_layouts.py::def test_uniform_layout_survives_public_package_dispatch",
+            "tests/test_translator/test_uniform_block_layouts.py::def test_uniform_block_native_readback",
+            "tests/test_translator/test_mlx_attention_ds_opengl.py::def test_pinned_opengl_attention_derivative",
+            "tests/test_translator/test_mlx_attention_ds_opengl.py::def test_opengl_derivative_verifier_rejects_corruption",
             "tests/test_translator/test_host_reflection.py::def test_glsl_reflection_records_exact_mlx_scalar_block_layouts",
+            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_validates_update_and_output_geometry",
+            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_uploads_initialized_output_and_guards_writeback",
+            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_audit_rejects_corrupt_native_evidence",
+            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_requires_complete_workload_traces",
+            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_ci_requires_native_execution_on_all_targets",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_validates_workload_allocations_and_launch",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_rejects_invalid_layout_before_translation",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_preserves_initialized_output_and_guards_writeback",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_audit_rejects_corrupt_execution_evidence",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_requires_complete_workload_and_upstream_traces",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_ci_requires_separate_three_os_host_execution",
+            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_preserves_all_workload_layouts",
+            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_rejects_invalid_layout_before_dispatch",
+            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_audit_reconstructs_outputs_and_rejects_corruption",
+            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_ci_requires_native_unchanged_upstream_test",
+            "tests/test_mlx_portable_gather.py::def test_gather_layout_matches_all_supported_storage_types",
+            "tests/test_mlx_portable_gather.py::def test_gather_host_writeback_requires_valid_native_readback",
+            "tests/test_mlx_portable_gather.py::def test_gather_audit_reconciles_native_storage_and_rejects_corruption",
+            "tests/test_mlx_portable_gather.py::def test_gather_ci_requires_unchanged_tests_on_all_three_targets",
+            "tests/test_mlx_portable_host.py::def test_translated_binding_contract_and_typed_readback",
+            "tests/test_mlx_portable_host.py::def test_invalid_dispatch_never_reaches_executor",
+            "tests/test_mlx_portable_host.py::def test_unary_dispatch_contract",
+            "tests/test_mlx_portable_host.py::def test_unary_nonfinite_transport",
+            "tests/test_mlx_portable_host.py::def test_unary_verifier_requires_complete_independent_results",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_reflection_retains_exact_members",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_dispatch_rejects_forged_layout",
+            "tests/test_translator/test_buffer_requirements.py::def test_package_dispatch_enforces_minimum_not_exact_extent",
+            "tests/test_translator/test_buffer_requirements.py::def test_minimum_applies_to_view_not_larger_allocation",
+            "tests/test_translator/test_buffer_requirements.py::def test_minimum_footprint_native_readback",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_buffer_native_readback",
+            "tests/test_translator/test_mlx_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
             "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
@@ -3632,7 +3906,7 @@
             "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_zero_pads_scalar_uniform_block_allocation",
             "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_opengl_native_loader"
           ],
-          "notes": "GLSL host reflection emits scalarLayout for explicit std430 one-member float, int, and uint runtime-array buffer blocks and explicit std140 one-member scalar uniform blocks. The contract records physicalType, elementType, elementSizeBytes, elementStrideBytes, alignmentBytes, memberOffsetBytes, storageLayout, runtimeSized, optional memberName, and blockSizeBytes for fixed blocks. Native loader ABI packaging preserves these fields, request construction rejects missing or mismatched layouts, and OpenGL UBO preparation zero-pads scalar uploads to blockSizeBytes while storage-buffer readback retains its logical payload size. Linux EGL CI translates, reflects, packages, dispatches, and executes pinned MLX arangeuint32 with exact output [3, 5, 7, 9]. Implicit layouts and unsupported aggregate shapes are not inferred.",
+          "notes": "GLSL host reflection records explicit std430 scalar/vector storage arrays and std140 uniform blocks. Flat homogeneous storage structs retain their actual type, member names, offsets, scalar alignment and stride through packaging and dispatch. Mixed scalar/vector uniform blocks retain per-field types, offsets, sizes and alignment, with explicit uint32-le-words transport of the complete block including padding. Loader and driver validate standard packing and reject malformed or incomplete payloads. Unsupported nested, array and matrix uniforms produce incomplete-reflection diagnostics. Linux EGL CI requires generic mixed scalar and padded vector parameter controls through public packaging/native-loader APIs, plus 16 unchanged current-pin MLX float32/float16 attention derivative configurations with shared allocations and guarded readbacks. Bfloat16 derivatives and whole-repository runtime redirection remain separate. Existing homogeneous storage, complex-power and arange execution remains covered.",
           "status": "supported"
         }
       }
@@ -3656,9 +3930,12 @@
             "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_rejects_incompatible_overlapping_layouts",
             "tests/test_translator/test_native_runtime_drivers.py::def test_prepare_directx_buffers_rejects_allocation_subview_with_constraint",
             "tests/test_translator/test_native_runtime_drivers.py::def test_directx_compute_runtime_reuses_explicit_shared_allocation",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_directx_sequence_reuses_immutable_constant_allocation",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_directx_sequence_rejects_incompatible_constant_reuse",
+            "tests/test_translator/test_dispatch_region_project.py::def test_packaged_regions_reuse_source_constants",
             "tests/test_translator/test_shared_native_allocations_runtime.py::def test_directx_shared_native_allocation_executes_on_device"
           ],
-          "notes": "RuntimeAllocationView preserves explicit id, byteOffset, byteLength, and allocationByteLength fields while RuntimeValue and RuntimeResourceBinding retain dtype, shape, physical layout, access, and binding coordinates. Runtime planning assigns deterministic per-binding allocation IDs when the field is absent and rejects conflicting sizes, out-of-bounds or misaligned views, incompatible overlapping layouts, and overlapping writable views before dispatch. The DirectX reference driver groups full-allocation structured-buffer bindings by allocation ID, combines non-conflicting uploads, creates one physical device allocation, and binds it at each SRV or UAV coordinate. Shared constant-buffer allocations and ranged structured-buffer views are unsupported; incompatible sizes or layouts, conflicting uploads, and overlapping writable views fail with structured target constraints. This bounded resource-binding contract does not provide repository scheduling, framework memory management, host-code rewriting, or full MLX runtime integration.",
+          "notes": "RuntimeAllocationView preserves explicit id, byteOffset, byteLength, and allocationByteLength fields while RuntimeValue and RuntimeResourceBinding retain dtype, shape, physical layout, access, and binding coordinates. Runtime planning assigns deterministic per-binding allocation IDs when the field is absent and rejects conflicting sizes, out-of-bounds or misaligned views, incompatible overlapping layouts, and overlapping writable views before dispatch. The DirectX reference driver groups full-allocation structured-buffer bindings by allocation ID, combines non-conflicting uploads, creates one physical device allocation, and binds it at each SRV or UAV coordinate. Ordered sequences also permit immutable constant-buffer reuse across nodes with identical scalar layouts and extents at offset zero; simultaneous CBV aliases, CBV/SRV/UAV mixing, conflicting uploads and incompatible views remain rejected. Derived region constants use distinct allocations. Ranged structured-buffer views remain unsupported. Regression tests cover allocation identity and rejection paths; the exact-grid Windows gate requires native numerical execution. This bounded resource-binding contract does not provide repository scheduling, framework memory management, host-code rewriting, or full MLX runtime integration.",
           "status": "supported"
         },
         "metal": {
@@ -3707,7 +3984,9 @@
             "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_uses_dependency_order_and_preserves_temporary",
             "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic",
             "tests/test_translator/test_runtime_graph_device.py::def test_reduction_device_fixture_matches_runtime_graph_contract",
-            "tests/test_translator/test_runtime_graph_device.py::def test_directx_dispatch_sequence_executes_shared_temporary_on_device"
+            "tests/test_translator/test_runtime_graph_device.py::def test_directx_dispatch_sequence_executes_shared_temporary_on_device",
+            "tests/test_translator/test_mlx_attention_reduce_runtime.py::def test_pinned_resident_attention_reductions",
+            "tests/test_translator/test_mlx_attention_reduce_runtime.py::def test_resident_reduction_rejects_conflicting_accumulator_upload"
           ],
           "notes": "The versioned runtime execution graph contract parses and serializes deterministic resource, layout, lifetime, dispatch, copy, fill, barrier, dependency, and bounded-control records, then validates them with structured diagnostics. Runtime package inspection resolves artifact selectors and entry points and checks reflected binding name presence, uniqueness, and access compatibility before execution. The DirectX graph executor runs dependency-ordered dispatch and visibility-barrier paths through one native dispatch sequence, reuses one graph-scoped payload-free temporary allocation, and defers output readback until the sequence completes. A gated Windows device test compiles both stages with DXC and executes a two-stage reduction through Direct3D 12 from input shape [4] containing [0, 1, 7, 42], through temporary shape [2], to output shape [1] containing the exact result [50]. Copy, fill, and bounded-control nodes are modeled but native execution reports explicit unsupported-capability diagnostics. This contract does not rewrite host or framework code and does not claim that the full MLX runtime or test suite is ported.",
           "status": "supported"
@@ -3732,7 +4011,9 @@
             "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_uses_dependency_order_and_preserves_temporary",
             "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic",
             "tests/test_translator/test_runtime_graph_device.py::def test_reduction_device_fixture_matches_runtime_graph_contract",
-            "tests/test_translator/test_runtime_graph_device.py::def test_opengl_dispatch_sequence_executes_shared_temporary_on_device"
+            "tests/test_translator/test_runtime_graph_device.py::def test_opengl_dispatch_sequence_executes_shared_temporary_on_device",
+            "tests/test_translator/test_mlx_attention_reduce_runtime.py::def test_pinned_resident_attention_reductions",
+            "tests/test_translator/test_mlx_attention_reduce_runtime.py::def test_resident_reduction_rejects_conflicting_accumulator_upload"
           ],
           "notes": "The versioned runtime execution graph contract parses and serializes deterministic resource, layout, lifetime, dispatch, copy, fill, barrier, dependency, and bounded-control records, then validates them with structured diagnostics. Runtime package inspection resolves artifact selectors and entry points and checks reflected binding name presence, uniqueness, and access compatibility before execution. The OpenGL graph executor runs dependency-ordered dispatch and visibility-barrier paths through one native dispatch sequence, reuses one graph-scoped payload-free temporary allocation, and defers output readback until the sequence completes. A gated Linux device test executes a two-stage GLSL reduction through an OpenGL 4.3 compute context from input shape [4] containing [0, 1, 7, 42], through temporary shape [2], to output shape [1] containing the exact result [50]. Copy, fill, and bounded-control nodes are modeled but native execution reports explicit unsupported-capability diagnostics. This contract does not rewrite host or framework code and does not claim that the full MLX runtime or test suite is ported.",
           "status": "supported"
@@ -3859,7 +4140,7 @@
     },
     {
       "category": "project",
-      "description": "Construct and preflight one DirectX or OpenGL compute runtime request from a complete native loader ABI descriptor without scheduling or executing device work.",
+      "description": "Construct and preflight one DirectX, OpenGL or Metal compute runtime request from a complete native loader ABI descriptor without scheduling or executing device work. Optional ieee754-binary32 buffer encoding preserves float32 storage words through uploads, readbacks and exact comparisons without changing reflected dtype or layout checks.",
       "id": "project.native_loader_dispatch_request",
       "name": "Native loader dispatch request",
       "support": {
@@ -3882,6 +4163,9 @@
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incompatible_initialized_read_write_value_contracts",
             "tests/test_translator/test_native_runtime_drivers.py::def test_directx_compute_runtime_uploads_and_reads_initialized_output",
             "tests/test_translator/test_initialized_read_write_runtime.py::def test_directx_initialized_read_write_resource_executes_on_device",
+            "tests/test_translator/test_float_storage_encoding.py::def test_public_dispatch_rejects_invalid_storage",
+            "tests/test_translator/test_float_storage_encoding.py::def test_encoded_payload_cannot_reinterpret_reflected_storage",
+            "tests/test_translator/test_float_storage_encoding.py::def test_float_storage_executes_natively",
             "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_directx_native_loader"
           ],
           "notes": "build_native_loader_dispatch_request constructs a preflighted RuntimeExecutionRequest from one complete schema-v1 native loader ABI descriptor. It verifies the package-contained HLSL artifact size and SHA-256 digest before binding, then pins that size, digest, and unit ID in a frozen RuntimeArtifactIdentity. Native execution uses the pinned identity even if identity fields in the request's public artifact mapping are later mutated; this freezes expected metadata, not the artifact file or other mapping fields. Request construction requires exact reflected names and validates physicalType, elementType, elementSizeBytes, elementStrideBytes, alignmentBytes, memberOffsetBytes, storageLayout, runtimeSized, optional memberName, and blockSizeBytes for fixed scalar blocks. It also validates DirectX binding namespaces, coordinates, access modes, materialized specialization values, and dispatch geometry. One exact binding name may appear in both inputValues and outputValues only for a reflected read_write resource: the input payload initializes one UAV allocation, while the expected output contract selects that same allocation for readback and comparison. Dtype, shape, and physical scalar layout must agree; incompatible or invalid overlaps fail with structured diagnostics. The pinned MLX arangeuint32 kernel at commit 4367c73b60541ddd5a266ce4644fd93d20223b6e follows this public descriptor-to-request path and executes in Windows Direct3D CI with exact output [3, 5, 7, 9]. Missing, incomplete, mismatched, or unsupported physical layouts are rejected rather than inferred. This request and native resource contract does not establish repository scheduling, host application rewriting, full MLX runtime integration, or test-suite parity.",
@@ -3889,10 +4173,24 @@
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_preserves_layouts_and_single_buffer_namespace",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_loader_requires_workgroup_size",
+            "tests/test_translator/test_exact_thread_grid_runtime.py::def test_metal_exact_grid_preflight",
+            "tests/test_translator/test_exact_thread_grid_runtime.py::def test_loader_rejects_conflicting_exact_grid",
+            "tests/test_translator/test_exact_thread_grid_runtime.py::def test_unimplemented_targets_never_round_up_exact_grid",
+            "tests/test_translator/test_exact_thread_grid_runtime.py::def test_metal_exact_thread_grid_native",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_operation_deadline_terminates_process",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_alias_views_share_storage_and_reject_conflicting_uploads",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_function_constant_types_and_ids",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_native_readback",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_native_function_constants",
+            "tests/test_translator/test_float_storage_encoding.py::def test_runtime_value_serialization_retains_exact_storage",
+            "tests/test_translator/test_float_storage_encoding.py::def test_storage_comparison_is_exact_even_with_large_numeric_tolerance",
+            "tests/test_translator/test_float_storage_encoding.py::def test_float_storage_executes_natively",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity"
           ],
-          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
-          "status": "validated_rejection"
+          "notes": "The Metal descriptor-to-request bridge verifies packaged source identity, exact buffer names and physical layouts, the shared buffer namespace, explicit dispatch geometry and scalar function-constant values. MetalRuntimeParityAdapter compiles an identity-checked source snapshot and MetalComputeRuntime executes it through a bounded Swift/Metal worker on macOS 13 or newer. The worker checks compiled bindings and native pipeline limits before execution and returns exact typed byte readbacks. Native CI requires multidimensional struct-buffer execution, both function-constant branches and current MLX complex-power package parity. The runtime is process-isolated and does not rewrite MLX host code or provide persistent streams or full-suite parity. Explicit threadGridSize dispatch preserves nonuniform final groups through native dispatchThreads, validates covering counts and device capabilities, and retains exact source thread/grid coordinates and subgroup activity. DirectX and OpenGL reject this contract until equivalent lowering is implemented.",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [
@@ -3913,6 +4211,9 @@
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incompatible_initialized_read_write_value_contracts",
             "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_runtime_uploads_and_reads_initialized_output",
             "tests/test_translator/test_initialized_read_write_runtime.py::def test_opengl_initialized_read_write_resource_executes_on_device",
+            "tests/test_translator/test_float_storage_encoding.py::def test_public_dispatch_rejects_invalid_storage",
+            "tests/test_translator/test_float_storage_encoding.py::def test_encoded_payload_cannot_reinterpret_reflected_storage",
+            "tests/test_translator/test_float_storage_encoding.py::def test_float_storage_executes_natively",
             "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_opengl_native_loader"
           ],
           "notes": "build_native_loader_dispatch_request constructs a preflighted RuntimeExecutionRequest from one complete schema-v1 native loader ABI descriptor. It verifies the package-contained GLSL artifact size and SHA-256 digest before binding, then pins that size, digest, and unit ID in a frozen RuntimeArtifactIdentity. Native execution uses the pinned identity even if identity fields in the request's public artifact mapping are later mutated; this freezes expected metadata, not the artifact file or other mapping fields. Request construction requires exact reflected names and validates physicalType, elementType, elementSizeBytes, elementStrideBytes, alignmentBytes, memberOffsetBytes, storageLayout, runtimeSized, optional memberName, and blockSizeBytes for fixed scalar blocks. It also validates OpenGL binding namespaces, coordinates, access modes, specialization values, and dispatch geometry. One exact binding name may appear in both inputValues and outputValues only for a reflected read_write resource: the input payload initializes one storage-buffer allocation, while the expected output contract selects that same allocation for readback and comparison. Dtype, shape, and physical scalar layout must agree; incompatible or invalid overlaps fail with structured diagnostics. The pinned MLX arangeuint32 kernel at commit 4367c73b60541ddd5a266ce4644fd93d20223b6e follows this public descriptor-to-request path and executes in Linux EGL CI with exact output [3, 5, 7, 9]. Missing, incomplete, mismatched, or unsupported physical layouts are rejected rather than inferred. This request and native resource contract does not establish repository scheduling, host application rewriting, full MLX runtime integration, or test-suite parity.",
@@ -3928,6 +4229,11 @@
       "support": {
         "directx": {
           "evidence": [
+            "tests/test_translator/test_native_dispatch_limits.py::def test_directx_rejects_over_limit_before_allocating_or_dispatching",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_malformed_dimensions_cannot_fall_back_to_other_metadata",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_malformed_sequence_geometry_prevents_all_device_work",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_omitted_dimensions_keep_geometry_defaults",
+            "tests/test_translator/test_native_loader_dispatch_integration.py::def test_native_directx_workgroup_limits",
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector",
@@ -3943,11 +4249,12 @@
             "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_directx_adapter_compiles_hlsl",
             "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
           ],
-          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. DirectX native runtime parity adapters add reusable adapter-backed execution with HLSL validation/compilation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable.",
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. DirectX native runtime parity adapters add reusable adapter-backed execution with HLSL validation/compilation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable. The Python DirectX driver preflights every sequence node against Direct3D 12 per-axis group counts, local sizes and total invocations before device allocation. Invalid dimensions fail without clamping; dispatch-limit-exceeded diagnostics retain requested values, effective maxima and the failing axis or aggregate field. Required Windows tests execute bounded native readback and reject above-limit counts.",
           "status": "supported"
         },
         "metal": {
           "evidence": [
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_compiled_interface_rejects_invalid_native_dispatch",
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector",
@@ -3959,11 +4266,18 @@
             "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_runs_executor_and_links_failed_check",
             "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
           ],
-          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable. The process-isolated Python Metal runtime reports existing device-dimension and compiled-pipeline invocation checks as dispatch-limit-exceeded diagnostics with requested values, effective maxima and axis or aggregate field under dispatchValidation. These checks retain native worker failure logs and do not change supported resource or host-integration scope.",
           "status": "supported"
         },
         "opengl": {
           "evidence": [
+            "tests/test_translator/test_native_dispatch_limits.py::def test_opengl_preflights_entire_sequence_before_any_device_work",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_malformed_dimensions_cannot_fall_back_to_other_metadata",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_malformed_sequence_geometry_prevents_all_device_work",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_omitted_dimensions_keep_geometry_defaults",
+            "tests/test_translator/test_native_dispatch_limits.py::def test_opengl_api_errors_cannot_be_reported_as_success",
+            "tests/test_translator/test_native_loader_dispatch_integration.py::def test_native_opengl_workgroup_limits",
+            "tests/test_translator/test_native_loader_dispatch_integration.py::def test_native_opengl_submission_error_is_not_success",
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector",
@@ -3990,7 +4304,7 @@
             "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_specializes_generated_spirv_on_device",
             "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
           ],
-          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. OpenGL native runtime parity adapters add reusable adapter-backed execution with GLSL validation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Specialization-bearing OpenGL compute artifacts compile to OpenGL SPIR-V, require OpenGL 4.6 or GL_ARB_gl_spirv plus the shader-binary and specialization entry points, apply bool and 32-bit signed, unsigned, or floating scalar values by numeric ID, keep ordinary uniforms on a separate binding path, and report applied values with provenance; artifacts without deferred specialization retain the GLSL source path. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable.",
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. OpenGL native runtime parity adapters add reusable adapter-backed execution with GLSL validation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Specialization-bearing OpenGL compute artifacts compile to OpenGL SPIR-V, require OpenGL 4.6 or GL_ARB_gl_spirv plus the shader-binary and specialization entry points, apply bool and 32-bit signed, unsigned, or floating scalar values by numeric ID, keep ordinary uniforms on a separate binding path, and report applied values with provenance; artifacts without deferred specialization retain the GLSL source path. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable. The Python OpenGL driver queries actual context compute limits and preflights all sequence nodes before device allocation. Missing limits, invalid dimensions and above-limit requests fail with structured diagnostics. API error checks after context setup, binding, submission, synchronization and readback prevent failed submissions from returning successful unchanged output. Required Linux tests exercise bounded native readback, excessive counts on each axis and an actual invalid-program submission.",
           "status": "supported"
         }
       }
@@ -5451,10 +5765,10 @@
       "metal": {
         "diagnostic": 4,
         "partial": 1,
-        "supported": 71,
+        "supported": 73,
         "unknown": 0,
         "unsupported": 3,
-        "validated_rejection": 8
+        "validated_rejection": 6
       },
       "opengl": {
         "diagnostic": 2,

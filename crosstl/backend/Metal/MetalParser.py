@@ -565,6 +565,7 @@ class MetalParser:
             return node
         namespace = self.current_namespace()
         node.namespace = namespace
+        node.internal_linkage = any(not scope for scope in self.namespace_scope_stack)
         name = getattr(node, "name", None)
         if name:
             node.qualified_name = f"{namespace}::{name}" if namespace else name
@@ -1811,6 +1812,7 @@ class MetalParser:
         if self.is_union_alias_start():
             return self.parse_using_union_alias(alias_name)
         alias_type, qualifiers = self.parse_type_specifier()
+        qualifier_contract = dict(self.last_type_specifier_qualifier_contract)
         if self.current_token[0] == "LPAREN":
             indirection = self.parse_callable_alias_abstract_indirection()
             parameters = self.parse_callable_alias_parameters()
@@ -1830,16 +1832,16 @@ class MetalParser:
             )
         self.eat("SEMICOLON")
         self.register_known_type(alias_name)
-        return self.annotate_declaration_scope(
-            TypeAliasNode(
-                alias_type,
-                alias_name,
-                qualifiers=qualifiers,
-                source_location=self.source_span_from_tokens(
-                    start_token, self.tokens[self.pos - 1]
-                ),
-            )
+        alias = TypeAliasNode(
+            alias_type,
+            alias_name,
+            qualifiers=qualifiers,
+            source_location=self.source_span_from_tokens(
+                start_token, self.tokens[self.pos - 1]
+            ),
         )
+        alias.pointee_qualifiers = list(qualifier_contract["pointee"])
+        return self.annotate_declaration_scope(alias)
 
     def is_using_declaration_start(self):
         return self.current_token[0] in {"IDENTIFIER", "METAL", "SCOPE"} and not (
@@ -1940,6 +1942,7 @@ class MetalParser:
         if self.current_token[0] == "ENUM":
             return self.parse_typedef_enum()
         qualifiers = []
+        qualifier_contract = {"pointee": ()}
         if (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] == "decltype"
@@ -1947,6 +1950,7 @@ class MetalParser:
             alias_type = self.parse_decltype_type()
         else:
             alias_type, qualifiers = self.parse_type_specifier()
+            qualifier_contract = dict(self.last_type_specifier_qualifier_contract)
         if self.current_token[0] == "LPAREN":
             alias_name, indirection = self.parse_function_typedef_declarator()
             if self.current_token[0] != "LPAREN":
@@ -1995,7 +1999,7 @@ class MetalParser:
             )
         self.eat("SEMICOLON")
         self.register_known_type(alias_name)
-        return TypeAliasNode(
+        alias = TypeAliasNode(
             alias_type,
             alias_name,
             qualifiers=qualifiers,
@@ -2006,6 +2010,8 @@ class MetalParser:
                 start_token, self.tokens[self.pos - 1]
             ),
         )
+        alias.pointee_qualifiers = list(qualifier_contract["pointee"])
+        return alias
 
     def parse_typedef_enum(self):
         tag_name, is_scoped, underlying_type = self.parse_enum_header()
@@ -3127,6 +3133,7 @@ class MetalParser:
             if self.current_token[0] == "OPERATOR":
                 self.skip_struct_method()
                 continue
+            qualifier_contract = dict(self.last_type_specifier_qualifier_contract)
             var_name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
             member_type = self.apply_declarator_type_suffix(vtype, type_suffix)
             if var_name == "operator":
@@ -3146,6 +3153,8 @@ class MetalParser:
             var_node = VariableNode(
                 member_type, var_name, qualifiers=qualifiers, attributes=attributes
             )
+            var_node.pointee_qualifiers = list(qualifier_contract["pointee"])
+            var_node.indirection_qualifiers = list(qualifier_contract["indirection"])
             var_node.array_sizes = array_sizes
             self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
             var_node.alignas = member_alignas
@@ -4385,21 +4394,23 @@ class MetalParser:
         return nodes
 
     def parse_if_statement(self):
+        start_token = self.current_token
         if_chain = []
         else_if_chain = []
+        if_constexpr = []
+        else_if_constexpr = []
         else_body = None
-        while self.current_token[0] == "IF":
-            self.eat("IF")
-            self.parse_optional_if_constexpr()
-            self.eat("LPAREN")
-            condition = self.parse_expression(allow_comma=True)
-            self.eat("RPAREN")
-            self.parse_control_statement_attributes()
-            body = self.parse_statement_body()
-            if_chain.append((condition, body))
+        self.eat("IF")
+        if_constexpr.append(self.parse_optional_if_constexpr())
+        self.eat("LPAREN")
+        condition = self.parse_expression(allow_comma=True)
+        self.eat("RPAREN")
+        self.parse_control_statement_attributes()
+        body = self.parse_statement_body()
+        if_chain.append((condition, body))
         while self.current_token[0] == "ELSE_IF":
             self.eat("ELSE_IF")
-            self.parse_optional_if_constexpr()
+            else_if_constexpr.append(self.parse_optional_if_constexpr())
             self.eat("LPAREN")
             condition = self.parse_expression(allow_comma=True)
             self.eat("RPAREN")
@@ -4411,15 +4422,26 @@ class MetalParser:
             self.eat("ELSE")
             else_body = self.parse_statement_body()
 
-        return IfNode(
-            if_chain=if_chain, else_if_chain=else_if_chain, else_body=else_body
+        node = IfNode(
+            if_chain=if_chain,
+            else_if_chain=else_if_chain,
+            else_body=else_body,
+            if_constexpr=if_constexpr,
+            else_if_constexpr=else_if_constexpr,
         )
+        node.source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
+        )
+        return node
 
     def parse_optional_if_constexpr(self):
         if self.current_token[0] == "CONSTEXPR":
             self.eat("CONSTEXPR")
+            return True
         elif self.current_token == ("IDENTIFIER", "IF_CONSTEXPR"):
             self.eat("IDENTIFIER")
+            return True
+        return False
 
     def parse_control_statement_attributes(self):
         self.parse_attributes()

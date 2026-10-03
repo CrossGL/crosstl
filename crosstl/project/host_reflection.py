@@ -10,10 +10,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
+from crosstl.project.buffer_requirements import (
+    MAX_BINDING_SIZE,
+    source_buffer_minimum_elements,
+)
 from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
 )
+from crosstl.project.uniform_layout import std140_block_layout
 
 REFLECTION_DIAGNOSTIC_PREFIX = "project.runtime-package-inspection"
 REFLECTION_TOOL_UNAVAILABLE = (
@@ -551,6 +556,7 @@ def _reflect_metal_source(
     stage: str | None,
 ) -> dict[str, Any]:
     source = _strip_comments(_read_text(artifact_path))
+    struct_declarations = _homogeneous_struct_declarations(source)
     entry_points = []
     resources = []
     stage_names = {
@@ -582,6 +588,9 @@ def _reflect_metal_source(
                 entry_point=entry_name,
             )
             if resource is not None:
+                layout = _metal_buffer_layout(resource, struct_declarations)
+                if layout is not None:
+                    resource["scalarLayout"] = layout
                 resources.append(resource)
 
     specialization_constants = []
@@ -610,6 +619,56 @@ def _reflect_metal_source(
         constants=[],
         specialization_constants=specialization_constants,
         diagnostics=[],
+    )
+
+
+def _metal_buffer_layout(
+    resource: Mapping[str, Any],
+    struct_declarations: Mapping[str, list[tuple[str, str]]],
+) -> dict[str, Any] | None:
+    if resource["kind"] not in {"buffer", "constant-buffer"}:
+        return None
+    match = re.fullmatch(
+        r"(?P<qualifiers>(?:(?:const|device|constant)\s+)+)"
+        r"(?P<type>[A-Za-z_]\w*)\s*(?P<reference>[*&])",
+        resource["type"],
+    )
+    if match is None:
+        return None
+    qualifiers = match.group("qualifiers").split()
+    if (
+        len(qualifiers) != len(set(qualifiers))
+        or len(set(qualifiers) & {"device", "constant"}) != 1
+    ):
+        return None
+    pointer = match.group("reference") == "*"
+    if not pointer and "constant" not in qualifiers:
+        return None
+    type_name = match.group("type")
+    scalar = re.fullmatch(
+        r"(float|int|uint|long|ulong|int64_t|uint64_t|bool)([24]?)", type_name
+    )
+    if scalar is None:
+        return (
+            _homogeneous_struct_buffer_layout(
+                type_name, struct_declarations, storage_layout="metal-buffer"
+            )
+            if pointer
+            else None
+        )
+    base, width_text = scalar.groups()
+    base = {"long": "int64_t", "ulong": "uint64_t"}.get(base, base)
+    width = int(width_text or 1)
+    if base in {"int64_t", "uint64_t", "bool"} and width != 1:
+        return None
+    size = (1 if base == "bool" else SCALAR_PHYSICAL_SIZES[base]) * width
+    return _physical_value_layout(
+        base,
+        vector_width=width,
+        storage_layout="metal-buffer" if pointer else "metal-constant",
+        alignment_bytes=size,
+        runtime_sized=pointer,
+        block_size_bytes=None if pointer else size,
     )
 
 
@@ -910,6 +969,7 @@ def _reflect_hlsl_source(
     artifact_path: Path, *, artifact_format: str, stage: str | None
 ) -> dict[str, Any]:
     source = _strip_comments(_read_text(artifact_path))
+    struct_declarations = _homogeneous_struct_declarations(source)
     entry_points = []
     for name, attributes in _iter_hlsl_function_declarations(source):
         reflected_stage = _hlsl_entry_stage(name, attributes, stage)
@@ -965,10 +1025,31 @@ def _reflect_hlsl_source(
             "access": _hlsl_resource_access(type_name),
         }
         scalar_layout = _hlsl_structured_value_layout(type_name)
+        if scalar_layout is None:
+            struct_match = re.fullmatch(
+                r"(?:RW)?StructuredBuffer\s*<\s*([A-Za-z_]\w*)\s*>", type_name
+            )
+            if struct_match is not None:
+                scalar_layout = _homogeneous_struct_buffer_layout(
+                    struct_match.group(1),
+                    struct_declarations,
+                    storage_layout="hlsl-structured-buffer",
+                )
         if scalar_layout is not None:
             resource["scalarLayout"] = scalar_layout
         resources.append(resource)
 
+    _reflect_buffer_requirements(
+        source,
+        target="directx",
+        entry_points=entry_points,
+        resources=resources,
+        resource_names={
+            resource["name"]: resource["name"]
+            for resource in resources
+            if resource.get("scalarLayout", {}).get("runtimeSized") is True
+        },
+    )
     constants = [
         {
             "name": match.group("name"),
@@ -1001,6 +1082,34 @@ def _hlsl_entry_stage(name: str, attributes: str, stage: str | None) -> str | No
     if name == "main" and stage:
         return _stage_name(stage)
     return None
+
+
+def _reflect_buffer_requirements(
+    source: str,
+    *,
+    target: str,
+    entry_points: Sequence[Mapping[str, Any]],
+    resources: Sequence[dict[str, Any]],
+    resource_names: Mapping[str, str],
+) -> None:
+    requirements = source_buffer_minimum_elements(
+        source,
+        target=target,
+        entry_points=[entry["name"] for entry in entry_points],
+        resource_names=resource_names,
+    )
+    for resource in resources:
+        count = requirements.get(resource["name"])
+        layout = resource.get("scalarLayout")
+        if count is None or layout is None:
+            continue
+        size = (
+            layout["memberOffsetBytes"]
+            + (count - 1) * layout["elementStrideBytes"]
+            + layout["elementSizeBytes"]
+        )
+        if 0 < size <= MAX_BINDING_SIZE:
+            layout["minimumBindingSizeBytes"] = size
 
 
 def _hlsl_resource_kind(type_name: str) -> str:
@@ -1061,6 +1170,71 @@ def _hlsl_value_block_layout(
         runtime_sized=False,
         block_size_bytes=16,
     )
+
+
+def _homogeneous_struct_declarations(source: str) -> dict[str, list[tuple[str, str]]]:
+    declarations = {}
+    seen = set()
+    for match in re.finditer(r"\bstruct\s+([A-Za-z_]\w*)\s*\{", source):
+        name = match.group(1)
+        if name in seen:
+            declarations.pop(name, None)
+            continue
+        seen.add(name)
+        body = _braced_body(source, match.end() - 1)
+        if body is None:
+            continue
+        if re.compile(r"\s*;").match(source, match.end() + len(body) + 1) is None:
+            continue
+        members = []
+        position = 0
+        for member in re.finditer(r"\s*([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*;", body):
+            if member.start() != position:
+                break
+            members.append((member.group(1), member.group(2)))
+            position = member.end()
+        if body[position:].strip() or not 1 <= len(members) <= 64:
+            continue
+        types = {member[0] for member in members}
+        names = {member[1] for member in members}
+        if len(types) != 1 or not types <= SCALAR_PHYSICAL_TYPES.keys():
+            continue
+        if len(names) != len(members):
+            continue
+        declarations[name] = members
+    return declarations
+
+
+def _homogeneous_struct_buffer_layout(
+    type_name: str,
+    declarations: Mapping[str, list[tuple[str, str]]],
+    *,
+    storage_layout: str,
+    member_name: str | None = None,
+) -> dict[str, Any] | None:
+    members = declarations.get(type_name)
+    if members is None:
+        return None
+    scalar_type = members[0][0]
+    scalar_size = SCALAR_PHYSICAL_SIZES[scalar_type]
+    layout = {
+        "physicalType": type_name,
+        "elementType": SCALAR_PHYSICAL_TYPES[scalar_type],
+        "elementSizeBytes": scalar_size * len(members),
+        "elementStrideBytes": scalar_size * len(members),
+        "alignmentBytes": scalar_size,
+        "memberOffsetBytes": 0,
+        "storageLayout": storage_layout,
+        "runtimeSized": True,
+        "componentCount": len(members),
+        "structMembers": [
+            {"name": name, "physicalType": base, "offsetBytes": index * scalar_size}
+            for index, (base, name) in enumerate(members)
+        ],
+    }
+    if member_name is not None:
+        layout["memberName"] = member_name
+    return layout
 
 
 def _hlsl_structured_value_layout(type_name: str) -> dict[str, Any] | None:
@@ -1167,6 +1341,7 @@ def _reflect_glsl_source(
         raw_source, artifact_path
     )
     source = _strip_comments(raw_source)
+    struct_declarations = _homogeneous_struct_declarations(source)
     execution_config = {}
     local_size_match = GLSL_LOCAL_SIZE_RE.search(source)
     if local_size_match:
@@ -1190,6 +1365,8 @@ def _reflect_glsl_source(
 
     resources = []
     occupied_spans = []
+    resource_names = {}
+    diagnostics = []
     for match in GLSL_BLOCK_RESOURCE_RE.finditer(source):
         occupied_spans.append(match.span())
         layout = _parse_layout(match.group("layout"))
@@ -1209,9 +1386,72 @@ def _reflect_glsl_source(
             layout_text=match.group("layout"),
             body=match.group("body"),
         )
+        if storage == "uniform":
+            layout_parts = (match.group("layout") or "").split(",")
+            qualifiers = {part.strip() for part in layout_parts if "=" not in part}
+            if (
+                qualifiers != {"std140"}
+                or not set(layout) <= {"binding", "set", "descriptor_set"}
+                or source[: match.start()].rstrip().endswith(")")
+            ):
+                scalar_layout = None
+            elif scalar_layout is None:
+                scalar_layout = _glsl_aggregate_block_layout(
+                    match.group("block"), match.group("body")
+                )
+            if scalar_layout is None:
+                diagnostics.append(
+                    ReflectionDiagnostic(
+                        REFLECTION_INCOMPLETE_OUTPUT,
+                        "Uniform block layout requires explicit std140 scalar/vector "
+                        "members; arrays, matrices, nested types and member qualifiers "
+                        "require additional physical-layout support.",
+                        details={
+                            "resource": name,
+                            "reasonKind": "uniform-block-layout-unsupported",
+                        },
+                    )
+                )
+        if scalar_layout is None and storage == "buffer":
+            member = GLSL_VALUE_BLOCK_MEMBER_RE.fullmatch(match.group("body"))
+            qualifiers = {
+                part.strip()
+                for part in (match.group("layout") or "").split(",")
+                if "=" not in part
+            }
+            if (
+                member is not None
+                and member.group("runtime_array")
+                and qualifiers == {"std430"}
+                and set(layout) <= {"binding", "set", "descriptor_set"}
+                and not source[: match.start()].rstrip().endswith(")")
+            ):
+                scalar_layout = _homogeneous_struct_buffer_layout(
+                    member.group("type"),
+                    struct_declarations,
+                    storage_layout="std430",
+                    member_name=member.group("name"),
+                )
         if scalar_layout is not None:
             resource["scalarLayout"] = scalar_layout
+            if scalar_layout.get("runtimeSized") is True:
+                member = scalar_layout["memberName"]
+                source_name = f"{name}.{member}" if match.group("name") else member
+                resource_names[source_name] = name
         resources.append(resource)
+    for header in re.finditer(r"\buniform\s+([A-Za-z_]\w*)\s*\{", source):
+        if not any(start <= header.start() < end for start, end in occupied_spans):
+            diagnostics.append(
+                ReflectionDiagnostic(
+                    REFLECTION_INCOMPLETE_OUTPUT,
+                    "Uniform block declaration cannot be reflected; block arrays "
+                    "and nested declarations require additional physical-layout support.",
+                    details={
+                        "resource": header[1],
+                        "reasonKind": "uniform-block-layout-unsupported",
+                    },
+                )
+            )
     for match in GLSL_RESOURCE_RE.finditer(source):
         if any(start <= match.start() < end for start, end in occupied_spans):
             continue
@@ -1229,6 +1469,13 @@ def _reflect_glsl_source(
             }
         )
 
+    _reflect_buffer_requirements(
+        source,
+        target="opengl",
+        entry_points=entry_points,
+        resources=resources,
+        resource_names=resource_names,
+    )
     constants = []
     specialization_constants = []
     spec_spans = []
@@ -1274,7 +1521,7 @@ def _reflect_glsl_source(
         resources=resources,
         constants=constants,
         specialization_constants=specialization_constants,
-        diagnostics=[],
+        diagnostics=diagnostics,
     )
 
 
@@ -1329,6 +1576,23 @@ def _glsl_value_type_shape(type_name: str) -> tuple[str, int] | None:
         GLSL_VECTOR_BASE_TYPES[vector_match.group("family").lower()],
         int(vector_match.group("width")),
     )
+
+
+def _glsl_aggregate_block_layout(type_name: str, body: str) -> dict[str, Any] | None:
+    declarations = []
+    # Full-match every declaration so unsupported syntax never becomes a partial layout.
+    parts = body.strip().split(";")
+    if parts[-1].strip():
+        return None
+    for part in parts[:-1]:
+        match = re.fullmatch(r"\s*([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*", part)
+        if match is None:
+            return None
+        declarations.append((match[1], match[2]))
+    try:
+        return std140_block_layout(type_name, declarations)
+    except ValueError:
+        return None
 
 
 def _glsl_scalar_block_layout(
@@ -1404,18 +1668,26 @@ def _physical_value_layout(
     element_stride_bytes: int | None = None,
 ) -> dict[str, Any]:
     normalized_type = physical_type.lower()
+    metal_boolean = normalized_type == "bool" and storage_layout in {
+        "metal-buffer",
+        "metal-constant",
+    }
     # HLSL and GLSL block-storage booleans occupy one 32-bit scalar slot.
     # Expose that physical representation to host loaders rather than a
     # language-level bool, which has no portable in-memory width.
-    if normalized_type == "bool":
+    if normalized_type == "bool" and not metal_boolean:
         normalized_type = "uint"
-    component_size_bytes = SCALAR_PHYSICAL_SIZES[normalized_type]
+    component_size_bytes = (
+        1 if metal_boolean else SCALAR_PHYSICAL_SIZES[normalized_type]
+    )
     element_size_bytes = component_size_bytes * vector_width
     layout: dict[str, Any] = {
         "physicalType": (
             normalized_type if vector_width == 1 else f"{normalized_type}{vector_width}"
         ),
-        "elementType": SCALAR_PHYSICAL_TYPES[normalized_type],
+        "elementType": (
+            "bool" if metal_boolean else SCALAR_PHYSICAL_TYPES[normalized_type]
+        ),
         "elementSizeBytes": element_size_bytes,
         "elementStrideBytes": (
             element_size_bytes if element_stride_bytes is None else element_stride_bytes

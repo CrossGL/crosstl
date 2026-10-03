@@ -20440,7 +20440,8 @@ def test_glsl_precision_aliases_lower_to_standard_glsl_types():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "float tone(float input_)" in generated_code
-    assert "float bias = float(0.5);" in generated_code
+    assert "float bias = 0.5;" in generated_code
+    assert "return crossgl_round_half1((input_ + bias));" in generated_code
     assert "vec2 pair(vec2 input_)" in generated_code
     assert "vec2 scale = vec2(1.0, 2.0);" in generated_code
     assert "vec3 tint(vec3 input_)" in generated_code
@@ -20452,7 +20453,7 @@ def test_glsl_precision_aliases_lower_to_standard_glsl_types():
     assert "mat2x3 passMatrix(mat2x3 input_)" in generated_code
     assert "mat2x3 m = mat2x3(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
     for invalid_token in ("half", "min16float", "min16uint", "min12int"):
-        assert invalid_token not in generated_code
+        assert re.search(rf"\b{invalid_token}\b", generated_code) is None
 
 
 def test_glsl_float16_ir_aliases_lower_to_standard_glsl_types():
@@ -20473,7 +20474,8 @@ def test_glsl_float16_ir_aliases_lower_to_standard_glsl_types():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "float tone(float input_)" in generated_code
-    assert "float bias = float(0.5);" in generated_code
+    assert "float bias = 0.5;" in generated_code
+    assert "return crossgl_round_half1((input_ + bias));" in generated_code
     assert "vec2 pair(vec2 input_)" in generated_code
     assert "vec2 scale = vec2(1.0, 2.0);" in generated_code
     assert "float16" not in generated_code
@@ -26775,13 +26777,13 @@ def test_glsl_software_subgroup_generated_names_are_collision_safe(tmp_path):
     [
         (
             "float value = WaveActiveMin(1.0);",
-            (16, 1, 1),
+            (0, 1, 1),
             "",
             "workgroup-size-mismatch",
         ),
         (
             "float value = WaveActiveMin(1.0);",
-            (48, 1, 1),
+            (32, 1, 0),
             "",
             "workgroup-size-mismatch",
         ),
@@ -26810,7 +26812,7 @@ def test_glsl_software_subgroup_generated_names_are_collision_safe(tmp_path):
             "operation-set-empty",
         ),
         (
-            "uint value = WaveActiveProduct(gl_LocalInvocationID.x);",
+            "uint value = WaveActiveBitOr(gl_LocalInvocationID.x);",
             (32, 1, 1),
             "",
             "operation-unsupported",
@@ -27151,7 +27153,7 @@ def test_glsl_software_subgroup_rejects_non_top_level_helper_calls(entry_body):
     assert raised.value.operation == "WaveActiveMin"
 
 
-def test_glsl_software_subgroup_rejects_indirect_helper_calls():
+def test_glsl_software_subgroup_accepts_unconditional_indirect_helper_calls(tmp_path):
     code = """
     shader GLSLSoftwareSubgroupIndirectHelperCall {
         float reduceValue(float value) {
@@ -27171,13 +27173,14 @@ def test_glsl_software_subgroup_rejects_indirect_helper_calls():
     }
     """
 
-    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
-        GLSLCodeGen(software_subgroup_width=32).generate(
-            parse_code(tokenize_code(code))
-        )
-
-    assert raised.value.reason == "helper-call-not-uniform"
-    assert raised.value.operation == "WaveActiveMin"
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+    assert "return reduceValue(value);" in generated
+    assert "return crossglSoftwareSubgroupMinFloat(value);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "software_subgroup_indirect_helper", validate_spirv=True
+    )
 
 
 def test_glsl_software_subgroup_accepts_exact_nested_overload_identity(tmp_path):

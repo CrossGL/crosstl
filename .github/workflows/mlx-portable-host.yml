@@ -1,0 +1,1841 @@
+name: MLX Portable Host Integration
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/mlx-portable-host.yml"
+      - "crosstl/**"
+      - "demos/integrations/mlx/portable_host/**"
+      - "demos/integrations/mlx/random_audit.py"
+      - "tests/test_mlx_random_audit.py"
+      - "tests/test_mlx_portable_host.py"
+      - "tests/test_mlx_portable_reductions.py"
+      - "tests/test_mlx_portable_rows.py"
+      - "tests/test_mlx_portable_reduction_shards.py"
+      - "tests/test_mlx_portable_columns.py"
+      - "tests/test_mlx_portable_mixed_reductions.py"
+      - "tests/test_mlx_portable_small_rows.py"
+      - "tests/test_mlx_portable_empty_reductions.py"
+      - "tests/test_mlx_portable_bitwise.py"
+      - "tests/test_mlx_portable_concatenate.py"
+      - "tests/test_mlx_portable_selection.py"
+      - "tests/test_mlx_portable_integer64.py"
+      - "tests/test_mlx_portable_padding.py"
+      - "tests/test_mlx_portable_slice_updates.py"
+      - "tests/test_mlx_portable_slice_update_workloads.py"
+      - "tests/test_mlx_portable_gather.py"
+      - "tests/test_mlx_portable_gather_axis.py"
+      - "tests/test_mlx_portable_scatter_axis.py"
+      - "tests/test_mlx_portable_scatter.py"
+      - "tests/test_translator/test_directx_atan2.py"
+      - "tests/test_translator/test_opengl_half_conversion.py"
+      - "tests/test_translator/test_directx_half_conversion.py"
+      - "tests/test_translator/test_directx_float_atomics.py"
+      - "tests/test_translator/test_directx_software_reductions.py"
+      - "tests/test_translator/test_directx_subgroup_identity.py"
+      - "tests/test_translator/test_directx_subgroup_uniformity.py"
+      - "tests/test_translator/test_directx_subgroup_components.py"
+      - "tests/test_translator/test_metal_float_atomics.py"
+      - "tests/test_translator/test_mlx_gated_delta_directx.py"
+      - "tests/test_translator/test_mlx_gated_delta_directx_runtime.py"
+      - "tests/test_translator/test_mlx_gated_delta_runtime.py"
+      - "tests/test_translator/test_mlx_attention_odo_runtime.py"
+      - "tests/test_translator/test_mlx_attention_ds_runtime.py"
+      - "tests/test_translator/test_mlx_attention_reduce_runtime.py"
+      - "tests/test_translator/test_mlx_attention_ds_opengl.py"
+      - "tests/test_translator/test_uniform_block_layouts.py"
+      - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
+      - "tests/test_translator/test_mlx_gated_delta_metal.py"
+      - "tests/test_translator/test_fused_math.py"
+      - "tests/test_translator/test_metal_fma.py"
+      - "tests/test_translator/test_project_metal_discovery.py"
+      - "tests/test_translator/test_mlx_current_unary_fma.py"
+      - "tests/test_translator/test_mlx_current_unary_trig.py"
+      - "tests/test_translator/test_metal_precise_acosh.py"
+      - "tests/test_translator/test_metal_precise_atan.py"
+      - "tests/test_translator/test_metal_boolean_promotion.py"
+      - "tests/test_translator/test_metal_float_selection.py"
+      - "tests/test_translator/test_boolean_buffer_runtime.py"
+      - "tests/test_translator/test_float_storage_encoding.py"
+      - "tests/test_translator/test_loop_updates.py"
+      - "tests/test_translator/test_metal_member_array_inference.py"
+      - "tests/test_translator/test_metal_vector_constructors.py"
+      - "tests/test_translator/test_mlx_current_gather.py"
+      - "tests/test_translator/test_software_subgroup_votes.py"
+      - "tests/test_translator/test_opengl_subgroup_wrappers.py"
+      - "tests/test_translator/test_software_subgroup_product.py"
+      - "tests/test_translator/test_subgroup_guarded_returns.py"
+      - "tests/test_translator/test_directx_self_comparisons.py"
+      - "tests/test_translator/test_wide_integer_arithmetic.py"
+      - "tests/test_translator/test_metal_vector_scalar_arithmetic.py"
+      - "tests/test_translator/test_opengl_vector_comparisons.py"
+      - "tests/test_translator/test_subgroup_uniform_arguments.py"
+      - "tests/test_translator/test_software_subgroup_partial.py"
+      - "tests/test_translator/test_dispatch_regions.py"
+      - "tests/test_translator/test_dispatch_region_project.py"
+      - "tests/test_translator/test_exact_thread_grid_runtime.py"
+      - "tests/test_translator/test_metal_wave_arguments.py"
+      - "tests/test_translator/test_software_subgroup_workgroup_ranges.py"
+      - "tests/test_translator/test_opengl_subgroup_exit_uniformity.py"
+      - "tests/test_translator/test_mlx_current_unary_sign.py"
+      - "tests/test_translator/test_mlx_current_unary_atan.py"
+      - "tests/test_translator/test_mlx_current_unary_acosh.py"
+      - "tests/test_translator/test_mlx_current_copy.py"
+      - "tests/test_translator/test_metal_precise_asin.py"
+      - "tests/test_translator/test_metal_builtin_ownership.py"
+      - "tests/test_translator/test_mlx_current_complex_power.py"
+      - "tests/test_translator/test_mlx_current_binary_shapes.py"
+      - "tests/test_translator/test_mlx_current_arg_reduce.py"
+      - "tests/test_translator/test_native_loader_dispatch_integration.py"
+      - "tests/test_translator/test_native_dispatch_limits.py"
+      - "tests/test_translator/test_struct_buffer_layouts.py"
+      - "tests/test_translator/test_buffer_requirements.py"
+      - "tools/run_bounded_command.py"
+      - "pyproject.toml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/mlx-portable-host.yml"
+      - "crosstl/**"
+      - "demos/integrations/mlx/portable_host/**"
+      - "demos/integrations/mlx/random_audit.py"
+      - "tests/test_mlx_random_audit.py"
+      - "tests/test_mlx_portable_host.py"
+      - "tests/test_mlx_portable_reductions.py"
+      - "tests/test_mlx_portable_rows.py"
+      - "tests/test_mlx_portable_reduction_shards.py"
+      - "tests/test_mlx_portable_columns.py"
+      - "tests/test_mlx_portable_mixed_reductions.py"
+      - "tests/test_mlx_portable_small_rows.py"
+      - "tests/test_mlx_portable_empty_reductions.py"
+      - "tests/test_mlx_portable_bitwise.py"
+      - "tests/test_mlx_portable_concatenate.py"
+      - "tests/test_mlx_portable_selection.py"
+      - "tests/test_mlx_portable_integer64.py"
+      - "tests/test_mlx_portable_padding.py"
+      - "tests/test_mlx_portable_slice_updates.py"
+      - "tests/test_mlx_portable_slice_update_workloads.py"
+      - "tests/test_mlx_portable_gather.py"
+      - "tests/test_mlx_portable_gather_axis.py"
+      - "tests/test_mlx_portable_scatter_axis.py"
+      - "tests/test_mlx_portable_scatter.py"
+      - "tests/test_translator/test_directx_atan2.py"
+      - "tests/test_translator/test_opengl_half_conversion.py"
+      - "tests/test_translator/test_directx_half_conversion.py"
+      - "tests/test_translator/test_directx_float_atomics.py"
+      - "tests/test_translator/test_directx_software_reductions.py"
+      - "tests/test_translator/test_directx_subgroup_identity.py"
+      - "tests/test_translator/test_directx_subgroup_uniformity.py"
+      - "tests/test_translator/test_directx_subgroup_components.py"
+      - "tests/test_translator/test_metal_float_atomics.py"
+      - "tests/test_translator/test_mlx_gated_delta_directx.py"
+      - "tests/test_translator/test_mlx_gated_delta_directx_runtime.py"
+      - "tests/test_translator/test_mlx_gated_delta_runtime.py"
+      - "tests/test_translator/test_mlx_attention_odo_runtime.py"
+      - "tests/test_translator/test_mlx_attention_ds_runtime.py"
+      - "tests/test_translator/test_mlx_attention_reduce_runtime.py"
+      - "tests/test_translator/test_mlx_attention_ds_opengl.py"
+      - "tests/test_translator/test_uniform_block_layouts.py"
+      - "tests/fixtures/runtime_verification/mlx_gated_delta_reference.py"
+      - "tests/test_translator/test_mlx_gated_delta_metal.py"
+      - "tests/test_translator/test_fused_math.py"
+      - "tests/test_translator/test_metal_fma.py"
+      - "tests/test_translator/test_project_metal_discovery.py"
+      - "tests/test_translator/test_mlx_current_unary_fma.py"
+      - "tests/test_translator/test_mlx_current_unary_trig.py"
+      - "tests/test_translator/test_metal_precise_acosh.py"
+      - "tests/test_translator/test_metal_precise_atan.py"
+      - "tests/test_translator/test_metal_boolean_promotion.py"
+      - "tests/test_translator/test_metal_float_selection.py"
+      - "tests/test_translator/test_boolean_buffer_runtime.py"
+      - "tests/test_translator/test_float_storage_encoding.py"
+      - "tests/test_translator/test_loop_updates.py"
+      - "tests/test_translator/test_metal_member_array_inference.py"
+      - "tests/test_translator/test_metal_vector_constructors.py"
+      - "tests/test_translator/test_mlx_current_gather.py"
+      - "tests/test_translator/test_software_subgroup_votes.py"
+      - "tests/test_translator/test_opengl_subgroup_wrappers.py"
+      - "tests/test_translator/test_software_subgroup_product.py"
+      - "tests/test_translator/test_subgroup_guarded_returns.py"
+      - "tests/test_translator/test_directx_self_comparisons.py"
+      - "tests/test_translator/test_wide_integer_arithmetic.py"
+      - "tests/test_translator/test_metal_vector_scalar_arithmetic.py"
+      - "tests/test_translator/test_opengl_vector_comparisons.py"
+      - "tests/test_translator/test_subgroup_uniform_arguments.py"
+      - "tests/test_translator/test_software_subgroup_partial.py"
+      - "tests/test_translator/test_dispatch_regions.py"
+      - "tests/test_translator/test_dispatch_region_project.py"
+      - "tests/test_translator/test_exact_thread_grid_runtime.py"
+      - "tests/test_translator/test_metal_wave_arguments.py"
+      - "tests/test_translator/test_software_subgroup_workgroup_ranges.py"
+      - "tests/test_translator/test_opengl_subgroup_exit_uniformity.py"
+      - "tests/test_translator/test_mlx_current_unary_sign.py"
+      - "tests/test_translator/test_mlx_current_unary_atan.py"
+      - "tests/test_translator/test_mlx_current_unary_acosh.py"
+      - "tests/test_translator/test_mlx_current_copy.py"
+      - "tests/test_translator/test_metal_precise_asin.py"
+      - "tests/test_translator/test_metal_builtin_ownership.py"
+      - "tests/test_translator/test_mlx_current_complex_power.py"
+      - "tests/test_translator/test_mlx_current_binary_shapes.py"
+      - "tests/test_translator/test_mlx_current_arg_reduce.py"
+      - "tests/test_translator/test_native_loader_dispatch_integration.py"
+      - "tests/test_translator/test_native_dispatch_limits.py"
+      - "tests/test_translator/test_struct_buffer_layouts.py"
+      - "tests/test_translator/test_buffer_requirements.py"
+      - "tools/run_bounded_command.py"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+  PYTHONUNBUFFERED: "1"
+  PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+  CMAKE_BUILD_PARALLEL_LEVEL: "4"
+  CMAKE_ARGS: "-DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_CROSTL_HOST=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON"
+
+concurrency:
+  group: mlx-portable-host-${{ github.ref }}
+  # Preserve native runs; newer commits replace only the pending run.
+  cancel-in-progress: false
+
+jobs:
+  portable-host:
+    name: MLX native host (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: opengl
+          - os: windows-2025
+            target: directx
+          - os: macos-26
+            target: metal
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Initialize execution evidence
+        run: |
+          mkdir -p .mlx-portable-host
+          python --version > .mlx-portable-host/python-version.txt
+      - name: Install Linux build and graphics dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - name: Install CrossTL and MLX build dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist "PyYAML>=6,<7" setuptools wheel cmake ninja nanobind numpy packaging \
+            2>&1 | tee .mlx-portable-host/dependencies.log
+      - name: Verify macOS Metal toolchain
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk macosx metal --version | tee .mlx-portable-host/metal-version.txt
+          xcrun --sdk macosx swiftc --version | tee .mlx-portable-host/swift-version.txt
+      - name: Install OpenGL runtime dependencies
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          python -m pip install moderngl PyOpenGL 2>&1 | tee -a .mlx-portable-host/dependencies.log
+          python -c "import moderngl, OpenGL; print(moderngl.__version__, OpenGL.__version__)"
+      - name: Install pinned DirectX tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $root = Join-Path $env:RUNNER_TEMP "dxc"
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4") {
+            throw "DXC archive checksum mismatch."
+          }
+          Expand-Archive $archive -DestinationPath $root
+          $bin = Join-Path $root "bin/x64"
+          if (-not (Test-Path "$bin/dxc.exe")) { throw "DXC executable missing." }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $warpArchive = Join-Path $env:RUNNER_TEMP "warp.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "warp"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg" -OutFile $warpArchive
+          if ((Get-FileHash $warpArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681") {
+            throw "WARP archive checksum mismatch."
+          }
+          Expand-Archive $warpArchive -DestinationPath $warpRoot
+          Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
+      - name: Validate portable host contracts
+        run: python -m pytest -q -n auto tests/test_mlx_portable_host.py tests/test_mlx_portable_reductions.py tests/test_mlx_portable_rows.py tests/test_mlx_portable_reduction_shards.py tests/test_mlx_portable_mixed_reductions.py tests/test_mlx_portable_columns.py tests/test_mlx_portable_small_rows.py tests/test_mlx_portable_empty_reductions.py tests/test_mlx_portable_bitwise.py tests/test_mlx_portable_concatenate.py tests/test_mlx_portable_selection.py tests/test_mlx_portable_integer64.py tests/test_mlx_portable_padding.py tests/test_mlx_portable_slice_updates.py tests/test_mlx_portable_slice_update_workloads.py tests/test_mlx_random_audit.py
+      - name: Validate software subgroup votes
+        env:
+          CROSTL_REQUIRE_SOFTWARE_SUBGROUP_VOTES: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/subgroup-votes
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Software subgroup votes" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/subgroup-votes/pytest \
+              --junitxml=.mlx-portable-host/subgroup-votes/results.xml \
+              tests/test_translator/test_software_subgroup_votes.py \
+              tests/test_translator/test_opengl_subgroup_wrappers.py \
+              2>&1 | tee .mlx-portable-host/subgroup-votes.log
+      - name: Validate software subgroup products
+        env:
+          CROSTL_REQUIRE_SOFTWARE_SUBGROUP_PRODUCT: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/subgroup-products
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Software subgroup products" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/subgroup-products/pytest \
+              --junitxml=.mlx-portable-host/subgroup-products/results.xml \
+              tests/test_translator/test_software_subgroup_product.py \
+              2>&1 | tee .mlx-portable-host/subgroup-products.log
+      - name: Validate subgroup-guarded returns
+        env:
+          CROSTL_REQUIRE_SUBGROUP_GUARDED_RETURNS: "1"
+          CROSTL_REQUIRE_FLOAT_SELF_COMPARISONS: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/subgroup-returns
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Subgroup-guarded returns" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/subgroup-returns/pytest \
+              --junitxml=.mlx-portable-host/subgroup-returns/results.xml \
+              tests/test_translator/test_subgroup_guarded_returns.py \
+              tests/test_translator/test_directx_self_comparisons.py \
+              tests/test_translator/test_opengl_vector_comparisons.py \
+              tests/test_translator/test_opengl_subgroup_exit_uniformity.py \
+              2>&1 | tee .mlx-portable-host/subgroup-returns.log
+      - name: Validate collective helper arguments
+        env:
+          CROSTL_REQUIRE_SUBGROUP_UNIFORM_ARGUMENTS: "1"
+          CROSTL_REQUIRE_WORKGROUP_RANGE_READBACKS: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/subgroup-arguments
+          python tools/run_bounded_command.py --timeout-seconds 360 --label "Collective helper arguments" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/subgroup-arguments/pytest \
+              --junitxml=.mlx-portable-host/subgroup-arguments/results.xml \
+              tests/test_translator/test_subgroup_uniform_arguments.py \
+              tests/test_translator/test_software_subgroup_workgroup_ranges.py \
+              2>&1 | tee .mlx-portable-host/subgroup-arguments.log
+      - name: Validate exact partial subgroup execution
+        env:
+          CROSTL_REQUIRE_PARTIAL_SUBGROUP_READBACKS: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/subgroup-partial
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Exact partial subgroup execution" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/subgroup-partial/pytest \
+              --junitxml=.mlx-portable-host/subgroup-partial/results.xml \
+              tests/test_translator/test_software_subgroup_partial.py \
+              2>&1 | tee .mlx-portable-host/subgroup-partial.log
+      - name: Validate source wave argument conversions
+        env:
+          CROSTL_REQUIRE_WAVE_ARGUMENT_READBACKS: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/wave-arguments
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "Source wave argument conversions" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/wave-arguments/pytest \
+              --junitxml=.mlx-portable-host/wave-arguments/results.xml \
+              tests/test_translator/test_metal_wave_arguments.py \
+              2>&1 | tee .mlx-portable-host/wave-arguments.log
+      - name: Validate exact dispatch regions
+        env:
+          CROSTL_REQUIRE_DISPATCH_REGIONS: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/dispatch-regions
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Exact dispatch region execution" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/dispatch-regions/pytest \
+              --junitxml=.mlx-portable-host/dispatch-regions/results.xml \
+              tests/test_translator/test_dispatch_regions.py \
+              tests/test_translator/test_dispatch_region_project.py \
+              2>&1 | tee .mlx-portable-host/dispatch-regions.log
+      - name: Validate lossless float storage
+        env:
+          CROSTL_REQUIRE_FLOAT_STORAGE_RUNTIME: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/float-storage
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Lossless float storage" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/float-storage/pytest \
+              --junitxml=.mlx-portable-host/float-storage/results.xml \
+              tests/test_translator/test_float_storage_encoding.py \
+              2>&1 | tee .mlx-portable-host/float-storage.log
+      - name: Validate ordered loop updates
+        env:
+          CROSTL_REQUIRE_LOOP_UPDATE_RUNTIME: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/loop-updates
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Ordered loop updates" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/loop-updates/pytest \
+              --junitxml=.mlx-portable-host/loop-updates/results.xml \
+              tests/test_translator/test_loop_updates.py \
+              2>&1 | tee .mlx-portable-host/loop-updates.log
+      - name: Validate member array deduction
+        env:
+          CROSTL_REQUIRE_MEMBER_ARRAY_RUNTIME: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/member-arrays
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Member array deduction" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/member-arrays/pytest \
+              --junitxml=.mlx-portable-host/member-arrays/results.xml \
+              tests/test_translator/test_metal_member_array_inference.py \
+              2>&1 | tee .mlx-portable-host/member-arrays.log
+      - name: Validate generic vector constructors
+        env:
+          CROSTL_REQUIRE_VECTOR_CONSTRUCTOR_RUNTIME: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/vector-constructors
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Generic vector constructors" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/vector-constructors/pytest \
+              --junitxml=.mlx-portable-host/vector-constructors/results.xml \
+              tests/test_translator/test_metal_vector_constructors.py \
+              2>&1 | tee .mlx-portable-host/vector-constructors.log
+      - name: Validate mixed-width integer arithmetic
+        env:
+          CROSTL_REQUIRE_WIDE_INTEGER_ARITHMETIC: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/integer-arithmetic
+          python tools/run_bounded_command.py --timeout-seconds 360 --label "Mixed-width integer arithmetic" -- \
+            python -m pytest -q -n auto --durations=20 \
+              --basetemp=.mlx-portable-host/integer-arithmetic/pytest \
+              --junitxml=.mlx-portable-host/integer-arithmetic/results.xml \
+              tests/test_translator/test_wide_integer_arithmetic.py \
+              tests/test_translator/test_metal_vector_scalar_arithmetic.py \
+              2>&1 | tee .mlx-portable-host/integer-arithmetic.log
+      - name: Validate Metal argument inference
+        env:
+          CROSTL_REQUIRE_METAL_ARGUMENT_INFERENCE: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/argument-inference
+          python tools/run_bounded_command.py --timeout-seconds 120 --label "Native argument inference" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/argument-inference/pytest \
+              --junitxml=.mlx-portable-host/argument-inference/results.xml \
+              tests/test_translator/test_project_metal_discovery.py \
+              2>&1 | tee .mlx-portable-host/argument-inference.log
+      - name: Validate native scalar math
+        env:
+          CROSTL_REQUIRE_DIRECTX_ATAN2: ${{ runner.os == 'Windows' && '1' || '0' }}
+          CROSTL_REQUIRE_METAL_PRECISE_ASIN: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/scalar-math
+          python tools/run_bounded_command.py --timeout-seconds 120 --label "Native scalar math" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/scalar-math/pytest \
+              --junitxml=.mlx-portable-host/scalar-math/results.xml \
+              tests/test_translator/test_directx_atan2.py \
+              tests/test_translator/test_metal_precise_asin.py \
+              2>&1 | tee .mlx-portable-host/scalar-math.log
+      - name: Validate OpenGL half conversions
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_REQUIRE_HALF_CONVERSION_RUNTIME: "1"
+          CROSTL_HALF_CONVERSION_TARGET: opengl
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/half-conversions
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "OpenGL half conversions" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/half-conversions/pytest \
+              --junitxml=.mlx-portable-host/half-conversions/results.xml \
+              tests/test_translator/test_opengl_half_conversion.py \
+              2>&1 | tee .mlx-portable-host/half-conversions.log
+      - name: Validate OpenGL uniform blocks
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_REQUIRE_UNIFORM_BLOCK_RUNTIME: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/uniform-blocks
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "OpenGL uniform blocks" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/uniform-blocks/pytest \
+              --junitxml=.mlx-portable-host/uniform-blocks/results.xml \
+              tests/test_translator/test_uniform_block_layouts.py \
+              2>&1 | tee .mlx-portable-host/uniform-blocks.log
+      - name: Validate DirectX half conversions
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_REQUIRE_HALF_CONVERSION_RUNTIME: "1"
+          CROSTL_HALF_CONVERSION_TARGET: directx
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/half-conversions
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "DirectX half conversions" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/half-conversions/pytest \
+              --junitxml=.mlx-portable-host/half-conversions/results.xml \
+              tests/test_translator/test_directx_half_conversion.py \
+              2>&1 | tee .mlx-portable-host/half-conversions.log
+      - name: Validate DirectX float atomics
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_REQUIRE_DIRECTX_FLOAT_ATOMICS: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/float-atomics
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "DirectX float atomics" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/float-atomics/pytest \
+              --junitxml=.mlx-portable-host/float-atomics/results.xml \
+              tests/test_translator/test_directx_float_atomics.py \
+              2>&1 | tee .mlx-portable-host/float-atomics.log
+      - name: Validate DirectX software reductions
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_REQUIRE_DIRECTX_SOFTWARE_REDUCTIONS: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/software-reductions
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "DirectX software reductions" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/software-reductions/pytest \
+              --junitxml=.mlx-portable-host/software-reductions/results.xml \
+              tests/test_translator/test_directx_software_reductions.py \
+              tests/test_translator/test_directx_subgroup_identity.py \
+              tests/test_translator/test_directx_subgroup_uniformity.py \
+              tests/test_translator/test_directx_subgroup_components.py \
+              2>&1 | tee .mlx-portable-host/software-reductions.log
+      - name: Validate binary32 fused arithmetic
+        env:
+          CROSTL_REQUIRE_FUSED_MATH: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/fused-math
+          python tools/run_bounded_command.py --timeout-seconds 120 --label "Native fused arithmetic" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/fused-math/pytest \
+              --junitxml=.mlx-portable-host/fused-math/results.xml \
+              tests/test_translator/test_fused_math.py \
+              tests/test_translator/test_metal_fma.py \
+              2>&1 | tee .mlx-portable-host/fused-math.log
+      - name: Checkout and prepare pinned upstream MLX
+        run: |
+          set -euo pipefail
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+          mkdir -p .mlx-portable-host
+          python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-host/adaptation.json
+      - name: Validate pinned gather loops
+        env:
+          CROSTL_REQUIRE_MLX_CURRENT_GATHER: "1"
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/gather
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "Pinned gather loops" -- \
+            python -m pytest -q -n auto --dist loadscope \
+              --basetemp=.mlx-portable-host/gather/pytest \
+              --junitxml=.mlx-portable-host/gather/results.xml \
+              tests/test_translator/test_mlx_current_gather.py \
+              2>&1 | tee .mlx-portable-host/gather.log
+      - name: Compile pinned DirectX gated-delta backward entry
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_REQUIRE_MLX_GATED_DELTA_DIRECTX: "1"
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/gated-delta
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "MLX DirectX gated-delta compilation" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/gated-delta/pytest \
+              --junitxml=.mlx-portable-host/gated-delta/results.xml \
+              tests/test_translator/test_mlx_gated_delta_directx.py \
+              2>&1 | tee .mlx-portable-host/gated-delta.log
+      - name: Execute pinned DirectX gated-delta gradients
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_REQUIRE_MLX_GATED_DELTA_DIRECTX_RUNTIME: "1"
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/gated-delta-runtime
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX DirectX gated-delta execution" -- \
+            python -m pytest -q -n auto --dist loadscope \
+              --basetemp=.mlx-portable-host/gated-delta-runtime/pytest \
+              --junitxml=.mlx-portable-host/gated-delta-runtime/results.xml \
+              tests/test_translator/test_mlx_gated_delta_directx_runtime.py \
+              2>&1 | tee .mlx-portable-host/gated-delta-runtime.log
+      - name: Execute pinned portable attention row dots
+        env:
+          CROSTL_REQUIRE_MLX_ATTENTION_RUNTIME: "1"
+          CROSTL_MLX_ATTENTION_TARGET: ${{ matrix.target }}
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/attention-odo
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX portable attention row dots" -- \
+            python -m pytest -q -n auto --dist loadscope \
+              --basetemp=.mlx-portable-host/attention-odo/pytest \
+              --junitxml=.mlx-portable-host/attention-odo/results.xml \
+              tests/test_translator/test_mlx_attention_odo_runtime.py \
+              2>&1 | tee .mlx-portable-host/attention-odo.log
+      - name: Execute pinned OpenGL attention derivatives
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_REQUIRE_MLX_ATTENTION_DS_OPENGL: "1"
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/attention-ds
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX OpenGL attention derivatives" -- \
+            python -m pytest -q -n auto --dist loadscope \
+              --basetemp=.mlx-portable-host/attention-ds/pytest \
+              --junitxml=.mlx-portable-host/attention-ds/results.xml \
+              tests/test_translator/test_mlx_attention_ds_opengl.py \
+              2>&1 | tee .mlx-portable-host/attention-ds.log
+      - name: Execute pinned DirectX attention derivatives
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_REQUIRE_MLX_ATTENTION_DS_RUNTIME: "1"
+          CROSTL_MLX_ATTENTION_DS_TARGET: directx
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/attention-ds
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX DirectX attention derivatives" -- \
+            python -m pytest -q -n auto --dist loadscope \
+              --basetemp=.mlx-portable-host/attention-ds/pytest \
+              --junitxml=.mlx-portable-host/attention-ds/results.xml \
+              tests/test_translator/test_mlx_attention_ds_runtime.py \
+              2>&1 | tee .mlx-portable-host/attention-ds.log
+      - name: Validate pinned unary fused arithmetic
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_FMA: "1"
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_TRIG: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/unary-fma
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Pinned unary fused arithmetic" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/unary-fma/pytest \
+              --junitxml=.mlx-portable-host/unary-fma/results.xml \
+              tests/test_translator/test_mlx_current_unary_fma.py \
+              tests/test_translator/test_mlx_current_unary_trig.py \
+              2>&1 | tee .mlx-portable-host/unary-fma.log
+      - name: Validate pinned inverse hyperbolic cosine
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_ACOSH: "1"
+          CROSTL_REQUIRE_METAL_PRECISE_ACOSH: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/acosh
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Pinned inverse hyperbolic cosine" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/acosh/pytest \
+              --junitxml=.mlx-portable-host/acosh/results.xml \
+              tests/test_translator/test_metal_precise_acosh.py \
+              tests/test_translator/test_mlx_current_unary_acosh.py \
+              2>&1 | tee .mlx-portable-host/acosh.log
+      - name: Validate pinned arctangent
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_ATAN: "1"
+          CROSTL_REQUIRE_METAL_PRECISE_ATAN: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/atan
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Pinned arctangent" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/atan/pytest \
+              --junitxml=.mlx-portable-host/atan/results.xml \
+              tests/test_translator/test_metal_precise_atan.py \
+              tests/test_translator/test_mlx_current_unary_atan.py \
+              2>&1 | tee .mlx-portable-host/atan.log
+      - name: Validate pinned comparison arithmetic
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_SIGN: "1"
+          CROSTL_REQUIRE_METAL_BOOLEAN_PROMOTION: "1"
+          CROSTL_REQUIRE_METAL_FLOAT_SELECTION: "1"
+          CROSTL_REQUIRE_BOOLEAN_BUFFER_RUNTIME: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/boolean-promotion
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Pinned comparison arithmetic" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/boolean-promotion/pytest \
+              --junitxml=.mlx-portable-host/boolean-promotion/results.xml \
+              tests/test_translator/test_metal_boolean_promotion.py \
+              tests/test_translator/test_metal_float_selection.py \
+              tests/test_translator/test_boolean_buffer_runtime.py \
+              tests/test_translator/test_mlx_current_unary_sign.py \
+              2>&1 | tee .mlx-portable-host/boolean-promotion.log
+      - name: Validate pinned copy layouts
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
+          CROSTL_REQUIRE_MLX_CURRENT_COPY: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/copy-layouts
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "Pinned copy layouts" -- \
+            python -m pytest -q -n auto -vv \
+              --basetemp=.mlx-portable-host/copy-layouts/pytest \
+              --junitxml=.mlx-portable-host/copy-layouts/results.xml \
+              tests/test_translator/test_mlx_current_copy.py \
+              2>&1 | tee .mlx-portable-host/copy-layouts.log
+      - name: Validate pinned native binary math
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
+          CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_POWER: "1"
+          CROSTL_REQUIRE_MLX_CURRENT_BINARY_SHAPES: "1"
+          CROSTL_REQUIRE_STRUCT_BUFFER_RUNTIME: "1"
+          CROSTL_RUN_NATIVE_LOADER_DIRECTX_DEVICE_TEST: ${{ runner.os == 'Windows' && '1' || '0' }}
+          CROSTL_RUN_NATIVE_LOADER_OPENGL_DEVICE_TEST: ${{ runner.os == 'Linux' && '1' || '0' }}
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/binary-math
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "Pinned native binary math" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/binary-math/pytest \
+              --junitxml=.mlx-portable-host/binary-math/results.xml \
+              tests/test_translator/test_struct_buffer_layouts.py \
+              tests/test_translator/test_buffer_requirements.py \
+              tests/test_translator/test_native_dispatch_limits.py \
+              tests/test_translator/test_native_loader_dispatch_integration.py \
+              tests/test_translator/test_mlx_current_complex_power.py \
+              tests/test_translator/test_mlx_current_binary_shapes.py \
+              2>&1 | tee .mlx-portable-host/binary-math.log
+      - name: Execute pinned resident attention reductions
+        env:
+          CROSTL_REQUIRE_MLX_ATTENTION_REDUCE_RUNTIME: "1"
+          CROSTL_MLX_ATTENTION_REDUCE_TARGET: ${{ matrix.target }}
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/attention-reduce
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Resident attention reductions" -- \
+            python -m pytest -q -n auto --dist loadscope \
+              --basetemp=.mlx-portable-host/attention-reduce/pytest \
+              --junitxml=.mlx-portable-host/attention-reduce/results.xml \
+              tests/test_translator/test_mlx_attention_reduce_runtime.py \
+              2>&1 | tee .mlx-portable-host/attention-reduce.log
+      - name: Build adapted upstream MLX
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX portable host build" -- \
+            python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-host/build.log
+      - name: Translate unchanged upstream kernels
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 2400 --label "MLX host package translation" -- \
+            python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
+              --target ${{ matrix.target }} --output-dir .mlx-portable-host/packages 2>&1 | tee .mlx-portable-host/translation.log
+      - name: Execute upstream tests on the translated backend
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 4000 --label "MLX portable host verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify --mlx-root mlx-upstream \
+              --packages .mlx-portable-host/packages --output-dir .mlx-portable-host/evidence 2>&1 | tee .mlx-portable-host/verification.log
+      - name: Retain native execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-portable-host-${{ matrix.target }}-${{ github.run_attempt }}
+          path: .mlx-portable-host
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  small-row-reductions:
+    name: MLX small-row reductions (${{ matrix.target }})
+    needs: portable-host
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: opengl
+          - os: windows-2025
+            target: directx
+          - os: macos-26
+            target: metal
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Initialize small-row evidence
+        run: mkdir -p .mlx-portable-small-rows
+      - name: Install Linux build and graphics dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - name: Install CrossTL and MLX build dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging \
+            2>&1 | tee .mlx-portable-small-rows/dependencies.log
+      - name: Install OpenGL runtime dependencies
+        if: runner.os == 'Linux'
+        run: python -m pip install moderngl PyOpenGL
+      - name: Verify macOS Metal toolchain
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk macosx metal --version | tee .mlx-portable-small-rows/metal-version.txt
+          xcrun --sdk macosx swiftc --version | tee .mlx-portable-small-rows/swift-version.txt
+      - name: Install pinned DirectX tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $root = Join-Path $env:RUNNER_TEMP "dxc"
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4") {
+            throw "DXC archive checksum mismatch."
+          }
+          Expand-Archive $archive -DestinationPath $root
+          $bin = Join-Path $root "bin/x64"
+          if (-not (Test-Path "$bin/dxc.exe")) { throw "DXC executable missing." }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $warpArchive = Join-Path $env:RUNNER_TEMP "warp.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "warp"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg" -OutFile $warpArchive
+          if ((Get-FileHash $warpArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681") {
+            throw "WARP archive checksum mismatch."
+          }
+          Expand-Archive $warpArchive -DestinationPath $warpRoot
+          Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
+      - name: Select same-run host packages
+        uses: actions/github-script@v7
+        id: host-artifact
+        env:
+          MLX_TARGET: ${{ matrix.target }}
+        with:
+          script: |
+            const prefix = `mlx-portable-host-${process.env.MLX_TARGET}-`;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
+            });
+            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
+              && /^\d+$/.test(item.name.slice(prefix.length)));
+            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
+            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
+            core.setOutput("id", candidates[0].id);
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.host-artifact.outputs.id }}
+          path: .mlx-portable-small-rows/base
+          merge-multiple: true
+      - name: Prepare pinned MLX
+        run: |
+          set -euo pipefail
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-small-rows/adaptation.json
+      - name: Build adapted upstream MLX
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX small-row host build" -- \
+            python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-small-rows/build.log
+      - name: Execute small-row host reductions
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 4000 --label "MLX small-row host verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_small_rows --mlx-root mlx-upstream \
+              --packages .mlx-portable-small-rows/base/packages --jobs 2 --output-dir .mlx-portable-small-rows/evidence 2>&1 | tee .mlx-portable-small-rows/verification.log
+      - name: Translate reduction initialization
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX initialization translation" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family init --jobs 4 --output-dir .mlx-portable-small-rows/init-packages \
+              2>&1 | tee .mlx-portable-small-rows/init-translation.log
+      - name: Execute empty host reductions
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX empty reduction verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_empty_reductions --mlx-root mlx-upstream \
+              --packages .mlx-portable-small-rows/base/packages --reductions .mlx-portable-small-rows/init-packages \
+              --output-dir .mlx-portable-small-rows/empty-evidence 2>&1 | tee .mlx-portable-small-rows/empty-verification.log
+      - name: Translate bitwise host packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX bitwise translation" -- \
+            python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family bitwise --output-dir .mlx-portable-small-rows/bitwise-packages \
+              2>&1 | tee .mlx-portable-small-rows/bitwise-translation.log
+      - name: Execute bitwise host operations
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1500 --label "MLX bitwise verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_bitwise --mlx-root mlx-upstream \
+              --packages .mlx-portable-small-rows/base/packages --bitwise .mlx-portable-small-rows/bitwise-packages \
+              --output-dir .mlx-portable-small-rows/bitwise-evidence 2>&1 | tee .mlx-portable-small-rows/bitwise-verification.log
+      - name: Translate concatenation test reduction
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX concatenation reduction translation" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --entry all_reduce_andbool_ --width 32 \
+              --output-dir .mlx-portable-small-rows/concatenate-reductions \
+              2>&1 | tee .mlx-portable-small-rows/concatenate-translation.log
+      - name: Execute concatenation host operations
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1500 --label "MLX concatenation verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_concatenate --mlx-root mlx-upstream \
+              --packages .mlx-portable-small-rows/base/packages --reductions .mlx-portable-small-rows/concatenate-reductions \
+              --output-dir .mlx-portable-small-rows/concatenate-evidence 2>&1 | tee .mlx-portable-small-rows/concatenate-verification.log
+      - name: Translate selection host packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX selection translation" -- \
+            python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family selection --output-dir .mlx-portable-small-rows/selection-packages \
+              2>&1 | tee .mlx-portable-small-rows/selection-translation.log
+      - name: Translate absolute-value host packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX absolute-value translation" -- \
+            python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family absolute --output-dir .mlx-portable-small-rows/absolute-packages \
+              2>&1 | tee .mlx-portable-small-rows/absolute-translation.log
+      - name: Execute selection host operations
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX selection verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_selection --mlx-root mlx-upstream \
+              --packages .mlx-portable-small-rows/base/packages --selection .mlx-portable-small-rows/selection-packages \
+              --absolute .mlx-portable-small-rows/absolute-packages --reductions .mlx-portable-small-rows/concatenate-reductions \
+              --output-dir .mlx-portable-small-rows/selection-evidence 2>&1 | tee .mlx-portable-small-rows/selection-verification.log
+      - name: Retain small-row execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-portable-small-rows-${{ matrix.target }}-${{ github.run_attempt }}
+          path: .mlx-portable-small-rows
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  integer64-host:
+    name: MLX integer64 host (${{ matrix.target }})
+    needs: portable-host
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: opengl
+          - os: windows-2025
+            target: directx
+          - os: macos-26
+            target: metal
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Initialize integer64 evidence
+        run: mkdir -p .mlx-portable-integer64
+      - name: Install Linux build and graphics dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - name: Install CrossTL and MLX build dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging \
+            2>&1 | tee .mlx-portable-integer64/dependencies.log
+      - name: Install OpenGL runtime dependencies
+        if: runner.os == 'Linux'
+        run: python -m pip install moderngl PyOpenGL
+      - name: Verify macOS Metal toolchain
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk macosx metal --version | tee .mlx-portable-integer64/metal-version.txt
+          xcrun --sdk macosx swiftc --version | tee .mlx-portable-integer64/swift-version.txt
+      - name: Install pinned DirectX tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $root = Join-Path $env:RUNNER_TEMP "dxc"
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4") {
+            throw "DXC archive checksum mismatch."
+          }
+          Expand-Archive $archive -DestinationPath $root
+          $bin = Join-Path $root "bin/x64"
+          if (-not (Test-Path "$bin/dxc.exe")) { throw "DXC executable missing." }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $warpArchive = Join-Path $env:RUNNER_TEMP "warp.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "warp"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg" -OutFile $warpArchive
+          if ((Get-FileHash $warpArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681") {
+            throw "WARP archive checksum mismatch."
+          }
+          Expand-Archive $warpArchive -DestinationPath $warpRoot
+          Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
+      - name: Select same-run host packages
+        uses: actions/github-script@v7
+        id: host-artifact
+        env:
+          MLX_TARGET: ${{ matrix.target }}
+        with:
+          script: |
+            const prefix = `mlx-portable-host-${process.env.MLX_TARGET}-`;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
+            });
+            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
+              && /^\d+$/.test(item.name.slice(prefix.length)));
+            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
+            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
+            core.setOutput("id", candidates[0].id);
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.host-artifact.outputs.id }}
+          path: .mlx-portable-integer64/base
+          merge-multiple: true
+      - name: Prepare pinned MLX
+        run: |
+          set -euo pipefail
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-integer64/adaptation.json
+      - name: Build adapted upstream MLX
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX integer64 host build" -- \
+            python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-integer64/build.log
+      - name: Translate integer64 host packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 7200 --label "MLX integer64 translation" -- \
+            python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family integer64 --output-dir .mlx-portable-integer64/integer64-packages \
+              2>&1 | tee .mlx-portable-integer64/integer64-translation.log
+      - name: Translate integer64 test companions
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX integer absolute translation" -- \
+            python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family absolute --output-dir .mlx-portable-integer64/absolute-packages \
+              2>&1 | tee .mlx-portable-integer64/absolute-translation.log
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX integer64 Boolean reduction translation" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --entry all_reduce_andbool_ --width 32 \
+              --output-dir .mlx-portable-integer64/reductions 2>&1 | tee .mlx-portable-integer64/reductions.log
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX integer64 empty reduction translation" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family init --entry init_reduce_andbool_ --width 1 \
+              --output-dir .mlx-portable-integer64/init-packages 2>&1 | tee .mlx-portable-integer64/init-translation.log
+      - name: Execute integer64 host operations
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 3000 --label "MLX integer64 verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_integer64 --mlx-root mlx-upstream \
+              --packages .mlx-portable-integer64/base/packages --integer64 .mlx-portable-integer64/integer64-packages \
+              --absolute .mlx-portable-integer64/absolute-packages --reductions .mlx-portable-integer64/reductions \
+              --reductions .mlx-portable-integer64/init-packages --output-dir .mlx-portable-integer64/evidence \
+              2>&1 | tee .mlx-portable-integer64/verification.log
+      - name: Translate padding test companion
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX padding Boolean reduction translation" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --entry all_reduce_andbool_ --width 64 \
+              --output-dir .mlx-portable-integer64/padding-reductions \
+              2>&1 | tee .mlx-portable-integer64/padding-translation.log
+      - name: Execute padding and slice updates
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 3000 --label "MLX padding verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_padding --mlx-root mlx-upstream \
+              --packages .mlx-portable-integer64/base/packages --integer64 .mlx-portable-integer64/integer64-packages \
+              --reductions .mlx-portable-integer64/reductions --reductions .mlx-portable-integer64/padding-reductions \
+              --output-dir .mlx-portable-integer64/padding-evidence \
+              2>&1 | tee .mlx-portable-integer64/padding-verification.log
+      - name: Retain integer64 execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-portable-integer64-${{ matrix.target }}-${{ github.run_attempt }}
+          path: .mlx-portable-integer64
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  slice-update-host:
+    name: MLX slice update and indexing host (${{ matrix.target }})
+    needs: integer64-host
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 315
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: opengl
+          - os: windows-2025
+            target: directx
+          - os: macos-26
+            target: metal
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Initialize slice update evidence
+        run: mkdir -p .mlx-portable-slice-update
+      - name: Install Linux build and graphics dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - name: Install CrossTL and MLX build dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging \
+            2>&1 | tee .mlx-portable-slice-update/dependencies.log
+      - name: Install OpenGL runtime dependencies
+        if: runner.os == 'Linux'
+        run: python -m pip install moderngl PyOpenGL
+      - name: Verify macOS Metal toolchain
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk macosx metal --version | tee .mlx-portable-slice-update/metal-version.txt
+          xcrun --sdk macosx swiftc --version | tee .mlx-portable-slice-update/swift-version.txt
+      - name: Install pinned DirectX tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $root = Join-Path $env:RUNNER_TEMP "dxc"
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4") {
+            throw "DXC archive checksum mismatch."
+          }
+          Expand-Archive $archive -DestinationPath $root
+          $bin = Join-Path $root "bin/x64"
+          if (-not (Test-Path "$bin/dxc.exe")) { throw "DXC executable missing." }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $warpArchive = Join-Path $env:RUNNER_TEMP "warp.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "warp"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg" -OutFile $warpArchive
+          if ((Get-FileHash $warpArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681") {
+            throw "WARP archive checksum mismatch."
+          }
+          Expand-Archive $warpArchive -DestinationPath $warpRoot
+          Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
+      - name: Select same-run integer64 packages
+        uses: actions/github-script@v7
+        id: host-artifact
+        env:
+          MLX_TARGET: ${{ matrix.target }}
+        with:
+          script: |
+            const prefix = `mlx-portable-integer64-${process.env.MLX_TARGET}-`;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
+            });
+            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
+              && /^\d+$/.test(item.name.slice(prefix.length)));
+            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
+            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
+            core.setOutput("id", candidates[0].id);
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.host-artifact.outputs.id }}
+          path: .mlx-portable-slice-update/base
+          merge-multiple: true
+      - name: Prepare pinned MLX
+        run: |
+          set -euo pipefail
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-slice-update/adaptation.json
+      - name: Build adapted upstream MLX
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX slice update host build" -- \
+            python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-slice-update/build.log
+      - name: Translate slice update kernels
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX slice update translation" -- \
+            python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family slice-update --output-dir .mlx-portable-slice-update/slice-update-packages \
+              2>&1 | tee .mlx-portable-slice-update/slice-update-translation.log
+      - name: Execute slice update reductions
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 3000 --label "MLX slice update verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_slice_updates --mlx-root mlx-upstream \
+              --packages .mlx-portable-slice-update/base/base/packages --integer64 .mlx-portable-slice-update/base/integer64-packages \
+              --slice-updates .mlx-portable-slice-update/slice-update-packages \
+              --reductions .mlx-portable-slice-update/base/reductions --reductions .mlx-portable-slice-update/base/padding-reductions \
+              --output-dir .mlx-portable-slice-update/slice-update-evidence \
+              2>&1 | tee .mlx-portable-slice-update/slice-update-verification.log
+      - name: Execute general gather host operations
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 3600 --label "MLX gather verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_gather --mlx-root mlx-upstream \
+              --packages .mlx-portable-slice-update/base/base/packages --integer64 .mlx-portable-slice-update/base/integer64-packages \
+              --reductions .mlx-portable-slice-update/base/reductions \
+              --output-dir .mlx-portable-slice-update/gather-evidence \
+              2>&1 | tee .mlx-portable-slice-update/gather-verification.log
+      - name: Execute axis gather host operations
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 3600 --label "MLX axis gather verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_gather --axis --mlx-root mlx-upstream \
+              --packages .mlx-portable-slice-update/base/base/packages --integer64 .mlx-portable-slice-update/base/integer64-packages \
+              --reductions .mlx-portable-slice-update/base/reductions \
+              --output-dir .mlx-portable-slice-update/gather-axis-evidence \
+              2>&1 | tee .mlx-portable-slice-update/gather-axis-verification.log
+      - name: Execute axis scatter host operations
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 3600 --label "MLX axis scatter verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_scatter_axis --mlx-root mlx-upstream \
+              --packages .mlx-portable-slice-update/base/base/packages --integer64 .mlx-portable-slice-update/base/integer64-packages \
+              --output-dir .mlx-portable-slice-update/scatter-axis-evidence \
+              2>&1 | tee .mlx-portable-slice-update/scatter-axis-verification.log
+      - name: Retain slice update execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-portable-slice-update-${{ matrix.target }}-${{ github.run_attempt }}
+          path: .mlx-portable-slice-update
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  scatter-host:
+    name: MLX general scatter host (${{ matrix.target }})
+    needs: integer64-host
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: opengl
+          - os: windows-2025
+            target: directx
+          - os: macos-26
+            target: metal
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Initialize general scatter evidence
+        run: mkdir -p .mlx-portable-scatter
+      - name: Install Linux build and graphics dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - name: Install CrossTL and MLX build dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging \
+            2>&1 | tee .mlx-portable-scatter/dependencies.log
+      - name: Install OpenGL runtime dependencies
+        if: runner.os == 'Linux'
+        run: python -m pip install moderngl PyOpenGL
+      - name: Verify macOS Metal toolchain
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk macosx metal --version | tee .mlx-portable-scatter/metal-version.txt
+          xcrun --sdk macosx swiftc --version | tee .mlx-portable-scatter/swift-version.txt
+      - name: Install pinned DirectX tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $root = Join-Path $env:RUNNER_TEMP "dxc"
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4") {
+            throw "DXC archive checksum mismatch."
+          }
+          Expand-Archive $archive -DestinationPath $root
+          $bin = Join-Path $root "bin/x64"
+          if (-not (Test-Path "$bin/dxc.exe")) { throw "DXC executable missing." }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $warpArchive = Join-Path $env:RUNNER_TEMP "warp.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "warp"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg" -OutFile $warpArchive
+          if ((Get-FileHash $warpArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681") {
+            throw "WARP archive checksum mismatch."
+          }
+          Expand-Archive $warpArchive -DestinationPath $warpRoot
+          Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
+      - name: Select same-run integer64 packages
+        uses: actions/github-script@v7
+        id: host-artifact
+        env:
+          MLX_TARGET: ${{ matrix.target }}
+        with:
+          script: |
+            const prefix = `mlx-portable-integer64-${process.env.MLX_TARGET}-`;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
+            });
+            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
+              && /^\d+$/.test(item.name.slice(prefix.length)));
+            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
+            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
+            core.setOutput("id", candidates[0].id);
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.host-artifact.outputs.id }}
+          path: .mlx-portable-scatter/base
+          merge-multiple: true
+      - name: Prepare pinned MLX
+        run: |
+          set -euo pipefail
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-scatter/adaptation.json
+      - name: Build adapted upstream MLX
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX general scatter host build" -- \
+            python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-scatter/build.log
+      - name: Execute general scatter host operations
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 3600 --label "MLX general scatter verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_scatter --mlx-root mlx-upstream \
+              --packages .mlx-portable-scatter/base/base/packages --integer64 .mlx-portable-scatter/base/integer64-packages \
+              --output-dir .mlx-portable-scatter/scatter-evidence \
+              2>&1 | tee .mlx-portable-scatter/scatter-verification.log
+      - name: Retain general scatter execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-portable-scatter-${{ matrix.target }}-${{ github.run_attempt }}
+          path: .mlx-portable-scatter
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  row-packages:
+    name: MLX row translation (${{ matrix.target }}, shard ${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        target: [metal, opengl, directx]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Initialize row translation evidence
+        run: mkdir -p .mlx-row-shard
+      - name: Install translation dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e . 2>&1 | tee .mlx-row-shard/dependencies.log
+      - name: Check out pinned MLX kernels
+        run: |
+          set -euo pipefail
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+      - name: Translate complete row shard
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 7200 --label "MLX row translation shard" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_shards build --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --shard "${{ matrix.shard }}" --jobs 2 \
+              --output-dir .mlx-row-shard/packages 2>&1 | tee .mlx-row-shard/translation.log
+      - name: Retain row translation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-row-packages-${{ matrix.target }}-s${{ matrix.shard }}-${{ github.run_attempt }}
+          path: .mlx-row-shard
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  reductions:
+    name: MLX ${{ matrix.family }} reductions (${{ matrix.target }})
+    needs: [portable-host, row-packages]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: opengl
+            family: all
+            verifier: verify
+          - os: windows-2025
+            target: directx
+            family: all
+            verifier: verify
+          - os: macos-26
+            target: metal
+            family: all
+            verifier: verify
+          - os: ubuntu-24.04
+            target: opengl
+            family: row
+            verifier: verify_rows
+            verification_timeout: 7800
+            companion_args: --all-reductions .mlx-portable-reductions/companions --require-all-widths
+          - os: windows-2025
+            target: directx
+            family: row
+            verifier: verify_rows
+            verification_timeout: 7800
+            companion_args: --all-reductions .mlx-portable-reductions/companions --require-all-widths
+          - os: macos-26
+            target: metal
+            family: row
+            verifier: verify_rows
+            verification_timeout: 7800
+            companion_args: --all-reductions .mlx-portable-reductions/companions --require-all-widths
+          - os: windows-2025
+            target: directx
+            family: column
+            verifier: verify_columns
+          - os: ubuntu-24.04
+            target: opengl
+            family: column
+            verifier: verify_columns
+          - os: macos-26
+            target: metal
+            family: column
+            verifier: verify_columns
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Initialize reduction evidence
+        run: mkdir -p .mlx-portable-reductions
+      - name: Install Linux build and graphics dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - name: Install CrossTL and MLX build dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging \
+            2>&1 | tee .mlx-portable-reductions/dependencies.log
+      - name: Install OpenGL runtime dependencies
+        if: runner.os == 'Linux'
+        run: python -m pip install moderngl PyOpenGL
+      - name: Verify macOS Metal toolchain
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk macosx metal --version | tee .mlx-portable-reductions/metal-version.txt
+          xcrun --sdk macosx swiftc --version | tee .mlx-portable-reductions/swift-version.txt
+      - name: Install pinned DirectX tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $root = Join-Path $env:RUNNER_TEMP "dxc"
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4") {
+            throw "DXC archive checksum mismatch."
+          }
+          Expand-Archive $archive -DestinationPath $root
+          $bin = Join-Path $root "bin/x64"
+          if (-not (Test-Path "$bin/dxc.exe")) { throw "DXC executable missing." }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $warpArchive = Join-Path $env:RUNNER_TEMP "warp.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "warp"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg" -OutFile $warpArchive
+          if ((Get-FileHash $warpArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681") {
+            throw "WARP archive checksum mismatch."
+          }
+          Expand-Archive $warpArchive -DestinationPath $warpRoot
+          Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
+      - name: Select same-run host packages
+        uses: actions/github-script@v7
+        id: host-artifact
+        env:
+          MLX_TARGET: ${{ matrix.target }}
+        with:
+          script: |
+            const prefix = `mlx-portable-host-${process.env.MLX_TARGET}-`;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
+            });
+            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
+              && /^\d+$/.test(item.name.slice(prefix.length)));
+            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
+            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
+            core.setOutput("id", candidates[0].id);
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.host-artifact.outputs.id }}
+          path: .mlx-portable-reductions/base
+          merge-multiple: true
+      - name: Prepare pinned MLX
+        run: |
+          set -euo pipefail
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-reductions/adaptation.json
+      - name: Build adapted upstream MLX
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX reduction host build" -- \
+            python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-reductions/build.log
+      - name: Translate reduction launch variants
+        if: matrix.family != 'row'
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 12000 --label "MLX reduction packages" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target ${{ matrix.target }} --family ${{ matrix.family }} --jobs 2 --output-dir .mlx-portable-reductions/packages 2>&1 | tee .mlx-portable-reductions/translation.log
+      - name: Select same-run row shards
+        if: matrix.family == 'row'
+        uses: actions/github-script@v7
+        id: row-artifacts
+        env:
+          MLX_TARGET: ${{ matrix.target }}
+        with:
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
+            });
+            const ids = [];
+            for (let shard = 0; shard < 8; shard++) {
+              const prefix = `mlx-row-packages-${process.env.MLX_TARGET}-s${shard}-`;
+              const matches = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
+                && /^\d+$/.test(item.name.slice(prefix.length)));
+              matches.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
+              if (!matches.length) throw new Error(`Missing row translation shard ${shard}`);
+              ids.push(matches[0].id);
+            }
+            core.setOutput("ids", ids.join(","));
+      - name: Download row shards
+        if: matrix.family == 'row'
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.row-artifacts.outputs.ids }}
+          path: .mlx-portable-reductions/packages/shards
+          merge-multiple: false
+      - name: Verify complete row package collection
+        if: matrix.family == 'row'
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "MLX row package collection" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_shards collect \
+              --directory .mlx-portable-reductions/packages --target "${{ matrix.target }}" \
+              2>&1 | tee .mlx-portable-reductions/collection.log
+      - name: Compile every row variant natively
+        if: matrix.family == 'row'
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 7200 --label "MLX row native compilation" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_shards compile \
+              --directory .mlx-portable-reductions/packages --target "${{ matrix.target }}" \
+              --output-dir .mlx-portable-reductions/compiled \
+              2>&1 | tee .mlx-portable-reductions/compilation.log
+      - name: Translate whole-array companions for mixed workloads
+        if: matrix.family == 'row'
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX mixed reduction packages" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target ${{ matrix.target }} --family all --width 32 --jobs 2 \
+              --output-dir .mlx-portable-reductions/companions 2>&1 | tee .mlx-portable-reductions/companion-translation.log
+      - name: Execute MLX reductions
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds ${{ matrix.verification_timeout || 5400 }} --label "MLX reduction host verification" -- \
+            python -m demos.integrations.mlx.portable_host.${{ matrix.verifier }} --mlx-root mlx-upstream \
+              --packages .mlx-portable-reductions/base/packages --reductions .mlx-portable-reductions/packages \
+              ${{ matrix.companion_args }} --output-dir .mlx-portable-reductions/evidence 2>&1 | tee .mlx-portable-reductions/verification.log
+      - name: Retain reduction execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-portable-${{ matrix.family }}-reductions-${{ matrix.target }}-${{ github.run_attempt }}
+          path: .mlx-portable-reductions
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

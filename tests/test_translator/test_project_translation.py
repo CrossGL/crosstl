@@ -44,7 +44,10 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
-from crosstl.project.host_reflection import REFLECTION_TOOL_UNAVAILABLE
+from crosstl.project.host_reflection import (
+    REFLECTION_INCOMPLETE_OUTPUT,
+    REFLECTION_TOOL_UNAVAILABLE,
+)
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 from tests.test_backend.test_SPIRV.test_codegen import (
     SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
@@ -621,6 +624,8 @@ def test_project_package_exposes_public_api_surface():
         "ReflectionDiagnostic",
         "DirectXComputeRuntime",
         "DirectXRuntimeParityAdapter",
+        "MetalComputeRuntime",
+        "MetalRuntimeParityAdapter",
         "NativeRuntimeBufferBinding",
         "NativeRuntimeConstantBinding",
         "NativeRuntimeDispatchRequest",
@@ -703,6 +708,8 @@ def test_project_package_exposes_public_api_surface():
         "build_native_loader_abi_descriptor",
         "build_native_loader_abi_package",
         "build_native_loader_dispatch_request",
+        "prepare_native_loader_dispatch_regions",
+        "select_native_loader_dispatch_regions",
         "build_runtime_host_loader_scaffolds",
         "build_runtime_host_integration_handoff",
         "build_runtime_loader_manifest",
@@ -15696,6 +15703,64 @@ def test_metal_expression_type_infers_nested_index_elements():
     )
 
 
+@pytest.mark.parametrize(
+    "declared, expression, expected",
+    [
+        ("const array<int, 2>", "refs.values[i]", "int"),
+        ("metal::array<float, 2>", "refs.values[i]", "float"),
+        ("array<array<int, 2>, 3>", "refs.values[i][j]", "int"),
+        ("float[2][3]", "refs.values[i]", "float[3]"),
+        ("float[2][3]", "refs.values[i][j]", "float"),
+        ("array<const device int*, 2>", "refs.values[i]", "const device int*"),
+        ("array<const device int*, 2>", "refs.values[i][j]", "int"),
+        ("const device int*[2]", "refs.values[i]", "const device int*"),
+        ("const device int*[2]", "refs.values[i][j]", "int"),
+        ("array<const constant int*, 2>", "refs.values[i]", "const constant int*"),
+        ("array<threadgroup uint*, 2>", "refs.values[i]", "threadgroup uint*"),
+        ("array<int, 2>", "refs.values[i][j]", None),
+        ("Other<int, 2>", "refs.values[i]", None),
+        ("array<int, 2>", "refs.values[]", None),
+        ("array<int, 2>", "refs.values[i]garbage[j]", None),
+        ("array<int, 2>", "refs->values[i]", None),
+    ],
+)
+def test_metal_expression_type_preserves_member_array_layers(
+    declared, expression, expected
+):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    assert (
+        project_pipeline._metal_expression_type(
+            MetalPreprocessor(), expression, {"refs.values": declared}, {}
+        )
+        == expected
+    )
+
+
+def test_metal_struct_member_environment_retains_declared_array_types():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = """
+    struct References {
+        int dimensions[2][3];
+        const device float* pointers[2];
+        const array<const constant int*, 2> arrays;
+    };
+    """
+    environments = project_pipeline._metal_struct_field_type_environments(
+        MetalPreprocessor(), source
+    )
+    assert len(environments) == 1
+    assert environments[0][1:] == (
+        "References",
+        {
+            "dimensions": "int[2][3]",
+            "pointers": "const device float*[2]",
+            "arrays": "const array<const constant int*,2>",
+        },
+    )
+
+
 def test_metal_expression_type_infers_vector_components():
     from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 
@@ -22657,6 +22722,7 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
     )
     assert set(artifact["provenance"]) == (
         project_pipeline.REPORT_ARTIFACT_PROVENANCE_FIELDS
+        - {"dispatchRegion", "dispatchRegionProgram"}
     )
     assert set(artifact["sourceRemap"]) == (
         project_pipeline.REPORT_ARTIFACT_SOURCE_REMAP_FIELDS
@@ -42498,7 +42564,7 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
     payload = inspect_runtime_package(package_dir / "runtime-package.json")
 
     host_interface = payload["bindings"][0]["hostInterface"]
-    assert host_interface["status"] == "ready"
+    assert host_interface["status"] == "incomplete"
     assert host_interface["source"] == "compiled-artifact"
     assert host_interface["parser"] == "opengl-reflection"
     assert host_interface["artifactFormat"] == "GLSL source"
@@ -42529,7 +42595,11 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
             "access": "read",
         },
     ]
-    assert host_interface["diagnostics"] == []
+    assert host_interface["diagnostics"] == [REFLECTION_INCOMPLETE_OUTPUT]
+    assert host_interface["diagnosticRecords"][0]["details"] == {
+        "resource": "Camera",
+        "reasonKind": "uniform-block-layout-unsupported",
+    }
 
 
 def test_inspect_runtime_package_reflects_generated_wgsl_resource_bindings(tmp_path):
@@ -42784,7 +42854,7 @@ def test_inspect_runtime_package_reports_entry_point_parameter_resources(tmp_pat
 
     host_interface = payload["bindings"][0]["hostInterface"]
     assert host_interface["status"] == "ready"
-    assert host_interface["parser"] == "metal"
+    assert host_interface["parser"] == "metal-reflection"
     assert host_interface["entryPoints"] == [
         {
             "name": "fragment_main",
@@ -42796,18 +42866,20 @@ def test_inspect_runtime_package_reports_entry_point_parameter_resources(tmp_pat
         {
             "name": "camera",
             "kind": "constant-buffer",
-            "type": "Camera&",
-            "set": None,
+            "type": "constant Camera&",
+            "set": 0,
             "binding": 0,
             "access": "read",
+            "metadata": {"entryPoint": "fragment_main"},
         },
         {
             "name": "sourceTexture",
             "kind": "texture",
             "type": "texture2d<float>",
-            "set": None,
+            "set": 0,
             "binding": 0,
-            "access": None,
+            "access": "read",
+            "metadata": {"entryPoint": "fragment_main"},
         },
     ]
     assert host_interface["diagnostics"] == []
@@ -52838,7 +52910,7 @@ def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_pat
     intermediate = MetalToCrossGLConverter().generate(
         MetalParser(MetalLexer(source).tokenize()).parse()
     )
-    assert "(const device vec<bfloat16_t, 4>*)(base + offset)" in intermediate
+    assert "(const device bfloat16vec4*)(base + offset)" in intermediate
 
     payload = translate_project(
         repo,
@@ -52908,7 +52980,7 @@ def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_pat
                 "addressSpace": "storage",
                 "reason": "unsupported-scalar-layout",
                 "sourceType": expected_source_types[target],
-                "targetType": "vec<bfloat16_t, 4>",
+                "targetType": "bfloat16vec4",
             },
             "sourcePath": "generic_vector_pointer.metal",
             "targetArtifact": (
@@ -56942,7 +57014,10 @@ def test_metal_simd_shuffle_down_to_directx_lowers_to_wave_read(tmp_path):
         str(shader_path), backend="directx", source_backend="metal"
     )
     assert "simd_shuffle_down" not in generated_hlsl
-    assert "WaveReadLaneAt(v, (WaveGetLaneIndex() + uint(1)))" in generated_hlsl
+    assert (
+        "WaveReadLaneAt(v, (WaveGetLaneIndex() + uint((uint(1) & 65535u))))"
+        in generated_hlsl
+    )
 
     repo = _write_metal_directx_project(
         tmp_path / "repo", "reduce_kernel", METAL_SIMD_SHUFFLE_DOWN_KERNEL
@@ -56997,7 +57072,10 @@ def test_metal_relative_shuffle_self_policy_propagates_to_directx(tmp_path):
     assert "bool valid = delta < (laneCount - lane);" in generated
     assert "uint laneCount = WaveGetLaneCount();" in generated
     assert "WaveReadLaneAt(value, sourceLane);" in generated
-    assert "__crossgl_wave_shuffle_down_self_float(v, uint(1))" in generated
+    assert (
+        "__crossgl_wave_shuffle_down_self_float(v, uint((uint(1) & 65535u)))"
+        in generated
+    )
     assert "WaveReadLaneAt(v, (WaveGetLaneIndex() + uint(1)))" not in generated
     assert_directx_compute_validates_if_available(generated, tmp_path)
 

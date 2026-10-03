@@ -9,8 +9,8 @@ baselines are not, by themselves, evidence that every kernel translates or
 passes a target validator.
 
 The next corpus increment is separately pinned to
-`d9add9d11f3154111a4c85f267ec2fd307ecd18e`. Its authoritative discovery census
-is 42 Metal units, 17,478 entries, and zero discovery diagnostics. The compact
+`9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. Its authoritative discovery census
+is 49 Metal units, 17,832 entries, and zero discovery diagnostics. The compact
 `contracts/arg_reduce.current-tree.translation.json` contract pins all 24
 entries from `arg_reduce.metal` and all 72 deterministic Metal, OpenGL, and
 DirectX artifacts. Required CI compiles every entry with the applicable native
@@ -18,11 +18,101 @@ validator. Numerical execution remains an explicit float32 subset:
 `argmin_float32` and `argmax_float32` run on Metal, Mesa EGL, and Direct3D 12
 WARP over axis sizes 32 and 129, strides 1 and 2, ordinary values, and
 NaN/Infinity inputs; macOS additionally compares against the upstream metallib.
-This is a 24/17,478 deterministic translation and native-compiler increment with
-2/17,478 numerical runtime coverage, not full-tree coverage, upstream MLX
+This is a 24/17,832 deterministic translation and native-compiler increment with
+2/17,832 numerical runtime coverage, not full-tree coverage, upstream MLX
 test-suite execution, or MLX host-runtime redirection.
 
+Original Metal reference libraries use the unchanged upstream sources with
+compiler warnings retained but not promoted to errors. The pinned headers use
+C++17 constructs that some Metal 3.1 toolchains diagnose as extensions.
+Generated Metal libraries still compile with `-Werror`; both paths retain
+`-fno-fast-math` and the same numerical assertions. No upstream headers are
+modified to accommodate the reference compiler.
+
+The current pin adds cross-entropy, gated-delta forward and backward kernels
+(including NAX variants), matrix-multiplication gather offsets, and attention
+backward kernels. These files are included in discovery; they are not covered by
+the arg-reduce translation and numerical checks above.
+
+A separate native gate exercises all 15 discovered `Powercomplex64` entry
+shapes at the same `d9add9d` pin. Its 873 complex outputs cover scalar/vector
+broadcasting, multidimensional grids, non-contiguous inputs, zero strides,
+32/64-bit index variants, and partial final tiles in four-dimensional gathers.
+Every shape retains its random cases and tests both signed-zero sides of the
+negative-real branch cut with a half exponent, using the same error bound.
+Inputs and readbacks are retained separately for all three datasets.
+DirectX and OpenGL use the public runtime-package and native-loader APIs.
+Metal executes the original source, generated kernels and public runtime package
+for every dataset, retaining 873 comparisons on each path. Each output is
+checked against an independently indexed CPU reference; required CI retains
+the compiler logs, packages, bindings and numerical results. The OpenGL
+index-range assertions are bounded fixture preconditions, not general runtime
+bounds checks. Other binary operators and types, the complete upstream suite,
+and MLX host-runtime redirection remain outside this proof.
+
+The DirectX/OpenGL two- and three-dimensional cases also verify that truncated
+stride buffers are rejected before dispatch. Their minimum lengths come from
+proven constant-index accesses in the generated helpers, not from MLX-specific
+buffer names. Valid workloads still run unchanged; this preflight guarantee does
+not cover arbitrary dynamic indexing.
+
 ## Scope
+
+The independent [general-gather round-trip workflow](../../../.github/workflows/mlx-gather-roundtrip.yml)
+uses the unchanged JIT template and indexing headers at
+`9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. It executes 24 original/generated
+Metal workloads through public project, package and native-dispatch APIs.
+Coverage includes zero through two index buffers, scalar through three-dimensional
+indices, negative and repeated indices, and dense, transposed, strided and
+broadcast source/index layouts. Binary32 outputs are compared as exact storage
+words, including trailing guards. No upstream source or test is modified.
+
+The no-index specialization requires a valid zero-extent standard array.
+CrossTL retains that native object and its layout instead of emitting an illegal
+C-style array. Separate native controls exercise aliases, nested arrays,
+packed/narrow elements, copies and neighboring fields. DirectX/OpenGL empty-array
+representation remains unsupported ([#2042](https://github.com/CrossGL/crosstl/issues/2042)).
+Private pointer-bearing aggregates use resource identities and signed offsets
+on DirectX and OpenGL, with concrete buffer specialization on OpenGL
+([#1544](https://github.com/CrossGL/crosstl/issues/1544)). Required Windows/Linux
+gates execute the 20 indexed workloads. OpenGL uses explicit allocation-derived
+index-range assertions; these bounded cases do not establish unrestricted
+64-bit addressing. Returned void helper calls retain their computation and
+argument effects ([#2043](https://github.com/CrossGL/crosstl/issues/2043)).
+These are direct kernel proofs, not integration of general Gather into the MLX
+host adapter or a passing complete upstream suite.
+
+The same workflow requires pointer-offset execution controls: 13 cases on Metal
+and 11 on DirectX/OpenGL, with exact outputs and neighboring guards. Metal also
+executes the original source. Offset values, including struct members and
+conditional scalar loads, do not change a pointer's address space. Both operand
+orders preserve resource-backed aggregate pointers without repeating offset
+side effects. Incompatible Metal helper arguments fail project translation
+instead of replacing a reachable computation with zero
+([#2053](https://github.com/CrossGL/crosstl/issues/2053)). DirectX/OpenGL still
+reject same-buffer conditional pointers
+([#2054](https://github.com/CrossGL/crosstl/issues/2054)) and local struct-pointer
+aliases ([#2055](https://github.com/CrossGL/crosstl/issues/2055)); explicit negative
+controls retain those diagnostics. These cases do not count as native passes.
+Generated resource helpers use explicit 64-bit index arguments; native OpenGL
+execution checks this contract independently of glslang acceptance
+([#2056](https://github.com/CrossGL/crosstl/issues/2056)).
+
+The [Metal host integration harness](METAL_HOST.md) redirects selected current-pinned
+complex-power kernels through MLX's own runtime and runs its unchanged upstream
+operations tests. Its dispatch trace distinguishes actual host execution from
+compile-only coverage. Eight host layouts retain 402 complex readbacks across
+ordinary inputs and both signed-zero branch cuts; unselected operations still
+use upstream kernels.
+
+The [portable host adapter](portable_host/README.md) connects MLX's C++ GPU
+evaluation to native DirectX/OpenGL/generated Metal packages with the original
+Metal and CUDA backends disabled. It covers five typed array-creation entries,
+30 float32 unary entries, shared views, bit-exact 32-bit layout copies and 16
+binary arithmetic entries, with 21 unchanged upstream tests and explicit
+unsupported-operation failures.
+This synchronous adapter does not yet
+implement a complete MLX backend.
 
 The current harness verifies:
 
@@ -60,7 +150,7 @@ The current harness verifies:
   `unary.metal` entries to OpenGL. The schema-v2
   `contracts/unary.opengl-translation.json` contract pins every standalone
   `main` artifact across the same five shapes, 37 operators, 20 type pairs,
-  1,243 materializations, and 3,363 reflected resources, totaling 4,060,696
+  1,243 materializations, and 3,363 reflected resources, totaling 4,119,841
   generated GLSL bytes. Translation requires three explicit host/runtime
   index-range preconditions for `offset + i`, `out_idx++`, and `idx`; these are
   portability promises rather than inferred or runtime-enforced bounds. The
@@ -95,7 +185,8 @@ The current harness verifies:
   reflection, and native compiler coverage on both targets, not numerical
   execution or MLX host runtime redirection;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 2,496
-  discovered current-pinned copy entries from `copy.metal`. The schema-v2
+  discovered copy entries from `copy.metal` at the legacy reference revision
+  `846d176227a0ac13d2667e58d2bb68b322109ab0`. The schema-v2
   `contracts/copy.metal-roundtrip.json` contract spans 30 shapes, 16 concrete
   templates, 13 source types, all 169 conversion pairs, 6,566 exact
   materializations, and 8,684 reflected resources. It records the conditional
@@ -105,7 +196,11 @@ The current harness verifies:
   macOS shards each compile 104 exact artifacts with warnings fatal and require
   2,496 non-empty AIR objects in aggregate. This is complete copy translation,
   reflection, and native compiler coverage, not numerical execution or MLX host
-  runtime redirection;
+  runtime redirection. The compiler-gated identity refresh retains source
+  coverage, materializations and resource ABI; generated differences are limited
+  to helper linkage qualifiers. `artifactIdentityRefresh` records the new audit
+  separately from the historical `proof` metadata. Neither record establishes
+  coverage of a newer MLX revision;
 - selected-entry translation of all 2,496 discovered current-pinned
   `copy.metal` entries to OpenGL. The schema-v2
   `contracts/copy.opengl-translation.json` contract pins every standalone
@@ -388,6 +483,10 @@ The current harness verifies:
   metadata remains tracked by
   [#1542](https://github.com/CrossGL/crosstl/issues/1542). Host dispatch contract
   import was completed under [#1793](https://github.com/CrossGL/crosstl/issues/1793).
+  These are compilation claims only. The current-pin
+  [random readiness audit](portable_host/README.md#random-generation-readiness)
+  records failed OpenGL numerical execution and separate Metal round-trip
+  blockers; `RandomBits` host integration is not enabled.
   The three pending aggregate sources cover 76 compute entries. Those historical
   aggregate runs do not consume the later entry-scoped bounded contracts and
   remain asserted as failed artifacts; no placeholder workgroup size is
@@ -808,6 +907,117 @@ entries. It does not execute those entries, establish numerical parity, redirect
 the MLX host runtime, or run the upstream MLX test suite on OpenGL.
 
 ## Current Translator Gaps
+
+The current-pin gated-delta backward kernels still need OpenGL floating-point
+atomic lowering ([#1986](https://github.com/CrossGL/crosstl/issues/1986)). Struct
+selection now preserves anonymous type-parameter defaults and evaluates supported
+`enable_if` partial specializations ([#1985](https://github.com/CrossGL/crosstl/issues/1985)).
+The selected `seq_gated_delta_vjp_float_128_128_24_24_1` entry retains the floating
+field in `mlx_atomic<float>`. Its generated Metal now compiles with warnings fatal;
+the macOS host workflow requires compilation of both the original source and the
+translated entry and retains their libraries, compiler logs and identities.
+DirectX float buffer addition and exchange now have native execution coverage.
+Eight gated-delta backward configurations have required Windows DirectX and
+original/generated Metal numerical gates, checking all six gradients against an
+independent reference. This covers selected head layouts, checkpoint intervals,
+partial segments and float16/float32 storage, not complete MLX host integration.
+
+The attention backward row-dot stage has required Windows, Linux and macOS
+gates. They translate all 24 declared float32/float16/bfloat16 entries across
+dimensions 64, 72, 80, 96, 128, 192, 256 and 512. Exact dyadic cases distinguish
+storage interpretation, indexing and reduction behavior; additional fractional
+cases compare against decoded-input float64 dot products at `rtol=atol=1e-5`.
+Dispatches preserve the upstream `(32, 1, 1)` workgroup shape and add inactive
+rows to test whole-workgroup early returns. An empty-length case must preserve
+all output guards. Original and translated Metal read back every buffer;
+DirectX and OpenGL read back the writable output. These checks cover the row-dot stage,
+not the remaining attention-gradient stages or full upstream attention tests.
+
+OpenGL uses software subgroups of width 32 and validates each generated shader
+with glslang before native execution. The fixture records source-scoped index
+bounds derived from its dimensions, lengths and six flattened heads. These are
+bounded host preconditions, not a general guarantee for 64-bit MLX indices.
+Generated GLSL exposes float32 input storage for this stage: the host fixture
+decodes the already-quantized float16/bfloat16 source values before uploading
+float32 buffers. It preserves the original input files separately from the
+uploaded bytes and records both storage widths. The `qL` parameter uses a
+checked 16-byte std140 block. No source kernels are rewritten, and this fixture
+does not establish automatic layout conversion for a full MLX backend.
+
+The attention tile-derivative stage has separate Windows and macOS gates for
+all three declared storage types. Its 24 configurations cover causal masking,
+fully masked rows, nonzero tile origins, partial workgroups, fractional inputs,
+and the shared score/derivative allocation used by the upstream host. The
+32-byte mixed integer/float parameter block is packed at checked field offsets.
+Word-sized readback transport preserves native 16-bit buffer strides; an odd
+element count has explicit tail padding after the output guard. Exact cases
+compare bitwise and fractional cases use `rtol=atol=1e-5` against quantized
+float64 references. Original/generated Metal also checks input preservation
+and allocation identity. These are kernel-stage checks, not end-to-end
+attention backward or upstream host redirection.
+
+The attention reduction stage has a separate resident-sequence gate on Windows,
+Linux and macOS. Each case executes a prefix of `set`, `add`, `add`, `set` with
+distinct source allocations and shared accumulator/output allocations. The
+accumulator is initialized once and is not read back or reuploaded between
+dispatches. Prefix checks distinguish accumulation from reset behavior and
+verify untouched rows, partial workgroups and buffer guards. Dyadic and
+fractional inputs use the source storage precision; all output comparisons
+are bitwise, including the float32 accumulator and rounded low-precision result.
+
+Windows and original/generated Metal cover float32, float16 and bfloat16.
+OpenGL covers float32 and float16, with explicit decoded float32 uploads and
+source-scoped bounds derived from the fixture dimensions. OpenGL bfloat16
+narrowing remains tracked in [#1488](https://github.com/CrossGL/crosstl/issues/1488).
+Metal submits the sequence in one command buffer and verifies every allocation
+after completion. Portable drivers perform only the final output readback;
+Windows retains native two-byte source/output storage. These are maintained
+reduction-stage tests, not a complete attention operation or automatic MLX
+host-runtime redirection. No upstream kernels are modified.
+
+The Linux gate executes the same eight derivative configurations for each of
+float32 and float16. The 32-byte parameter block uses reflected mixed-field
+layout metadata, preserved by the native runtime contract. The test uploads
+already-quantized inputs into the generated float32 storage and compares actual
+float32 readbacks against decoded source-type references; it does not round
+outputs on the host to conceal a missing shader conversion. Original inputs,
+uploads, generated modules, parameter layouts and guarded outputs are retained.
+Source-qualified index bounds cover the dispatched tile. Actual shared buffer
+allocation is tested alongside separate allocations. Bfloat16 derivatives remain
+blocked by [issue #1488](https://github.com/CrossGL/crosstl/issues/1488); no complete
+attention operation or automatic backend-wide repacking is claimed.
+
+DirectX also requires a reduced native binary16 conversion gate. It shares
+258,052 input words with the OpenGL and original/generated Metal controls,
+including midpoint neighbors, subnormal boundaries, overflow and signed zeros.
+Separate cases exercise implicit and explicit conversion, helper boundaries,
+structure fields, vector components and single evaluation. Generated HLSL rounds
+the representation bits to nearest-even before constructing a native half value;
+the attention derivative buffers retain their two-byte element strides. This
+addresses the truncating native-cast behavior tracked in
+[issue #1993](https://github.com/CrossGL/crosstl/issues/1993), without changing the
+24 derivative configurations or their tolerances. Passing the reduced gate is
+not a substitute for passing those MLX cases or the full upstream suite.
+
+Reduced Metal roundtrip tests execute float atomic addition and exchange on
+scalar buffers and aggregate fields. They check 513 competing updates, returned
+values, final storage and single evaluation of address/value operands. Separate
+isolated cases preserve signed zeros, infinities, NaN bit patterns and subnormal
+inputs against original-source Metal controls. The macOS workflow requires these
+readbacks and retains the original/generated sources, compiled libraries and raw
+buffer contents. Float min/max and bitwise atomics remain unsupported; local and
+read-only storage are rejected. These tests do not establish portable float
+atomic support or a complete gated-delta port.
+
+Unknown predicates, unresolved constraint result types and multiple viable
+constrained partials produce diagnostics instead of selecting a primary
+declaration with a different layout. Ordering multiple viable partials remains
+tracked in [#1987](https://github.com/CrossGL/crosstl/issues/1987). Native
+regression tests require 194 exact readback words distinguishing fractional and
+integer fields; the same tests run on Windows/DirectX, Linux/OpenGL and
+macOS/Metal, with original-source controls on macOS. Parameter inference and named
+Boolean free-function constraints have separate native checks. These reduced
+tests do not establish complete gated-delta execution or full MLX backend support.
 
 The latest full-corpus scout at MLX commit
 `4367c73b60541ddd5a266ce4644fd93d20223b6e` discovered 40 Metal units, 841

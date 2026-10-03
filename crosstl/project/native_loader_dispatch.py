@@ -14,10 +14,12 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+from crosstl.project.buffer_requirements import valid_minimum_binding_size
 from crosstl.project.native_loader_abi import (
     NativeLoaderABIError,
     _validate_descriptor,
 )
+from crosstl.project.runtime_value_encoding import validate_value_encoding
 from crosstl.project.runtime_verification import (
     RuntimeAdapterContract,
     RuntimeArtifactIdentity,
@@ -32,14 +34,23 @@ from crosstl.project.runtime_verification import (
     RuntimeValue,
     prepare_runtime_execution,
 )
+from crosstl.project.uniform_layout import validate_std140_block_layout
+from crosstl.translator.dispatch_regions import DispatchRegion
 
 _ERROR_PREFIX = "project.native-loader-dispatch"
 _COMPUTE_STAGE = "compute"
 _TARGET_ARTIFACT_FORMATS = {
+    "metal": frozenset(("Metal source",)),
     "directx": frozenset(("HLSL source", "DXIL binary")),
     "opengl": frozenset(("GLSL source", "SPIR-V binary")),
 }
 _TARGET_RESOURCE_NAMESPACES = {
+    "metal": {
+        ("buffer", "read"): "buffer",
+        ("buffer", "write"): "buffer",
+        ("buffer", "read_write"): "buffer",
+        ("constant-buffer", "read"): "buffer",
+    },
     "directx": {
         ("buffer", "read"): "srv",
         ("buffer", "write"): "uav",
@@ -61,6 +72,8 @@ _BUFFER_KIND_ALIASES = {
     "uniform": "constant-buffer",
 }
 _BUFFER_DTYPE_ALIASES = {
+    "bool": "bool",
+    "boolean": "bool",
     "float": "float32",
     "f32": "float32",
     "float32": "float32",
@@ -89,6 +102,7 @@ _SPECIALIZATION_DTYPE_ALIASES = {
 }
 _SPECIALIZATION_DTYPE_ALIASES.update({"bool": "bool", "boolean": "bool"})
 _DTYPE_SIZES = {
+    "bool": 1,
     "float32": 4,
     "int32": 4,
     "uint32": 4,
@@ -96,6 +110,7 @@ _DTYPE_SIZES = {
     "uint64": 8,
 }
 _PHYSICAL_TYPES = {
+    "bool": "bool",
     "float32": "float",
     "int32": "int",
     "uint32": "uint",
@@ -103,6 +118,7 @@ _PHYSICAL_TYPES = {
     "uint64": "uint64_t",
 }
 _TARGET_STORAGE_LAYOUTS = {
+    "metal": {"buffer": "metal-buffer", "constant-buffer": "metal-constant"},
     "directx": {
         "buffer": "hlsl-structured-buffer",
         "constant-buffer": "hlsl-constant-buffer",
@@ -110,7 +126,17 @@ _TARGET_STORAGE_LAYOUTS = {
     "opengl": {"buffer": "std430", "constant-buffer": "std140"},
 }
 _VALUE_FIELDS = frozenset(
-    ("name", "kind", "dtype", "shape", "values", "value", "tolerance", "metadata")
+    (
+        "name",
+        "kind",
+        "dtype",
+        "shape",
+        "values",
+        "value",
+        "tolerance",
+        "metadata",
+        "encoding",
+    )
 )
 _ALIAS_METADATA_FIELDS = frozenset(("aliases", "resourceAliases", "bindingAliases"))
 _ENTRY_POINT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -161,7 +187,7 @@ def build_native_loader_dispatch_request(
     *,
     expected_target: str | None = None,
 ) -> RuntimeExecutionRequest:
-    """Build and preflight one DirectX or OpenGL native runtime request.
+    """Build and preflight one DirectX, OpenGL or Metal native runtime request.
 
     The descriptor remains the source of truth for artifact identity, resource
     coordinates, entry-point metadata, and specialization identities. Callers
@@ -184,6 +210,33 @@ def build_native_loader_dispatch_request(
         entry_point=entry_point["name"],
         reflected_workgroup_size=_reflected_workgroup_size(entry_point),
     )
+    if "dispatchRegion" in normalized["provenance"]:
+        region = DispatchRegion.from_json(normalized["provenance"]["dispatchRegion"])
+        if (
+            _padded_dimensions(dispatch.workgroup_count) != region.workgroup_count
+            or _padded_dimensions(dispatch.workgroup_size) != region.workgroup_size
+            or dispatch.thread_grid_size
+        ):
+            raise NativeLoaderDispatchError(
+                "dispatch-region-geometry-mismatch",
+                "A specialized dispatch region requires its recorded physical "
+                "workgroup count and size, without a second thread-grid mapping.",
+                path="$.dispatchGeometry",
+                details={"dispatchRegion": region.to_json()},
+            )
+    if dispatch.thread_grid_size and target != "metal":
+        raise NativeLoaderDispatchError(
+            "exact-thread-grid-unsupported",
+            "Exact thread-grid dispatch is not implemented for this native target.",
+            path="$.dispatchGeometry.threadGridSize",
+            details={"target": target},
+        )
+    if target == "metal" and not dispatch.workgroup_size:
+        raise NativeLoaderDispatchError(
+            "workgroup-size-missing",
+            "Metal native dispatch requires an explicit or reflected workgroup size.",
+            path="$.dispatchGeometry.workgroupSize",
+        )
     inputs = _with_derived_execution_inputs(
         inputs,
         normalized["bindings"],
@@ -299,7 +352,7 @@ def _validated_target(
     if target not in _TARGET_ARTIFACT_FORMATS:
         raise NativeLoaderDispatchError(
             "target-unsupported",
-            "Native loader dispatch supports DirectX and OpenGL targets only.",
+            "Native loader dispatch supports DirectX, OpenGL and Metal targets only.",
             path="$.target",
             details={
                 "target": target,
@@ -318,7 +371,7 @@ def _validated_target(
         if expected not in _TARGET_ARTIFACT_FORMATS:
             raise NativeLoaderDispatchError(
                 "expected-target-invalid",
-                "Expected target must identify DirectX or OpenGL.",
+                "Expected target must identify DirectX, OpenGL or Metal.",
                 path="$.expectedTarget",
                 details={"value": expected_target},
             )
@@ -339,9 +392,11 @@ def _validated_target(
             path="$.artifact.format",
             details={
                 "target": target,
-                "expectedFormat": (
-                    "HLSL source" if target == "directx" else "GLSL source"
-                ),
+                "expectedFormat": {
+                    "directx": "HLSL source",
+                    "opengl": "GLSL source",
+                    "metal": "Metal source",
+                }[target],
                 "supportedFormats": sorted(supported_formats),
                 "actualFormat": actual_format,
             },
@@ -594,6 +649,7 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             values=value.get("values", value.get("value")),
             tolerance=tolerance,
             metadata=copy.deepcopy(dict(metadata)),
+            encoding=value.get("encoding"),
         )
     else:
         raise NativeLoaderDispatchError(
@@ -638,6 +694,15 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             details={"aliasFields": aliases, "name": runtime_value.name},
         )
     dtype = _buffer_dtype(runtime_value.dtype, path=f"{path}.dtype")
+    try:
+        validate_value_encoding(runtime_value.encoding, dtype, runtime_value.values)
+    except ValueError as exc:
+        raise NativeLoaderDispatchError(
+            "value-encoding-invalid",
+            str(exc),
+            path=f"{path}.encoding",
+            details={"name": runtime_value.name},
+        ) from exc
     shape = _value_shape(runtime_value.shape, path=f"{path}.shape")
     if not shape:
         raise NativeLoaderDispatchError(
@@ -668,13 +733,14 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
                     "actualCount": actual_count,
                 },
             )
-        _validate_buffer_values(
-            flattened_values,
-            dtype=dtype,
-            path=f"{path}.values",
-            name=runtime_value.name,
-            role=role,
-        )
+        if runtime_value.encoding is None:
+            _validate_buffer_values(
+                flattened_values,
+                dtype=dtype,
+                path=f"{path}.values",
+                name=runtime_value.name,
+                role=role,
+            )
     return RuntimeValue(
         name=runtime_value.name,
         kind="buffer",
@@ -683,6 +749,7 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
         values=runtime_value.values,
         tolerance=runtime_value.tolerance,
         metadata=copy.deepcopy(dict(metadata)),
+        encoding=runtime_value.encoding,
     )
 
 
@@ -751,7 +818,7 @@ def _buffer_dtype(value: Any, *, path: str) -> str:
         raise NativeLoaderDispatchError(
             "value-dtype-unsupported",
             "Native runtime buffers support float32, int32, uint32, int64, "
-            "and uint64 values only.",
+            "uint64, and Metal bool values only.",
             path=path,
             details={"dtype": value},
         )
@@ -776,7 +843,9 @@ def _validate_buffer_values(
 ) -> None:
     for index, value in enumerate(values):
         valid = False
-        if dtype in {"int32", "int64"}:
+        if dtype == "bool":
+            valid = type(value) is bool
+        elif dtype in {"int32", "int64"}:
             bit_width = _DTYPE_SIZES[dtype] * 8
             valid = (
                 isinstance(value, int)
@@ -1022,7 +1091,7 @@ def _resource_bindings(
         if coordinates["set"] != 0:
             raise NativeLoaderDispatchError(
                 "resource-set-unsupported",
-                "DirectX and OpenGL native runtime adapters currently require resource set zero.",
+                "Native runtime buffer adapters require resource set zero.",
                 path=f"{path}.coordinates.set",
                 details={"target": target, "name": name, "set": coordinates["set"]},
             )
@@ -1137,6 +1206,61 @@ def _validated_scalar_layout(
             path=path,
             details={"binding": runtime_value.name},
         )
+    if runtime_value.dtype == "bool" and target != "metal":
+        raise NativeLoaderDispatchError(
+            "resource-layout-mismatch",
+            "Byte-sized boolean values require Metal storage; other targets use their reflected physical representation.",
+            path=path,
+            details={"binding": runtime_value.name, "target": target},
+        )
+    # Metal's constant address space does not imply a fixed-size argument.
+    if (
+        target == "metal"
+        and resource_kind == "constant-buffer"
+        and layout.get("storageLayout") == "metal-buffer"
+        and layout.get("runtimeSized") is True
+    ):
+        resource_kind = "buffer"
+    if "minimumBindingSizeBytes" in layout and not valid_minimum_binding_size(
+        layout["minimumBindingSizeBytes"]
+    ):
+        raise NativeLoaderDispatchError(
+            "resource-minimum-binding-size-invalid",
+            "Minimum binding size must be a positive signed 64-bit byte count.",
+            path=f"{path}.minimumBindingSizeBytes",
+            details={"binding": runtime_value.name},
+        )
+    if "structMembers" in layout or "componentCount" in layout:
+        return _validated_struct_layout(
+            layout,
+            runtime_value=runtime_value,
+            target=target,
+            resource_kind=resource_kind,
+            path=path,
+        )
+    if "blockMembers" in layout or "payloadEncoding" in layout:
+        try:
+            block_size = validate_std140_block_layout(layout)
+        except ValueError as exc:
+            raise NativeLoaderDispatchError(
+                "resource-layout-invalid",
+                str(exc),
+                path=path,
+                details={"binding": runtime_value.name},
+            ) from exc
+        if (
+            target != "opengl"
+            or resource_kind != "constant-buffer"
+            or runtime_value.dtype != "uint32"
+            or math.prod(runtime_value.shape) * 4 != block_size
+        ):
+            raise NativeLoaderDispatchError(
+                "resource-layout-mismatch",
+                "Aggregate uniforms require the complete std140 block as uint32 words, including padding.",
+                path=path,
+                details={"binding": runtime_value.name, "blockSizeBytes": block_size},
+            )
+        return copy.deepcopy(dict(layout))
     element_type = _buffer_dtype(layout.get("elementType"), path=f"{path}.elementType")
     element_size = layout.get("elementSizeBytes")
     element_stride = layout.get("elementStrideBytes")
@@ -1269,6 +1393,86 @@ def _validated_scalar_layout(
                     "elementSizeBytes": element_size,
                 },
             )
+    return copy.deepcopy(dict(layout))
+
+
+def _validated_struct_layout(
+    layout: Mapping[str, Any],
+    *,
+    runtime_value: RuntimeValue,
+    target: str,
+    resource_kind: str,
+    path: str,
+) -> dict[str, Any]:
+    members = layout.get("structMembers")
+    count = layout.get("componentCount")
+    scalar_type = _PHYSICAL_TYPES[runtime_value.dtype]
+    scalar_size = _DTYPE_SIZES[runtime_value.dtype]
+    type_name = layout.get("physicalType")
+    valid = (
+        resource_kind == "buffer"
+        and isinstance(members, list)
+        and isinstance(count, int)
+        and not isinstance(count, bool)
+        and 1 <= count <= 64
+        and len(members) == count
+        and isinstance(type_name, str)
+        and re.fullmatch(r"[A-Za-z_]\w*", type_name) is not None
+        and type_name not in _PHYSICAL_TYPES.values()
+        and "vectorWidth" not in layout
+        and layout.get("elementType") == runtime_value.dtype
+        and layout.get("storageLayout")
+        == _TARGET_STORAGE_LAYOUTS[target][resource_kind]
+        and layout.get("runtimeSized") is True
+    )
+    if valid:
+        expected_sizes = {
+            "elementSizeBytes": scalar_size * count,
+            "elementStrideBytes": scalar_size * count,
+            "alignmentBytes": scalar_size,
+            "memberOffsetBytes": 0,
+        }
+        valid = all(
+            type(layout.get(key)) is int and layout[key] == value
+            for key, value in expected_sizes.items()
+        )
+    if valid:
+        names = set()
+        for index, member in enumerate(members):
+            if not isinstance(member, Mapping):
+                valid = False
+                break
+            name = member.get("name")
+            if (
+                set(member) != {"name", "physicalType", "offsetBytes"}
+                or not isinstance(name, str)
+                or re.fullmatch(r"[A-Za-z_]\w*", name) is None
+                or name in names
+                or member.get("physicalType") != scalar_type
+                or type(member.get("offsetBytes")) is not int
+                or member["offsetBytes"] != index * scalar_size
+            ):
+                valid = False
+                break
+            names.add(name)
+    if not valid:
+        raise NativeLoaderDispatchError(
+            "resource-layout-unsupported",
+            "Native struct buffers require exact tightly packed homogeneous scalar members.",
+            path=path,
+            details={"binding": runtime_value.name},
+        )
+    if math.prod(runtime_value.shape) % count:
+        raise NativeLoaderDispatchError(
+            "resource-layout-mismatch",
+            "Runtime value shape does not contain complete reflected struct elements.",
+            path=path,
+            details={
+                "binding": runtime_value.name,
+                "componentCount": count,
+                "shape": list(runtime_value.shape),
+            },
+        )
     return copy.deepcopy(dict(layout))
 
 
@@ -1470,6 +1674,8 @@ def _specialization_constants(
             "descriptorProvenance": copy.deepcopy(constant.get("provenance", {})),
         }
         kind = "specialization-constant"
+        if target == "metal":
+            kind = "function-constant"
         if target == "directx":
             kind = "compile-time-constant"
             metadata["mechanism"] = "compiled"
@@ -1610,6 +1816,7 @@ def _dispatch_geometry(
         supplied_workgroup_size = value.workgroup_size
         global_size = value.global_size
         grid_size = value.grid_size
+        thread_grid_size = value.thread_grid_size
         metadata = value.metadata
     elif isinstance(value, Mapping):
         allowed = {
@@ -1618,6 +1825,7 @@ def _dispatch_geometry(
             "workgroupSize",
             "globalSize",
             "gridSize",
+            "threadGridSize",
             "metadata",
         }
         unsupported = sorted(set(value) - allowed, key=str)
@@ -1633,6 +1841,7 @@ def _dispatch_geometry(
         supplied_workgroup_size = value.get("workgroupSize", ())
         global_size = value.get("globalSize", ())
         grid_size = value.get("gridSize", ())
+        thread_grid_size = value.get("threadGridSize", ())
         metadata = value.get("metadata", {})
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         dispatch_entry_point = None
@@ -1640,6 +1849,7 @@ def _dispatch_geometry(
         supplied_workgroup_size = ()
         global_size = ()
         grid_size = ()
+        thread_grid_size = ()
         metadata = {}
     else:
         raise NativeLoaderDispatchError(
@@ -1695,6 +1905,33 @@ def _dispatch_geometry(
         derived_global_size = tuple(
             count * size for count, size in zip(padded_counts, padded_size)
         )
+    exact_grid = ()
+    if thread_grid_size != ():
+        exact_grid = _positive_dimensions(
+            thread_grid_size,
+            path=f"{path}.threadGridSize",
+            label="thread grid size",
+        )
+        if not workgroup_size:
+            raise NativeLoaderDispatchError(
+                "workgroup-size-missing",
+                "Exact thread-grid dispatch requires a workgroup size.",
+                path=f"{path}.workgroupSize",
+            )
+        expected_counts = tuple(
+            (extent + width - 1) // width
+            for extent, width in zip(
+                _padded_dimensions(exact_grid), _padded_dimensions(workgroup_size)
+            )
+        )
+        if expected_counts != _padded_dimensions(counts):
+            raise NativeLoaderDispatchError(
+                "dispatch-size-mismatch",
+                "Thread grid does not match its covering workgroup count.",
+                path=f"{path}.threadGridSize",
+                details={"expectedWorkgroupCount": list(expected_counts)},
+            )
+        derived_global_size = _padded_dimensions(exact_grid)
     for field_name, candidate in (("globalSize", global_size), ("gridSize", grid_size)):
         if not candidate:
             continue
@@ -1719,6 +1956,7 @@ def _dispatch_geometry(
         workgroup_count=counts,
         global_size=derived_global_size,
         grid_size=derived_global_size,
+        thread_grid_size=exact_grid,
         metadata={
             **copy.deepcopy(dict(metadata)),
             "source": "native-loader-dispatch",

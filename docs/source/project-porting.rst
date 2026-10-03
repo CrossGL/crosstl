@@ -502,8 +502,8 @@ dispatch dimensions, runtime bindings, or backend integration. Record those
 requirements through the corresponding dispatch and runtime contracts.
 
 The next MLX kernel-tree increment is pinned independently at
-``d9add9d11f3154111a4c85f267ec2fd307ecd18e``. Entry discovery must report
-exactly 42 Metal units, 17,478 entries, and zero diagnostics. The compact
+``9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8``. Entry discovery must report
+exactly 49 Metal units, 17,832 entries, and zero diagnostics. The compact
 ``arg_reduce.current-tree.translation.json`` contract pins all 24 discovered
 ``arg_reduce.metal`` entries and 72 deterministic Metal, OpenGL, and DirectX
 artifacts. Required macOS, Linux, and Windows CI compiles all 24 entries with
@@ -512,8 +512,8 @@ respectively. Numerical runtime parity remains an explicit representative
 float32 subset: ``argmin_float32`` and ``argmax_float32`` must execute on Metal,
 Mesa EGL, and Direct3D 12 WARP over two rows, axis sizes 32 and 129, strides 1
 and 2, ordinary values, and NaN/Infinity values; the Metal path also executes
-the exact upstream metallib for parity. This is a 24/17,478 deterministic
-translation and native-compiler increment with 2/17,478 numerical runtime
+the exact upstream metallib for parity. This is a 24/17,832 deterministic
+translation and native-compiler increment with 2/17,832 numerical runtime
 coverage, not full-tree coverage. The contract explicitly records that the
 upstream MLX test suite and MLX host-runtime redirection have not yet been
 implemented. Strict JSON runtime requests encode non-finite float32 inputs with
@@ -532,6 +532,17 @@ Generated helper names reserve existing source identifiers, including local
 variables and parameters. A deterministic suffix avoids name collisions while
 repeated calls to the same specialization reuse one helper.
 
+Global explicit free-function specializations are selected after the constrained
+primary is resolved; they are not competing overloads. Selection compares
+canonical template arguments and concrete parameter signatures, including
+visible aliases and deduced or defaulted arguments. A matching specialization
+keeps its own body, while an unrelated specialization does not displace the
+primary. Ambiguous canonical identities and unproven ordinary-overload
+precedence still produce diagnostics. Namespaced explicit specializations remain
+outside this global selection path. Required Metal, DirectX and OpenGL execution
+tests distinguish primary addition from specialized subtraction and verify both
+default and non-default template arguments.
+
 The two current-tree DirectX float32 entries explicitly select
 ``software_subgroup_width = 32``. Their shuffle helpers use shared storage and
 workgroup barriers instead of hardware wave instructions. A private
@@ -544,6 +555,46 @@ Other DirectX entries retain the native-wave compiler path. Both paths still
 require DXC validation, and the numerical entries retain every existing case
 and the required Windows WARP execution gate. Compilation alone does not
 establish numerical parity or resolve a native-runtime timeout.
+
+Explicit-width software subgroups on DirectX and OpenGL also support scalar
+Boolean all/any votes. The native host workflow requires compiler validation and
+device readbacks across multiple logical subgroups, repeated calls, single
+operand evaluation and untouched output guards. macOS additionally executes
+the original Metal source. Divergent exits before a later collective are
+rejected rather than dropping the exit or forcing inactive lanes into the vote.
+OpenGL resolves unconditional wrapper chains to their exact collective helper
+overloads. Entry-point calls may occur in proven uniform loops or branches
+controlled by immutable workgroup-uniform inputs. Recursive chains, ambiguous
+root overloads, lane-dependent branches and escaped or mutated uniform inputs
+remain diagnostic. The native vote gate exercises three wrapper levels and
+different predicates in even and odd workgroups; shared scratch accesses use
+explicit memory ordering as well as execution barriers. This does not establish
+complete MLX reduction support: collective-result uniformity and full host
+reduction dispatch remain separate work.
+
+Scalar float32, int32 and uint32 products use an adjacent-pair reduction tree
+with strides 1, 2, 4, 8 and 16 on both software backends. Integer products wrap
+at 32 bits. The required native product gate checks repeated helper calls,
+single operand evaluation, overflow, signed zeros, infinities, NaNs and
+order-sensitive rounding against original Metal and independent references.
+Input words, readbacks, output guards and validation modules are retained.
+NaN payloads are not required to match. This defines the software reduction
+order; it is not a claim of identical floating-point results for every possible
+native hardware reduction order or denormal mode.
+Narrow products remain diagnostic until their intermediate rounding is
+preserved, even where a target normally uses a 32-bit carrier for that type.
+
+Pure scalar helpers of the form ``if (subgroup_vote) return fallback; return
+subgroup_reduce(value);`` can converge both collectives before selecting each
+logical subgroup's result. This retains different subgroup votes within one
+workgroup; it does not reclassify them as workgroup-uniform. The lowering requires
+safe by-value operands and rejects memory loads, effectful calls, mutation and
+unproven arithmetic. Direct votes, negated votes and immutable Boolean locals
+are supported, including unused method receivers. Native-mode branches remain
+unchanged. Required native tests compare generated outputs with independent
+references and original Metal compiled without fast math, retaining exact
+finite results, NaN classification, repeated calls and guards. Full MLX host
+reduction planning and arbitrary collective control flow remain separate work.
 
 The bounded Windows test also records live Direct3D 12 debug-layer messages
 through ``tools/run_directx_diagnostics.py``. Each entry's JSON-lines log is
@@ -610,7 +661,7 @@ The same entry-scoped pipeline now translates all 877 current-pinned unary
 entries to standalone OpenGL ``main`` artifacts. The schema-v2
 ``unary.opengl-translation.json`` contract preserves the same five-shape,
 37-operator, 20-type-pair classification and all 1,243 exact materializations,
-while pinning 4,060,696 generated GLSL bytes and all 3,363 target-reflected
+while pinning 4,119,841 generated GLSL bytes and all 3,363 target-reflected
 resources. Vector artifacts expose read-only input, read-write output, and an
 entry-scoped size uniform block. Gather artifacts expose input, output, shape,
 stride, and the read-only ``ndimBuffer`` storage resource; scalar uses of the
@@ -672,6 +723,38 @@ requires DXC compilation and Direct3D readbacks for finite values, NaNs,
 infinities, vector selection, and eager evaluation. This isolated arithmetic
 check does not establish whole-MLX numerical or host-runtime coverage.
 
+Canonical ``atan2(y, x)`` uses typed HLSL helpers to retain the sign of zero
+when selecting a quadrant. The helpers also handle both-infinite operands,
+signed axis angles, and NaNs explicitly. Finite angles use exponent-scaled
+significands and a range-reduced polynomial instead of the target intrinsic;
+``precise`` intermediates preserve the polynomial evaluation order. Float
+scalar/vector operands are supported, with
+explicit promotion and narrowing for half/minimum-precision forms and the
+existing scalar bfloat decode/encode path. Arguments are evaluated once.
+Unknown, mismatched or unsupported operand types and shadowed target intrinsics
+fail closed. Source-defined overloads retain their behavior, and HLSL-to-HLSL
+``atan2`` round trips remain native. This is not a general subnormal or
+transcendental-accuracy contract.
+
+A bounded Windows readback test checks 1,121 operand pairs through scalar and
+vector calls, including raw-bit and float-upload echoes, signed zeros,
+infinities, NaNs, extreme normal exponents, all quadrants and range-reduction
+boundaries. Finite results must stay within the unchanged absolute error
+bound of ``2e-6``; signed axis and infinite angles retain exact bit checks.
+macOS executes the unchanged Metal source with fast math
+disabled as a control; fast-math compilation may ignore signed zeros and
+non-finite values. The pinned MLX complex-power test separately retains its
+existing numerical reference and error bound; passing an isolated angular
+test does not replace that end-to-end proof.
+
+The frozen binary and unary HLSL contracts at MLX revision
+``846d176227a0ac13d2667e58d2bb68b322109ab0`` retain their source pins,
+entry classifications, materialization counts and interfaces. The angular
+lowering changes 84 binary and 28 complex-unary artifact identities; each
+changed entry is recompiled with DXC and warnings fatal before refreshing its
+fingerprint. The other 4,887 identities remain unchanged. This historical
+contract refresh is separate from current-revision MLX runtime coverage.
+
 OpenGL also lowers canonical ``fabs``, ``fmin``, ``fmax``, and Boolean
 ``select`` for desktop GLSL 4.00 and later. Floating min/max helpers explicitly
 return the numeric operand when the other operand is NaN, in either argument
@@ -709,7 +792,153 @@ close complete discovered-unary translation, reflection, and native compiler
 coverage on both targets; they do not claim numerical execution, MLX host
 runtime redirection, or MLX test-suite parity.
 
-The current-pinned MLX copy integration proves all 2,496 discovered entries
+**Ordered loop updates.**
+
+Metal and OpenGL emit comma-separated ``for`` updates individually in source
+order, matching DirectX. Updates remain in the loop header so ``continue``
+executes them and ``break`` skips them. Prefix/postfix increments, dependent
+compound assignments, empty and single updates retain their loop-local scopes.
+Required three-platform native tests check these effects and guarded outputs.
+The pinned MLX ``gather_front<float, int, int, N>`` proof instantiates unchanged
+upstream bodies for ``N`` equal to 1, 4 and 8. It checks negative and repeated
+indices, empty slices, partial chunks and exact binary32 storage words, including
+NaN payloads and signed zeros. The source wrapper only includes upstream headers
+and declares template instantiations. This is kernel execution coverage, not
+MLX Gather host integration or complete indexing support.
+
+**Mixed-width integer arithmetic.**
+
+The Metal frontend retains structured-buffer compound assignments as lvalues in
+the intermediate representation, including side-effecting indices. It does not
+expand them into a load/store pair that evaluates the index twice.
+
+For built-in integer vector/scalar arithmetic and comparisons, the Metal
+frontend explicitly converts the scalar to the vector element type before the
+operation. Both operand orders, compound assignments and inferred local types
+retain this source rule in saved CrossGL. Scalar pairs still use their usual
+integer conversions, and shifts still promote their operands independently.
+This does not change standalone CrossGL or native HLSL conversion rules.
+
+Metal-to-HLSL lowering explicitly applies source integer conversions before arithmetic,
+bitwise operations, comparisons and conditional selection. In particular,
+``int64_t`` combined with ``uint`` uses signed 64-bit arithmetic, not HLSL's
+implicit unsigned conversion. Vector/scalar pairs retain the vector element
+type, and shifts preserve independent operand promotions, including compound
+shifts with scalar counts and vector destinations. Compound assignments
+convert before narrowing back to the destination. Before an indexed destination
+is passed to a typed ``inout`` helper, effectful indices are captured in private
+temporaries: DXC may otherwise evaluate a private-array index on both copy-in
+and copy-out. Captures remain in the assignment expression, not at function
+entry, preserving conditional selection, loop updates and returned values.
+Nested arrays and structure-member arrays retain their destination identity.
+A right operand that may modify a copied
+destination receives a diagnostic rather than an unproven copy-in/copy-out
+translation.
+
+Native HLSL input retains its DXC integer conversion rules instead: the frontend
+records explicit common operand types in CrossGL, including unsigned preference
+across widths and scalar/vector conversions. Nested expressions, conditional
+arms, aliases, uniquely resolved function results and compound assignments carry
+those types through a saved intermediate file. Integer literal suffixes and
+canonical 64-bit vector types are retained. Ambiguous wide return types and
+unproven compound-assignment copy-in aliases remain diagnostic.
+
+OpenGL signed remainder uses truncating division and multiplication rather than
+relying on ``%`` for negative operands. Typed helpers evaluate operands once and
+broadcast scalar operands to the result vector shape. Constant initializers
+retain constant expressions. Unsupported side-effecting compound destinations
+remain diagnostic. Zero divisors and signed-minimum divided by minus one are
+outside the source-defined numerical contract.
+
+OpenGL shifts convert 64-bit counts to matching signed or unsigned 32-bit scalar
+or vector operands for native driver compatibility. This does not change the
+promoted left operand or the result type. Compound shifts retain native indexed
+lvalues and evaluate both the index and count once. Negative counts and counts
+at least as large as the promoted left operand's bit width are outside the
+source-defined contract; this lowering does not assign them portable semantics.
+
+Required native CI checks scalar mixed-width arithmetic and scalar/vector signed
+remainder on Windows, Linux and macOS, including original Metal controls,
+unchanged inputs and guarded outputs. Wide shift counts cover both directions,
+32-bit and 64-bit left operands, vector widths two through four, scalar
+broadcasts and side-effecting binary and compound expressions on every target.
+The original Metal shift controls use representable, nonnegative signed left-shift
+operands and valid counts throughout. Vector/scalar arithmetic controls include
+values outside the vector component range, both operand orders, comparisons,
+inferred locals, nested operations and single-evaluation compound assignments.
+The original Metal mixed-sign comparison controls disable only ``-Wsign-compare``
+and record that flag; generated artifacts retain warning-fatal compilation.
+Native HLSL controls additionally compare generated results on each target and
+the original HLSL on Windows; optimized DXC checks cover direct and saved-CrossGL
+round trips.
+Twelve additional original/generated Metal and required Windows cases cover
+eight compound operators on private arrays, nested arrays and structure-member
+arrays in statement, expression, conditional and loop-update positions. Each
+case checks modified elements, unchanged neighbors, evaluation counts, the
+assignment result, input preservation and output guards. OpenGL retains an
+explicit diagnostic for these unsupported effectful compound destinations.
+These checks do not establish full MLX-suite parity.
+
+**Fused arithmetic profiles.**
+
+``crosstl.translator.fused_math`` provides an internal binary32 fused
+multiply-add helper expressed with pairs of 32-bit unsigned words. It rounds
+the exact product plus addend once, to nearest with ties to even, without
+requiring 64-bit integers or double precision. It supports gradual underflow
+or explicit signed-zero flushing of subnormal inputs and results before
+rounding. NaNs are canonicalized; payloads and floating-point exception flags
+are not represented. Generated artifacts retain the Berkeley SoftFloat license
+for the adapted arithmetic.
+
+Required Windows/DirectX, Linux/OpenGL and macOS/Metal checks execute both
+policies against an independent integer oracle. Evidence includes the input
+bits, expected bits, readbacks, generated source, native modules and runtime
+diagnostics. The macOS source control separately compares default and precise
+Metal ``fma`` against the flush-before-rounding policy. This is a selected
+profile check, not a claim that every Metal device or compilation mode uses
+that policy: the Metal language permits different rounding and subnormal
+behavior.
+
+Set ``source_options={"binary32_fma_profile": "rne-flush"}`` in the single-file
+API, or select a profile in the project configuration:
+
+.. code-block:: toml
+
+   [project.source_options.metal]
+   binary32_fma_profile = "rne-flush"
+
+``rne-flush`` selects nearest-even rounding with signed-zero flushing of
+subnormal operands and results before rounding. ``rne-gradual`` selects
+nearest-even rounding with gradual underflow. The option lowers resolved
+binary32 ``fma`` and ``precise::fma`` calls for scalars and two- to four-lane
+vectors. Arguments are evaluated once. Helpers have translation-unit-private
+Metal linkage so independently translated modules can share a library.
+User-defined overloads, explicit ``fast::fma`` and non-binary32 operations
+retain their existing lowering; this option does not configure other arithmetic.
+
+The default is unset and preserves existing artifact identities. The selected
+profile is an explicit source-environment assumption, not inferred from the
+destination backend. Verify it against the original source environment before
+enabling it for a repository: the
+`Metal numerical contract <https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf>`_
+allows multiple rounding and subnormal behaviors. Round-toward-zero arithmetic
+is not implemented by these profiles. Existing corpus identities must be
+regenerated and compiler-validated when a profile changes emitted code.
+
+Required native CI tests source-call lowering as well as the integer helper;
+macOS additionally links independently translated modules. This does not by
+itself establish MLX host integration or complete upstream-suite parity.
+The pinned ``d9add9d`` native package gate translates the unchanged
+``v_Erffloat32float32`` and ``v_Expm1float32float32`` entries with ``rne-flush``.
+It checks the upstream numerical regression inputs and a dense neighborhood
+of zero against independent references, including signed zero, normal/subnormal
+boundaries and Expm1 overflow. No upstream kernel is edited; this gate is
+separate from running the upstream Python tests through an adapted MLX host.
+`Issue #1962 <https://github.com/CrossGL/crosstl/issues/1962>`_ remains the
+integration tracker for the MLX Expm1/Erf failures.
+
+The legacy MLX copy reference at
+``846d176227a0ac13d2667e58d2bb68b322109ab0`` proves all 2,496 discovered entries
 from ``copy.metal`` through Metal-to-CrossGL-to-Metal translation. The family
 covers 30 shapes, 16 concrete templates, 13 input and output types, and all 169
 conversion pairs. Its schema-v2 contract pins every artifact and shape ABI,
@@ -730,6 +959,12 @@ artifacts with ``xcrun -sdk macosx metal -Werror -c``, requiring a non-empty AIR
 object for each. This proves translation, reflection, and native compiler
 acceptance; it does not claim Metal numerical execution, MLX host-runtime
 redirection, or MLX test-suite parity.
+
+The compiler-gated identity refresh retains source coverage, materializations
+and resource ABI. Its generated-source changes are limited to helper linkage
+qualifiers. ``artifactIdentityRefresh`` records this audit separately from the
+historical ``proof`` metadata; it does not establish coverage of a newer MLX
+revision or add numerical execution claims.
 
 The same selected-entry pipeline translates all 2,496 copy entries to
 standalone OpenGL ``main`` artifacts. The schema-v2
@@ -1085,15 +1320,111 @@ provide the KHR subgroup extensions:
 
 This option is target-scoped and explicit; it does not change Metal parsing or
 other target artifacts. The only accepted width is ``32``. The selected output
-must contain exactly one compute entry with concrete positive local dimensions,
-a local X dimension divisible by 32, and no more than 1,024 total invocations.
+must contain exactly one compute entry with concrete positive local dimensions
+and no more than 1,024 total invocations.
 CrossTL partitions the linear invocation range into an exact compile-time count
 of independent 32-lane software subgroups. Subgroup count, subgroup index,
 subgroup width, and lane index lower respectively to the workgroup invocation
-count divided by 32, ``gl_LocalInvocationIndex / 32``,
+count divided by 32 and rounded up, ``gl_LocalInvocationIndex / 32``,
 ``CROSSTL_SOFTWARE_SUBGROUP_WIDTH``, and
 ``gl_LocalInvocationIndex % 32``. The one-subgroup case retains the simpler
 ``1u``, ``0u``, and ``gl_LocalInvocationIndex`` forms.
+
+A fixed workgroup may end in a subgroup with fewer than 32 real invocations.
+Reductions combine only those invocations, scratch storage retains the exact
+workgroup size, and shuffle-down helpers use the calling value when their source
+falls beyond the real lanes. Source shuffle results from inactive lanes are not
+portable; numerical controls select only results from active source lanes.
+Relative offsets are checked before adding the lane index, so unsigned overflow
+cannot wrap an out-of-range shuffle into another lane's value.
+Metal shuffle and broadcast lane parameters retain their source ``ushort``
+conversion before target lowering, including arguments passed through helpers.
+Canonical 32-bit wave arguments retain their own width. Unqualified source wave
+calls respect namespace visibility, including local ``using namespace``
+directives, before builtin argument conversion is applied.
+Writes through an indexed destination do not invalidate the index's uniformity;
+actual index mutations and divergent exits still prevent software lowering.
+All real invocations must still reach the same workgroup barriers. This does not
+provide dynamic nonuniform final dispatch groups: the runtime must preserve the
+selected workgroup shape rather than round a source thread grid up silently.
+
+Native loader requests can express an exact source thread grid with
+``threadGridSize``, in addition to ``workgroupSize`` and ``workgroupCount``.
+The group count must equal the component-wise ceiling of the thread grid divided
+by the workgroup size. For example, ``threadGridSize = [1025, 1, 1]`` with
+``workgroupSize = [1024, 1, 1]`` requires ``workgroupCount = [2, 1, 1]``.
+When supplied, ``globalSize`` and ``gridSize`` must describe the exact thread
+grid, not its padded bounds. Omitting ``threadGridSize`` retains full-group
+dispatch and its existing dimension checks.
+
+The Metal runtime implements this contract through native ``dispatchThreads``
+after checking device support and grid limits. Original and generated Metal
+controls check partial groups, source coordinates, subgroup sums and buffer
+guards across one-, two- and three-dimensional grids. DirectX and OpenGL reject
+this explicit contract with ``exact-thread-grid-unsupported`` until their
+lowering can preserve partial-group identities and active lanes. This contract
+does not yet enable the MLX small-row host plan on those targets.
+
+The translator's ``plan_dispatch_regions`` and ``specialize_dispatch_region``
+APIs provide the lowering needed for portable exact grids. The planner partitions
+a grid into at most eight rectangular regions with uniform active workgroup
+shapes. Specialization preserves source global IDs, workgroup IDs, grid extents
+and group counts while leaving local IDs and subgroup operations tied to each
+region's actual group shape. It operates on an independent, single-entry AST;
+source kernels are not patched. Per-invocation coordinate captures remain private
+to each invocation, including when read by helper functions.
+
+Native tests execute these region artifacts through one shared-allocation
+dispatch sequence on DirectX and OpenGL, with original and roundtrip Metal
+controls. The caller must compile each specialization, submit its exact physical
+counts and share allocations across the complete plan.
+
+Project translation accepts a target-scoped ``dispatch_region`` source option
+for DirectX and OpenGL. Its fields match ``DispatchRegion.to_json()``; the
+configured ``workgroup_size`` must match the region's physical ``workgroupSize``.
+For the final five invocations of a 37-thread grid with nominal width 32:
+
+.. code-block:: toml
+
+   [project]
+   workgroup_size = [5, 1, 1]
+
+   [project.source_options.metal.target_options.opengl.dispatch_region]
+   threadGridSize = [37, 1, 1]
+   sourceWorkgroupSize = [32, 1, 1]
+   workgroupOffset = [1, 0, 0]
+   workgroupCount = [1, 1, 1]
+   workgroupSize = [5, 1, 1]
+
+The region is lowered after entry selection and retained in artifact, package
+and native-loader provenance as ``dispatchRegion``. The loader checks its
+physical size against the reflected entry and rejects a different launch count
+or a second thread-grid mapping. Each region needs its own output directory or
+otherwise distinct artifact identity; a grid or offset change changes the
+specialized program, even when the physical workgroup shape stays the same.
+
+Region packages also record ``dispatchRegionProgram``: the selected source
+entry, resolved CrossGL program hash (including included definitions), target,
+lowering settings and installed translation-code identity. This is a consistency
+record, not a cryptographic signature or a proof of numerical equivalence.
+
+``select_native_loader_dispatch_regions`` accepts descriptor/package-root pairs
+and orders the complete canonical plan for a requested exact grid and nominal
+workgroup size. Missing, duplicate, unrelated or mixed-program regions are
+rejected. Older packages without the program identity can still be loaded
+individually, but cannot participate in automatic region selection.
+
+``prepare_native_loader_dispatch_regions`` additionally verifies every artifact,
+preflights its bindings and compiles through the native adapter before yielding
+requests for ``dispatch_sequence``. Source allocations are shared, with uploads
+only on the first region; derived launch uniforms remain region-local. Use the
+context manager for the whole dispatch so compiled modules remain alive and are
+cleaned up on success or failure.
+
+On-demand specialization caching and MLX host dispatch integration are not yet
+wired to these APIs. Single-request DirectX/OpenGL ``threadGridSize`` rejection
+remains in place; use the complete region preparation API for an exact grid,
+not an ordinary rounded dispatch.
 
 The bounded mode supports scalar ``float``, ``int``, or ``uint`` sum, minimum,
 maximum, and shuffle-down operations. Shared scratch spans the complete
@@ -1467,6 +1798,12 @@ produce diagnostic-only failed manifests. The manifest is a handoff contract;
 it does not generate runtime framework code, execute device code, or rewrite
 host application code.
 
+Within one artifact-manifest build, variants of the same source/backend/target
+reuse source-wide reflection, including unavailable results. Generated artifacts
+are still validated and reflected individually, and entry-specific execution
+and specialization metadata is merged separately. Source results are not cached
+across manifest builds.
+
 Build a backend-neutral runtime binding manifest for host integrations:
 
 .. code-block:: bash
@@ -1688,6 +2025,80 @@ not available. Their supported resource shapes are intentionally narrower than
 the translated shader languages; a successful translation does not imply that
 one of these reference drivers can execute the complete host workload.
 
+Native Dispatch Limits
+----------------------
+
+The Python native drivers reject invalid launch dimensions before submitting
+device work. Counts and local sizes must contain one to three positive integers;
+zero, negative, Boolean and fractional values are not clamped or coerced.
+Dimension fields must be sequences, not scalar values, mappings, sets, strings
+or byte strings. False-valued malformed metadata cannot select a fallback or
+bypass local-size checks. The existing empty-sequence/``None`` convention for
+omitted dimensions is preserved. Derived group counts use exact integer ceiling
+division. Malformed dimensions report ``dispatch-dimensions-invalid``, identifying
+the field and, for a sequence, the failing node before any device work.
+
+DirectX checks Direct3D 12 compute limits. OpenGL queries the current context's
+per-axis group-count and local-size limits and maximum invocations per group.
+Vulkan queries the selected physical device before creating a logical device.
+The Metal worker checks device local-size limits and the compiled pipeline's
+maximum threads per group. OpenGL and DirectX preflight every request in a
+sequence before allocating resources or executing the first node.
+
+An exceeded limit reports ``dispatch-limit-exceeded`` with ``field``,
+``requested``, ``maximum``, the requested geometry and the applicable ``limits``.
+Per-axis failures include ``axis`` (zero-based); aggregate invocation failures
+do not. Sequence diagnostics include ``nodeIndex``. Metal returns the detailed
+worker record under ``dispatchValidation`` while preserving its process logs.
+Missing or invalid capability information is an error, not an assumed limit.
+These checks do not tile an oversized workload, infer missing local sizes from
+shader binaries, or replace compiler validation of the actual shader layout.
+
+OpenGL also checks API error state after setup, resource binding, submission,
+synchronization and readback. A non-success state reports ``opengl-api-error``
+with ``phase`` and ``glError``; inability to read that state is a failure too.
+Unchanged output after a rejected submission cannot be reported as successful
+execution. These Python-driver checks do not add limit validation to generated
+C++ loader adapters or establish complete host-runtime integration.
+
+Lossless Float Buffer Storage
+----------------------------
+
+Typed float32 buffers can opt into ``encoding: "ieee754-binary32"`` in the
+Python native dispatch API and runtime-verification fixtures. Each ``values``
+element is then an unsigned 32-bit storage word, not a numeric float:
+
+.. code-block:: json
+
+   {
+     "dtype": "float32",
+     "shape": [3],
+     "encoding": "ieee754-binary32",
+     "values": [2143363909, 1065353216, 2147483648]
+   }
+
+These words represent a noncanonical quiet NaN, 1.0 and negative zero. Native
+packing and readback retain their bits without converting through host floats.
+The reflected buffer remains float32, so kernels still perform floating-point
+arithmetic. Encoding does not bypass physical-layout, size, binding or allocation
+checks. Other encodings, incompatible dtypes, Boolean words, fractional words
+and words outside the unsigned 32-bit range are rejected.
+
+Upload and readback choose their encodings independently, including an
+initialized read-write buffer. An output request may omit ``values`` and select
+encoded readback using only dtype, shape and encoding. Returned words describe
+actual native storage; no original input values are substituted after execution.
+Encoded expected outputs require exact word equality and matching encoding,
+regardless of numeric tolerance settings. This checks storage preservation, not
+a requirement that arithmetic NaN results preserve an operand's payload.
+
+Without ``encoding``, the existing numeric buffer and non-finite token contracts
+remain unchanged. Native regression gates exercise generated Metal, DirectX and
+OpenGL partial updates, with original Metal controls and shared-allocation
+DirectX/OpenGL sequences. Metal's process-isolated runtime has no sequence API.
+This representation currently covers binary32 buffers, not half/double storage
+or generated C++ adapter serialization.
+
 Shared Native Allocation Views
 ------------------------------
 
@@ -1788,7 +2199,12 @@ allocation for the group, and bind that allocation at each reflected coordinate.
 Conflicting upload bytes fail setup instead of causing an implicit conversion or
 per-binding allocation. DirectX currently requires every structured-buffer view
 to cover the complete allocation, requires one dtype and stride across the
-group, and rejects shared constant-buffer allocations. OpenGL supports bounded
+group, and rejects simultaneous aliases of a constant buffer within one dispatch.
+An ordered DirectX sequence may reuse an immutable constant allocation across
+nodes when every view has the same scalar layout and extent at offset zero.
+Conflicting uploads, different allocation sizes, and mixing constant buffers with
+SRV/UAV resources remain errors. Source constants are uploaded once; derived
+region constants retain distinct allocations. OpenGL supports bounded
 uniform-block and storage-buffer ranges, subject to the offset-alignment limits
 reported by the active context. It rejects mixed uniform/storage groups,
 incompatible overlapping scalar layouts, and overlapping writable ranges.
@@ -1976,6 +2392,134 @@ diagnostics and runtime-reference review actions forward, and it remains a
 metadata contract only: it does not rewrite host application code, execute
 device code, generate runtime framework code, or install target SDKs.
 
+Native Metal Package Execution
+------------------------------
+
+``MetalRuntimeParityAdapter`` and ``MetalComputeRuntime`` execute compute
+artifacts through the public package, loader descriptor and dispatch-request
+APIs on macOS 13 or newer. They require Xcode's Metal and Swift tools and an
+available Metal device. No additional Python GPU binding is required. The
+runtime compiles an identity-checked source snapshot with warnings fatal and
+fast math disabled, links a Metal library, and runs a shipped Swift worker.
+
+Requests require explicit or reflected ``workgroupSize`` and
+``workgroupCount``; the runtime does not guess a group size from a maximum-thread
+attribute. Buffer arguments share one index namespace, from 0 through 30, in
+resource set zero. Scalar buffers, tightly packed two-/four-component 32-bit
+vectors and flat homogeneous scalar structs retain their exact physical layout.
+``constant T*`` parameters are read-only runtime buffers; supported
+``constant T&`` scalar/vector parameters are fixed-size values. Metal ``long``
+and ``ulong`` scalar storage uses signed/unsigned 64-bit host values. Scalar
+``bool`` buffers and constants use one-byte storage with Boolean host values;
+integer values are not implicitly converted. Readback rejects bytes other than
+zero and one. Padded vectors, half storage, Boolean vectors, nested or mixed
+structs, textures, samplers and dynamic threadgroup arguments are not supported
+by this buffer runtime.
+
+Dispatch values describe physical storage, not a target-independent tensor
+encoding. DirectX and OpenGL Boolean buffers retain their reflected
+``uint32`` representation with four-byte elements. Callers must use that
+representation rather than upload Metal's one-byte Boolean payloads. The
+loader rejects mismatched widths. Required native checks exercise translated
+comparison and mask kernels, guarded odd-sized buffers, read-modify-write
+values and offset views; macOS also executes the original Metal source.
+This storage support does not by itself implement MLX Boolean host operations.
+
+The worker specializes Boolean, float32, int32 and uint32 function constants
+by numeric ID, verifies required compiled buffer arguments and alignment,
+checks device and pipeline threadgroup limits, dispatches three-dimensional
+threadgroups, synchronizes and reads the requested byte views. Compatible
+aliased views share one allocation; contradictory overlapping initial bytes
+are rejected. The default combined buffer limit is 256 MiB, configurable with
+``MetalComputeRuntime(max_buffer_bytes=...)``. This is not dynamic shader
+memory-safety analysis.
+
+Compilation, probing and execution each have a default 120-second deadline,
+configurable with ``MetalRuntimeParityAdapter(timeout_seconds=...)``. A timeout
+terminates and reaps the worker process group and reports a structured failure;
+it never substitutes host computation. Call ``close()`` on the Metal runtime
+when finished to release the temporary worker executable. Device name,
+compiled-library hash, execution width and dispatch geometry accompany readback
+evidence. The implementation follows Metal's
+`compiled binding reflection
+<https://developer.apple.com/documentation/metal/mtlcomputepipelinereflection>`_.
+
+Required macOS CI covers package execution, sparse bindings, multidimensional
+indexing, function constants and invalid contracts. The current MLX binary-shape
+gate additionally runs all 15 selected complex-power shapes through this public
+runtime, alongside original-source and roundtrip Metal comparisons. This adds
+a native reference path; it does not provide persistent MLX streams, automatic
+host-code redirection, a generated Metal C++ loader, full upstream-suite parity,
+or the remaining runtime adapters tracked by issue #1424.
+
+A separate `MLX Metal host integration harness
+<https://github.com/CrossGL/crosstl/blob/main/demos/integrations/mlx/METAL_HOST.md>`_
+builds the pinned upstream runtime with a documented per-entry library resolver.
+It runs the unchanged upstream operations module with selected translated
+complex-power entries and records dispatches from MLX's own command encoder.
+All 15 independently emitted entries must compile and link into one Metal
+library before host execution. Source ``static`` and anonymous-namespace helpers
+retain internal linkage, including materialized template helpers. Inline
+definitions and implicit template instantiations retain repeatable linkage, and
+generated constructors and lowered member helpers remain artifact-private.
+Required native tests also link unrelated modules with identical private helper
+names, verify their distinct results and exercise exported visible callables.
+Declaration-only external functions remain a separate limitation: the Metal
+frontend currently drops those declarations, so a translated caller cannot link
+against a definition in another source file. This is tracked in
+`issue #1978 <https://github.com/CrossGL/crosstl/issues/1978>`_; the selected MLX
+library proof does not exercise or establish that capability.
+Eight array layouts execute three datasets with 402 retained complex readbacks,
+including both signed-zero branch cuts. Per-dataset traces must account for each
+selected entry exactly once, and the verifier recomputes references independently
+of the workload's success flags. Original MLX JIT signed-zero behavior is documented
+separately and is not used as the numerical reference for these additional cases.
+Other operations remain on the original backend; this is partial, explicit host
+integration, not automatic C++ runtime translation or full upstream-suite parity.
+
+The `portable MLX host adapter
+<https://github.com/CrossGL/crosstl/blob/main/demos/integrations/mlx/portable_host/README.md>`_
+instead builds MLX with its original Metal and CUDA backends disabled. Its
+synchronous callback connects ``Arange`` for five scalar types and 30 float32 unary entries to public
+DirectX/OpenGL/Metal runtime packages. Shared-buffer view primitives reuse upstream
+shape, stride and ownership logic, including broadcasts, transposes, splits and
+non-copying reshapes. Layout-changing contiguous conversions, reshapes, flattening
+and unflattening dispatch the unchanged uint32 general-copy specialization for
+float32/int32/uint32 storage. Bounds-checked, rebased source spans preserve negative
+strides; integer-word transport preserves NaN payloads and subnormals. Six binary
+primitives dispatch 16 unchanged entries: addition, subtraction, multiplication,
+minimum and maximum for float32/int32/uint32, and float32 division. Translated
+copies materialize non-row-contiguous and broadcast inputs before arithmetic;
+no CPU elementwise fallback is used. Unsupported casts remain explicit errors. Other
+primitives retain upstream unsupported-GPU errors.
+Linux/OpenGL, Windows/Direct3D 12 and macOS/generated Metal CI build the adapted
+library, require 21 unchanged upstream tests against CPU and translated GPU execution, and check
+20 array-creation records plus 130 unary records against independent references,
+including 8,193 consecutive binary32 inputs at and above one for inverse
+hyperbolic cosine at unchanged upstream tolerances.
+The verifier reconstructs the five allowed source adaptations from the pin,
+requires exact bytes before and after execution, and rejects unrelated tracked
+changes. Forty additional records cover view layouts, chained unary dispatch,
+source preservation and exact 64-bit values. The verifier independently checks
+complete numerical records, another 33 copying/source-preservation records with
+1,716 exact storage words, 134 binary records with 5,274 outputs, the initial 360
+nonempty dispatches, all 52 entries, and eleven required
+rejection cases before publishing a schema-version-2 summary. Copy checks include
+invalid allocation bounds, unsupported storage widths and excessive sizes. Each
+copy dispatch retains its geometry and checks a 128-byte destination guard.
+Binary checks require preserved operand words, exact integer results, zero signs,
+nonfinite classification and ``rtol=2e-6, atol=1e-6`` for finite float32 outputs.
+Minimum/maximum ties select the second operand as specified by the pinned source.
+Binary dispatches also retain a checked 128-byte destination guard. Required native
+conditional-selection controls cover operand bits and lazy branch evaluation.
+Unary execution is limited to contiguous float32 inputs and 65,535 stored
+elements. Source
+checks do not attest to a separately supplied binary; CI retains its build log.
+The Metal path compiles the generated package with warnings fatal and fast math
+disabled; the original MLX Metal backend is unavailable in this build. All three
+targets use explicit one-thread-per-workgroup dispatch. This is selected
+host-staging coverage, not a complete translated MLX backend.
+
 Exact Scalar Physical Resource Layouts
 --------------------------------------
 
@@ -2012,13 +2556,110 @@ tables. Runtime ``vec2`` and ``vec4`` storage arrays remain tightly packed,
 while ``vec3`` records its logical element size and padded array stride
 separately. The current native loader rejects padded storage vectors rather
 than uploading a falsely tight layout. GLSL ``dvec`` values, HLSL 64-bit
-vectors, matrices, fixed arrays, aggregates, unsupported narrow or
+vectors, matrices, fixed arrays, unsupported aggregate shapes, narrow or
 floating-point scalar widths, implicit GLSL block layouts, arbitrary member
-offsets, and multi-member blocks do not receive usable loader metadata. Those
+offsets, and multi-member HLSL blocks do not receive usable loader metadata. Those
 shapes remain unresolved or fail closed when a native loader request requires
 a physical layout. Native requests range-check signed and unsigned 64-bit
 values and preserve them with little-endian 8-byte packing; 64-bit
 specialization constants remain intentionally unsupported.
+
+Flat homogeneous structs are supported as HLSL structured-buffer elements and
+GLSL ``std430`` storage-array elements. Each may contain 1-64 members of one
+supported scalar type: ``float``, ``int``, ``uint``, ``int64_t``, or ``uint64_t``.
+The layout retains the actual struct name as ``physicalType``, a
+``componentCount``, and ordered ``structMembers`` containing each member's
+``name``, scalar ``physicalType``, and ``offsetBytes``. Structs are not relabeled
+as native vectors: two float members have an 8-byte element size and 4-byte
+alignment on these storage paths. Allocation sizing divides the flattened scalar
+count by the member count before applying the element stride.
+
+Dispatch validation requires unique member names, exact homogeneous types and
+offsets, tight stride, complete elements, and the matching target storage class.
+Nested structs, mixed scalar types, arrays, padded records, explicit member
+qualifiers and duplicate declarations remain unsupported on these storage paths.
+No MLX-specific type-name mapping is used.
+
+Fixed OpenGL uniform blocks may contain mixed supported scalar/vector members.
+Their ``scalarLayout`` retains the block name as ``physicalType`` and ordered
+``blockMembers`` with names, actual GLSL types, component types, vector widths,
+byte offsets, sizes and alignments. Packing follows the `OpenGL std140 rules
+<https://registry.khronos.org/OpenGL/specs/gl/glspec46.core.pdf>`_ (section 7.6.2.2).
+For example, ``int, vec2, vec3, float, uint`` members occupy offsets
+``0, 8, 16, 28, 32`` in a 48-byte block. This is the generated target layout,
+not an assumption about the original language's struct ABI.
+
+``payloadEncoding: uint32-le-words`` identifies byte transport, not homogeneous
+shader data. Inputs provide the complete little-endian block as uint32 words,
+including internal and trailing padding; no numerical conversion of mixed
+fields is performed. Reflection, package descriptors, contract comparison and
+dispatch retain the same member records. Both loader and driver independently
+validate the supplied layout against standard packing before upload. Missing,
+overlapping, misaligned or contradictory records and wrong payload lengths are
+rejected. Arrays, matrices, nested types and explicit member qualifiers remain
+unsupported and produce incomplete-reflection diagnostics. Required Linux CI
+executes translated mixed scalar and padded scalar/vector controls through the
+public package and native-loader APIs.
+
+For a single reflected HLSL or GLSL entry, ``minimumBindingSizeBytes`` records
+the minimum buffer footprint proven by constant-index accesses in its mandatory
+straight-line prefix. Analysis uses the existing target parsers, follows unique
+helper definitions, and propagates buffer identity and bounded integer offsets.
+It stops at unresolved calls, ambiguous overloads, recursion and dynamic control
+flow. Unresolved preprocessing disables this analysis; array parameter extents
+alone do not establish required sizes. Missing metadata means unknown, not zero.
+This is a lower bound from proven accesses, not a complete dynamic bounds check.
+
+Packaging and native loader descriptors preserve this requirement. Runtime
+preflight checks both the bound view and the provided values against the binding's
+physical layout. A larger backing allocation or weaker value metadata cannot
+make a short view valid. Larger usable buffers remain accepted. Malformed or
+overflowing minimum byte counts and undersized views produce structured errors
+before native execution. Required native CI covers a general helper-based
+buffer access and rejects truncated stride buffers for the current MLX two- and
+three-dimensional complex-power entries before executing the unchanged valid
+numerical workloads.
+
+The storage rules follow `DXC buffer packing
+<https://github.com/microsoft/DirectXShaderCompiler/wiki/Buffer-Packing>`_ and
+the `GLSL buffer layout specification
+<https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html#uniform-and-shader-storage-block-layout-qualifiers>`_.
+
+Required native CI exercises a reduced two-field transform and the unmodified
+``g1_Powercomplex64`` entry from MLX commit
+``9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8``. The latter runs 256 finite and
+zero-base cases through translated HLSL/GLSL runtime packages; macOS compiles
+and executes both original and roundtrip Metal. The numerical bound is
+``5e-5 * max(1, abs(reference))`` for the complex absolute error. Reports retain
+every input, output, error and bound, and buffers use nonzero sentinels to detect
+missed writes. This proves the selected kernel and layout path, not full binary
+family coverage, upstream MLX-suite execution, or MLX host-runtime redirection.
+
+The separate binary-shape gate discovers and executes every one of the 15
+``Powercomplex64`` entry shapes at that pin. Its 873 complex outputs exercise
+scalar/vector broadcasting, two- and three-dimensional dispatch, non-contiguous
+storage, zero strides, 32/64-bit index paths and partial final tiles in
+four-dimensional gathers. Each shape retains its random workload and adds two
+branch-cut workloads: negative-real bases with positive or negative imaginary
+zero, raised to the power one half. Each dataset retains its own inputs and
+readback evidence, without weakening the complex-error bound above.
+Expected input locations are enumerated from logical
+coordinates and strides independently of the shader's index helpers. Metal
+executes original and translated kernels and separately consumes the public
+runtime package, as DirectX and OpenGL do. All three Metal paths execute each
+dataset, retaining 873 comparisons per path. Package construction happens once
+per entry; each dataset still receives fresh buffers, artifact identity checks,
+native compilation and its own device/library/dispatch evidence. DirectX also
+compiles with warnings fatal, and OpenGL validates a generated SPIR-V 1.3 module
+before native GLSL execution.
+
+The gate rejects a changed source census, missing native tools, missing entry
+outputs and numerical mismatches. OpenGL's explicit ``[0, 511]`` index-range
+assertions apply only to these bounded workloads; they are not inferred bounds
+for arbitrary tensors. A 900-second outer deadline and always-uploaded artifacts
+preserve failures without converting them to optional skips. This extends
+access-shape coverage for one operator and type, not every binary operation or
+the upstream MLX test suite.
 
 At pinned MLX commit ``4367c73b60541ddd5a266ce4644fd93d20223b6e``, the
 ``arangeuint32`` entry from ``arange.metal`` is translated to DirectX and
@@ -3430,6 +4071,93 @@ of returning an artifact with unresolved target resource types. Metal,
 CrossGL, and already-preprocessed source paths retain their existing behavior.
 This contract does not infer variants for which the source supplies no concrete
 evidence, and it is not a full-corpus or runtime-parity claim.
+
+Concrete struct-member array accesses participate in free-function and member
+template deduction. C-style dimensions and standard ``array<T, N>`` layers are
+consumed one index at a time; struct-scoped aliases are resolved before indexing.
+Selecting a pointer element preserves its Metal address space and qualifiers,
+while a subsequent index selects its pointee. Native package tests cover integer
+and fractional values, free and member calls, index side effects, and output
+guards on the three generated backends. Source deduction is separate from the
+target representation of pointer-bearing aggregates described below.
+
+Addresses taken through concrete Metal pointer members retain the pointee's
+address space and read-only qualification, including scoped aliases, nested
+owners and fixed pointer arrays. A const owner or pointer slot does not make a
+mutable pointee read-only. Metal round-trip tests compile and execute the original
+and generated kernels across constant, device, thread and threadgroup storage,
+checking overload selection, index side effects, writes and output guards.
+Incompatible address spaces and removal of pointee constness remain errors.
+DirectX selected compute entries can carry constant/device buffer references in
+private aggregates as binding identities and signed element offsets. Concrete
+resource arguments are forwarded through helpers; loads and stores select a
+bound resource explicitly instead of creating arrays of HLSL resource objects.
+Nested aggregates, fixed pointer arrays, value copies, mutable reference parameters,
+rebasing and concrete template owners retain their backing buffers. Required
+Windows numerical controls use the same inputs and guarded outputs as the
+original/generated Metal controls. Unknown pointer escapes, incompatible access
+contracts, local reference aliases, reference returns, pointer identity operations,
+compound pointee updates and external
+aggregate buffer layouts remain diagnostic. This representation does not yet
+cover thread/threadgroup pointer members, and it
+does not change the source buffer ABI to store these private handles.
+OpenGL specializes the same private handles against concrete storage buffers;
+final subscripts require proven bounds or explicit allocation-derived range
+assertions. Unsupported aggregate escapes remain diagnostic on both targets.
+
+Concrete Metal ``vec<T, N>`` constructors preserve scalar splats, copied vectors
+and mixed component arguments for float, half and integer widths two through
+four. Global and local aliases resolve before constructor emission. Named
+``static_cast`` and functional vector conversions select the declared conversion
+operator by destination type and receiver qualifiers, retaining its body and
+single evaluation. Incompatible or ambiguous receivers produce structured
+diagnostics. Required native controls include mutable receivers, const overloads,
+materialized template owners, side-effecting temporary construction and output
+guards; macOS also executes the original source. This bounded contract does not
+establish arbitrary user-defined conversion chains or bfloat16 parity.
+
+Metal round trips additionally preserve native two-, three- and four-lane bfloat
+vectors, including scalar alias chains, vector aliases and declared conversions
+on materialized template owners. Required macOS execution compares original and
+generated kernels using exact integer readbacks: ties-to-even conversion,
+signed zero, overflow, infinity, raw 16-bit payload copies, indexed/swizzled
+components, vector size and output guards. Raw copies include NaN payloads;
+this is not a claim about every arithmetic operation or NaN conversion rule.
+The unchanged pinned general-gather wrapper executes as original and generated
+Metal in a required macOS gate. Six specializations cover zero, one or two index
+buffers and scalar through three-dimensional indices across dense, transposed,
+strided and broadcast layouts. The 24 workloads retain negative and repeated
+indices, exact binary32 storage payloads and trailing output guards. Separate
+required Windows and Linux gates execute the same twenty indexed workloads
+through DirectX and OpenGL packages. The four zero-index workloads retain their
+Metal gate; their empty pointer-array representation remains unsupported on
+the foreign targets. Foreign-target bfloat parity remains unfinished. Compiler success is
+not a substitute for the required native readback evidence.
+
+The portable MLX host adapter additionally connects ``Gather::eval_gpu`` to
+on-demand packages built from that unchanged wrapper. It validates index values,
+allocation spans, shapes, strides and dispatch dimensions before submission.
+Six source storage types and signed/unsigned 32-bit and 64-bit indices are
+supported within the documented rank and allocation bounds. The required host
+gate compares 42 indexing workloads and unchanged upstream ``test_take`` on
+separate CPU and native paths, retaining uploaded storage, module identities,
+native readbacks and output guards. ``GatherAxis::eval_gpu`` uses the unchanged
+axis-gather template with validated source/index contiguity and upstream grid
+geometry. A separate required host step compares 60 workloads and unchanged
+``test_take_along_axis`` on each target, including noncontiguous indices and exact
+64-bit storage. Larger allocations, additional storage types and full
+indexing/autodiff coverage remain separate work; this is not full upstream-suite parity. See
+``demos/integrations/mlx/portable_host/README.md`` for the exact host contract.
+
+Zero-extent Metal standard arrays retain native array objects rather than
+illegal C-style zero-length arrays. Layout calculations retain the element
+storage required by Metal, including packed/narrow elements, nested arrays and
+concrete structs. Native controls verify logical size zero, alignment,
+initialization, independent copies, adjacent fields and pointer-element storage
+qualification. DirectX/OpenGL report an unsupported-representation diagnostic
+for these objects until their value and layout contracts are implemented.
+This does not make C-style zero-length arrays valid or define portable pointer
+object sizes.
 
 During project translation, Metal template-member inference preserves a
 generic pointer template parameter as a pointer rather than reducing it to its
