@@ -10,7 +10,7 @@ from crosstl.project import build_native_loader_dispatch_request
 from demos.integrations.mlx.portable_host.prepare import COMMIT
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_loop_updates import _execute
-from tests.test_translator.test_mlx_current_gather import _validate
+from tests.test_translator.test_mlx_current_gather import _bound_inputs, _validate
 from tests.test_translator.test_mlx_general_gather import (
     LAYOUTS,
     SPECIALIZATIONS,
@@ -65,31 +65,6 @@ def test_indexed_general_gather_compiles(package, tmp_path):
         directory / descriptor["artifact"]["packagePath"], tmp_path, "directx"
     )
     assert module.is_file() and module.stat().st_size
-
-
-def _bound_inputs(descriptor, entry, inputs):
-    bound, matched = {}, set()
-    for binding in descriptor["bindings"]:
-        if "executionInput" in binding.get("provenance", {}):
-            continue
-        layout = binding["scalarLayout"]
-        member = layout.get("memberName", binding["name"])
-        name = member.removeprefix(entry.rstrip("_") + "_")
-        assert name in inputs and name not in matched, (name, binding)
-        assert binding["name"] not in bound
-        matched.add(name)
-        value = inputs[name]
-        if value["dtype"] == "bool":
-            assert all(type(item) is bool for item in value["values"])
-            value = {
-                **value,
-                "dtype": "uint32",
-                "values": [int(item) for item in value["values"]],
-            }
-        assert value["dtype"] == layout["elementType"], (name, layout)
-        bound[binding["name"]] = value
-    assert matched == set(inputs)
-    return bound
 
 
 def _request(descriptor, directory, entry, workload):

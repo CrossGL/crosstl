@@ -79,6 +79,31 @@ def _workload(stride, width):
     }
 
 
+def _bound_inputs(descriptor, entry, inputs):
+    bound, matched = {}, set()
+    for binding in descriptor["bindings"]:
+        if "executionInput" in binding.get("provenance", {}):
+            continue
+        layout = binding["scalarLayout"]
+        member = layout.get("memberName", binding["name"])
+        name = member.removeprefix(entry.rstrip("_") + "_")
+        assert name in inputs and name not in matched, (name, binding)
+        assert binding["name"] not in bound
+        matched.add(name)
+        value = inputs[name]
+        if value["dtype"] == "bool":
+            assert all(type(item) is bool for item in value["values"])
+            value = {
+                **value,
+                "dtype": "uint32",
+                "values": [int(item) for item in value["values"]],
+            }
+        assert value["dtype"] == layout["elementType"], (name, layout)
+        bound[binding["name"]] = value
+    assert matched == set(inputs)
+    return bound
+
+
 @pytest.mark.parametrize("stride", [0, 1, 3, 9])
 @pytest.mark.parametrize("width", [1, 4, 8])
 def test_gather_workloads_cover_negative_duplicate_and_tail_indices(stride, width):
@@ -91,6 +116,40 @@ def test_gather_workloads_cover_negative_duplicate_and_tail_indices(stride, widt
     assert expected[stride : 2 * stride] == source[3 * stride : 4 * stride]
     assert expected[3 * stride : 4 * stride] == expected[4 * stride : 5 * stride]
     assert workload["grid"]["workgroupCount"][0] * width >= stride
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+@pytest.mark.parametrize("width", (1, 4, 8))
+def test_gather_inputs_follow_reflected_constant_names(target, width):
+    entry, _ = _source(width)
+    inputs = _workload(3, width)["inputs"]
+    bindings = []
+    for name, value in inputs.items():
+        constant = name in {"stride", "size"}
+        member = f"{entry}_{name}" if target == "directx" and constant else name
+        suffix = "Constants" if target == "directx" else "Args"
+        binding_name = (
+            f"{entry}_{name}_{suffix}"
+            if target != "metal" and constant
+            else f"{name}Buffer" if target == "opengl" else name
+        )
+        bindings.append(
+            {
+                "name": binding_name,
+                "scalarLayout": {"memberName": member, "elementType": value["dtype"]},
+            }
+        )
+    descriptor = {"bindings": bindings}
+    bound = _bound_inputs(descriptor, entry, inputs)
+    assert list(bound) == [binding["name"] for binding in bindings]
+    assert list(bound.values()) == list(inputs.values())
+    for missing in ("stride", "size"):
+        with pytest.raises(AssertionError):
+            _bound_inputs(
+                descriptor, entry, {k: v for k, v in inputs.items() if k != missing}
+            )
+    with pytest.raises(AssertionError):
+        _bound_inputs({"bindings": [*bindings, bindings[-1]]}, entry, inputs)
 
 
 def _verify_source(root):
@@ -193,7 +252,7 @@ def test_pinned_gather_front_native_parity(gather_source, tmp_path, width, strid
     request = build_native_loader_dispatch_request(
         descriptor,
         package,
-        _bound_values(descriptor, workload["inputs"]),
+        _bound_inputs(descriptor, entry, workload["inputs"]),
         expected,
         workload["grid"],
         expected_target=target,
