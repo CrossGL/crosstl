@@ -3015,10 +3015,12 @@ def test_parse_statement_expression_block_from_angle_generated_shader():
     block = ast.functions[0].body[0]
 
     assert isinstance(block, BlockNode)
-    assert len(block.statements) == 2
+    assert len(block.statements) == 3
     assert isinstance(block.statements[0], IfNode)
-    assert len(block.statements[0].if_chain) == 2
-    assert getattr(block.statements[1], "op", None) == "++"
+    assert isinstance(block.statements[1], IfNode)
+    assert len(block.statements[0].if_chain) == 1
+    assert len(block.statements[1].if_chain) == 1
+    assert getattr(block.statements[2], "op", None) == "++"
 
 
 def test_parse_decltype_template_typedef_and_explicit_instantiations_from_llama_cpp():
@@ -3807,6 +3809,8 @@ def test_parse_if_constexpr_from_mlx_fp_quantized():
     assert isinstance(if_node.condition, BinaryOpNode)
     assert len(if_node.else_if_chain) == 1
     assert if_node.else_body
+    assert if_node.if_constexpr == [True]
+    assert if_node.else_if_constexpr == [True]
 
 
 def test_parse_lambda_argument_from_mlx_fp_quantized_nax():

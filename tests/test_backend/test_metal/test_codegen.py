@@ -8196,8 +8196,8 @@ def test_codegen_lowers_dispatch_bool_callback_from_mlx_fp_quantized_nax():
     assert "[&]" not in compact
     assert "if ((!is_unaligned_sm))" in compact
     assert "if (true)" in compact
-    assert "if (false)" in compact
-    assert "workgroupBarrier();" in compact
+    assert "if (false)" not in compact
+    assert compact.count("workgroupBarrier();") == 1
     assert "Unhandled expression" not in compact
     assert parse_crossgl(result) is not None
 
@@ -8228,7 +8228,8 @@ def test_codegen_sanitizes_template_id_value_expression_from_mlx_gemm_gather_nax
     assert "gemm_loop_u3cT_u2cSM_u2cfalse_u2cAccumType_u3e" in compact
     assert "gemm_loop<" not in compact
     assert "if (true)" in compact
-    assert "if (false)" in compact
+    assert "if (false)" not in compact
+    assert compact.count("do_gemm();") == 1
     assert "Unhandled expression" not in compact
     assert parse_crossgl(result) is not None
 
@@ -8251,10 +8252,9 @@ def test_codegen_lowers_nested_dispatch_bool_callbacks():
 
     assert compact.count("if (align_m)") == 1
     assert compact.count("if (align_n)") == 2
-    assert "if (true && true)" in compact
-    assert "if (true && false)" in compact
-    assert "if (false && true)" in compact
-    assert "if (false && false)" in compact
+    assert compact.count("if (true)") == 1
+    assert "if (false" not in compact
+    assert compact.count("out_[0] = 1;") == 1
     assert "dispatch_bool" not in compact
     assert parse_crossgl(result) is not None
 
@@ -8324,7 +8324,8 @@ def test_codegen_nested_dispatch_bool_parameter_shadowing_uses_inner_value():
     compact = normalize(convert(code))
 
     assert compact.count("if (true)") == 2
-    assert compact.count("if (false)") == 2
+    assert "if (false)" not in compact
+    assert compact.count("out_[0] = 1u;") == 2
 
 
 def test_codegen_rejects_callback_helper_without_semantic_lowering():
@@ -8441,7 +8442,8 @@ def test_codegen_reference_return_helper_reparses_from_pytorch_linalg():
     """
     crossgl = convert(code)
 
-    assert "float get_ref(device float* A" in crossgl
+    assert "float get_ref_true(device float* A" in crossgl
+    assert "float get_ref(device float* A" not in crossgl
     assert "float& get_ref" not in crossgl
     parse_crossgl(crossgl)
 

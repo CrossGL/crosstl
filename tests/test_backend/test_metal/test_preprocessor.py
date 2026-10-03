@@ -11978,6 +11978,36 @@ def test_infer_argument_type_rejects_address_without_pointer_metadata():
     )
 
 
+@pytest.mark.parametrize(
+    "declaration, expected",
+    [
+        ("int value = 1;", "thread int*"),
+        ("const uint value = 1u;", "thread const uint*"),
+        ("threadgroup int value;", "threadgroup int*"),
+    ],
+)
+def test_infer_argument_type_preserves_addressed_local_storage(declaration, expected):
+    pp = MetalPreprocessor()
+    code = f"kernel void k() {{ {declaration} use(&value); }}"
+    declarations = pp._collect_local_variable_types(code, [])
+    locals_ = pp._flatten_types_at(declarations, code.index("use(&value)"))
+    assert pp._infer_argument_type("&(value)", {}, locals_) == expected
+    assert (
+        pp._infer_argument_type(
+            "&value", {}, pp._flatten_types_at(declarations, len(code))
+        )
+        is None
+    )
+    assert pp._infer_argument_type("&value", {}, {"value": "int"}) is None
+    global_types = pp._collect_local_variable_types(declaration, [])
+    assert (
+        pp._infer_argument_type(
+            "&value", {}, pp._flatten_types_at(global_types, len(declaration))
+        )
+        is None
+    )
+
+
 def test_infer_argument_type_simd_group_builtin_returns_first_arg_type():
     # A SIMD/quad group built-in that moves/combines lane values returns the type
     # of its first argument, so scan's

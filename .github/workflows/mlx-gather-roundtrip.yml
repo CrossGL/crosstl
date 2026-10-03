@@ -75,6 +75,9 @@ jobs:
           CROSTL_REQUIRE_MLX_GENERAL_SCATTER: "1"
           CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_LOAD_RUNTIME: "1"
+          CROSTL_REQUIRE_ATOMIC_COMPARE_EXCHANGE_RUNTIME: "1"
+          CROSTL_REQUIRE_METAL_CONSTEXPR_RUNTIME: "1"
+          CROSTL_REQUIRE_METAL_CONSTRAINED_RUNTIME: "1"
           CROSTL_REQUIRE_MLX_SCATTER_AXIS: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -98,6 +101,10 @@ jobs:
               tests/test_translator/test_atomic_store_runtime.py \
               tests/test_translator/test_atomic_load_runtime.py \
               tests/test_translator/test_mlx_atomic_load_runtime.py \
+              tests/test_translator/test_atomic_compare_exchange_runtime.py \
+              tests/test_translator/test_mlx_atomic_compare_exchange_runtime.py \
+              tests/test_translator/test_metal_constexpr_branches.py \
+              tests/test_translator/test_metal_constrained_calls.py \
               tests/test_translator/test_mlx_scatter_axis_runtime.py \
               2>&1 | tee .mlx-gather-opengl/execution.log
       - name: Retain OpenGL execution evidence
@@ -145,6 +152,9 @@ jobs:
           CROSTL_REQUIRE_MLX_GENERAL_SCATTER: "1"
           CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_LOAD_RUNTIME: "1"
+          CROSTL_REQUIRE_ATOMIC_COMPARE_EXCHANGE_RUNTIME: "1"
+          CROSTL_REQUIRE_METAL_CONSTEXPR_RUNTIME: "1"
+          CROSTL_REQUIRE_METAL_CONSTRAINED_RUNTIME: "1"
           CROSTL_REQUIRE_MLX_SCATTER_AXIS: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
         run: |
@@ -167,6 +177,10 @@ jobs:
               tests/test_translator/test_atomic_store_runtime.py \
               tests/test_translator/test_atomic_load_runtime.py \
               tests/test_translator/test_mlx_atomic_load_runtime.py \
+              tests/test_translator/test_atomic_compare_exchange_runtime.py \
+              tests/test_translator/test_mlx_atomic_compare_exchange_runtime.py \
+              tests/test_translator/test_metal_constexpr_branches.py \
+              tests/test_translator/test_metal_constrained_calls.py \
               tests/test_translator/test_mlx_scatter_axis_runtime.py \
               2>&1 | tee .mlx-gather/execution.log
       - name: Retain original and translated execution evidence
@@ -246,6 +260,9 @@ jobs:
           CROSTL_REQUIRE_MLX_GENERAL_SCATTER: "1"
           CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_LOAD_RUNTIME: "1"
+          CROSTL_REQUIRE_ATOMIC_COMPARE_EXCHANGE_RUNTIME: "1"
+          CROSTL_REQUIRE_METAL_CONSTEXPR_RUNTIME: "1"
+          CROSTL_REQUIRE_METAL_CONSTRAINED_RUNTIME: "1"
           CROSTL_REQUIRE_MLX_SCATTER_AXIS: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
         run: |
@@ -267,6 +284,10 @@ jobs:
               tests/test_translator/test_atomic_store_runtime.py \
               tests/test_translator/test_atomic_load_runtime.py \
               tests/test_translator/test_mlx_atomic_load_runtime.py \
+              tests/test_translator/test_atomic_compare_exchange_runtime.py \
+              tests/test_translator/test_mlx_atomic_compare_exchange_runtime.py \
+              tests/test_translator/test_metal_constexpr_branches.py \
+              tests/test_translator/test_metal_constrained_calls.py \
               tests/test_translator/test_mlx_scatter_axis_runtime.py \
               2>&1 | tee .mlx-gather-directx/execution.log
       - name: Retain DirectX execution evidence

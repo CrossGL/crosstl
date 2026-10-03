@@ -529,6 +529,16 @@ class _MetalSubscriptableType:
     pointer_type: Optional[str] = None
 
 
+class _MetalAddressableValueType(str):
+    """Keep scalar value inference compatible while retaining storage provenance."""
+
+    def __new__(cls, value_type, pointer_type=None, scope=None):
+        value = super().__new__(cls, value_type)
+        value.pointer_type = pointer_type
+        value.scope = scope
+        return value
+
+
 _MetalBufferType = Union[str, _MetalSubscriptableType]
 _MetalPositionedBufferTypes = Dict[str, List[Tuple[int, _MetalBufferType]]]
 _MetalBufferTypeView = Dict[str, _MetalBufferType]
@@ -900,6 +910,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             ],
         ] = {}
         self._materialized_function_names: Set[str] = set()
+        self._materialized_function_templates: Set[Tuple[str, str]] = set()
         self._active_static_constexpr_functions: Dict[
             str, List[_MetalConstexprFunction]
         ] = {}
@@ -939,6 +950,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._known_member_function_return_types.clear()
         self._instantiated_template_member_calls.clear()
         self._materialized_function_names.clear()
+        self._materialized_function_templates.clear()
         self._active_static_constexpr_functions.clear()
         self._source_type_alias_bindings.clear()
         self._integral_constant_binary_operators.clear()
@@ -974,6 +986,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         processed = self._materialize_inferred_constrained_template_function_calls(
             processed
         )
+        processed = self._prune_unreferenced_materialized_function_templates(processed)
         processed = self._substitute_local_integral_constant_array_extents(processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
@@ -1363,7 +1376,6 @@ class MetalPreprocessor(HLSLPreprocessor):
             namespace_visibility=namespace_visibility,
         )
         replacements: List[Tuple[int, int, str]] = []
-        materializations: List[str] = []
         materialized_names: Dict[Tuple[Tuple[int, int], Tuple[str, ...]], str] = {}
         generated_name_owners: Dict[str, Tuple[Tuple[int, int], Tuple[str, ...]]] = {}
         handled_template_spans: Set[Tuple[int, int]] = set()
@@ -1371,15 +1383,21 @@ class MetalPreprocessor(HLSLPreprocessor):
             IDENTIFIER_RE.findall(self._mask_comments_and_literals(code))
         )
 
-        for call in calls:
+        # Append concrete bodies without rewriting the source until the worklist
+        # is exhausted. Original declaration offsets and specialization ownership
+        # then stay stable, including when a new body calls an earlier helper.
+        # Lookup uses the declaring template, not the appended body's position.
+        dependencies = {}
+        pending_calls = [(call, call.span[0], call.span[0], None) for call in calls]
+        for call, lookup_position, instantiation_position, owner_key in pending_calls:
             visible_candidates = [
                 template
                 for template in by_name.get(call.name, [])
-                if template.span[0] <= call.span[0]
+                if template.span[0] <= lookup_position
                 and self._metal_template_function_call_visible(
                     template,
                     call.qualified_name,
-                    call.span[0],
+                    lookup_position,
                     namespace_visibility,
                     None,
                 )
@@ -1482,7 +1500,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
 
             for declaration in competing_declarations.get(call.name, []):
-                if declaration.span[0] > call.span[0]:
+                if declaration.span[0] > lookup_position:
                     continue
                 if (
                     call.template_arguments is not None
@@ -1513,7 +1531,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     self._metal_namespace_declaration_visible(
                         namespace,
                         self._metal_call_reference_namespace(call.qualified_name),
-                        call.span[0],
+                        lookup_position,
                         namespace_visibility,
                     )
                     for namespace in namespaces
@@ -1535,7 +1553,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                     explicit_specializations={
                         key: value
                         for key, value in explicit_specializations.items()
-                        if not template.namespace and value["span"][0] <= call.span[0]
+                        if not template.namespace
+                        and value["span"][0] <= instantiation_position
                     },
                     template=template,
                     function_name=template.name,
@@ -1551,8 +1570,44 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
             )
             key = (template.span, ordered_arguments)
+            if owner_key is not None:
+                pending_dependencies = [key]
+                visited = set()
+                while pending_dependencies:
+                    dependency = pending_dependencies.pop()
+                    if dependency == owner_key:
+                        self._raise_constrained_free_function_error(
+                            code,
+                            call,
+                            "recursive constrained helper specialization is unsupported",
+                        )
+                    if dependency not in visited:
+                        visited.add(dependency)
+                        pending_dependencies.extend(dependencies.get(dependency, ()))
+                dependencies.setdefault(owner_key, set()).add(key)
             specialized_name = materialized_names.get(key)
             if specialized_name is None:
+                unique_count = len(materialized_names) + 1
+                if unique_count > self.max_template_specializations:
+                    requested = self._template_specialization_signature(
+                        template.name, list(ordered_arguments)
+                    )
+                    suggested_action = (
+                        "raise max_template_specializations for this source pattern "
+                        "or reduce the number of reachable constrained specializations"
+                    )
+                    raise MetalTemplateSpecializationError(
+                        "Metal constrained template specialization limit exceeded "
+                        f"while materializing '{requested}'; {unique_count} unique "
+                        f"concrete signatures requested, limit {self.max_template_specializations} "
+                        f"from {self.template_specialization_limit_source}. "
+                        f"Suggested action: {suggested_action}.",
+                        limit=self.max_template_specializations,
+                        limit_source=self.template_specialization_limit_source,
+                        unique_specialization_count=unique_count,
+                        requested_signature=requested,
+                        suggested_action=suggested_action,
+                    )
                 preferred_name = self._template_specialization_identifier(
                     template.name, list(ordered_arguments)
                 )
@@ -1591,7 +1646,25 @@ class MetalPreprocessor(HLSLPreprocessor):
                 reserved_identifiers.add(specialized_name)
                 generated_name_owners[preferred_name] = key
                 materialized_names[key] = specialized_name
-                materializations.append(materialized.rstrip())
+                materialization_start = len(code) + 2
+                code += "\n\n" + materialized
+                context = self._reachability_type_context(code, template_spans, structs)
+                body_start = self._find_next_top_level_char(materialized, 0, "{")
+                owner_position = (
+                    specialization["span"][0]
+                    if specialization is not None
+                    else template.body_start
+                )
+                for nested in self._find_static_constexpr_calls(code, set(by_name)):
+                    if nested.span[0] <= materialization_start + body_start:
+                        continue
+                    if self._function_reference_is_member_call(
+                        code, nested.span[0], set()
+                    ):
+                        continue
+                    pending_calls.append(
+                        (nested, owner_position, instantiation_position, key)
+                    )
 
             replacements.append((call.span[0], call.argument_open, specialized_name))
 
@@ -1599,11 +1672,33 @@ class MetalPreprocessor(HLSLPreprocessor):
             return code
         replacements.extend((start, end, "") for start, end in handled_template_spans)
         resolved = self._apply_text_replacements(code, replacements)
-        if materializations:
-            resolved = resolved.rstrip() + "\n\n" + "\n\n".join(materializations)
-            if not resolved.endswith("\n"):
-                resolved += "\n"
         return resolved
+
+    def _prune_unreferenced_materialized_function_templates(self, code: str) -> str:
+        """Drop an instantiated primary only after all raw references are gone.
+
+        A concrete body can still expose calls needed by a later pass. Pruning
+        happens after materialization, and references in other template bodies,
+        function-pointer expressions and declarations conservatively retain it.
+        """
+        if not self._materialized_function_templates:
+            return code
+        masked = self._mask_comments_and_literals(code)
+        replacements = []
+        for template in self._find_template_functions(code):
+            if (
+                template.namespace,
+                template.source,
+            ) not in self._materialized_function_templates:
+                continue
+            start, end = template.span
+            if any(
+                not start <= match.start() < end
+                for match in re.finditer(rf"\b{re.escape(template.name)}\b", masked)
+            ):
+                continue
+            replacements.append((start, end, ""))
+        return self._apply_text_replacements(code, replacements)
 
     def _find_free_function_overload_declarations(
         self,
@@ -19518,6 +19613,11 @@ class MetalPreprocessor(HLSLPreprocessor):
         for name in declarations:
             resolved = self._resolve_declared_type_at(declarations, name, position)
             if resolved is not None:
+                if isinstance(resolved, _MetalAddressableValueType) and (
+                    resolved.scope is None
+                    or not resolved.scope[0] <= position < resolved.scope[1]
+                ):
+                    resolved = str(resolved)
                 flattened[name] = resolved
         return flattened
 
@@ -19701,6 +19801,13 @@ class MetalPreprocessor(HLSLPreprocessor):
         # not collapse to one PYTHONHASHSEED-dependent type.
         local_types: Dict[str, List[Tuple[int, str]]] = {}
         recognized_aggregates = self._aggregate_type_names(code, struct_spans)
+        lexical_scopes = self._find_lexical_brace_scopes(code)
+        function_body_spans = [
+            function.body_span
+            for function in self._find_non_template_function_definitions(
+                code, struct_spans
+            )
+        ]
         # A zero-width leading anchor (start-of-string or a statement/scope
         # boundary) keeps consecutive declarations like `float acc=...; float
         # x=...;` from cannibalizing each other's anchor.
@@ -19722,8 +19829,25 @@ class MetalPreprocessor(HLSLPreprocessor):
                 and normalized not in recognized_aggregates
             ):
                 continue
+            pointer_type = None
+            scope = self._containing_span(match.start(), function_body_spans)
+            if scope is not None:
+                scope = self._innermost_lexical_scope(
+                    lexical_scopes, match.start(), len(code)
+                )
+                storage_type = re.sub(r"\bconstexpr\b", "const", raw_type)
+                if not set(IDENTIFIER_RE.findall(storage_type)).intersection(
+                    {"thread", "threadgroup"}
+                ):
+                    storage_type = f"thread {storage_type}"
+                pointer_type = self._normalize_known_address_space_pointer_type(
+                    f"{storage_type}*"
+                )
             local_types.setdefault(match.group("name"), []).append(
-                (match.start(), normalized)
+                (
+                    match.start(),
+                    _MetalAddressableValueType(normalized, pointer_type, scope),
+                )
             )
         for entries in local_types.values():
             entries.sort(key=lambda item: item[0])
@@ -20134,10 +20258,14 @@ class MetalPreprocessor(HLSLPreprocessor):
             if not expr:
                 return None
 
-        # Address-of a proven buffer/array element preserves the source pointer's
-        # address space, cv qualifiers, and pointee type. Every other unary `&`
-        # form is deliberately unsupported and therefore fails closed.
+        # Address-of requires declaration provenance, whether a local value or
+        # a buffer/array element. Value-only type records cannot prove storage.
         if expr.startswith("&"):
+            operand = self._strip_enclosing_parens(expr[1:].strip())
+            if IDENTIFIER_RE.fullmatch(operand):
+                declared = local_variable_types.get(operand)
+                if isinstance(declared, _MetalAddressableValueType):
+                    return declared.pointer_type
             return self._infer_addressed_buffer_element_pointer_type(
                 expr,
                 buffer_element_types,
@@ -21737,6 +21865,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         if not materialized.endswith("\n"):
             materialized += "\n"
         self._materialized_function_names.add(function_identifier)
+        self._materialized_function_templates.add((template.namespace, template.source))
         return materialized
 
     def _reconstruct_materialized_function_array_parameter_declarators(

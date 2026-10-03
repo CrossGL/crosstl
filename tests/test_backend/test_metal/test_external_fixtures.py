@@ -1,6 +1,9 @@
 import pytest
 
-from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
+from crosstl.backend.Metal.MetalCrossGLCodeGen import (
+    MetalConstexprBranchLoweringError,
+    MetalToCrossGLConverter,
+)
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.translator.lexer import Lexer as CrossGLLexer
@@ -993,10 +996,19 @@ EXTERNAL_FIXTURES = [
         "source_path": "mlx/backend/metal/kernels/fp_quantized.h",
         "roundtrip": True,
         "contains": [
-            "T dequantize_scale(uint8 s)",
-            "if (group_size == 16)",
+            "float dequantize_scale_float_16(uint8 s)",
+            "float dequantize_scale_float_32(uint8 s)",
+            "fp8_e4m3",
+            "fp8_e8m0",
         ],
-        "not_contains": ["if constexpr"],
+        "not_contains": ["if constexpr", "group_size == 16"],
+        "instantiation": (
+            """
+            kernel void sample_scale(device float* results [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
+                results[tid] = dequantize_scale<float, 16>(uint8_t(tid)) + dequantize_scale<float, 32>(uint8_t(tid));
+            }
+        """
+        ),
         "source": (
             """
             #include <metal_stdlib>
@@ -2470,7 +2482,7 @@ def parse_crossgl(source):
     "fixture", EXTERNAL_FIXTURES, ids=[fixture["name"] for fixture in EXTERNAL_FIXTURES]
 )
 def test_external_metal_fixture_parse_and_roundtrip(fixture):
-    ast = parse_metal(fixture["source"])
+    ast = parse_metal(fixture["source"] + fixture.get("instantiation", ""))
     assert ast.functions or ast.structs or ast.global_variables or ast.typedefs
     assert fixture["repo_url"]
     assert fixture["commit"]
@@ -2492,3 +2504,21 @@ def test_external_metal_fixture_parse_and_roundtrip(fixture):
 
     if fixture["roundtrip"]:
         parse_crossgl(crossgl)
+
+
+def test_unspecialized_external_constexpr_branch_is_diagnosed():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item["name"] == "mlx_fp_quantized_if_constexpr_dequantize_scale"
+    )
+    ast = parse_metal(fixture["source"])
+    with pytest.raises(
+        MetalConstexprBranchLoweringError, match="group_size == 16"
+    ) as error:
+        MetalToCrossGLConverter().generate(ast)
+    assert (
+        error.value.project_diagnostic_code
+        == "project.translate.metal-constexpr-branch-unresolved"
+    )
+    assert error.value.source_location["line"] == 7

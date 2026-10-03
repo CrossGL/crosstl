@@ -2067,6 +2067,7 @@ class HLSLCodeGen:
         self.required_image_atomic_helpers = set()
         self.required_byteaddress_atomic_helpers = set()
         self.hlsl_float_atomic_helpers = {}
+        self.hlsl_expected_compare_helpers = {}
         self.hlsl_float_atomic_reserved_names = set()
         self.required_glsl_buffer_aggregate_load_helpers = {}
         self.comparison_sampler_parameters = {}
@@ -3047,6 +3048,7 @@ class HLSLCodeGen:
         self.required_image_atomic_helpers = set()
         self.required_byteaddress_atomic_helpers = set()
         self.hlsl_float_atomic_helpers = {}
+        self.hlsl_expected_compare_helpers = {}
         self.hlsl_float_atomic_reserved_names = set()
         self.required_glsl_buffer_aggregate_load_helpers = {}
         self.comparison_sampler_parameters = {}
@@ -4433,6 +4435,7 @@ class HLSLCodeGen:
         code += self.generate_image_atomic_helpers()
         code += self.generate_byteaddress_atomic_helpers()
         code += self.generate_hlsl_float_atomic_helpers()
+        code += self.generate_hlsl_expected_compare_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
         code += self.generate_hlsl_inverse_helpers()
         code += self.generate_hlsl_fragment_shading_rate_helper()
@@ -42086,7 +42089,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         return target
 
-    def hlsl_float_atomic_storage(self, target):
+    def hlsl_buffer_atomic_storage(self, target, *, allow_workgroup=False):
         if isinstance(target, PointerAccessNode):
             target = MemberAccessNode(
                 ArrayAccessNode(target.pointer_expr, 0), target.member
@@ -42097,12 +42100,28 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if load_access is not None:
             target = load_access
         if isinstance(target, MemberAccessNode):
-            storage = self.hlsl_float_atomic_storage(target.object)
+            storage = self.hlsl_buffer_atomic_storage(
+                target.object, allow_workgroup=allow_workgroup
+            )
             if storage is not None:
                 storage["suffix"] += f".{target.member}"
             return storage
         if isinstance(target, ArrayAccessNode):
             container, index = target.array, target.index
+            if allow_workgroup:
+                shared = self.hlsl_static_workgroup_pointer_binding(
+                    target, self.current_hlsl_resource_pointer_aliases
+                )
+                if shared is not None:
+                    return {
+                        "resource_type": None,
+                        "root": shared["root"],
+                        "arguments": [
+                            self.generate_expression(shared.get("offset", 0))
+                        ],
+                        "index_types": ["uint"],
+                        "suffix": "[index0]",
+                    }
             binding = self.hlsl_resource_pointer_binding(container)
             if isinstance(
                 container, ArrayAccessNode
@@ -42120,7 +42139,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     or str(binding.get("byte_offset", "0")) != "0"
                 ):
                     raise ValueError(
-                        "DirectX float atomic requires an unambiguous typed storage view"
+                        "DirectX buffer atomic requires an unambiguous typed storage view"
                     )
                 resource = (
                     binding["root"]
@@ -42147,12 +42166,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     "index_types": ["uint"],
                     "suffix": "[index0]",
                 }
-            storage = self.hlsl_float_atomic_storage(container)
+            storage = self.hlsl_buffer_atomic_storage(
+                container, allow_workgroup=allow_workgroup
+            )
             if storage is not None:
                 index_type = self.map_type(self.expression_result_type(index))
                 if index_type not in {"int", "uint", "int64_t", "uint64_t"}:
                     raise ValueError(
-                        "DirectX float atomic requires scalar integer member indices"
+                        "DirectX buffer atomic requires scalar integer member indices"
                     )
                 storage["suffix"] += f"[index{len(storage['index_types'])}]"
                 storage["index_types"].append(index_type)
@@ -42168,6 +42189,92 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "suffix": "[index0]",
             }
         return None
+
+    def generate_hlsl_expected_compare_call(self, args):
+        if len(args) != 3:
+            raise ValueError(
+                "DirectX atomicCompareExchangeWeak requires target, expected and desired"
+            )
+        kind = self.scalar_expression_kind(args[0])
+        if kind not in {"int", "uint"} or self.scalar_expression_kind(args[1]) != kind:
+            raise ValueError(
+                "DirectX atomicCompareExchangeWeak requires matching integer target and expected"
+            )
+        storage = self.hlsl_buffer_atomic_storage(args[0], allow_workgroup=True)
+        if storage is None or (
+            storage["resource_type"] and not storage["resource_type"].startswith("RW")
+        ):
+            raise ValueError(
+                "DirectX atomicCompareExchangeWeak requires writable buffer or groupshared storage"
+            )
+        key = (
+            kind,
+            storage["resource_type"],
+            storage.get("root"),
+            tuple(storage["index_types"]),
+            storage["suffix"],
+        )
+        helper = self.hlsl_expected_compare_helpers.get(key)
+        if helper is None:
+            digest = sha1(repr(key).encode("utf-8")).hexdigest()[:12]
+            name = f"__crossgl_compare_expected_{digest}"
+            reserved = (
+                self.hlsl_float_atomic_reserved_names
+                | set(self.function_return_types)
+                | set(self.local_variable_types)
+            )
+            reserved.update(
+                item["name"] for item in self.hlsl_expected_compare_helpers.values()
+            )
+            while name in reserved:
+                name += "_"
+            helper = {**storage, "name": name, "kind": kind}
+            self.hlsl_expected_compare_helpers[key] = helper
+        arguments = storage["arguments"] + [
+            self.generate_expression(args[1]),
+            self.generate_expression_with_expected(args[2], kind),
+        ]
+        return f"{helper['name']}({', '.join(arguments)})"
+
+    def generate_hlsl_expected_compare_helpers(self):
+        code = ""
+        for helper in self.hlsl_expected_compare_helpers.values():
+            kind = helper["kind"]
+            roles = ["storage", "expected", "desired", "observed", "matched"] + [
+                f"index{i}" for i in range(len(helper["index_types"]))
+            ]
+            prefix = "__crossgl_cas_"
+            while any(
+                prefix + role in self.hlsl_float_atomic_reserved_names for role in roles
+            ):
+                prefix += "_"
+            names = {role: prefix + role for role in roles}
+            parameters = (
+                [f"{helper['resource_type']} {names['storage']}"]
+                if helper["resource_type"]
+                else []
+            )
+            parameters.extend(
+                f"{index_kind} {names[f'index{i}']}"
+                for i, index_kind in enumerate(helper["index_types"])
+            )
+            parameters.extend(
+                [f"inout {kind} {names['expected']}", f"{kind} {names['desired']}"]
+            )
+            root = names["storage"] if helper["resource_type"] else helper["root"]
+            suffix = helper["suffix"]
+            for i in range(len(helper["index_types"])):
+                suffix = suffix.replace(f"[index{i}]", f"[{names[f'index{i}']}]")
+            code += (
+                f"bool {helper['name']}({', '.join(parameters)}) {{\n"
+                f"    {kind} {names['observed']};\n"
+                f"    InterlockedCompareExchange({root}{suffix}, {names['expected']}, {names['desired']}, {names['observed']});\n"
+                f"    bool {names['matched']} = {names['observed']} == {names['expected']};\n"
+                f"    if (!{names['matched']}) {names['expected']} = {names['observed']};\n"
+                f"    return {names['matched']};\n"
+                "}\n\n"
+            )
+        return code
 
     def hlsl_float_atomic_helper(self, func_name, storage):
         key = (
@@ -42301,7 +42408,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         target_args = [rendered_target]
         if float_atomic:
-            storage = self.hlsl_float_atomic_storage(target)
+            storage = self.hlsl_buffer_atomic_storage(target)
             if storage is None:
                 raise ValueError(
                     "DirectX float atomic requires a writable typed buffer element"
@@ -44527,6 +44634,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return [], self.generate_expression_with_expected(expr, expected_type), False
 
     def generate_hlsl_typed_buffer_atomic_expression(self, func_name, args):
+        if (
+            func_name == "atomicCompareExchangeWeak"
+            and func_name not in self.function_return_types
+        ):
+            return self.generate_hlsl_expected_compare_call(args)
         parts = self.hlsl_typed_buffer_atomic_parts(func_name, args)
         if parts is None:
             return None

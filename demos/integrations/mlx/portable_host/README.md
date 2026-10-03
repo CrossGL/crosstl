@@ -206,7 +206,7 @@ values so the expected result does not assume a particular thread ordering.
 A separate three-OS CI job requires this proof without extending the existing
 indexing job's execution budget.
 
-Product updates, float and packed storage, zero-index specializations, larger
+Host-level product updates, float and packed storage, zero-index specializations, larger
 allocations and the complete upstream indexing/autodiff suite remain unsupported.
 
 Integer atomic loads have a separate required numerical gate on all three native
@@ -221,10 +221,26 @@ OpenGL use an atomic OR with zero and return the observed value without changing
 the stored bits. Those foreign operations require writable storage; read-only
 inputs are diagnosed instead of silently changing their access contract. Only
 explicit relaxed ordering is supported. Unsupported orders, element types and
-untracked storage fail translation. This load contract does not yet implement
-compare-exchange's Boolean result and expected-value writeback, so it does not
-resolve the product and packed-update requirements in
-[#2048](https://github.com/CrossGL/crosstl/issues/2048).
+untracked storage fail translation.
+
+Integer compare-exchange has a separate required numerical gate on the same three
+targets. It checks Boolean success, expected-value writeback on failure, one-time
+address and argument evaluation, resource and workgroup storage, and contending
+updates. Six additional controls execute the unchanged signed and unsigned MLX
+compare-exchange and multiplication helpers, including eight concurrent
+multiply-by-two updates. These use bounded, representable integer results and
+explicit relaxed ordering. Native weak compare-exchange may fail spuriously;
+success controls retry rather than assuming every matching comparison succeeds.
+OpenGL's helper offsets use explicit workload bounds, not general allocation
+inference. Unsupported orders, mismatched types, read-only destinations and
+untracked expected-value pointers produce diagnostics.
+
+The multiplication controls also exercise transitive constrained helper
+specialization and compile-time branch selection. Separate native cases check
+namespace ownership, explicit specializations, reused helpers, mixed runtime
+and compile-time branches, and discarded type-dependent expressions. These
+kernel-level contracts do not yet redirect MLX host product updates or implement
+packed storage. They do not establish full upstream-suite parity.
 
 In particular, the full `test_array_at` method also needs random generation,
 floating-point atomics and product updates; passing the list-index assignment

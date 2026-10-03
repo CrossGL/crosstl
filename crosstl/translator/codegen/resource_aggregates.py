@@ -504,6 +504,7 @@ class _Lowering:
         operation = _name(node.function)
         arity = {
             "atomicLoad": 1,
+            "atomicCompareExchangeWeak": 3,
             "atomicStore": 2,
             "atomicAdd": 2,
             "atomicMin": 2,
@@ -537,6 +538,7 @@ class _Lowering:
             source_pointer.readable,
         )
         store = operation == "atomicStore"
+        compare_expected = operation == "atomicCompareExchangeWeak"
         if not pointer.writable or (not store and not pointer.readable):
             raise ResourceAggregateError("atomic-resource-access", node)
         element = PrimitiveType(pointer.element)
@@ -553,7 +555,11 @@ class _Lowering:
                 ParameterNode("reference", self.target_type(pointer)),
                 ParameterNode("index", PrimitiveType("int64_t")),
                 *(
-                    ParameterNode(f"value{i}", deepcopy(element))
+                    ParameterNode(
+                        f"value{i}",
+                        deepcopy(element),
+                        qualifiers=["inout"] if compare_expected and i == 0 else [],
+                    )
                     for i in range(arity - 1)
                 ),
                 *self.resource_parameters(),
@@ -603,7 +609,15 @@ class _Lowering:
             self.generated.append(
                 FunctionNode(
                     name,
-                    PrimitiveType("void") if store else deepcopy(element),
+                    (
+                        PrimitiveType("void")
+                        if store
+                        else (
+                            PrimitiveType("bool")
+                            if compare_expected
+                            else deepcopy(element)
+                        )
+                    ),
                     params,
                     BlockNode(body),
                 )

@@ -312,7 +312,11 @@ class IfNode(ASTNode):
         else_body=None,
         if_chain=None,
         else_if_chain=None,
+        if_constexpr=None,
+        else_if_constexpr=None,
     ):
+        self.if_constexpr = list(if_constexpr or [])
+        self.else_if_constexpr = list(else_if_constexpr or [])
         if if_chain is not None or else_if_chain is not None:
             self.if_chain = if_chain or []
             self.else_if_chain = else_if_chain or []

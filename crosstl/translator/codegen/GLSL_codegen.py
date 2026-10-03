@@ -2225,6 +2225,7 @@ class GLSLCodeGen:
         "triangles": "uvec3",
     }
     GLSL_MEMORY_ATOMIC_FUNCTIONS = {
+        "atomicCompareExchangeWeak",
         "atomicLoad",
         "atomicStore",
         "atomicAdd",
@@ -2499,6 +2500,7 @@ class GLSLCodeGen:
         self.glsl_signed_remainder_helper_names = {}
         self.glsl_generating_global_initializer = False
         self.required_glsl_trailing_zero_helpers = set()
+        self.glsl_expected_compare_helpers = {}
         self.glsl_trailing_zero_helper_names = {}
         self.glsl_trailing_zero_reserved_names = set()
         self.current_glsl_disabled_extensions = set()
@@ -7132,6 +7134,7 @@ class GLSLCodeGen:
         self.glsl_signed_remainder_helper_names = {}
         self.glsl_generating_global_initializer = False
         self.required_glsl_trailing_zero_helpers = set()
+        self.glsl_expected_compare_helpers = {}
         self.glsl_trailing_zero_helper_names = {}
         self.glsl_trailing_zero_reserved_names = set()
         self.required_glsl_software_subgroup_helpers = set()
@@ -8325,6 +8328,7 @@ class GLSLCodeGen:
             + self.generate_glsl_float_selection_helpers()
             + self.generate_glsl_signed_remainder_helpers()
             + self.generate_glsl_complex64_helpers()
+            + self.generate_glsl_expected_compare_helpers()
         )
         if generated_helpers:
             code = (
@@ -11862,6 +11866,13 @@ class GLSLCodeGen:
                         mutated.update(
                             self.glsl_interval_mutation_target_keys(arguments[0])
                         )
+                        if (
+                            function_name == "atomicCompareExchangeWeak"
+                            and len(arguments) > 1
+                        ):
+                            mutated.update(
+                                self.glsl_interval_mutation_target_keys(arguments[1])
+                            )
                     candidates = list(
                         self.glsl_function_overloads_by_name.get(function_name, ())
                     )
@@ -11969,6 +11980,8 @@ class GLSLCodeGen:
             arguments = list(node.arguments or [])
             if function_name in self.GLSL_MEMORY_ATOMIC_FUNCTIONS and arguments:
                 mutated.update(self.glsl_mutation_target_names(arguments[0]))
+                if function_name == "atomicCompareExchangeWeak" and len(arguments) > 1:
+                    mutated.update(self.glsl_mutation_target_names(arguments[1]))
             candidates = list(
                 self.glsl_function_overloads_by_name.get(function_name, ())
             )
@@ -31565,6 +31578,8 @@ complex64_t crossgl_complex64_mod_assign(
                 )
             if func_name in self.function_return_types:
                 return self.function_return_types[func_name]
+            if func_name == "atomicCompareExchangeWeak":
+                return "bool"
             if func_name == "imageLoad" and args:
                 return self.image_load_result_type(args[0])
             if (
@@ -38865,7 +38880,7 @@ complex64_t crossgl_complex64_mod_assign(
             )
 
     def glsl_buffer_block_atomic_value_arguments(self, func_name, args):
-        if func_name == "atomicCompSwap":
+        if func_name in {"atomicCompSwap", "atomicCompareExchangeWeak"}:
             for index, label in ((1, "compare"), (2, "value")):
                 if len(args) > index:
                     yield args[index], label
@@ -38890,11 +38905,142 @@ complex64_t crossgl_complex64_mod_assign(
         literal_value = self.literal_int_value(value_arg, self.literal_int_constants)
         return literal_value is not None and literal_value >= 0
 
+    def glsl_expected_compare_storage(self, target):
+        if isinstance(target, PointerAccessNode):
+            target = MemberAccessNode(
+                ArrayAccessNode(target.pointer_expr, 0), target.member
+            )
+        if isinstance(target, UnaryOpNode) and target.op == "*":
+            target = ArrayAccessNode(target.operand, 0)
+        if (
+            isinstance(target, FunctionCallNode)
+            and self.function_call_name(target) == "buffer_load"
+            and "buffer_load" not in self.function_return_types
+            and len(target.arguments) == 2
+        ):
+            target = ArrayAccessNode(*target.arguments)
+        if isinstance(target, MemberAccessNode):
+            storage = self.glsl_expected_compare_storage(target.object)
+            if storage is not None:
+                storage["target"] += f".{target.member}"
+            return storage
+        if not isinstance(target, ArrayAccessNode):
+            return None
+        container, index = target.array, target.index
+        binding = self.glsl_workgroup_pointer_binding(
+            container, self.glsl_workgroup_pointer_aliases()
+        )
+        if binding is None:
+            binding = self.glsl_storage_pointer_binding(
+                container, self.glsl_storage_pointer_aliases()
+            )
+        if binding is not None:
+            if binding.get("pointer_reinterpretation"):
+                raise ValueError(
+                    "OpenGL atomicCompareExchangeWeak requires an unambiguous typed storage view"
+                )
+            rendered = self.glsl_index_expression(index, container)
+            offset = self.glsl_workgroup_pointer_offset_expression(binding)
+            if offset not in {"0", "0u"}:
+                rendered = (
+                    offset
+                    if rendered in {"0", "0u"}
+                    else f"({offset} + int({rendered}))"
+                )
+            return {
+                "target": f"{binding['root']}[index0]",
+                "arguments": [f"uint({rendered})"],
+            }
+        access = self.structured_buffer_resource_access(container)
+        if access is not None:
+            if not image_access_satisfies_requirement("read_write", access):
+                raise ValueError(
+                    "OpenGL atomicCompareExchangeWeak requires read-write storage"
+                )
+            root = self.generate_expression(container)
+            index_expr = self.glsl_index_expression(index, container)
+            return {"target": f"{root}[index0]", "arguments": [f"uint({index_expr})"]}
+        storage = self.glsl_expected_compare_storage(container)
+        if storage is not None:
+            storage["target"] += f"[index{len(storage['arguments'])}]"
+            storage["arguments"].append(
+                f"uint({self.glsl_index_expression(index, container)})"
+            )
+        return storage
+
+    def generate_glsl_expected_compare_call(self, args):
+        if len(args) != 3:
+            raise ValueError(
+                "OpenGL atomicCompareExchangeWeak requires target, expected and desired"
+            )
+        kind = self.map_type(self.expression_result_type(args[0]))
+        if (
+            kind not in {"int", "uint"}
+            or self.map_type(self.expression_result_type(args[1])) != kind
+        ):
+            raise ValueError(
+                "OpenGL atomicCompareExchangeWeak requires matching integer target and expected"
+            )
+        self.validate_glsl_storage_pointer_mutation_target(args[0])
+        storage = self.glsl_expected_compare_storage(args[0])
+        if storage is None:
+            raise ValueError(
+                "OpenGL atomicCompareExchangeWeak requires a storage buffer or shared target"
+            )
+        key = (kind, storage["target"], len(storage["arguments"]))
+        helper = self.glsl_expected_compare_helpers.get(key)
+        if helper is None:
+            name = self.glsl_generated_module_identifier(
+                ("compare-expected", key), "crossgl_compare_expected"
+            )
+            helper = {**storage, "name": name, "kind": kind}
+            self.glsl_expected_compare_helpers[key] = helper
+        arguments = storage["arguments"] + [
+            self.generate_expression(args[1]),
+            self.generate_expression_with_expected(args[2], kind),
+        ]
+        return f"{helper['name']}({', '.join(arguments)})"
+
+    def generate_glsl_expected_compare_helpers(self):
+        code = ""
+        for helper in self.glsl_expected_compare_helpers.values():
+            kind = helper["kind"]
+            roles = ["expected", "desired", "observed", "matched"] + [
+                f"index{i}" for i in range(len(helper["arguments"]))
+            ]
+            names = {
+                role: self.glsl_generated_module_identifier(
+                    ("compare-local", role), f"crossgl_atomic_{role}"
+                )
+                for role in roles
+            }
+            target = helper["target"]
+            parameters = []
+            for i in range(len(helper["arguments"])):
+                name = names[f"index{i}"]
+                parameters.append(f"uint {name}")
+                target = target.replace(f"[index{i}]", f"[{name}]")
+            parameters.extend(
+                [f"inout {kind} {names['expected']}", f"{kind} {names['desired']}"]
+            )
+            code += (
+                f"bool {helper['name']}({', '.join(parameters)}) {{\n"
+                f"    {kind} {names['observed']} = atomicCompSwap({target}, {names['expected']}, {names['desired']});\n"
+                f"    bool {names['matched']} = {names['observed']} == {names['expected']};\n"
+                f"    if (!{names['matched']}) {names['expected']} = {names['observed']};\n"
+                f"    return {names['matched']};\n"
+                "}\n\n"
+            )
+        return code
+
     def generate_glsl_memory_atomic_call(self, func_name, args):
         if func_name not in self.GLSL_MEMORY_ATOMIC_FUNCTIONS or not args:
             return None
         if func_name in self.function_return_types:
             return None
+        if func_name == "atomicCompareExchangeWeak":
+            self.validate_glsl_buffer_block_atomic_call(func_name, args)
+            return self.generate_glsl_expected_compare_call(args)
         if func_name == "atomicLoad" and len(args) != 1:
             raise ValueError("OpenGL atomicLoad requires exactly one target")
         if func_name == "atomicStore" and len(args) != 2:

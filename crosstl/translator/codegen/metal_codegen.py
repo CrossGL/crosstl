@@ -13437,6 +13437,10 @@ class MetalCodeGen:
         atomic_target = f"reinterpret_cast<{qualifier}{address_space} {atomic_type}*>({target_expr})"
         if operation == "load":
             return f"atomic_load_explicit({atomic_target}, memory_order_relaxed)"
+        if operation == "compare_exchange_expected":
+            return self.generate_metal_expected_compare_exchange(
+                atomic_target, args, mapped_target_type
+            )
         value = self.generate_expression_with_expected(args[1], mapped_target_type)
         return (
             f"atomic_{operation}_explicit("
@@ -13444,7 +13448,7 @@ class MetalCodeGen:
         )
 
     def unsupported_metal_buffer_resource_atomic_call(self, func_name, target, reason):
-        if func_name in {"atomicLoad", "atomicStore"}:
+        if func_name in {"atomicLoad", "atomicStore", "atomicCompareExchangeWeak"}:
             raise ValueError(f"Metal {func_name} {reason}")
         return_type = (
             self.expression_result_type(target) or self.current_expression_expected_type
@@ -13452,6 +13456,24 @@ class MetalCodeGen:
         zero_value = self.diagnostic_zero_value_for_type(return_type or "int")
         return (
             f"/* unsupported Metal buffer atomic: {func_name} {reason} */ {zero_value}"
+        )
+
+    def generate_metal_expected_compare_exchange(
+        self, atomic_target, args, scalar_type
+    ):
+        expected_type = self.map_type(self.expression_result_type(args[1]))
+        if expected_type != scalar_type or self.argument_address_space(args[1]) not in {
+            None,
+            "thread",
+        }:
+            raise ValueError(
+                "Metal atomicCompareExchangeWeak requires matching thread expected storage"
+            )
+        expected = self.generate_expression(args[1])
+        desired = self.generate_expression_with_expected(args[2], scalar_type)
+        return (
+            f"atomic_compare_exchange_weak_explicit({atomic_target}, &({expected}), "
+            f"{desired}, memory_order_relaxed, memory_order_relaxed)"
         )
 
     def strip_metal_atomic_memory_scope_argument(self, func_name, args, rendered_args):
@@ -21436,6 +21458,7 @@ class MetalCodeGen:
     def buffer_atomic_operations(self):
         return {
             "atomicLoad": ("load", 1),
+            "atomicCompareExchangeWeak": ("compare_exchange_expected", 3),
             "atomicStore": ("store", 2),
             "atomicAdd": ("fetch_add", 2),
             "atomicMin": ("fetch_min", 2),
@@ -21465,8 +21488,8 @@ class MetalCodeGen:
     def unsupported_glsl_buffer_block_atomic_call(
         self, target, operation, reason, access=None
     ):
-        if operation == "atomicLoad":
-            raise ValueError(f"Metal atomicLoad {reason}")
+        if operation in {"atomicLoad", "atomicCompareExchangeWeak"}:
+            raise ValueError(f"Metal {operation} {reason}")
         result_type = self.expression_result_type(target) or "uint"
         component_type = access.get("component_type") if access else None
         if component_type is not None:
@@ -21538,6 +21561,10 @@ class MetalCodeGen:
         )
         if operation == "load":
             return f"atomic_load_explicit({atomic_target}, memory_order_relaxed)"
+        if operation == "compare_exchange_expected":
+            return self.generate_metal_expected_compare_exchange(
+                atomic_target, args, access["component_type"]
+            )
         value = self.generate_expression_with_expected(args[1], access["type"])
         return f"atomic_{operation}_explicit({atomic_target}, {value}, memory_order_relaxed)"
 

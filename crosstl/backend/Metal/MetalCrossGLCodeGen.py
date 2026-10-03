@@ -712,6 +712,36 @@ class MetalAtomicLoadLoweringError(ValueError):
         )
 
 
+class MetalAtomicCompareExchangeLoweringError(ValueError):
+    """Raised when a compare-exchange contract cannot be preserved."""
+
+    project_diagnostic_code = (
+        "project.translate.metal-atomic-compare-exchange-unsupported"
+    )
+    missing_capabilities = ("metal.atomic-compare-exchange-contract-lowering",)
+
+    def __init__(self, reason, source_location=None):
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(
+            "Cannot lower Metal atomic_compare_exchange_weak_explicit without "
+            f"changing its semantics: {reason}"
+        )
+
+
+class MetalConstexprBranchLoweringError(ValueError):
+    """Raised when compile-time branch selection remains unresolved."""
+
+    project_diagnostic_code = "project.translate.metal-constexpr-branch-unresolved"
+    missing_capabilities = ("metal.constexpr-branch-selection",)
+
+    def __init__(self, condition, source_location=None):
+        self.source_location = source_location
+        super().__init__(
+            f"Cannot select Metal if constexpr branch for unresolved condition '{condition}'"
+        )
+
+
 class MetalToCrossGLConverter:
     """Serialize Metal backend AST nodes back into CrossGL source."""
 
@@ -7240,7 +7270,9 @@ class MetalToCrossGLConverter:
             or getattr(function, "source_location", None),
         )
 
-    def evaluate_value_template_constant_expression(self, expression):
+    def evaluate_value_template_constant_expression(
+        self, expression, *, constants=None
+    ):
         try:
             lexer = MetalLexer(expression, preprocess=False)
             parser = MetalParser(lexer.tokenize())
@@ -7249,7 +7281,7 @@ class MetalToCrossGLConverter:
                 return None
         except (SyntaxError, ValueError, TypeError):
             return None
-        return evaluate_literal_int_expression(node)
+        return evaluate_literal_int_expression(node, constants)
 
     def bind_concrete_function_template_arguments(
         self,
@@ -9669,7 +9701,9 @@ class MetalToCrossGLConverter:
         ):
             return
         rendered_value = self.substitute_local_integral_constant_text(rendered_value)
-        value = self.evaluate_value_template_constant_expression(rendered_value)
+        value = self.evaluate_value_template_constant_expression(
+            rendered_value, constants={"true": 1, "false": 0}
+        )
         if isinstance(value, int) and not isinstance(value, bool):
             self.local_integral_constant_bindings[name] = str(value)
 
@@ -9998,6 +10032,10 @@ class MetalToCrossGLConverter:
         return code
 
     def generate_if_statement(self, node, indent, is_main):
+        if any(getattr(node, "if_constexpr", ())) or any(
+            getattr(node, "else_if_constexpr", ())
+        ):
+            return self.generate_constexpr_if_statement(node, indent, is_main)
         code = ""
         if node.if_chain:
             for condition, body in node.if_chain:
@@ -10021,6 +10059,50 @@ class MetalToCrossGLConverter:
 
         code += "\n"
         return code
+
+    def generate_constexpr_if_statement(self, node, indent, is_main):
+        code = ""
+        selected = False
+        branches = []
+        for chain, flags in (
+            (node.if_chain, node.if_constexpr),
+            (node.else_if_chain, node.else_if_constexpr),
+        ):
+            branches.extend(
+                (condition, body, flags[index] if index < len(flags) else False)
+                for index, (condition, body) in enumerate(chain)
+            )
+        for condition, body, is_constexpr in branches:
+            rendered = self.generate_expression(condition, is_main)
+            if is_constexpr:
+                value = self.evaluate_value_template_constant_expression(
+                    self.substitute_local_integral_constant_text(rendered),
+                    constants={"true": 1, "false": 0},
+                )
+                if value is None:
+                    raise MetalConstexprBranchLoweringError(
+                        rendered, getattr(node, "source_location", None)
+                    )
+                if not value:
+                    continue
+                # Retain a lexical block without emitting or inspecting the
+                # discarded branch. Earlier runtime conditions still govern it.
+                prefix = " else" if code else "if (true)"
+                selected = True
+            else:
+                prefix = f"{' else if' if code else 'if'} ({rendered})"
+            code += prefix + " {\n"
+            code += self.generate_scoped_function_body(body, indent + 1, is_main)
+            code += "    " * indent + "}"
+            if selected:
+                break
+        if not selected and node.else_body:
+            code += (" else" if code else "if (true)") + " {\n"
+            code += self.generate_scoped_function_body(
+                node.else_body, indent + 1, is_main
+            )
+            code += "    " * indent + "}"
+        return code + "\n"
 
     def generate_small_vector_component_read(self, expression, info, is_main=False):
         vector = self.generate_postfix_operand(expression.array, is_main)
@@ -11249,6 +11331,69 @@ class MetalToCrossGLConverter:
 
     def metal_atomic_function_call(self, name, args, is_main, source_location=None):
         function_name = str(name).lstrip(":")
+        if function_name in {
+            "atomic_compare_exchange_weak_explicit",
+            "metal::atomic_compare_exchange_weak_explicit",
+        }:
+            if self.metal_user_function_overloads(name):
+                return None
+            error = MetalAtomicCompareExchangeLoweringError
+            if len(args) != 5:
+                raise error(
+                    "requires target, expected pointer, desired value and two memory orders",
+                    source_location,
+                )
+            for argument in args[3:]:
+                order = str(getattr(argument, "name", argument)).lstrip(":")
+                shadowed = order == "memory_order_relaxed" and (
+                    order in self.current_variable_types
+                    or order in self.global_variable_types
+                )
+                if shadowed or order not in {
+                    "memory_order_relaxed",
+                    "metal::memory_order_relaxed",
+                }:
+                    raise error(
+                        "requires memory_order_relaxed for success and failure",
+                        source_location,
+                    )
+            target_qualifiers = set(self.expression_metal_type_qualifiers(args[0]))
+            if "const" in target_qualifiers or not target_qualifiers.intersection(
+                {"device", "threadgroup"}
+            ):
+                raise error(
+                    "requires writable device or threadgroup storage", source_location
+                )
+            expected_qualifiers = set(self.expression_metal_type_qualifiers(args[1]))
+            if "const" in expected_qualifiers or "thread" not in expected_qualifiers:
+                raise error(
+                    "requires writable thread storage for expected", source_location
+                )
+            target_type = self.metal_pointer_pointee_type_once(
+                self.expression_metal_type(args[0])
+            )
+            expected_type = self.metal_pointer_pointee_type_once(
+                self.expression_metal_type(args[1])
+            )
+            if (
+                target_type is None
+                or expected_type is None
+                or self.map_type(target_type) not in {"int", "uint"}
+                or self.map_type(expected_type) != self.map_type(target_type)
+            ):
+                raise error(
+                    "requires matching scalar int or uint target and expected storage",
+                    source_location,
+                )
+            if "atomicCompareExchangeWeak" in self.user_function_names:
+                raise error(
+                    "canonical atomicCompareExchangeWeak conflicts with a source function",
+                    source_location,
+                )
+            target = self.generate_metal_atomic_target(args[0], is_main)
+            expected = self.generate_metal_atomic_target(args[1], is_main)
+            desired = self.generate_expression(args[2], is_main)
+            return f"atomicCompareExchangeWeak({target}, {expected}, {desired})"
         if function_name in {"atomic_load_explicit", "metal::atomic_load_explicit"}:
             if self.metal_user_function_overloads(name):
                 return None

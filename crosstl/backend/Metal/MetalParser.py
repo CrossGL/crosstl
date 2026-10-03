@@ -4394,21 +4394,23 @@ class MetalParser:
         return nodes
 
     def parse_if_statement(self):
+        start_token = self.current_token
         if_chain = []
         else_if_chain = []
+        if_constexpr = []
+        else_if_constexpr = []
         else_body = None
-        while self.current_token[0] == "IF":
-            self.eat("IF")
-            self.parse_optional_if_constexpr()
-            self.eat("LPAREN")
-            condition = self.parse_expression(allow_comma=True)
-            self.eat("RPAREN")
-            self.parse_control_statement_attributes()
-            body = self.parse_statement_body()
-            if_chain.append((condition, body))
+        self.eat("IF")
+        if_constexpr.append(self.parse_optional_if_constexpr())
+        self.eat("LPAREN")
+        condition = self.parse_expression(allow_comma=True)
+        self.eat("RPAREN")
+        self.parse_control_statement_attributes()
+        body = self.parse_statement_body()
+        if_chain.append((condition, body))
         while self.current_token[0] == "ELSE_IF":
             self.eat("ELSE_IF")
-            self.parse_optional_if_constexpr()
+            else_if_constexpr.append(self.parse_optional_if_constexpr())
             self.eat("LPAREN")
             condition = self.parse_expression(allow_comma=True)
             self.eat("RPAREN")
@@ -4420,15 +4422,26 @@ class MetalParser:
             self.eat("ELSE")
             else_body = self.parse_statement_body()
 
-        return IfNode(
-            if_chain=if_chain, else_if_chain=else_if_chain, else_body=else_body
+        node = IfNode(
+            if_chain=if_chain,
+            else_if_chain=else_if_chain,
+            else_body=else_body,
+            if_constexpr=if_constexpr,
+            else_if_constexpr=else_if_constexpr,
         )
+        node.source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
+        )
+        return node
 
     def parse_optional_if_constexpr(self):
         if self.current_token[0] == "CONSTEXPR":
             self.eat("CONSTEXPR")
+            return True
         elif self.current_token == ("IDENTIFIER", "IF_CONSTEXPR"):
             self.eat("IDENTIFIER")
+            return True
+        return False
 
     def parse_control_statement_attributes(self):
         self.parse_attributes()
