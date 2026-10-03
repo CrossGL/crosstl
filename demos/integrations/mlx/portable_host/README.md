@@ -238,7 +238,12 @@ untracked expected-value pointers produce diagnostics.
 The multiplication controls also exercise transitive constrained helper
 specialization and compile-time branch selection. Separate native cases check
 namespace ownership, explicit specializations, reused helpers, mixed runtime
-and compile-time branches, and discarded type-dependent expressions. These
+and compile-time branches, and discarded type-dependent expressions. Dependent
+calls with proven class arguments also retain their associated source namespaces
+after specialization, so a later helper declaration can be found without making
+unrelated namespaces or later primitive-only overloads visible. The scatter gate
+includes unchanged `Prod<int>` policies with duplicate indices, negative and zero
+factors, strided updates and partial chunks. These
 kernel-level contracts do not yet redirect MLX host product updates or implement
 packed storage. They do not establish full upstream-suite parity.
 

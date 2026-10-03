@@ -59,19 +59,17 @@ def _verify_source(root, headers):
     return hashes
 
 
-def _source(root, count):
+def _source(root, count, operation="sum"):
     contiguous, nwork = (False, 1) if count == 1 else (True, 4)
     template = re.search(
         r'scatter_kernels = R"\((.*?)\)";', (root / JIT).read_text(), re.S
     ).group(1)
-    entry = (
-        f"scatterint32int64_sum_{count}_updc_{str(contiguous).lower()}_nwork{nwork}_int"
-    )
+    entry = f"scatterint32int64_{operation}_{count}_updc_{str(contiguous).lower()}_nwork{nwork}_int"
     wrapper = template.format(
-        "int32int64_sum",
+        f"int32int64_{operation}",
         "int",
         "int64_t",
-        "Sum<int>",
+        {"sum": "Sum<int>", "prod": "Prod<int>"}[operation],
         count,
         "\n".join(
             f"const device int64_t *idx{i} [[buffer({20 + i})]]," for i in range(count)
@@ -84,8 +82,10 @@ def _source(root, count):
     return entry, "".join(f'#include "{header}"\n' for header in HEADERS) + wrapper
 
 
-def _workload(count, target="metal"):
+def _workload(count, target="metal", operation="sum"):
     updates = [-7, 3, 8, 2, -5, 4, 9, 6][: 8 if count == 1 else 7]
+    if operation == "prod":
+        updates = [-1, 2, 1, -2, -1, 2, 1, 0][: 8 if count == 1 else 7]
     columns = [2, 2, 4, 3, 2, 4, -1, -1][: len(updates)]
     rows = [0, 0, 2, 1, 0, 2, -1][: len(updates)]
     shape = [5] if count == 1 else [3, 5]
@@ -96,7 +96,11 @@ def _workload(count, target="metal"):
     for i, value in enumerate(updates):
         column = columns[i] % 5
         row = 0 if count == 1 else rows[i] % 3
-        expected[row * 5 + column] += value
+        if operation == "prod":
+            expected[row * 5 + column] *= value
+        else:
+            assert operation == "sum"
+            expected[row * 5 + column] += value
 
     def typed(dtype, values, shape=None):
         return {"dtype": dtype, "shape": shape or [len(values)], "values": values}
@@ -133,10 +137,10 @@ def _workload(count, target="metal"):
     return inputs, {**inputs["out"], "values": expected}, grid
 
 
-def _request(root, target, work, count):
-    entry, source = _source(root, count)
+def _request(root, target, work, count, operation="sum"):
+    entry, source = _source(root, count, operation)
     (work / "source.metal").write_text(source, encoding="utf-8")
-    supplied, expected, grid = _workload(count, target)
+    supplied, expected, grid = _workload(count, target, operation)
     with tempfile.TemporaryDirectory(
         prefix=".general-scatter-proof-", dir=root
     ) as temporary:
@@ -212,7 +216,24 @@ def test_general_scatter_workload_preserves_guards_and_duplicate_updates(count):
 
 
 @pytest.mark.parametrize("count", (1, 2))
-def test_pinned_general_scatter_executes_natively(tmp_path, count):
+def test_general_product_scatter_has_bounded_signed_zero_and_duplicate_updates(count):
+    supplied, expected, grid = _workload(count, operation="prod")
+    size = 5 if count == 1 else 15
+    assert expected["values"][size:] == [-12345] * 32
+    if count == 1:
+        assert expected["values"][:size] == [100, 110, 240, -260, 0]
+    else:
+        assert expected["values"][2] == 240
+        assert expected["values"][8] == -360
+        assert expected["values"][14] == 480
+    assert max(abs(value) for value in expected["values"][:size]) < 1024
+    assert len(supplied["updates"]["values"]) == (16 if count == 1 else 7)
+    assert grid == ([1, 8, 1] if count == 1 else [1, 2, 1])
+
+
+@pytest.mark.parametrize("count", (1, 2))
+@pytest.mark.parametrize("operation", ("sum", "prod"))
+def test_pinned_general_scatter_executes_natively(tmp_path, count, operation):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(
             f"set {REQUIRE_ENV}=1 for required pinned general-scatter execution"
@@ -221,7 +242,9 @@ def test_pinned_general_scatter_executes_natively(tmp_path, count):
     target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
     hashes = _verify_source(root, (*HEADERS, JIT))
     try:
-        entry, source, request, outputs = _request(root, target, tmp_path, count)
+        entry, source, request, outputs = _request(
+            root, target, tmp_path, count, operation
+        )
         (tmp_path / "workload.json").write_text(
             json.dumps(
                 {
@@ -229,7 +252,8 @@ def test_pinned_general_scatter_executes_natively(tmp_path, count):
                     "headers": hashes,
                     "entry": entry,
                     "indexCount": count,
-                    "inputs": _workload(count, target)[0],
+                    "operation": operation,
+                    "inputs": _workload(count, target, operation)[0],
                     "outputs": outputs,
                 },
                 indent=2,

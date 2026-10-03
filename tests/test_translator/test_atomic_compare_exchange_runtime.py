@@ -213,6 +213,51 @@ def test_atomic_compare_exchange_translates(tmp_path, target, kind, case):
         "opengl": "atomicCompSwap",
     }[target] in generated
     assert "atomicCompareExchangeWeak(" not in generated
+    if target == "directx" and case in {
+        "scalar",
+        "member",
+        "pointer",
+        "conditional",
+        "collision",
+    }:
+        assert "expected[slot++]" not in generated
+        assert generated.count("slot++") == 1
+        assert "expected[__crossgl_integer_index" in generated
+    tool = {"metal": "xcrun", "directx": "dxc", "opengl": "glslangValidator"}[target]
+    if shutil.which(tool):
+        _, module = _compile(generated, target, tmp_path)
+        assert module.is_file() and module.stat().st_size
+
+
+@pytest.mark.parametrize("kind", ("int", "uint"))
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+def test_compare_exchange_scalar_private_pointer_keeps_constant_zero(
+    tmp_path, target, kind
+):
+    source = f"""#include <metal_stdlib>
+    using namespace metal;
+    bool exchange(device atomic<{kind}>* values, thread {kind}* expected) {{
+        return atomic_compare_exchange_weak_explicit(values, expected, {kind}(7),
+            memory_order_relaxed, memory_order_relaxed);
+    }}
+    kernel void exchange_values(device atomic<{kind}>* values [[buffer(0)]],
+        device {kind}* results [[buffer(1)]]) {{
+        {kind} expected = {kind}(0);
+        results[0] = {kind}(exchange(values, &expected));
+        results[1] = expected;
+    }}
+    """
+    _, descriptor, package = _package(
+        tmp_path, target, kind, (1, 1, 1), source=source, software_subgroups=False
+    )
+    assert descriptor["bindings"]
+    artifacts = list(
+        (package / "artifacts").rglob(
+            {"metal": "*.metal", "directx": "*.hlsl", "opengl": "*.glsl"}[target]
+        )
+    )
+    assert len(artifacts) == 1
+    generated = artifacts[0].read_text()
     tool = {"metal": "xcrun", "directx": "dxc", "opengl": "glslangValidator"}[target]
     if shutil.which(tool):
         _, module = _compile(generated, target, tmp_path)

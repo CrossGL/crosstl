@@ -12801,7 +12801,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         value_mapped = contract["right"]["mapped_type"]
         assignments = []
         if self.hlsl_expression_has_observable_side_effects(target):
-            assignments, stable_target = self.hlsl_wide_integer_compound_lvalue(
+            assignments, stable_target = self.hlsl_stabilize_inout_lvalue(
                 node, target, target_mapped
             )
             lhs = self.generate_expression(stable_target)
@@ -12823,7 +12823,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         call = f"{name}({lhs}, {rhs})"
         return f"({', '.join([*assignments, call])})" if assignments else call
 
-    def hlsl_wide_integer_compound_lvalue(self, node, target, target_type):
+    def hlsl_stabilize_inout_lvalue(
+        self,
+        node,
+        target,
+        target_type,
+        *,
+        operation="mixed-width assignment",
+        reason="wide-integer-compound-unstable-lvalue",
+    ):
         # DXC may evaluate an indexed inout argument on both copy-in and copy-out.
         # Declare private temporaries in the function, but evaluate their values
         # in the original expression so conditional and loop execution is intact.
@@ -12831,11 +12839,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         def reject():
             raise DirectXContextualConversionError(
-                "DirectX cannot preserve the indexed mixed-width assignment "
+                f"DirectX cannot preserve the indexed {operation} "
                 "without a scalar integer index and a stable storage owner",
                 target_type=target_type,
                 source_type=self.expression_result_type(target),
-                reason="wide-integer-compound-unstable-lvalue",
+                reason=reason,
                 source_location=getattr(node, "source_location", None),
             )
 
@@ -12854,6 +12862,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 reject()
             expression.array_expr = expression.array = stabilize(expression.array)
             index = expression.index
+            if self.literal_int_value(index, {}) is not None:
+                return expression
             index_type = self.expression_result_type(index)
             info = self.hlsl_boolean_compound_type_info(index_type)
             if (
@@ -42230,11 +42240,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 name += "_"
             helper = {**storage, "name": name, "kind": kind}
             self.hlsl_expected_compare_helpers[key] = helper
+        assignments, expected = self.hlsl_stabilize_inout_lvalue(
+            args[1],
+            args[1],
+            kind,
+            operation="atomic expected-value writeback",
+            reason="atomic-expected-unstable-lvalue",
+        )
         arguments = storage["arguments"] + [
-            self.generate_expression(args[1]),
+            self.generate_expression(expected),
             self.generate_expression_with_expected(args[2], kind),
         ]
-        return f"{helper['name']}({', '.join(arguments)})"
+        call = f"{helper['name']}({', '.join(arguments)})"
+        # The explicit result type distinguishes sequencing from a constructor
+        # argument list in DXC's strict initializer diagnostics.
+        return f"bool(({', '.join([*assignments, call])}))" if assignments else call
 
     def generate_hlsl_expected_compare_helpers(self):
         code = ""

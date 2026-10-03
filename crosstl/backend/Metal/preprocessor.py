@@ -1352,6 +1352,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             return code
 
         structs = self._find_concrete_struct_definitions(code)
+        template_structs = self._find_template_structs(code)
         context = self._reachability_type_context(code, template_spans, structs)
         namespace_visibility = self._metal_namespace_visibility(code)
         boolean_templates = self._find_boolean_variable_templates(code)
@@ -1388,8 +1389,16 @@ class MetalPreprocessor(HLSLPreprocessor):
         # then stay stable, including when a new body calls an earlier helper.
         # Lookup uses the declaring template, not the appended body's position.
         dependencies = {}
-        pending_calls = [(call, call.span[0], call.span[0], None) for call in calls]
-        for call, lookup_position, instantiation_position, owner_key in pending_calls:
+        pending_calls = [
+            (call, call.span[0], call.span[0], None, False) for call in calls
+        ]
+        for (
+            call,
+            lookup_position,
+            instantiation_position,
+            owner_key,
+            dependent,
+        ) in pending_calls:
             visible_candidates = [
                 template
                 for template in by_name.get(call.name, [])
@@ -1402,18 +1411,25 @@ class MetalPreprocessor(HLSLPreprocessor):
                     None,
                 )
             ]
-            if not visible_candidates:
+            dependent_lookup = (
+                dependent
+                and self._metal_call_reference_namespace(call.qualified_name) is None
+            )
+            if not visible_candidates and not dependent_lookup:
                 continue
-
-            argument_count_candidates: List[Tuple[_MetalTemplateFunction, str]] = []
-            for template in visible_candidates:
-                parameters = self._template_function_parameter_text(template)
-                if parameters is None or not self._callable_accepts_argument_count(
+            potential_candidates = (
+                by_name.get(call.name, []) if dependent_lookup else visible_candidates
+            )
+            if not any(
+                parameters is not None
+                and self._callable_accepts_argument_count(
                     parameters, len(call.arguments)
-                ):
-                    continue
-                argument_count_candidates.append((template, parameters))
-            if not argument_count_candidates:
+                )
+                for parameters in (
+                    self._template_function_parameter_text(template)
+                    for template in potential_candidates
+                )
+            ):
                 continue
 
             buffer_view = self._flatten_types_at(
@@ -1444,6 +1460,46 @@ class MetalPreprocessor(HLSLPreprocessor):
                     "one or more call argument types could not be inferred "
                     "conservatively",
                 )
+
+            associated_namespaces = set()
+            if dependent_lookup:
+                if call.name in local_view:
+                    self._raise_constrained_free_function_error(
+                        code,
+                        call,
+                        "a local declaration hides the dependent function name",
+                    )
+                associated_namespaces = self._constrained_call_associated_namespaces(
+                    argument_types,
+                    structs,
+                    template_structs,
+                    position=lookup_position,
+                    namespace_visibility=namespace_visibility,
+                )
+                if associated_namespaces is None:
+                    self._raise_constrained_free_function_error(
+                        code,
+                        call,
+                        "argument-dependent lookup has unproven type ownership",
+                    )
+                for template in by_name.get(call.name, []):
+                    if (
+                        template.span[0] <= instantiation_position
+                        and template.namespace in associated_namespaces
+                        and template not in visible_candidates
+                    ):
+                        visible_candidates.append(template)
+
+            argument_count_candidates: List[Tuple[_MetalTemplateFunction, str]] = []
+            for template in visible_candidates:
+                parameters = self._template_function_parameter_text(template)
+                if parameters is None or not self._callable_accepts_argument_count(
+                    parameters, len(call.arguments)
+                ):
+                    continue
+                argument_count_candidates.append((template, parameters))
+            if not argument_count_candidates:
+                continue
 
             enabled: List[Tuple[_MetalTemplateFunction, Dict[str, str]]] = []
             saw_unrecognized_constraint = False
@@ -1500,7 +1556,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
 
             for declaration in competing_declarations.get(call.name, []):
-                if declaration.span[0] > lookup_position:
+                if declaration.span[0] > max(lookup_position, instantiation_position):
                     continue
                 if (
                     call.template_arguments is not None
@@ -1528,11 +1584,18 @@ class MetalPreprocessor(HLSLPreprocessor):
                     else [lexical_namespace]
                 )
                 if any(
-                    self._metal_namespace_declaration_visible(
-                        namespace,
-                        self._metal_call_reference_namespace(call.qualified_name),
-                        lookup_position,
-                        namespace_visibility,
+                    (
+                        declaration.span[0] <= lookup_position
+                        and self._metal_namespace_declaration_visible(
+                            namespace,
+                            self._metal_call_reference_namespace(call.qualified_name),
+                            lookup_position,
+                            namespace_visibility,
+                        )
+                    )
+                    or (
+                        declaration.span[0] <= instantiation_position
+                        and namespace in associated_namespaces
                     )
                     for namespace in namespaces
                 ):
@@ -1655,6 +1718,15 @@ class MetalPreprocessor(HLSLPreprocessor):
                     if specialization is not None
                     else template.body_start
                 )
+                dependent_parameters = {
+                    name
+                    for name, declared_type in zip(
+                        self._parameter_identifier_names(parameters),
+                        self._parameter_declared_types(parameters),
+                    )
+                    if set(IDENTIFIER_RE.findall(declared_type))
+                    & set(template.template_parameters)
+                }
                 for nested in self._find_static_constexpr_calls(code, set(by_name)):
                     if nested.span[0] <= materialization_start + body_start:
                         continue
@@ -1663,7 +1735,18 @@ class MetalPreprocessor(HLSLPreprocessor):
                     ):
                         continue
                     pending_calls.append(
-                        (nested, owner_position, instantiation_position, key)
+                        (
+                            nested,
+                            owner_position,
+                            instantiation_position,
+                            key,
+                            specialization is None
+                            and any(
+                                self._strip_enclosing_parens(argument.strip())
+                                in dependent_parameters
+                                for argument in nested.arguments
+                            ),
+                        )
                     )
 
             replacements.append((call.span[0], call.argument_open, specialized_name))
@@ -1673,6 +1756,107 @@ class MetalPreprocessor(HLSLPreprocessor):
         replacements.extend((start, end, "") for start, end in handled_template_spans)
         resolved = self._apply_text_replacements(code, replacements)
         return resolved
+
+    def _constrained_call_associated_namespaces(
+        self,
+        argument_types: Sequence[str],
+        structs: Sequence[_MetalStructDefinition],
+        template_structs: Sequence[_MetalTemplateStruct],
+        *,
+        position: int,
+        namespace_visibility: _MetalNamespaceVisibility,
+    ) -> Optional[Set[str]]:
+        """Prove namespaces for concrete class arguments of a dependent call.
+
+        Relocated specializations retain their source namespace and type arguments.
+        Primitive arguments contribute nothing; unresolved owners and inheritance
+        cannot safely yield a partial overload set.
+        """
+        namespaces: Set[str] = set()
+        pending = list(argument_types)
+        visited = set()
+        while pending:
+            raw_type = pending.pop()
+            type_name = self._normalize_inferred_type(raw_type).rstrip("*& ")
+            if type_name in visited:
+                continue
+            visited.add(type_name)
+            if len(visited) > 256:
+                return None
+            if type_name in self._METAL_SCALAR_VECTOR_TYPES or type_name == "void":
+                continue
+            specialization = self._materialized_struct_specializations.get(type_name)
+            primary = None
+            if specialization is not None:
+                primary = self._materialized_struct_primary_templates.get(type_name)
+                arguments = list(specialization[1])
+            else:
+                template_id = self._exact_template_type_id(type_name)
+                if template_id is not None:
+                    name, arguments = template_id
+                    candidates = [
+                        template
+                        for template in template_structs
+                        if self._template_struct_specialization_arguments(template)
+                        is None
+                        and (
+                            (
+                                f"{template.namespace}::{template.name}"
+                                if template.namespace
+                                else template.name
+                            )
+                            == name.lstrip(":")
+                            or (
+                                name == template.name
+                                and self._metal_namespace_declaration_visible(
+                                    template.namespace,
+                                    None,
+                                    position,
+                                    namespace_visibility,
+                                )
+                            )
+                        )
+                    ]
+                    if len(candidates) != 1:
+                        return None
+                    primary = candidates[0]
+                    arguments = self._template_arguments_with_resolved_defaults(
+                        primary, arguments
+                    )
+                    if arguments is None:
+                        return None
+            if primary is not None:
+                if primary.variadic_template_parameters:
+                    return None
+                body_start = self._find_next_top_level_char(primary.source, 0, "{")
+                if body_start is None or re.search(
+                    r"(?<!:):(?!:)", primary.source[:body_start]
+                ):
+                    return None
+                namespaces.add(primary.namespace)
+                for parameter, argument in zip(primary.template_parameters, arguments):
+                    if not primary.template_parameter_types.get(parameter):
+                        pending.append(argument)
+                continue
+            candidates = [
+                struct
+                for struct in structs
+                if (struct.qualified_name or struct.name).lstrip(":")
+                == type_name.lstrip(":")
+                or (
+                    struct.name == type_name
+                    and self._metal_namespace_declaration_visible(
+                        self._struct_namespace(struct),
+                        None,
+                        position,
+                        namespace_visibility,
+                    )
+                )
+            ]
+            if len(candidates) != 1 or candidates[0].base_clause:
+                return None
+            namespaces.add(self._struct_namespace(candidates[0]))
+        return namespaces
 
     def _prune_unreferenced_materialized_function_templates(self, code: str) -> str:
         """Drop an instantiated primary only after all raw references are gone.
