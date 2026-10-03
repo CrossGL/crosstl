@@ -65,6 +65,18 @@ def _local_action_text(name):
     return path.read_text(encoding="utf-8")
 
 
+def test_mlx_gather_checkout_preserves_pinned_source_bytes():
+    workflow = (WORKFLOW_DIR / "mlx-gather-roundtrip.yml").read_text(encoding="utf-8")
+    ci_coverage = _load_ci_coverage_module()
+    for target in ("metal", "directx", "opengl"):
+        job = _workflow_job_section(workflow, target)
+        step = ci_coverage.workflow_step_section(job, "Checkout pinned upstream MLX")
+        initialization = step.index("git init mlx-upstream")
+        configuration = step.index("git -C mlx-upstream config core.autocrlf false")
+        checkout = step.index("git -C mlx-upstream checkout --detach FETCH_HEAD")
+        assert initialization < configuration < checkout
+
+
 def _load_ci_coverage_module():
     spec = importlib.util.spec_from_file_location("ci_coverage", CI_COVERAGE_SCRIPT)
     module = importlib.util.module_from_spec(spec)
