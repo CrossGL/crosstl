@@ -806,6 +806,22 @@ translation report and compiled module. It does not establish numerical
 correctness of the full backward kernel or add that operation to the MLX host
 adapter. OpenGL floating-point atomic lowering remains outstanding.
 
+Float atomic load/store checks require native execution on Metal and DirectX,
+including the unchanged pinned `mlx_atomic_load_explicit<float>` and
+`mlx_atomic_store_explicit<float>` helpers. Twenty-four reduced cases cover
+buffer fields, pointer offsets, resource aggregates, shared memory, nested calls,
+conditional operands and returned stores. Raw binary32 words preserve signed
+zeros, subnormals, infinities and NaN payloads; readbacks also check address/value
+evaluation counts, untouched inputs and buffer guards. Original Metal wrappers
+execute alongside generated Metal. DirectX loads use a non-modifying bitwise
+compare/exchange and stores use exchange, not floating-point addition by zero.
+Required Windows execution is separate from DXC compilation. OpenGL rejects
+these float-storage operations explicitly until their physical storage and
+toolchain contracts are implemented. These tests do not establish float
+compare-exchange support or complete MLX atomic/runtime parity.
+Two additional native controls check fractional float addition and exchange
+through resource aggregates, preserving old values and both resource bindings.
+
 ## Required Evidence
 
 The verifier checks the pin, reconstructs the five adapted files from the pinned

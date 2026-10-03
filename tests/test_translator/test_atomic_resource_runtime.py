@@ -202,7 +202,7 @@ def test_resource_atomics_execute_natively(tmp_path, scalar, case):
 
 
 @pytest.mark.parametrize("target", ("directx", "opengl"))
-@pytest.mark.parametrize("failure", ("readonly", "member-array", "float"))
+@pytest.mark.parametrize("failure", ("readonly", "member-array", "float-minimum"))
 def test_resource_atomics_reject_unsupported_destinations(tmp_path, target, failure):
     source = _source("add", "int")
     if failure == "readonly":
@@ -212,7 +212,7 @@ def test_resource_atomics_reject_unsupported_destinations(tmp_path, target, fail
             ".value,", ".value[index & 1],"
         )
     else:
-        source = source.replace("atomic_int value;", "atomic_float value;")
+        source = _source("min", "float")
     (tmp_path / "source.metal").write_text(source)
     report = translate_project(
         ProjectConfig(

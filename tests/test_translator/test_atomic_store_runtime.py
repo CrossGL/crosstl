@@ -241,7 +241,7 @@ def test_local_memory_order_name_is_not_treated_as_a_builtin(tmp_path, target):
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
 def test_unsupported_atomic_store_type_does_not_publish_a_noop(tmp_path, target):
-    (tmp_path / "store.metal").write_text(_source("float", "member"), encoding="utf-8")
+    (tmp_path / "store.metal").write_text(_source("ulong", "member"), encoding="utf-8")
     report = translate_project(
         ProjectConfig(
             root=tmp_path,

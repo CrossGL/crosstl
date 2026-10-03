@@ -11899,7 +11899,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         result = ""
         for line in lines:
-            terminator = "" if line.endswith((";", "}")) else ";"
+            terminator = "" if line.endswith((";", "{", "}")) else ";"
             result += f"{indent_str}{line}{terminator}\n"
         return result
 
@@ -24278,7 +24278,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             source_type,
         )
 
-    def generate_hlsl_bitcast_call(self, func_name, args):
+    def generate_hlsl_bitcast_call(self, func_name, args, *, argument_code=None):
         if (
             not func_name
             or func_name in getattr(self, "function_return_types", {})
@@ -24291,7 +24291,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if target_type is None:
             return None
         argument = args[0]
-        argument_code = self.generate_expression_with_expected(argument, None)
+        if argument_code is None:
+            argument_code = self.generate_expression_with_expected(argument, None)
         source_type = self.expression_result_type(argument)
         if func_name == "asuint" and self.is_hlsl_bfloat16_type(source_type):
             self.require_hlsl_bfloat16_helper("to_uint16")
@@ -42300,6 +42301,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         key = (
             func_name,
             storage["resource_type"],
+            storage.get("root"),
             tuple(storage["index_types"]),
             storage["suffix"],
         )
@@ -42326,27 +42328,58 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def generate_hlsl_float_atomic_helpers(self):
         code = ""
         for helper in self.hlsl_float_atomic_helpers.values():
-            parameters = [f"{helper['resource_type']} storage"]
+            roles = [
+                "storage",
+                "value",
+                "original",
+                "observed",
+                "expected",
+                "desired",
+            ] + [f"index{i}" for i in range(len(helper["index_types"]))]
+            prefix = ""
+            if not helper["resource_type"]:
+                while any(
+                    prefix + role in self.hlsl_float_atomic_reserved_names
+                    for role in roles
+                ):
+                    prefix += "__crossgl_float_"
+            names = {role: prefix + role for role in roles}
+            parameters = (
+                [f"{helper['resource_type']} {names['storage']}"]
+                if helper["resource_type"]
+                else []
+            )
             parameters.extend(
-                f"{kind} index{index}"
+                f"{kind} {names[f'index{index}']}"
                 for index, kind in enumerate(helper["index_types"])
             )
-            parameters.extend(["float value", "out float original"])
-            target = f"storage{helper['suffix']}"
+            if helper["operation"] != "atomicLoad":
+                parameters.append(f"float {names['value']}")
+            parameters.append(f"out float {names['original']}")
+            root = names["storage"] if helper["resource_type"] else helper["root"]
+            suffix = helper["suffix"]
+            for index in range(len(helper["index_types"])):
+                suffix = suffix.replace(
+                    f"[index{index}]", f"[{names[f'index{index}']}]"
+                )
+            target = f"{root}{suffix}"
             code += f"void {helper['name']}({', '.join(parameters)}) {{\n"
-            if helper["operation"] == "atomicExchange":
-                code += f"    InterlockedExchange({target}, value, original);\n"
+            if helper["operation"] == "atomicLoad":
+                # Equal compare/replacement bits make this a non-modifying atomic read.
+                code += f"    InterlockedCompareExchangeFloatBitwise({target}, 0.0f, 0.0f, {names['original']});\n"
+            elif helper["operation"] in {"atomicExchange", "atomicStore"}:
+                code += f"    InterlockedExchange({target}, {names['value']}, {names['original']});\n"
             else:
                 code += (
-                    "    float observed;\n"
-                    f"    InterlockedCompareExchangeFloatBitwise({target}, 0.0f, 0.0f, observed);\n"
+                    f"    float {names['observed']};\n"
+                    f"    InterlockedCompareExchangeFloatBitwise({target}, 0.0f, 0.0f, {names['observed']});\n"
                     "    [allow_uav_condition]\n"
                     "    while (true) {\n"
-                    "        float expected = observed;\n"
-                    "        precise float desired = expected + value;\n"
-                    f"        InterlockedCompareExchangeFloatBitwise({target}, expected, desired, observed);\n"
-                    "        if (asuint(observed) == asuint(expected)) {\n"
-                    "            original = expected;\n"
+                    f"        float {names['expected']} = {names['observed']};\n"
+                    f"        precise float {names['desired']} = {names['expected']} + {names['value']};\n"
+                    f"        InterlockedCompareExchangeFloatBitwise({target}, {names['expected']}, {names['desired']}, {names['observed']});\n"
+                    f"        if (asuint({names['observed']}) == asuint({names['expected']})) {{\n"
+                    f"            {names['original']} = {names['expected']};\n"
                     "            return;\n"
                     "        }\n"
                     "    }\n"
@@ -42354,7 +42387,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             code += "}\n\n"
         return code
 
-    def hlsl_typed_buffer_atomic_parts(self, func_name, args):
+    def hlsl_typed_buffer_atomic_parts(self, func_name, args, *, render_operands=True):
         operation_info = self.hlsl_typed_buffer_atomic_operations().get(func_name)
         if (
             operation_info is None
@@ -42400,6 +42433,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         target_type = self.expression_result_type(target)
         target_kind = self.scalar_expression_kind(target)
         float_atomic = self.map_type(target_type) == "float" and func_name in {
+            "atomicLoad",
+            "atomicStore",
             "atomicAdd",
             "atomicExchange",
         }
@@ -42423,25 +42458,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"must be scalar {target_kind}, got {value_kind}"
             )
 
-        rendered_target = self.generate_expression(
-            self.hlsl_typed_buffer_atomic_lvalue(target)
-        )
-        target_args = [rendered_target]
-        if float_atomic:
-            storage = self.hlsl_buffer_atomic_storage(target)
-            if storage is None:
-                raise ValueError(
-                    "DirectX float atomic requires a writable typed buffer element"
-                )
-            intrinsic = self.hlsl_float_atomic_helper(func_name, storage)
-            target_args = storage["arguments"]
-        rendered_values = [
-            self.generate_expression_with_expected(value_arg, target_type)
-            for value_arg in value_args
-        ]
-        if func_name == "atomicLoad":
-            # An unchanged-value RMW supplies an atomic read without a plain load.
-            rendered_values = ["0u" if target_kind == "uint" else "0"]
         original_arg = args[min_args] if len(args) > min_args else None
         if original_arg is not None:
             original_kind = self.scalar_expression_kind(original_arg)
@@ -42461,16 +42477,49 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     f"DirectX typed buffer atomic '{func_name}' original "
                     f"argument must be an assignable scalar {target_kind} target"
                 )
-        return {
+        parts = {
             "func_name": func_name,
             "intrinsic": intrinsic,
-            "target": rendered_target,
-            "target_args": target_args,
             "float_atomic": float_atomic,
-            "values": rendered_values,
             "target_type": target_type,
             "target_kind": target_kind,
             "original_arg": original_arg,
+        }
+        # Discovery must not render operands: a nested atomic needs its own
+        # statement context before the containing call can be emitted.
+        if not render_operands:
+            return parts
+        rendered_target = self.generate_expression(
+            self.hlsl_typed_buffer_atomic_lvalue(target)
+        )
+        target_args = [rendered_target]
+        if float_atomic:
+            storage = self.hlsl_buffer_atomic_storage(
+                target, allow_workgroup=func_name in {"atomicLoad", "atomicStore"}
+            )
+            if storage is None:
+                raise ValueError(
+                    "DirectX float atomic requires a writable typed buffer element"
+                )
+            parts["intrinsic"] = self.hlsl_float_atomic_helper(func_name, storage)
+            target_args = storage["arguments"]
+        code = ""
+        rendered_values = []
+        for value_arg in value_args:
+            value_code, value = self.render_hlsl_typed_buffer_atomic_value_expression(
+                value_arg, target_type, 0
+            )
+            code += value_code
+            rendered_values.append(value)
+        if func_name == "atomicLoad" and not float_atomic:
+            # An unchanged-value RMW supplies an atomic read without a plain load.
+            rendered_values = ["0u" if target_kind == "uint" else "0"]
+        return {
+            **parts,
+            "target": rendered_target,
+            "target_args": target_args,
+            "values": rendered_values,
+            "code": code,
         }
 
     def validate_hlsl_typed_buffer_atomic_result_context(self, parts, expected_type):
@@ -42565,7 +42614,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         call_args = [*parts["target_args"], *parts["values"]]
         if original is not None:
             call_args.append(original)
-            return f"{parts['intrinsic']}({', '.join(call_args)})"
+            return parts["code"] + f"{parts['intrinsic']}({', '.join(call_args)})"
 
         if (
             parts["intrinsic"]
@@ -42579,9 +42628,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             temp_name = self.next_hlsl_temp_variable("atomic_original")
             call_args.append(temp_name)
             return (
-                f"{temp_type} {temp_name}\n{parts['intrinsic']}({', '.join(call_args)})"
+                parts["code"]
+                + f"{temp_type} {temp_name}\n{parts['intrinsic']}({', '.join(call_args)})"
             )
-        return f"{parts['intrinsic']}({', '.join(call_args)})"
+        return parts["code"] + f"{parts['intrinsic']}({', '.join(call_args)})"
 
     def generate_hlsl_typed_buffer_atomic_return(self, expr, indent=0):
         if not (
@@ -42608,7 +42658,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             original = self.next_hlsl_temp_variable("atomic_discarded")
             call_args.append(original)
             return (
-                f"{indent_str}{self.map_type(parts['target_type'])} {original};\n"
+                self.generate_statement_code(parts["code"], indent)
+                + f"{indent_str}{self.map_type(parts['target_type'])} {original};\n"
                 f"{indent_str}{parts['intrinsic']}({', '.join(call_args)});\n"
                 f"{indent_str}return;\n"
             )
@@ -42627,7 +42678,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         call_args = [*parts["target_args"], *parts["values"], original]
         indent_str = "    " * indent
-        code = ""
+        code = self.generate_statement_code(parts["code"], indent)
         if declaration:
             code += f"{indent_str}{declaration}"
         code += f"{indent_str}{parts['intrinsic']}({', '.join(call_args)});\n"
@@ -43177,7 +43228,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if not isinstance(func_name, str):
                 continue
             args = getattr(node, "arguments", getattr(node, "args", []))
-            if self.hlsl_typed_buffer_atomic_parts(func_name, args) is not None:
+            if (
+                self.hlsl_typed_buffer_atomic_parts(
+                    func_name, args, render_operands=False
+                )
+                is not None
+            ):
                 return True
         return False
 
@@ -43209,12 +43265,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.validate_hlsl_typed_buffer_atomic_result_context(parts, expected_type)
         original_arg = parts["original_arg"]
         indent_str = "    " * indent
+        code = self.generate_statement_code(parts["code"], indent)
         if original_arg is not None:
             original = self.generate_expression(original_arg)
-            code = ""
         else:
             original = self.next_hlsl_temp_variable("atomic_expr")
-            code = f"{indent_str}{self.map_type(parts['target_type'])} {original};\n"
+            code += f"{indent_str}{self.map_type(parts['target_type'])} {original};\n"
 
         call_args = [*parts["target_args"], *parts["values"], original]
         code += f"{indent_str}{parts['intrinsic']}({', '.join(call_args)});\n"
@@ -44283,6 +44339,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         return code, f"{callee}({', '.join(call_args)})"
 
                 if (
+                    func_name in self.HLSL_BITCAST_FUNCTION_TARGETS
+                    and func_name not in self.function_return_types
+                    and len(args) == 1
+                ):
+                    code, value = self.render_hlsl_typed_buffer_atomic_value_expression(
+                        args[0], self.expression_result_type(args[0]), indent
+                    )
+                    bitcast = self.generate_hlsl_bitcast_call(
+                        func_name, args, argument_code=value
+                    )
+                    if bitcast is not None:
+                        return code, bitcast
+
+                if (
                     func_name in {"sqrt", "abs", "floor", "ceil", "round", "trunc"}
                     and len(args) == 1
                 ):
@@ -44397,6 +44467,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and self.hlsl_typed_buffer_atomic_parts(
                 self.function_call_name(value),
                 getattr(value, "arguments", getattr(value, "args", [])),
+                render_operands=False,
             )
             is not None
         ):
@@ -44572,6 +44643,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     call_args = [*parts["target_args"], *parts["values"], original]
                     return (
                         [
+                            *parts["code"].splitlines(),
                             *declaration,
                             f"{parts['intrinsic']}({', '.join(call_args)})",
                         ],
@@ -44659,7 +44731,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and func_name not in self.function_return_types
         ):
             return self.generate_hlsl_expected_compare_call(args)
-        parts = self.hlsl_typed_buffer_atomic_parts(func_name, args)
+        parts = self.hlsl_typed_buffer_atomic_parts(
+            func_name, args, render_operands=False
+        )
         if parts is None:
             return None
         raise ValueError(

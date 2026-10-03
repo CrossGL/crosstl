@@ -544,7 +544,11 @@ class _Lowering:
         element = PrimitiveType(pointer.element)
         for member in members:
             element = self.fields.get(_name(element), {}).get(member)
-        if _name(element) not in {"int", "uint"}:
+        if _name(element) not in {"int", "uint"} and not (
+            _name(element) == "float"
+            and operation
+            in {"atomicLoad", "atomicStore", "atomicAdd", "atomicExchange"}
+        ):
             raise ResourceAggregateError("atomic-resource-element", node)
         key = pointer, operation, tuple(members)
         name = self.helpers.get(key)
@@ -908,6 +912,31 @@ class _Lowering:
 
     def run(self):
         self.discover(self.entry)
+        # A changed resource-aggregate type cannot retain an unlowered helper ABI.
+        # Prune only unreachable resource helpers; unrelated global initializers
+        # may still refer to ordinary value functions outside the entry closure.
+        unused = {
+            id(function)
+            for overloads in self.functions.values()
+            for function in overloads
+            if id(function) not in self.reachable
+            and any(
+                self.contains_reference(type_)
+                for type_ in [
+                    *self.parameter_types[id(function)],
+                    self.returns[id(function)],
+                ]
+            )
+        }
+        self.ast.functions = [
+            function for function in self.ast.functions if id(function) not in unused
+        ]
+        for stage in self.ast.stages.values():
+            stage.local_functions = [
+                function
+                for function in stage.local_functions
+                if id(function) not in unused
+            ]
         for struct in self.structs.values():
             for member in struct.members:
                 member.member_type = self.target_type(

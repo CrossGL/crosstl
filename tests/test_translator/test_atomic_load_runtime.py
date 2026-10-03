@@ -262,7 +262,7 @@ def test_atomic_load_shadowed_order_is_not_a_builtin(tmp_path, target):
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
 def test_unsupported_atomic_load_type_does_not_publish_a_noop(tmp_path, target):
-    report = _report(tmp_path, _source("float", "member"), target)
+    report = _report(tmp_path, _source("ulong", "member"), target)
     assert report["summary"]["translatedCount"] == 0
     assert report["summary"]["failedCount"] == 1
     assert any(

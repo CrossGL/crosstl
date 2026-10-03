@@ -90,6 +90,7 @@ jobs:
               --basetemp=.mlx-gather-opengl/pytest \
               --junitxml=.mlx-gather-opengl/results.xml \
               tests/test_translator/test_mlx_general_gather_opengl.py \
+              tests/test_translator/test_float_atomic_memory.py \
               tests/test_translator/test_resource_aggregates_opengl.py \
               tests/test_translator/test_void_return_effects.py \
               tests/test_translator/test_template_wrapper_runtime.py \
@@ -142,6 +143,7 @@ jobs:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_REQUIRE_MLX_GENERAL_GATHER: "1"
           CROSTL_REQUIRE_METAL_EMPTY_ARRAYS: "1"
+          CROSTL_REQUIRE_FLOAT_ATOMIC_MEMORY: "1"
           CROSTL_REQUIRE_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
           CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
@@ -166,6 +168,8 @@ jobs:
               --junitxml=.mlx-gather/results.xml \
               tests/test_translator/test_mlx_general_gather.py \
               tests/test_translator/test_metal_empty_arrays.py \
+              tests/test_translator/test_float_atomic_memory.py \
+              tests/test_translator/test_mlx_float_atomic_memory.py \
               tests/test_translator/test_resource_aggregates.py \
               tests/test_translator/test_void_return_effects.py \
               tests/test_translator/test_template_wrapper_runtime.py \
@@ -250,6 +254,7 @@ jobs:
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_REQUIRE_MLX_DIRECTX_GENERAL_GATHER: "1"
+          CROSTL_REQUIRE_FLOAT_ATOMIC_MEMORY: "1"
           CROSTL_REQUIRE_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
           CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
@@ -273,6 +278,8 @@ jobs:
               --basetemp=.mlx-gather-directx/pytest \
               --junitxml=.mlx-gather-directx/results.xml \
               tests/test_translator/test_mlx_general_gather_directx.py \
+              tests/test_translator/test_float_atomic_memory.py \
+              tests/test_translator/test_mlx_float_atomic_memory.py \
               tests/test_translator/test_resource_aggregates.py \
               tests/test_translator/test_void_return_effects.py \
               tests/test_translator/test_template_wrapper_runtime.py \

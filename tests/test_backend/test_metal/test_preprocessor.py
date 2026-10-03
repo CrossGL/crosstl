@@ -12268,6 +12268,102 @@ def test_infer_argument_type_preserves_member_array_layers(
     )
 
 
+@pytest.mark.parametrize("operator", ("++", "--"))
+@pytest.mark.parametrize("kind", ("int", "uint", "short", "ulong", "float", "half"))
+def test_infer_argument_type_scalar_postfix_updates(kind, operator):
+    assert (
+        MetalPreprocessor()._infer_argument_type(
+            f"(value {operator})", {}, {"value": kind}
+        )
+        == kind
+    )
+
+
+@pytest.mark.parametrize(
+    "kind", ("Counter", "uint2", "bool", "const int", "device int*", "")
+)
+def test_infer_argument_type_postfix_does_not_guess_overloads(kind):
+    assert (
+        MetalPreprocessor()._infer_argument_type("value++", {}, {"value": kind}) is None
+    )
+
+
+def test_inferred_postfix_retains_const_declaration_provenance():
+    from crosstl.backend.Metal.preprocessor import _MetalAddressableValueType
+
+    declared = _MetalAddressableValueType("uint", "const thread uint*")
+    assert (
+        MetalPreprocessor()._infer_argument_type("value++", {}, {"value": declared})
+        is None
+    )
+
+
+def test_constrained_scalar_postfix_argument_retains_single_update():
+    output = MetalPreprocessor().preprocess("""#include <metal_stdlib>
+    using namespace metal;
+    template<typename T, enable_if_t<is_integral_v<T>, bool> = true>
+    T take(T value) { return value; }
+    kernel void k(device uint* output [[buffer(0)]]) {
+        uint index = 3u;
+        output[0] = take(index++);
+        output[1] = index;
+    }
+    """)
+    assert "take_uint(index++)" in output
+    assert output.count("index++") == 1
+
+
+@pytest.mark.parametrize("qualifier", ("", "metal::"))
+@pytest.mark.parametrize("kind", ("float", "uint", "float2", "half4"))
+def test_infer_argument_type_builtin_bitcast_result(qualifier, kind):
+    assert (
+        MetalPreprocessor()._infer_argument_type(
+            f"{qualifier}as_type<{kind}>(input[index++])", {}, {}
+        )
+        == kind
+    )
+
+
+@pytest.mark.parametrize(
+    "expression",
+    (
+        "as_type<float>()",
+        "as_type<float>(x, y)",
+        "as_type<Unknown>(x)",
+        "as_type<float>(x) + 1",
+        "other::as_type<float>(x)",
+    ),
+)
+def test_infer_argument_type_bitcast_requires_exact_builtin_call(expression):
+    assert MetalPreprocessor()._infer_argument_type(expression, {}, {}) is None
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    (
+        "template<typename T> uint as_type(uint value) { return value; }",
+        "template<typename T> uint as_type(uint value);",
+        "uint as_type(uint value);",
+        "namespace custom { template<typename T> uint as_type(uint value); }",
+    ),
+)
+def test_inferred_bitcast_respects_source_declarations_and_reuse(declaration):
+    pp = MetalPreprocessor()
+    pp._configure_inferred_bitcast_ownership(declaration)
+    assert (
+        pp._infer_argument_type("as_type<float>(value)", {}, {"value": "uint"}) is None
+    )
+    pp._configure_inferred_bitcast_ownership("kernel void k() {}")
+    assert (
+        pp._infer_argument_type("as_type<float>(value)", {}, {"value": "uint"})
+        == "float"
+    )
+    assert (
+        pp._infer_argument_type("as_type<float>(value)", {}, {"as_type": "Custom"})
+        is None
+    )
+
+
 def test_infer_argument_type_builtin_vector_swizzle():
     pp = MetalPreprocessor()
     locals_ = {"dims": "short2", "color": "const float4"}

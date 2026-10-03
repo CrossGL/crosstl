@@ -21473,7 +21473,8 @@ class MetalCodeGen:
     @staticmethod
     def buffer_atomic_supports_scalar_type(operation, component_type):
         return component_type in {"int", "uint"} or (
-            component_type == "float" and operation in {"fetch_add", "exchange"}
+            component_type == "float"
+            and operation in {"load", "store", "fetch_add", "exchange"}
         )
 
     def glsl_buffer_block_atomic_access(self, target):

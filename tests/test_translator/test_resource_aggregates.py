@@ -338,6 +338,32 @@ def test_resource_lowering_retains_source_ast_and_is_deterministic(tmp_path):
     assert pickle.dumps(ast) == original
 
 
+@pytest.mark.parametrize("stage_local", (False, True))
+def test_resource_lowering_removes_only_unreachable_resource_signatures(stage_local):
+    ast = parse("""shader ResourceHelpers {
+        struct Cursor { device int* data; }
+        int read(Cursor cursor, uint index) { return cursor.data[index]; }
+        void unused(Cursor cursor, uint index) { cursor.data[index] = 0; }
+        int ordinary(int value) { return value + 1; }
+        compute { void main(RWStructuredBuffer<int> values @buffer(0),
+                            RWStructuredBuffer<int> results @buffer(1)) {
+            Cursor cursor = Cursor(values);
+            results[0] = read(cursor, 0u);
+        } }
+    }""")
+    stage = next(iter(ast.stages.values()))
+    if stage_local:
+        stage.local_functions.extend(ast.functions)
+        ast.functions = []
+    before = pickle.dumps(ast)
+    lowered = lower_resource_aggregates(ast)
+    names = {f.name for f in lowered.functions}
+    names.update(f.name for s in lowered.stages.values() for f in s.local_functions)
+    assert "unused" not in names
+    assert {"read", "ordinary"} <= names
+    assert pickle.dumps(ast) == before
+
+
 @pytest.mark.parametrize(
     "operation",
     ["local-reference", "reference-return", "address", "cast", "reinterpret"],

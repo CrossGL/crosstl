@@ -900,6 +900,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             {}
         )
         self._known_member_function_return_types: Dict[str, str] = {}
+        self._inferred_bitcast_shadowed = False
         self._instantiated_template_member_calls: Dict[
             str,
             Tuple[
@@ -964,6 +965,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._static_constexpr_helper_resolution_stack = []
         code = self._strip_leading_compiler_diagnostics(code)
         processed = super().preprocess(code, file_path=file_path)
+        self._configure_inferred_bitcast_ownership(processed)
         self._configure_integral_constant_contracts(processed)
         processed = self._materialize_project_template_instantiations(processed)
         # Concrete helper bodies must exist while their receiver's methods are
@@ -20415,6 +20417,24 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _is_metal_scalar_or_vector_type(self, type_text: str) -> bool:
         return self._scalar_and_width(type_text) is not None
 
+    def _configure_inferred_bitcast_ownership(self, code: str) -> None:
+        references = self._find_static_constexpr_calls(code, {"as_type"})
+        self._inferred_bitcast_shadowed = False
+        if not references:
+            return
+        template_spans = self._find_template_declaration_spans(code)
+        functions = self._find_non_template_function_definitions(code, template_spans)
+        templates = self._find_template_functions(code)
+        declarations = self._find_free_function_overload_declarations(
+            code,
+            references,
+            excluded_spans=[f.body_span for f in functions]
+            + [(t.body_start, t.span[1]) for t in templates],
+            template_spans=template_spans,
+            namespace_visibility=self._metal_namespace_visibility(code),
+        )
+        self._inferred_bitcast_shadowed = bool(declarations)
+
     def _infer_argument_type(
         self,
         argument: str,
@@ -20441,6 +20461,43 @@ class MetalPreprocessor(HLSLPreprocessor):
             expr = expr[1:-1].strip()
             if not expr:
                 return None
+
+        # Built-in scalar postfix updates retain the declared value type. Keep
+        # the source expression unchanged so specialization does not consume or
+        # duplicate its mutation; user-defined update operators remain unresolved.
+        postfix = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:\+\+|--)", expr)
+        if postfix is not None:
+            declared = local_variable_types.get(postfix.group(1), "")
+            if re.search(
+                r"\bconst\b", getattr(declared, "pointer_type", None) or declared
+            ):
+                return None
+            normalized = self._normalize_inferred_expression_type(declared)
+            scalar = self._scalar_and_width(normalized or "")
+            if scalar is not None and scalar[1] == 1 and scalar[0] != "bool":
+                return normalized
+            return None
+
+        bitcast = re.match(
+            r"(?:metal\s*::\s*)?as_type\s*<([A-Za-z_][A-Za-z0-9_]*)>\s*\(", expr
+        )
+        if bitcast is not None:
+            if (
+                self._inferred_bitcast_shadowed
+                or "as_type" in local_variable_types
+                or "as_type" in buffer_element_types
+            ):
+                return None
+            target = self._normalize_inferred_expression_type(bitcast.group(1))
+            start = bitcast.end() - 1
+            end = self._find_matching_delimiter(expr, start, "(", ")")
+            if end == len(expr) - 1 and self._is_metal_scalar_or_vector_type(
+                target or ""
+            ):
+                arguments = self._split_top_level_commas(expr[start + 1 : end])
+                if len(arguments) == 1 and arguments[0].strip():
+                    return target
+            return None
 
         # Address-of requires declaration provenance, whether a local value or
         # a buffer/array element. Value-only type records cannot prove storage.

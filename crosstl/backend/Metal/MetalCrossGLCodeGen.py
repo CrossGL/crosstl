@@ -11422,9 +11422,14 @@ class MetalToCrossGLConverter:
             pointee = self.metal_pointer_pointee_type_once(
                 self.expression_metal_type(args[0])
             )
-            if pointee is None or self.map_type(pointee) not in {"int", "uint"}:
+            if pointee is None or self.map_type(pointee) not in {
+                "int",
+                "uint",
+                "float",
+            }:
                 raise MetalAtomicLoadLoweringError(
-                    "requires a scalar int or uint atomic target", source_location
+                    "requires a scalar int, uint or float atomic target",
+                    source_location,
                 )
             if "atomicLoad" in self.user_function_names:
                 raise MetalAtomicLoadLoweringError(
