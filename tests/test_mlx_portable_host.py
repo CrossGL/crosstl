@@ -42,6 +42,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "Gather",
                     "GatherAxis",
                     "ScatterAxis",
+                    "Scatter",
                     "Power",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,

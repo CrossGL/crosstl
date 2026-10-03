@@ -1093,6 +1093,117 @@ void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
 }
 
+void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() < 3 || inputs.size() > 12 || axes_.size() != inputs.size() - 2 ||
+      (out.dtype() != int32 && out.dtype() != uint32) ||
+      inputs[0].dtype() != out.dtype() || inputs.back().dtype() != out.dtype() ||
+      inputs[0].shape() != out.shape() || out.ndim() == 0 || out.ndim() > 64 ||
+      out.size() > 65535 || inputs.back().size() > 65535 ||
+      (reduce_type_ != None && reduce_type_ != Sum && reduce_type_ != Min && reduce_type_ != Max)) {
+    throw std::invalid_argument("CrossTL scatter requires bounded int32 or uint32 indexed updates.");
+  }
+  const auto index_dtype = inputs[1].dtype();
+  if (index_dtype != int32 && index_dtype != uint32 &&
+      index_dtype != int64 && index_dtype != uint64) {
+    throw std::invalid_argument("CrossTL scatter requires 32-bit or 64-bit integer indices.");
+  }
+  const int32_t index_rank = static_cast<int32_t>(inputs[1].ndim());
+  if (index_rank > 64 || inputs.back().ndim() > 64 ||
+      inputs.back().ndim() != index_rank + out.ndim() || inputs[1].size() > 65535) {
+    throw std::invalid_argument("CrossTL scatter update and index ranks do not match.");
+  }
+  for (size_t i = 0; i < axes_.size(); ++i) {
+    if (axes_[i] < 0 || axes_[i] >= out.ndim() ||
+        inputs[i + 1].dtype() != index_dtype || inputs[i + 1].shape() != inputs[1].shape()) {
+      throw std::invalid_argument("CrossTL scatter indices require matching shapes and types.");
+    }
+  }
+  // Copy before updating so aliased source and update views remain unchanged.
+  dispatch_copy(inputs[0], out);
+  if (inputs.back().size() == 0) {
+    return;
+  }
+  if (!out.size()) {
+    throw std::invalid_argument("CrossTL scatter cannot update an empty output.");
+  }
+  auto upd = gather_input(inputs.back());
+  const auto update_span = gather_span(upd);
+  uint64_t idx_size = inputs[1].size(), upd_ndim = upd.ndim(), out_ndim = out.ndim();
+  uint64_t upd_size = 1;
+  for (size_t i = index_rank; i < upd.ndim(); ++i) {
+    upd_size *= upd.shape(i);
+  }
+  const auto ratio = idx_size / out.size();
+  const int work = index_rank <= 1 || ratio < 1 ? 1 :
+      ratio <= 4 ? 4 : ratio < 16 ? 8 : ratio < 32 ? 16 : 32;
+  const char* operation = reduce_type_ == None ? "none" :
+      reduce_type_ == Sum ? "sum" : reduce_type_ == Min ? "min" : "max";
+  const auto count = axes_.size();
+  const std::string entry = std::string("scatter") + storage_type(out.dtype()) +
+      storage_type(index_dtype) + "_" + operation + "_" + std::to_string(count) +
+      "_updc_" + (upd.flags().row_contiguous ? "true" : "false") +
+      "_nwork" + std::to_string(work) + "_int";
+  require_entry(entry);
+  std::vector<array> indices;
+  std::vector<uint64_t> spans;
+  std::vector<int32_t> shapes;
+  std::vector<int64_t> strides;
+  std::vector<uint8_t> contiguous;
+  std::vector<std::string> names;
+  for (size_t i = 0; i < count; ++i) {
+    indices.push_back(gather_input(inputs[i + 1]));
+    spans.push_back(gather_span(indices.back()));
+    shapes.insert(shapes.end(), indices.back().shape().begin(), indices.back().shape().end());
+    strides.insert(strides.end(), indices.back().strides().begin(), indices.back().strides().end());
+    contiguous.push_back(indices.back().flags().row_contiguous);
+    names.push_back("idx" + std::to_string(i));
+  }
+  if (index_rank == 0) {
+    shapes.push_back(0);
+    strides.push_back(0);
+    contiguous.push_back(false);
+  }
+  std::vector<int32_t> update_shape(upd.shape().begin(), upd.shape().end());
+  std::vector<int64_t> update_strides(upd.strides().begin(), upd.strides().end());
+  std::vector<int32_t> output_shape(out.shape().begin(), out.shape().end());
+  std::vector<int64_t> output_strides(out.strides().begin(), out.strides().end());
+  std::vector<int32_t> axes(axes_.begin(), axes_.end());
+  int32_t idx_ndim = index_rank;
+  std::vector<CrosstlMlxBuffer> buffers = {
+      {"updates", storage_type(upd.dtype()), const_cast<void*>(upd.data<void>()), update_span, 0},
+      {"out", storage_type(out.dtype()), out.data<void>(), out.size(), 1},
+      {"upd_shape", "int32", update_shape.data(), update_shape.size(), 0},
+      {"upd_strides", "int64", update_strides.data(), update_strides.size(), 0},
+      {"upd_ndim", "uint64", &upd_ndim, 1, 0},
+      {"upd_size", "uint64", &upd_size, 1, 0},
+      {"out_shape", "int32", output_shape.data(), output_shape.size(), 0},
+      {"out_strides", "int64", output_strides.data(), output_strides.size(), 0},
+      {"out_ndim", "uint64", &out_ndim, 1, 0},
+      {"axes", "int32", axes.data(), count, 0},
+      {"idx_shapes", "int32", shapes.data(), shapes.size(), 0},
+      {"idx_strides", "int64", strides.data(), strides.size(), 0},
+      {"idx_contigs", "bool_", contiguous.data(), contiguous.size(), 0},
+      {"idx_ndim", "int32", &idx_ndim, 1, 0},
+      {"idx_size", "uint64", &idx_size, 1, 0},
+  };
+  for (size_t i = 0; i < count; ++i) {
+    buffers.push_back({names[i].c_str(), storage_type(index_dtype),
+                      const_cast<void*>(indices[i].data<void>()), spans[i], 0});
+  }
+  const CrosstlMlxLaunch launch{
+      {static_cast<uint32_t>(upd_size), static_cast<uint32_t>((idx_size + work - 1) / work), 1},
+      {1, 1, 1}};
+  char error[2048] = {};
+  const int status = dispatch_callback.load()(
+      entry.c_str(), buffers.data(), static_cast<uint32_t>(buffers.size()),
+      out.size(), &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native scatter failed: ") + error);
+  }
+}
+
 void ScatterAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   if (inputs.size() != 3 || (out.dtype() != int32 && out.dtype() != uint32) ||

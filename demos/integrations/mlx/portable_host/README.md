@@ -160,6 +160,59 @@ allocations and full indexing/autodiff coverage are not claimed.
 These workloads and the additional upstream test do not establish full-suite
 or complete-backend parity.
 
+## General Scatter
+
+General-scatter translation preserves pointer address spaces when offsets use
+scalar structure members ([#2053](https://github.com/CrossGL/crosstl/issues/2053))
+and resolves constrained integer minimum/maximum helpers without selecting
+unrelated float specializations
+([#2052](https://github.com/CrossGL/crosstl/issues/2052)). Unsupported pointer
+calls fail translation instead of replacing their computation with zero.
+Compiler acceptance alone does not establish numerical correctness: the required
+verifier retains every operation and fails on unsupported or incorrect results.
+
+The adapter implements indexed `Scatter::eval_gpu` for int32 and uint32
+replacement, addition, minimum and maximum. It translates the exact pinned JIT
+wrapper and `indexing/scatter.h`; the upstream kernels and Python tests remain
+unchanged. Indexed assignment and `array.at` updates reach this path through
+MLX's normal primitive selection.
+
+The source is copied by a translated GPU kernel before updates, preserving
+source views and updates that alias them. Index arrays may use signed or unsigned
+32-bit or 64-bit storage. One through ten index arrays, scalar indices,
+noncontiguous and broadcast updates, negative indices and repeated destinations
+are supported within the existing 65,535-element storage and rank-64 bounds.
+Negative storage strides are materialized by translated copies. Output slice
+bounds, index values, buffer spans and contiguity are checked before translation
+or native submission. The host supplies the unchanged fifteen metadata/data
+bindings plus each index buffer, and preserves upstream work-per-thread selection
+of 1, 4, 8, 16 or 32 and its partial final chunk. Independent invocations use
+one-thread workgroups; atomic updates still synchronize accesses to shared output
+storage. This synchronous schedule is not a performance claim.
+
+```sh
+python -m demos.integrations.mlx.portable_host.verify_scatter \
+  --mlx-root mlx-upstream --packages host-packages \
+  --integer64 integer64-packages --output-dir scatter-evidence
+```
+
+The verifier runs 112 workloads and unchanged upstream
+`test_array.TestArray.test_setitem_with_list` in separate CPU and generated-backend
+processes. Retained evidence includes initial output storage, update and index
+uploads, metadata, launch geometry, native compilation, readbacks and 32 trailing
+guard elements. The audit reconstructs each indexed update from those uploads
+and reconciles it with the public MLX result. Duplicate replacements use identical
+values so the expected result does not assume a particular thread ordering.
+A separate three-OS CI job requires this proof without extending the existing
+indexing job's execution budget.
+
+Product updates, float and packed storage, zero-index specializations, larger
+allocations and the complete upstream indexing/autodiff suite remain unsupported.
+In particular, the full `test_array_at` method also needs random generation,
+floating-point atomics and product updates; passing the list-index assignment
+test does not establish that broader coverage. No output is computed or corrected
+on the CPU by this adapter.
+
 ## Axis Scatter
 
 `ScatterAxis::eval_gpu` dispatches the unchanged pinned

@@ -15,6 +15,7 @@ from demos.integrations.mlx.portable_host import (
     gather_axis_layout,
     gather_layout,
     scatter_axis_layout,
+    scatter_layout,
 )
 
 
@@ -76,16 +77,19 @@ def dispatch(host, entry, buffers, count, threads, launch):
         raise ValueError(
             "Gather dispatch requires the pinned source root and launch geometry"
         )
-    scatter = entry.startswith("scatter_axis")
-    axis = entry.startswith("gather_axis") or scatter
+    scatter = entry.startswith("scatter")
+    scatter_axis = entry.startswith("scatter_axis")
+    axis = entry.startswith("gather_axis") or scatter_axis
     layout_module = (
         scatter_axis_layout
-        if scatter
-        else gather_axis_layout if axis else gather_layout
+        if scatter_axis
+        else (
+            scatter_layout if scatter else gather_axis_layout if axis else gather_layout
+        )
     )
     parameters = layout_module.signature(entry)
     dtype, indices = parameters[0], parameters[2]
-    if count != (11 if axis else 11 + indices) or not buffers:
+    if count != (11 if axis else (15 if scatter else 11) + indices) or not buffers:
         raise ValueError("Native gather buffer count does not match its entry")
     supplied = {}
     for i in range(count):

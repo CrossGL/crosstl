@@ -22,6 +22,7 @@ from demos.integrations.mlx.portable_host import (
     gather_axis_layout,
     gather_layout,
     scatter_axis_layout,
+    scatter_layout,
 )
 from demos.integrations.mlx.portable_host.gather_layout import MAX_ELEMENTS
 from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
@@ -40,11 +41,45 @@ SOURCE_TYPES = {
 def signature(entry):
     if entry.startswith("scatter_axis"):
         return scatter_axis_layout.signature(entry)
+    if entry.startswith("scatter"):
+        return scatter_layout.signature(entry)
     layout = gather_axis_layout if entry.startswith("gather_axis") else gather_layout
     return layout.signature(entry)
 
 
 def source(root, entry):
+    if entry.startswith("scatter") and not entry.startswith("scatter_axis"):
+        dtype, index_dtype, count, operation, contiguous, work = signature(entry)
+        template = re.search(
+            r'scatter_kernels = R"\((.*?)\)";', (root / JIT_HEADER).read_text(), re.S
+        )
+        if template is None:
+            raise ValueError("Pinned general-scatter JIT definition is missing")
+        kind = SOURCE_TYPES[index_dtype]
+        arguments = "\n".join(
+            f"const device {kind}* idx{i} [[buffer({20 + i})]]," for i in range(count)
+        )
+        wrapper = template.group(1).format(
+            dtype + index_dtype + "_" + operation,
+            SOURCE_TYPES[dtype],
+            kind,
+            (
+                "None"
+                if operation == "none"
+                else f"{operation.title()}<{SOURCE_TYPES[dtype]}>"
+            ),
+            count,
+            arguments,
+            ", ".join(f"idx{i}" for i in range(count)),
+            str(contiguous).lower(),
+            work,
+            "int",
+        )
+        return (
+            '#include "mlx/backend/metal/kernels/utils.h"\n'
+            '#include "mlx/backend/metal/kernels/reduce_utils.h"\n'
+            '#include "mlx/backend/metal/kernels/indexing/scatter.h"\n' + wrapper
+        )
     if entry.startswith("scatter_axis"):
         dtype, index_dtype, operation, update_contiguous, index_contiguous = signature(
             entry

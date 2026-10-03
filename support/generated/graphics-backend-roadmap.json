@@ -1414,6 +1414,8 @@
             "tests/test_translator/test_resource_aggregates.py::def test_resource_aggregate_compiles",
             "tests/test_translator/test_resource_aggregates.py::def test_resource_aggregate_executes_natively",
             "tests/test_translator/test_resource_aggregates.py::def test_resource_aggregate_rejects_unproven_operations",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_project_preserves_pointer_offset_calls",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_pointer_offsets_execute_natively",
             "tests/test_translator/test_mlx_general_gather_directx.py::def test_indexed_general_gather_executes_natively"
           ],
           "notes": "Selected compute entries lower private constant/device pointer-bearing aggregates to resource identity and signed element offsets, including nested owners, fixed pointer arrays, copies, rebasing and helper calls. Native Windows controls are required. External aggregate buffer layouts, thread/workgroup pointer fields, pointer identity operations and unproven escapes remain unsupported; this is not full MLX host integration.",
@@ -1421,7 +1423,10 @@
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_struct"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_struct",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_pointer_arithmetic_uses_only_pointer_storage",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_project_rejects_incompatible_pointer_call_without_artifact",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_pointer_offsets_execute_natively"
           ],
           "notes": "",
           "status": "supported"
@@ -1435,6 +1440,8 @@
             "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_partial_aggregate_executes_on_vulkan",
             "tests/test_translator/test_resource_aggregates_opengl.py::def test_opengl_resource_aggregate_executes_natively",
             "tests/test_translator/test_resource_aggregates_opengl.py::def test_opengl_resource_aggregate_requires_index_range_proof",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_project_preserves_pointer_offset_calls",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_pointer_offsets_execute_natively",
             "tests/test_translator/test_mlx_general_gather_opengl.py::def test_opengl_indexed_general_gather_executes_natively"
           ],
           "notes": "OpenGL lowers struct declarations, member access, initialization, and return values. Contextual braced initializers preserve trailing value initialization recursively through nested structs, fixed arrays, and vectors; Metal-materialized partial vector constructors count supplied scalar and vector components and append type-correct zeros without repeating expression evaluation. Selected compute entries lower private storage-pointer aggregates through resource identities and signed offsets, specializing helpers against concrete buffer bindings. Final subscripts require proven ranges or explicit index-range assertions; external aggregate layouts and unproven escapes remain unsupported. Generated-code validation and required native compute controls exercise this bounded contract, not full MLX host integration.",
@@ -3757,6 +3764,12 @@
             "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_audit_rejects_corrupt_native_evidence",
             "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_requires_complete_workload_traces",
             "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_ci_requires_native_execution_on_all_targets",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_validates_workload_allocations_and_launch",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_rejects_invalid_layout_before_translation",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_preserves_initialized_output_and_guards_writeback",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_audit_rejects_corrupt_execution_evidence",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_requires_complete_workload_and_upstream_traces",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_ci_requires_separate_three_os_host_execution",
             "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_preserves_all_workload_layouts",
             "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_rejects_invalid_layout_before_dispatch",
             "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_audit_reconstructs_outputs_and_rejects_corruption",
@@ -3802,6 +3815,12 @@
             "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_audit_rejects_corrupt_native_evidence",
             "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_requires_complete_workload_traces",
             "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_ci_requires_native_execution_on_all_targets",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_validates_workload_allocations_and_launch",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_rejects_invalid_layout_before_translation",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_preserves_initialized_output_and_guards_writeback",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_audit_rejects_corrupt_execution_evidence",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_requires_complete_workload_and_upstream_traces",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_ci_requires_separate_three_os_host_execution",
             "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_preserves_all_workload_layouts",
             "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_rejects_invalid_layout_before_dispatch",
             "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_audit_reconstructs_outputs_and_rejects_corruption",
@@ -3831,6 +3850,12 @@
             "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_audit_rejects_corrupt_native_evidence",
             "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_requires_complete_workload_traces",
             "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_ci_requires_native_execution_on_all_targets",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_validates_workload_allocations_and_launch",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_rejects_invalid_layout_before_translation",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_preserves_initialized_output_and_guards_writeback",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_audit_rejects_corrupt_execution_evidence",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_requires_complete_workload_and_upstream_traces",
+            "tests/test_mlx_portable_scatter.py::def test_scatter_ci_requires_separate_three_os_host_execution",
             "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_preserves_all_workload_layouts",
             "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_rejects_invalid_layout_before_dispatch",
             "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_audit_reconstructs_outputs_and_rejects_corruption",
