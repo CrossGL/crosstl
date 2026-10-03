@@ -41992,6 +41992,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def hlsl_typed_buffer_atomic_operations(self):
         return {
+            "atomicStore": ("InterlockedExchange", 1),
             "atomicAdd": ("InterlockedAdd", 1),
             "atomicMin": ("InterlockedMin", 1),
             "atomicMax": ("InterlockedMax", 1),
@@ -42233,6 +42234,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         target = args[0]
         resource_type = self.hlsl_typed_buffer_atomic_target_resource_type(target)
         if resource_type is None:
+            shared = self.hlsl_static_workgroup_pointer_binding(
+                target, self.current_hlsl_resource_pointer_aliases
+            )
+            if shared is not None:
+                resource_type = "groupshared"
+        if resource_type is None:
             readonly_resource_type = self.hlsl_typed_buffer_atomic_target_resource_type(
                 target, {"Buffer", "StructuredBuffer"}
             )
@@ -42246,6 +42253,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         intrinsic, value_arg_count = operation_info
         min_args = 1 + value_arg_count
         max_args = min_args + 1
+        if func_name == "atomicStore":
+            max_args = min_args
         if not min_args <= len(args) <= max_args:
             raise ValueError(
                 f"DirectX typed buffer atomic '{func_name}' requires "
@@ -42294,7 +42303,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.generate_expression_with_expected(value_arg, target_type)
             for value_arg in value_args
         ]
-        original_arg = args[max_args - 1] if len(args) == max_args else None
+        original_arg = args[min_args] if len(args) > min_args else None
         if original_arg is not None:
             original_kind = self.scalar_expression_kind(original_arg)
             if original_kind != target_kind:
@@ -42326,6 +42335,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
 
     def validate_hlsl_typed_buffer_atomic_result_context(self, parts, expected_type):
+        if parts["func_name"] == "atomicStore":
+            raise ValueError("DirectX atomicStore does not return a value")
         expected_label = self.hlsl_atomic_result_expected_label(expected_type)
         if expected_label is None:
             return
@@ -42417,7 +42428,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             call_args.append(original)
             return f"{parts['intrinsic']}({', '.join(call_args)})"
 
-        if parts["intrinsic"] == "InterlockedCompareExchange" or parts["float_atomic"]:
+        if (
+            parts["intrinsic"]
+            in {
+                "InterlockedCompareExchange",
+                "InterlockedExchange",
+            }
+            or parts["float_atomic"]
+        ):
             temp_type = self.map_type(parts["target_type"])
             temp_name = self.next_hlsl_temp_variable("atomic_original")
             call_args.append(temp_name)
@@ -42442,6 +42460,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         parts = self.hlsl_typed_buffer_atomic_parts(func_name, args)
         if parts is None:
             return None
+
+        if func_name == "atomicStore":
+            if self.map_type(self.current_function_return_type) != "void":
+                raise ValueError("DirectX atomicStore does not return a value")
+            call_args = [*parts["target_args"], *parts["values"]]
+            indent_str = "    " * indent
+            original = self.next_hlsl_temp_variable("atomic_discarded")
+            call_args.append(original)
+            return (
+                f"{indent_str}{self.map_type(parts['target_type'])} {original};\n"
+                f"{indent_str}{parts['intrinsic']}({', '.join(call_args)});\n"
+                f"{indent_str}return;\n"
+            )
 
         original_arg = parts["original_arg"]
         self.validate_hlsl_typed_buffer_atomic_result_context(
@@ -44302,6 +44333,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def generate_hlsl_typed_buffer_atomic_return_from_expression(self, expr, indent):
+        if (
+            isinstance(expr, FunctionCallNode)
+            and self.function_call_name(expr) == "atomicStore"
+        ):
+            store_return = self.generate_hlsl_typed_buffer_atomic_return(expr, indent)
+            if store_return is not None:
+                return store_return
         if self.hlsl_typed_buffer_atomic_ternary_expression(expr):
             condition = getattr(expr, "condition", "")
             true_expr = getattr(expr, "true_expr", "")

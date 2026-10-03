@@ -682,6 +682,21 @@ class MetalAtomicFenceLoweringError(ValueError):
         )
 
 
+class MetalAtomicStoreLoweringError(ValueError):
+    """Raised when an atomic store's ordering cannot be preserved."""
+
+    project_diagnostic_code = "project.translate.metal-atomic-store-unsupported"
+    missing_capabilities = ("metal.atomic-store-contract-lowering",)
+
+    def __init__(self, reason, source_location=None):
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(
+            "Cannot lower Metal atomic_store_explicit without changing its "
+            f"semantics: {reason}"
+        )
+
+
 class MetalToCrossGLConverter:
     """Serialize Metal backend AST nodes back into CrossGL source."""
 
@@ -10627,7 +10642,9 @@ class MetalToCrossGLConverter:
             )
             if sync_call is not None:
                 return sync_call
-            atomic_call = self.metal_atomic_function_call(expr.name, expr.args, is_main)
+            atomic_call = self.metal_atomic_function_call(
+                expr.name, expr.args, is_main, getattr(expr, "source_location", None)
+            )
             if atomic_call is not None:
                 return atomic_call
             callback = next(
@@ -11215,7 +11232,32 @@ class MetalToCrossGLConverter:
             return f"({rendered})"
         return rendered
 
-    def metal_atomic_function_call(self, name, args, is_main):
+    def metal_atomic_function_call(self, name, args, is_main, source_location=None):
+        function_name = str(name).lstrip(":")
+        if function_name in {"atomic_store_explicit", "metal::atomic_store_explicit"}:
+            if self.metal_user_function_overloads(name):
+                return None
+            if len(args) != 3:
+                raise MetalAtomicStoreLoweringError(
+                    "requires a target, value and explicit memory order",
+                    source_location,
+                )
+            order = str(getattr(args[2], "name", args[2])).lstrip(":")
+            shadowed_order = order == "memory_order_relaxed" and (
+                order in self.current_variable_types
+                or order in self.global_variable_types
+            )
+            if shadowed_order or order not in {
+                "memory_order_relaxed",
+                "metal::memory_order_relaxed",
+            }:
+                raise MetalAtomicStoreLoweringError(
+                    "only memory_order_relaxed has a portable store contract",
+                    source_location,
+                )
+            target = self.generate_metal_atomic_target(args[0], is_main)
+            value = self.generate_expression(args[1], is_main)
+            return f"atomicStore({target}, {value})"
         unscoped_name = str(name).split("::")[-1]
         mapped = self.metal_atomic_intrinsics.get(unscoped_name)
         if mapped is None or unscoped_name in self.user_function_names:
@@ -11236,6 +11278,8 @@ class MetalToCrossGLConverter:
         # which the DirectX typed-buffer-atomic lowering does not recognise).
         if isinstance(expr, UnaryOpNode) and getattr(expr, "op", None) == "&":
             expr = expr.operand
+        elif self.metal_pointer_pointee_type_once(self.expression_metal_type(expr)):
+            expr = ArrayAccessNode(expr, 0)
         if self.is_structured_buffer_element_access(expr):
             buffer = self.generate_without_structured_buffer_index_lowering(
                 expr.array, is_main

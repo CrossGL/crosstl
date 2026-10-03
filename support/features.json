@@ -4411,6 +4411,11 @@
           "notes": "barrier/workgroupBarrier lower to GroupMemoryBarrierWithGroupSync; memoryBarrier lowers to AllMemoryBarrier; user-defined functions with the same names are preserved.",
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_translates",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_executes_natively",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_order_is_not_silently_weakened",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_unsupported_atomic_store_type_does_not_publish_a_noop",
+            "tests/test_translator/test_mlx_scatter_axis_runtime.py::def test_pinned_scatter_axis_executes_natively",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_user_defined_synchronization_names_are_not_lowered",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_hlsl_compute_synchronization_compiles_with_dxc"
           ]
@@ -4420,6 +4425,11 @@
           "notes": "workgroupBarrier lowers to GLSL barrier; barrier and memoryBarrier remain native; user-defined workgroupBarrier functions are preserved.",
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_workgroup_barrier_builtin_lowers_to_native_barrier",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_translates",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_executes_natively",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_order_is_not_silently_weakened",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_unsupported_atomic_store_type_does_not_publish_a_noop",
+            "tests/test_translator/test_mlx_scatter_axis_runtime.py::def test_pinned_scatter_axis_executes_natively",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_user_defined_workgroup_barrier_is_not_lowered",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_glsl_compute_synchronization_validates_with_glslangvalidator"
           ]
@@ -4429,6 +4439,11 @@
           "notes": "barrier/workgroupBarrier, groupMemoryBarrier, and memoryBarrierShared lower to threadgroup barriers; memoryBarrier, memoryBarrierBuffer, and deviceMemoryBarrier lower to device-memory barriers; memoryBarrierImage lowers to a texture-memory barrier; allMemoryBarrier lowers to combined device/threadgroup/texture flags; threadgroup atomic arrays and GLSL buffer-block atomic compare helpers use address-form atomic operations across helper/kernel barrier ordering; atomic compare-exchange lowers target and expected-value address forms to toolchain-compatible Metal intrinsics, with deterministic diagnostics for unsupported expected-pointer address spaces; user-defined functions with the same names are preserved.",
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_synchronization_builtins_lower_to_threadgroup_barriers",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_translates",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_executes_natively",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_order_is_not_silently_weakened",
+            "tests/test_translator/test_atomic_store_runtime.py::def test_unsupported_atomic_store_type_does_not_publish_a_noop",
+            "tests/test_translator/test_mlx_scatter_axis_runtime.py::def test_pinned_scatter_axis_executes_natively",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_threadgroup_array_helpers_preserve_address_space_and_barriers",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_threadgroup_atomic_array_elements_use_address_arguments",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_atomic_compare_exchange_addresses_targets_and_expected_values",

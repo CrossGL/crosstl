@@ -2225,6 +2225,7 @@ class GLSLCodeGen:
         "triangles": "uvec3",
     }
     GLSL_MEMORY_ATOMIC_FUNCTIONS = {
+        "atomicStore",
         "atomicAdd",
         "atomicMin",
         "atomicMax",
@@ -38891,6 +38892,10 @@ complex64_t crossgl_complex64_mod_assign(
     def generate_glsl_memory_atomic_call(self, func_name, args):
         if func_name not in self.GLSL_MEMORY_ATOMIC_FUNCTIONS or not args:
             return None
+        if func_name in self.function_return_types:
+            return None
+        if func_name == "atomicStore" and len(args) != 2:
+            raise ValueError("OpenGL atomicStore requires a target and value")
 
         self.validate_glsl_buffer_block_atomic_call(func_name, args)
 
@@ -38920,6 +38925,8 @@ complex64_t crossgl_complex64_mod_assign(
                 self.map_type(target_type) if target_type is not None else None
             )
             target_expression = self.generate_expression(args[0])
+        if func_name == "atomicStore" and target_type not in {"int", "uint"}:
+            raise ValueError("OpenGL atomicStore requires a scalar int or uint target")
         rendered_args = [target_expression]
         value_arg_ids = {
             id(value_arg)
@@ -38936,7 +38943,8 @@ complex64_t crossgl_complex64_mod_assign(
             else:
                 rendered_args.append(self.generate_expression(arg))
 
-        return f"{func_name}({', '.join(rendered_args)})"
+        native_name = "atomicExchange" if func_name == "atomicStore" else func_name
+        return f"{native_name}({', '.join(rendered_args)})"
 
     def generate_glsl_memory_atomic_value_argument(self, arg, target_type):
         value_type = self.glsl_buffer_block_atomic_argument_type(arg)

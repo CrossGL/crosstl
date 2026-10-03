@@ -13439,6 +13439,8 @@ class MetalCodeGen:
         )
 
     def unsupported_metal_buffer_resource_atomic_call(self, func_name, target, reason):
+        if func_name == "atomicStore":
+            raise ValueError(f"Metal atomicStore {reason}")
         return_type = (
             self.expression_result_type(target) or self.current_expression_expected_type
         )
@@ -21399,6 +21401,7 @@ class MetalCodeGen:
 
     def buffer_atomic_operations(self):
         return {
+            "atomicStore": ("store", 2),
             "atomicAdd": ("fetch_add", 2),
             "atomicMin": ("fetch_min", 2),
             "atomicMax": ("fetch_max", 2),

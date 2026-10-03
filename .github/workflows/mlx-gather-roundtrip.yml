@@ -67,6 +67,8 @@ jobs:
           CROSTL_REQUIRE_OPENGL_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
           CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
+          CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
+          CROSTL_REQUIRE_MLX_SCATTER_AXIS: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
@@ -81,6 +83,8 @@ jobs:
               tests/test_translator/test_resource_aggregates_opengl.py \
               tests/test_translator/test_void_return_effects.py \
               tests/test_translator/test_template_wrapper_runtime.py \
+              tests/test_translator/test_atomic_store_runtime.py \
+              tests/test_translator/test_mlx_scatter_axis_runtime.py \
               2>&1 | tee .mlx-gather-opengl/execution.log
       - name: Retain OpenGL execution evidence
         if: always()
@@ -119,6 +123,8 @@ jobs:
           CROSTL_REQUIRE_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
           CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
+          CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
+          CROSTL_REQUIRE_MLX_SCATTER_AXIS: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
         run: |
           set -euo pipefail
@@ -132,6 +138,8 @@ jobs:
               tests/test_translator/test_resource_aggregates.py \
               tests/test_translator/test_void_return_effects.py \
               tests/test_translator/test_template_wrapper_runtime.py \
+              tests/test_translator/test_atomic_store_runtime.py \
+              tests/test_translator/test_mlx_scatter_axis_runtime.py \
               2>&1 | tee .mlx-gather/execution.log
       - name: Retain original and translated execution evidence
         if: always()
@@ -202,6 +210,8 @@ jobs:
           CROSTL_REQUIRE_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
           CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
+          CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
+          CROSTL_REQUIRE_MLX_SCATTER_AXIS: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
         run: |
           set -euo pipefail
@@ -214,6 +224,8 @@ jobs:
               tests/test_translator/test_resource_aggregates.py \
               tests/test_translator/test_void_return_effects.py \
               tests/test_translator/test_template_wrapper_runtime.py \
+              tests/test_translator/test_atomic_store_runtime.py \
+              tests/test_translator/test_mlx_scatter_axis_runtime.py \
               2>&1 | tee .mlx-gather-directx/execution.log
       - name: Retain DirectX execution evidence
         if: always()
