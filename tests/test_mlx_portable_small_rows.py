@@ -8,7 +8,9 @@ import re
 import struct
 import sys
 from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
@@ -336,27 +338,7 @@ def test_small_row_host_dispatch_checks_before_writeback(
             assert len(record["details"]["regions"]) == 2
 
 
-@pytest.mark.parametrize(
-    "fault",
-    [
-        None,
-        "missing",
-        "count",
-        "result",
-        "input",
-        "dtype",
-        "shape",
-        "modified-input",
-        "input-flag",
-        "version",
-        "guard",
-        "rounded",
-        "groups",
-        "entry",
-        "template-rank",
-    ],
-)
-def test_small_row_evidence_rejects_incomplete_or_changed_results(fault):
+def small_row_evidence():
     import numpy as np
 
     records, trace = [], []
@@ -414,6 +396,31 @@ def test_small_row_evidence_rejects_incomplete_or_changed_results(fault):
             }
         )
     assert len(records) == 34
+    return records, trace
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "missing",
+        "count",
+        "result",
+        "input",
+        "dtype",
+        "shape",
+        "modified-input",
+        "input-flag",
+        "version",
+        "guard",
+        "rounded",
+        "groups",
+        "entry",
+        "template-rank",
+    ],
+)
+def test_small_row_evidence_rejects_incomplete_or_changed_results(fault):
+    records, trace = small_row_evidence()
     if fault == "missing":
         records.pop()
     elif fault == "count":
@@ -447,6 +454,178 @@ def test_small_row_evidence_rejects_incomplete_or_changed_results(fault):
             verify_small_rows.validate(records, trace, native=True)
     else:
         verify_small_rows.validate(records, trace, native=True)
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 8])
+def test_small_row_partitions_preserve_every_workload_once(count):
+    expected = list(verify_small_rows.cases())
+    partitions = [
+        verify_small_rows.selected_cases(index, count) for index in range(count)
+    ]
+    assert all(partitions)
+    ids = [case["id"] for partition in partitions for case in partition]
+    assert len(ids) == len(set(ids)) == len(expected) == 34
+    assert set(ids) == {case["id"] for case in expected}
+    for index, partition in enumerate(partitions):
+        assert partition == [
+            case
+            for position, case in enumerate(expected)
+            if (position // 2) % count == index
+        ]
+
+
+@pytest.mark.parametrize(
+    "index,count",
+    [(-1, 2), (2, 2), (True, 2), (0.0, 2), (0, 0), (0, 9), (0, True), (0, 2.0)],
+)
+def test_small_row_partitions_reject_invalid_bounds(index, count):
+    with pytest.raises(ValueError, match="partition"):
+        verify_small_rows.selected_cases(index, count)
+
+
+@pytest.mark.parametrize("count", [2, 3, 8])
+@pytest.mark.parametrize(
+    "fault", [None, "missing", "duplicate", "wrong-shard", "result", "guard", "trace"]
+)
+def test_small_row_partition_merge_checks_complete_evidence(tmp_path, count, fault):
+    records, trace = small_row_evidence()
+    shards, events = [], []
+    for index in range(count):
+        positions = [
+            position
+            for position in range(len(records))
+            if (position // 2) % count == index
+        ]
+        shards.append([deepcopy(records[position]) for position in positions])
+        events.append([deepcopy(trace[position]) for position in positions])
+    if fault == "missing":
+        shards[-1].pop()
+        events[-1].pop()
+    elif fault == "duplicate":
+        shards[0][1] = deepcopy(shards[0][0])
+    elif fault == "wrong-shard":
+        shards[0], shards[1] = shards[1], shards[0]
+        events[0], events[1] = events[1], events[0]
+    elif fault == "result":
+        shards[-1][-1]["actual"] = []
+    elif fault == "guard":
+        events[-1][-1]["reductionGuardValues"] = [0] * 32
+    elif fault == "trace":
+        events[-1].pop()
+    for index, values in enumerate(events):
+        destination = tmp_path / f"native-{index}"
+        destination.mkdir()
+        (destination / "dispatch.jsonl").write_text(
+            "".join(json.dumps(event) + "\n" for event in values)
+        )
+    if fault:
+        with pytest.raises(ValueError):
+            verify_small_rows.merge_native_shards(tmp_path, shards)
+        assert not (tmp_path / "native").exists()
+    else:
+        assert verify_small_rows.merge_native_shards(tmp_path, shards) == records
+        assert json.loads((tmp_path / "native/results.json").read_text()) == records
+        assert [
+            json.loads(line)
+            for line in (tmp_path / "native/dispatch.jsonl").read_text().splitlines()
+        ] == trace
+    assert all(
+        (tmp_path / f"native-{index}/dispatch.jsonl").is_file()
+        for index in range(count)
+    )
+
+
+@pytest.mark.parametrize("jobs", [2, 3])
+@pytest.mark.parametrize("failure", [False, True])
+def test_small_row_parallel_workers_retain_deadlines_and_all_evidence(
+    tmp_path, monkeypatch, jobs, failure
+):
+    args = SimpleNamespace(
+        output_dir=tmp_path / "evidence",
+        packages=tmp_path / "packages",
+        mlx_root=tmp_path / "source",
+        jobs=jobs,
+    )
+    args.packages.mkdir()
+    (args.packages / "index.json").write_text(json.dumps({"target": "metal"}))
+    records, trace = small_row_evidence()
+    for event in trace:
+        event["artifact"] = {"id": event["entry"]}
+    barrier = Barrier(jobs)
+    finished = []
+
+    def execute(command, **kwargs):
+        mode = command[command.index("--worker") + 1]
+        assert Path(command[1]).name == "run_bounded_command.py"
+        assert command[command.index("--timeout-seconds") + 1] == (
+            "180" if mode == "cpu" else "3600"
+        )
+        assert kwargs["check"] is False
+        destination = Path(command[command.index("--output-dir") + 1])
+        destination.mkdir()
+        if mode == "cpu":
+            assert "--shard-count" not in command
+            values = deepcopy(records)
+            for record in values:
+                record["dispatchCount"] = 0
+            status = 0
+        else:
+            index = int(command[command.index("--shard-index") + 1])
+            assert command[command.index("--shard-count") + 1] == str(jobs)
+            assert destination.name == f"native-{index}"
+            barrier.wait(timeout=10)
+            positions = [
+                position
+                for position in range(len(records))
+                if (position // 2) % jobs == index
+            ]
+            values = [records[position] for position in positions]
+            (destination / "dispatch.jsonl").write_text(
+                "".join(json.dumps(trace[position]) + "\n" for position in positions)
+            )
+            status = 124 if failure and index == 0 else 0
+        (destination / "results.json").write_text(json.dumps(values))
+        kwargs["stdout"].write(destination.name + " completed\n")
+        kwargs["stderr"].write("deadline expired\n" if status else "")
+        finished.append(destination.name)
+        return SimpleNamespace(returncode=status)
+
+    monkeypatch.setattr(verify_small_rows.subprocess, "run", execute)
+    monkeypatch.setattr(
+        verify_small_rows,
+        "verify_prepared",
+        lambda root: {"commit": verify_small_rows.COMMIT},
+    )
+    monkeypatch.setattr(
+        verify_small_rows,
+        "SmallRowPackageCache",
+        lambda *args: SimpleNamespace(
+            get=lambda entry, **kwargs: [({"artifact": {"id": entry}}, tmp_path)],
+        ),
+    )
+    if failure:
+        with pytest.raises(RuntimeError, match="native worker failed"):
+            verify_small_rows.verify(args)
+        assert not (args.output_dir / "evidence.json").exists()
+        assert not (args.output_dir / "native").exists()
+    else:
+        verify_small_rows.verify(args)
+        assert (
+            json.loads((args.output_dir / "native/results.json").read_text()) == records
+        )
+        summary = json.loads((args.output_dir / "evidence.json").read_text())
+        assert summary["nativeWorkerCount"] == jobs
+        assert summary["casesPerPath"] == summary["dispatchCount"] == 34
+        assert summary["numericalParity"] is True
+        assert summary["fullUpstreamSuite"] is summary["fullTranslatedBackend"] is False
+    assert set(finished) == {"cpu", *(f"native-{index}" for index in range(jobs))}
+    for label in finished:
+        receipt = json.loads((args.output_dir / f"{label}.command.json").read_text())
+        assert receipt["returncode"] == (124 if failure and label == "native-0" else 0)
+        assert (
+            args.output_dir / f"{label}.stdout"
+        ).read_text() == label + " completed\n"
+        assert (args.output_dir / f"{label}.stderr").is_file()
 
 
 def test_small_row_ci_requires_native_execution_on_all_targets():
@@ -493,6 +672,7 @@ def test_small_row_ci_requires_native_execution_on_all_targets():
     assert "continue-on-error" not in step and "if" not in step
     assert "portable_host.verify_small_rows" in step["run"]
     assert "--mlx-root mlx-upstream" in step["run"]
+    assert "--jobs 2" in step["run"]
     retained = next(
         step
         for step in job["steps"]

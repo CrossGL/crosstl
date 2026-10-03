@@ -987,7 +987,7 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 4000 --label "MLX small-row host verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_small_rows --mlx-root mlx-upstream \
-              --packages .mlx-portable-small-rows/base/packages --output-dir .mlx-portable-small-rows/evidence 2>&1 | tee .mlx-portable-small-rows/verification.log
+              --packages .mlx-portable-small-rows/base/packages --jobs 2 --output-dir .mlx-portable-small-rows/evidence 2>&1 | tee .mlx-portable-small-rows/verification.log
       - name: Translate reduction initialization
         run: |
           set -euo pipefail

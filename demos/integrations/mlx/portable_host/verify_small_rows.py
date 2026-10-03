@@ -7,6 +7,7 @@ import math
 import struct
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from crosstl.project import select_native_loader_dispatch_regions
@@ -86,6 +87,22 @@ def reference(np, case):
     return data, expected
 
 
+def selected_cases(shard_index=0, shard_count=1):
+    if (
+        type(shard_count) is not int
+        or not 1 <= shard_count <= 8
+        or type(shard_index) is not int
+        or not 0 <= shard_index < shard_count
+    ):
+        raise ValueError("Invalid small-row workload partition")
+    # Keep scalar/cooperative pairs together while distributing their types.
+    return [
+        case
+        for index, case in enumerate(cases())
+        if (index // 2) % shard_count == shard_index
+    ]
+
+
 def worker(args):
     import mlx.core as mx
     import numpy as np
@@ -102,7 +119,9 @@ def worker(args):
     else:
         mx.set_default_device(mx.cpu)
     records = []
-    for case in cases():
+    for case in selected_cases(
+        getattr(args, "shard_index", 0), getattr(args, "shard_count", 1)
+    ):
         data, expected = reference(np, case)
         source = mx.array(data)
         start = host.dispatch_count if host else 0
@@ -132,10 +151,10 @@ def worker(args):
         print(case["id"], flush=True)
 
 
-def validate(records, trace, *, native):
+def validate(records, trace, *, native, shard_index=0, shard_count=1):
     import numpy as np
 
-    expected_cases = list(cases())
+    expected_cases = selected_cases(shard_index, shard_count)
     if len(records) != len(expected_cases) or len(trace) != (
         len(records) if native else 0
     ):
@@ -202,46 +221,100 @@ def validate(records, trace, *, native):
                 raise ValueError("Small-row native trace does not match its results")
 
 
+def run_worker(args, mode, *, shard_index=0, shard_count=1):
+    label = mode if shard_count == 1 else f"{mode}-{shard_index}"
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve().parents[4] / "tools/run_bounded_command.py"),
+        "--timeout-seconds",
+        "180" if mode == "cpu" else "3600",
+        "--label",
+        f"MLX small-row host {label}",
+        "--",
+        sys.executable,
+        "-m",
+        __package__ + ".verify_small_rows",
+        "--worker",
+        mode,
+        "--mlx-root",
+        str(args.mlx_root.resolve()),
+        "--packages",
+        str(args.packages.resolve()),
+        "--output-dir",
+        str(args.output_dir.resolve() / label),
+    ]
+    if shard_count > 1:
+        command.extend(
+            ["--shard-index", str(shard_index), "--shard-count", str(shard_count)]
+        )
+    with (args.output_dir / f"{label}.stdout").open("w") as out, (
+        args.output_dir / f"{label}.stderr"
+    ).open("w") as err:
+        process = subprocess.run(command, stdout=out, stderr=err, check=False)
+    (args.output_dir / f"{label}.command.json").write_text(
+        json.dumps({"command": command, "returncode": process.returncode})
+    )
+    if process.returncode:
+        raise RuntimeError(f"Small-row {mode} worker failed; see {args.output_dir}")
+    return json.loads((args.output_dir / label / "results.json").read_text())
+
+
+def merge_native_shards(output_dir, shards):
+    by_id = {}
+    for index, records in enumerate(shards):
+        trace = [
+            json.loads(line)
+            for line in (
+                (output_dir / f"native-{index}/dispatch.jsonl").read_text().splitlines()
+            )
+        ]
+        validate(
+            records, trace, native=True, shard_index=index, shard_count=len(shards)
+        )
+        for record, event in zip(records, trace):
+            if record["id"] in by_id:
+                raise ValueError("Duplicate small-row native workload")
+            by_id[record["id"]] = record, event
+    records, trace = [], []
+    for case in cases():
+        if case["id"] not in by_id:
+            raise ValueError("Missing small-row native workload")
+        record, event = by_id.pop(case["id"])
+        records.append(record)
+        trace.append(event)
+    if by_id:
+        raise ValueError("Unexpected small-row native workload")
+    validate(records, trace, native=True)
+    destination = output_dir / "native"
+    destination.mkdir()
+    (destination / "results.json").write_text(json.dumps(records, indent=2))
+    (destination / "dispatch.jsonl").write_text(
+        "".join(json.dumps(event) + "\n" for event in trace)
+    )
+    return records
+
+
 def verify(args):
+    jobs = getattr(args, "jobs", 1)
+    selected_cases(0, jobs)
     args.output_dir.mkdir(parents=True)
     before = verify_prepared(args.mlx_root)
     (args.output_dir / "adaptation-before.json").write_text(
         json.dumps(before, indent=2)
     )
-    results = {}
-    for mode in ("cpu", "native"):
-        command = [
-            sys.executable,
-            str(Path(__file__).resolve().parents[4] / "tools/run_bounded_command.py"),
-            "--timeout-seconds",
-            "180" if mode == "cpu" else "3600",
-            "--label",
-            f"MLX small-row host {mode}",
-            "--",
-            sys.executable,
-            "-m",
-            __package__ + ".verify_small_rows",
-            "--worker",
-            mode,
-            "--mlx-root",
-            str(args.mlx_root.resolve()),
-            "--packages",
-            str(args.packages.resolve()),
-            "--output-dir",
-            str(args.output_dir.resolve() / mode),
-        ]
-        with (args.output_dir / f"{mode}.stdout").open("w") as out, (
-            args.output_dir / f"{mode}.stderr"
-        ).open("w") as err:
-            process = subprocess.run(command, stdout=out, stderr=err, check=False)
-        (args.output_dir / f"{mode}.command.json").write_text(
-            json.dumps({"command": command, "returncode": process.returncode})
-        )
-        if process.returncode:
-            raise RuntimeError(f"Small-row {mode} worker failed; see {args.output_dir}")
-        results[mode] = json.loads(
-            (args.output_dir / mode / "results.json").read_text()
-        )
+    results = {"cpu": run_worker(args, "cpu")}
+    if jobs == 1:
+        results["native"] = run_worker(args, "native")
+    else:
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            futures = [
+                pool.submit(
+                    run_worker, args, "native", shard_index=index, shard_count=jobs
+                )
+                for index in range(jobs)
+            ]
+            shards = [future.result() for future in futures]
+        results["native"] = merge_native_shards(args.output_dir, shards)
     trace = [
         json.loads(line)
         for line in (args.output_dir / "native/dispatch.jsonl").read_text().splitlines()
@@ -296,6 +369,7 @@ def verify(args):
         "casesPerPath": len(results["native"]),
         "dispatchCount": len(trace),
         "dispatchVersion": DISPATCH_VERSION,
+        "nativeWorkerCount": jobs,
         "numericalParity": True,
         "fullTranslatedBackend": False,
         "fullUpstreamSuite": False,
@@ -310,5 +384,8 @@ if __name__ == "__main__":
     parser.add_argument("--packages", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--worker", choices=("cpu", "native"))
+    parser.add_argument("--jobs", type=int, default=1)
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--shard-count", type=int, default=1)
     args = parser.parse_args()
     worker(args) if args.worker else verify(args)

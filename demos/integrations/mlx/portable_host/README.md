@@ -505,6 +505,12 @@ runtime. ABI version 2 wheels must be rebuilt.
 python -m demos.integrations.mlx.portable_host.verify_small_rows --mlx-root mlx-upstream --packages packages --output-dir small-row-evidence
 ```
 
+Use `--jobs 2` to run two native worker processes concurrently, as CI does.
+Each worker retains its own results, dispatch trace, logs and exit status. The
+verifier checks each partition and then the combined set of 34 workloads before
+publishing evidence. Worker failures and deadlines remain fatal; concurrency
+does not remove cases or relax numerical checks. The default is one worker.
+
 The dedicated three-OS CI gate compares 34 host workloads against MLX CPU and
 NumPy, checks unchanged host inputs and output guards, and retains package identity
 and DirectX/OpenGL region module evidence. These are additional integration
