@@ -47500,12 +47500,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         type_name = self.type_name_string(vtype)
         if not type_name:
             return None
-        normalized = str(type_name).strip()
-        normalized = re.sub(
-            r"^(?:(?:const|constant|device|thread|threadgroup|volatile)\s+)+",
-            "",
-            normalized,
-        )
+        aliases = getattr(self, "hlsl_type_aliases", {})
+        seen = set()
+        while True:
+            normalized = re.sub(
+                r"^(?:(?:const|constant|device|thread|threadgroup|volatile)\s+)+",
+                "",
+                str(type_name).strip(),
+            )
+            if normalized not in aliases:
+                break
+            if normalized in seen:
+                return None
+            seen.add(normalized)
+            type_name = self.type_name_string(aliases[normalized])
         normalized = normalized.rsplit("::", 1)[-1]
         return normalized if normalized in self.HLSL_SOURCE_BFLOAT16_TYPES else None
 

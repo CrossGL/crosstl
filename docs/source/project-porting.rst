@@ -1626,6 +1626,13 @@ validation and runtime loader commands for that HLSL require
 ``-enable-16bit-types``; application-specific compiler wrappers and build
 commands must preserve the same option.
 
+HLSL resolves retained scalar type aliases before selecting bfloat conversions.
+Their logical bfloat type remains distinct from the physical ``uint`` register
+payload, including initialization, helper parameters, returns and arithmetic.
+Alias chains work when the intermediate representation retains each declaration.
+The Metal frontend can still omit a dependent alias declaration; that separate
+limitation remains tracked in `issue 2075 <https://github.com/CrossGL/crosstl/issues/2075>`_.
+
 Successful artifacts that use this path record a ``bfloat16Lowering`` object
 with ``status`` set to ``exact``, ``approximationUsed`` set to ``false``, and
 the register, storage, and rounding representations used by the generated

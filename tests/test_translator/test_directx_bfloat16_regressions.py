@@ -3,11 +3,95 @@ import textwrap
 import pytest
 
 import crosstl.translator
+from crosstl._crosstl import translate
 from crosstl.project import translate_project
 from crosstl.translator.codegen.directx_codegen import (
     DirectXBFloat16UnsupportedError,
     HLSLCodeGen,
 )
+
+
+@pytest.mark.parametrize(
+    "declarations",
+    (
+        "using Narrow = bfloat;",
+        "typedef bfloat Narrow;",
+    ),
+)
+@pytest.mark.parametrize("helper", (False, True))
+def test_directx_bfloat_aliases_preserve_logical_conversion(
+    tmp_path, declarations, helper
+):
+    generated = []
+    for dtype, aliases in (("bfloat", ""), ("Narrow", declarations)):
+        source = tmp_path / f"{dtype}.metal"
+        helper_source = (
+            f"{dtype} identity({dtype} value) {{ return value; }}" if helper else ""
+        )
+        expression = "identity(value)" if helper else "value"
+        source.write_text(
+            f"""#include <metal_stdlib>
+using namespace metal;
+{aliases}
+{helper_source}
+kernel void convert(const device uint* values [[buffer(0)]],
+                    device uint* results [[buffer(1)]],
+                    uint i [[thread_position_in_grid]]) {{
+    {dtype} value = {dtype}(as_type<bfloat>(ushort(values[i])));
+    results[i] = as_type<uint>(float({expression}));
+}}
+""",
+            encoding="utf-8",
+        )
+        generated.append(translate(str(source), backend="directx", format_output=False))
+    assert (
+        "__crossgl_bfloat16_from_uint16(uint16_t(uint16_t(values.Load(i))))"
+        in generated[0]
+    )
+    assert f"asuint(__crossgl_bfloat16_to_float(uint({expression})))" in generated[0]
+    assert generated[1] == generated[0]
+
+
+def test_directx_canonical_bfloat_alias_chain_retains_helper_conversions():
+    generated = []
+    for dtype, aliases in (
+        ("bfloat16", ""),
+        ("Narrow", "typedef bfloat16 Base; typedef Base Narrow;"),
+    ):
+        shader = f"""
+shader Conversions {{
+    {aliases}
+    {dtype} narrow(float value) {{ return {dtype}(value); }}
+    {dtype} identity({dtype} value) {{ return value; }}
+    float widen({dtype} value) {{ return float(identity(value)); }}
+    float arithmetic({dtype} left, {dtype} right) {{ return float(left + right); }}
+}}
+"""
+        generated.append(HLSLCodeGen().generate(crosstl.translator.parse(shader)))
+    assert "return __crossgl_bfloat16_from_float(float(value));" in generated[0]
+    assert "return __crossgl_bfloat16_to_float(uint(identity(value)));" in generated[0]
+    assert generated[1] == generated[0]
+
+
+@pytest.mark.parametrize(
+    "dtype,aliases,expected",
+    (
+        ("Narrow", {"Narrow": "bfloat16"}, True),
+        ("const Narrow", {"Narrow": "volatile bfloat16"}, True),
+        ("Narrow", {"Narrow": "Base", "Base": "bfloat16"}, True),
+        ("Narrow", {"Narrow": "uint"}, False),
+        ("Narrow", {"Narrow": "Narrow"}, False),
+        ("Narrow", {"Narrow": "Base", "Base": "Narrow"}, False),
+        ("Narrow", {"Narrow": "bfloat16[2]"}, False),
+        ("Narrow", {"Narrow": "bfloat16*"}, False),
+    ),
+)
+def test_directx_bfloat_alias_classification_is_logical_and_cycle_safe(
+    dtype, aliases, expected
+):
+    generator = HLSLCodeGen()
+    generator.hlsl_type_aliases = aliases
+    assert generator.is_hlsl_bfloat16_type(dtype) is expected
 
 
 def test_directx_bfloat16_builtin_decodes_and_preserves_return_contract():
