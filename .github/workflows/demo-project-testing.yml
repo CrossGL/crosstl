@@ -5396,13 +5396,27 @@ jobs:
 
       - name: Prove current MLX complete unary family DirectX translation
         env:
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_UNARY_DIRECTX_TRANSLATION: "1"
           CROSTL_MLX_UNARY_DIRECTX_SHARD_INDEX: ${{ matrix.shard_index }}
           CROSTL_MLX_UNARY_DIRECTX_SHARD_COUNT: "5"
         run: >-
           python -m pytest -q -n auto
+          --junitxml=unary-directx-junit.xml
           demos/integrations/mlx/tests/kernels/test_unary_complete_directx.py::test_current_mlx_unary_family_translates_to_directx
+
+      - name: Upload unary DirectX corpus evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-unary-directx-corpus-${{ matrix.shard_index }}
+          path: |
+            mlx-current-upstream/.crosstl-corpus-evidence
+            unary-directx-junit.xml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   mlx-binary-complete-metal-roundtrip:
     concurrency:
@@ -5910,13 +5924,27 @@ jobs:
 
       - name: Prove current MLX complete copy family DirectX translation
         env:
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_COPY_DIRECTX_TRANSLATION: "1"
           CROSTL_MLX_COPY_DIRECTX_SHARD_INDEX: ${{ matrix.shard_index }}
           CROSTL_MLX_COPY_DIRECTX_SHARD_COUNT: "24"
         run: >-
           python -m pytest -q -n auto
+          --junitxml=copy-directx-junit.xml
           demos/integrations/mlx/tests/kernels/test_copy_complete_directx.py::test_current_mlx_copy_family_translates_to_directx
+
+      - name: Upload copy DirectX corpus evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-copy-directx-corpus-${{ matrix.shard_index }}
+          path: |
+            mlx-current-upstream/.crosstl-corpus-evidence
+            copy-directx-junit.xml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   mlx-reduce-complete-directx-translation:
     concurrency:
@@ -5971,13 +5999,27 @@ jobs:
 
       - name: Prove current MLX complete reduce family DirectX translation
         env:
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_REDUCE_DIRECTX_TRANSLATION: "1"
           CROSTL_MLX_REDUCE_DIRECTX_SHARD_INDEX: ${{ matrix.shard_index }}
           CROSTL_MLX_REDUCE_DIRECTX_SHARD_COUNT: "24"
         run: >-
           python -m pytest -q -n auto
+          --junitxml=reduce-directx-junit.xml
           demos/integrations/mlx/tests/kernels/test_reduce_complete_directx.py::test_current_mlx_reduce_family_translates_to_directx
+
+      - name: Upload reduce DirectX corpus evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-reduce-directx-corpus-${{ matrix.shard_index }}
+          path: |
+            mlx-current-upstream/.crosstl-corpus-evidence
+            reduce-directx-junit.xml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   mlx-binary-complete-opengl-translation:
     concurrency:
@@ -6094,13 +6136,27 @@ jobs:
 
       - name: Prove current MLX complete binary family DirectX translation
         env:
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_BINARY_DIRECTX_TRANSLATION: "1"
           CROSTL_MLX_BINARY_DIRECTX_SHARD_INDEX: ${{ matrix.shard_index }}
           CROSTL_MLX_BINARY_DIRECTX_SHARD_COUNT: "24"
         run: >-
           python -m pytest -q -n auto
+          --junitxml=binary-directx-junit.xml
           demos/integrations/mlx/tests/kernels/test_binary_complete_directx.py::test_current_mlx_binary_family_translates_to_directx
+
+      - name: Upload binary DirectX corpus evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-binary-directx-corpus-${{ matrix.shard_index }}
+          path: |
+            mlx-current-upstream/.crosstl-corpus-evidence
+            binary-directx-junit.xml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   mlx-full-corpus-scout:
     concurrency:

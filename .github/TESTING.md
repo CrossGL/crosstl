@@ -24,6 +24,15 @@ checksum and does not fall back to another release. These jobs do not execute
 Direct3D; WARP numerical execution and Windows host integration remain required.
 Metal corpus compilation stays on macOS because it requires Apple's toolchain.
 
+The four DirectX corpus families retain each case's configuration, generated
+shader and portability report before checking the recorded artifact identity.
+When compilation is reached, its command, output and exit status are retained
+alongside the compiled module. Every shard uploads this evidence and its JUnit
+results on success or failure. A missing compiler record means compilation was
+not reached; a generated shader alone is not proof that compilation passed.
+Local runs clean up by default; set `CROSTL_KEEP_CORPUS_EVIDENCE=1` to retain the
+same files under the upstream checkout's `.crosstl-corpus-evidence` directory.
+
 `demo-project-testing.yml` is the entry point for project integration checks.
 Each native job keeps its source pin, numerical comparisons, guards, bounded execution
 and retained evidence. Moving a compiler-only job must not disable an execution

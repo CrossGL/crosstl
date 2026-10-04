@@ -4,6 +4,8 @@ import textwrap
 from fnmatch import fnmatchcase
 from pathlib import Path
 
+import pytest
+
 from tests.test_ci_workflows import (
     RUNNER_OSES,
     _load_ci_coverage_module,
@@ -102,6 +104,31 @@ def test_metal_execution_budget_preserves_all_storage_cases():
     seconds = sum(int(value) for value in re.findall(r"--timeout-seconds (\d+)", job))
     minutes = int(re.search(r"timeout-minutes: (\d+)", job).group(1))
     assert seconds + 300 <= minutes * 60
+
+
+@pytest.mark.parametrize("family", ("unary", "binary", "copy", "reduce"))
+def test_directx_corpus_retains_failure_evidence_without_additional_jobs(family):
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    job = _workflow_job_section(workflow, f"mlx-{family}-complete-directx-translation")
+    coverage = _load_ci_coverage_module()
+    proof = coverage.workflow_step_section(
+        job, f"Prove current MLX complete {family} family DirectX translation"
+    )
+    assert "runs-on: ubuntu-24.04" in job
+    assert 'CROSTL_KEEP_CORPUS_EVIDENCE: "1"' in proof
+    assert "python -m pytest -q -n auto" in proof
+    assert f"--junitxml={family}-directx-junit.xml" in proof
+    assert "continue-on-error" not in job
+    upload = coverage.workflow_step_section(
+        job, f"Upload {family} DirectX corpus evidence"
+    )
+    assert "if: always()" in upload
+    assert f"name: mlx-{family}-directx-corpus-${{{{ matrix.shard_index }}}}" in upload
+    assert "mlx-current-upstream/.crosstl-corpus-evidence" in upload
+    assert f"{family}-directx-junit.xml" in upload
+    assert "include-hidden-files: true" in upload
+    assert "if-no-files-found: error" in upload
+    assert "retention-days: 14" in upload
 
 
 def test_mlx_gather_checkout_preserves_pinned_source_bytes():

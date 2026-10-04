@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import textwrap
 from collections import Counter
 from dataclasses import dataclass
@@ -22,6 +21,7 @@ from crosstl.project import (
     validate_project_report,
 )
 from crosstl.project.directx_toolchain import dxc_compiler_arguments_for_source
+from demos.integrations.mlx.tests.corpus_evidence import corpus_workspace, run_compiler
 from demos.integrations.mlx.tests.kernels.test_reduce_complete_metal_roundtrip import (
     ENTRY_CLASSIFICATION_FIELDS,
     EXPECTED_INPUT_TYPE_COUNTS,
@@ -448,6 +448,8 @@ def _translate_and_validate(
         validate=True,
         run_toolchains=False,
     )
+    report_path = work_dir / "portability-report.json"
+    report.write_json(report_path)
     payload = report.to_json()
     summary = payload["summary"]
     assert summary["unitCount"] == 1
@@ -510,8 +512,6 @@ def _translate_and_validate(
         assert residue not in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
 
-    report_path = work_dir / "portability-report.json"
-    report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
     runtime = build_runtime_artifact_manifest(report_path)
     assert runtime["success"] is True, json.dumps(runtime, indent=2)
@@ -541,7 +541,7 @@ def _translate_and_validate(
     compiler_arguments = dxc_compiler_arguments_for_source(generated)
     assert compiler_arguments == ("-enable-16bit-types",)
     dxil_path = work_dir / f"{workload.entry_point}.dxil"
-    compilation = subprocess.run(
+    compilation = run_compiler(
         [
             _required_tool("dxc"),
             *compiler_arguments,
@@ -554,9 +554,7 @@ def _translate_and_validate(
             "-Fo",
             str(dxil_path),
         ],
-        check=False,
-        capture_output=True,
-        text=True,
+        work_dir=work_dir,
         timeout=180,
     )
     assert compilation.returncode == 0, compilation.stdout + compilation.stderr
@@ -574,8 +572,10 @@ def test_current_mlx_reduce_family_translates_to_directx(
     workload: ReduceDirectXWorkload,
 ) -> None:
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-reduce-directx-",
-        dir=mlx_root,
-    ) as temporary_directory:
-        _translate_and_validate(mlx_root, Path(temporary_directory), workload)
+    with corpus_workspace(
+        mlx_root,
+        family="reduce",
+        target="directx",
+        entry_point=workload.entry_point,
+    ) as work_dir:
+        _translate_and_validate(mlx_root, work_dir, workload)

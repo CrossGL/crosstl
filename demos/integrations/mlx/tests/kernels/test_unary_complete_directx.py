@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import textwrap
 from collections import Counter
 from dataclasses import dataclass
@@ -20,6 +19,7 @@ from crosstl.project import (
     validate_project_report,
 )
 from crosstl.project.directx_toolchain import dxc_compiler_arguments_for_source
+from demos.integrations.mlx.tests.corpus_evidence import corpus_workspace, run_compiler
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_UNARY_SOURCE = "mlx/backend/metal/kernels/unary.metal"
@@ -573,6 +573,8 @@ def _translate_and_validate(
         validate=True,
         run_toolchains=False,
     )
+    report_path = work_dir / "portability-report.json"
+    report.write_json(report_path)
     payload = report.to_json()
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["artifactCount"] == 1
@@ -705,8 +707,6 @@ def _translate_and_validate(
             assert "out_[uint(out_idx++)]" in generated
         assert "++out_idx" not in generated
 
-    report_path = work_dir / "portability-report.json"
-    report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
     runtime_artifacts = build_runtime_artifact_manifest(report_path)
     assert runtime_artifacts["success"] is True, json.dumps(
@@ -736,7 +736,7 @@ def _translate_and_validate(
     compiler_arguments = dxc_compiler_arguments_for_source(generated)
     assert compiler_arguments == ("-enable-16bit-types",)
     dxil_path = work_dir / f"{workload.entry_point}.dxil"
-    compilation = subprocess.run(
+    compilation = run_compiler(
         [
             dxc,
             *compiler_arguments,
@@ -749,9 +749,7 @@ def _translate_and_validate(
             "-Fo",
             str(dxil_path),
         ],
-        check=False,
-        capture_output=True,
-        text=True,
+        work_dir=work_dir,
         timeout=120,
     )
     assert compilation.returncode == 0, compilation.stdout + compilation.stderr
@@ -768,12 +766,14 @@ def test_current_mlx_unary_family_translates_to_directx(
     workload: UnaryDirectXWorkload,
 ) -> None:
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-unary-directx-",
-        dir=mlx_root,
-    ) as temporary_directory:
+    with corpus_workspace(
+        mlx_root,
+        family="unary",
+        target="directx",
+        entry_point=workload.entry_point,
+    ) as work_dir:
         _translate_and_validate(
             mlx_root,
-            Path(temporary_directory),
+            work_dir,
             workload,
         )
