@@ -224,9 +224,14 @@ def _compile(
         result.update(
             status="failed",
             error=str(error),
-            stdout=(error.stdout or b"").decode("utf-8", errors="replace"),
-            stderr=(error.stderr or b"").decode("utf-8", errors="replace"),
         )
+        for stream in ("stdout", "stderr"):
+            captured = getattr(error, stream)
+            result[stream] = (
+                captured.decode("utf-8", errors="replace")
+                if isinstance(captured, bytes)
+                else captured or ""
+            )
     except (OSError, ValueError) as error:
         result.update(status="failed", error=str(error))
     _write_json(directory / "evidence.json", result)

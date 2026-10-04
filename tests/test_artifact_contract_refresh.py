@@ -24,7 +24,7 @@ SOURCE = """shader Example {
 
 @pytest.fixture
 def project(tmp_path):
-    (tmp_path / "source.cgl").write_text(SOURCE)
+    (tmp_path / "source.cgl").write_bytes(SOURCE.encode("utf-8"))
     config = tmp_path / "crosstl.toml"
     config.write_text('[project]\nsource_roots = ["."]\ntargets = ["opengl"]\n')
     contract = {
@@ -204,7 +204,7 @@ def test_complete_multi_entry_source_refreshes_in_serial_and_parallel(project, j
         "kernel void first(device float* result [[buffer(0)]]) { result[0] = 1.0; }\n"
         "kernel void second(device float* result [[buffer(0)]]) { result[0] = 2.0; }\n"
     )
-    (project["root"] / "source.metal").write_text(source)
+    (project["root"] / "source.metal").write_bytes(source.encode("utf-8"))
     contract = json.loads(project["contract_path"].read_text())
     contract.update(
         source="source.metal", sourceSha256=hashlib.sha256(source.encode()).hexdigest()
@@ -236,7 +236,7 @@ def test_metal_template_roundtrip_retains_entry_launch_contract(project):
         " { result[0] = T(1); }\n"
         'template [[host_name("write_float")]] kernel void write_value<float>(device float*);\n'
     )
-    (project["root"] / "source.metal").write_text(source)
+    (project["root"] / "source.metal").write_bytes(source.encode("utf-8"))
     contract = json.loads(project["contract_path"].read_text())
     contract.update(
         source="source.metal",
@@ -359,6 +359,55 @@ def test_compiler_timeout_is_retained_as_evidence(project):
     assert "timed out" in result["error"]
     assert result["stdout"] == "started\n"
     assert result["stderr"] == "waiting\n"
+    assert not (project["work"] / "candidate.json").exists()
+
+
+@pytest.mark.parametrize(
+    "stdout,stderr,expected_stdout,expected_stderr",
+    [
+        (b"started\n", b"waiting\n", "started\n", "waiting\n"),
+        ("started\n", "waiting\n", "started\n", "waiting\n"),
+        (b"started\n", "waiting\n", "started\n", "waiting\n"),
+        (None, None, "", ""),
+        (b"invalid\xff", b"", "invalid\ufffd", ""),
+    ],
+)
+def test_compiler_timeout_accepts_platform_output_types(
+    project, monkeypatch, stdout, stderr, expected_stdout, expected_stderr
+):
+    def timeout(command, **kwargs):
+        assert kwargs == {"capture_output": True, "text": True, "timeout": 1}
+        raise refresh.subprocess.TimeoutExpired(
+            command, 1, output=stdout, stderr=stderr
+        )
+
+    source = project["root"] / "source.cgl"
+    record = {
+        "entryPoint": "computeMain",
+        "targetEntryPoint": "main",
+        "path": str(source),
+        "sha256": refresh._sha256(source),
+    }
+    monkeypatch.setattr(refresh.subprocess, "run", timeout)
+    result = refresh._compile(record, project["compiler_command"], project["work"], 1)
+    assert result["status"] == "failed"
+    assert "timed out" in result["error"]
+    assert result["stdout"] == expected_stdout
+    assert result["stderr"] == expected_stderr
+    assert "compiledSha256" not in result
+    evidence = list((project["work"] / "compiled").glob("*/evidence.json"))
+    assert len(evidence) == 1
+    assert json.loads(evidence[0].read_text(encoding="utf-8")) == result
+
+
+def test_source_newline_changes_are_not_accepted_as_pinned_input(project):
+    (project["root"] / "source.cgl").write_bytes(
+        SOURCE.replace("\n", "\r\n").encode("utf-8")
+    )
+    result = refresh.refresh(**project)
+    assert result["status"] == "failed"
+    assert result["failures"] == [{"error": "Pinned source hash differs"}]
+    assert result["records"] == []
     assert not (project["work"] / "candidate.json").exists()
 
 
