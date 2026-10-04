@@ -2227,6 +2227,20 @@ def test_ci_coverage_report_summary_reflects_validation_failures():
     assert broken["summary"] == {"ok": False, "errors": 1}
 
 
+def test_support_sync_installs_workflow_test_dependencies():
+    workflow = yaml.safe_load(
+        (WORKFLOW_DIR / "support-issue-sync.yml").read_text(encoding="utf-8")
+    )
+    install = next(
+        step
+        for step in workflow["jobs"]["sync"]["steps"]
+        if step.get("name") == "Install test dependency"
+    )
+    command = shlex.split(install["run"])
+    assert command[:4] == ["python", "-m", "pip", "install"]
+    assert {"pytest", "pypdf", "PyYAML>=6,<7"} <= set(command[4:])
+
+
 def test_ci_coverage_comparison_reports_removed_coverage():
     module = _load_ci_coverage_module()
     baseline = module.build_report()
