@@ -9028,6 +9028,10 @@ class MetalCodeGen:
             "double",
             "int",
             "uint",
+            "long",
+            "ulong",
+            "int64_t",
+            "uint64_t",
             "bool",
         }
 
@@ -9054,6 +9058,12 @@ class MetalCodeGen:
             "uint2",
             "uint3",
             "uint4",
+            "long2",
+            "long3",
+            "long4",
+            "ulong2",
+            "ulong3",
+            "ulong4",
             "bool2",
             "bool3",
             "bool4",
@@ -24921,7 +24931,18 @@ class MetalCodeGen:
             self.type_name_string,
             self.map_type,
             self.vector_component_type,
-            scalar_types={"float", "half", "double", "int", "uint", "bool"},
+            scalar_types={
+                "float",
+                "half",
+                "double",
+                "int",
+                "uint",
+                "long",
+                "ulong",
+                "int64_t",
+                "uint64_t",
+                "bool",
+            },
             excluded_type_markers=("x",),
         )
 
@@ -24932,7 +24953,18 @@ class MetalCodeGen:
             self.type_name_string,
             self.map_type,
             self.vector_component_type,
-            scalar_types={"float", "half", "double", "int", "uint", "bool"},
+            scalar_types={
+                "float",
+                "half",
+                "double",
+                "int",
+                "uint",
+                "long",
+                "ulong",
+                "int64_t",
+                "uint64_t",
+                "bool",
+            },
             excluded_type_markers=("x",),
         )
 

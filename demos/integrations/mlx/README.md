@@ -485,9 +485,9 @@ The current harness verifies:
   import was completed under [#1793](https://github.com/CrossGL/crosstl/issues/1793).
   These are compilation claims only. The current-pin
   [random readiness audit](portable_host/README.md#random-generation-readiness)
-  now passes its 20 bounded numerical cases on OpenGL and generated Metal.
-  DirectX numerical parity remains subject to the required Windows execution
-  gate; `RandomBits` host integration is not enabled.
+  now passes its 20 bounded numerical cases on OpenGL, DirectX and generated
+  Metal, including required Windows native execution. `RandomBits` host
+  integration is not enabled.
   The three pending aggregate sources cover 76 compute entries. Those historical
   aggregate runs do not consume the later entry-scoped bounded contracts and
   remain asserted as failed artifacts; no placeholder workgroup size is

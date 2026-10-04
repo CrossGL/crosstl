@@ -41,6 +41,16 @@ CONTEXTS = {
         [3, 4, 5, 0, 6],
     ),
 }
+WIDE_FORMS = (
+    "empty",
+    "partial",
+    "full",
+    "splat",
+    "mixed",
+    "effects",
+    "alias",
+    "return",
+)
 
 
 def _case(root, target, scalar, width, count, explicit):
@@ -170,6 +180,96 @@ def test_vector_list_contexts_execute_natively(tmp_path, context):
     )
 
 
+def _wide_case(root, target, signed, width, form):
+    scalar = "long" if signed else "ulong"
+    dtype = "int64" if signed else "uint64"
+    vector = f"{scalar}{width}"
+    values = [
+        2**54 + 3,
+        -(2**53 + 1) if signed else 2**63 + 17,
+        -(2**62) + 9 if signed else 2**64 - 1,
+        2**40 + 7,
+    ]
+    count = {"empty": 0, "partial": 1, "return": width - 1}.get(form, width)
+    arguments = [f"values[{index}]" for index in range(count)]
+    expected = values[:count] + [0] * (width - count)
+    helper = ""
+    initializer = "{" + ", ".join(arguments) + "}"
+    spelling = vector
+    calls = 0
+    if form == "splat":
+        initializer = f"{vector}(values[0])"
+        expected = [values[0]] * width
+    elif form == "mixed":
+        arguments[:2] = [f"{scalar}2(values[0], values[1])"]
+        initializer = vector + "(" + ", ".join(arguments) + ")"
+    elif form == "effects":
+        helper = (
+            f"{scalar} next_value(thread uint& cursor, const device {scalar}* values) "
+            "{ return values[cursor++]; }"
+        )
+        initializer = "{" + ", ".join(["next_value(cursor, values)"] * width) + "}"
+        calls = width
+    elif form == "alias":
+        helper = f"using Wide = {vector};"
+        spelling = "Wide"
+        initializer = "Wide" + initializer
+    elif form == "return":
+        helper = f"{vector} make_value(const device {scalar}* values) {{ return {vector}{initializer}; }}"
+        initializer = "make_value(values)"
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+{helper}
+kernel void wide_lists(const device {scalar}* values [[buffer(0)]],
+                       device {scalar}* results [[buffer(1)]]) {{
+    uint cursor = 0u;
+    {spelling} value = {initializer};
+"""
+    for index, lane in enumerate("xyzw"[:width]):
+        source += f"    results[{index + 1}] = value.{lane};\n"
+    source += f"    results[{width + 1}] = {scalar}(cursor);\n}}\n"
+    _, descriptor, package = _package(
+        root, target, "uint", (1, 1, 1), source=source, software_subgroups=False
+    )
+    result = [97, *expected, calls, 97]
+    inputs = {
+        "values": {"dtype": dtype, "shape": [4], "values": values},
+        "results": {
+            "dtype": dtype,
+            "shape": [len(result)],
+            "values": [97] * len(result),
+        },
+    }
+    outputs = {"results": {"dtype": dtype, "shape": [len(result)], "values": result}}
+    return (
+        source,
+        _request(descriptor, package, inputs, outputs, 1),
+        _bound_values(descriptor, outputs),
+    )
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+@pytest.mark.parametrize("signed", (True, False), ids=("signed", "unsigned"))
+@pytest.mark.parametrize("width", (2, 3, 4))
+@pytest.mark.parametrize("form", WIDE_FORMS)
+def test_wide_vector_lists_translate(tmp_path, target, signed, width, form):
+    _, request, _ = _wide_case(tmp_path, target, signed, width, form)
+    assert "ConstructorNode(" not in request.artifact_path.read_text()
+
+
+@pytest.mark.parametrize("signed", (True, False), ids=("signed", "unsigned"))
+@pytest.mark.parametrize("width", (2, 3, 4))
+@pytest.mark.parametrize("form", WIDE_FORMS)
+def test_wide_vector_lists_execute_natively(tmp_path, signed, width, form):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required vector list initialization")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    source, request, expected = _wide_case(tmp_path, target, signed, width, form)
+    _execute(
+        request, expected, tmp_path, original_source=source, original_entry="wide_lists"
+    )
+
+
 def test_vector_list_native_checks_are_required():
     from tools import ci_coverage
 
@@ -192,13 +292,14 @@ def test_vector_list_native_checks_are_required():
 
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl", "vulkan"))
-def test_excess_vector_list_elements_fail_project_translation(tmp_path, target):
-    (tmp_path / "excess.metal").write_text("""#include <metal_stdlib>
+@pytest.mark.parametrize("scalar", ("uint", "long", "ulong"))
+def test_excess_vector_list_elements_fail_project_translation(tmp_path, target, scalar):
+    (tmp_path / "excess.metal").write_text(f"""#include <metal_stdlib>
 using namespace metal;
-kernel void excess(device uint* results [[buffer(0)]]) {
-    uint4 value = {1u, 2u, 3u, 4u, 5u};
+kernel void excess(device {scalar}* results [[buffer(0)]]) {{
+    {scalar}4 value = {{{scalar}(1), {scalar}(2), {scalar}(3), {scalar}(4), {scalar}(5)}};
     results[0] = value.w;
-}
+}}
 """)
     report = translate_project(
         ProjectConfig(

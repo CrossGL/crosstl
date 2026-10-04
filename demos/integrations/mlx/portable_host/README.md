@@ -787,7 +787,8 @@ that baseline are tracked here:
 | Aggregate type lookup under name shadowing | [#2027](https://github.com/CrossGL/crosstl/issues/2027) |
 | Narrow vector layout in Metal aggregates | [#2028](https://github.com/CrossGL/crosstl/issues/2028) |
 
-The current generated Metal and OpenGL paths pass all 20 cases. OpenGL union
+The generated Metal, OpenGL and DirectX paths now pass all 20 cases. Windows
+CI verifies native Direct3D execution, not only DXC compilation. OpenGL union
 values now share one word allocation, with explicit byte packing and bitcasts
 instead of independent fields. Signed byte results retain their exact values in
 the portable 32-bit carrier. The native controls cover 4-, 8- and 16-byte unions,
@@ -808,10 +809,19 @@ CI checks the audit's reference, binding and evidence-validation contracts on al
 three operating systems. Each gather workflow additionally requires all 20
 native random cases. Metal retains each dispatched library and
 checks its hash against the execution identity; OpenGL retains the exact GLSL
-submitted to its native compiler. These are kernel gates, not host integration
-or upstream-suite coverage. DirectX numerical execution and partial-byte tails
-still need verification before enabling `RandomBits` host dispatch.
+submitted to its native compiler, and DirectX retains the compiled DXIL module.
+These are kernel gates, not host integration or upstream-suite coverage.
+Partial-byte allocation and tail handling still need a complete runtime contract
+before enabling `RandomBits` host dispatch.
 No kernel edits, generated-source repairs or readback corrections are applied.
+
+Separate original/generated Metal probes with tightly packed three-byte outputs
+write into the first trailing guard; three-key probes also overwrite bytes in
+neighboring key outputs. Both paths exhibit the behavior, so it is not a
+translation discrepancy. Six- and eleven-byte probes preserve the tested guards.
+The upstream kernel writes its first four output bytes unconditionally. Host
+integration must account for this source allocation requirement and per-key
+spacing without concealing overwritten values or relaxing guard checks.
 
 The required macOS gather workflow separately verifies the byte-storage and
 narrow-aggregate prerequisites. Signed and unsigned byte buffers retain one-byte
@@ -833,9 +843,12 @@ them with offset-zero buffers
 Vector list initialization now remains distinct from scalar-splat construction
 through the shared representation. Metal retains braces; DirectX and OpenGL
 explicitly initialize omitted components to zero. Required native checks cover
-78 cases per target, including empty, partial and full lists, Boolean and numeric
+126 cases per target, including empty, partial and full lists, Boolean and numeric
 lanes, aliases, returned vectors, aggregate members, assignments and ordered
-side effects. Excess components fail project translation. The Metal checks also
+side effects. The 48 signed/unsigned 64-bit cases use exact values beyond binary64
+integer precision and cover two-, three- and four-lane vectors without narrowing
+through 32-bit or floating-point intermediates. Excess components, including
+explicit 64-bit scalar constructors, fail project translation. The Metal checks also
 execute the original source; each target retains compiled artifacts and guarded
 readbacks. Byte and vector storage have a separate bounded macOS step so these
 checks do not consume the general-gather execution budget.
@@ -858,8 +871,8 @@ cover entry, helper, parameter and local names while preserving reflected entry
 identities. The unchanged Metal random audit now passes all 20 contiguous
 `rbitsc` and strided `rbits` workloads, including exact output bytes and neighboring
 guards. The OpenGL audit also passes these 20 workloads with shared union storage.
-Partial-byte outputs and DirectX numerical results remain unverified;
-`RandomBits` host dispatch remains disabled.
+DirectX also passes the same 20 cases on Windows. Partial-byte allocation remains
+separate work; `RandomBits` host dispatch remains disabled.
 
 ## Run
 
