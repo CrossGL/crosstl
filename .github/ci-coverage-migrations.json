@@ -1,0 +1,5 @@
+{
+  "mlx-native-metal.yml": "demo-project-testing.yml",
+  "mlx-platform-runtime.yml": "demo-project-testing.yml",
+  "mlx-project-porting.yml": "demo-project-testing.yml"
+}

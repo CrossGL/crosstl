@@ -68,3 +68,12 @@ The Metal storage step has a 30-minute bound within an 80-minute job; the earlie
 The full local command is `python -m pytest -q -n auto`. The all-file pre-commit
 checks validate workflow contracts and generated support artifacts. Changes to
 matrix coverage must update those contracts and this policy together.
+
+The base-to-head coverage comparison accepts explicitly reviewed workflow moves
+from `.github/ci-coverage-migrations.json`. Only workflow filenames are mapped;
+job identities and coverage requirements are not removed. Each old job must
+retain its timeout under the destination workflow, which must also retain every
+positive permission and action-policy requirement. Missing jobs, duplicate job
+destinations and weakened policies still fail. Applied mappings are recorded in
+the comparison artifact. A mapping is inactive once its source is absent from
+the base revision. Test, compiler and platform coverage are compared separately.

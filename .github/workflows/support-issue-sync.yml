@@ -21,6 +21,7 @@ on:
     branches:
       - main
     paths:
+      - ".github/ci-coverage-migrations.json"
       - ".github/workflows/backend-tests.yml"
       - ".github/workflows/demo.yml"
       - ".github/workflows/docs.yml"
@@ -148,6 +149,7 @@ jobs:
           python tools/ci_coverage.py compare
           --baseline support/generated/ci-coverage-base-report.json
           --current support/generated/ci-coverage-report.json
+          --workflow-migrations .github/ci-coverage-migrations.json
           --output support/generated/ci-coverage-comparison.json
           --fail-on-shrink
 

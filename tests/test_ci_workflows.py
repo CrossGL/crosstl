@@ -2250,6 +2250,192 @@ def test_ci_coverage_comparison_reports_removed_coverage():
     ]
 
 
+@pytest.fixture
+def consolidated_workflow_reports():
+    module = _load_ci_coverage_module()
+    current = module.build_report()
+    baseline = copy.deepcopy(current)
+    destination = "demo-project-testing.yml"
+    sources = ["demo-source.yml", "demo-runtime.yml", "demo-reference.yml"]
+    jobs = baseline["workflows"]["runtime"]["job_timeouts"].pop(destination)
+    for index, source in enumerate(sources):
+        baseline["workflows"]["runtime"]["job_timeouts"][source] = dict(
+            list(jobs.items())[index :: len(sources)]
+        )
+    for section, fields in {
+        "permissions": (
+            "explicit_permissions",
+            "write_permissions",
+            "unexpected_write_permissions",
+        ),
+        "actions": ("action_refs", "mutable_refs", "node24_opt_in"),
+    }.items():
+        for field in fields:
+            values = baseline["workflows"][section][field]
+            if destination in values:
+                value = values.pop(destination)
+                values.update({source: copy.deepcopy(value) for source in sources})
+    return module, baseline, current, dict.fromkeys(sources, destination)
+
+
+def test_ci_coverage_comparison_preserves_consolidated_workflow_policies(
+    consolidated_workflow_reports,
+):
+    module, baseline, current, migrations = consolidated_workflow_reports
+    original = copy.deepcopy(baseline)
+    assert module.build_ci_coverage_comparison(baseline, current)["shrinks"]
+    comparison = module.build_ci_coverage_comparison(baseline, current, migrations)
+    assert comparison["summary"] == {
+        "ok": True,
+        "shrink_count": 0,
+        "growth_count": 0,
+    }
+    assert comparison["workflow_migrations"] == migrations
+    assert baseline == original
+    assert (
+        module.build_ci_coverage_comparison(current, current, migrations)[
+            "workflow_migrations"
+        ]
+        == {}
+    )
+
+
+@pytest.mark.parametrize(
+    "regression",
+    ["missing_job", "timeout", "permissions", "write_policy", "action_ref", "node24"],
+)
+def test_ci_coverage_workflow_moves_do_not_hide_policy_regressions(
+    consolidated_workflow_reports, regression
+):
+    module, baseline, current, migrations = consolidated_workflow_reports
+    target = "demo-project-testing.yml"
+    workflows = current["workflows"]
+    jobs = workflows["runtime"]["job_timeouts"][target]
+    job = next(iter(jobs))
+    if regression == "missing_job":
+        del jobs[job]
+    elif regression == "timeout":
+        jobs[job] = None
+    elif regression == "permissions":
+        workflows["permissions"]["explicit_permissions"][target] = False
+    elif regression == "write_policy":
+        workflows["permissions"]["unexpected_write_permissions"][target] = [
+            "contents:write"
+        ]
+    elif regression == "action_ref":
+        workflows["actions"]["mutable_refs"][target] = ["actions/checkout@main"]
+    else:
+        workflows["actions"]["node24_opt_in"][target] = False
+    comparison = module.build_ci_coverage_comparison(baseline, current, migrations)
+    assert comparison["summary"]["shrink_count"] == 1
+    assert any(target in key for key in comparison["shrinks"][0]["removed"])
+
+
+def test_ci_coverage_workflow_moves_preserve_unrelated_coverage_checks(
+    consolidated_workflow_reports,
+):
+    module, baseline, current, migrations = consolidated_workflow_reports
+    current["workflows"]["backend_tests"]["components"]["actual"].remove("metal")
+    comparison = module.build_ci_coverage_comparison(baseline, current, migrations)
+    assert comparison["shrinks"] == [
+        {
+            "scope": "backend-tests.yml",
+            "dimension": "components",
+            "removed": ["metal"],
+            "added": [],
+        }
+    ]
+
+
+def test_ci_coverage_consolidation_retains_any_positive_policy():
+    module = _load_ci_coverage_module()
+    assert module.migrated_workflow_policies(
+        {"first.yml": True, "second.yml": False, "destination.yml": False},
+        {"first.yml": "destination.yml", "second.yml": "destination.yml"},
+    ) == {"destination.yml": True}
+
+
+@pytest.mark.parametrize(
+    "migrations",
+    [
+        [],
+        {"demo-source.yml": None},
+        {"demo-source.yml": "../destination.yml"},
+        {"demo-source.yml": "demo-source.yml"},
+        {"first.yml": "second.yml", "second.yml": "third.yml"},
+        {"demo-source.yml": "missing.yml"},
+    ],
+)
+def test_ci_coverage_rejects_invalid_workflow_migrations(
+    consolidated_workflow_reports, migrations
+):
+    module, baseline, current, _ = consolidated_workflow_reports
+    with pytest.raises(module.CiCoverageError):
+        module.build_ci_coverage_comparison(baseline, current, migrations)
+
+
+@pytest.mark.parametrize("retained_source", [False, True])
+def test_ci_coverage_rejects_ambiguous_workflow_migrations(
+    consolidated_workflow_reports, retained_source
+):
+    module, baseline, current, migrations = consolidated_workflow_reports
+    jobs = baseline["workflows"]["runtime"]["job_timeouts"]
+    if retained_source:
+        current["workflows"]["runtime"]["job_timeouts"]["demo-source.yml"] = jobs[
+            "demo-source.yml"
+        ]
+    else:
+        jobs["demo-runtime.yml"].update(jobs["demo-source.yml"])
+    with pytest.raises(module.CiCoverageError):
+        module.build_ci_coverage_comparison(baseline, current, migrations)
+
+
+def test_ci_coverage_compare_command_records_workflow_migrations(
+    consolidated_workflow_reports, tmp_path
+):
+    module, baseline, current, migrations = consolidated_workflow_reports
+    for name, value in (
+        ("base", baseline),
+        ("current", current),
+        ("moves", migrations),
+    ):
+        (tmp_path / f"{name}.json").write_text(json.dumps(value), encoding="utf-8")
+    arguments = [
+        "--root",
+        str(tmp_path),
+        "compare",
+        "--baseline",
+        "base.json",
+        "--current",
+        "current.json",
+        "--workflow-migrations",
+        "moves.json",
+        "--output",
+        "comparison.json",
+        "--fail-on-shrink",
+    ]
+    assert module.main(arguments) == 0
+    result = json.loads((tmp_path / "comparison.json").read_text(encoding="utf-8"))
+    assert result["workflow_migrations"] == migrations
+    current["workflows"]["runtime"]["job_timeouts"][
+        "demo-project-testing.yml"
+    ].popitem()
+    (tmp_path / "current.json").write_text(json.dumps(current), encoding="utf-8")
+    assert module.main(arguments) == 1
+    (tmp_path / "moves.json").write_text("[]", encoding="utf-8")
+    assert module.main(arguments) == 2
+
+
+def test_ci_coverage_checked_in_migrations_name_existing_destination():
+    migrations = json.loads(
+        (ROOT / ".github" / "ci-coverage-migrations.json").read_text(encoding="utf-8")
+    )
+    assert migrations
+    for source, destination in migrations.items():
+        assert not (WORKFLOW_DIR / source).exists()
+        assert (WORKFLOW_DIR / destination).is_file()
+
+
 def test_ci_coverage_comparison_reports_workflow_policy_shrink():
     module = _load_ci_coverage_module()
     baseline = module.build_report()
@@ -2813,6 +2999,8 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
     assert "python tools/ci_coverage.py compare" in issue_sync
     assert "--baseline support/generated/ci-coverage-base-report.json" in issue_sync
     assert "--current support/generated/ci-coverage-report.json" in issue_sync
+    assert "--workflow-migrations .github/ci-coverage-migrations.json" in issue_sync
+    assert '".github/ci-coverage-migrations.json"' in issue_sync
     assert "--output support/generated/ci-coverage-comparison.json" in issue_sync
     assert "--fail-on-shrink" in issue_sync
     assert "actions/upload-artifact@v4" in issue_sync

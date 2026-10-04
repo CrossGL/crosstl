@@ -131,7 +131,7 @@ repos:
         entry: python tools/ci_coverage.py check
         language: python
         pass_filenames: false
-        files: ^(\.github/workflows/.*\.ya?ml|tools/ci_coverage\.py|tests/test_ci_workflows\.py)$
+        files: ^(\.github/(workflows/.*\.ya?ml|ci-coverage-migrations\.json)|tools/ci_coverage\.py|tests/test_ci_workflows\.py)$
 
       - id: crosstl-ci-workflow-tests
         name: CrossTL CI workflow tests
@@ -139,7 +139,7 @@ repos:
         language: python
         additional_dependencies: [pytest, hypothesis, numpy, jinja2, "PyYAML>=6,<7"]
         pass_filenames: false
-        files: ^(\.github/(workflows/.*\.ya?ml|actions/.*/action\.ya?ml|actionlint\.yaml)|tools/(compile_artifact_bundle|refresh_artifact_contract|ci_coverage|pytest_failure_summary|support_ci_summary|support_matrix|support_signals|sync_pr_issue_links|sync_support_issues)\.py|tests/(ci_helpers|test_compile_artifact_bundle|test_ci_workflows|test_tool_cli|test_demo_layout)\.py|demos/integrations/.*/tests/test_ci\.py|setup\.cfg)$
+        files: ^(\.github/(workflows/.*\.ya?ml|actions/.*/action\.ya?ml|actionlint\.yaml|ci-coverage-migrations\.json)|tools/(compile_artifact_bundle|refresh_artifact_contract|ci_coverage|pytest_failure_summary|support_ci_summary|support_matrix|support_signals|sync_pr_issue_links|sync_support_issues)\.py|tests/(ci_helpers|test_compile_artifact_bundle|test_ci_workflows|test_tool_cli|test_demo_layout)\.py|demos/integrations/.*/tests/test_ci\.py|setup\.cfg)$
 
       - id: crosstl-pr-issue-link-tests
         name: CrossTL PR issue link tests
