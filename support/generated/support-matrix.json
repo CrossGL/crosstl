@@ -124,6 +124,7 @@
           "tests/test_translator/test_narrow_integer_conversions.py",
           "tests/test_translator/test_vector_list_initialization.py",
           "tests/test_translator/test_half_buffer_runtime.py",
+          "tests/test_translator/test_bfloat_buffer_runtime.py",
           "tests/test_translator/test_half_copy_identity.py",
           "tests/test_translator/test_union_storage.py",
           "tests/test_translator/test_directx_metal_math.py",
@@ -144,7 +145,7 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1690
+        "test_count": 1705
       },
       "translator_codegen": {
         "exists": true,
@@ -268,6 +269,7 @@
           "tests/test_translator/test_narrow_integer_conversions.py",
           "tests/test_translator/test_vector_list_initialization.py",
           "tests/test_translator/test_half_buffer_runtime.py",
+          "tests/test_translator/test_bfloat_buffer_runtime.py",
           "tests/test_translator/test_half_copy_identity.py",
           "tests/test_translator/test_union_storage.py",
           "tests/test_translator/test_codegen/test_GLSL_storage_pointer_codegen.py",
@@ -291,7 +293,7 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1926
+        "test_count": 1941
       },
       "translator_codegen": {
         "exists": true,
@@ -663,6 +665,7 @@
           "tests/test_translator/test_narrow_integer_conversions.py",
           "tests/test_translator/test_vector_list_initialization.py",
           "tests/test_translator/test_half_buffer_runtime.py",
+          "tests/test_translator/test_bfloat_buffer_runtime.py",
           "tests/test_translator/test_half_copy_identity.py",
           "tests/test_translator/test_union_storage.py",
           "tests/test_translator/test_mlx_attention_reduce_runtime.py",
@@ -680,7 +683,7 @@
           "tests/test_translator/test_mlx_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2078
+        "test_count": 2093
       },
       "translator_codegen": {
         "exists": true,
