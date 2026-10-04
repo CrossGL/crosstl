@@ -1454,6 +1454,69 @@ def test_unary_dtype_rejection_uses_unsupported_width(tmp_path, monkeypatch):
     assert json.loads((args.output_dir / "result.json").read_text())["rejected"] is True
 
 
+@pytest.mark.parametrize("mode", ("copy-dtype", "cast-dtype", "full-dtype"))
+@pytest.mark.parametrize("fault", (None, "message", "accepted"))
+def test_dtype_rejection_matches_current_backend(tmp_path, monkeypatch, mode, fault):
+    import numpy as np
+
+    installed, arrays = [], []
+    message = (
+        "CrossTL casts require float16, float32, int32, uint32, int64, uint64 or bool arrays."
+        if mode == "cast-dtype"
+        else "CrossTL copying layouts require matching float16, float32, int32, uint32, int64, uint64 or bool arrays."
+    )
+    assert message in Path(verify.__file__).with_name("backend.cpp").read_text()
+
+    def array(values, dtype=None):
+        result = np.array(values, dtype=dtype)
+        arrays.append(result)
+        return result
+
+    def evaluate(value):
+        assert arrays[0].dtype == np.int16
+        if fault == "message":
+            raise ValueError("Unrelated runtime failure")
+        if fault != "accepted":
+            raise ValueError(message)
+
+    module = SimpleNamespace(
+        gpu="gpu",
+        int16=np.int16,
+        float32=np.float32,
+        metal=SimpleNamespace(is_available=lambda: False),
+        is_available=lambda device: bool(installed),
+        default_device=lambda: "gpu",
+        array=array,
+        transpose=np.transpose,
+        reshape=lambda values, shape, *, stream: values.reshape(shape),
+        full=np.full,
+        eval=evaluate,
+    )
+    monkeypatch.setitem(sys.modules, "mlx", SimpleNamespace(core=module))
+    monkeypatch.setitem(sys.modules, "mlx.core", module)
+    monkeypatch.setattr(
+        verify,
+        "HostRuntime",
+        lambda *args, **kwargs: SimpleNamespace(install=lambda: installed.append(True)),
+    )
+    monkeypatch.setenv("DEVICE", "cpu")
+    args = SimpleNamespace(
+        worker=mode, output_dir=tmp_path / "proof", packages=tmp_path
+    )
+    result = args.output_dir / "result.json"
+    if fault == "message":
+        with pytest.raises(ValueError, match="Unrelated runtime failure"):
+            verify.worker(args)
+    elif fault == "accepted":
+        with pytest.raises(RuntimeError, match="unexpectedly executed"):
+            verify.worker(args)
+    else:
+        verify.worker(args)
+        assert json.loads(result.read_text()) == {"rejected": True, "message": message}
+    if fault:
+        assert not result.exists()
+
+
 @pytest.mark.parametrize(
     "fault",
     [None, "missing", "payload", "broadcast", "shape", "dtype", "source", "promotion"],

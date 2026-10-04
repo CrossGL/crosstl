@@ -77,15 +77,17 @@ NEGATIVE_CHECKS = {
     "unary-allocation": "exceeds its allocation",
     "unary-strided-allocation": "exceeds its allocation",
     "unary-over-limit": "65535",
-    "copy-dtype": "matching float32, int32, uint32, int64, uint64 or bool",
+    "copy-dtype": "matching float16, float32, int32, uint32, int64, uint64 or bool",
     "copy-limit": "65535",
     "copy-allocation": "exceeds its allocation",
     "binary-dtype": "supported dtype",
     "binary-limit": "65535",
-    "cast-dtype": "casts require float32, int32, uint32, int64, uint64 or bool",
+    "cast-dtype": (
+        "casts require float16, float32, int32, uint32, int64, uint64 or bool"
+    ),
     "cast-limit": "65535",
     "cast-allocation": "exceeds its allocation",
-    "full-dtype": "matching float32, int32, uint32, int64, uint64 or bool",
+    "full-dtype": "matching float16, float32, int32, uint32, int64, uint64 or bool",
     "full-limit": "65535",
     "full-allocation": "exceeds its allocation",
 }
