@@ -147,7 +147,7 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1735
+        "test_count": 1737
       },
       "translator_codegen": {
         "exists": true,
@@ -297,7 +297,7 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1971
+        "test_count": 1973
       },
       "translator_codegen": {
         "exists": true,
@@ -689,7 +689,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2123
+        "test_count": 2125
       },
       "translator_codegen": {
         "exists": true,

@@ -71,6 +71,16 @@ WORDS = (
     0x7D01,
     0xFD55,
 )
+BITCAST_CASES = {
+    "half-to-bits": ("half", "ushort", "as_type<ushort>(values[i])"),
+    "bits-to-half": ("ushort", "half", "as_type<half>(values[i])"),
+    "bits-through-half": (
+        "ushort",
+        "ushort",
+        "as_type<ushort>(as_type<half>(values[i]))",
+    ),
+    "bits-copy": ("ushort", "ushort", "values[i]"),
+}
 
 
 def _validate_half(artifact, directory, target):
@@ -181,6 +191,61 @@ def _directx_buffers(request):
         state, request.artifact_path, request.artifact_path.with_suffix(".dxil")
     )
     return _prepare_directx_buffers(native.buffers)
+
+
+def _bitcast_case(root, case):
+    input_type, output_type, expression = BITCAST_CASES[case]
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+kernel void half_transport(const device {input_type}* values [[buffer(0)]],
+                           device {output_type}* results [[buffer(1)]],
+                           uint i [[thread_position_in_grid]]) {{
+    results[i + 1u] = {expression};
+}}
+"""
+    _, descriptor, package = _package(
+        root, "directx", "uint", (1, 1, 1), source=source, software_subgroups=False
+    )
+
+    def payload(source_type, words):
+        value = {
+            "dtype": "float16" if source_type == "half" else "uint16",
+            "shape": [len(words)],
+            "values": list(words),
+        }
+        if source_type == "half":
+            value["encoding"] = FLOAT16_BITS
+        return value
+
+    guard = 0x3555
+    inputs = {
+        "values": payload(input_type, WORDS),
+        "results": payload(output_type, [guard] * (len(WORDS) + 2)),
+    }
+    outputs = {"results": payload(output_type, [guard, *WORDS, guard])}
+    request = _request(descriptor, package, inputs, outputs, len(WORDS))
+    return request, _bound_values(descriptor, outputs)
+
+
+@pytest.mark.parametrize("case", BITCAST_CASES)
+def test_half_bitcast_controls_retain_two_byte_storage(tmp_path, case):
+    request, expected = _bitcast_case(tmp_path, case)
+    buffers = _directx_buffers(request)
+    assert len(buffers) == 2
+    for buffer in buffers:
+        words = WORDS if buffer.name == "values" else [0x3555] * (len(WORDS) + 2)
+        assert buffer.stride == 2
+        assert buffer.payload == struct.pack("<" + "H" * len(words), *words)
+        assert buffer.byte_length == len(words) * 2
+    assert expected["results"]["values"] == [0x3555, *WORDS, 0x3555]
+
+
+@pytest.mark.parametrize("case", BITCAST_CASES)
+def test_half_bitcast_controls_execute_natively(tmp_path, case):
+    if os.environ.get(REQUIRE_ENV) != "1" or sys.platform != "win32":
+        pytest.skip(f"set {REQUIRE_ENV}=1 on Windows for native half bitcasts")
+    request, expected = _bitcast_case(tmp_path, case)
+    _execute(request, expected, tmp_path, validate=_validate_half)
 
 
 def _assert_directx_subview_rejected(request):
