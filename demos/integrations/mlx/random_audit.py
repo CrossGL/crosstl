@@ -3,20 +3,12 @@
 import argparse
 import hashlib
 import json
-import shutil
 import struct
 import subprocess
-import tempfile
 from pathlib import Path
 
 from crosstl.project import (
-    ProjectConfig,
-    build_native_loader_abi_descriptor,
     build_native_loader_dispatch_request,
-    build_runtime_artifact_manifest,
-    build_runtime_loader_manifest,
-    build_runtime_package,
-    translate_project,
 )
 from crosstl.project.native_runtime_drivers import (
     DirectXComputeRuntime,
@@ -29,14 +21,19 @@ from crosstl.project.runtime_verification import (
     RuntimeParityExecutor,
     RuntimeTestAdapterSpec,
 )
-from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
+from demos.integrations.mlx.portable_host import random_packages
+from demos.integrations.mlx.portable_host.prepare import COMMIT
 from demos.integrations.mlx.portable_host.random_layout import RandomOutputLayout
+from demos.integrations.mlx.portable_host.random_packages import (
+    ENTRIES,
+    build_packages,
+    verify_source,
+)
 
-SOURCE = "mlx/backend/metal/kernels/random.metal"
-SOURCE_SHA256 = "f1a19b3f11b7b10203824890f13debc6d627959b4e7f17c219e2e9da553c1bd7"
-ENTRIES = ("rbitsc", "rbits")
 KEYS = ((0, 0), (0xFFFFFFFF, 0x80000000), (123, 456))
 WORD_COUNTS = (1, 2, 3, 8, 17)
+SOURCE = random_packages.SOURCE
+SOURCE_SHA256 = random_packages.SOURCE_SHA256
 BYTE_COUNTS = (1, 2, 3, 5, 6, 7, 9, 10, 11, 15, 17, 33)
 GUARD_COUNT = 17
 
@@ -275,95 +272,6 @@ def retain_native_module(details, target, destination):
     }[target]
     (destination / filename).write_bytes(content)
     return {"path": filename, "sizeBytes": len(content), "sha256": digest}
-
-
-def verify_source(root):
-    require_revision(root)
-    if hashlib.sha256((root / SOURCE).read_bytes()).hexdigest() != SOURCE_SHA256:
-        raise ValueError("Pinned random source hash differs")
-    changed = subprocess.check_output(
-        [
-            "git",
-            "-C",
-            str(root),
-            "status",
-            "--porcelain",
-            "--",
-            "mlx/backend/metal/kernels",
-        ],
-        text=True,
-        timeout=30,
-    )
-    if changed.strip():
-        raise ValueError("Pinned kernel tree has local changes")
-
-
-def build_packages(root, target, output):
-    verify_source(root)
-    with tempfile.TemporaryDirectory(prefix=".random-audit-", dir=root) as directory:
-        work = Path(directory)
-        config = ProjectConfig(
-            root=root,
-            source_roots=("mlx/backend/metal/kernels",),
-            include_patterns=(SOURCE,),
-            include_dirs=(".",),
-            targets=(target,),
-            output_dir=f"{work.name}/out",
-            entry_points={SOURCE: ENTRIES},
-            workgroup_size=(1, 1, 1),
-            index_range_assertions=(
-                [
-                    {
-                        "source": SOURCE,
-                        "function": function,
-                        "expression": expression,
-                        "minimum": 0,
-                        "maximum": 65535,
-                    }
-                    for function, expression in (
-                        ("rbitsc", "idx + i"),
-                        ("rbits", "idx + i"),
-                        ("rbits", "k1_elem"),
-                        ("rbits", "k2_elem"),
-                    )
-                ]
-                if target == "opengl"
-                else ()
-            ),
-        )
-        report = translate_project(config, format_output=False)
-        report.write_json(work / "report.json")
-        shutil.copytree(work, output / "translation")
-        payload = report.to_json()
-        if payload["summary"]["failedCount"] or len(payload["artifacts"]) != 2:
-            raise ValueError("Random translation did not produce both entries")
-        entries = {
-            item["path"]: item["entryPoint"]["source"] for item in payload["artifacts"]
-        }
-        manifest = build_runtime_artifact_manifest(work / "report.json")
-        if not manifest["success"]:
-            raise ValueError("Random runtime manifest is incomplete")
-        write_json(work / "artifacts.json", manifest)
-        package = output / "package"
-        result = build_runtime_package(work / "artifacts.json", package)
-        if not result["success"]:
-            raise ValueError("Random runtime package is incomplete")
-        loader = build_runtime_loader_manifest(package / "runtime-package.json")
-        if not loader["success"]:
-            raise ValueError("Random loader manifest is incomplete")
-        descriptors = {}
-        for unit in loader["loadUnits"]:
-            descriptor = build_native_loader_abi_descriptor(
-                loader, load_unit_id=unit["id"]
-            )
-            descriptors[entries[descriptor["source"]["artifactPath"]]] = descriptor
-        if set(descriptors) != set(ENTRIES):
-            raise ValueError("Random entry coverage differs")
-        write_json(
-            output / "index.json",
-            {"commit": COMMIT, "target": target, "descriptors": descriptors},
-        )
-        return descriptors
 
 
 class RandomAuditExecutor(RuntimeParityExecutor):

@@ -922,6 +922,55 @@ void AsType::eval_gpu(const std::vector<array>& inputs, array& out) {
   dispatch_cast(inputs, out);
 }
 
+void RandomBits::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() != 1 || inputs[0].dtype() != uint32 ||
+      inputs[0].ndim() < 1 || inputs[0].ndim() > 64 || inputs[0].shape(-1) != 2 ||
+      (out.dtype() != uint8 && out.dtype() != uint16 && out.dtype() != uint32)) {
+    throw std::invalid_argument("CrossTL random requires uint32 key pairs and unsigned byte, halfword or word output.");
+  }
+  if (out.size() == 0) {
+    out.set_data(allocator::malloc(0));
+    return;
+  }
+  const uint64_t key_count = inputs[0].size() / 2;
+  if (key_count == 0 || inputs[0].size() > 65535 || out.nbytes() > 65535 ||
+      out.size() % key_count != 0) {
+    throw std::invalid_argument("CrossTL random output or key count exceeds its bounds.");
+  }
+  const uint64_t bytes_per_key = out.nbytes() / key_count;
+  if (key_count * std::max<uint64_t>(4, bytes_per_key) + 17 > 65535) {
+    throw std::invalid_argument("CrossTL random native allocation exceeds its bounds.");
+  }
+  auto keys = gather_input(inputs[0]);
+  const auto span = gather_span(keys);
+  const char* entry = keys.flags().row_contiguous ? "rbitsc" : "rbits";
+  require_entry(entry);
+  const int32_t rank = static_cast<int32_t>(keys.ndim());
+  std::vector<int32_t> shape(keys.shape().begin(), keys.shape().end());
+  std::vector<int64_t> strides(keys.strides().begin(), keys.strides().end());
+  out.set_data(allocator::malloc(out.nbytes()));
+  CrosstlMlxBuffer buffers[] = {
+      {"keys", "uint32", keys.data<void>(), span, 0},
+      {"out", "int8", out.data<void>(), out.nbytes(), 1},
+      {"bytes_per_key", "uint64", const_cast<uint64_t*>(&bytes_per_key), 1, 0},
+      {"ndim", "int32", const_cast<int32_t*>(&rank), 1, 0},
+      {"key_shape", "int32", shape.data(), shape.size(), 0},
+      {"key_strides", "int64", strides.data(), strides.size(), 0},
+  };
+  const uint64_t words = (bytes_per_key + 3) / 4;
+  const CrosstlMlxLaunch launch{
+      {static_cast<uint32_t>(key_count), static_cast<uint32_t>((words + 1) / 2), 1},
+      {1, 1, 1}};
+  char error[2048] = {};
+  const int status = dispatch_callback.load()(
+      entry, buffers, 6, out.nbytes(), &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native random failed: ") + error);
+  }
+}
+
 void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   if (inputs.size() < 2 || inputs.size() > 11 ||

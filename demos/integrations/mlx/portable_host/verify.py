@@ -314,9 +314,10 @@ def verify_results(result, *, cpu=False):
     boolean_workloads.validate(result.get("booleans"))
 
 
-def upstream_test_sources(root):
+def upstream_test_sources(root, tests=None):
     sources = {}
-    paths = {f"python/tests/{test.split('.')[0]}.py" for test in UPSTREAM_TESTS}
+    tests = UPSTREAM_TESTS if tests is None else tests
+    paths = {f"python/tests/{test.split('.')[0]}.py" for test in tests}
     for name in sorted(paths):
         path = root / name
         pristine = subprocess.check_output(

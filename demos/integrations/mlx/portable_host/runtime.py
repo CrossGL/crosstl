@@ -30,6 +30,7 @@ from demos.integrations.mlx.portable_host import (
     column_reduction_layout,
     copy_layout,
     gather_dispatch,
+    random_dispatch,
     reduction_layout,
     row_reduction_layout,
     slice_update_layout,
@@ -62,6 +63,12 @@ from demos.integrations.mlx.portable_host.packages import (
     SELECTION_ENTRIES,
     SLICE_UPDATE_ENTRIES,
     UNARY_ENTRIES,
+)
+from demos.integrations.mlx.portable_host.random_packages import (
+    ENTRIES as RANDOM_ENTRIES,
+)
+from demos.integrations.mlx.portable_host.random_packages import (
+    load_index as load_random_index,
 )
 from demos.integrations.mlx.portable_host.reduction_packages import (
     COLUMN_ENTRIES,
@@ -187,6 +194,7 @@ class HostRuntime:
         absolute=None,
         integer64=None,
         slice_updates=None,
+        random=None,
     ):
         self.directory = Path(directory).resolve()
         self.trace = Path(trace).resolve()
@@ -205,6 +213,11 @@ class HostRuntime:
         self.descriptors = index["descriptors"]
         if set(self.descriptors) != set(ENTRIES):
             raise ValueError("Packages must contain the exact supported entry set")
+        self.random_directory = Path(random).resolve() if random is not None else None
+        if self.random_directory is not None:
+            self.descriptors.update(
+                load_random_index(self.random_directory, self.target)
+            )
         self.bitwise_directory = (
             Path(bitwise).resolve() if bitwise is not None else None
         )
@@ -344,6 +357,10 @@ class HostRuntime:
             return 1
 
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
+        if entry in RANDOM_ENTRIES:
+            return random_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         if entry.startswith(("gather", "scatter")):
             return gather_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch

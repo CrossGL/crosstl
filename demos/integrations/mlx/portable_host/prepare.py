@@ -48,6 +48,7 @@ def adapted_sources(original, primitives, events):
     """Render the complete adaptation without changing the source tree."""
     for primitive in (
         "Arange",
+        "RandomBits",
         "Reduce",
         "BitwiseBinary",
         "BitwiseInvert",

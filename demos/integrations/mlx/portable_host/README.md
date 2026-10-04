@@ -747,10 +747,57 @@ barrier participation. The host continues to reject this plan until the source
 semantics are established and the target lowering or checked launch contract
 preserves them. The existing looped and two-pass gates do not cover this kernel.
 
-## Random Generation Readiness
+## Random Generation
 
-`RandomBits` is not integrated into the host adapter. Successful compilation of
-the two DirectX random entries does not establish numerical parity. The
+The optional random package family connects `RandomBits::eval_gpu` to the
+unchanged `rbitsc` and `rbits` kernels. `HostRuntime(..., random=...)` loads and
+verifies both packages against the source pin, entry identities and artifact
+contents. Key arrays must contain uint32 pairs. Contiguous, transposed,
+broadcast and positive-stride key views use their original layout; negative
+strides are materialized by translated copy kernels. Empty outputs do not
+dispatch. The host validates input allocation spans, metadata, launch geometry
+and disjoint output storage before native execution.
+
+Native output is transferred as signed byte carriers and copied into the MLX
+array without computing random values on the CPU. Per-key slots shorter than
+four bytes use the padded layout described below. The allocation, including
+17 guard bytes, is limited to 65,535 native byte carriers. Missing packages and
+larger outputs fail explicitly. This is bounded synchronous host integration,
+not a complete random API or backend.
+
+```bash
+python -m demos.integrations.mlx.portable_host.random_packages \
+  --mlx-root mlx-upstream --target metal --output-dir random-packages
+python -m demos.integrations.mlx.portable_host.reduction_packages \
+  --mlx-root mlx-upstream --target metal --entry all_reduce_andbool_ --width 32 \
+  --output-dir random-reductions
+python -m demos.integrations.mlx.portable_host.verify_random \
+  --mlx-root mlx-upstream --packages host-packages --random random-packages \
+  --reductions random-reductions --output-dir random-evidence
+```
+
+The verifier runs 42 public-API workloads: key splitting with six key layouts,
+including empty outputs, and float32 uniform generation with three explicit
+seeds. It also runs the unchanged upstream `test_global_rng`, `test_key` and
+`test_key_split` in separate CPU and translated-backend processes. Results are
+checked against an integer Threefry reference, with exact float32 output words
+for the maintained uniform cases. Every random dispatch retains its uploads,
+complete native bytes, guards, logical output hash, generated source and native
+compiler evidence. Two separate processes check missing-package and oversized
+output rejection before dispatch. CI requires this verification on all three
+platforms. The full upstream `test_uniform` also needs bfloat16 operations;
+the complete random suite remains outside the demonstrated coverage.
+
+A full-module probe of the pinned `test_random.py` completes 14 tests on CPU
+and reports eight errors through generated Metal. The remaining work includes
+half-precision casts, arg-reductions, sorting, larger random and reduction
+allocations, and additional reduction package variants. Tests that inspect
+only lazy array metadata do not establish native execution. These failures are
+not skipped or reclassified by the required three-test profile above.
+
+### Kernel Evidence
+
+Successful compilation alone does not establish numerical parity. The
 `random_audit` command translates unchanged `random.metal`, creates public runtime
 packages and compares native results against an independent integer Threefry
 reference. It retains translation reports, descriptors, input values, native
@@ -811,8 +858,8 @@ native random cases. Metal retains each dispatched library and
 checks its hash against the execution identity; OpenGL retains the exact GLSL
 submitted to its native compiler, and DirectX retains the compiled DXIL module.
 These are kernel gates, not host integration or upstream-suite coverage.
-Partial-byte allocation and tail handling still need a complete runtime contract
-before enabling `RandomBits` host dispatch.
+The host integration above adds MLX dispatch and upstream-test evidence to these
+separate kernel checks.
 No kernel edits, generated-source repairs or readback corrections are applied.
 
 Separate original/generated Metal probes with tightly packed three-byte outputs
@@ -894,8 +941,9 @@ cover entry, helper, parameter and local names while preserving reflected entry
 identities. The unchanged Metal random audit now passes all 20 contiguous
 `rbitsc` and strided `rbits` workloads, including exact output bytes and neighboring
 guards. The OpenGL audit also passes these 20 workloads with shared union storage.
-DirectX also passes the same 20 cases on Windows. Partial-byte allocation remains
-separate work; `RandomBits` host dispatch remains disabled.
+DirectX also passes the same 20 cases on Windows. The separate partial-byte
+profile and host verification establish their own allocation and execution
+contracts; neither implies complete upstream-suite coverage.
 
 ## Run
 
