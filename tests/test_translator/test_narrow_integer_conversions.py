@@ -35,6 +35,11 @@ FORMS = (
     "compound",
     "prefix",
     "postfix",
+    "member_compound",
+    "member_or",
+    "member_prefix",
+    "member_postfix",
+    "nested_member_compound",
 )
 
 
@@ -66,10 +71,31 @@ def _case(root, target, signed, form):
     elif form == "array":
         body = f"{byte} values[2] = {{{byte}(0), {byte}(input_value)}};"
         expression = "int(values[1])"
-    elif form == "member":
+    elif form in {
+        "member",
+        "member_compound",
+        "member_or",
+        "member_prefix",
+        "member_postfix",
+        "nested_member_compound",
+    }:
         declarations = f"struct Cell {{ {byte} value; }};"
-        body = "Cell cell; cell.value = input_value;"
-        expression = "int(cell.value)"
+        member = "cell.value"
+        owner_type = "Cell"
+        if form == "nested_member_compound":
+            declarations += " struct Outer { Cell inner; };"
+            member, owner_type = "cell.inner.value", "Outer"
+        body = f"{owner_type} cell; {member} = input_value;"
+        expression = f"int({member})"
+        if form in {"member_compound", "nested_member_compound"}:
+            body += f" {member} += 3;"
+        elif form == "member_or":
+            body += f" {member} |= {byte}(1);"
+        elif form == "member_prefix":
+            expression = f"int(++{member})"
+        elif form == "member_postfix":
+            body += f" int old = int({member}++);"
+            expression = f"old + int({member}) * 1024"
     elif form == "conditional":
         body = f"{byte} value = input_value < 0 ? input_value : input_value + 256;"
     elif form == "single_evaluation":
@@ -118,11 +144,13 @@ kernel void byte_conversions(const device int* inputs [[buffer(0)]],
         narrowed = _narrow(value, signed)
         if form in {"vector", "vector_braces"}:
             narrowed += _narrow(value + 2, signed) * 1024
-        elif form == "compound":
+        elif form in {"compound", "member_compound", "nested_member_compound"}:
             narrowed = _narrow(narrowed + 3, signed)
-        elif form == "prefix":
+        elif form == "member_or":
+            narrowed = _narrow(narrowed | 1, signed)
+        elif form in {"prefix", "member_prefix"}:
             narrowed = _narrow(narrowed + 1, signed)
-        elif form == "postfix":
+        elif form in {"postfix", "member_postfix"}:
             narrowed += _narrow(narrowed + 1, signed) * 1024
         values.append(narrowed)
     count = len(VALUES) + 2
@@ -182,13 +210,23 @@ def test_narrow_integer_conversions_execute_natively(tmp_path, signed, form):
 
 @pytest.mark.parametrize("target", ("metal", "directx"))
 @pytest.mark.parametrize("update", ("values[index++] += 3", "values[index++]++"))
-def test_byte_update_does_not_repeat_an_index_effect(tmp_path, target, update):
+@pytest.mark.parametrize("member", (False, True), ids=("element", "field"))
+def test_byte_update_does_not_repeat_an_index_effect(tmp_path, target, update, member):
     source = tmp_path / "update.metal"
+    declaration = "uchar values[2] = {uchar(255), uchar(1)};"
+    result = "values[0]"
+    if member:
+        declaration = (
+            "Cell values[2]; values[0].value = uchar(255); values[1].value = uchar(1);"
+        )
+        update = update.replace("values[index++]", "values[index++].value")
+        result += ".value"
     source.write_text(
         "#include <metal_stdlib>\nusing namespace metal;\n"
+        "struct Cell { uchar value; };\n"
         "kernel void update(device int* results [[buffer(0)]]) {\n"
-        "uchar values[2] = {uchar(255), uchar(1)}; int index = 0;\n"
-        f"{update}; results[0] = int(values[0]) + index;\n}}\n"
+        f"{declaration} int index = 0;\n"
+        f"{update}; results[0] = int({result}) + index;\n}}\n"
     )
     error_type = (
         UnsupportedMetalFeatureError

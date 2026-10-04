@@ -12005,9 +12005,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         value_type = self.expression_result_type(target)
         if self.hlsl_byte_integer_shape(value_type) is None:
             return None
-        if not isinstance(target, (IdentifierNode, VariableNode)):
+        owner = target
+        while isinstance(owner, MemberAccessNode):
+            owner = owner.object_expr
+        if not isinstance(owner, (IdentifierNode, VariableNode)):
             raise DirectXContextualConversionError(
-                "DirectX byte updates require a stable scalar or vector variable",
+                "DirectX byte updates require a stable variable or field",
                 source_type=value_type,
                 target_type=value_type,
                 reason="byte-update-lvalue-unsupported",

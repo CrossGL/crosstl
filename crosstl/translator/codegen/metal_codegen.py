@@ -8854,10 +8854,13 @@ class MetalCodeGen:
         value_type = self.expression_result_type(target)
         if self.metal_byte_conversion_expression("value", value_type) is None:
             return None
-        if not isinstance(target, (IdentifierNode, VariableNode)):
+        owner = target
+        while isinstance(owner, MemberAccessNode):
+            owner = owner.object_expr
+        if not isinstance(owner, (IdentifierNode, VariableNode)):
             raise UnsupportedMetalFeatureError(
                 "byte-update",
-                "Byte updates require a stable scalar or vector variable",
+                "Byte updates require a stable variable or field",
                 reason="byte-update-lvalue-unsupported",
                 source_location=getattr(node, "source_location", None),
             )

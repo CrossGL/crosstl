@@ -2061,6 +2061,17 @@ Unchanged output after a rejected submission cannot be reported as successful
 execution. These Python-driver checks do not add limit validation to generated
 C++ loader adapters or establish complete host-runtime integration.
 
+Byte Field Updates
+------------------
+
+Byte-valued variables and fields retain their signed or unsigned eight-bit range
+after compound assignment and prefix/postfix updates on Metal, DirectX and
+OpenGL. This includes nested fields rooted in a stable local variable. Postfix
+expressions return the value before the update, including at overflow boundaries.
+Updates whose owner requires evaluating an array index or function call remain
+outside this contract; unsupported forms produce a diagnostic instead of
+duplicating an observable evaluation.
+
 Lossless Float Buffer Storage
 -----------------------------
 

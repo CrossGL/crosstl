@@ -33051,10 +33051,13 @@ complex64_t crossgl_complex64_mod_assign(
         }
         if is_postfix and self.current_discarded_expression is not expression:
             narrow = self.glsl_narrow_integer_contract(expected_type)
+            owner = expression.operand
+            while isinstance(owner, MemberAccessNode):
+                owner = owner.object_expr
             if (
                 narrow is None
                 or narrow["bits"] != 8
-                or not isinstance(expression.operand, (IdentifierNode, VariableNode))
+                or not isinstance(owner, (IdentifierNode, VariableNode))
             ):
                 self.glsl_scalar_conversion_error(
                     expression,
