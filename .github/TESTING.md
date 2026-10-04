@@ -29,6 +29,12 @@ Each native job keeps its source pin, numerical comparisons, guards, bounded exe
 and retained evidence. Moving a compiler-only job must not disable an execution
 gate or be presented as proof of runtime parity.
 
+Concurrency is scoped to each job and matrix leg on a branch. Running native
+work is allowed to finish, while only the newest waiting revision of that job
+is retained. A long Metal corpus run therefore does not hold up an unrelated
+DirectX or OpenGL check from the next revision. The workflow does not serialize
+all platforms behind one workflow-wide queue.
+
 Project demo checks run for changes to source, tests, demo inputs, support
 contracts and build/toolchain configuration. Root documentation-only changes do
 not launch the native demo matrices. Scheduled corpus audits remain enabled.

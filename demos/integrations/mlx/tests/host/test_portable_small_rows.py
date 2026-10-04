@@ -762,8 +762,12 @@ def test_native_host_ci_preserves_active_execution():
     workflow = yaml.safe_load(
         Path(".github/workflows/demo-project-testing.yml").read_text()
     )
-    concurrency = workflow["concurrency"]
-    assert concurrency["group"] == "project-demo-testing-${{ github.ref }}"
+    assert "concurrency" not in workflow
+    concurrency = workflow["jobs"]["small-row-reductions"]["concurrency"]
+    assert concurrency["group"] == (
+        "${{ github.workflow }}-${{ github.ref }}-small-row-reductions-"
+        "${{ strategy.job-index }}"
+    )
     assert concurrency["cancel-in-progress"] is False
     assert concurrency.get("queue", "single") == "single"
 

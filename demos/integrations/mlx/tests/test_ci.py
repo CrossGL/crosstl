@@ -59,6 +59,27 @@ def test_project_demo_triggers_cover_code_without_root_documentation():
         assert not any(fnmatchcase(path, pattern) for pattern in paths), path
 
 
+def test_project_demo_queues_each_job_and_matrix_leg_independently():
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    coverage = _load_ci_coverage_module()
+    assert not coverage.nested_yaml_section(workflow, "concurrency", 0)
+    jobs = coverage.workflow_job_names(workflow)
+    assert len(jobs) == 32
+    groups = set()
+    for name in jobs:
+        job = _workflow_job_section(workflow, name)
+        section = coverage.nested_yaml_section(job, "concurrency", 4)
+        expected = "${{ github.workflow }}-${{ github.ref }}-" + name
+        if coverage.nested_yaml_section(job, "matrix", 6):
+            expected += "-${{ strategy.job-index }}"
+        assert section == [
+            "      group: " + expected,
+            "      cancel-in-progress: false",
+        ]
+        assert expected not in groups
+        groups.add(expected)
+
+
 def test_metal_execution_budget_preserves_all_storage_cases():
     job = _workflow_job_section(_workflow_texts()["demo-project-testing.yml"], "metal")
     step = _load_ci_coverage_module().workflow_step_section(
