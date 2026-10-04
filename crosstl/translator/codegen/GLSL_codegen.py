@@ -138,6 +138,10 @@ from .enum_utils import (
     sanitize_type_name,
     substitute_generic_type_name,
 )
+from .for_in_utils import (
+    generate_typed_array_for_in,
+    validate_range_reference_argument,
+)
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
@@ -33221,6 +33225,9 @@ complex64_t crossgl_complex64_mod_assign(
         )
 
         try:
+            if getattr(node, "binding_type", None) is not None:
+                self.glsl_for_in_fixed_array_type(node, pattern, iterable_node)
+                return generate_typed_array_for_in(self, node, indent, target="opengl")
             binding_qualifier = self.validate_glsl_for_in_binding(node, pattern)
             pattern_view = self.current_glsl_scalar_array_view_plans.get(id(node))
 
@@ -33516,6 +33523,24 @@ complex64_t crossgl_complex64_mod_assign(
         reason,
     ):
         descriptions = {
+            "binding-address-view-unsupported": (
+                "requires an addressable loop binding that cannot retain its source identity"
+            ),
+            "reference-helper-transport-unsupported": (
+                "passes a reference binding to a helper whose parameter copies cannot preserve aliasing"
+            ),
+            "reference-container-shadowed": (
+                "has a reference whose binding or container is shadowed in the loop body"
+            ),
+            "reference-element-type-mismatch": (
+                "requires a reference conversion that cannot retain the source element"
+            ),
+            "unsupported-container-identity": (
+                "requires an array container identity that cannot be captured"
+            ),
+            "unresolved-selector-type": (
+                "has an array selector without a resolved integer type"
+            ),
             "invalid-extent": "has a negative fixed-array extent",
             "mutable-reference-binding": (
                 "requires mutable reference binding, which GLSL cannot preserve"
@@ -37569,7 +37594,12 @@ complex64_t crossgl_complex64_mod_assign(
                 (
                     getattr(parameter, "name", None),
                     self.type_name_string(raw_type),
-                    tuple(self.glsl_parameter_qualifiers(parameter)),
+                    tuple(self.glsl_parameter_qualifiers(parameter))
+                    + (
+                        ("in",)
+                        if "in" in (getattr(parameter, "qualifiers", []) or [])
+                        else ()
+                    ),
                 )
             )
         return infos
@@ -38437,6 +38467,7 @@ complex64_t crossgl_complex64_mod_assign(
     def generate_function_call_argument(
         self, func_name, arg, param_name, param_type, param_qualifiers=()
     ):
+        validate_range_reference_argument(self, arg, param_type, param_qualifiers)
         private_binding = self.glsl_private_pointer_call_argument_binding(
             func_name,
             param_name,

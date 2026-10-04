@@ -17713,7 +17713,7 @@ def test_for_in_unknown_or_user_defined_iterables_are_structured_diagnostics(
     assert diagnostic.reason == reason
 
 
-def test_for_in_mutable_reference_binding_is_structured_diagnostic():
+def test_for_in_mutable_reference_binding_updates_original_array():
     shader = """
     shader MutableReferenceForIn {
         void helper() {
@@ -17730,15 +17730,12 @@ def test_for_in_mutable_reference_binding_is_structured_diagnostic():
     )
     loop.binding_type = ReferenceType(PrimitiveType("uint"), is_mutable=True)
 
-    with pytest.raises(DirectXForInIterableError) as exc_info:
-        HLSLCodeGen().generate(ast)
-
-    diagnostic = exc_info.value
-    assert diagnostic.binding_type == "uint&"
-    assert diagnostic.reason == "mutable-reference-binding"
+    generated = HLSLCodeGen().generate(ast)
+    assert "values[value_crossgl_index] += 1u;" in generated
+    assert "value_crossgl_iterable" not in generated
 
 
-def test_for_in_immutable_reference_binding_lowers_to_const_value():
+def test_for_in_immutable_reference_binding_reads_original_array():
     shader = """
     shader ImmutableReferenceForIn {
         void helper() {
@@ -17757,7 +17754,8 @@ def test_for_in_immutable_reference_binding_lowers_to_const_value():
 
     generated_code = HLSLCodeGen().generate(ast)
 
-    assert "const uint value = value_crossgl_iterable[" in generated_code
+    assert "uint copy = values[value_crossgl_index];" in generated_code
+    assert "value_crossgl_iterable" not in generated_code
 
 
 def test_for_in_empty_fixed_array_omits_unreachable_loop_body():

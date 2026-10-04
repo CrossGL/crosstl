@@ -124,6 +124,10 @@ from .enum_utils import (
     infer_enum_constructor_type,
     sanitize_type_name,
 )
+from .for_in_utils import (
+    generate_typed_array_for_in,
+    validate_range_reference_argument,
+)
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
@@ -20675,6 +20679,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
         try:
+            if getattr(node, "binding_type", None) is not None:
+                return generate_typed_array_for_in(self, node, indent, target="directx")
             pattern_name = self.hlsl_declaration_identifier_name(pattern)
             self.current_unsupported_glsl_buffer_block_local_variables.discard(pattern)
 
@@ -20903,6 +20909,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         reason,
     ):
         descriptions = {
+            "reference-container-shadowed": (
+                "has a reference whose binding or container is shadowed in the loop body"
+            ),
+            "reference-helper-transport-unsupported": (
+                "passes a reference binding to a helper whose parameter copies cannot preserve aliasing"
+            ),
+            "reference-element-type-mismatch": (
+                "requires a reference conversion that cannot retain the source element"
+            ),
+            "unsupported-container-identity": (
+                "requires an array container identity that cannot be captured"
+            ),
+            "unresolved-selector-type": (
+                "has an array selector without a resolved integer type"
+            ),
             "invalid-extent": "has a negative fixed-array extent",
             "mutable-reference-binding": (
                 "requires mutable reference binding, which HLSL cannot preserve"
@@ -39408,10 +39429,29 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         private_pointer_indices = self.function_private_pointer_parameter_indices.get(
             type_func_name or func_name, {}
         )
+        range_reference_parameters = []
+        if getattr(self, "current_for_in_reference_bindings", {}):
+            candidates = self.hlsl_function_overloads_by_name.get(
+                parameter_lookup_name, ()
+            ) or [self.current_hlsl_available_functions.get(parameter_lookup_name)]
+            range_reference_parameters = [
+                list(getattr(candidate, "parameters", []) or [])
+                for candidate in candidates
+                if candidate is not None
+            ]
         rendered_args = []
         for index, arg in enumerate(args):
             expected_type = (
                 parameter_types[index] if index < len(parameter_types) else None
+            )
+            reference_qualifiers = {
+                qualifier
+                for parameters in range_reference_parameters
+                if index < len(parameters)
+                for qualifier in self.hlsl_parameter_qualifiers(parameters[index])
+            }
+            validate_range_reference_argument(
+                self, arg, expected_type, reference_qualifiers
             )
             if isinstance(arg, ArrayLiteralNode) and self.hlsl_outer_array_type(
                 expected_type

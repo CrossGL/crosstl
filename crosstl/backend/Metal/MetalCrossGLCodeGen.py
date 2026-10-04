@@ -10006,16 +10006,38 @@ class MetalToCrossGLConverter:
 
     def generate_range_for_loop(self, node, indent, is_main):
         iterable = self.generate_expression(node.iterable, is_main)
+        iterable_type = self.expression_metal_type(node.iterable)
+        element_type = self.split_outer_metal_declarator_array_type(iterable_type)
+        standard_array = self.metal_array_type_parts(iterable_type)
+        if standard_array is not None:
+            element_type = standard_array[0]
+        qualifiers = self.metal_declaration_type_qualifiers(node)
+        binding_type = str(node.vtype).strip()
+        reference = binding_type.endswith("&")
+        value_type = binding_type.rstrip("&").strip()
+        if value_type == "auto" and element_type is not None:
+            value_type = element_type
+        mapped_type = self.map_type(value_type)
+        if reference:
+            mapped_type += "&" if "const" in qualifiers else "& mut"
+        qualifier_text = " ".join(qualifiers)
+        declaration = f"{qualifier_text} {mapped_type}".strip()
+        previous_variable_types = dict(self.current_variable_types)
+        previous_variable_qualifiers = dict(self.current_variable_type_qualifiers)
         self.template_binding_shadow_scopes.append(set())
         try:
+            self.current_variable_types[node.name] = value_type
+            self.current_variable_type_qualifiers[node.name] = qualifiers
             if any(node.name in bindings for bindings in self.template_value_bindings):
                 self.template_binding_shadow_scopes[-1].add(node.name)
-            code = f"for {node.name} in {iterable} {{\n"
+            code = f"for {node.name}: {declaration} in {iterable} {{\n"
             code += self.generate_scoped_function_body(node.body, indent + 1, is_main)
             code += "    " * indent + "}\n"
             return code
         finally:
             self.template_binding_shadow_scopes.pop()
+            self.current_variable_types = previous_variable_types
+            self.current_variable_type_qualifiers = previous_variable_qualifiers
 
     def generate_while_loop(self, node, indent, is_main):
         condition = self.generate_expression(node.condition, is_main)

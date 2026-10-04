@@ -819,10 +819,22 @@ execute the original source; each target retains compiled artifacts and guarded
 readbacks. Byte and vector storage have a separate bounded macOS step so these
 checks do not consume the general-gather execution budget.
 
-These controls do not establish random-generation parity. The unchanged Metal
-random audit now passes vector initialization but still fails native compilation
-on fixed-array range iteration and aggregate name shadowing; `RandomBits` host
-dispatch remains disabled.
+Range bindings retain their declared types and reference qualifiers through the
+shared representation. Generated Metal uses native array iteration; DirectX and
+OpenGL capture subarray selectors once and read each element from the original
+array. References retain their storage identity rather than using a copy with
+delayed writeback. Eighteen required native controls per target cover conversion,
+copy/reference distinctions, changes through aliases, nested arrays, global
+tables, member arrays, early exits and binding scopes. Metal also executes the
+original sources. Unsupported reference shadowing, addressable binding views and
+reference transport through helper parameters remain explicit diagnostics on the portable targets;
+ordinary by-value helper arguments and copied loop bindings are covered separately
+([#2064](https://github.com/CrossGL/crosstl/issues/2064)).
+
+The unchanged Metal random audit now passes all ten contiguous `rbitsc`
+workloads, including exact output bytes and neighboring guards. The ten `rbits`
+workloads still fail native compilation on aggregate name shadowing. This is not
+complete random-generation parity; `RandomBits` host dispatch remains disabled.
 
 ## Run
 

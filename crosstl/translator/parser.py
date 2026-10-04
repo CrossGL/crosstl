@@ -4199,6 +4199,12 @@ class Parser:
         """Parse a ``for pattern in iterable`` loop after ``for`` is consumed."""
         pattern = self.current_token[1]
         self.eat("IDENTIFIER")
+        binding_type = None
+        binding_qualifiers = []
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            binding_qualifiers = self.parse_variable_qualifiers()
+            binding_type = self.parse_type()
         self.eat("IN")
         previous_suppression = getattr(self, "suppress_braced_constructor", False)
         self.suppress_braced_constructor = True
@@ -4207,13 +4213,19 @@ class Parser:
         finally:
             self.suppress_braced_constructor = previous_suppression
 
-        self.enter_value_type_scope({pattern: None})
+        self.enter_value_type_scope({pattern: binding_type})
         try:
             body = self.parse_statement()
         finally:
             self.restore_value_type_scope()
 
-        return ForInNode(pattern=pattern, iterable=iterable, body=body)
+        return ForInNode(
+            pattern=pattern,
+            iterable=iterable,
+            body=body,
+            binding_type=binding_type,
+            binding_qualifiers=binding_qualifiers,
+        )
 
     def parse_for_loop_variable_declaration(self):
         """Parse variable declarations in for loops (without consuming semicolon)."""

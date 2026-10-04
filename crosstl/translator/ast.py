@@ -979,12 +979,20 @@ class ForInNode(StatementNode):
     """For-in loop (Rust, Python style)."""
 
     def __init__(
-        self, pattern: str, iterable: "ExpressionNode", body: StatementNode, **kwargs
+        self,
+        pattern: str,
+        iterable: "ExpressionNode",
+        body: StatementNode,
+        binding_type=None,
+        binding_qualifiers=None,
+        **kwargs,
     ):
         super().__init__(**kwargs)
         self.pattern = pattern
         self.iterable = iterable
         self.body = body
+        self.binding_type = binding_type
+        self.binding_qualifiers = list(binding_qualifiers or [])
 
     def __repr__(self):
         return f"ForInNode(pattern={self.pattern})"

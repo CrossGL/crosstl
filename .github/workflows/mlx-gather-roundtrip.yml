@@ -65,6 +65,7 @@ jobs:
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_REQUIRE_MLX_OPENGL_GENERAL_GATHER: "1"
+          CROSTL_REQUIRE_RANGE_BINDINGS: "1"
           CROSTL_REQUIRE_VECTOR_LIST_INITIALIZATION: "1"
           CROSTL_REQUIRE_OPENGL_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_OPENGL_FLOAT_ATOMIC_STORAGE: "1"
@@ -92,6 +93,7 @@ jobs:
               --basetemp=.mlx-gather-opengl/pytest \
               --junitxml=.mlx-gather-opengl/results.xml \
               tests/test_translator/test_mlx_general_gather_opengl.py \
+              tests/test_translator/test_range_bindings.py \
               tests/test_translator/test_vector_list_initialization.py \
               tests/test_translator/test_float_atomic_memory.py \
               tests/test_translator/test_float_atomic_compare_exchange.py \
@@ -194,6 +196,7 @@ jobs:
               2>&1 | tee .mlx-gather/execution.log
       - name: Validate Metal byte and vector storage
         env:
+          CROSTL_REQUIRE_RANGE_BINDINGS: "1"
           CROSTL_REQUIRE_VECTOR_LIST_INITIALIZATION: "1"
           CROSTL_REQUIRE_BYTE_BUFFER_RUNTIME: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
@@ -204,6 +207,7 @@ jobs:
             python -m pytest -q -n auto --dist loadgroup --durations=20 \
               --basetemp=.mlx-gather/storage/pytest \
               --junitxml=.mlx-gather/storage/results.xml \
+              tests/test_translator/test_range_bindings.py \
               tests/test_translator/test_vector_list_initialization.py \
               tests/test_translator/test_byte_buffer_runtime.py \
               tests/test_translator/test_metal_narrow_aggregate_runtime.py \
@@ -332,6 +336,7 @@ jobs:
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_REQUIRE_MLX_DIRECTX_GENERAL_GATHER: "1"
+          CROSTL_REQUIRE_RANGE_BINDINGS: "1"
           CROSTL_REQUIRE_VECTOR_LIST_INITIALIZATION: "1"
           CROSTL_REQUIRE_FLOAT_ATOMIC_MEMORY: "1"
           CROSTL_REQUIRE_FLOAT_ATOMIC_COMPARE_EXCHANGE: "1"
@@ -359,6 +364,7 @@ jobs:
               --basetemp=.mlx-gather-directx/pytest \
               --junitxml=.mlx-gather-directx/results.xml \
               tests/test_translator/test_mlx_general_gather_directx.py \
+              tests/test_translator/test_range_bindings.py \
               tests/test_translator/test_vector_list_initialization.py \
               tests/test_translator/test_float_atomic_memory.py \
               tests/test_translator/test_mlx_float_atomic_memory.py \

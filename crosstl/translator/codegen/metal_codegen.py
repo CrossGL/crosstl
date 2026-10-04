@@ -2820,7 +2820,7 @@ class MetalCodeGen:
                 qualifier = self.global_variable_qualifier(node)
                 declaration = f"{qualifier}{declaration}"
                 self.record_metal_program_scope_value_global(
-                    var_name, vtype, qualifier, node
+                    var_name, getattr(node, "var_type", vtype), qualifier, node
                 )
                 initial_value = getattr(node, "initial_value", None)
                 if initial_value is not None:
@@ -9164,8 +9164,9 @@ class MetalCodeGen:
                 )
             array_type_name = self.type_name_string(array_type)
             if array_type_name and "[" in array_type_name and "]" in array_type_name:
-                base_type, _ = split_array_type_suffix(array_type_name)
-                return base_type
+                return self.metal_for_in_array_element_type(
+                    array_type_name, allow_unsized=True
+                )
             metal_array_element_type = self.metal_array_element_type(array_type)
             if metal_array_element_type is not None:
                 return metal_array_element_type
@@ -9957,23 +9958,80 @@ class MetalCodeGen:
         )
 
         try:
-            self.local_variable_types[pattern] = "int"
-            self.current_unsupported_glsl_buffer_block_local_variables.discard(pattern)
-
+            if getattr(node, "binding_type", None) is not None and (
+                isinstance(iterable_node, RangeNode)
+                or self.metal_for_in_array_element_type(
+                    self.expression_result_type(iterable_node)
+                )
+                is None
+            ):
+                raise UnsupportedMetalFeatureError(
+                    "typed for-in iterable",
+                    f"Metal typed for-in binding '{pattern}' requires a fixed array",
+                    missing_capabilities=("metal.fixed-array-for-in-lowering",),
+                    operation="for-in",
+                    reason="unsupported-iterable-type",
+                    source_location=getattr(node, "source_location", None),
+                )
             if isinstance(iterable_node, RangeNode):
                 start = self.generate_expression(iterable_node.start)
                 end = self.generate_expression(iterable_node.end)
+                pattern_type = "int"
                 comparator = "<=" if iterable_node.inclusive else "<"
                 code = (
                     f"{indent_str}for (int {pattern} = {start}; "
                     f"{pattern} {comparator} {end}; ++{pattern}) {{\n"
                 )
             else:
+                iterable_type = self.expression_result_type(iterable_node)
+                element_type = self.metal_for_in_array_element_type(iterable_type)
                 iterable = self.generate_expression(iterable_node)
-                code = (
-                    f"{indent_str}for (int {pattern} = 0; {pattern} < {iterable}; "
-                    f"++{pattern}) {{\n"
-                )
+                if element_type is not None:
+                    binding_type = getattr(node, "binding_type", None)
+                    reference = isinstance(binding_type, ReferenceType)
+                    value_type = (
+                        binding_type.referenced_type if reference else binding_type
+                    )
+                    pattern_type = self.type_name_string(value_type)
+                    if pattern_type in {None, "auto"}:
+                        pattern_type = element_type
+                    qualifiers = set(getattr(node, "binding_qualifiers", []) or [])
+                    readonly = bool(qualifiers & {"const", "constant", "readonly"})
+                    readonly |= reference and not binding_type.is_mutable
+                    declaration = self.map_type(pattern_type)
+                    if reference:
+                        if (
+                            self.metal_for_in_array_element_type(pattern_type)
+                            is not None
+                        ):
+                            declaration = "auto"
+                        address_space = self.argument_address_space(iterable_node)
+                        address_space = address_space or "thread"
+                        declaration = f"{address_space} {declaration}&"
+                    if readonly:
+                        declaration = f"const {declaration}"
+                    code = (
+                        f"{indent_str}for ({declaration} {pattern} : {iterable}) {{\n"
+                    )
+                elif self.is_scalar_integer_type(iterable_type):
+                    pattern_type = "int"
+                    code = (
+                        f"{indent_str}for (int {pattern} = 0; {pattern} < {iterable}; "
+                        f"++{pattern}) {{\n"
+                    )
+                else:
+                    raise UnsupportedMetalFeatureError(
+                        "for-in iterable",
+                        f"Metal for-in binding '{pattern}' requires a fixed array or "
+                        f"integer bound, got '{self.type_name_string(iterable_type)}'",
+                        missing_capabilities=("metal.fixed-array-for-in-lowering",),
+                        operation="for-in",
+                        reason="unsupported-iterable-type",
+                        source_location=getattr(node, "source_location", None),
+                    )
+
+            self.local_variable_types[pattern] = pattern_type
+            self.current_unsupported_glsl_buffer_block_local_variables.discard(pattern)
 
             code += self.generate_scoped_statement_body(
                 getattr(node, "body", []), indent + 1
@@ -9985,6 +10043,18 @@ class MetalCodeGen:
             self.current_unsupported_glsl_buffer_block_local_variables = (
                 previous_unsupported_locals
             )
+
+    def metal_for_in_array_element_type(self, iterable_type, *, allow_unsized=False):
+        type_name = self.type_name_string(iterable_type)
+        if not type_name:
+            return None
+        type_name = self.resolve_metal_type_alias(type_name)
+        base_type, suffix = split_array_type_suffix(type_name)
+        if suffix:
+            match = re.fullmatch(r"\[([^\]]*)\](.*)", suffix)
+            if match is not None and (allow_unsized or match.group(1)):
+                return f"{base_type}{match.group(2)}"
+        return self.metal_array_element_type(type_name)
 
     def generate_while(self, node, indent):
         indent_str = "    " * indent

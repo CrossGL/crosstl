@@ -4509,15 +4509,24 @@ class MetalParser:
         return False
 
     def parse_range_for_statement(self):
-        vtype, _qualifiers = self.parse_type_specifier()
-        name, _array_sizes, _type_suffix, _grouped_suffix = self.parse_declarator()
+        vtype, qualifiers = self.parse_type_specifier()
+        name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
         self.eat("COLON")
         iterable = self.parse_expression(allow_comma=True)
         self.eat("RPAREN")
 
         body = self.parse_statement_body()
 
-        return RangeForNode(vtype, name, iterable, body)
+        node = RangeForNode(
+            self.apply_declarator_type_suffix(vtype, type_suffix),
+            name,
+            iterable,
+            body,
+            qualifiers=qualifiers,
+        )
+        node.array_sizes = array_sizes
+        self.apply_declarator_metadata(node, type_suffix, grouped_suffix)
+        return node
 
     def parse_for_init(self):
         if self.is_declaration_start():

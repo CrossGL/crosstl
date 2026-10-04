@@ -2918,6 +2918,8 @@ def test_codegen_comma_separated_pointer_declarators_keep_own_suffixes():
 def test_codegen_range_for_loop_from_mlx_random():
     code = """
     void mix_values() {
+        const uint rotations[1][2] = {{13u, 15u}};
+        uint value = 0u;
         for (auto r : rotations[0]) {
             value += r;
         }
@@ -2925,7 +2927,7 @@ def test_codegen_range_for_loop_from_mlx_random():
     """
     crossgl = convert(code)
 
-    assert "for r in rotations[0] {" in crossgl
+    assert "for r: uint in rotations[0] {" in crossgl
     assert "value += r;" in crossgl
 
 
