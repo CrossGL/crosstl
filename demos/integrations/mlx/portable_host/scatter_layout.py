@@ -29,6 +29,11 @@ METADATA = {
 ATOMIC_TYPES = {"int32": "int", "uint32": "uint", "float32": "float"}
 
 
+def atomic_storage_dtype(dtype, target):
+    """Return the reflected physical type of the output atomic allocation."""
+    return "uint32" if dtype == "float32" and target == "opengl" else dtype
+
+
 def signature(entry):
     match = re.fullmatch(
         r"scatter(int32|uint32|float32)(int32|uint32|int64|uint64)_(none|sum|prod|min|max)_"

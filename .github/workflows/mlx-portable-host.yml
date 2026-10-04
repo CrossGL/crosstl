@@ -1457,6 +1457,9 @@ jobs:
           - os: windows-2025
             target: directx
             profile: float32
+          - os: ubuntu-24.04
+            target: opengl
+            profile: float32
           - os: xcode-27
             target: metal
             profile: float32

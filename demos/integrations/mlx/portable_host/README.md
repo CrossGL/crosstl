@@ -212,11 +212,14 @@ signed results retain their exact bit patterns.
 A separate three-OS CI job requires this proof without extending the existing
 indexing job's execution budget.
 
-Metal and DirectX also route float32 indexed assignment and `array.at` updates
-through the same unchanged scatter kernels. Initial output storage, updates and
-readbacks retain raw binary32 encoding; the adapter validates the reflected float
-atomic member before dispatch. OpenGL rejects nonempty float scatter until its
-physical atomic storage is supported.
+Metal, DirectX and OpenGL also route float32 indexed assignment and `array.at`
+updates through the same unchanged scatter kernels. Initial output storage,
+updates and readbacks preserve the original binary32 words. Metal and DirectX
+retain float32 bindings with explicit binary32 encoding. OpenGL uses a uint32
+atomic output allocation without float encoding; its non-atomic update buffer
+remains float32 with binary32 encoding. The adapter validates both roles and the
+reflected atomic member before dispatch, and copies raw readback words into the
+MLX result without numeric conversion.
 
 ```sh
 python -m demos.integrations.mlx.portable_host.verify_scatter \
@@ -229,8 +232,8 @@ all existing view layouts and work-per-thread settings. Fractional arithmetic
 inputs have exactly representable results regardless of update order; a
 replacement case preserves signed zero, subnormals, infinities and NaN payloads.
 It also runs the unchanged list-index assignment test above, which is integer
-coverage, not an additional upstream float test. Required Windows and Xcode 27.1
-jobs retain separate artifacts; the original three-OS integer profile remains
+coverage, not an additional upstream float test. Required Linux, Windows and
+Xcode 27.1 jobs retain separate artifacts; the original three-OS integer profile remains
 unchanged. These bounded workloads do not establish arbitrary floating reduction
 order, nonfinite arithmetic or full upstream indexing-suite parity.
 
@@ -290,7 +293,7 @@ inputs have order-independent, exactly representable results; replacement also
 checks signed zero, subnormals, infinities and NaN payloads as raw binary32 words.
 Every case retains 32 output guard words. Required macOS and Windows checks run
 the generated kernels; macOS also executes the original pinned wrapper. This is
-kernel execution coverage, not float scatter routing through the MLX host API.
+kernel execution coverage; the separate host profile above verifies MLX dispatch.
 
 OpenGL lowers binary32 atomic allocations to unsigned-word storage and keeps
 logical float arithmetic behind bit-preserving loads and stores. Struct-backed

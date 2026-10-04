@@ -87,6 +87,7 @@ def test_float_scatter_requires_distinct_native_ci_profiles():
         ("opengl", "integer"),
         ("metal", "float32"),
         ("directx", "float32"),
+        ("opengl", "float32"),
     }
     assert (
         next(
@@ -195,7 +196,7 @@ def test_float_scatter_all_order_intermediates_are_exact(case):
             assert all(np.isfinite(float(value)) for value in [initial, *values])
 
 
-@pytest.mark.parametrize("target", ("metal", "directx"))
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
 @pytest.mark.parametrize("case", ACTIVE, ids=lambda case: case["id"])
 def test_float_scatter_audit_reconstructs_raw_uploads(tmp_path, target, case):
     event = scatter_event(tmp_path, case, target)
@@ -209,7 +210,7 @@ def test_float_scatter_audit_reconstructs_raw_uploads(tmp_path, target, case):
     assert actual == words(np, expected)
 
 
-@pytest.mark.parametrize("target", ("metal", "directx"))
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
 @pytest.mark.parametrize(
     "fault",
     (
@@ -239,15 +240,21 @@ def test_float_scatter_rejects_corrupt_raw_evidence(tmp_path, target, fault):
             "large-upload": 2**32,
         }[fault]
     elif fault == "upload-encoding":
-        event["inputs"]["out"].pop("encoding")
+        if target == "opengl":
+            event["inputs"]["out"]["encoding"] = FLOAT32_BITS
+        else:
+            event["inputs"]["out"].pop("encoding")
     elif fault == "request-encoding":
-        event["details"]["request"]["buffers"]["out"].pop("encoding")
+        if target == "opengl":
+            event["details"]["request"]["buffers"]["out"]["encoding"] = FLOAT32_BITS
+        else:
+            event["details"]["request"]["buffers"]["out"].pop("encoding")
     elif fault.startswith("member"):
         member = event["details"]["request"]["buffers"]["out"]["binding"]["metadata"][
             "scalarLayout"
         ]["structMembers"][0]
         member["physicalType" if fault == "member-type" else "offsetBytes"] = (
-            "uint" if fault == "member-type" else 4
+            ("float" if target == "opengl" else "uint") if fault == "member-type" else 4
         )
     elif fault.endswith("readback"):
         event["scatterValues"][0] = {
@@ -266,20 +273,39 @@ def test_float_scatter_rejects_corrupt_raw_evidence(tmp_path, target, fault):
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
 @pytest.mark.parametrize("operation", ("none", "sum", "prod", "min", "max"))
-def test_float_scatter_advertises_only_supported_targets(target, operation):
+def test_float_scatter_advertises_native_targets(target, operation):
     host = SimpleNamespace(target=target, descriptors={}, gathers=object())
     entry = f"scatterfloat32int64_{operation}_1_updc_true_nwork1_int"
-    assert runtime.HostRuntime._entry_available(host, entry.encode()) == int(
-        target != "opengl"
-    )
-    if target == "opengl":
-        with pytest.raises(ValueError, match="float atomic storage"):
-            gather_dispatch.dispatch(
-                host, entry, None, 0, 1, runtime.Launch((1, 1, 1), (1, 1, 1))
-            )
+    assert runtime.HostRuntime._entry_available(host, entry.encode()) == 1
 
 
-@pytest.mark.parametrize("target", ("metal", "directx"))
+@pytest.mark.parametrize("member", ("out", "updates"))
+def test_opengl_float_scatter_rejects_exchanged_storage_roles(tmp_path, member):
+    event = scatter_event(tmp_path, CASES[0], "opengl")
+    value = event["inputs"][member]
+    binding = event["details"]["request"]["buffers"][member]
+    scalar = binding["binding"]["metadata"]["scalarLayout"]
+    dtype = "float32" if member == "out" else "uint32"
+    value["dtype"] = binding["dtype"] = scalar["elementType"] = dtype
+    if member == "out":
+        scalar["structMembers"][0]["physicalType"] = "float"
+        value["encoding"] = binding["encoding"] = FLOAT32_BITS
+    else:
+        value.pop("encoding")
+        binding.pop("encoding")
+    with pytest.raises(ValueError):
+        scatter_evidence.audit_event(np, event)
+
+
+@pytest.mark.parametrize("word", (0.5, True, -1, 2**32))
+def test_opengl_float_scatter_rejects_invalid_output_words(tmp_path, word):
+    event = scatter_event(tmp_path, CASES[0], "opengl")
+    event["inputs"]["out"]["values"][0] = word
+    with pytest.raises(ValueError):
+        scatter_evidence.audit_event(np, event)
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
 @pytest.mark.parametrize(
     "fault", (None, "encoding", "dtype", "guard", "member", "negative", "float", "bool")
 )
@@ -298,14 +324,21 @@ def test_float_scatter_dispatch_preserves_raw_initialization(
     if fault == "member":
         next(value for value in descriptor["bindings"] if value["name"] == "out")[
             "scalarLayout"
-        ]["structMembers"][0]["physicalType"] = "uint"
+        ]["structMembers"][0]["physicalType"] = (
+            "float" if target == "opengl" else "uint"
+        )
 
     def request(_descriptor, _directory, inputs, outputs, launch, **kwargs):
         assert inputs["out"]["values"] == words(np, arrays["out"]) + runtime.COPY_GUARD
         assert inputs["updates"]["values"] == words(np, arrays["updates"])
-        assert (
-            inputs["out"]["encoding"] == inputs["updates"]["encoding"] == FLOAT32_BITS
-        )
+        assert inputs["updates"]["dtype"] == "float32"
+        assert inputs["updates"]["encoding"] == FLOAT32_BITS
+        if target == "opengl":
+            assert inputs["out"]["dtype"] == "uint32"
+            assert "encoding" not in inputs["out"]
+        else:
+            assert inputs["out"]["dtype"] == "float32"
+            assert inputs["out"]["encoding"] == FLOAT32_BITS
         return SimpleNamespace(outputs=outputs)
 
     def execute(_host, request):
@@ -314,9 +347,12 @@ def test_float_scatter_dispatch_preserves_raw_initialization(
             "values": words(np, expected) + runtime.COPY_GUARD,
         }
         if fault == "encoding":
-            output.pop("encoding")
+            if target == "opengl":
+                output["encoding"] = FLOAT32_BITS
+            else:
+                output.pop("encoding")
         elif fault == "dtype":
-            output["dtype"] = "uint32"
+            output["dtype"] = "float32" if target == "opengl" else "uint32"
         elif fault == "guard":
             output["values"][-1] = 0
         elif fault in {"negative", "float", "bool"}:

@@ -296,8 +296,6 @@ class HostRuntime:
     def _entry_available(self, entry):
         try:
             name = entry.decode("ascii")
-            if name.startswith("scatterfloat32") and self.target == "opengl":
-                return 0
             if name in self.descriptors:
                 return 1
             if name.startswith(("gather", "scatter")) and self.gathers is not None:

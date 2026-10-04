@@ -89,8 +89,6 @@ def dispatch(host, entry, buffers, count, threads, launch):
     )
     parameters = layout_module.signature(entry)
     dtype, indices = parameters[0], parameters[2]
-    if scatter and dtype == "float32" and host.target == "opengl":
-        raise ValueError("OpenGL float scatter requires float atomic storage support")
     if count != (11 if axis else (15 if scatter else 11) + indices) or not buffers:
         raise ValueError("Native gather buffer count does not match its entry")
     supplied = {}
@@ -123,6 +121,8 @@ def dispatch(host, entry, buffers, count, threads, launch):
         buffer = supplied[name]
         kind = buffer.dtype.decode("ascii")
         storage = physical_dtype(kind, host.target)
+        if scatter and name == "out":
+            storage = scatter_layout.atomic_storage_dtype(kind, host.target)
         size = 1 if storage == "bool" else ctypes.sizeof(gather_layout.TYPES[storage])
         if layout["elementType"] != storage or layout["elementStrideBytes"] != size:
             raise ValueError("Native and reflected gather layouts disagree")
@@ -154,14 +154,14 @@ def dispatch(host, entry, buffers, count, threads, launch):
                     {
                         "name": "val",
                         "offsetBytes": 0,
-                        "physicalType": scatter_layout.ATOMIC_TYPES[dtype],
+                        "physicalType": scatter_layout.ATOMIC_TYPES[storage],
                     }
                 ]
             )
         ):
             raise ValueError("Native scatter atomic storage layout does not match")
         value = {"dtype": storage, "shape": shape, "values": values}
-        if kind == "float32":
+        if storage == "float32":
             value["encoding"] = FLOAT32_BITS
         inputs[binding["name"]] = value
         if name == "out":
@@ -184,11 +184,13 @@ def dispatch(host, entry, buffers, count, threads, launch):
         raise RuntimeError("Native gather executor did not return its output")
     output = result.outputs[output_name]
     storage = physical_dtype(dtype, host.target)
+    if scatter:
+        storage = scatter_layout.atomic_storage_dtype(dtype, host.target)
     size = threads + len(guard)
     if (
         output.get("dtype") != storage
         or output.get("shape") != ([size, 1] if scatter else [size])
-        or output.get("encoding") != (FLOAT32_BITS if dtype == "float32" else None)
+        or output.get("encoding") != (FLOAT32_BITS if storage == "float32" else None)
         or not isinstance(output.get("values"), list)
         or len(output["values"]) != size
     ):

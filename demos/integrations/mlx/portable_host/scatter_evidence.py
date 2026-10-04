@@ -16,6 +16,7 @@ from demos.integrations.mlx.portable_host.runtime import COPY_GUARD
 from demos.integrations.mlx.portable_host.scatter_layout import (
     ATOMIC_TYPES,
     METADATA,
+    atomic_storage_dtype,
     signature,
 )
 
@@ -24,9 +25,6 @@ def audit_event(np, event):
     dtype, index_dtype, count, operation, contiguous, work = signature(event["entry"])
     target = event["target"]
     require(target in {"metal", "directx", "opengl"}, "Unknown scatter target")
-    require(
-        dtype != "float32" or target != "opengl", "Unsupported OpenGL float scatter"
-    )
     request = event["details"]["request"]
     audit_input_bindings(event)
     inputs = {}
@@ -65,7 +63,9 @@ def audit_event(np, event):
                     {
                         "name": "val",
                         "offsetBytes": 0,
-                        "physicalType": ATOMIC_TYPES[dtype],
+                        "physicalType": ATOMIC_TYPES[
+                            atomic_storage_dtype(dtype, target)
+                        ],
                     }
                 ],
                 "Scatter atomic storage layout changed",
@@ -74,7 +74,7 @@ def audit_event(np, event):
     dtypes = {
         **METADATA,
         "updates": dtype,
-        "out": dtype,
+        "out": atomic_storage_dtype(dtype, target),
         **{f"idx{i}": index_dtype for i in range(count)},
     }
     dtypes["idx_contigs"] = "bool" if target == "metal" else "uint32"
@@ -87,7 +87,7 @@ def audit_event(np, event):
     )
     arrays = {}
     for name, value in inputs.items():
-        if value["dtype"] == "float32":
+        if dtype == "float32" and name in {"out", "updates"}:
             require(
                 isinstance(value["values"], list)
                 and all(

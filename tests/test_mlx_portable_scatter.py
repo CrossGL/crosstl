@@ -431,6 +431,8 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
     for name, buffer in supplied.items():
         kind = buffer.dtype.decode()
         storage = runtime.physical_dtype(kind, target)
+        if name == "out":
+            storage = layout.atomic_storage_dtype(kind, target)
         values = (
             list(
                 ctypes.cast(
@@ -461,7 +463,7 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
                     {
                         "name": "val",
                         "offsetBytes": 0,
-                        "physicalType": layout.ATOMIC_TYPES[case["dtype"]],
+                        "physicalType": layout.ATOMIC_TYPES[storage],
                     }
                 ],
             )
@@ -470,7 +472,7 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
             "shape": shape,
             "binding": {"metadata": {"scalarLayout": scalar}},
         }
-        if kind == "float32":
+        if storage == "float32":
             event["inputs"][name]["encoding"] = "ieee754-binary32"
             request["buffers"][name]["encoding"] = "ieee754-binary32"
     if target != "metal":
