@@ -15655,8 +15655,8 @@ def test_copy_metal_roundtrip_evidence_records_complete_family():
         "compiler": "xcrun -sdk macosx metal -Werror -c",
         "source_warning_exemption": None,
         "status": "required-on-ci",
-        "ci_shard_count": 24,
-        "entries_per_shard": 104,
+        "ci_job_count": 1,
+        "bundle_compiler": "tools/compile_artifact_bundle.py",
         "compiled_artifact_count": 2496,
         "all_air_artifacts_nonempty": True,
         "test": (

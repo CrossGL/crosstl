@@ -1856,13 +1856,22 @@ including the native-width `as_type<ushort>` bfloat path. Registered
 representations fail closed and unregistered lookalikes are not projected.
 Scalar/vector forms reflect three resources, generalized forms reflect exact
 three- through eight-resource interfaces, and every artifact retains the
-host-owned `[1, 1, 1]` workgroup contract. Required macOS CI partitions the
-family into 24 disjoint 104-entry shards, compiles every artifact with
-`xcrun -sdk macosx metal -Werror -c`, and requires 2,496 non-empty AIR outputs.
+host-owned `[1, 1, 1]` workgroup contract. Required Ubuntu CI verifies and exports
+the family in 24 disjoint 104-entry source shards. One dependent macOS job
+verifies every exported identity against the complete contract, compiles every
+artifact with `xcrun -sdk macosx metal -Werror -c`, and requires 2,496 non-empty AIR outputs.
+Source reports, separate shard bundles and compiler results are retained.
 This is complete discovered-copy translation, reflection, and native compiler
 evidence, not Metal numerical execution, MLX host-runtime redirection, or MLX
 test-suite parity. The older selected OpenGL, DirectX, and native-loader checks
 remain separate bounded evidence.
+
+The checked-in copy identities are compiler-gated reference artifacts. Current
+byte-width narrowing and typed vector initialization changes produce identity
+mismatches in byte-copy and generalized complex-copy entries;
+the complete refresh remains under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
+These cases fail before export or compilation. The CI split does not change
+their expected hashes or treat an earlier compiled reference as a fresh translation.
 
 The focused `prove_layer_norm_directx.py` gate translates two host-selected
 single-row entries from the pinned `layer_norm.metal` source: forward float32

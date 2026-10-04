@@ -12,6 +12,30 @@ KEEP_EVIDENCE_ENV = "CROSTL_KEEP_CORPUS_EVIDENCE"
 EVIDENCE_DIRECTORY = ".crosstl-corpus-evidence"
 
 
+def assert_deferred_metal_compiler_diagnostics(payload: dict) -> None:
+    toolchains = payload["validation"]["toolchains"]
+    assert len(toolchains) == 1
+    assert toolchains[0]["target"] == "metal"
+    assert toolchains[0]["status"] in {"available", "unavailable"}
+    expected_count = int(toolchains[0]["status"] == "unavailable")
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": expected_count,
+        "error": 0,
+    }
+    assert len(payload["diagnostics"]) == expected_count
+    for diagnostic in payload["diagnostics"]:
+        assert {
+            field: diagnostic.get(field)
+            for field in ("severity", "code", "target", "missingCapabilities")
+        } == {
+            "severity": "warning",
+            "code": "project.validate.toolchain-unavailable",
+            "target": "metal",
+            "missingCapabilities": ["toolchain.validation"],
+        }
+
+
 @contextmanager
 def corpus_workspace(
     root: Path, *, family: str, target: str, entry_point: str

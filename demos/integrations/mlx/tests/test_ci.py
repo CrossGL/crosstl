@@ -68,7 +68,7 @@ def test_project_demo_queues_each_job_and_matrix_leg_independently():
     coverage = _load_ci_coverage_module()
     assert not coverage.nested_yaml_section(workflow, "concurrency", 0)
     jobs = coverage.workflow_job_names(workflow)
-    assert len(jobs) == 34
+    assert len(jobs) == 35
     groups = set()
     for name in jobs:
         job = _workflow_job_section(workflow, name)
@@ -2356,7 +2356,9 @@ def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
         _assert_workflow_triggers(mlx_porting, path)
 
 
-@pytest.mark.parametrize("family,artifact_count", [("binary", 4122), ("reduce", 2396)])
+@pytest.mark.parametrize(
+    "family,artifact_count", [("binary", 4122), ("reduce", 2396), ("copy", 2496)]
+)
 def test_metal_report_describes_split_ci(family, artifact_count):
     gaps = json.loads((ROOT / "demos/integrations/mlx/expected-gaps.json").read_text())
     status = gaps[f"{family}_metal_roundtrip_status"]
@@ -2827,85 +2829,28 @@ def test_mlx_project_porting_workflow_runs_copy_complete_directx_proof():
     )
 
 
-def test_mlx_project_porting_workflow_runs_copy_complete_metal_proof():
-    mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = (
-        "demos/integrations/mlx/tests/kernels/test_copy_complete_metal_roundtrip.py"
-    )
-
-    copy_metal_job = _workflow_job_section(
-        mlx_porting,
-        "mlx-copy-complete-metal-roundtrip",
-    )
-    assert (
-        "name: MLX complete copy Metal round-trip "
-        "(shard ${{ matrix.shard_index }} of 24)" in copy_metal_job
-    )
-    assert "if: github.event_name != 'schedule'" in copy_metal_job
-    assert "runs-on: macOS-latest" in copy_metal_job
-    assert "timeout-minutes: 180" in copy_metal_job
-    assert "fail-fast: false" in copy_metal_job
-    assert _matrix_values(copy_metal_job, "shard_index") == {
-        str(index) for index in range(24)
-    }
-    assert 'python-version: "3.12"' in copy_metal_job
-    assert "python -m pip install -e . pytest-xdist" in copy_metal_job
-    assert "xcrun --sdk macosx metal --version" in copy_metal_job
-    assert "Checkout current MLX copy corpus" in copy_metal_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in copy_metal_job
-
-    copy_metal_step = ci_coverage.workflow_step_section(
-        copy_metal_job,
-        "Prove current MLX complete copy family Metal round-trips",
-    )
-    assert "if: runner.os" not in copy_metal_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in copy_metal_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_COPY_METAL_ROUNDTRIP: "1"' in copy_metal_step
-    assert (
-        "CROSTL_MLX_COPY_METAL_SHARD_INDEX: ${{ matrix.shard_index }}"
-        in copy_metal_step
-    )
-    assert 'CROSTL_MLX_COPY_METAL_SHARD_COUNT: "24"' in copy_metal_step
-    assert (
-        f"{test_path}::test_current_mlx_copy_family_roundtrips_through_metal"
-        in copy_metal_step
-    )
-    assert "-n auto" in copy_metal_step
-    assert "-k" not in copy_metal_step
-    _assert_workflow_triggers(mlx_porting, test_path)
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX complete copy family Metal round-trips" not in (
-        matrix_job
-    )
-
-
-def test_mlx_project_porting_workflow_runs_reduce_complete_metal_proof():
+@pytest.mark.parametrize("family", ("reduce", "copy"))
+def test_mlx_project_porting_workflow_runs_complete_metal_proof(family):
     workflow = _workflow_texts()["demo-project-testing.yml"]
     jobs = yaml.safe_load(workflow)["jobs"]
 
-    def reduction_job(value):
+    def family_job(value):
         if isinstance(value, str):
-            return value.replace("binary", "reduce").replace("BINARY", "REDUCE")
+            return value.replace("binary", family).replace("BINARY", family.upper())
         if isinstance(value, list):
-            return [reduction_job(item) for item in value]
+            return [family_job(item) for item in value]
         if isinstance(value, dict):
-            return {
-                reduction_job(key): reduction_job(item) for key, item in value.items()
-            }
+            return {family_job(key): family_job(item) for key, item in value.items()}
         return value
 
-    # Both families require the same complete source/consumer policy above.
+    # Every family requires the same complete source/consumer policy above.
     for suffix in ("metal-sources", "complete-metal-roundtrip"):
-        assert jobs[f"mlx-reduce-{suffix}"] == reduction_job(
+        assert jobs[f"mlx-{family}-{suffix}"] == family_job(
             jobs[f"mlx-binary-{suffix}"]
         )
     _assert_workflow_triggers(
         workflow,
-        "demos/integrations/mlx/tests/kernels/test_reduce_complete_metal_roundtrip.py",
+        f"demos/integrations/mlx/tests/kernels/test_{family}_complete_metal_roundtrip.py",
     )
 
 

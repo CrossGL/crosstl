@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import textwrap
 from collections import Counter
 from dataclasses import dataclass
@@ -19,11 +18,18 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from demos.integrations.mlx.tests.corpus_evidence import (
+    assert_deferred_metal_compiler_diagnostics,
+    corpus_workspace,
+)
+from tools.compile_artifact_bundle import write_bundle_entry
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_COPY_SOURCE = "mlx/backend/metal/kernels/copy.metal"
 MLX_COPY_SHA256 = "ed8a579eb6fe6a14c36560d2c8b548baf99e66fa77d300fb4ad7554883820eba"
 REQUIRE_COPY_METAL_ENV = "CROSTL_REQUIRE_MLX_COPY_METAL_ROUNDTRIP"
+REQUIRE_COPY_METAL_SOURCE_ENV = "CROSTL_REQUIRE_MLX_COPY_METAL_SOURCE"
+COPY_METAL_BUNDLE_ENV = "CROSTL_CORPUS_BUNDLE_ROOT"
 COPY_METAL_SHARD_INDEX_ENV = "CROSTL_MLX_COPY_METAL_SHARD_INDEX"
 COPY_METAL_SHARD_COUNT_ENV = "CROSTL_MLX_COPY_METAL_SHARD_COUNT"
 COPY_METAL_CI_SHARD_COUNT = 24
@@ -835,7 +841,10 @@ def _project_config(workload: CopyMetalWorkload) -> str:
 def _pinned_mlx_root() -> Path:
     root_value = os.environ.get("CROSTL_MLX_ROOT")
     if not root_value:
-        if os.environ.get(REQUIRE_COPY_METAL_ENV) == "1":
+        if any(
+            os.environ.get(name) == "1"
+            for name in (REQUIRE_COPY_METAL_ENV, REQUIRE_COPY_METAL_SOURCE_ENV)
+        ):
             pytest.fail("CROSTL_MLX_ROOT is not configured")
         pytest.skip("CROSTL_MLX_ROOT is not configured")
 
@@ -922,6 +931,8 @@ def _translate_copy_metal_artifact(
     mlx_root: Path,
     work_dir: Path,
     workload: CopyMetalWorkload,
+    *,
+    defer_native_compilation: bool = False,
 ) -> tuple[Path, Path]:
     config_path = work_dir / "crosstl.toml"
     config_path.write_text(_project_config(workload) + "\n", encoding="utf-8")
@@ -935,16 +946,21 @@ def _translate_copy_metal_artifact(
         run_toolchains=False,
     )
     payload = report.to_json()
+    report_path = work_dir / "portability-report.json"
+    report.write_json(report_path)
 
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["artifactCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    assert payload["summary"]["diagnosticCounts"] == {
-        "note": 0,
-        "warning": 0,
-        "error": 0,
-    }
+    if defer_native_compilation:
+        assert_deferred_metal_compiler_diagnostics(payload)
+    else:
+        assert payload["summary"]["diagnosticCounts"] == {
+            "note": 0,
+            "warning": 0,
+            "error": 0,
+        }
     artifact = payload["artifacts"][0]
     assert artifact["source"] == MLX_COPY_SOURCE
     assert artifact["sourceHash"] == {
@@ -1003,23 +1019,24 @@ def _translate_copy_metal_artifact(
     ):
         assert residue not in generated
 
-    report_path = work_dir / "portability-report.json"
-    report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
     return report_path, generated_path
 
 
-def _roundtrip_pinned_mlx_copy_through_metal(workload: CopyMetalWorkload) -> None:
+def _roundtrip_pinned_mlx_copy_through_metal(
+    workload: CopyMetalWorkload,
+    *,
+    bundle_root: Path | None = None,
+) -> None:
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=f".crosstl-copy-{workload.entry_point}-metal-roundtrip-",
-        dir=mlx_root,
-    ) as temporary_directory:
-        work_dir = Path(temporary_directory)
+    with corpus_workspace(
+        mlx_root, family="copy", target="metal", entry_point=workload.entry_point
+    ) as work_dir:
         report_path, generated_path = _translate_copy_metal_artifact(
             mlx_root,
             work_dir,
             workload,
+            defer_native_compilation=bundle_root is not None,
         )
         runtime_artifacts = build_runtime_artifact_manifest(report_path)
         assert runtime_artifacts["success"] is True, json.dumps(
@@ -1043,6 +1060,15 @@ def _roundtrip_pinned_mlx_copy_through_metal(workload: CopyMetalWorkload) -> Non
         assert [resource["metadata"] for resource in reflected["resources"]] == [
             {"entryPoint": workload.entry_point}
         ] * len(expected_resources)
+
+        if bundle_root is not None:
+            write_bundle_entry(
+                generated_path,
+                COPY_METAL_CONTRACT_PATH,
+                workload.entry_point,
+                bundle_root,
+            )
+            return
 
         xcrun = shutil.which("xcrun")
         if xcrun is None:
@@ -1079,3 +1105,13 @@ def _roundtrip_pinned_mlx_copy_through_metal(workload: CopyMetalWorkload) -> Non
 )
 def test_current_mlx_copy_family_roundtrips_through_metal(workload):
     _roundtrip_pinned_mlx_copy_through_metal(workload)
+
+
+@pytest.mark.parametrize(
+    "workload",
+    CURRENT_COPY_METAL_WORKLOADS,
+    ids=lambda workload: workload.entry_point,
+)
+def test_current_mlx_copy_family_exports_native_compilation_bundle(workload, tmp_path):
+    bundle_root = Path(os.environ.get(COPY_METAL_BUNDLE_ENV, str(tmp_path / "bundle")))
+    _roundtrip_pinned_mlx_copy_through_metal(workload, bundle_root=bundle_root)

@@ -18,7 +18,10 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
-from demos.integrations.mlx.tests.corpus_evidence import corpus_workspace
+from demos.integrations.mlx.tests.corpus_evidence import (
+    assert_deferred_metal_compiler_diagnostics,
+    corpus_workspace,
+)
 from tools.compile_artifact_bundle import write_bundle_entry
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -770,30 +773,6 @@ def _normalized_materialization(materialization: dict) -> dict:
     return result
 
 
-def _assert_deferred_metal_compiler_diagnostics(payload: dict) -> None:
-    toolchains = payload["validation"]["toolchains"]
-    assert len(toolchains) == 1
-    assert toolchains[0]["target"] == "metal"
-    assert toolchains[0]["status"] in {"available", "unavailable"}
-    expected_count = int(toolchains[0]["status"] == "unavailable")
-    assert payload["summary"]["diagnosticCounts"] == {
-        "note": 0,
-        "warning": expected_count,
-        "error": 0,
-    }
-    assert len(payload["diagnostics"]) == expected_count
-    for diagnostic in payload["diagnostics"]:
-        assert {
-            field: diagnostic.get(field)
-            for field in ("severity", "code", "target", "missingCapabilities")
-        } == {
-            "severity": "warning",
-            "code": "project.validate.toolchain-unavailable",
-            "target": "metal",
-            "missingCapabilities": ["toolchain.validation"],
-        }
-
-
 def _translate_reduce_metal_artifact(
     mlx_root: Path,
     work_dir: Path,
@@ -820,7 +799,7 @@ def _translate_reduce_metal_artifact(
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
     if defer_native_compilation:
-        _assert_deferred_metal_compiler_diagnostics(payload)
+        assert_deferred_metal_compiler_diagnostics(payload)
     else:
         assert payload["summary"]["diagnosticCounts"] == {
             "note": 0,

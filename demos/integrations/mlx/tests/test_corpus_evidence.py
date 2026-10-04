@@ -118,7 +118,7 @@ def test_compiler_retains_launch_error_and_reraises(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "family,target",
     [(name, "directx") for name in ("unary", "binary", "copy", "reduce")]
-    + [("binary", "metal"), ("reduce", "metal")],
+    + [(name, "metal") for name in ("binary", "reduce", "copy")],
 )
 def test_corpus_retains_report_before_translation_assertions(
     family, target, tmp_path, monkeypatch
@@ -162,7 +162,7 @@ def test_corpus_retains_report_before_translation_assertions(
 @pytest.mark.parametrize(
     "damage", (None, "translation", "manifest", "entry_point", "resources")
 )
-@pytest.mark.parametrize("family", ("binary", "reduce"))
+@pytest.mark.parametrize("family", ("binary", "reduce", "copy"))
 def test_metal_bundle_export_requires_translation_and_host_interface(
     family, damage, tmp_path, monkeypatch
 ):
@@ -171,15 +171,18 @@ def test_metal_bundle_export_requires_translation_and_host_interface(
     )
     workload = getattr(module, f"CURRENT_{family.upper()}_METAL_WORKLOADS")[0]
     monkeypatch.setattr(module, "_pinned_mlx_root", lambda: tmp_path)
-    resources = (
-        module._resources(module.BINARY_SHAPE_SPECS[workload.shape].resource_kind)
-        if family == "binary"
-        else module._resources(
+    if family == "binary":
+        resources = module._resources(
+            module.BINARY_SHAPE_SPECS[workload.shape].resource_kind
+        )
+    elif family == "copy":
+        resources = module.COPY_METAL_RESOURCES_BY_ENTRY[workload.entry_point]
+    else:
+        resources = module._resources(
             module.EXPECTED_SHAPE_CONTRACTS[workload.shape]["templateName"],
             workload.input_type,
             workload.output_type,
         )
-    )
     manifest = {
         "success": damage != "manifest",
         "artifacts": [
@@ -211,7 +214,7 @@ def test_metal_bundle_export_requires_translation_and_host_interface(
 
     def translate(*args, **kwargs):
         assert kwargs == (
-            {"defer_native_compilation": True} if family == "reduce" else {}
+            {"defer_native_compilation": True} if family in {"reduce", "copy"} else {}
         )
         calls.append("translation")
         assert damage != "translation"
@@ -245,7 +248,7 @@ def test_metal_bundle_export_requires_translation_and_host_interface(
 
 
 @pytest.mark.parametrize("mode", ("native", "source"))
-@pytest.mark.parametrize("family", ("binary", "reduce"))
+@pytest.mark.parametrize("family", ("binary", "reduce", "copy"))
 def test_metal_required_source_cannot_skip(family, mode, monkeypatch):
     module = importlib.import_module(
         f"demos.integrations.mlx.tests.kernels.test_{family}_complete_metal_roundtrip"
@@ -281,8 +284,8 @@ def test_metal_required_source_cannot_skip(family, mode, monkeypatch):
 def test_deferred_metal_diagnostics_only_allow_missing_native_compiler(
     available, damage
 ):
-    from demos.integrations.mlx.tests.kernels import (
-        test_reduce_complete_metal_roundtrip as reduce,
+    from demos.integrations.mlx.tests.corpus_evidence import (
+        assert_deferred_metal_compiler_diagnostics,
     )
 
     diagnostic = {
@@ -324,4 +327,4 @@ def test_deferred_metal_diagnostics_only_allow_missing_native_compiler(
     elif damage == "status":
         payload["validation"]["toolchains"][0]["status"] = "not-configured"
     with pytest.raises(AssertionError) if damage else nullcontext():
-        reduce._assert_deferred_metal_compiler_diagnostics(payload)
+        assert_deferred_metal_compiler_diagnostics(payload)

@@ -970,9 +970,11 @@ projects registered ``complex64_t`` values only after validating the ordered
 ``real``/``imag`` float representation. Wrong registered shapes fail closed and
 unregistered lookalikes remain untouched. Reflected interfaces contain three to
 eight exact resources and retain host-owned ``[1, 1, 1]`` workgroup metadata.
-Required macOS CI uses 24 disjoint 104-entry shards and compiles all 2,496 exact
+Required Ubuntu CI verifies and exports 24 disjoint 104-entry source shards.
+One dependent macOS job verifies the complete source bundle and compiles all 2,496 exact
 artifacts with ``xcrun -sdk macosx metal -Werror -c``, requiring a non-empty AIR
-object for each. This proves translation, reflection, and native compiler
+object for each. Reports, source bundles and compiler results are retained.
+This proves translation, reflection, and native compiler
 acceptance; it does not claim Metal numerical execution, MLX host-runtime
 redirection, or MLX test-suite parity.
 
@@ -981,6 +983,13 @@ and resource ABI. Its generated-source changes are limited to helper linkage
 qualifiers. ``artifactIdentityRefresh`` records this audit separately from the
 historical ``proof`` metadata; it does not establish coverage of a newer MLX
 revision or add numerical execution claims.
+
+Current byte-width narrowing and typed vector initialization changes require
+a further copy identity review
+under `issue #1966 <https://github.com/CrossGL/crosstl/issues/1966>`_.
+Until that review is complete, affected entries fail the existing identity check
+before export or compilation. Moving generation to Ubuntu does not replace these
+checks or establish fresh translation evidence from older compiled references.
 
 The same selected-entry pipeline translates all 2,496 copy entries to
 standalone OpenGL ``main`` artifacts. The schema-v2
