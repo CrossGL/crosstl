@@ -701,7 +701,7 @@ EXTERNAL_FIXTURES = [
         "source_path": "BookOfShaders/Shaders/06a-color-mix.metal",
         "roundtrip": True,
         "contains": [
-            "constant vec3 colorA = vec3(0.000f, 0.129f, 0.647f);",
+            "constant vec3 colorA = vec3{(0.000f), (0.129f), (0.647f),};",
             "vec3 color = mix(colorA, colorB, fraction);",
             "vec4 fragment_main(FragmentIn in_, constant Uniforms& uniforms @buffer(0))",
         ],

@@ -809,9 +809,19 @@ loader also preserves explicit allocation views instead of silently replacing
 them with offset-zero buffers
 ([#2063](https://github.com/CrossGL/crosstl/issues/2063)).
 
+Vector list initialization now remains distinct from scalar-splat construction
+through the shared representation. Metal retains braces; DirectX and OpenGL
+explicitly initialize omitted components to zero. Required native checks cover
+78 cases per target, including empty, partial and full lists, Boolean and numeric
+lanes, aliases, returned vectors, aggregate members, assignments and ordered
+side effects. Excess components fail project translation. The Metal checks also
+execute the original source; each target retains compiled artifacts and guarded
+readbacks. Byte and vector storage have a separate bounded macOS step so these
+checks do not consume the general-gather execution budget.
+
 These controls do not establish random-generation parity. The unchanged Metal
-random audit still fails native compilation on partial vector initialization,
-fixed-array range iteration and aggregate name shadowing; `RandomBits` host
+random audit now passes vector initialization but still fails native compilation
+on fixed-array range iteration and aggregate name shadowing; `RandomBits` host
 dispatch remains disabled.
 
 ## Run

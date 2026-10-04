@@ -7613,7 +7613,8 @@ class MetalCodeGen:
             stripped = line.strip()
             terminator = (
                 ""
-                if stripped.endswith((";", "{", "}", ":"))
+                if stripped.endswith((";", "{", ":"))
+                or stripped == "}"
                 or stripped.startswith(("case ", "default:"))
                 else ";"
             )
@@ -10438,6 +10439,25 @@ class MetalCodeGen:
                     self.generate_expression_with_expected(arg, None)
                     for arg in getattr(expr, "arguments", [])
                 )
+                if getattr(
+                    expr, "is_braced_constructor", False
+                ) and self.is_vector_value_type(constructor_type):
+                    width = self.value_component_count(constructor_type)
+                    counts = [
+                        self.expression_component_count(arg) for arg in expr.arguments
+                    ]
+                    if (
+                        width
+                        and all(count is not None for count in counts)
+                        and sum(counts) > width
+                    ):
+                        raise UnsupportedMetalFeatureError(
+                            "vector-list-initialization",
+                            f"Vector initializer for {metal_type} exceeds its {width} components",
+                            reason="element-count-mismatch",
+                            source_location=getattr(expr, "source_location", None),
+                        )
+                    return f"{metal_type}{{{args}}}"
                 return f"{metal_type}({args})"
             return str(expr)
         elif isinstance(expr, FunctionCallNode):

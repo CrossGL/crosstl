@@ -486,6 +486,40 @@ def test_glsl_input_attachment_lowers_to_spirv_subpass_data(tmp_path):
     assert "Unknown type subpassInput" not in generated
 
 
+@pytest.mark.parametrize("count", (0, 1, 3, 4))
+@pytest.mark.parametrize("global_scope", (False, True))
+def test_metal_vector_lists_retain_spirv_constructor_support(
+    tmp_path, count, global_scope
+):
+    source = tmp_path / "vector.metal"
+    values = ", ".join(f"{i + 1}u" for i in range(count))
+    declaration = f"uint4 value = {{{values}}};"
+    source.write_text(f"""#include <metal_stdlib>
+using namespace metal;
+{'constant ' + declaration if global_scope else ''}
+kernel void vector_list(device uint* results [[buffer(0)]]) {{
+    {'' if global_scope else declaration}
+    results[0] = value.x;
+    results[1] = value.w;
+}}
+""")
+    output = crosstl.translate(str(source), backend="vulkan", format_output=False)
+    assert "WARNING" not in output
+    if global_scope:
+        variable = spirv_named_variable(output, "value", storage_class="Private")
+        initializer = re.search(
+            rf"{variable} = OpVariable %\d+ Private (%\d+)", output
+        )[1]
+        components = re.search(
+            rf"{initializer} = OpConstantComposite %\d+ (.*)", output
+        )[1].split()
+        constants = spirv_uint_constant_values(output)
+        assert [constants[item] for item in components] == list(range(1, count + 1)) + [
+            0
+        ] * (4 - count)
+    assert_spirv_module_validates(output, tmp_path, target_env="vulkan1.1")
+
+
 def assert_spirv_module_validates(spv_code, tmp_path, target_env=None):
     spirv_as = shutil.which("spirv-as")
     spirv_val = shutil.which("spirv-val")

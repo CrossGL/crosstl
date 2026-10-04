@@ -4572,6 +4572,7 @@ def test_method_calls_and_shorthand_path_constructors_parse():
 
     vec_constructor = add_call.arguments[0]
     assert isinstance(vec_constructor, ConstructorNode)
+    assert vec_constructor.is_braced_constructor is True
     assert list(vec_constructor.named_arguments) == ["x", "y", "z"]
 
     x_call = vec_constructor.named_arguments["x"]

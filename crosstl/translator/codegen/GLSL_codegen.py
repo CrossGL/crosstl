@@ -34220,6 +34220,13 @@ complex64_t crossgl_complex64_mod_assign(
             else:
                 return str(expr)
         elif isinstance(expr, ConstructorNode):
+            if getattr(expr, "is_braced_constructor", False):
+                vector_initializer = self.generate_glsl_vector_aggregate_initializer(
+                    ArrayLiteralNode(list(expr.arguments)),
+                    self.map_type(expr.constructor_type),
+                )
+                if vector_initializer is not None:
+                    return vector_initializer
             enum_constructor = self.glsl_enum_constructor_expression(expr)
             if enum_constructor is not None:
                 return enum_constructor

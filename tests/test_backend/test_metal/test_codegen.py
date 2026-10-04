@@ -5165,7 +5165,7 @@ def test_codegen_braced_uchar_vector_constructor_from_llama_cpp():
     normalized = normalize(crossgl)
 
     assert "u8vec2 get_scale_min_k4_just2" in crossgl
-    assert "u8vec2(uint8(q[j + 0 + k] & 63), uint8(q[j + 4 + k] & 63))" in crossgl
+    assert "u8vec2{(uint8(q[j + 0 + k] & 63)), (uint8(q[j + 4 + k] & 63)),}" in crossgl
     assert "uchar2{" not in crossgl
     assert "return j < 4 ?" in normalized
     assert parse_crossgl(crossgl) is not None
@@ -9238,7 +9238,7 @@ def test_codegen_contextually_binds_braced_vector_source_overload():
 
     assert (
         "int64 vector_value = elem_to_loc_int64_t__metal_overload_2("
-        "uvec3(vector_index.x, 0u, 0u), shape, strides, ndim);" in normalized
+        "uvec3{(vector_index.x), (0u), (0u),}, shape, strides, ndim);" in normalized
     )
     assert "elem_to_loc_int64_t({" not in normalized
 

@@ -10501,6 +10501,11 @@ class MetalToCrossGLConverter:
         elements = named_elements + positional_elements
         if expected_array:
             return "{" + ", ".join(elements) + "}"
+        if self.metal_small_vector_type_parts(expected_type) is not None:
+            # Keep list initialization distinct from scalar splat construction.
+            # Parentheses prevent identifiers from becoming field shorthands.
+            values = ", ".join(f"({element})" for element in elements)
+            return f"{mapped_type}{{{values}{',' if elements else ''}}}"
         if mapped_type and mapped_type.startswith(("vec", "ivec", "uvec", "bvec")):
             return f"{mapped_type}({', '.join(elements)})"
         if mapped_type and named_elements:

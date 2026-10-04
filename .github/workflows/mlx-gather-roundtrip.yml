@@ -65,6 +65,7 @@ jobs:
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_REQUIRE_MLX_OPENGL_GENERAL_GATHER: "1"
+          CROSTL_REQUIRE_VECTOR_LIST_INITIALIZATION: "1"
           CROSTL_REQUIRE_OPENGL_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_OPENGL_FLOAT_ATOMIC_STORAGE: "1"
           CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
@@ -91,6 +92,7 @@ jobs:
               --basetemp=.mlx-gather-opengl/pytest \
               --junitxml=.mlx-gather-opengl/results.xml \
               tests/test_translator/test_mlx_general_gather_opengl.py \
+              tests/test_translator/test_vector_list_initialization.py \
               tests/test_translator/test_float_atomic_memory.py \
               tests/test_translator/test_float_atomic_compare_exchange.py \
               tests/test_translator/test_opengl_float_atomic_storage.py \
@@ -124,7 +126,7 @@ jobs:
   metal:
     name: Original and translated Metal gather
     runs-on: macos-26
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -146,7 +148,6 @@ jobs:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_REQUIRE_MLX_GENERAL_GATHER: "1"
           CROSTL_REQUIRE_METAL_EMPTY_ARRAYS: "1"
-          CROSTL_REQUIRE_BYTE_BUFFER_RUNTIME: "1"
           CROSTL_REQUIRE_FLOAT_ATOMIC_MEMORY: "1"
           CROSTL_REQUIRE_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
@@ -172,8 +173,6 @@ jobs:
               --junitxml=.mlx-gather/results.xml \
               tests/test_translator/test_mlx_general_gather.py \
               tests/test_translator/test_metal_empty_arrays.py \
-              tests/test_translator/test_byte_buffer_runtime.py \
-              tests/test_translator/test_metal_narrow_aggregate_runtime.py \
               tests/test_translator/test_float_atomic_memory.py \
               tests/test_translator/test_mlx_float_atomic_memory.py \
               tests/test_translator/test_resource_aggregates.py \
@@ -193,6 +192,22 @@ jobs:
               tests/test_translator/test_metal_constrained_calls.py \
               tests/test_translator/test_mlx_scatter_axis_runtime.py \
               2>&1 | tee .mlx-gather/execution.log
+      - name: Validate Metal byte and vector storage
+        env:
+          CROSTL_REQUIRE_VECTOR_LIST_INITIALIZATION: "1"
+          CROSTL_REQUIRE_BYTE_BUFFER_RUNTIME: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-gather/storage
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "Native Metal storage" -- \
+            python -m pytest -q -n auto --dist loadgroup --durations=20 \
+              --basetemp=.mlx-gather/storage/pytest \
+              --junitxml=.mlx-gather/storage/results.xml \
+              tests/test_translator/test_vector_list_initialization.py \
+              tests/test_translator/test_byte_buffer_runtime.py \
+              tests/test_translator/test_metal_narrow_aggregate_runtime.py \
+              2>&1 | tee .mlx-gather/storage/execution.log
       - name: Retain original and translated execution evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -317,6 +332,7 @@ jobs:
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_REQUIRE_MLX_DIRECTX_GENERAL_GATHER: "1"
+          CROSTL_REQUIRE_VECTOR_LIST_INITIALIZATION: "1"
           CROSTL_REQUIRE_FLOAT_ATOMIC_MEMORY: "1"
           CROSTL_REQUIRE_FLOAT_ATOMIC_COMPARE_EXCHANGE: "1"
           CROSTL_REQUIRE_MLX_FLOAT_SCATTER: "1"
@@ -343,6 +359,7 @@ jobs:
               --basetemp=.mlx-gather-directx/pytest \
               --junitxml=.mlx-gather-directx/results.xml \
               tests/test_translator/test_mlx_general_gather_directx.py \
+              tests/test_translator/test_vector_list_initialization.py \
               tests/test_translator/test_float_atomic_memory.py \
               tests/test_translator/test_mlx_float_atomic_memory.py \
               tests/test_translator/test_float_atomic_compare_exchange.py \

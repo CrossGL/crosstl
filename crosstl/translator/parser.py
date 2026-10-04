@@ -5194,7 +5194,9 @@ class Parser:
             break
 
         self.eat("RBRACE")
-        return ConstructorNode(NamedType(type_name), arguments, named_arguments)
+        node = ConstructorNode(NamedType(type_name), arguments, named_arguments)
+        node.is_braced_constructor = True
+        return node
 
     def is_constructor_shorthand_field(self):
         """Return whether the current token is a braced-constructor field shorthand."""

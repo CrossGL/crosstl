@@ -271,7 +271,7 @@ def test_byte_storage_is_required_in_metal_ci():
         / ".github/workflows/mlx-gather-roundtrip.yml"
     ).read_text()
     step = ci_coverage.workflow_step_section(
-        workflow, "Validate general gather and empty arrays"
+        workflow, "Validate Metal byte and vector storage"
     )
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_byte_buffer_runtime.py" in step

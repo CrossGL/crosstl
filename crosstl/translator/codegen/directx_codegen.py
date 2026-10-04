@@ -21998,6 +21998,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             return f"{array}[{index}]"
         elif isinstance(expr, ConstructorNode):
+            if getattr(expr, "is_braced_constructor", False):
+                vector_initializer = self.hlsl_vector_aggregate_initializer(
+                    ArrayLiteralNode(list(expr.arguments)),
+                    self.map_type(expr.constructor_type),
+                )
+                if vector_initializer is not None:
+                    return vector_initializer
             registered_conversion = (
                 self.hlsl_registered_structure_scalar_constructor_call(
                     self.type_name_string(getattr(expr, "constructor_type", None)),
