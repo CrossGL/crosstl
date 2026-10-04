@@ -13913,7 +13913,7 @@ def test_metal_union_storage_aliasing_matches_direct_and_project_directx(tmp_pat
     assert "__crossgl_union_unpack_u8x4(bits.CrossGLUnionStorage[0])" in direct
     assert (
         "bits.CrossGLUnionStorage[1] = "
-        "__crossgl_union_pack_u8x4(uint4(9u, 10u, 11u, 12u));"
+        "__crossgl_union_pack_u8x4((uint4((uint4(uint4(9u, 10u, 11u, 12u)) & 255u)) & 255u));"
     ) in direct
     HLSLParser(HLSLLexer(direct).tokenize()).parse()
     assert_directx_compute_validates_if_available(direct, tmp_path)

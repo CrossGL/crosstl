@@ -376,11 +376,12 @@ def test_metal_explicit_as_type_preserves_native_narrow_vector_widths():
         "uint4(as_type<ushort4>(short3(signedWords)));" in generated
     )
     assert (
-        "uint4 unsignedBytes = uint4(as_type<uchar4>(char3(signedBytes)));" in generated
+        "uint4 unsignedBytes = uint4(uchar4(uint4(as_type<uchar4>(char3(signedBytes)))));"
+        in generated
     )
     assert (
         "uint4 unsignedByteAliases = "
-        "uint4(as_type<uchar4>(char3(signedByteAliases)));" in generated
+        "uint4(uchar4(uint4(as_type<uchar4>(char3(signedByteAliases)))));" in generated
     )
     assert (
         "uint4 unsignedWordAliases = "
@@ -5314,21 +5315,23 @@ def test_metal_narrow_integer_aliases_map_to_valid_metal_integer_types():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "int signedScalar(int input)" in generated_code
-    assert "int one = int(1);" in generated_code
+    assert "int one = int(char(int(char(int(1)))));" in generated_code
     assert "uint unsignedScalar(uint input)" in generated_code
-    assert "uint one = uint(1u);" in generated_code
+    assert "uint one = uint(uchar(uint(uchar(uint(1u)))));" in generated_code
     assert "int2 signedPair(int2 input)" in generated_code
-    assert "int2 inc = int2(1, 2);" in generated_code
+    assert "int2 inc = int2(char2(int2(char2(int2(1, 2)))));" in generated_code
     assert "uint3 unsignedTriple(uint3 input)" in generated_code
-    assert "uint3 inc = uint3(1u, 2u, 3u);" in generated_code
+    assert (
+        "uint3 inc = uint3(uchar3(uint3(uchar3(uint3(1u, 2u, 3u)))));" in generated_code
+    )
     assert "int2 signedShort(int2 input)" in generated_code
     assert "int2 inc = int2(1, 2);" in generated_code
     assert "uint3 unsignedShort(uint3 input)" in generated_code
     assert "uint3 inc = uint3(1u, 2u, 3u);" in generated_code
     assert "int4 signedChar(int4 input)" in generated_code
-    assert "int4 inc = int4(1, 2, 3, 4);" in generated_code
+    assert "int4 inc = int4(char4(int4(char4(int4(1, 2, 3, 4)))));" in generated_code
     assert "uint2 unsignedChar(uint2 input)" in generated_code
-    assert "uint2 inc = uint2(1u, 2u);" in generated_code
+    assert "uint2 inc = uint2(uchar2(uint2(uchar2(uint2(1u, 2u)))));" in generated_code
     for invalid_token in (
         "int8",
         "uint8",
@@ -5336,8 +5339,6 @@ def test_metal_narrow_integer_aliases_map_to_valid_metal_integer_types():
         "u8vec3",
         "short2",
         "ushort3",
-        "char4",
-        "uchar2",
     ):
         assert invalid_token not in generated_code
 
@@ -5399,9 +5400,12 @@ def test_metal_generic_vector_constructors_emit_metal_names():
     assert "double2 precisePair(double2 input)" in generated_code
     assert "double2 inc = double2(1.0, 2.0);" in generated_code
     assert "int2 signedBytes(int2 input)" in generated_code
-    assert "int2 inc = int2(1, 2);" in generated_code
+    assert "int2 inc = int2(char2(int2(char2(int2(1, 2)))));" in generated_code
     assert "uint4 unsignedBytes(uint4 input)" in generated_code
-    assert "uint4 inc = uint4(1u, 2u, 3u, 4u);" in generated_code
+    assert (
+        "uint4 inc = uint4(uchar4(uint4(uchar4(uint4(1u, 2u, 3u, 4u)))));"
+        in generated_code
+    )
     assert "int3 signedShorts(int3 input)" in generated_code
     assert "int3 inc = int3(1, 2, 3);" in generated_code
     assert "uint2 unsignedShorts(uint2 input)" in generated_code

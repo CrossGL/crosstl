@@ -795,9 +795,18 @@ copies, helper returns, indexed members and single-evaluation selectors.
 Unsupported layouts, buffer union reflection and reference arguments through
 union members produce structured diagnostics.
 
+Byte conversion now retains the source's signed or unsigned eight-bit range
+before widening into Metal/HLSL arithmetic carriers. Required native controls
+on all three operating systems cover 38 workloads with runtime int32 boundary inputs,
+casts, aliases, initialization, assignment, value arguments and returns, arrays,
+aggregate members, direct and rebased buffer stores, vector constructors and single-evaluation
+calls. Local byte increment and compound assignment preserve wraparound;
+unsupported Metal/HLSL indexed updates fail explicitly rather than repeating
+their selectors. Byte storage transport remains a separate contract.
+
 CI checks the audit's reference, binding and evidence-validation contracts on all
-three operating systems. The macOS and Linux gather workflows additionally
-require all 20 native random cases. Metal retains each dispatched library and
+three operating systems. Each gather workflow additionally requires all 20
+native random cases. Metal retains each dispatched library and
 checks its hash against the execution identity; OpenGL retains the exact GLSL
 submitted to its native compiler. These are kernel gates, not host integration
 or upstream-suite coverage. DirectX numerical execution and partial-byte tails

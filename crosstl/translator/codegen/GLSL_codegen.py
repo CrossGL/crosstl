@@ -32785,12 +32785,18 @@ complex64_t crossgl_complex64_mod_assign(
             "POST_DECREMENT",
         }
         if is_postfix and self.current_discarded_expression is not expression:
-            self.glsl_scalar_conversion_error(
-                expression,
-                expected_type,
-                expected_type,
-                "narrow-postfix-result",
-            )
+            narrow = self.glsl_narrow_integer_contract(expected_type)
+            if (
+                narrow is None
+                or narrow["bits"] != 8
+                or not isinstance(expression.operand, (IdentifierNode, VariableNode))
+            ):
+                self.glsl_scalar_conversion_error(
+                    expression,
+                    expected_type,
+                    expected_type,
+                    "narrow-postfix-result",
+                )
         one = LiteralNode(1, PrimitiveType("int"))
         value = self.glsl_narrow_update_value(
             expression.operand,
@@ -32800,6 +32806,13 @@ complex64_t crossgl_complex64_mod_assign(
             expression,
         )
         target = self.generate_glsl_buffer_block_mutation_target(expression.operand)
+        if is_postfix and self.current_discarded_expression is not expression:
+            inverse = "-" if operator == "++" else "+"
+            one = "1u" if narrow["mapped"].startswith("u") else "1"
+            previous = self.glsl_apply_narrow_integer_contract(
+                f"({target} {inverse} {one})", expected_type
+            )
+            return f"(({target} = {value}), {previous})"
         return f"({target} = {value})"
 
     def generate_assignment(self, node, is_main=False, *, statement_context=False):

@@ -1220,7 +1220,7 @@ def test_hlsl_metal_union_storage_aliases_exact_bytes_and_side_effects(tmp_path)
     assert "((value.w & 0xffu) << 24u)" in generated
     assert (
         "holder.values[next_index(calls)].CrossGLUnionStorage[1] = "
-        "__crossgl_union_pack_u8x4(uint4(5u, 6u, 7u, 8u));"
+        "__crossgl_union_pack_u8x4((uint4((uint4(uint4(5u, 6u, 7u, 8u)) & 255u)) & 255u));"
     ) in generated
     assert generated.count("holder.values[next_index(calls)].CrossGLUnionStorage") == 2
     assert "output[1] = holder.values[0].CrossGLUnionStorage.y;" in generated
@@ -7159,21 +7159,35 @@ def test_hlsl_narrow_integer_aliases_map_to_valid_hlsl_integer_types():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "int signedScalar(int input)" in generated_code
-    assert "int one = int(1);" in generated_code
+    assert (
+        "int one = (int(uint((int(uint(int(1)) << 24u) >> 24)) << 24u) >> 24);"
+        in generated_code
+    )
     assert "uint unsignedScalar(uint input)" in generated_code
-    assert "uint one = uint(1u);" in generated_code
+    assert "uint one = (uint((uint(uint(1u)) & 255u)) & 255u);" in generated_code
     assert "int2 signedPair(int2 input)" in generated_code
-    assert "int2 inc = int2(1, 2);" in generated_code
+    assert (
+        "int2 inc = (int2(uint2((int2(uint2(int2(1, 2)) << 24u) >> 24)) << 24u) >> 24);"
+        in generated_code
+    )
     assert "uint3 unsignedTriple(uint3 input)" in generated_code
-    assert "uint3 inc = uint3(1u, 2u, 3u);" in generated_code
+    assert (
+        "uint3 inc = (uint3((uint3(uint3(1u, 2u, 3u)) & 255u)) & 255u);"
+        in generated_code
+    )
     assert "int16_t2 signedShort(int16_t2 input)" in generated_code
     assert "int16_t2 inc = int16_t2(1, 2);" in generated_code
     assert "uint16_t3 unsignedShort(uint16_t3 input)" in generated_code
     assert "uint16_t3 inc = uint16_t3(1u, 2u, 3u);" in generated_code
     assert "int4 signedChar(int4 input)" in generated_code
-    assert "int4 inc = int4(1, 2, 3, 4);" in generated_code
+    assert (
+        "int4 inc = (int4(uint4((int4(uint4(int4(1, 2, 3, 4)) << 24u) >> 24)) << 24u) >> 24);"
+        in generated_code
+    )
     assert "uint2 unsignedChar(uint2 input)" in generated_code
-    assert "uint2 inc = uint2(1u, 2u);" in generated_code
+    assert (
+        "uint2 inc = (uint2((uint2(uint2(1u, 2u)) & 255u)) & 255u);" in generated_code
+    )
     for invalid_token in (
         "int8",
         "uint8",
@@ -18861,7 +18875,7 @@ def test_hlsl_renames_collapsed_fixed_width_integer_overloads(tmp_path):
 
     assert "int widen_int8_t(int value)" in generated_code
     assert "int widen_int32_t(int value)" in generated_code
-    assert "return widen_int8_t(value);" in generated_code
+    assert "return widen_int8_t((int(uint(value) << 24u) >> 24));" in generated_code
     assert "return widen_int32_t(value);" in generated_code
     assert_directx_compute_validates_if_available(generated_code, tmp_path)
 
@@ -47447,8 +47461,8 @@ def test_hlsl_metal_private_scalar_struct_view_materializes_exact_value(tmp_path
     )
 
     assert "ByteView direct;" in generated
-    assert "direct.bits = (byte & 0xffu);" in generated
-    assert "consume(ByteView((byte & 0xffu)))" in generated
+    assert "direct.bits = ((uint(byte) & 255u) & 0xffu);" in generated
+    assert "consume(ByteView(((uint(byte) & 255u) & 0xffu)))" in generated
     assert "PointerReinterpretNode" not in generated
     assert "&byte" not in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()

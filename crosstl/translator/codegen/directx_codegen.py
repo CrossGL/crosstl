@@ -6,6 +6,7 @@ from copy import deepcopy
 from hashlib import sha1
 
 from ...glsl_builtins import GLSL_BUILTIN_INT_LIMITS
+from ..arithmetic_conversions import ArithmeticScalarKind, narrow_integer_shape
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -11896,6 +11897,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if bfloat_conversion is not None:
             return bfloat_conversion
 
+        byte_conversion = self.hlsl_byte_conversion_expression(rendered, expected_name)
+        if byte_conversion is not None:
+            return byte_conversion
+
         expected = self.map_type(expected_name)
         source = self.map_type(source_name)
         if not expected or not source or expected == source:
@@ -11972,6 +11977,60 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if source_integer["base_type"] in valid_source_bases:
                 return f"{expected}({rendered})"
         return rendered
+
+    def hlsl_byte_integer_shape(self, value_type):
+        source_name = self.type_name_string(value_type)
+        aliases = getattr(self, "hlsl_type_aliases", {})
+        seen = set()
+        while source_name in aliases and source_name not in seen:
+            seen.add(source_name)
+            source_name = self.type_name_string(aliases[source_name])
+        shape = narrow_integer_shape(source_name)
+        return shape if shape is not None and shape[1] == 8 else None
+
+    def hlsl_byte_conversion_expression(self, rendered, value_type):
+        shape = self.hlsl_byte_integer_shape(value_type)
+        if shape is None:
+            return None
+        kind, _bits, width = shape
+        suffix = str(width) if width > 1 else ""
+        # Shift as unsigned, then extend the retained sign bit in signed storage.
+        # Each expression is evaluated once, including calls and indexed reads.
+        if kind is ArithmeticScalarKind.SIGNED_INTEGER:
+            return f"(int{suffix}(uint{suffix}({rendered}) << 24u) >> 24)"
+        return f"(uint{suffix}({rendered}) & 255u)"
+
+    def hlsl_byte_update_expression(self, node, target, operator, value=None):
+        value_type = self.expression_result_type(target)
+        if self.hlsl_byte_integer_shape(value_type) is None:
+            return None
+        if not isinstance(target, (IdentifierNode, VariableNode)):
+            raise DirectXContextualConversionError(
+                "DirectX byte updates require a stable scalar or vector variable",
+                source_type=value_type,
+                target_type=value_type,
+                reason="byte-update-lvalue-unsupported",
+                source_location=getattr(node, "source_location", None),
+            )
+        lhs = self.generate_expression(target)
+        promoted = self.map_type(value_type).replace("uint", "int")
+        rhs = (
+            self.generate_expression_with_expected(value, None)
+            if value is not None
+            else "1"
+        )
+        binary = operator[0] if operator in {"++", "--"} else operator[:-1]
+        converted = self.hlsl_byte_conversion_expression(
+            f"({promoted}({lhs}) {binary} ({rhs}))", value_type
+        )
+        updated = f"({lhs} = {converted})"
+        if value is None and getattr(node, "is_postfix", False):
+            inverse = "-" if operator == "++" else "+"
+            previous = self.hlsl_byte_conversion_expression(
+                f"({promoted}({lhs}) {inverse} 1)", value_type
+            )
+            return f"({updated}, {previous})"
+        return updated
 
     def is_scalar_value_type(self, vtype):
         vtype = self.type_name_string(vtype)
@@ -19701,7 +19760,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if compound_assignment is not None:
             return compound_assignment
-        target_type = binding.get("element_type") if binding else None
+        target_type = self.hlsl_resource_pointer_assignment_type(binding)
         compound_assignment = self.generate_hlsl_wide_integer_compound_assignment(
             target, target, value, op, lhs=lhs, target_type=target_type
         )
@@ -19775,7 +19834,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         inferred_type = self.expression_result_type(target)
         if not isinstance(target, ArrayAccessNode):
             return inferred_type
-        if self.is_hlsl_bfloat16_type(inferred_type):
+        if self.is_hlsl_bfloat16_type(inferred_type) or (
+            self.hlsl_byte_integer_shape(inferred_type) is not None
+        ):
             return inferred_type
 
         resource_types = {
@@ -19801,6 +19862,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             physical_resource_type, resource_types
         )
         return element_type or inferred_type
+
+    def hlsl_resource_pointer_assignment_type(self, binding):
+        if binding is None:
+            return None
+        source_type = binding.get("source_element_type")
+        if self.hlsl_byte_integer_shape(source_type) is not None:
+            return source_type
+        return binding.get("element_type")
 
     def generate_assignment(self, node, *, statement_context=False):
         if hasattr(node, "target") and hasattr(node, "value"):
@@ -19847,6 +19916,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         union_assignment = self.generate_hlsl_union_assignment(target, value, op)
         if union_assignment is not None:
             return union_assignment
+
+        if op != "=":
+            byte_update = self.hlsl_byte_update_expression(node, target, op, value)
+            if byte_update is not None:
+                return byte_update
 
         if isinstance(value, ArrayLiteralNode) and self.hlsl_outer_array_type(
             target_type
@@ -19925,7 +19999,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if compound_assignment is not None:
                 return compound_assignment
-            target_type = binding.get("element_type") if binding else None
+            target_type = self.hlsl_resource_pointer_assignment_type(binding)
             compound_assignment = self.generate_hlsl_wide_integer_compound_assignment(
                 node, target, value, op, lhs=lhs, target_type=target_type
             )
@@ -21595,6 +21669,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if pointee is not None:
                     return pointee
             operand = self.generate_expression(getattr(expr, "operand", ""))
+            if mapped_op in {"++", "--"}:
+                byte_update = self.hlsl_byte_update_expression(
+                    expr, expr.operand, mapped_op
+                )
+                if byte_update is not None:
+                    return byte_update
             complex_unary = self.hlsl_complex64_unary_expression(
                 expr,
                 operand,
@@ -22763,7 +22843,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not isinstance(name, str):
             return None
         if name in getattr(self, "hlsl_type_aliases", {}):
-            return self.map_type(name)
+            return name
         if name in getattr(self, "function_return_types", {}):
             return None
         if name in self.METAL_TYPE_ALIAS_GLOBALS:
@@ -25014,6 +25094,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 binding.get("source_element_type")
             ):
                 source_element_type = binding["source_element_type"]
+            byte_store_type = next(
+                (
+                    candidate
+                    for candidate in (
+                        source_element_type,
+                        self.hlsl_resource_pointer_assignment_type(binding),
+                    )
+                    if self.hlsl_byte_integer_shape(candidate) is not None
+                ),
+                None,
+            )
             value_source_type = self.hlsl_source_expression_type(args[2])
             logical_bfloat_type = next(
                 (
@@ -25036,7 +25127,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 },
             )
             if rendered_value is not None:
-                value = rendered_value
+                value = (
+                    self.hlsl_byte_conversion_expression(
+                        rendered_value, byte_store_type
+                    )
+                    or rendered_value
+                )
             elif (
                 logical_bfloat_type is not None and physical_element_type == "uint16_t"
             ):
@@ -25049,7 +25145,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 value = f"{storage_type}({value})"
             else:
                 value = self.generate_expression_with_expected(
-                    args[2], physical_element_type or source_element_type
+                    args[2],
+                    byte_store_type or physical_element_type or source_element_type,
                 )
             index = self.hlsl_resource_index_expression(
                 args[0],
@@ -40270,7 +40367,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if arg_component_count == 1:
                 rendered_arg = rendered_args[0]
                 if not self.hlsl_expression_is_repeatable(args[0]):
-                    return self.hlsl_scalar_splat_cast(mapped_type, rendered_arg)
+                    splat = self.hlsl_scalar_splat_cast(mapped_type, rendered_arg)
+                    return (
+                        self.hlsl_byte_conversion_expression(splat, constructor_type)
+                        or splat
+                    )
                 rendered_args = [rendered_arg] * component_count
             elif arg_component_count and arg_component_count > component_count:
                 rendered_args = [
@@ -40302,7 +40403,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             for _ in range(component_count - provided_component_count)
                         ),
                     ]
-        return f"{mapped_type}({', '.join(rendered_args)})"
+        rendered = f"{mapped_type}({', '.join(rendered_args)})"
+        return (
+            self.hlsl_byte_conversion_expression(rendered, constructor_type) or rendered
+        )
 
     def hlsl_constructor_expression(self, constructor_type, args):
         matrix_resize = self.generate_hlsl_matrix_resize_constructor(

@@ -8839,7 +8839,49 @@ class MetalCodeGen:
             r"^\s*bfloat\s*[({]", rendered
         ):
             return f"bfloat({rendered})"
-        return rendered
+        return (
+            self.metal_byte_conversion_expression(rendered, expected_type) or rendered
+        )
+
+    def metal_byte_conversion_expression(self, rendered, value_type):
+        native = self.metal_native_narrow_bitcast_storage_type(value_type)
+        if native is None or not re.fullmatch(r"u?char[234]?", native):
+            return None
+        # Keep arithmetic carriers widened, but preserve the source conversion.
+        return f"{self.map_type(value_type)}({native}({rendered}))"
+
+    def metal_byte_update_expression(self, node, target, operator, value=None):
+        value_type = self.expression_result_type(target)
+        if self.metal_byte_conversion_expression("value", value_type) is None:
+            return None
+        if not isinstance(target, (IdentifierNode, VariableNode)):
+            raise UnsupportedMetalFeatureError(
+                "byte-update",
+                "Byte updates require a stable scalar or vector variable",
+                reason="byte-update-lvalue-unsupported",
+                source_location=getattr(node, "source_location", None),
+            )
+        lhs = self.generate_expression(target)
+        mapped = self.map_type(value_type)
+        promoted = mapped.replace("uint", "int")
+        rhs = (
+            self.generate_expression_with_expected(value, None)
+            if value is not None
+            else "1"
+        )
+        binary = operator[0] if operator in {"++", "--"} else operator[:-1]
+        converted = self.metal_byte_conversion_expression(
+            f"({promoted}({lhs}) {binary} ({rhs}))", value_type
+        )
+        updated = f"({lhs} = {converted})"
+        if value is None and getattr(node, "is_postfix", False):
+            inverse = "-" if operator == "++" else "+"
+            # Byte increment is bijective modulo 256; invert the stored result.
+            previous = self.metal_byte_conversion_expression(
+                f"({promoted}({lhs}) {inverse} 1)", value_type
+            )
+            return f"({updated}, {previous})"
+        return updated
 
     def generate_metal_bfloat_promoted_argument(self, argument):
         rendered = self.generate_expression(argument)
@@ -9769,6 +9811,11 @@ class MetalCodeGen:
         if address_space_assignment is not None:
             return address_space_assignment
 
+        if op != "=":
+            byte_update = self.metal_byte_update_expression(node, target, op, value)
+            if byte_update is not None:
+                return byte_update
+
         lhs = self.generate_expression(target)
         native_vector = self.metal_native_narrow_bitcast_storage_type(
             self.expression_result_type(target)
@@ -10469,6 +10516,12 @@ class MetalCodeGen:
                 return local_reinterpret
             operand = self.generate_unary_operand(expr.operand)
             operator = self.map_operator(expr.op)
+            if operator in {"++", "--"}:
+                byte_update = self.metal_byte_update_expression(
+                    expr, expr.operand, operator
+                )
+                if byte_update is not None:
+                    return byte_update
             if getattr(expr, "is_postfix", False):
                 return f"{operand}{operator}"
             return f"{operator}{operand}"
@@ -10557,8 +10610,13 @@ class MetalCodeGen:
                             reason="element-count-mismatch",
                             source_location=getattr(expr, "source_location", None),
                         )
-                    return f"{metal_type}{{{args}}}"
-                return f"{metal_type}({args})"
+                    rendered = f"{metal_type}{{{args}}}"
+                else:
+                    rendered = f"{metal_type}({args})"
+                return (
+                    self.metal_byte_conversion_expression(rendered, constructor_type)
+                    or rendered
+                )
             return str(expr)
         elif isinstance(expr, FunctionCallNode):
             option_payload = self.option_constructor_payload_expression(expr)
@@ -11103,7 +11161,11 @@ class MetalCodeGen:
                     self.generate_expression_with_expected(arg, None)
                     for arg in expr.args
                 )
-                return f"{metal_type}({args})"
+                rendered = f"{metal_type}({args})"
+                return (
+                    self.metal_byte_conversion_expression(rendered, func_name)
+                    or rendered
+                )
             readonly_raw_buffer_call = self.readonly_raw_buffer_call_diagnostic(
                 argument_func_name, expr.args
             )
@@ -20450,13 +20512,16 @@ class MetalCodeGen:
             )
             if (
                 native_type is not None
-                and native_type[-1:] in {"2", "3", "4"}
                 and not qualifiers.intersection({"out", "inout"})
                 and len(self.function_overloads_by_name.get(func_name, [])) <= 1
             ):
                 # Native aggregate vectors need an explicit value conversion
                 # when the callee uses the widened arithmetic representation.
-                rendered = f"{self.map_type(param_type)}({rendered})"
+                converted = self.metal_byte_conversion_expression(rendered, param_type)
+                if converted is not None:
+                    rendered = converted
+                elif native_type[-1:] in {"2", "3", "4"}:
+                    rendered = f"{self.map_type(param_type)}({rendered})"
             args.append(rendered)
             if self.structured_buffer_parameter_requires_length(func_name, param_name):
                 length = self.structured_buffer_length_data_argument(arg)
