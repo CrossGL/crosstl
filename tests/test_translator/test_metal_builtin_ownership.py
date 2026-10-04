@@ -71,7 +71,9 @@ def _run(command):
     return result.stdout
 
 
-def _compile(generated, target, tmp_path, *, metal_compile_flags=()):
+def _compile(
+    generated, target, tmp_path, *, metal_compile_flags=(), directx_compile_flags=()
+):
     suffix, module_suffix, tool = {
         "directx": ("hlsl", "dxil", "dxc"),
         "opengl": ("comp", "spv", "glslangValidator"),
@@ -91,6 +93,7 @@ def _compile(generated, target, tmp_path, *, metal_compile_flags=()):
                 "-E",
                 "CSMain",
                 "-WX",
+                *directx_compile_flags,
                 str(artifact),
                 "-Fo",
                 str(module),

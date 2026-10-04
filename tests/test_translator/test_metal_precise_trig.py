@@ -137,7 +137,7 @@ def test_precise_trig_generation_state_does_not_leak():
 
 
 @pytest.mark.parametrize("operation", ["sin", "cos"])
-@pytest.mark.parametrize("operand", ["int", "double", "half", "Payload"])
+@pytest.mark.parametrize("operand", ["int", "double", "Payload"])
 def test_precise_trig_rejects_unrepresentable_operands(tmp_path, operation, operand):
     source = "struct Payload { float value; };\n" + (
         f"{operand} evaluate({operand} x) {{ return metal::precise::{operation}(x); }}"
@@ -336,10 +336,15 @@ def _execute(
     metal_entry="trigonometry",
     check_outputs=_check,
     metal_compile_flags=(),
+    directx_compile_flags=(),
 ):
     directory.mkdir()
     artifact, module = _compile(
-        source, target, directory, metal_compile_flags=metal_compile_flags
+        source,
+        target,
+        directory,
+        metal_compile_flags=metal_compile_flags,
+        directx_compile_flags=directx_compile_flags,
     )
     assert module.is_file(), "native compiler required"
     layouts = (
@@ -405,6 +410,9 @@ def _execute(
         "artifactSha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
         "moduleSha256": hashlib.sha256(module.read_bytes()).hexdigest(),
         "metalCompileFlags": list(metal_compile_flags) if target == "metal" else [],
+        "directxCompileFlags": (
+            list(directx_compile_flags) if target == "directx" else []
+        ),
         "runtime": state.details,
     }
 
@@ -436,6 +444,211 @@ def test_precise_trig_executes(tmp_path):
                 "inputCount": len(inputs),
                 "outputCount": len(expected),
                 "oracle": "160-digit Decimal Machin pi and Taylor series, binary32 RNE",
+                "records": records,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+PROMOTED_OPERATIONS = ("sin", "cos", "asin", "acos", "atan", "acosh")
+PROMOTED_SHAPES = (("half", 1), ("bfloat", 1))
+PROMOTED_INPUTS = (
+    0,
+    0x8000,
+    1,
+    0x8001,
+    0x3555,
+    0x3C00,
+    0x3F80,
+    0x4000,
+    0x4200,
+    0x7BFF,
+    0x7C00,
+    0x7D01,
+    0x7F80,
+    0x7FC1,
+    0xFBFF,
+    0xFFFF,
+)
+
+
+def _promotion_source(operand, width):
+    suffix = str(width) if width > 1 else ""
+    stride = 2 * width * len(PROMOTED_OPERATIONS) + 1
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+using Narrow = {operand}{suffix};
+Narrow record(thread uint& count, Narrow value) {{ count += 1; return value; }}
+kernel void promote_precise(const device uint* values [[buffer(0)]],
+                            device uint* results [[buffer(1)]],
+                            uint i [[thread_position_in_grid]]) {{
+    Narrow value = Narrow(as_type<{operand}>(ushort(values[i])));
+    uint count = 0;
+"""
+    for index, operation in enumerate(PROMOTED_OPERATIONS):
+        source += f"""
+    auto implicit_{operation} = metal::precise::{operation}(record(count, value));
+    auto explicit_{operation} = metal::precise::{operation}(float{suffix}(value));
+"""
+        for lane in range(width):
+            component = "." + "xyzw"[lane] if width > 1 else ""
+            offset = 2 * (index * width + lane)
+            source += f"    results[{stride} * i + {offset}] = as_type<uint>(implicit_{operation}{component});\n"
+            source += f"    results[{stride} * i + {offset + 1}] = as_type<uint>(explicit_{operation}{component});\n"
+    return source + f"    results[{stride} * i + {stride - 1}] = count;\n}}\n"
+
+
+def _promotion_expected(operand, width):
+    results = []
+    for word in PROMOTED_INPUTS:
+        value = (
+            struct.unpack("<e", struct.pack("<H", word))[0]
+            if operand == "half"
+            else _float(word << 16)
+        )
+        for operation in PROMOTED_OPERATIONS:
+            try:
+                result = getattr(math, operation)(value)
+            except ValueError:
+                result = math.nan
+            results.extend([_bits(result)] * (2 * width))
+        results.append(len(PROMOTED_OPERATIONS))
+    return results + GUARD
+
+
+def _check_promotions(actual, expected, width, *, original=False):
+    assert len(actual) == len(expected), "output size"
+    assert actual[-len(GUARD) :] == GUARD, "output guard"
+    stride = 2 * width * len(PROMOTED_OPERATIONS) + 1
+    maximum = 0
+    for base in range(0, len(expected) - len(GUARD), stride):
+        assert actual[base + stride - 1] == len(
+            PROMOTED_OPERATIONS
+        ), "operand evaluation count"
+        for offset in range(0, stride - 1, 2):
+            got, explicit = actual[base + offset : base + offset + 2]
+            want = expected[base + offset]
+            assert got == explicit, "implicit and explicit promotion differ"
+            # Keep the established original-Metal atan control separate from
+            # the stricter generated-output contract (MSL 8.1/8.5).
+            operation = PROMOTED_OPERATIONS[offset // (2 * width)]
+            if original and operation == "atan":
+                from tests.test_translator.test_metal_precise_atan import (
+                    _check_original_word,
+                )
+
+                maximum = max(maximum, _check_original_word(got, want))
+                continue
+            if want & 0x7FFFFFFF > 0x7F800000:
+                assert got & 0x7FFFFFFF > 0x7F800000, "NaN classification"
+            elif want & 0x7FFFFFFF in (0, 0x7F800000):
+                assert got == want, "zero or infinity"
+            else:
+                assert got >> 31 == want >> 31, "result sign"
+                error = abs(got - want)
+                assert error <= 4, (base, offset, hex(got), hex(want), error)
+                maximum = max(maximum, error)
+    return maximum
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl", "metal"))
+@pytest.mark.parametrize("operand,width", PROMOTED_SHAPES)
+def test_precise_math_promotes_narrow_operands(tmp_path, target, operand, width):
+    generated = _translate(tmp_path, _promotion_source(operand, width), target)
+    suffix = str(width) if width > 1 else ""
+    for operation in PROMOTED_OPERATIONS:
+        assert f"metal_precise_{operation}_float{suffix}(" in generated
+
+
+@pytest.mark.parametrize("operation", ("sin", "cos", "atan", "acosh"))
+@pytest.mark.parametrize("width", (2, 3, 4))
+def test_precise_math_rejects_implicit_narrow_vector_conversion(
+    tmp_path, operation, width
+):
+    source = f"float{width} evaluate(half{width} value) {{ return metal::precise::{operation}(value); }}"
+    with pytest.raises(MetalPreciseMathLoweringError):
+        _translate(tmp_path, source, "crossgl")
+
+
+@pytest.mark.parametrize(
+    "corruption", ("pair", "value", "size", "guard", "count", "zero", "nan")
+)
+def test_precise_promotion_verifier_rejects_corruption(corruption):
+    expected = _promotion_expected("half", 1)
+    actual = expected.copy()
+    if corruption == "pair":
+        actual[2] ^= 1
+    elif corruption == "value":
+        actual[2:4] = [expected[2] + 5] * 2
+    elif corruption == "size":
+        actual.pop()
+    elif corruption == "guard":
+        actual[-1] ^= 1
+    elif corruption == "count":
+        actual[12] = 0
+    elif corruption == "zero":
+        actual[:2] = [0x80000000] * 2
+    else:
+        actual[10:12] = [0] * 2
+    with pytest.raises(AssertionError):
+        _check_promotions(actual, expected, 1)
+
+
+def test_precise_promotion_original_control_does_not_relax_generated_checks():
+    expected = _promotion_expected("bfloat", 1)
+    actual = expected.copy()
+    for index in (1, 2, 3):
+        actual[13 * index + 8 : 13 * index + 10] = [0, 0]
+    _check_promotions(actual, expected, 1, original=True)
+    with pytest.raises(AssertionError):
+        _check_promotions(actual, expected, 1)
+
+
+@pytest.mark.parametrize("operand,width", PROMOTED_SHAPES)
+def test_precise_math_promotions_execute_natively(tmp_path, operand, width):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required native precise promotions")
+    target = {"win32": "directx", "linux": "opengl", "darwin": "metal"}[sys.platform]
+    source = _promotion_source(operand, width)
+    generated = _translate(tmp_path, source, target)
+    expected = _promotion_expected(operand, width)
+    (tmp_path / "inputs.bin").write_bytes(
+        struct.pack(f"<{len(PROMOTED_INPUTS)}I", *PROMOTED_INPUTS)
+    )
+    (tmp_path / "expected.bin").write_bytes(
+        struct.pack(f"<{len(expected)}I", *expected)
+    )
+    records = {}
+    for label, code in (("generated", generated), ("original", source)):
+        if label == "original" and target != "metal":
+            continue
+        records[label] = _execute(
+            tmp_path / label,
+            target,
+            code,
+            PROMOTED_INPUTS,
+            expected,
+            metal_entry="promote_precise",
+            check_outputs=lambda actual, reference: _check_promotions(
+                actual, reference, width, original=label == "original"
+            ),
+            metal_compile_flags=("-fno-fast-math",),
+            directx_compile_flags=("-enable-16bit-types",),
+        )
+    (tmp_path / "evidence.json").write_text(
+        json.dumps(
+            {
+                "target": target,
+                "operand": operand,
+                "width": width,
+                "oracle": (
+                    "binary32-rounded Python math with at most four ULP error; exact implicit/explicit pairs"
+                ),
+                "originalMetalControl": (
+                    "The existing original atan control permits subnormal flushing and either zero sign; generated checks remain exact."
+                ),
                 "records": records,
             },
             indent=2,

@@ -879,6 +879,22 @@ assignment result, input preservation and output guards. OpenGL retains an
 explicit diagnostic for these unsupported effectful compound destinations.
 These checks do not establish full MLX-suite parity.
 
+**Precise scalar promotions.**
+
+Metal's qualified precise sine, cosine, arctangent and inverse hyperbolic
+cosine accept scalar ``half`` and ``bfloat`` operands by promotion to
+``float``. Translation preserves that binary32 result, including inferred
+``auto`` declarations, and evaluates each operand once. Narrow vectors still
+require an explicit conversion to the corresponding float vector, matching
+the source compiler's overload rules.
+
+Native checks compare implicit and explicit promotions, output guards and
+evaluation counts. Generated results retain the existing binary32 accuracy
+and signed-zero requirements. The original Metal arctangent control uses its
+separate documented zero/subnormal policy; that allowance does not apply to
+translated output. This contract does not change unqualified half-math
+overloads or establish full application parity.
+
 **Fused arithmetic profiles.**
 
 ``crosstl.translator.fused_math`` provides an internal binary32 fused

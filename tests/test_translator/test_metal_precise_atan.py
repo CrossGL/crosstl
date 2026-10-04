@@ -106,7 +106,7 @@ def test_precise_atan_names_and_state_are_isolated():
     assert "__crossgl_metal_precise_atan" not in generated
 
 
-@pytest.mark.parametrize("operand", ["int", "double", "half", "float8", "Payload"])
+@pytest.mark.parametrize("operand", ["int", "double", "float8", "Payload"])
 def test_precise_atan_diagnoses_unsupported_operands(tmp_path, operand):
     source = (
         "struct Payload { float x; };\n"

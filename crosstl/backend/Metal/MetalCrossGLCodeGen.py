@@ -13665,8 +13665,16 @@ class MetalToCrossGLConverter:
                 source_location,
             )
 
+        scalar_type = self.metal_scalar_arithmetic_type_info(type_info["element_type"])
+        binary32_operand = scalar_type == ("floating", True, 32) or (
+            width == 1
+            and (
+                type_info["category"] == "bfloat"
+                or (scalar_type is not None and scalar_type[2] < 32)
+            )
+        )
         if operation in {"sin", "cos"}:
-            if self.normalized_metal_type(type_info["element_type"]) != "float":
+            if not binary32_operand:
                 raise MetalPreciseMathLoweringError(
                     operation,
                     operand_type,
@@ -13679,7 +13687,7 @@ class MetalToCrossGLConverter:
             self.required_metal_precise_asin_widths.add(width)
             return self.metal_precise_asin_helper_name(width)
         if operation == "atan":
-            if self.normalized_metal_type(type_info["element_type"]) != "float":
+            if not binary32_operand:
                 raise MetalPreciseMathLoweringError(
                     operation,
                     operand_type,
@@ -13689,7 +13697,7 @@ class MetalToCrossGLConverter:
             self.required_metal_precise_atan_widths.add(width)
             return self.metal_precise_atan_helper_name(width)
         if operation == "acosh":
-            if self.normalized_metal_type(type_info["element_type"]) != "float":
+            if not binary32_operand:
                 raise MetalPreciseMathLoweringError(
                     operation,
                     operand_type,

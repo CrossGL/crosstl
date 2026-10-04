@@ -106,7 +106,7 @@ def test_precise_acosh_names_and_state_are_isolated(tmp_path):
     assert "__crossgl_metal_precise_acosh" not in generated
 
 
-@pytest.mark.parametrize("operand", ["int", "double", "half", "float8", "Payload"])
+@pytest.mark.parametrize("operand", ["int", "double", "float8", "Payload"])
 def test_precise_acosh_diagnoses_unsupported_operands(tmp_path, operand):
     source = (
         "struct Payload { float x; };\n"
