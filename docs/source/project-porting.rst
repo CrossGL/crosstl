@@ -2136,11 +2136,13 @@ canonicalize NaNs during numeric conversion. Its conversion controls require
 exact agreement between original and generated Metal, and separately check
 NaN classification, sign and bfloat representability. They do not establish
 cross-target NaN payload identity. All finite conversion results and identity
-copies retain exact bitwise comparisons. Scalar 32-bit integer conversions use
+copies retain exact bitwise comparisons. Runtime scalar 32-bit integer conversions use
 integer rounding in OpenGL and DirectX to avoid an intermediate float32 rounding
 step. OpenGL runtime conversions from double and wider integers that could
 introduce double rounding fail with a structured diagnostic. This does not
 establish support for every bfloat operation in an MLX host backend.
+Compile-time integer initializers follow a separate evaluation path; exact
+integer-to-bfloat constant rounding remains tracked in issue #2069.
 
 Binary16 Storage
 ~~~~~~~~~~~~~~~~
