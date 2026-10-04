@@ -58,7 +58,7 @@ FORMS = ("scalar", "constant", "reference", "vector2", "vector4", "alias", "stru
 TARGET_FORMS = {
     "metal": FORMS,
     "directx": ("scalar", "constant", "reference", "alias"),
-    "opengl": ("scalar", "constant", "reference", "alias", "struct"),
+    "opengl": FORMS,
 }
 NATIVE_TARGET = {"darwin": "metal", "win32": "directx", "linux": "opengl"}.get(
     sys.platform

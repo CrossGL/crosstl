@@ -11669,8 +11669,9 @@ def test_codegen_keeps_metal_stdlib_wrappers_as_non_emitted_builtin_metadata():
         "float(WaveActiveMax(__crossgl_bfloat16_to_float(uint(value)))));"
         in normalize(generated_targets["directx"])
     )
-    assert "float simd_result = float(subgroupMax(float(value)));" in normalize(
-        generated_targets["opengl"]
+    assert (
+        "float simd_result = crossgl_round_bfloat1(float(subgroupMax(float(value))));"
+        in normalize(generated_targets["opengl"])
     )
 
 

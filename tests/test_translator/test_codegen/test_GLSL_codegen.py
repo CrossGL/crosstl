@@ -44638,7 +44638,10 @@ def test_opengl_renames_collapsed_bfloat_overloads_and_rewrites_nested_calls(
     assert "return adjust_float(adjust_float(value));" in generated_code
     assert "return adjust_bfloat16_t(adjust_bfloat16_t(value));" in generated_code
     assert "return adjust_bfloat16_t(float(3.0));" in generated_code
-    assert "return adjust_bfloat16_t((left + right));" in generated_code
+    assert (
+        "return adjust_bfloat16_t(crossgl_round_bfloat1((left + right)));"
+        in generated_code
+    )
     assert "return adjust_bfloat16_t(values[index]);" in generated_code
     assert "return adjust_bfloat16_t(value);" in generated_code
     assert "float adjust(float value)" not in generated_code

@@ -6256,6 +6256,31 @@ uint {helper_name}(uint groupIndex) {{
             )
 
         helper_sources = {
+            "from_uint": (
+                """
+uint __crossgl_bfloat16_from_uint(uint value) {
+    if (value < 256u) { return asuint(float(value)) >> 16u; }
+    uint leading = uint(firstbithigh(value));
+    uint shift = leading - 7u;
+    uint retained = value >> shift;
+    uint remainder = value & ((1u << shift) - 1u);
+    uint midpoint = 1u << (shift - 1u);
+    if (remainder > midpoint || (remainder == midpoint && (retained & 1u) != 0u)) {
+        retained += 1u;
+    }
+    return ((leading + 126u) << 7u) + retained;
+}
+"""
+            ),
+            "from_int": (
+                """
+uint __crossgl_bfloat16_from_uint(uint value);
+uint __crossgl_bfloat16_from_int(int value) {
+    uint magnitude = value < 0 ? 0u - uint(value) : uint(value);
+    return __crossgl_bfloat16_from_uint(magnitude) | (value < 0 ? 0x8000u : 0u);
+}
+"""
+            ),
             "from_float": (
                 """
 uint __crossgl_bfloat16_from_float(float value) {
@@ -9140,6 +9165,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             helper in value_code
             for helper in (
                 "__crossgl_bfloat16_from_float",
+                "__crossgl_bfloat16_from_int",
+                "__crossgl_bfloat16_from_uint",
                 "__crossgl_bfloat16_to_float",
             )
         ):
@@ -11716,6 +11743,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             if mapped_source == "bool":
                 rendered = f"(({rendered}) ? 1.0 : 0.0)"
+            if mapped_source in {"int", "uint"}:
+                self.require_hlsl_bfloat16_helper("from_uint")
+                self.require_hlsl_bfloat16_helper(f"from_{mapped_source}")
+                return f"__crossgl_bfloat16_from_{mapped_source}({mapped_source}({rendered}))"
             return self.hlsl_float_to_bfloat16_expression(rendered)
 
         decoded = self.hlsl_bfloat16_to_float_expression(rendered)

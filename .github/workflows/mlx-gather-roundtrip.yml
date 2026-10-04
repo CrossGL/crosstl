@@ -69,6 +69,7 @@ jobs:
         env:
           CROSTL_REQUIRE_HALF_BUFFER_RUNTIME: "1"
           CROSTL_REQUIRE_BFLOAT_BUFFER_RUNTIME: "1"
+          CROSTL_REQUIRE_BFLOAT_CONVERSION_RUNTIME: "1"
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_REQUIRE_MLX_OPENGL_GENERAL_GATHER: "1"
           CROSTL_REQUIRE_RANGE_BINDINGS: "1"
@@ -103,6 +104,7 @@ jobs:
               tests/test_translator/test_mlx_general_gather_opengl.py \
               tests/test_translator/test_half_buffer_runtime.py \
               tests/test_translator/test_bfloat_buffer_runtime.py \
+              tests/test_translator/test_opengl_bfloat_conversion.py \
               tests/test_translator/test_half_copy_identity.py \
               tests/test_translator/test_range_bindings.py \
               tests/test_translator/test_union_storage.py \
@@ -231,6 +233,7 @@ jobs:
         env:
           CROSTL_REQUIRE_HALF_BUFFER_RUNTIME: "1"
           CROSTL_REQUIRE_BFLOAT_BUFFER_RUNTIME: "1"
+          CROSTL_REQUIRE_BFLOAT_CONVERSION_RUNTIME: "1"
           CROSTL_REQUIRE_RANGE_BINDINGS: "1"
           CROSTL_REQUIRE_UNION_STORAGE: "1"
           CROSTL_REQUIRE_NARROW_INTEGER_CONVERSIONS: "1"
@@ -251,6 +254,7 @@ jobs:
               tests/test_translator/test_byte_buffer_runtime.py \
               tests/test_translator/test_half_buffer_runtime.py \
               tests/test_translator/test_bfloat_buffer_runtime.py \
+              tests/test_translator/test_opengl_bfloat_conversion.py \
               tests/test_translator/test_half_copy_identity.py \
               tests/test_translator/test_metal_aggregate_lookup.py \
               tests/test_translator/test_metal_narrow_aggregate_runtime.py \
@@ -393,6 +397,7 @@ jobs:
         env:
           CROSTL_REQUIRE_HALF_BUFFER_RUNTIME: "1"
           CROSTL_REQUIRE_BFLOAT_BUFFER_RUNTIME: "1"
+          CROSTL_REQUIRE_BFLOAT_CONVERSION_RUNTIME: "1"
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_REQUIRE_MLX_DIRECTX_GENERAL_GATHER: "1"
           CROSTL_REQUIRE_RANGE_BINDINGS: "1"
@@ -427,6 +432,7 @@ jobs:
               tests/test_translator/test_mlx_general_gather_directx.py \
               tests/test_translator/test_half_buffer_runtime.py \
               tests/test_translator/test_bfloat_buffer_runtime.py \
+              tests/test_translator/test_opengl_bfloat_conversion.py \
               tests/test_translator/test_half_copy_identity.py \
               tests/test_translator/test_range_bindings.py \
               tests/test_translator/test_union_storage.py \

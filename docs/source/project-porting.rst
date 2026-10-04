@@ -2121,10 +2121,26 @@ output guards, with original Metal execution as a round-trip control. Storage
 support does not establish bfloat arithmetic, conversion rounding or complete
 MLX host integration. Padded vectors and unsupported allocation views remain
 subject to the native loader's existing restrictions.
-Metal controls additionally cover two- and four-lane vectors and homogeneous
-structures. DirectX vector and aggregate lowering, and OpenGL bfloat vector
-lowering, remain tracked separately in issue #1488; this storage contract does
-not enable those translations.
+Metal and OpenGL controls additionally cover two- and four-lane vectors and
+homogeneous structures. DirectX vector and aggregate lowering remain tracked
+separately in issue #1488.
+
+OpenGL rounds float32-to-bfloat numeric conversions to nearest, with ties to
+even, using integer operations on the binary32 representation. Constructors,
+assignments, function arguments and returns, scalar/vector arithmetic, and
+vector components retain bfloat precision before widening to float32. Existing
+bfloat values are not requantized during identity copies or vector repacking.
+The helper quiets NaNs while retaining their sign and upper payload bits;
+same-type copies preserve every payload bit instead. Native Metal can
+canonicalize NaNs during numeric conversion. Its conversion controls require
+exact agreement between original and generated Metal, and separately check
+NaN classification, sign and bfloat representability. They do not establish
+cross-target NaN payload identity. All finite conversion results and identity
+copies retain exact bitwise comparisons. Scalar 32-bit integer conversions use
+integer rounding in OpenGL and DirectX to avoid an intermediate float32 rounding
+step. OpenGL runtime conversions from double and wider integers that could
+introduce double rounding fail with a structured diagnostic. This does not
+establish support for every bfloat operation in an MLX host backend.
 
 Binary16 Storage
 ~~~~~~~~~~~~~~~~
