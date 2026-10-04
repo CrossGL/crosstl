@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 517,
+        "unsupported_marker_count": 506,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -121,6 +121,7 @@
       "tests": {
         "paths": [
           "tests/test_translator/test_codegen/test_directx_codegen.py",
+          "tests/test_translator/test_union_storage.py",
           "tests/test_translator/test_directx_metal_math.py",
           "tests/test_translator/test_metal_precise_asin.py",
           "tests/test_translator/test_metal_precise_trig.py",
@@ -139,7 +140,7 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1645
+        "test_count": 1653
       },
       "translator_codegen": {
         "exists": true,
@@ -260,6 +261,7 @@
         "paths": [
           "tests/test_translator/test_arithmetic_conversions.py",
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
+          "tests/test_translator/test_union_storage.py",
           "tests/test_translator/test_codegen/test_GLSL_storage_pointer_codegen.py",
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_translator/test_opengl_metal_math.py",
@@ -281,7 +283,7 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1881
+        "test_count": 1889
       },
       "translator_codegen": {
         "exists": true,
@@ -650,6 +652,7 @@
       "tests": {
         "paths": [
           "tests/test_translator/test_codegen/test_metal_codegen.py",
+          "tests/test_translator/test_union_storage.py",
           "tests/test_translator/test_mlx_attention_reduce_runtime.py",
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_translator/test_metal_precise_asin.py",
@@ -665,7 +668,7 @@
           "tests/test_translator/test_mlx_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2033
+        "test_count": 2041
       },
       "translator_codegen": {
         "exists": true,
