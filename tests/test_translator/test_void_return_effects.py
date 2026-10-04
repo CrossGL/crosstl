@@ -132,5 +132,6 @@ def test_void_return_effects_are_required_on_each_native_target():
         step = ci_coverage.workflow_step_section(workflow, name)
         assert f'{REQUIRE_ENV}: "1"' in step
         assert "test_void_return_effects.py" in step
-        assert "--timeout-seconds 1200" in step
+        timeout = 1800 if name == "Validate general gather and empty arrays" else 1200
+        assert f"--timeout-seconds {timeout}" in step
         assert "if:" not in step and "continue-on-error" not in workflow

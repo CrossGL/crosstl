@@ -398,7 +398,8 @@ def test_float_atomic_memory_requires_native_metal_and_directx_evidence():
         assert f'{REQUIRE_ENV}: "1"' in step
         assert "test_float_atomic_memory.py" in step
         assert "test_mlx_float_atomic_memory.py" in step
-        assert "--timeout-seconds 1200" in step
+        timeout = 1800 if name == "Validate general gather and empty arrays" else 1200
+        assert f"--timeout-seconds {timeout}" in step
         assert "if:" not in step and "continue-on-error" not in workflow
     opengl = ci_coverage.workflow_step_section(
         workflow, "Validate indexed OpenGL gather and resource aggregates"

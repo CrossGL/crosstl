@@ -124,7 +124,8 @@ def test_constrained_specialization_execution_is_required_on_each_target():
         step = ci_coverage.workflow_step_section(workflow, name)
         assert f'{REQUIRE_ENV}: "1"' in step
         assert "test_constrained_specialization_runtime.py" in step
-        assert "--timeout-seconds 1200" in step and "-n auto" in step
+        timeout = 1800 if name == "Validate general gather and empty arrays" else 1200
+        assert f"--timeout-seconds {timeout}" in step and "-n auto" in step
         assert "if:" not in step and "continue-on-error" not in workflow
     for event in ("pull_request", "push"):
         assert "tests/test_translator/**" in ci_coverage.workflow_event_path_filters(

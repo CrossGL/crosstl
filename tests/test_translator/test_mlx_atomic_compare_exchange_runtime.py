@@ -54,7 +54,8 @@ def test_compare_exchange_and_dependencies_are_required_on_each_native_target():
             "test_metal_constrained_calls.py",
         ):
             assert module in step
-        assert "--timeout-seconds 1200" in step and "-n auto" in step
+        timeout = 1800 if name == "Validate general gather and empty arrays" else 1200
+        assert f"--timeout-seconds {timeout}" in step and "-n auto" in step
         assert "--junitxml=" in step and "--basetemp=" in step
         assert "if:" not in step and "continue-on-error" not in workflow
 

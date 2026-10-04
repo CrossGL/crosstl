@@ -147,7 +147,8 @@ def test_template_wrapper_execution_is_required_on_each_native_target():
         step = ci_coverage.workflow_step_section(workflow, name)
         assert f'{REQUIRE_ENV}: "1"' in step
         assert "test_template_wrapper_runtime.py" in step
-        assert "--timeout-seconds 1200" in step
+        timeout = 1800 if name == "Validate general gather and empty arrays" else 1200
+        assert f"--timeout-seconds {timeout}" in step
         assert "if:" not in step and "continue-on-error" not in workflow
     for event in ("pull_request", "push"):
         assert (

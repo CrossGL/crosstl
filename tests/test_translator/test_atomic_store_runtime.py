@@ -300,5 +300,6 @@ def test_atomic_stores_and_pinned_scatter_are_required_on_each_native_target():
         assert f'{SCATTER_ENV}: "1"' in step
         assert "test_atomic_store_runtime.py" in step
         assert "test_mlx_scatter_axis_runtime.py" in step
-        assert "--timeout-seconds 1200" in step
+        timeout = 1800 if name == "Validate general gather and empty arrays" else 1200
+        assert f"--timeout-seconds {timeout}" in step
         assert "if:" not in step and "continue-on-error" not in workflow
