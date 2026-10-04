@@ -6280,6 +6280,7 @@ def _runtime_fixture_values_by_name(
 
 
 _RUNTIME_SCALAR_BYTE_SIZES = {
+    "bfloat16": 2,
     "bool": 1,
     "float16": 2,
     "half": 2,

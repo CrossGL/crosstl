@@ -3325,6 +3325,8 @@ def _directx_buffer_stride(
 def _directx_hlsl_element_stride(type_name: str) -> int | None:
     scalar_sizes = {
         "float16_t": 2,
+        "int16_t": 2,
+        "uint16_t": 2,
         "float": 4,
         "float32_t": 4,
         "int": 4,
@@ -3336,7 +3338,9 @@ def _directx_hlsl_element_stride(type_name: str) -> int | None:
     }
     if type_name in scalar_sizes:
         return scalar_sizes[type_name]
-    match = re.fullmatch(r"(float16_t|float|int|uint)([1-4])", type_name)
+    match = re.fullmatch(
+        r"(float16_t|int16_t|uint16_t|float|int|uint)([1-4])", type_name
+    )
     if match:
         return scalar_sizes[match.group(1)] * int(match.group(2))
     return None
@@ -4287,6 +4291,8 @@ def _scalar_block_size(
         )
     expected_physical_type = {
         "float16": "float16_t",
+        "int16": "int16_t",
+        "uint16": "uint16_t",
         "float32": "float",
         "int32": "int",
         "uint32": "uint",
@@ -4479,7 +4485,8 @@ def _buffer_readback_encoding(
     )
     try:
         validate_value_encoding(binding.encoding, dtype)
-        validate_value_encoding(encoding, dtype)
+        if _binding_requires_readback(binding):
+            validate_value_encoding(encoding, dtype)
     except ValueError as exc:
         raise RuntimeAdapterSetupError(
             str(exc),
@@ -4712,6 +4719,14 @@ def _int_field(value: Any, *, default: int | None = None) -> int:
 
 def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
     aliases = {
+        "bfloat": "bfloat16",
+        "bfloat16_t": "bfloat16",
+        "short": "int16",
+        "i16": "int16",
+        "int16_t": "int16",
+        "ushort": "uint16",
+        "u16": "uint16",
+        "uint16_t": "uint16",
         "half": "float16",
         "f16": "float16",
         "float16_t": "float16",
@@ -4740,9 +4755,12 @@ def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
     }
     normalized = str(dtype or "").strip().lower()
     value = aliases.get(normalized, normalized)
-    if value == "float16" and target.lower() in {"metal", "directx"}:
+    if value in {"float16", "int16", "uint16"} and target.lower() in {
+        "metal",
+        "directx",
+    }:
         return value
-    if value in {"bool", "int8", "uint8"} and target.lower() == "metal":
+    if value in {"bfloat16", "bool", "int8", "uint8"} and target.lower() == "metal":
         return value
     if value not in {"float32", "uint32", "int32", "uint64", "int64"}:
         raise RuntimeExecutorUnavailable(
@@ -4754,6 +4772,9 @@ def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
 
 def _dtype_format(dtype: str) -> str:
     return {
+        "bfloat16": "H",
+        "int16": "h",
+        "uint16": "H",
         "float16": "e",
         "int8": "b",
         "uint8": "B",
@@ -4802,17 +4823,23 @@ def _pack_values(
         )
     if encoding is not None:
         return struct.pack(
-            "<" + ("H" if dtype == "float16" else "I") * expected_count, *values
+            "<" + ("H" if dtype in {"float16", "bfloat16"} else "I") * expected_count,
+            *values,
         )
     if dtype == "bool" and any(type(item) is not bool for item in values):
         raise RuntimeExecutorUnavailable(
             f"{target} boolean buffer values must be true or false."
         )
-    if dtype in {"int8", "uint8"}:
-        low, high = (-128, 127) if dtype == "int8" else (0, 255)
+    if dtype in {"int8", "uint8", "int16", "uint16"}:
+        width = _dtype_size(dtype) * 8
+        low, high = (
+            (-(1 << (width - 1)), (1 << (width - 1)) - 1)
+            if dtype.startswith("int")
+            else (0, (1 << width) - 1)
+        )
         if any(type(item) is not int or not low <= item <= high for item in values):
             raise RuntimeExecutorUnavailable(
-                f"{target} byte buffer values must be integers in [{low}, {high}]."
+                f"{target} narrow integer buffer values must be integers in [{low}, {high}]."
             )
     if dtype in {"float16", "float32"}:
         special_bits = (
@@ -4896,7 +4923,7 @@ def _unpack_values(
         struct.unpack(
             "<"
             + (
-                ("H" if dtype == "float16" else "I")
+                ("H" if dtype in {"float16", "bfloat16"} else "I")
                 if encoding is not None
                 else _dtype_format(dtype)
             )

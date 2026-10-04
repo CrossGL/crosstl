@@ -2099,6 +2099,33 @@ DirectX/OpenGL sequences. Metal's process-isolated runtime has no sequence API.
 The representation does not cover double storage or generated C++ adapter
 serialization.
 
+Bfloat16 Storage
+~~~~~~~~~~~~~~~~
+
+Native Metal ``bfloat`` buffers use ``dtype: "bfloat16"`` and
+``encoding: "bfloat16-bits"``. Uploads and readbacks contain unsigned 16-bit
+storage words, not host floating-point conversions. An explicit encoding is
+required so bfloat16 cannot be mistaken for IEEE binary16 or float32. Exact-word
+comparisons retain signed zeros, subnormals and NaN payloads.
+
+DirectX's bfloat lowering exposes ``uint16_t`` buffers. Supply ``dtype: "uint16"``
+and unsigned integer values to that physical interface. Explicit HLSL
+``int16_t`` and ``uint16_t`` buffers, and Metal ``short`` and ``ushort`` buffers,
+retain two-byte integer storage. DXC requires native 16-bit types to be enabled.
+OpenGL's widened bfloat lowering exposes float32 storage; exact bfloat carriers
+are binary32 words with the original word in the upper 16 bits. Neither target
+accepts a logical bfloat16 payload in place of its reflected physical layout.
+
+Required native copy controls cover all 65,536 bfloat storage patterns and
+output guards, with original Metal execution as a round-trip control. Storage
+support does not establish bfloat arithmetic, conversion rounding or complete
+MLX host integration. Padded vectors and unsupported allocation views remain
+subject to the native loader's existing restrictions.
+Metal controls additionally cover two- and four-lane vectors and homogeneous
+structures. DirectX vector and aggregate lowering, and OpenGL bfloat vector
+lowering, remain tracked separately in issue #1488; this storage contract does
+not enable those translations.
+
 Binary16 Storage
 ~~~~~~~~~~~~~~~~
 
