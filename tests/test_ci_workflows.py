@@ -68,13 +68,29 @@ def _local_action_text(name):
 def test_mlx_gather_checkout_preserves_pinned_source_bytes():
     workflow = (WORKFLOW_DIR / "mlx-gather-roundtrip.yml").read_text(encoding="utf-8")
     ci_coverage = _load_ci_coverage_module()
-    for target in ("metal", "directx", "opengl"):
+    for target in ("metal", "metal-float", "directx", "opengl"):
         job = _workflow_job_section(workflow, target)
         step = ci_coverage.workflow_step_section(job, "Checkout pinned upstream MLX")
         initialization = step.index("git init mlx-upstream")
         configuration = step.index("git -C mlx-upstream config core.autocrlf false")
         checkout = step.index("git -C mlx-upstream checkout --detach FETCH_HEAD")
         assert initialization < configuration < checkout
+
+
+def test_mlx_float_atomic_reference_uses_fixed_metal_toolchain():
+    workflow = (WORKFLOW_DIR / "mlx-gather-roundtrip.yml").read_text(encoding="utf-8")
+    job = _workflow_job_section(workflow, "metal-float")
+    assert "runs-on: xcode-27" in job
+    assert "DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer" in job
+    assert "xcodebuild -version | tee .mlx-float-metal/xcode-version.txt" in job
+    assert "metal --version | tee .mlx-float-metal/metal-version.txt" in job
+    assert "if-no-files-found: error" in job
+    assert "include-hidden-files: true" in job
+    assert "if: always()" in job
+    assert "continue-on-error" not in job
+    previous = _workflow_job_section(workflow, "metal")
+    assert "runs-on: macos-26" in previous
+    assert 'CROSTL_REQUIRE_FLOAT_ATOMIC_MEMORY: "1"' in previous
 
 
 def _load_ci_coverage_module():

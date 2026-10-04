@@ -145,7 +145,6 @@ jobs:
           CROSTL_REQUIRE_MLX_GENERAL_GATHER: "1"
           CROSTL_REQUIRE_METAL_EMPTY_ARRAYS: "1"
           CROSTL_REQUIRE_FLOAT_ATOMIC_MEMORY: "1"
-          CROSTL_REQUIRE_FLOAT_ATOMIC_COMPARE_EXCHANGE: "1"
           CROSTL_REQUIRE_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
           CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
@@ -172,8 +171,6 @@ jobs:
               tests/test_translator/test_metal_empty_arrays.py \
               tests/test_translator/test_float_atomic_memory.py \
               tests/test_translator/test_mlx_float_atomic_memory.py \
-              tests/test_translator/test_float_atomic_compare_exchange.py \
-              tests/test_translator/test_mlx_float_atomic_compare_exchange.py \
               tests/test_translator/test_resource_aggregates.py \
               tests/test_translator/test_void_return_effects.py \
               tests/test_translator/test_template_wrapper_runtime.py \
@@ -197,6 +194,63 @@ jobs:
         with:
           name: mlx-gather-metal-${{ github.run_attempt }}
           path: .mlx-gather
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  metal-float:
+    name: Original and translated Metal float atomics
+    runs-on: xcode-27
+    timeout-minutes: 35
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Record floating atomic toolchain
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-float-metal
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcodebuild -version | tee .mlx-float-metal/xcode-version.txt
+          xcrun --sdk macosx metal --version | tee .mlx-float-metal/metal-version.txt
+      - name: Install CrossTL and test dependencies
+        run: python -m pip install -e . pytest pytest-xdist numpy
+      - name: Checkout pinned upstream MLX
+        run: |
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+      - name: Validate float compare-exchange and scatter
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_REQUIRE_FLOAT_ATOMIC_COMPARE_EXCHANGE: "1"
+          CROSTL_REQUIRE_MLX_FLOAT_SCATTER: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "Native Metal float atomics" -- \
+            python -m pytest -q -n auto --dist loadgroup --durations=20 \
+              --basetemp=.mlx-float-metal/pytest \
+              --junitxml=.mlx-float-metal/results.xml \
+              tests/test_translator/test_float_atomic_compare_exchange.py \
+              tests/test_translator/test_mlx_float_atomic_compare_exchange.py \
+              tests/test_translator/test_mlx_float_scatter_runtime.py \
+              2>&1 | tee .mlx-float-metal/execution.log
+      - name: Retain floating atomic execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-float-metal-${{ github.run_attempt }}
+          path: .mlx-float-metal
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -260,6 +314,7 @@ jobs:
           CROSTL_REQUIRE_MLX_DIRECTX_GENERAL_GATHER: "1"
           CROSTL_REQUIRE_FLOAT_ATOMIC_MEMORY: "1"
           CROSTL_REQUIRE_FLOAT_ATOMIC_COMPARE_EXCHANGE: "1"
+          CROSTL_REQUIRE_MLX_FLOAT_SCATTER: "1"
           CROSTL_REQUIRE_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
           CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
@@ -287,6 +342,7 @@ jobs:
               tests/test_translator/test_mlx_float_atomic_memory.py \
               tests/test_translator/test_float_atomic_compare_exchange.py \
               tests/test_translator/test_mlx_float_atomic_compare_exchange.py \
+              tests/test_translator/test_mlx_float_scatter_runtime.py \
               tests/test_translator/test_resource_aggregates.py \
               tests/test_translator/test_void_return_effects.py \
               tests/test_translator/test_template_wrapper_runtime.py \

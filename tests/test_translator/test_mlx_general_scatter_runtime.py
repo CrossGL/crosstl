@@ -139,8 +139,12 @@ def _workload(count, target="metal", operation="sum"):
 
 def _request(root, target, work, count, operation="sum"):
     entry, source = _source(root, count, operation)
-    (work / "source.metal").write_text(source, encoding="utf-8")
     supplied, expected, grid = _workload(count, target, operation)
+    return _prepare_request(root, target, work, entry, source, supplied, expected, grid)
+
+
+def _prepare_request(root, target, work, entry, source, supplied, expected, grid):
+    (work / "source.metal").write_text(source, encoding="utf-8")
     with tempfile.TemporaryDirectory(
         prefix=".general-scatter-proof-", dir=root
     ) as temporary:

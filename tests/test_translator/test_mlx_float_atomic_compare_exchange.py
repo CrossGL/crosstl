@@ -37,7 +37,7 @@ def test_float_compare_exchange_requires_native_windows_and_metal_execution():
         / ".github/workflows/mlx-gather-roundtrip.yml"
     ).read_text()
     for name in (
-        "Validate general gather and empty arrays",
+        "Validate float compare-exchange and scatter",
         "Validate indexed DirectX gather and resource aggregates",
     ):
         step = ci_coverage.workflow_step_section(workflow, name)

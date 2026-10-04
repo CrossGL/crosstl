@@ -251,6 +251,25 @@ contending multiply-by-two updates. Multiplication inputs are finite values,
 signed zeros and infinities; these controls do not establish arbitrary NaN
 arithmetic semantics. The upstream header and tests remain unchanged.
 
+The strict Metal compare-exchange gate uses Xcode 27.1. Compiler 32023.883 from
+the macOS 26 image lowers the float success result to `fcmp ueq`, reporting
+success for some bitwise mismatches involving signed zero, subnormals or NaNs.
+Both original and translated sources reproduce this compiler defect. Compiler
+32023.918 uses integer equality for the success result and passes the unchanged
+controls. CI retains the compiler versions and all numerical assertions; the
+macOS 26 job still exercises float loads/stores and integer atomic operations.
+This does not establish correct float compare-exchange on older Metal compilers.
+
+The float scatter gate executes all five policies from the pinned JIT wrapper:
+replacement, sum, product, minimum and maximum. Sixteen cases cover fractional
+values, strided updates and indices, duplicate and negative indices, partial
+four-update chunks, and 65 concurrent updates to one destination. Arithmetic
+inputs have order-independent, exactly representable results; replacement also
+checks signed zero, subnormals, infinities and NaN payloads as raw binary32 words.
+Every case retains 32 output guard words. Required macOS and Windows checks run
+the generated kernels; macOS also executes the original pinned wrapper. This is
+kernel execution coverage, not float scatter routing through the MLX host API.
+
 OpenGL float atomic storage is still unsupported. These controls do not enable
 float scatter in the host adapter or establish complete upstream-suite parity.
 
