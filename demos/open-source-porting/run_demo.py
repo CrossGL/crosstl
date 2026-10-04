@@ -276,18 +276,12 @@ def _run(command: list[str], *, cwd: Path | None = None) -> subprocess.Completed
 
 
 def _translate_case(
-    case_dir: Path,
     *,
     work_dir: Path,
     targets: list[str],
-    update: bool,
 ) -> Path:
     output_dir = work_dir / OUTPUT_DIR_NAME
-    report_path = (
-        Path(tempfile.mkdtemp(prefix=f"{case_dir.name}-report-")) / REPORT_NAME
-        if update
-        else output_dir / REPORT_NAME
-    )
+    report_path = output_dir / REPORT_NAME
     if output_dir.exists():
         shutil.rmtree(output_dir)
 
@@ -576,33 +570,11 @@ def _run_case(
             + ", ".join(unsupported)
         )
 
-    if update:
-        report_path = _translate_case(
-            case_dir,
-            work_dir=case_dir,
-            targets=selected_targets,
-            update=True,
-        )
-        _validate_report(
-            report_path,
-            run_toolchains=run_toolchains,
-            require_toolchain_runs=require_toolchain_runs,
-            selected_targets=selected_targets,
-            reports_dir=reports_dir,
-            case_name=case_dir.name,
-        )
-        _normalize_artifacts(case_dir / OUTPUT_DIR_NAME, selected_targets)
-        shutil.rmtree(report_path.parent, ignore_errors=True)
-        print(f"{case_dir.name}: updated {OUTPUT_DIR_NAME}")
-        return
-
     with tempfile.TemporaryDirectory(prefix="crosstl-demo-") as temp_name:
         work_dir = _copy_case(case_dir, Path(temp_name))
         report_path = _translate_case(
-            case_dir,
             work_dir=work_dir,
             targets=selected_targets,
-            update=False,
         )
         _validate_report(
             report_path,
@@ -613,6 +585,21 @@ def _run_case(
             case_name=case_dir.name,
         )
         _normalize_artifacts(work_dir / OUTPUT_DIR_NAME, selected_targets)
+        if update:
+            for target in selected_targets:
+                source = work_dir / OUTPUT_DIR_NAME / target
+                if not source.is_dir() or not any(
+                    path.is_file() for path in source.rglob("*")
+                ):
+                    raise SystemExit(f"{case_dir.name}: no artifacts for {target}")
+            # Publish only selected targets, after translation and validation succeed.
+            for target in selected_targets:
+                destination = case_dir / OUTPUT_DIR_NAME / target
+                if destination.exists():
+                    shutil.rmtree(destination)
+                shutil.copytree(work_dir / OUTPUT_DIR_NAME / target, destination)
+            print(f"{case_dir.name}: updated {', '.join(selected_targets)}")
+            return
         _compare_artifacts(case_dir, work_dir, selected_targets)
         print(f"{case_dir.name}: verified {', '.join(selected_targets)}")
 

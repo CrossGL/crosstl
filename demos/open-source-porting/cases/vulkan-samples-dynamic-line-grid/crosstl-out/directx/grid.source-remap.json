@@ -182,9 +182,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 20,
-        "endOffset": 556,
+        "endOffset": 586,
         "file": "crosstl-out/directx/grid.hlsl",
-        "length": 77,
+        "length": 107,
         "line": 19,
         "offset": 479
       },
@@ -204,11 +204,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 21,
-        "endOffset": 635,
+        "endOffset": 665,
         "file": "crosstl-out/directx/grid.hlsl",
         "length": 79,
         "line": 20,
-        "offset": 556
+        "offset": 586
       },
       "original": {
         "column": 1,
@@ -226,11 +226,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 22,
-        "endOffset": 661,
+        "endOffset": 691,
         "file": "crosstl-out/directx/grid.hlsl",
         "length": 26,
         "line": 21,
-        "offset": 635
+        "offset": 665
       },
       "original": {
         "column": 1,

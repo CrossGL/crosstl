@@ -424,9 +424,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 43,
-        "endOffset": 1242,
+        "endOffset": 1272,
         "file": "crosstl-out/directx/noise.vert.hlsl",
-        "length": 83,
+        "length": 113,
         "line": 42,
         "offset": 1159
       },
@@ -446,11 +446,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 44,
-        "endOffset": 1335,
+        "endOffset": 1365,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 93,
         "line": 43,
-        "offset": 1242
+        "offset": 1272
       },
       "original": {
         "column": 1,
@@ -468,11 +468,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 45,
-        "endOffset": 1412,
+        "endOffset": 1442,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 77,
         "line": 44,
-        "offset": 1335
+        "offset": 1365
       },
       "original": {
         "column": 1,
@@ -490,11 +490,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 46,
-        "endOffset": 1459,
+        "endOffset": 1489,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 47,
         "line": 45,
-        "offset": 1412
+        "offset": 1442
       },
       "original": {
         "column": 1,
@@ -512,11 +512,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 47,
-        "endOffset": 1510,
+        "endOffset": 1540,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 51,
         "line": 46,
-        "offset": 1459
+        "offset": 1489
       },
       "original": {
         "column": 1,
@@ -534,11 +534,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 48,
-        "endOffset": 1550,
+        "endOffset": 1580,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 40,
         "line": 47,
-        "offset": 1510
+        "offset": 1540
       },
       "original": {
         "column": 1,
@@ -556,11 +556,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 49,
-        "endOffset": 1585,
+        "endOffset": 1615,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 35,
         "line": 48,
-        "offset": 1550
+        "offset": 1580
       },
       "original": {
         "column": 1,
@@ -578,11 +578,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 51,
-        "endOffset": 1632,
+        "endOffset": 1662,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 27,
         "line": 50,
-        "offset": 1605
+        "offset": 1635
       },
       "original": {
         "column": 1,
@@ -600,11 +600,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 53,
-        "endOffset": 1689,
+        "endOffset": 1719,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 39,
         "line": 52,
-        "offset": 1650
+        "offset": 1680
       },
       "original": {
         "column": 1,
@@ -622,11 +622,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 54,
-        "endOffset": 1728,
+        "endOffset": 1758,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 39,
         "line": 53,
-        "offset": 1689
+        "offset": 1719
       },
       "original": {
         "column": 1,
@@ -644,11 +644,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 57,
-        "endOffset": 1802,
+        "endOffset": 1832,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 34,
         "line": 56,
-        "offset": 1768
+        "offset": 1798
       },
       "original": {
         "column": 1,
@@ -666,11 +666,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 58,
-        "endOffset": 1832,
+        "endOffset": 1862,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 30,
         "line": 57,
-        "offset": 1802
+        "offset": 1832
       },
       "original": {
         "column": 1,

@@ -16,7 +16,7 @@ float4 grid(float3 pos) {
 // Fragment Shader
 float4 PSMain(FragmentInput input): SV_Target0 {
     float4 outColor;
-    float t = (-input.nearPoint.y / (input.farPoint.y - input.nearPoint.y));
+    float t = (asfloat(asuint(input.nearPoint.y) ^ 0x80000000u) / (input.farPoint.y - input.nearPoint.y));
     float3 pos = (input.nearPoint + (t * (input.farPoint - input.nearPoint)));
     outColor = grid(pos);
     return outColor;
