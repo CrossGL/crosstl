@@ -904,6 +904,25 @@ separate documented zero/subnormal policy; that allowance does not apply to
 translated output. This contract does not change unqualified half-math
 overloads or establish full application parity.
 
+**Binary32 negation.**
+
+DirectX lowers unary minus on known ``float`` scalars and two- to four-lane
+vectors by toggling the payload sign bit. This preserves subnormals, signed
+zeros, infinities and NaN payloads without depending on the compiler's
+floating-point denormal mode. Operand evaluation occurs once. Literal
+constants retain constant-expression syntax; integer, narrow-float, double,
+matrix and complex operations retain their separate lowering rules.
+
+The existing native math job also checks scalar and vector negation, aliases,
+structure members, array indexing and side-effecting helper calls against an
+independent integer oracle. It retains raw input, expected and readback words,
+compiler outputs, module hashes, evaluation counts and guards. This adds no
+runner matrix and does not change the tolerance of the precise math checks.
+The cross-target control applies inverse negation in two statements. DirectX
+also exercises nested ``-(-x)``; the Metal target's incorrect concatenation of
+that expression into ``--x`` is tracked separately in
+`issue 2077 <https://github.com/CrossGL/crosstl/issues/2077>`_.
+
 **Fused arithmetic profiles.**
 
 ``crosstl.translator.fused_math`` provides an internal binary32 fused

@@ -19915,7 +19915,7 @@ def test_hlsl_native_binary16_widening_eliminates_native_half_roundtrip(tmp_path
     assert "float value = __crossgl_binary16_to_float(uint(bits));" in generated
     assert "value *= 16384.0;" in generated
     assert "return uint((int(bits) << 23));" in generated
-    assert "-value" in generated
+    assert "asfloat(asuint(value) ^ 0x80000000u)" in generated
     assert "asfloat16(" not in generated
     assert "float16_t value" not in generated
     assert "f16tof32(" not in generated

@@ -14269,6 +14269,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return "int"
             return left_type or right_type
         if isinstance(expr, UnaryOpNode):
+            if self.map_operator(expr.op) == "!":
+                return self.hlsl_boolean_expression_result_type(
+                    self.expression_result_type(expr.operand)
+                )
             if expr.op == "*" and not getattr(expr, "is_postfix", False):
                 binding = self.hlsl_resource_pointer_binding(expr.operand)
                 if binding is not None and binding.get("element_type") is not None:
@@ -21693,6 +21697,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if bfloat_unary is not None:
                 return bfloat_unary
+            if mapped_op == "-" and not isinstance(expr.operand, LiteralNode):
+                floating = self.hlsl_floating_arithmetic_type_info(
+                    self.hlsl_source_expression_type(expr.operand)
+                )
+                if floating is not None and floating["base_type"] == "float":
+                    # Arithmetic negation can flush subnormals under DirectX FTZ.
+                    # Toggle the sign without arithmetic or repeated evaluation.
+                    width = floating["width"]
+                    mask = "0x80000000u"
+                    if width != 1:
+                        mask = f"uint{width}({', '.join([mask] * width)})"
+                    return f"asfloat(asuint({operand}) ^ {mask})"
             if mapped_op in {"++", "--"} and getattr(expr, "is_postfix", False):
                 return f"{operand}{mapped_op}"
             return f"{mapped_op}{operand}"
@@ -33979,6 +33995,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             operand_type = self.hlsl_source_expression_type(
                 getattr(expression, "operand", getattr(expression, "expr", None))
             )
+            if self.map_operator(expression.op) == "!":
+                return self.hlsl_boolean_expression_result_type(operand_type)
             if expression.op == "*" and not getattr(expression, "is_postfix", False):
                 pointee_type = self.hlsl_pointer_pointee_type_once(operand_type)
                 if pointee_type is not None:
