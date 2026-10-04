@@ -164,6 +164,7 @@ from .generic_struct_utils import (
 )
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .glsl_float_atomic_storage import FloatAtomicStorage
+from .glsl_union_storage import UnionStorage
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -2513,6 +2514,7 @@ class GLSLCodeGen:
         self.current_structured_buffer_array_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
         self.struct_member_types = {}
+        self.union_storage = UnionStorage(self)
         self.struct_member_name_maps = {}
         self.generic_struct_definitions = {}
         self.generic_struct_specializations = {}
@@ -6881,6 +6883,9 @@ class GLSLCodeGen:
 
     def default_value_struct_field_types(self, type_name):
         source_type_name = self.glsl_source_type_identifier_name(type_name)
+        union = self.union_storage.layout(source_type_name)
+        if union is not None:
+            return [union["storage_type"]]
         member_types = self.struct_member_types.get(source_type_name)
         if member_types is not None:
             return list(member_types.values())
@@ -7195,6 +7200,7 @@ class GLSLCodeGen:
             structs, self.type_name_string
         )
         self.remove_glsl_static_struct_member_types(structs)
+        self.union_storage = UnionStorage(self, structs)
         self.struct_member_name_maps = {}
         self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
             structs
@@ -8348,6 +8354,7 @@ class GLSLCodeGen:
             + self.generate_glsl_complex64_helpers()
             + self.generate_glsl_expected_compare_helpers()
             + self.float_atomic_storage.helper_definitions()
+            + self.union_storage.helper_definitions()
         )
         if generated_helpers:
             code = (
@@ -15332,6 +15339,9 @@ class GLSLCodeGen:
     def generate_cbuffers(self, ast, target_stage=None):
         code = ""
         cbuffers = self.glsl_cbuffer_nodes(ast, target_stage)
+        for cbuffer in cbuffers:
+            for member in getattr(cbuffer, "members", []) or []:
+                self.union_storage.validate_buffer(self.member_type_name(member))
         duplicate_names = collect_duplicate_cbuffer_names(cbuffers)
         if duplicate_names:
             names = ", ".join(sorted(duplicate_names))
@@ -29743,6 +29753,9 @@ complex64_t crossgl_complex64_mod_assign(
         )
 
     def glsl_struct_constructor_conversion(self, expr, constructor, arguments):
+        union = self.union_storage.construct(expr, constructor, arguments)
+        if union is not None:
+            return union
         source_constructor = self.glsl_source_type_identifier_name(constructor)
         if source_constructor not in self.structs_by_name:
             return None
@@ -30993,6 +31006,9 @@ complex64_t crossgl_complex64_mod_assign(
         )
 
     def glsl_value_initialized_expression(self, expr, expected_type):
+        union = self.union_storage.construct(expr, expected_type, [])
+        if union is not None:
+            return union
         mapped_type = self.map_type(expected_type)
         _base_type, array_suffix = split_array_type_suffix(mapped_type)
         if array_suffix:
@@ -31034,6 +31050,9 @@ complex64_t crossgl_complex64_mod_assign(
 
     def generate_glsl_aggregate_initializer(self, expr):
         expected_type = self.type_name_string(self.current_expression_expected_type)
+        union = self.union_storage.construct(expr, expected_type, expr.elements)
+        if union is not None:
+            return union
         if expected_type:
             mapped_type = self.map_type(expected_type)
             if self.glsl_is_zero_aggregate_initializer(
@@ -32844,6 +32863,11 @@ complex64_t crossgl_complex64_mod_assign(
         left_node = getattr(node, "target", getattr(node, "left", None))
         right_node = getattr(node, "value", getattr(node, "right", None))
         op = self.map_operator(getattr(node, "operator", getattr(node, "op", "=")))
+        union = self.union_storage.assignment(
+            left_node, right_node, op, statement_context
+        )
+        if union is not None:
+            return union
         storage_to_workgroup_copy = self.glsl_storage_to_workgroup_byte_array_copy(
             left_node,
             right_node,
@@ -33877,6 +33901,9 @@ complex64_t crossgl_complex64_mod_assign(
 
     def generate_expression(self, expr, is_main=False):
         """Render a CrossGL AST expression into GLSL expression syntax."""
+        union = self.union_storage.read(expr)
+        if union is not None:
+            return union
         storage_read = self.float_atomic_storage.read(expr, is_main)
         if storage_read is not None:
             return storage_read
@@ -34245,6 +34272,11 @@ complex64_t crossgl_complex64_mod_assign(
             else:
                 return str(expr)
         elif isinstance(expr, ConstructorNode):
+            union = self.union_storage.construct(
+                expr, expr.constructor_type, expr.arguments
+            )
+            if union is not None:
+                return union
             if getattr(expr, "is_braced_constructor", False):
                 vector_initializer = self.generate_glsl_vector_aggregate_initializer(
                     ArrayLiteralNode(list(expr.arguments)),
@@ -34290,6 +34322,9 @@ complex64_t crossgl_complex64_mod_assign(
             mesh_output_counts_call = self.generate_mesh_output_counts_call(
                 original_func_name, expr.args
             )
+            union = self.union_storage.call(original_func_name, expr.args)
+            if union is not None:
+                return union
             if mesh_output_counts_call is not None:
                 return mesh_output_counts_call
             self.reject_mesh_output_helper_expression_context(
@@ -38467,6 +38502,7 @@ complex64_t crossgl_complex64_mod_assign(
     def generate_function_call_argument(
         self, func_name, arg, param_name, param_type, param_qualifiers=()
     ):
+        self.union_storage.validate_argument(arg, param_type, param_qualifiers)
         validate_range_reference_argument(self, arg, param_type, param_qualifiers)
         private_binding = self.glsl_private_pointer_call_argument_binding(
             func_name,
@@ -47963,6 +47999,7 @@ complex64_t crossgl_complex64_mod_assign(
         self, vtype, name, binding, array_size=None, node=None
     ):
         element_type = self.structured_buffer_element_type(vtype)
+        self.union_storage.validate_buffer(element_type)
         element_type = self.float_atomic_storage.declaration(element_type, name)
         definitions = self.float_atomic_storage.take_definitions()
         memory_qualifiers = self.structured_buffer_memory_qualifiers(vtype, node)
@@ -48392,6 +48429,7 @@ complex64_t crossgl_complex64_mod_assign(
         self, vtype, var_name, binding, array_suffix=""
     ):
         struct_name = str(self.resource_base_type(vtype))
+        self.union_storage.validate_buffer(struct_name)
         struct = self.structs_by_name[struct_name]
         block_name = self.unique_glsl_interface_block_name(
             "uniform", struct_name, var_name
@@ -50706,6 +50744,9 @@ complex64_t crossgl_complex64_mod_assign(
         return f"{indent}float {member_name};\n"
 
     def generate_struct(self, node):
+        union = self.union_storage.declaration(node)
+        if union is not None:
+            return union
         code = f"struct {self.glsl_type_identifier_name(node.name)} {{\n"
         members = [
             member

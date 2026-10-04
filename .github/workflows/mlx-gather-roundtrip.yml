@@ -70,6 +70,7 @@ jobs:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_REQUIRE_MLX_OPENGL_GENERAL_GATHER: "1"
           CROSTL_REQUIRE_RANGE_BINDINGS: "1"
+          CROSTL_REQUIRE_UNION_STORAGE: "1"
           CROSTL_REQUIRE_VECTOR_LIST_INITIALIZATION: "1"
           CROSTL_REQUIRE_OPENGL_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_OPENGL_FLOAT_ATOMIC_STORAGE: "1"
@@ -98,6 +99,7 @@ jobs:
               --junitxml=.mlx-gather-opengl/results.xml \
               tests/test_translator/test_mlx_general_gather_opengl.py \
               tests/test_translator/test_range_bindings.py \
+              tests/test_translator/test_union_storage.py \
               tests/test_translator/test_vector_list_initialization.py \
               tests/test_translator/test_float_atomic_memory.py \
               tests/test_translator/test_float_atomic_compare_exchange.py \
@@ -119,6 +121,16 @@ jobs:
               tests/test_translator/test_metal_constrained_calls.py \
               tests/test_translator/test_mlx_scatter_axis_runtime.py \
               2>&1 | tee .mlx-gather-opengl/execution.log
+      - name: Validate translated OpenGL random kernels
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Native OpenGL random kernels" -- \
+            python -m demos.integrations.mlx.random_audit \
+              --mlx-root mlx-upstream --target opengl --output-dir .mlx-gather-opengl/random \
+              2>&1 | tee .mlx-gather-opengl/random-execution.log
       - name: Retain OpenGL execution evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -201,6 +213,7 @@ jobs:
       - name: Validate Metal byte and vector storage
         env:
           CROSTL_REQUIRE_RANGE_BINDINGS: "1"
+          CROSTL_REQUIRE_UNION_STORAGE: "1"
           CROSTL_REQUIRE_VECTOR_LIST_INITIALIZATION: "1"
           CROSTL_REQUIRE_BYTE_BUFFER_RUNTIME: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
@@ -212,6 +225,7 @@ jobs:
               --basetemp=.mlx-gather/storage/pytest \
               --junitxml=.mlx-gather/storage/results.xml \
               tests/test_translator/test_range_bindings.py \
+              tests/test_translator/test_union_storage.py \
               tests/test_translator/test_vector_list_initialization.py \
               tests/test_translator/test_byte_buffer_runtime.py \
               tests/test_translator/test_metal_aggregate_lookup.py \
@@ -349,6 +363,7 @@ jobs:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_REQUIRE_MLX_DIRECTX_GENERAL_GATHER: "1"
           CROSTL_REQUIRE_RANGE_BINDINGS: "1"
+          CROSTL_REQUIRE_UNION_STORAGE: "1"
           CROSTL_REQUIRE_VECTOR_LIST_INITIALIZATION: "1"
           CROSTL_REQUIRE_FLOAT_ATOMIC_MEMORY: "1"
           CROSTL_REQUIRE_FLOAT_ATOMIC_COMPARE_EXCHANGE: "1"
@@ -377,6 +392,7 @@ jobs:
               --junitxml=.mlx-gather-directx/results.xml \
               tests/test_translator/test_mlx_general_gather_directx.py \
               tests/test_translator/test_range_bindings.py \
+              tests/test_translator/test_union_storage.py \
               tests/test_translator/test_vector_list_initialization.py \
               tests/test_translator/test_float_atomic_memory.py \
               tests/test_translator/test_mlx_float_atomic_memory.py \

@@ -5557,9 +5557,12 @@ class MetalCodeGen:
             semantic = self.semantic_from_node(func)
             function_name = entry_name or func.name
             semantic_attr = self.map_non_stage_function_semantic(semantic)
-            # Lowered class overloads may be retained without a call in this unit.
-            if getattr(func, "linkage", None) == "internal" and getattr(
-                func, "is_inline", False
+            # Lowered helpers can become unused after native operation selection.
+            if (
+                getattr(func, "linkage", None) == "internal"
+                and getattr(func, "is_inline", False)
+            ) or re.fullmatch(
+                r"CrossGLMetalVectorIndex_[iu](?:8|16)vec[234]_set", function_name
             ):
                 code += "__attribute__((unused))\n"
             code += (
@@ -9767,6 +9770,24 @@ class MetalCodeGen:
             return address_space_assignment
 
         lhs = self.generate_expression(target)
+        native_vector = self.metal_native_narrow_bitcast_storage_type(
+            self.expression_result_type(target)
+        )
+        member_target = target
+        while isinstance(member_target, ArrayAccessNode):
+            member_target = member_target.array
+        if (
+            op == "="
+            and isinstance(member_target, MemberAccessNode)
+            and native_vector is not None
+            and native_vector[-1:] in {"2", "3", "4"}
+            and self.member_lookup_type_name(
+                self.expression_result_type(member_target.object)
+            )
+            in self.structs_by_name
+        ):
+            # Aggregate storage retains narrow vectors; arithmetic values do not.
+            rhs = f"{native_vector}({rhs})"
         if op == "=" and self.pointer_assignment_needs_address(target, value):
             rhs = f"&{rhs}"
         return f"{lhs} {op} {rhs}"
@@ -10564,6 +10585,29 @@ class MetalCodeGen:
                 callee = func_expr
             else:
                 callee = self.generate_expression(func_expr)
+
+            vector_set = re.fullmatch(
+                r"CrossGLMetalVectorIndex_([iu](?:8|16)vec[234])_set",
+                str(func_name),
+            )
+            if vector_set and len(expr.args) == 3:
+                member = expr.args[0]
+                while isinstance(member, ArrayAccessNode):
+                    member = member.array
+                if (
+                    isinstance(member, MemberAccessNode)
+                    and self.member_lookup_type_name(
+                        self.expression_result_type(member.object)
+                    )
+                    in self.structs_by_name
+                ):
+                    native = self.metal_native_narrow_bitcast_storage_type(
+                        vector_set[1]
+                    )
+                    target = self.generate_expression(expr.args[0])
+                    lane = self.generate_expression_with_expected(expr.args[1], "uint")
+                    selected = self.generate_expression(expr.args[2])
+                    return f"({target}[{lane}] = {native[:-1]}({selected}))"
 
             unsupported_table_call = (
                 self.unsupported_metal_ray_function_table_array_member_call(func_expr)

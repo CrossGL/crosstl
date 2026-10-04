@@ -787,12 +787,21 @@ that baseline are tracked here:
 | Aggregate type lookup under name shadowing | [#2027](https://github.com/CrossGL/crosstl/issues/2027) |
 | Narrow vector layout in Metal aggregates | [#2028](https://github.com/CrossGL/crosstl/issues/2028) |
 
+The current generated Metal and OpenGL paths pass all 20 cases. OpenGL union
+values now share one word allocation, with explicit byte packing and bitcasts
+instead of independent fields. Signed byte results retain their exact values in
+the portable 32-bit carrier. The native controls cover 4-, 8- and 16-byte unions,
+copies, helper returns, indexed members and single-evaluation selectors.
+Unsupported layouts, buffer union reflection and reference arguments through
+union members produce structured diagnostics.
+
 CI checks the audit's reference, binding and evidence-validation contracts on all
-three operating systems. The macOS gather workflow additionally requires all 20
-native Metal random cases and retains each dispatched library, checking its hash
-against the runtime's execution identity. This is a kernel gate, not host
-integration or upstream-suite coverage. DirectX/OpenGL random execution must be
-verified independently before enabling their `RandomBits` dispatch.
+three operating systems. The macOS and Linux gather workflows additionally
+require all 20 native random cases. Metal retains each dispatched library and
+checks its hash against the execution identity; OpenGL retains the exact GLSL
+submitted to its native compiler. These are kernel gates, not host integration
+or upstream-suite coverage. DirectX numerical execution and partial-byte tails
+still need verification before enabling `RandomBits` host dispatch.
 No kernel edits, generated-source repairs or readback corrections are applied.
 
 The required macOS gather workflow separately verifies the byte-storage and
@@ -839,7 +848,8 @@ or local value hides the type name. Eight original/generated Metal controls
 cover entry, helper, parameter and local names while preserving reflected entry
 identities. The unchanged Metal random audit now passes all 20 contiguous
 `rbitsc` and strided `rbits` workloads, including exact output bytes and neighboring
-guards. Partial-byte outputs and other backends remain unverified;
+guards. The OpenGL audit also passes these 20 workloads with shared union storage.
+Partial-byte outputs and DirectX numerical results remain unverified;
 `RandomBits` host dispatch remains disabled.
 
 ## Run
