@@ -2081,7 +2081,7 @@ These words represent a noncanonical quiet NaN, 1.0 and negative zero. Native
 packing and readback retain their bits without converting through host floats.
 The reflected buffer remains float32, so kernels still perform floating-point
 arithmetic. Encoding does not bypass physical-layout, size, binding or allocation
-checks. Other encodings, incompatible dtypes, Boolean words, fractional words
+checks. Unknown encodings, incompatible dtypes, Boolean words, fractional words
 and words outside the unsigned 32-bit range are rejected.
 
 Upload and readback choose their encodings independently, including an
@@ -2096,8 +2096,45 @@ Without ``encoding``, the existing numeric buffer and non-finite token contracts
 remain unchanged. Native regression gates exercise generated Metal, DirectX and
 OpenGL partial updates, with original Metal controls and shared-allocation
 DirectX/OpenGL sequences. Metal's process-isolated runtime has no sequence API.
-This representation currently covers binary32 buffers, not half/double storage
-or generated C++ adapter serialization.
+The representation does not cover double storage or generated C++ adapter
+serialization.
+
+Binary16 Storage
+~~~~~~~~~~~~~~~~
+
+Metal ``half`` and DirectX ``float16_t`` buffers can use ``dtype: "float16"``
+with ``encoding: "ieee754-binary16"``. Values are unsigned 16-bit words; for
+example, ``[0, 32768, 1, 32257]`` represents positive zero, negative zero,
+the smallest positive subnormal and a quiet NaN with a payload. Uploads and
+readbacks use two bytes per scalar, without conversion through host floats.
+The same exact-word comparison rules apply as for binary32 storage.
+
+Reflection retains the actual element size, stride and alignment through
+packaging and native-loader descriptors. Scalar, naturally aligned vectors,
+homogeneous structures and constant-buffer values retain their physical
+layouts. Padded layouts that cannot be represented by a tightly packed value
+array remain unsupported. Ambiguous HLSL ``half`` declarations are not assumed
+to have native 16-bit storage; explicit ``float16_t`` is required.
+
+Without an encoding, finite numeric values are rounded to binary16 on upload;
+overflow is rejected. Explicit non-finite input tokens remain available.
+Use encoded values when signed-zero or NaN payload identity must be checked.
+Boolean words, negative words, values above 65535, inconsistent encodings,
+misaligned views and truncated allocations fail before dispatch.
+Metal supports aligned offset views. The DirectX Python driver retains its
+existing full-allocation binding requirement and rejects partial views before
+device submission.
+
+OpenGL's widened half lowering continues to expose float32 physical storage.
+A binary16 payload cannot bind that storage. Conversion tests use the reported
+physical representation and verify the half-rounded result; they do not claim
+native two-byte OpenGL storage. Required native tests cover copy payloads,
+conversion rounding and output guards, but do not by themselves establish
+complete MLX half-precision operation coverage.
+
+This contract applies to the Python native runtime drivers. The generated C++
+DirectX adapter still requires four-byte-multiple structured-buffer strides;
+its two-byte view support and encoded-value serialization remain separate work.
 
 Shared Native Allocation Views
 ------------------------------

@@ -52,6 +52,7 @@ def _reflection(tmp_path, declaration):
     "scalar,dtype,size",
     [
         ("bool", "bool", 1),
+        ("half", "float16", 2),
         ("float", "float32", 4),
         ("int", "int32", 4),
         ("uint", "uint32", 4),
@@ -122,7 +123,7 @@ def test_metal_explicit_struct_layout_is_not_inferred(tmp_path, attribute):
     [
         "device float3* values",
         "device packed_float3* values",
-        "device half* values",
+        "device half3* values",
         "device bool2* values",
         "device bool3* values",
         "device bool4* values",

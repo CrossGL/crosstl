@@ -3324,6 +3324,7 @@ def _directx_buffer_stride(
 
 def _directx_hlsl_element_stride(type_name: str) -> int | None:
     scalar_sizes = {
+        "float16_t": 2,
         "float": 4,
         "float32_t": 4,
         "int": 4,
@@ -3335,9 +3336,9 @@ def _directx_hlsl_element_stride(type_name: str) -> int | None:
     }
     if type_name in scalar_sizes:
         return scalar_sizes[type_name]
-    match = re.fullmatch(r"(float|int|uint)([1-4])", type_name)
+    match = re.fullmatch(r"(float16_t|float|int|uint)([1-4])", type_name)
     if match:
-        return 4 * int(match.group(2))
+        return scalar_sizes[match.group(1)] * int(match.group(2))
     return None
 
 
@@ -4285,6 +4286,7 @@ def _scalar_block_size(
             vectorWidth=vector_width,
         )
     expected_physical_type = {
+        "float16": "float16_t",
         "float32": "float",
         "int32": "int",
         "uint32": "uint",
@@ -4710,6 +4712,9 @@ def _int_field(value: Any, *, default: int | None = None) -> int:
 
 def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
     aliases = {
+        "half": "float16",
+        "f16": "float16",
+        "float16_t": "float16",
         "char": "int8",
         "i8": "int8",
         "int8_t": "int8",
@@ -4735,6 +4740,8 @@ def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
     }
     normalized = str(dtype or "").strip().lower()
     value = aliases.get(normalized, normalized)
+    if value == "float16" and target.lower() in {"metal", "directx"}:
+        return value
     if value in {"bool", "int8", "uint8"} and target.lower() == "metal":
         return value
     if value not in {"float32", "uint32", "int32", "uint64", "int64"}:
@@ -4747,6 +4754,7 @@ def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
 
 def _dtype_format(dtype: str) -> str:
     return {
+        "float16": "e",
         "int8": "b",
         "uint8": "B",
         "bool": "?",
@@ -4793,7 +4801,9 @@ def _pack_values(
             f"{target} compute runtime buffer value count does not match shape."
         )
     if encoding is not None:
-        return struct.pack("<" + "I" * expected_count, *values)
+        return struct.pack(
+            "<" + ("H" if dtype == "float16" else "I") * expected_count, *values
+        )
     if dtype == "bool" and any(type(item) is not bool for item in values):
         raise RuntimeExecutorUnavailable(
             f"{target} boolean buffer values must be true or false."
@@ -4804,17 +4814,42 @@ def _pack_values(
             raise RuntimeExecutorUnavailable(
                 f"{target} byte buffer values must be integers in [{low}, {high}]."
             )
-    if dtype == "float32":
-        special_bits = {
-            "nan": 0x7FC00000,
-            "+infinity": 0x7F800000,
-            "-infinity": 0xFF800000,
-        }
+    if dtype in {"float16", "float32"}:
+        special_bits = (
+            {
+                "nan": 0x7E00,
+                "+infinity": 0x7C00,
+                "-infinity": 0xFC00,
+            }
+            if dtype == "float16"
+            else {
+                "nan": 0x7FC00000,
+                "+infinity": 0x7F800000,
+                "-infinity": 0xFF800000,
+            }
+        )
         payload = bytearray()
         for item in values:
             bits = special_bits.get(item) if isinstance(item, str) else None
+            if dtype == "float16" and bits is None:
+                try:
+                    valid = (
+                        isinstance(item, (int, float))
+                        and not isinstance(item, bool)
+                        and math.isfinite(item)
+                    )
+                    if valid:
+                        struct.pack("<e", item)
+                except (OverflowError, ValueError, struct.error):
+                    valid = False
+                if not valid:
+                    raise RuntimeExecutorUnavailable(
+                        "Binary16 values must be finite representable numbers or explicit nonfinite tokens."
+                    )
             payload.extend(
-                struct.pack("<I", bits) if bits is not None else struct.pack("<f", item)
+                struct.pack("<H" if dtype == "float16" else "<I", bits)
+                if bits is not None
+                else struct.pack("<" + _dtype_format(dtype), item)
             )
         return bytes(payload)
     return struct.pack("<" + _dtype_format(dtype) * expected_count, *values)
@@ -4859,7 +4894,13 @@ def _unpack_values(
         return []
     return list(
         struct.unpack(
-            "<" + ("I" if encoding is not None else _dtype_format(dtype)) * count,
+            "<"
+            + (
+                ("H" if dtype == "float16" else "I")
+                if encoding is not None
+                else _dtype_format(dtype)
+            )
+            * count,
             payload,
         )
     )

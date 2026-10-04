@@ -73,6 +73,10 @@ _BUFFER_KIND_ALIASES = {
     "uniform": "constant-buffer",
 }
 _BUFFER_DTYPE_ALIASES = {
+    "half": "float16",
+    "f16": "float16",
+    "float16": "float16",
+    "float16_t": "float16",
     "char": "int8",
     "i8": "int8",
     "int8": "int8",
@@ -111,6 +115,7 @@ _SPECIALIZATION_DTYPE_ALIASES = {
 }
 _SPECIALIZATION_DTYPE_ALIASES.update({"bool": "bool", "boolean": "bool"})
 _DTYPE_SIZES = {
+    "float16": 2,
     "int8": 1,
     "uint8": 1,
     "bool": 1,
@@ -121,6 +126,7 @@ _DTYPE_SIZES = {
     "uint64": 8,
 }
 _PHYSICAL_TYPES = {
+    "float16": "half",
     "int8": "char",
     "uint8": "uchar",
     "bool": "bool",
@@ -839,7 +845,7 @@ def _buffer_dtype(value: Any, *, path: str) -> str:
         raise NativeLoaderDispatchError(
             "value-dtype-unsupported",
             "Native runtime buffers support float32, int32, uint32, int64, "
-            "uint64, and Metal bool, int8 and uint8 values only.",
+            "uint64, Metal/DirectX float16, and Metal bool, int8 and uint8 values only.",
             path=path,
             details={"dtype": value},
         )
@@ -880,7 +886,7 @@ def _validate_buffer_values(
                 and not isinstance(value, bool)
                 and 0 <= value <= maximum
             )
-        elif dtype == "float32":
+        elif dtype in {"float16", "float32"}:
             if isinstance(value, str):
                 # Strict JSON cannot carry NaN or infinities as numeric values.
                 # Runtime inputs may use these exact portable tokens; expected
@@ -897,7 +903,7 @@ def _validate_buffer_values(
                     numeric_value = float(value)
                     valid = math.isfinite(numeric_value)
                     if valid:
-                        struct.pack("<f", numeric_value)
+                        struct.pack("<e" if dtype == "float16" else "<f", numeric_value)
                 except (OverflowError, struct.error, ValueError):
                     valid = False
         if not valid:
@@ -1241,6 +1247,13 @@ def _validated_scalar_layout(
             path=path,
             details={"binding": runtime_value.name, "target": target},
         )
+    if runtime_value.dtype == "float16" and target not in {"metal", "directx"}:
+        raise NativeLoaderDispatchError(
+            "resource-layout-mismatch",
+            "Binary16 values require native two-byte storage; widened targets use their reflected physical representation.",
+            path=path,
+            details={"binding": runtime_value.name, "target": target},
+        )
     # Metal's constant address space does not imply a fixed-size argument.
     if (
         target == "metal"
@@ -1330,15 +1343,19 @@ def _validated_scalar_layout(
     storage_layout = layout.get("storageLayout")
     runtime_sized = layout.get("runtimeSized")
     expected_physical_type = _PHYSICAL_TYPES[runtime_value.dtype]
+    if runtime_value.dtype == "float16" and target == "directx":
+        expected_physical_type = "float16_t"
     if vector_width != 1:
         expected_physical_type = f"{expected_physical_type}{vector_width}"
     expected_element_size = _DTYPE_SIZES[runtime_value.dtype] * vector_width
-    if runtime_value.dtype in {"int8", "uint8"} and (
-        vector_width not in {1, 2, 4} or alignment != expected_element_size
+    if (
+        runtime_value.dtype in {"int8", "uint8", "float16"}
+        and target == "metal"
+        and (vector_width not in {1, 2, 4} or alignment != expected_element_size)
     ):
         raise NativeLoaderDispatchError(
             "resource-layout-unsupported",
-            "Metal byte buffers require the natural scalar, two-lane or four-lane alignment.",
+            "Metal narrow buffers require the natural scalar, two-lane or four-lane alignment.",
             path=path,
             details={"binding": runtime_value.name, "vectorWidth": vector_width},
         )
@@ -1444,6 +1461,8 @@ def _validated_struct_layout(
     members = layout.get("structMembers")
     count = layout.get("componentCount")
     scalar_type = _PHYSICAL_TYPES[runtime_value.dtype]
+    if runtime_value.dtype == "float16" and target == "directx":
+        scalar_type = "float16_t"
     scalar_size = _DTYPE_SIZES[runtime_value.dtype]
     type_name = layout.get("physicalType")
     valid = (

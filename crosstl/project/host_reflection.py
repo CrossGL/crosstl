@@ -646,7 +646,7 @@ def _metal_buffer_layout(
         return None
     type_name = match.group("type")
     scalar = re.fullmatch(
-        r"(float|int|uint|long|ulong|int64_t|uint64_t|bool|char|uchar|int8_t|uint8_t)([24]?)",
+        r"(half|float|int|uint|long|ulong|int64_t|uint64_t|bool|char|uchar|int8_t|uint8_t)([24]?)",
         type_name,
     )
     if scalar is None:
@@ -705,19 +705,21 @@ HLSL_CONSTANT_RE = re.compile(
     re.IGNORECASE,
 )
 HLSL_VALUE_BLOCK_MEMBER_RE = re.compile(
-    r"\A\s*(?P<type>(?P<base>int64_t|uint64_t|float|int|uint|bool)(?P<width>[1-4])?)\s+"
+    r"\A\s*(?P<type>(?P<base>float16_t|int64_t|uint64_t|float|int|uint|bool)(?P<width>[1-4])?)\s+"
     r"(?P<name>[A-Za-z_]\w*)\s*;\s*\Z",
     re.IGNORECASE,
 )
 HLSL_STRUCTURED_VALUE_RE = re.compile(
     r"\A(?:RW)?StructuredBuffer\s*<\s*"
-    r"(?P<type>(?P<base>int64_t|uint64_t|float|int|uint|bool)(?P<width>[1-4])?)\s*>\Z",
+    r"(?P<type>(?P<base>float16_t|int64_t|uint64_t|float|int|uint|bool)(?P<width>[1-4])?)\s*>\Z",
     re.IGNORECASE,
 )
 HLSL_DISPATCH_INFO_BUFFER_RE = re.compile(r"\ACrossGLDispatchInfo_*\Z")
 HLSL_DISPATCH_INFO_MEMBER_RE = re.compile(r"\AcrossglNumWorkGroups_*\Z")
 
 SCALAR_PHYSICAL_TYPES = {
+    "half": "float16",
+    "float16_t": "float16",
     "char": "int8",
     "uchar": "uint8",
     "float": "float32",
@@ -727,6 +729,8 @@ SCALAR_PHYSICAL_TYPES = {
     "uint64_t": "uint64",
 }
 SCALAR_PHYSICAL_SIZES = {
+    "half": 2,
+    "float16_t": 2,
     "char": 1,
     "uchar": 1,
     "float": 4,
@@ -1228,6 +1232,12 @@ def _homogeneous_struct_buffer_layout(
     scalar_type = members[0][0]
     if scalar_type in {"char", "uchar"} and storage_layout != "metal-buffer":
         return None
+    if (
+        scalar_type in {"half", "float16_t"}
+        and storage_layout
+        != {"half": "metal-buffer", "float16_t": "hlsl-structured-buffer"}[scalar_type]
+    ):
+        return None
     scalar_size = SCALAR_PHYSICAL_SIZES[scalar_type]
     layout = {
         "physicalType": type_name,
@@ -1261,7 +1271,7 @@ def _hlsl_structured_value_layout(type_name: str) -> dict[str, Any] | None:
         base_type,
         vector_width=vector_width,
         storage_layout="hlsl-structured-buffer",
-        alignment_bytes=4,
+        alignment_bytes=2 if base_type == "float16_t" else 4,
         runtime_sized=True,
     )
 
@@ -1579,6 +1589,8 @@ def _parse_layout(layout: str | None) -> dict[str, Any]:
 
 def _glsl_value_type_shape(type_name: str) -> tuple[str, int] | None:
     normalized_type = type_name.lower()
+    if normalized_type in {"half", "float16_t"}:
+        return None
     if normalized_type in SCALAR_PHYSICAL_TYPES or normalized_type == "bool":
         return normalized_type, 1
     vector_match = GLSL_VECTOR_VALUE_RE.fullmatch(normalized_type)
