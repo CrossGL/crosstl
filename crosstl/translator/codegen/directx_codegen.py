@@ -95,6 +95,7 @@ from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
 )
+from .bfloat_constants import bfloat16_constant_bits, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
@@ -8973,7 +8974,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if self.is_hlsl_bfloat16_type(expected_type):
             numeric_value = self.hlsl_bfloat16_constant_numeric_value(expression)
             if numeric_value is not None:
-                return f"0x{self.bfloat16_bits_for_float(numeric_value):04x}u"
+                return f"0x{bfloat16_constant_bits(numeric_value):04x}u"
         mapped_type = self.map_type(expected_type)
         array_type = self.hlsl_outer_array_type(mapped_type)
         if array_type is not None:
@@ -9117,48 +9118,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return "\n".join(declarations) + "\n\n" if declarations else ""
 
     def hlsl_bfloat16_constant_numeric_value(self, expr):
-        if isinstance(expr, bool):
-            return 1.0 if expr else 0.0
-        if isinstance(expr, (int, float)):
-            return float(expr)
-        if isinstance(expr, LiteralNode):
-            value = getattr(expr, "value", None)
-            if isinstance(value, bool):
-                return 1.0 if value else 0.0
-            if isinstance(value, (int, float)):
-                return float(value)
-            return None
-        if isinstance(expr, UnaryOpNode) and expr.op in {"+", "-"}:
-            value = self.hlsl_bfloat16_constant_numeric_value(expr.operand)
-            if value is None:
-                return None
-            return value if expr.op == "+" else -value
-        if isinstance(expr, ConstructorNode) and self.is_hlsl_bfloat16_type(
-            getattr(expr, "constructor_type", None)
-        ):
-            arguments = list(getattr(expr, "arguments", []) or [])
-            if len(arguments) == 0:
-                return 0.0
-            if len(arguments) == 1:
-                return self.hlsl_bfloat16_constant_numeric_value(arguments[0])
-            return None
-        if isinstance(expr, FunctionCallNode):
-            func_name = self.function_call_name(expr)
-            if self.is_hlsl_bfloat16_type(func_name):
-                arguments = list(
-                    getattr(expr, "arguments", getattr(expr, "args", [])) or []
-                )
-                if len(arguments) == 0:
-                    return 0.0
-                if len(arguments) == 1:
-                    return self.hlsl_bfloat16_constant_numeric_value(arguments[0])
-        return None
+        return scalar_constant_value(
+            expr,
+            constants=self.literal_int_constants,
+            function_names=self.function_return_types,
+        )
 
     def generate_constant_expression(self, expr, expected_type=None):
         if self.is_hlsl_bfloat16_type(expected_type):
             numeric_value = self.hlsl_bfloat16_constant_numeric_value(expr)
             if numeric_value is not None:
-                bits = self.bfloat16_bits_for_float(numeric_value)
+                bits = bfloat16_constant_bits(numeric_value)
                 return f"0x{bits:04x}u"
         value_code = self.generate_expression_with_expected(expr, expected_type)
         if self.is_hlsl_bfloat16_type(expected_type) and any(

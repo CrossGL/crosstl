@@ -234,7 +234,7 @@ def test_bfloat_aliases_retain_arithmetic_precision(tmp_path, left, right):
         )
     )
     assert (
-        "crossgl_round_bfloat1((crossgl_round_bfloat1((x + float(0.00390625))) * y))"
+        "crossgl_round_bfloat1((crossgl_round_bfloat1((x + 0.00390625)) * y))"
         in generated
     )
     _compile(generated, tmp_path)
@@ -262,7 +262,7 @@ def test_bfloat_constants_are_rounded_before_global_initialization(tmp_path):
         )
     )
     assert "const float value = 1.0;" in generated
-    assert "float zero = float(0);" in generated
+    assert "float zero = 0.0;" in generated
     _compile(generated, tmp_path)
 
 

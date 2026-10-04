@@ -112,6 +112,7 @@ from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
 )
+from .bfloat_constants import bfloat16_constant_float, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
@@ -30121,6 +30122,20 @@ complex64_t crossgl_complex64_mod_assign(
             self.glsl_scalar_conversion_error(
                 source_node, source_type, expected_type, "bfloat-unsupported-profile"
             )
+        if width == 1:
+            constant = scalar_constant_value(
+                source_node,
+                constants=(
+                    self.glsl_active_literal_int_constants()
+                    if self.glsl_generating_global_initializer
+                    else None
+                ),
+                function_names=self.function_return_types,
+            )
+            if constant is not None:
+                rounded = bfloat16_constant_float(constant)
+                if math.isfinite(rounded):
+                    return repr(rounded)
         constructor = (
             isinstance(source_node, FunctionCallNode)
             and self.glsl_bfloat_width(self.function_call_name(source_node)) == width
@@ -30131,7 +30146,10 @@ complex64_t crossgl_complex64_mod_assign(
             info = self.glsl_value_type_info(self.glsl_source_expression_type(operand))
             exact_integer_literal = False
             if info is not None and info["family"] in {"int", "uint"}:
-                literals = self.glsl_half_literal_components(operand)
+                literal = scalar_constant_value(
+                    operand, function_names=self.function_return_types
+                )
+                literals = [literal] if literal is not None else None
                 if literals is not None:
                     try:
                         exact_integer_literal = all(
@@ -30261,6 +30279,11 @@ complex64_t crossgl_complex64_mod_assign(
         name = self.function_call_name(expression)
         if name in self.function_return_types:
             return None
+        if self.glsl_bfloat_width(name) == 1:
+            value = scalar_constant_value(
+                expression, function_names=self.function_return_types
+            )
+            return [value] if value is not None else None
         mapped = self.glsl_constructor_type(name)
         if mapped not in {"float", "vec2", "vec3", "vec4"}:
             return None

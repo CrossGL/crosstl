@@ -44637,7 +44637,7 @@ def test_opengl_renames_collapsed_bfloat_overloads_and_rewrites_nested_calls(
     assert "float adjust_bfloat16_t(float value)" in generated_code
     assert "return adjust_float(adjust_float(value));" in generated_code
     assert "return adjust_bfloat16_t(adjust_bfloat16_t(value));" in generated_code
-    assert "return adjust_bfloat16_t(float(3.0));" in generated_code
+    assert "return adjust_bfloat16_t(3.0);" in generated_code
     assert (
         "return adjust_bfloat16_t(crossgl_round_bfloat1((left + right)));"
         in generated_code
@@ -44784,7 +44784,7 @@ def test_opengl_mapped_overload_names_avoid_existing_declarations(tmp_path):
     assert "float adjust_float_2(float value)" in generated_code
     assert "float adjust_bfloat16_t_2(float value)" in generated_code
     assert "float value = adjust_float_2(1.0);" in generated_code
-    assert "float narrowValue = adjust_bfloat16_t_2(float(2.0));" in generated_code
+    assert "float narrowValue = adjust_bfloat16_t_2(2.0);" in generated_code
     assert_glsl_compute_validates_if_available(
         generated_code, tmp_path, "hygienic_mapped_overloads"
     )
@@ -48657,7 +48657,7 @@ def test_glsl_metal_nested_remove_cv_alias_materializes_bfloat_cast(tmp_path):
     )
 
     assert "remove_cv_t<bfloat>(" not in generated
-    assert "output_[dst_offset] = float(1.0);" in generated
+    assert "output_[dst_offset] = 1.0;" in generated
     assert_glsl_compute_validates_if_available(
         generated,
         tmp_path,

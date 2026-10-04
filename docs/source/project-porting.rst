@@ -2141,8 +2141,15 @@ integer rounding in OpenGL and DirectX to avoid an intermediate float32 rounding
 step. OpenGL runtime conversions from double and wider integers that could
 introduce double rounding fail with a structured diagnostic. This does not
 establish support for every bfloat operation in an MLX host backend.
-Compile-time integer initializers follow a separate evaluation path; exact
-integer-to-bfloat constant rounding remains tracked in issue #2069.
+Scalar integer constant initializers also round directly to bfloat, without
+an intermediate float32 value. Constructor, cast, alias and implicit initializer
+forms preserve the difference between ``bfloat(16842753u)`` (16908288) and
+``bfloat(float(16842753u))`` (16777216). Native controls retain signed zero,
+midpoint neighbors, ties of both parities, exponent carry and 32-bit extrema.
+Unsupported constant expressions, including unproven unsigned negation,
+narrowing integer casts and Metal literals whose wider source type was lost,
+remain diagnostic rather than silently using a rounded float32 initializer.
+Metal integer literal width preservation is tracked in issue #2070.
 
 Binary16 Storage
 ~~~~~~~~~~~~~~~~
