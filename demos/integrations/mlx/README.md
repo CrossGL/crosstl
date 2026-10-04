@@ -2423,6 +2423,12 @@ Metal `constant` storage instead of being substituted as rvalues. Unknown
 aliases, unresolved address provenance, non-integral pointer offsets, and
 incompatible overloads continue to fail closed.
 
+Reduction reference artifacts retain explicit byte-value conversions, internal
+helper linkage and the source shuffle offset's 16-bit width. The reference
+refresh preserves every entry, operator, materialization and resource interface;
+the updated sources compile with warnings treated as errors. Compilation alone
+does not establish numerical parity for the full reduction family.
+
 Required macOS CI partitions the sorted family into 24 disjoint shards: 20 with
 100 entries and four with 99. Each shard retranslates its exact entries,
 verifies deterministic artifact identity, materialization, workgroup metadata,

@@ -2696,8 +2696,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/reduce.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "5f392b62222ee5a75a1c2b05cb5b40850e55d39023c95778dea036bc4cb705ba",
-      "size_bytes": 1477019,
+      "sha256": "886bf529eca7ad239b88ef973d387b6e5e65cc67cab91efd67b9df5c4c7a1bc3",
+      "size_bytes": 1477021,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -2781,7 +2781,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 19833148,
+      "generated_size_bytes_total": 20749078,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "init_reduce_andbool_",
@@ -2789,7 +2789,7 @@
         },
         "maximum": {
           "entryPoint": "col_reduce_looped_large_5_32_32_reduce_mincomplex64",
-          "sizeBytes": 17640
+          "sizeBytes": 18334
         }
       }
     },
