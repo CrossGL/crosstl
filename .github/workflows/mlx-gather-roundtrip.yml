@@ -7,6 +7,8 @@ on:
       - ".github/workflows/mlx-gather-roundtrip.yml"
       - "crosstl/**"
       - "demos/integrations/mlx/portable_host/**"
+      - "demos/integrations/mlx/random_audit.py"
+      - "tests/test_mlx_random_audit.py"
       - "tests/test_translator/**"
       - "tests/test_backend/test_metal/**"
       - "tests/fixtures/runtime_verification/**"
@@ -18,6 +20,8 @@ on:
       - ".github/workflows/mlx-gather-roundtrip.yml"
       - "crosstl/**"
       - "demos/integrations/mlx/portable_host/**"
+      - "demos/integrations/mlx/random_audit.py"
+      - "tests/test_mlx_random_audit.py"
       - "tests/test_translator/**"
       - "tests/test_backend/test_metal/**"
       - "tests/fixtures/runtime_verification/**"
@@ -210,8 +214,16 @@ jobs:
               tests/test_translator/test_range_bindings.py \
               tests/test_translator/test_vector_list_initialization.py \
               tests/test_translator/test_byte_buffer_runtime.py \
+              tests/test_translator/test_metal_aggregate_lookup.py \
               tests/test_translator/test_metal_narrow_aggregate_runtime.py \
               2>&1 | tee .mlx-gather/storage/execution.log
+      - name: Validate translated Metal random kernels
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Native Metal random kernels" -- \
+            python -m demos.integrations.mlx.random_audit \
+              --mlx-root mlx-upstream --target metal --output-dir .mlx-gather/random \
+              2>&1 | tee .mlx-gather/random-execution.log
       - name: Retain original and translated execution evidence
         if: always()
         uses: actions/upload-artifact@v4

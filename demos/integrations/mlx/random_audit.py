@@ -217,6 +217,30 @@ def compare_readback(result, output_name, case, descriptor):
     )
 
 
+def retain_native_module(details, target, destination):
+    """Keep the dispatched module before the runtime removes temporary files."""
+    module_path = details.get("nativeRuntimeDispatch", {}).get("modulePath")
+    if not isinstance(module_path, str) or not module_path:
+        raise ValueError("Native random module path is missing")
+    try:
+        content = Path(module_path).read_bytes()
+    except OSError as error:
+        raise ValueError("Native random module cannot be retained") from error
+    digest = hashlib.sha256(content).hexdigest()
+    if target == "metal" and (
+        not content.startswith(b"MTLB")
+        or digest != details.get("metalRuntime", {}).get("librarySHA256")
+    ):
+        raise ValueError("Retained Metal module differs from the executed library")
+    filename = {
+        "metal": "kernel.metallib",
+        "directx": "kernel.dxil",
+        "opengl": "kernel.glsl",
+    }[target]
+    (destination / filename).write_bytes(content)
+    return {"path": filename, "sizeBytes": len(content), "sha256": digest}
+
+
 def verify_source(root):
     require_revision(root)
     if hashlib.sha256((root / SOURCE).read_bytes()).hexdigest() != SOURCE_SHA256:
@@ -306,6 +330,21 @@ def build_packages(root, target, output):
         return descriptors
 
 
+class RandomAuditExecutor(RuntimeParityExecutor):
+    """Retain evidence while the dispatch state's temporary files still exist."""
+
+    evidence_directory = None
+
+    def collect_outputs(self, state):
+        outputs = super().collect_outputs(state)
+        if self.evidence_directory is None:
+            raise ValueError("Random evidence directory is missing")
+        state.details["retainedNativeModule"] = retain_native_module(
+            state.details, self.target, self.evidence_directory
+        )
+        return outputs
+
+
 def executor(target):
     adapter = {
         "metal": lambda: MetalRuntimeParityAdapter(),
@@ -314,7 +353,7 @@ def executor(target):
         ),
         "directx": lambda: DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime()),
     }[target]()
-    return RuntimeParityExecutor(
+    return RandomAuditExecutor(
         RuntimeTestAdapterSpec(
             adapter_id="mlx-random-" + target,
             target=target,
@@ -356,6 +395,7 @@ def audit(root, target, output):
                     case["execution"],
                     expected_target=target,
                 )
+                native.evidence_directory = destination
                 result = native.run(request)
                 write_json(
                     destination / "result.json",
@@ -366,9 +406,14 @@ def audit(root, target, output):
                     },
                 )
                 (output_name,) = outputs
-                record["passed"] = compare_readback(
+                passed = compare_readback(
                     result, output_name, case, descriptors[case["entry"]]
                 )
+                if passed:
+                    record["nativeModule"] = result.details.get("retainedNativeModule")
+                    if not record["nativeModule"]:
+                        raise ValueError("Native random module was not retained")
+                record["passed"] = passed
                 if not record["passed"]:
                     record["error"] = (
                         "Native random values, layout, guards or execution identity differ"

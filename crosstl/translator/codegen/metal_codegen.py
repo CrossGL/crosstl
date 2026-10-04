@@ -7972,6 +7972,15 @@ class MetalCodeGen:
         ``char``/``uchar``/``short``/``ushort`` pointee width.
         """
         mapped_type = self.map_type(declared_type)
+        aggregate_type, array_suffix = split_array_type_suffix(mapped_type)
+        if aggregate_type in self.structs_by_name and (
+            aggregate_type == self.current_function_name
+            or aggregate_type in self.function_return_types
+            or aggregate_type in self.local_variable_types
+        ):
+            # Expanding source `auto` must not look up a same-named value.
+            tag = "union" if aggregate_type in self.metal_union_layouts else "struct"
+            mapped_type = f"{tag} {aggregate_type}{array_suffix}"
         if (
             self.local_variable_address_space(node) != "threadgroup"
             and id(node)

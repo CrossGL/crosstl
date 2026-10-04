@@ -754,7 +754,7 @@ the two DirectX random entries does not establish numerical parity. The
 `random_audit` command translates unchanged `random.metal`, creates public runtime
 packages and compares native results against an independent integer Threefry
 reference. It retains translation reports, descriptors, input values, native
-readbacks, compiler/dispatch identity and per-case failures. Incorrect output or
+readbacks, compiled Metal libraries, compiler/dispatch identity and per-case failures. Incorrect output or
 an unsupported runtime contract produces a nonzero exit status.
 
 Run against a clean checkout of the pinned revision, using the matching native
@@ -774,7 +774,8 @@ At CrossTL `046b8d15`, the unchanged original Metal kernels match all 20 referen
 cases. Generated OpenGL passes glslang and SPIR-V validation but returns zeros
 in all 20 native cases, with intact guards. Generated Metal has independent
 compilation and byte-layout blockers. DirectX compiles both entries, but its
-random numerical execution has not been established. The current blockers are:
+random numerical execution has not been established. The failures identified by
+that baseline are tracked here:
 
 | Contract | Issue |
 | --- | --- |
@@ -787,9 +788,11 @@ random numerical execution has not been established. The current blockers are:
 | Narrow vector layout in Metal aggregates | [#2028](https://github.com/CrossGL/crosstl/issues/2028) |
 
 CI checks the audit's reference, binding and evidence-validation contracts on all
-three operating systems. The failing native random audit is not a passing host
-gate and does not count toward upstream-suite coverage. After the blockers are
-resolved, require this native audit in CI before enabling `RandomBits` dispatch.
+three operating systems. The macOS gather workflow additionally requires all 20
+native Metal random cases and retains each dispatched library, checking its hash
+against the runtime's execution identity. This is a kernel gate, not host
+integration or upstream-suite coverage. DirectX/OpenGL random execution must be
+verified independently before enabling their `RandomBits` dispatch.
 No kernel edits, generated-source repairs or readback corrections are applied.
 
 The required macOS gather workflow separately verifies the byte-storage and
@@ -831,10 +834,13 @@ reference transport through helper parameters remain explicit diagnostics on the
 ordinary by-value helper arguments and copied loop bindings are covered separately
 ([#2064](https://github.com/CrossGL/crosstl/issues/2064)).
 
-The unchanged Metal random audit now passes all ten contiguous `rbitsc`
-workloads, including exact output bytes and neighboring guards. The ten `rbits`
-workloads still fail native compilation on aggregate name shadowing. This is not
-complete random-generation parity; `RandomBits` host dispatch remains disabled.
+Local aggregate declarations use elaborated structure/union tags when a function
+or local value hides the type name. Eight original/generated Metal controls
+cover entry, helper, parameter and local names while preserving reflected entry
+identities. The unchanged Metal random audit now passes all 20 contiguous
+`rbitsc` and strided `rbits` workloads, including exact output bytes and neighboring
+guards. Partial-byte outputs and other backends remain unverified;
+`RandomBits` host dispatch remains disabled.
 
 ## Run
 

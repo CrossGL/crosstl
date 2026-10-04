@@ -1,6 +1,7 @@
 """Check random-audit oracles, bounded bindings and rejection of incomplete evidence."""
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,6 +9,76 @@ from types import SimpleNamespace
 import pytest
 
 from demos.integrations.mlx import random_audit as audit
+
+
+def test_native_module_is_retained_with_executed_identity(tmp_path):
+    content = b"MTLB-retention-control"
+    module = tmp_path / "temporary.metallib"
+    module.write_bytes(content)
+    destination = tmp_path / "evidence"
+    destination.mkdir()
+    digest = hashlib.sha256(content).hexdigest()
+    record = audit.retain_native_module(
+        {
+            "nativeRuntimeDispatch": {"modulePath": str(module)},
+            "metalRuntime": {"librarySHA256": digest},
+        },
+        "metal",
+        destination,
+    )
+    module.unlink()
+    assert record == {
+        "path": "kernel.metallib",
+        "sizeBytes": len(content),
+        "sha256": digest,
+    }
+    assert (destination / record["path"]).read_bytes() == content
+
+
+@pytest.mark.parametrize("fault", ("path", "missing", "hash", "header"))
+def test_invalid_executed_module_cannot_be_retained(tmp_path, fault):
+    module = tmp_path / "temporary.metallib"
+    content = b"BAD!" if fault == "header" else b"MTLB-retention-control"
+    module.write_bytes(content)
+    details = {
+        "nativeRuntimeDispatch": {"modulePath": str(module)},
+        "metalRuntime": {"librarySHA256": hashlib.sha256(content).hexdigest()},
+    }
+    if fault == "path":
+        details["nativeRuntimeDispatch"] = {}
+    elif fault == "missing":
+        module.unlink()
+    elif fault == "hash":
+        details["metalRuntime"]["librarySHA256"] = "0" * 64
+    with pytest.raises(ValueError, match="module"):
+        audit.retain_native_module(details, "metal", tmp_path)
+    assert not (tmp_path / "kernel.metallib").exists()
+
+
+def test_native_random_audit_is_required_on_macos():
+    import yaml
+
+    workflow = yaml.safe_load(
+        (
+            Path(__file__).parents[1] / ".github/workflows/mlx-gather-roundtrip.yml"
+        ).read_text()
+    )
+    events = workflow.get("on", workflow.get(True))
+    for event in ("push", "pull_request"):
+        assert "demos/integrations/mlx/random_audit.py" in events[event]["paths"]
+        assert "tests/test_mlx_random_audit.py" in events[event]["paths"]
+    job = workflow["jobs"]["metal"]
+    assert job["runs-on"].startswith("macos-")
+    (step,) = (
+        step
+        for step in job["steps"]
+        if step.get("name") == "Validate translated Metal random kernels"
+    )
+    assert "if" not in step and not step.get("continue-on-error", False)
+    assert "set -euo pipefail" in step["run"]
+    assert "--timeout-seconds 300" in step["run"]
+    assert "python -m demos.integrations.mlx.random_audit" in step["run"]
+    assert "--target metal --output-dir .mlx-gather/random" in step["run"]
 
 
 @pytest.mark.parametrize(
@@ -218,6 +289,13 @@ def test_audit_keeps_complete_failure_evidence(tmp_path, monkeypatch, wrong):
         assert execution == case["execution"]
         run.calls += 1
         result = native_result(selected, case)
+        module = tmp_path / "temporary.glsl"
+        module.write_text("#version 430\nvoid main() {}\n")
+        result.details["nativeRuntimeDispatch"]["modulePath"] = str(module)
+        result.details["retainedNativeModule"] = audit.retain_native_module(
+            result.details, "opengl", native.evidence_directory
+        )
+        module.unlink()
         if wrong:
             result.outputs["out_"]["values"][0] = 0
         return result
