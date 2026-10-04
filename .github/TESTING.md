@@ -12,10 +12,15 @@ and runtime checks.
 | OpenGL execution and host integration | Required Mesa/EGL checks | Platform-specific controls | Platform-specific controls |
 | Metal compilation, reference and host integration | Not available | Not available | Required native checks |
 
-Every backend and code generator remains in the unit matrices on all three
-operating systems. Python-version compatibility is exercised fully on Ubuntu;
-repeating those versions on Windows and macOS is not required. This removes 198
-duplicate platform/version jobs per revision without removing a backend suite.
+Every backend and code generator remains covered on all three operating
+systems. Python-version compatibility is exercised fully on Ubuntu; repeating
+those versions on Windows and macOS is not required. Windows and macOS each
+run the complete backend directory in one job and the complete translator
+directory in another, with two pytest workers per job. Ubuntu keeps its
+component-level matrix. The version policy removes 198 duplicate jobs, and
+grouping native-platform unit suites removes another 38 runner setups per
+revision without removing a test suite. Failure reports retain individual
+test names in JUnit even when suites share a runner.
 
 The demo's 77 unary, binary, copy and reduction DirectX compilation shards run
 on Ubuntu. They retain every entry, strict compiler flags, artifact identity

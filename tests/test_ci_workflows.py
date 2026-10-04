@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -10,6 +11,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tests.ci_helpers import assert_paths_covered, assert_workflow_triggers
 
@@ -328,6 +330,112 @@ def _assert_windows_legacy_python_is_excluded(workflow_text, os_key="OS"):
             f"            {os_key}: windows-latest"
         )
         assert excluded in workflow_text
+
+
+def _assert_grouped_native_python_policy(workflow_text, component_key):
+    job = yaml.safe_load(workflow_text)["jobs"]["test"]
+    matrix = job["strategy"]["matrix"]
+    assert set(matrix) == {component_key, "python-version", "OS", "exclude", "include"}
+    assert set(matrix["python-version"]) == PYTHON_VERSIONS
+    assert set(matrix["OS"]) == RUNNER_OSES
+    assert matrix["exclude"] == [
+        {"OS": "windows-latest"},
+        {"OS": "macOS-latest"},
+    ]
+    assert matrix["include"] == [
+        {component_key: "all", "python-version": "3.13", "OS": runner}
+        for runner in ("windows-latest", "macOS-latest")
+    ]
+    assert "all" not in matrix[component_key]
+    assert job["runs-on"] == "${{ matrix.OS }}"
+    assert job["env"]["PYTEST_XDIST_AUTO_NUM_WORKERS"] == "2"
+    assert job["strategy"]["fail-fast"] is False
+    assert "continue-on-error" not in job and "if" not in job
+    install = next(
+        step for step in job["steps"] if step.get("name") == "Install dependencies"
+    )
+    assert "pip install -r requirements.txt pytest-xdist" in install["run"]
+
+
+@pytest.mark.parametrize("exit_code", (0, 7))
+@pytest.mark.parametrize(
+    "workflow,component_key,component,selection",
+    [
+        ("backend", "backend", "all", ["tests/test_backend"]),
+        ("backend", "backend", "directx", ["tests/test_backend/test_directx"]),
+        ("translator", "component", "all", ["tests/test_translator"]),
+        (
+            "translator",
+            "component",
+            "general",
+            ["tests/test_translator", "--ignore=tests/test_translator/test_codegen"],
+        ),
+        (
+            "translator",
+            "component",
+            "GLSL",
+            [
+                "tests/test_translator/test_codegen/test_GLSL_codegen.py",
+                "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
+            ],
+        ),
+        (
+            "translator",
+            "component",
+            "directx",
+            ["tests/test_translator/test_codegen/test_directx_codegen.py"],
+        ),
+    ],
+)
+def test_grouped_platform_test_commands_preserve_coverage_and_failures(
+    tmp_path, workflow, component_key, component, selection, exit_code
+):
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("workflow command checks require bash")
+    job = yaml.safe_load(_workflow_texts()[f"{workflow}-tests.yml"])["jobs"]["test"]
+    step = next(
+        item for item in job["steps"] if item.get("id") == f"run_{workflow}_tests"
+    )
+    assert step["shell"] == "bash"
+    assert "continue-on-error" not in step and "if" not in step
+    command = step["run"]
+    for key, value in {
+        component_key: component,
+        "python-version": "3.13",
+        "OS": "windows-latest",
+    }.items():
+        command = command.replace("${{ matrix." + key + " }}", value)
+    assert "${{" not in command
+    recorder = tmp_path / "record.py"
+    recorder.write_text(
+        "import json, sys\nfrom pathlib import Path\n"
+        "Path('command.json').write_text(json.dumps(sys.argv[1:]))\n"
+        f"sys.exit({exit_code})\n",
+        encoding="utf-8",
+    )
+    command = command.replace(
+        "python ", f"{shlex.quote(sys.executable)} {shlex.quote(str(recorder))} "
+    )
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-eo", "pipefail", "-c", command],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == exit_code, result.stdout + result.stderr
+    args = json.loads((tmp_path / "command.json").read_text())
+    assert args[:2] == ["-m", "pytest"]
+    assert args[-2:] == [
+        "--junitxml",
+        f"support/generated/{workflow}-tests-{component}-3.13-windows-latest.xml",
+    ]
+    test_args = args[2:-2]
+    workers = test_args.index("-n")
+    assert test_args[workers : workers + 2] == ["-n", "auto"]
+    del test_args[workers : workers + 2]
+    assert test_args == selection
 
 
 def test_ci_runs_the_complete_pytest_suite_on_pull_requests_and_pushes():
@@ -2435,7 +2543,7 @@ def test_backend_test_matrix_matches_support_catalog_and_platform_policy():
     )
     assert _matrix_values(backend_tests, "python-version") == PYTHON_VERSIONS
     assert _matrix_values(backend_tests, "OS") == RUNNER_OSES
-    _assert_windows_python_policy(backend_tests)
+    _assert_grouped_native_python_policy(backend_tests, "backend")
     assert "fail-fast: false" in backend_tests
     assert "id: setup_python" in backend_tests
     assert "continue-on-error: true" in backend_tests
@@ -2481,7 +2589,7 @@ def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
     assert _matrix_values(translator_tests, "component") == expected_components
     assert _matrix_values(translator_tests, "python-version") == PYTHON_VERSIONS
     assert _matrix_values(translator_tests, "OS") == RUNNER_OSES
-    _assert_windows_python_policy(translator_tests)
+    _assert_grouped_native_python_policy(translator_tests, "component")
     assert "fail-fast: false" in translator_tests
     assert "id: setup_python" in translator_tests
     assert "continue-on-error: true" in translator_tests

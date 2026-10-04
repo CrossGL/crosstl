@@ -137,7 +137,7 @@ repos:
         name: CrossTL CI workflow tests
         entry: python -m pytest -q tests/test_ci_workflows.py tests/test_tool_cli.py tests/test_demo_layout.py demos/integrations/mlx/tests/test_ci.py
         language: python
-        additional_dependencies: [pytest, hypothesis, numpy, jinja2]
+        additional_dependencies: [pytest, hypothesis, numpy, jinja2, "PyYAML>=6,<7"]
         pass_filenames: false
         files: ^(\.github/(workflows/.*\.ya?ml|actions/.*/action\.ya?ml|actionlint\.yaml)|tools/(ci_coverage|pytest_failure_summary|support_ci_summary|support_matrix|support_signals|sync_pr_issue_links|sync_support_issues)\.py|tests/(ci_helpers|test_ci_workflows|test_tool_cli|test_demo_layout)\.py|demos/integrations/.*/tests/test_ci\.py|setup\.cfg)$
 
