@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import textwrap
 from collections import Counter
 from dataclasses import dataclass
@@ -19,11 +18,15 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from demos.integrations.mlx.tests.corpus_evidence import corpus_workspace
+from tools.compile_artifact_bundle import write_bundle_entry
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_REDUCE_SOURCE = "mlx/backend/metal/kernels/reduce.metal"
 MLX_REDUCE_SHA256 = "f1e410ab635eaa940ec195461069cbb013ab88ab0d1f8d5dd8790d30b32c454a"
 REQUIRE_REDUCE_METAL_ENV = "CROSTL_REQUIRE_MLX_REDUCE_METAL_ROUNDTRIP"
+REQUIRE_REDUCE_METAL_SOURCE_ENV = "CROSTL_REQUIRE_MLX_REDUCE_METAL_SOURCE"
+REDUCE_METAL_BUNDLE_ENV = "CROSTL_CORPUS_BUNDLE_ROOT"
 REDUCE_METAL_SHARD_INDEX_ENV = "CROSTL_MLX_REDUCE_METAL_SHARD_INDEX"
 REDUCE_METAL_SHARD_COUNT_ENV = "CROSTL_MLX_REDUCE_METAL_SHARD_COUNT"
 REDUCE_METAL_CI_SHARD_COUNT = 24
@@ -726,7 +729,10 @@ def _project_config(workload: ReduceMetalWorkload) -> str:
 def _pinned_mlx_root() -> Path:
     root_value = os.environ.get("CROSTL_MLX_ROOT")
     if not root_value:
-        if os.environ.get(REQUIRE_REDUCE_METAL_ENV) == "1":
+        if any(
+            os.environ.get(name) == "1"
+            for name in (REQUIRE_REDUCE_METAL_ENV, REQUIRE_REDUCE_METAL_SOURCE_ENV)
+        ):
             pytest.fail("CROSTL_MLX_ROOT is not configured")
         pytest.skip("CROSTL_MLX_ROOT is not configured")
     mlx_root = Path(root_value).resolve()
@@ -764,10 +770,36 @@ def _normalized_materialization(materialization: dict) -> dict:
     return result
 
 
+def _assert_deferred_metal_compiler_diagnostics(payload: dict) -> None:
+    toolchains = payload["validation"]["toolchains"]
+    assert len(toolchains) == 1
+    assert toolchains[0]["target"] == "metal"
+    assert toolchains[0]["status"] in {"available", "unavailable"}
+    expected_count = int(toolchains[0]["status"] == "unavailable")
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": expected_count,
+        "error": 0,
+    }
+    assert len(payload["diagnostics"]) == expected_count
+    for diagnostic in payload["diagnostics"]:
+        assert {
+            field: diagnostic.get(field)
+            for field in ("severity", "code", "target", "missingCapabilities")
+        } == {
+            "severity": "warning",
+            "code": "project.validate.toolchain-unavailable",
+            "target": "metal",
+            "missingCapabilities": ["toolchain.validation"],
+        }
+
+
 def _translate_reduce_metal_artifact(
     mlx_root: Path,
     work_dir: Path,
     workload: ReduceMetalWorkload,
+    *,
+    defer_native_compilation: bool = False,
 ) -> tuple[Path, Path]:
     config_path = work_dir / "crosstl.toml"
     config_path.write_text(_project_config(workload) + "\n", encoding="utf-8")
@@ -781,16 +813,21 @@ def _translate_reduce_metal_artifact(
         run_toolchains=False,
     )
     payload = report.to_json()
+    report_path = work_dir / "portability-report.json"
+    report.write_json(report_path)
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["artifactCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    assert payload["summary"]["diagnosticCounts"] == {
-        "note": 0,
-        "warning": 0,
-        "error": 0,
-    }
-    assert payload["diagnostics"] == []
+    if defer_native_compilation:
+        _assert_deferred_metal_compiler_diagnostics(payload)
+    else:
+        assert payload["summary"]["diagnosticCounts"] == {
+            "note": 0,
+            "warning": 0,
+            "error": 0,
+        }
+        assert payload["diagnostics"] == []
     artifact = payload["artifacts"][0]
     assert artifact["source"] == MLX_REDUCE_SOURCE
     assert artifact["sourceHash"] == {
@@ -829,25 +866,24 @@ def _translate_reduce_metal_artifact(
         "fallback for unmatched generated control flow",
     ):
         assert residue not in generated
-    report_path = work_dir / "portability-report.json"
-    report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
     return report_path, generated_path
 
 
 def _roundtrip_pinned_mlx_reduce_through_metal(
     workload: ReduceMetalWorkload,
+    *,
+    bundle_root: Path | None = None,
 ) -> None:
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=f".crosstl-reduce-{workload.entry_point}-metal-roundtrip-",
-        dir=mlx_root,
-    ) as temporary_directory:
-        work_dir = Path(temporary_directory)
+    with corpus_workspace(
+        mlx_root, family="reduce", target="metal", entry_point=workload.entry_point
+    ) as work_dir:
         report_path, generated_path = _translate_reduce_metal_artifact(
             mlx_root,
             work_dir,
             workload,
+            defer_native_compilation=bundle_root is not None,
         )
         runtime_artifacts = build_runtime_artifact_manifest(report_path)
         assert runtime_artifacts["success"] is True, json.dumps(
@@ -880,6 +916,15 @@ def _roundtrip_pinned_mlx_reduce_through_metal(
         assert [resource["metadata"] for resource in host_interface["resources"]] == [
             {"entryPoint": workload.entry_point}
         ] * workload.resource_count
+
+        if bundle_root is not None:
+            write_bundle_entry(
+                generated_path,
+                REDUCE_METAL_CONTRACT_PATH,
+                workload.entry_point,
+                bundle_root,
+            )
+            return
 
         xcrun = shutil.which("xcrun")
         if xcrun is None:
@@ -916,3 +961,17 @@ def _roundtrip_pinned_mlx_reduce_through_metal(
 )
 def test_current_mlx_reduce_family_roundtrips_through_metal(workload):
     _roundtrip_pinned_mlx_reduce_through_metal(workload)
+
+
+@pytest.mark.parametrize(
+    "workload",
+    CURRENT_REDUCE_METAL_WORKLOADS,
+    ids=lambda workload: workload.entry_point,
+)
+def test_current_mlx_reduce_family_exports_native_compilation_bundle(
+    workload, tmp_path
+):
+    bundle_root = Path(
+        os.environ.get(REDUCE_METAL_BUNDLE_ENV, str(tmp_path / "bundle"))
+    )
+    _roundtrip_pinned_mlx_reduce_through_metal(workload, bundle_root=bundle_root)

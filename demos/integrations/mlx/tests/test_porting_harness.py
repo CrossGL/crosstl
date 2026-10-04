@@ -16354,13 +16354,24 @@ def test_reduce_metal_roundtrip_evidence_records_complete_family():
         "generated_size_bytes_total": artifact["generatedSizeBytesTotal"],
         "generated_size_range": artifact["generatedSizeRange"],
     }
+    assert status["translation_validation"] == {
+        "platform": "ubuntu-24.04",
+        "status": "required-on-ci",
+        "ci_shard_count": 24,
+        "shard_entry_counts": [100] * 20 + [99] * 4,
+        "artifact_count": 2396,
+        "test": (
+            "demos/integrations/mlx/tests/kernels/test_reduce_complete_metal_roundtrip.py::"
+            "test_current_mlx_reduce_family_exports_native_compilation_bundle"
+        ),
+    }
     assert status["native_validation"] == {
         "platform": "macos-latest",
         "compiler": "xcrun -sdk macosx metal -Werror -c",
         "source_warning_exemption": None,
         "status": "required-on-ci",
-        "ci_shard_count": 24,
-        "shard_entry_counts": [100] * 20 + [99] * 4,
+        "ci_job_count": 1,
+        "bundle_compiler": "tools/compile_artifact_bundle.py",
         "compiled_artifact_count": 2396,
         "all_air_artifacts_nonempty": True,
         "test": (

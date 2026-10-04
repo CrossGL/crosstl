@@ -29,15 +29,19 @@ checksum and does not fall back to another release. These jobs do not execute
 Direct3D; WARP numerical execution and Windows host integration remain required.
 Metal corpus compilation stays on macOS because it requires Apple's toolchain.
 
-The complete binary Metal corpus separates portable translation from native
-compilation. Its 24 source-generation shards run on Ubuntu, preserving every
-body, materialization and resource-interface assertion. One dependent macOS job
-verifies all 4,122 artifact identities against the checked-in contract and compiles
-every source with warnings fatal. Shard downloads remain separate so duplicate
+The complete binary and reduction Metal corpora separate portable translation
+from native compilation. Each family has 24 source-generation shards on Ubuntu,
+preserving every body, materialization and resource-interface assertion. One
+dependent macOS job per family verifies all artifact identities against the
+checked-in contract and compiles every source with warnings fatal: 4,122 binary
+and 2,396 reduction artifacts. Shard downloads remain separate so duplicate
 entries cannot overwrite each other. Missing, duplicated or changed sources fail
 before any compilation; compiler failures retain diagnostics and output identities.
-This removes 23 macOS jobs without sampling the corpus. Metal numerical and host
+This removes 46 macOS jobs without sampling either corpus. Metal numerical and host
 integration checks still run natively and are not replaced by this compiler job.
+The reduction source phase permits only the explicit Metal toolchain-unavailable
+warning when that toolchain is absent, retains it in the report and rejects all
+other diagnostics. Its dependent macOS phase still requires native compilation.
 
 The four DirectX corpus families retain each case's configuration, generated
 shader and portability report before checking the recorded artifact identity.

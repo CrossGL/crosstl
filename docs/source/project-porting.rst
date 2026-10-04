@@ -1161,10 +1161,14 @@ expressions are hoisted into address-space-correct Metal ``constant`` storage
 instead of being substituted as rvalues. Ambiguous aliases, unresolved address
 provenance, non-integral offsets, and incompatible overloads remain fail-closed.
 
-Required macOS CI uses 24 disjoint shards: 20 contain 100 entries and four
+Required Ubuntu CI uses 24 disjoint source shards: 20 contain 100 entries and four
 contain 99. Every shard verifies deterministic identity, materialization,
-workgroup metadata, and reflected ABI before warning-fatal compilation with
+workgroup metadata, and reflected ABI before exporting its checked sources.
+One dependent macOS job verifies complete contract coverage and every source
+identity before warning-fatal compilation with
 ``xcrun -sdk macosx metal -Werror -c``. All 2,396 AIR objects must be non-empty.
+Missing, duplicated or altered sources fail before compilation; both phases
+retain evidence. The default local test still translates and compiles each entry.
 This closes complete discovered-reduce translation, reflection, and native
 compiler coverage; it does not claim Metal numerical execution, DirectX or
 OpenGL whole-family coverage, MLX host-runtime redirection, or MLX test-suite

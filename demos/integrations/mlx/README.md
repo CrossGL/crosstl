@@ -2429,12 +2429,17 @@ refresh preserves every entry, operator, materialization and resource interface;
 the updated sources compile with warnings treated as errors. Compilation alone
 does not establish numerical parity for the full reduction family.
 
-Required macOS CI partitions the sorted family into 24 disjoint shards: 20 with
+Required Ubuntu CI partitions the sorted family into 24 disjoint shards: 20 with
 100 entries and four with 99. Each shard retranslates its exact entries,
 verifies deterministic artifact identity, materialization, workgroup metadata,
-and reflected ABI, then invokes `xcrun -sdk macosx metal -Werror -c` and
-requires a non-empty AIR object. In aggregate the gate requires all 2,396 AIR
-outputs. This proves complete discovered-reduce translation, reflection, and
+and reflected ABI, then exports its checked sources. One dependent macOS job
+verifies the complete bundle against the pinned contract before invoking
+`xcrun -sdk macosx metal -Werror -c` for every source and requiring a non-empty
+AIR object. Both phases retain evidence; missing, duplicated or altered sources
+fail before compilation. This removes 23 macOS jobs; the gate still requires all
+2,396 AIR outputs. The default local test still translates and compiles each
+selected entry.
+This proves complete discovered-reduce translation, reflection, and
 native compiler acceptance; it does not claim Metal numerical execution,
 OpenGL or DirectX whole-family translation, MLX host-runtime redirection, or
 MLX test-suite parity.
