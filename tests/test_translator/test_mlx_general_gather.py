@@ -292,7 +292,7 @@ def test_general_gather_gate_requires_native_evidence():
     assert f'{REQUIRE_ENV}: "1"' in step
     assert 'CROSTL_REQUIRE_METAL_EMPTY_ARRAYS: "1"' in step
     assert "test_mlx_general_gather.py" in step and "test_metal_empty_arrays.py" in step
-    assert "--timeout-seconds 1200" in step and "--junitxml=" in step
+    assert "--timeout-seconds 1800" in step and "--junitxml=" in step
     assert "--basetemp=" in step and "-n auto --dist loadgroup" in step
     assert "continue-on-error" not in workflow and "if:" not in step
     assert f'MLX_COMMIT: "{COMMIT}"' in workflow

@@ -9,6 +9,84 @@ from types import SimpleNamespace
 import pytest
 
 from demos.integrations.mlx import random_audit as audit
+from demos.integrations.mlx.portable_host.random_layout import RandomOutputLayout
+
+
+@pytest.mark.parametrize("count", range(34))
+@pytest.mark.parametrize("keys", (1, 3))
+def test_random_output_storage_keeps_every_logical_byte(count, keys):
+    layout = RandomOutputLayout(keys, count)
+    stride = max(4, count) if count else 0
+    assert layout.native_bytes_per_key == stride
+    assert layout.native_byte_count == keys * stride
+    assert layout.logical_byte_count == keys * count
+    raw = bytes((index * 37 + 131) % 256 for index in range(keys * stride))
+    values = [value if value < 128 else value - 256 for value in raw]
+    assert layout.unpack(values) == b"".join(
+        raw[key * stride : key * stride + count] for key in range(keys)
+    )
+
+
+@pytest.mark.parametrize(
+    "keys,count", [(0, 3), (-1, 3), (True, 3), (1, -1), (1, 1.0), (1, False)]
+)
+def test_random_output_rejects_invalid_dimensions(keys, count):
+    with pytest.raises(ValueError, match="positive keys"):
+        RandomOutputLayout(keys, count)
+
+
+@pytest.mark.parametrize("bad", [-129, 128, 1.0, True, "1"])
+def test_random_output_rejects_nonbyte_readback(bad):
+    with pytest.raises(ValueError, match="signed byte"):
+        RandomOutputLayout(1, 1).unpack([0, 0, 0, bad])
+
+
+@pytest.mark.parametrize("size", (0, 1, 3, 5))
+def test_random_output_requires_full_native_allocation(size):
+    with pytest.raises(ValueError, match="exact signed byte"):
+        RandomOutputLayout(1, 1).unpack([0] * size)
+
+
+def test_partial_byte_profile_preserves_source_counters():
+    cases = audit.workloads(byte_tails=True)
+    assert len(cases) == len({case["id"] for case in cases}) == 48
+    assert {case["logicalBytesPerKey"] for case in cases} == {
+        1,
+        2,
+        3,
+        5,
+        6,
+        7,
+        9,
+        10,
+        11,
+        15,
+        17,
+        33,
+    }
+    for case in cases:
+        count, keys = case["logicalBytesPerKey"], case["keyCount"]
+        assert case["wordCount"] == (count + 3) // 4
+        assert case["odd"] == case["wordCount"] % 2
+        assert case["bytesPerKey"] == max(4, count)
+        assert len(case["expected"]) == max(4, count) * keys
+        assert len(case["logicalExpected"]) == count * keys
+        assert case["execution"]["workgroupCount"] == [
+            keys,
+            (case["wordCount"] + 1) // 2,
+            1,
+        ]
+        layout = RandomOutputLayout(keys, count)
+        assert list(layout.unpack(case["expected"])) == case["logicalExpected"]
+        if count < 4:
+            assert case["expected"][:4] == [89, 1, 32, 107]
+            assert case["logicalExpected"][:count] == [89, 1, 32][:count]
+
+
+@pytest.mark.parametrize("count", (False, -1, 0, 1.0, 65535))
+def test_partial_byte_workload_rejects_invalid_allocation(count):
+    with pytest.raises(ValueError, match="workload"):
+        audit.byte_workload("rbitsc", 1, count)
 
 
 def test_native_module_is_retained_with_executed_identity(tmp_path):
@@ -272,7 +350,11 @@ def test_numerical_and_native_evidence_contract(target, fault):
 
 
 @pytest.mark.parametrize("wrong", [False, True])
-def test_audit_keeps_complete_failure_evidence(tmp_path, monkeypatch, wrong):
+@pytest.mark.parametrize("byte_tails", [False, True])
+def test_audit_keeps_complete_failure_evidence(
+    tmp_path, monkeypatch, wrong, byte_tails
+):
+    cases = audit.workloads(byte_tails=byte_tails)
     desc = {entry: descriptor("opengl", entry) for entry in audit.ENTRIES}
     monkeypatch.setattr(audit, "build_packages", lambda *args: desc)
     monkeypatch.setattr(audit, "verify_source", lambda root: None)
@@ -285,7 +367,7 @@ def test_audit_keeps_complete_failure_evidence(tmp_path, monkeypatch, wrong):
 
     def run(request):
         selected, execution = request
-        case = audit.workloads()[run.calls]
+        case = cases[run.calls]
         assert execution == case["execution"]
         run.calls += 1
         result = native_result(selected, case)
@@ -309,17 +391,22 @@ def test_audit_keeps_complete_failure_evidence(tmp_path, monkeypatch, wrong):
     )
     monkeypatch.setattr(audit, "executor", lambda target: native)
     output = tmp_path / "audit"
-    result = audit.audit(tmp_path, "opengl", output)
+    result = audit.audit(tmp_path, "opengl", output, byte_tails=byte_tails)
     assert result["passed"] is (not wrong)
-    assert len(result["cases"]) == run.calls == 20
+    assert len(result["cases"]) == run.calls == len(cases)
     assert all(case["passed"] is (not wrong) for case in result["cases"])
-    assert len(list(output.glob("*/result.json"))) == 20
+    assert len(list(output.glob("*/result.json"))) == len(cases)
+    assert len(list(output.glob("*/logical-output.json"))) == (
+        0 if wrong else len(cases)
+    )
     assert json.loads((output / "evidence.json").read_text()) == result
     assert closed == [True]
 
 
 def test_cli_returns_failure_for_failed_audit(tmp_path, monkeypatch):
-    monkeypatch.setattr(audit, "audit", lambda *args: {"passed": False, "cases": []})
+    monkeypatch.setattr(
+        audit, "audit", lambda *args, **kwargs: {"passed": False, "cases": []}
+    )
     assert (
         audit.main(
             [
@@ -401,3 +488,39 @@ def test_contract_checks_run_on_all_platforms():
     )
     assert "tests/test_mlx_random_audit.py" in step["run"]
     assert "-n auto" in step["run"]
+
+
+@pytest.mark.parametrize("target", ("metal", "opengl", "directx"))
+@pytest.mark.parametrize("position", (0, 1, 2, 3, 4, 7, 8, 11, 12))
+def test_byte_profile_checks_padding_and_guards_before_unpacking(target, position):
+    case = audit.byte_workload("rbitsc", 3, 1)
+    desc = descriptor(target, "rbitsc")
+    result = native_result(desc, case)
+    assert audit.compare_readback(result, "out_", case, desc)
+    result.outputs["out_"]["values"][position] ^= 1
+    assert not audit.compare_readback(result, "out_", case, desc)
+
+
+@pytest.mark.parametrize("target", ("metal", "opengl", "directx"))
+def test_partial_random_profile_is_required_on_each_platform(target):
+    import yaml
+
+    workflow = yaml.safe_load(
+        (
+            Path(__file__).parents[1] / ".github/workflows/mlx-gather-roundtrip.yml"
+        ).read_text()
+    )
+    events = workflow.get("on", workflow.get(True))
+    for event in ("push", "pull_request"):
+        assert "demos/integrations/mlx/portable_host/**" in events[event]["paths"]
+    (step,) = (
+        step
+        for step in workflow["jobs"][target]["steps"]
+        if "random byte tails" in step.get("name", "")
+    )
+    assert "if" not in step and not step.get("continue-on-error", False)
+    assert "set -euo pipefail" in step["run"]
+    assert "--timeout-seconds 450" in step["run"]
+    assert "--byte-tails" in step["run"]
+    assert f"--target {target}" in step["run"]
+    assert "python -m demos.integrations.mlx.random_audit" in step["run"]

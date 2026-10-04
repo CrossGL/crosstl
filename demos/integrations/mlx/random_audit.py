@@ -30,12 +30,14 @@ from crosstl.project.runtime_verification import (
     RuntimeTestAdapterSpec,
 )
 from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
+from demos.integrations.mlx.portable_host.random_layout import RandomOutputLayout
 
 SOURCE = "mlx/backend/metal/kernels/random.metal"
 SOURCE_SHA256 = "f1a19b3f11b7b10203824890f13debc6d627959b4e7f17c219e2e9da553c1bd7"
 ENTRIES = ("rbitsc", "rbits")
 KEYS = ((0, 0), (0xFFFFFFFF, 0x80000000), (123, 456))
 WORD_COUNTS = (1, 2, 3, 8, 17)
+BYTE_COUNTS = (1, 2, 3, 5, 6, 7, 9, 10, 11, 15, 17, 33)
 GUARD_COUNT = 17
 
 
@@ -68,9 +70,28 @@ def threefry(key, count):
 def workload(entry, key_count, word_count):
     if entry not in ENTRIES or key_count not in (1, 3) or word_count not in WORD_COUNTS:
         raise ValueError("Unknown bounded random workload")
+    case = byte_workload(entry, key_count, word_count * 4)
+    case["id"] = f"{entry}-{key_count}-{word_count}"
+    return case
+
+
+def byte_workload(entry, key_count, byte_count):
+    if (
+        entry not in ENTRIES
+        or type(key_count) is not int
+        or key_count not in (1, 3)
+        or type(byte_count) is not int
+        or byte_count < 1
+    ):
+        raise ValueError("Unknown bounded random byte workload")
+    layout = RandomOutputLayout(key_count, byte_count)
+    if layout.native_byte_count + GUARD_COUNT > 65535:
+        raise ValueError("Random workload exceeds its asserted index bounds")
     keys = KEYS[:key_count]
+    word_count = (byte_count + 3) // 4
     width = (word_count + 1) // 2
     expected = []
+    logical_expected = []
     for key in keys:
         words = [None] * word_count
         for y in range(width):
@@ -79,7 +100,9 @@ def workload(entry, key_count, word_count):
             words[y] = pair[0]
             if not drop:
                 words[y + width] = pair[1]
-        expected.extend(struct.pack("<" + "I" * word_count, *words))
+        raw = struct.pack("<" + "I" * word_count, *words)
+        expected.extend(raw[: layout.native_bytes_per_key])
+        logical_expected.extend(raw[:byte_count])
     key_values = (
         [value for key in keys for value in key]
         if entry == "rbitsc"
@@ -89,7 +112,7 @@ def workload(entry, key_count, word_count):
     if len(expected) + GUARD_COUNT > 65535 or len(key_values) > 65535:
         raise ValueError("Random workload exceeds its asserted index bounds")
     return {
-        "id": f"{entry}-{key_count}-{word_count}",
+        "id": f"{entry}-{key_count}-{byte_count}-bytes",
         "entry": entry,
         "keyCount": key_count,
         "wordCount": word_count,
@@ -97,7 +120,9 @@ def workload(entry, key_count, word_count):
         "keyShape": [key_count, 2],
         "keyStrides": [1, key_count],
         "odd": word_count % 2,
-        "bytesPerKey": word_count * 4,
+        "bytesPerKey": layout.native_bytes_per_key,
+        "logicalBytesPerKey": byte_count,
+        "logicalExpected": logical_expected,
         "expected": [value if value < 128 else value - 256 for value in expected],
         "execution": {
             "workgroupCount": [key_count, width, 1],
@@ -106,7 +131,14 @@ def workload(entry, key_count, word_count):
     }
 
 
-def workloads():
+def workloads(*, byte_tails=False):
+    if byte_tails:
+        return [
+            byte_workload(entry, keys, count)
+            for entry in ENTRIES
+            for keys in (1, 3)
+            for count in BYTE_COUNTS
+        ]
     return [
         workload(entry, keys, words)
         for entry in ENTRIES
@@ -204,7 +236,7 @@ def compare_readback(result, output_name, case, descriptor):
     expected = case["expected"] + [91] * GUARD_COUNT
     value = result.outputs.get(output_name, {})
     actual = value.get("values", [])
-    return (
+    valid = (
         result.status == "ok"
         and set(result.outputs) == {output_name}
         and value.get("dtype") == dtype
@@ -215,6 +247,10 @@ def compare_readback(result, output_name, case, descriptor):
         and actual == expected
         and native_identity(result.details, descriptor, case)
     )
+    if not valid:
+        return False
+    layout = RandomOutputLayout(case["keyCount"], case["logicalBytesPerKey"])
+    return list(layout.unpack(actual[:-GUARD_COUNT])) == case["logicalExpected"]
 
 
 def retain_native_module(details, target, destination):
@@ -364,11 +400,12 @@ def executor(target):
     )
 
 
-def audit(root, target, output):
+def audit(root, target, output, *, byte_tails=False):
     output.mkdir(parents=True)
     evidence = {
         "commit": COMMIT,
         "target": target,
+        "profile": "byte-tails" if byte_tails else "words",
         "passed": False,
         "cases": [],
         "fullHostIntegration": False,
@@ -378,7 +415,8 @@ def audit(root, target, output):
     try:
         descriptors = build_packages(root.resolve(), target, output.resolve())
         native = executor(target)
-        for case in workloads():
+        cases = workloads(byte_tails=byte_tails)
+        for case in cases:
             destination = output / case["id"]
             destination.mkdir()
             record = {"workload": case, "passed": False}
@@ -410,6 +448,21 @@ def audit(root, target, output):
                     result, output_name, case, descriptors[case["entry"]]
                 )
                 if passed:
+                    layout = RandomOutputLayout(
+                        case["keyCount"], case["logicalBytesPerKey"]
+                    )
+                    logical = layout.unpack(
+                        result.outputs[output_name]["values"][:-GUARD_COUNT]
+                    )
+                    write_json(
+                        destination / "logical-output.json",
+                        {
+                            "bytesPerKey": layout.bytes_per_key,
+                            "nativeBytesPerKey": layout.native_bytes_per_key,
+                            "values": list(logical),
+                        },
+                    )
+                if passed:
                     record["nativeModule"] = result.details.get("retainedNativeModule")
                     if not record["nativeModule"]:
                         raise ValueError("Native random module was not retained")
@@ -424,7 +477,7 @@ def audit(root, target, output):
                 record["details"] = getattr(error, "details", {})
             evidence["cases"].append(record)
             write_json(output / "evidence.json", evidence)
-        evidence["passed"] = len(evidence["cases"]) == len(workloads()) and all(
+        evidence["passed"] = len(evidence["cases"]) == len(cases) and all(
             record["passed"] for record in evidence["cases"]
         )
         verify_source(root)
@@ -452,8 +505,11 @@ def main(argv=None):
         "--target", choices=("metal", "opengl", "directx"), required=True
     )
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--byte-tails", action="store_true")
     args = parser.parse_args(argv)
-    result = audit(args.mlx_root, args.target, args.output_dir)
+    result = audit(
+        args.mlx_root, args.target, args.output_dir, byte_tails=args.byte_tails
+    )
     print(
         json.dumps(
             {

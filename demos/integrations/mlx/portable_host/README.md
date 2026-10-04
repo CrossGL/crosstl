@@ -823,6 +823,29 @@ The upstream kernel writes its first four output bytes unconditionally. Host
 integration must account for this source allocation requirement and per-key
 spacing without concealing overwritten values or relaxing guard checks.
 
+The separate `--byte-tails` audit profile verifies a per-key staging layout for
+this requirement. Outputs shorter than four bytes receive a four-byte native
+slot; longer outputs retain their requested byte count. The number of counter
+words and the launch geometry remain unchanged. `RandomOutputLayout` copies the
+requested bytes from each slot without calculating or correcting random values.
+The audit checks the complete native allocation, including each padding byte,
+against the integer reference before checking the logical output. All 17 trailing
+guards must remain unchanged.
+
+This profile has 48 cases: contiguous and strided keys, one and three keys, and
+1, 2, 3, 5, 6, 7, 9, 10, 11, 15, 17 and 33 output bytes per key. Native Metal
+and OpenGL pass this profile locally; the three-platform gather workflow requires
+the same profile in CI, including native Direct3D execution on Windows. It keeps
+the existing 20 word-aligned cases as a separate required step. This establishes
+bounded byte transport, not `RandomBits` host routing or upstream random-suite
+parity.
+
+```bash
+python -m demos.integrations.mlx.random_audit --byte-tails \
+  --mlx-root /path/to/pinned/mlx --target metal \
+  --output-dir /path/to/random-byte-evidence
+```
+
 The required macOS gather workflow separately verifies the byte-storage and
 narrow-aggregate prerequisites. Signed and unsigned byte buffers retain one-byte
 elements through reflection, packaging, native upload and readback. Its 32

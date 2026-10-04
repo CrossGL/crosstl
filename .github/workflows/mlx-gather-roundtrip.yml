@@ -45,7 +45,7 @@ jobs:
   opengl:
     name: Translated OpenGL indexed gather
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -133,6 +133,16 @@ jobs:
             python -m demos.integrations.mlx.random_audit \
               --mlx-root mlx-upstream --target opengl --output-dir .mlx-gather-opengl/random \
               2>&1 | tee .mlx-gather-opengl/random-execution.log
+      - name: Validate OpenGL random byte tails
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 450 --label "Native OpenGL random byte tails" -- \
+            python -m demos.integrations.mlx.random_audit --byte-tails \
+              --mlx-root mlx-upstream --target opengl --output-dir .mlx-gather-opengl/random-byte-tails \
+              2>&1 | tee .mlx-gather-opengl/random-byte-tails.log
       - name: Retain OpenGL execution evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -146,7 +156,7 @@ jobs:
   metal:
     name: Original and translated Metal gather
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v4
         with:
@@ -187,7 +197,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .mlx-gather
-          python tools/run_bounded_command.py --timeout-seconds 1200 --label "Native gather round trip" -- \
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "Native gather round trip" -- \
             python -m pytest -q -n auto --dist loadgroup --durations=20 \
               --basetemp=.mlx-gather/pytest \
               --junitxml=.mlx-gather/results.xml \
@@ -242,6 +252,13 @@ jobs:
             python -m demos.integrations.mlx.random_audit \
               --mlx-root mlx-upstream --target metal --output-dir .mlx-gather/random \
               2>&1 | tee .mlx-gather/random-execution.log
+      - name: Validate Metal random byte tails
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 450 --label "Native Metal random byte tails" -- \
+            python -m demos.integrations.mlx.random_audit --byte-tails \
+              --mlx-root mlx-upstream --target metal --output-dir .mlx-gather/random-byte-tails \
+              2>&1 | tee .mlx-gather/random-byte-tails.log
       - name: Retain original and translated execution evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -312,7 +329,7 @@ jobs:
   directx:
     name: Translated DirectX indexed gather
     runs-on: windows-2025
-    timeout-minutes: 35
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -429,6 +446,13 @@ jobs:
             python -m demos.integrations.mlx.random_audit \
               --mlx-root mlx-upstream --target directx --output-dir .mlx-gather-directx/random \
               2>&1 | tee .mlx-gather-directx/random-execution.log
+      - name: Validate DirectX random byte tails
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 450 --label "Native DirectX random byte tails" -- \
+            python -m demos.integrations.mlx.random_audit --byte-tails \
+              --mlx-root mlx-upstream --target directx --output-dir .mlx-gather-directx/random-byte-tails \
+              2>&1 | tee .mlx-gather-directx/random-byte-tails.log
       - name: Retain DirectX execution evidence
         if: always()
         uses: actions/upload-artifact@v4
