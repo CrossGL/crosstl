@@ -520,6 +520,15 @@ implemented. Strict JSON runtime requests encode non-finite float32 inputs with
 the exact strings ``nan``, ``+infinity``, and ``-infinity`` before
 deterministic IEEE-754 packing.
 
+The current OpenGL identities were reviewed against retained sources after
+signed 64-bit remainder and narrow-value lowering changed. All 24 entries
+compile and validate, and the 16 required float32 execution cases pass on Mesa
+EGL. A separate local review covers 80 half/bfloat cases with source-rounded
+inputs; it does not expand the required CI runtime subset. Metal and DirectX
+identities remain independently gated. Strict Metal compilation currently
+rejects the four signed/unsigned byte entries due to aggregate-initializer
+narrowing, tracked in `issue 2074 <https://github.com/CrossGL/crosstl/issues/2074>`_.
+
 Constrained Metal free-function fallbacks are materialized only when their
 recognized constraints select a unique implementation. A visible ordinary or
 unconstrained-template overload with compatible argument count causes a

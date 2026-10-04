@@ -65,6 +65,17 @@ This is a 24/17,832 deterministic translation and native-compiler increment with
 2/17,832 numerical runtime coverage, not full-tree coverage, upstream MLX
 test-suite execution, or MLX host-runtime redirection.
 
+The current OpenGL identities include explicit signed 64-bit remainder,
+source-typed half loads, and bfloat rounding at shuffle and sentinel boundaries.
+All 24 bodies were reviewed against the retained sources and compiled with
+`glslangValidator` and `spirv-val`. The 16 required float32 cases pass on Mesa
+EGL. An additional local review executed 80 half/bfloat cases with source-rounded
+inputs, including rounding ties, subnormals, signed zeros, NaNs, and infinities;
+these do not expand the contract's required CI runtime subset. Metal and DirectX
+identities were not changed by this review. Strict Metal compilation currently
+rejects the four signed/unsigned byte entries because of aggregate-initializer
+narrowing, tracked in [#2074](https://github.com/CrossGL/crosstl/issues/2074).
+
 Original Metal reference libraries use the unchanged upstream sources with
 compiler warnings retained but not promoted to errors. The pinned headers use
 C++17 constructs that some Metal 3.1 toolchains diagnose as extensions.
