@@ -1681,7 +1681,7 @@
       }
     },
     "native_validation": {
-      "platform": "windows-latest",
+      "platform": "ubuntu-24.04",
       "compiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
       "compiler_arguments": [
         "-enable-16bit-types"
@@ -1730,7 +1730,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
       "schema_version": 1,
-      "sha256": "259815d4802aef0932911a14d9096b3597f5e2bd35cc76ac484fd1668a05b4b2",
+      "sha256": "842ce063e8483afb150c65aa440de638cc3bbfba79d95bd2eae2426c2ffcb425",
       "entry_identity_fields": [
         "entryPoint",
         "operator",
@@ -1826,15 +1826,15 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 189353,
+      "generated_size_bytes_total": 210416,
       "generated_size_range": {
         "minimum": {
-          "entryPoint": "ss_Addbool_",
-          "sizeBytes": 670
+          "entryPoint": "ss_Addfloat16",
+          "sizeBytes": 748
         },
         "maximum": {
           "entryPoint": "ss_LogAddExpcomplex64",
-          "sizeBytes": 3490
+          "sizeBytes": 3615
         }
       }
     },
@@ -1887,7 +1887,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "5540c68fde6b3b3b39f5bdb7100523a4d45896a78d0c746d5a71cc5754c451c5",
+      "sha256": "b72ad79e033a376cd5b92dd137d97801fe7b4560855a08e6acaf42830651d22d",
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -1900,7 +1900,7 @@
         "sizeBytes"
       ],
       "scalar_subset_path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
-      "scalar_subset_sha256": "259815d4802aef0932911a14d9096b3597f5e2bd35cc76ac484fd1668a05b4b2"
+      "scalar_subset_sha256": "842ce063e8483afb150c65aa440de638cc3bbfba79d95bd2eae2426c2ffcb425"
     },
     "shape_counts": {
       "g1": 238,
@@ -1998,15 +1998,15 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 5146491,
+      "generated_size_bytes_total": 5534240,
       "generated_size_range": {
         "minimum": {
-          "entryPoint": "ss_Addbool_",
-          "sizeBytes": 670
+          "entryPoint": "ss_Addfloat16",
+          "sizeBytes": 748
         },
         "maximum": {
           "entryPoint": "gn4large_LogAddExpcomplex64",
-          "sizeBytes": 4717
+          "sizeBytes": 4849
         }
       }
     },
@@ -2393,7 +2393,7 @@
       }
     },
     "native_validation": {
-      "platform": "windows-latest",
+      "platform": "ubuntu-24.04",
       "compiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
       "status": "required-on-ci",
       "compiled_artifact_count": 4122,
@@ -3689,7 +3689,7 @@
       }
     },
     "native_validation": {
-      "platform": "windows-latest",
+      "platform": "ubuntu-24.04",
       "compiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
       "status": "required-on-ci",
       "compiled_artifact_count": 2496,

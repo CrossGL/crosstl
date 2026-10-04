@@ -12216,7 +12216,7 @@ def test_unary_directx_translation_evidence_records_complete_family():
     assert artifact_contract["compilerArguments"] == ["-enable-16bit-types"]
     assert artifact_contract["requiresNonemptyDxilArtifact"] is True
     assert status["native_validation"] == {
-        "platform": "windows-latest",
+        "platform": "ubuntu-24.04",
         "compiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
         "compiler_arguments": ["-enable-16bit-types"],
         "status": "required-on-ci",
@@ -12292,7 +12292,7 @@ def test_binary_scalar_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
         "schema_version": 1,
-        "sha256": "259815d4802aef0932911a14d9096b3597f5e2bd35cc76ac484fd1668a05b4b2",
+        "sha256": "842ce063e8483afb150c65aa440de638cc3bbfba79d95bd2eae2426c2ffcb425",
         "entry_identity_fields": [
             "entryPoint",
             "operator",
@@ -12453,7 +12453,7 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/binary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "5540c68fde6b3b3b39f5bdb7100523a4d45896a78d0c746d5a71cc5754c451c5",
+        "sha256": "b72ad79e033a376cd5b92dd137d97801fe7b4560855a08e6acaf42830651d22d",
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12469,7 +12469,7 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
             "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json"
         ),
         "scalar_subset_sha256": (
-            "259815d4802aef0932911a14d9096b3597f5e2bd35cc76ac484fd1668a05b4b2"
+            "842ce063e8483afb150c65aa440de638cc3bbfba79d95bd2eae2426c2ffcb425"
         ),
     }
     contract_path = ROOT / status["contract"]["path"]
@@ -12989,7 +12989,7 @@ def test_binary_directx_translation_evidence_records_complete_family():
         "generated_size_range": contract["artifactContract"]["generatedSizeRange"],
     }
     assert status["native_validation"] == {
-        "platform": "windows-latest",
+        "platform": "ubuntu-24.04",
         "compiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
         "status": "required-on-ci",
         "compiled_artifact_count": 4122,
@@ -16095,7 +16095,7 @@ def test_copy_directx_translation_evidence_records_complete_family():
         "generated_size_range": contract["artifactContract"]["generatedSizeRange"],
     }
     assert status["native_validation"] == {
-        "platform": "windows-latest",
+        "platform": "ubuntu-24.04",
         "compiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
         "status": "required-on-ci",
         "compiled_artifact_count": 2496,

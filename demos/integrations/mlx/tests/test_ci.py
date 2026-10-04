@@ -1,4 +1,5 @@
 import ast
+import json
 import re
 import textwrap
 from fnmatch import fnmatchcase
@@ -129,6 +130,22 @@ def test_directx_corpus_retains_failure_evidence_without_additional_jobs(family)
     assert "include-hidden-files: true" in upload
     assert "if-no-files-found: error" in upload
     assert "retention-days: 14" in upload
+
+
+@pytest.mark.parametrize("family", ("unary", "binary", "copy"))
+def test_directx_corpus_report_matches_compiler_runner(family):
+    report = json.loads(
+        (ROOT / "demos/integrations/mlx/expected-gaps.json").read_text()
+    )
+    validation = report[f"{family}_directx_translation_status"]["native_validation"]
+    job = _workflow_job_section(
+        _workflow_texts()["demo-project-testing.yml"],
+        f"mlx-{family}-complete-directx-translation",
+    )
+    assert f"runs-on: {validation['platform']}" in job
+    assert "uses: ./.github/actions/install-linux-dxc" in job
+    assert validation["test"].split("::")[0] in job
+    assert len(_matrix_values(job, "shard_index")) == validation["ci_shard_count"]
 
 
 def test_mlx_gather_checkout_preserves_pinned_source_bytes():

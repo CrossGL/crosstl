@@ -221,7 +221,7 @@ The current harness verifies:
   read-only source `device const int& ndim` becomes a `StructuredBuffer<int>`
   scalar view at element zero, and source `out_idx++` remains postfix in HLSL.
   The same three explicit host/runtime index-range preconditions are required.
-  Five required Windows CI shards compile every artifact with pinned DXC,
+  Five required Ubuntu CI shards compile every artifact with pinned Linux DXC,
   source-derived `-enable-16bit-types`, warnings fatal, profile `cs_6_2`, and
   entry point `CSMain`; the gate requires 877 non-empty DXIL modules. Together
   with the OpenGL proof this closes complete discovered unary translation,
@@ -277,7 +277,7 @@ The current harness verifies:
   `real`/`imag` float-shape validation, while malformed registered shapes fail
   closed. Unlike the OpenGL lowering, this native HLSL path introduces no
   additional source-scoped 32-bit index-range portability promise. Twenty-four
-  required Windows CI shards retranslate every exact entry, verify identity,
+  required Ubuntu CI shards retranslate every exact entry, verify identity,
   materialization, workgroup metadata, and reflected ABI, and compile with
   checksum-pinned DXC using `-enable-16bit-types -WX -T cs_6_2 -E CSMain`,
   requiring 2,496 non-empty DXIL modules. Together with the Metal and OpenGL
@@ -323,7 +323,7 @@ The current harness verifies:
   original bfloat payload without requantization. All other unproven bfloat
   builtins remain fail-closed. The
   same seven explicit host/runtime index-range preconditions remain required.
-  Twenty-four required Windows CI shards retranslate every exact entry, verify
+  Twenty-four required Ubuntu CI shards retranslate every exact entry, verify
   deterministic identity, materialization, `CSMain` workgroup metadata, and
   reflected ABI, then compile with checksum-pinned DXC using native 16-bit
   types and warnings fatal. The gate requires 4,122 non-empty DXIL modules.
@@ -430,7 +430,7 @@ The current harness verifies:
   provenance, unresolved aggregate pointer members or arrays, and unsupported
   HIP record lifecycle or layout remain fail-closed. Unlike the OpenGL
   lowering, this native HLSL path introduces no additional source-scoped
-  32-bit index-range portability promise. Twenty-four required Windows CI
+  32-bit index-range portability promise. Twenty-four required Ubuntu CI
   shards retranslate every exact entry, verify deterministic identity,
   materialization, workgroup metadata, and reflected ABI, and compile with
   checksum-pinned DXC using `-enable-16bit-types -WX -T cs_6_2 -E CSMain`,
@@ -2305,6 +2305,11 @@ evaluation through an unambiguous ``(void)(...)`` form, and scalar Boolean
 relational operands receive their C++ integral promotion explicitly. The
 focused regressions retain fail-closed behavior outside those proven forms.
 
+The binary reference artifacts also retain explicit byte narrowing after
+arithmetic, Boolean integral promotions, and typed vector list initialization
+for index helpers. These conversions preserve the source value types and
+evaluation order; they do not change the selected operators or buffer interfaces.
+
 Every entry identity, shape, template, operator, exact input/output pair,
 semantic family, SHA-256, byte count, materialization contract, and host ABI is
 pinned by
@@ -2369,14 +2374,18 @@ selected original bfloat payload without requantization. The contract remains
 explicit and fail-closed: unrelated bfloat builtins are not admitted, and
 storage still requires Shader Model 6.2 native 16-bit types.
 
-Required Windows CI partitions the family into 24 disjoint shards. Every shard
+Required Ubuntu CI partitions the family into 24 disjoint shards. Every shard
 retranslates its exact entries, verifies deterministic identity, source/default
 and call-site materialization provenance, ``CSMain`` workgroup metadata, and
 exact three- through eight-resource host ABI, then compiles with checksum-pinned
-DXC using ``-enable-16bit-types -WX -T cs_6_2 -E CSMain``. All 4,122 DXIL
+Linux DXC using ``-enable-16bit-types -WX -T cs_6_2 -E CSMain``. All 4,122 DXIL
 modules must be non-empty. This closes discovered binary DirectX translation,
 reflection, and native compiler coverage; it does not claim numerical
 execution, MLX host-runtime redirection, or MLX test-suite parity.
+
+These compiler-only shards do not require a Windows runner. Direct3D 12
+execution and readback checks remain on Windows; compiling DXIL on Linux is
+not a substitute for those runtime tests.
 
 The complete current-pinned reduction gate covers all 2,396 host-named entries
 from `reduce.metal` at commit
