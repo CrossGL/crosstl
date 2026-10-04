@@ -93,11 +93,27 @@ kernel void atomic_memory(device mlx_atomic<float>* values [[buffer(0)]],
                 output_dir=f"{staging.name}/out",
                 entry_points={relative: ("atomic_memory",)},
                 workgroup_size=(1, 1, 1),
+                index_range_assertions=(
+                    (
+                        {
+                            "source": relative,
+                            "expression": "offset",
+                            "minimum": 1,
+                            "maximum": len(WORDS),
+                        },
+                    )
+                    if target == "opengl"
+                    else ()
+                ),
             ),
             format_output=False,
         )
         descriptor, package = _prepare_native_package(report, work)
     inputs, outputs = _workload(operation)
+    if target == "opengl":
+        for values in (inputs, outputs):
+            values["values"]["dtype"] = "uint32"
+            del values["values"]["encoding"]
     expected = _bound_values(descriptor, outputs)
     request = build_native_loader_dispatch_request(
         descriptor,

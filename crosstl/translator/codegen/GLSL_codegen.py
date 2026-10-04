@@ -159,6 +159,7 @@ from .generic_struct_utils import (
     infer_struct_constructor_type,
 )
 from .glsl_buffer_layout import glsl_buffer_block_node_type
+from .glsl_float_atomic_storage import FloatAtomicStorage
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -2309,6 +2310,7 @@ class GLSLCodeGen:
         private_pointer_out_of_bounds_read="error",
     ):
         """Initialize GLSL type maps and per-generation stage/resource state."""
+        self.float_atomic_storage = FloatAtomicStorage(self)
         self.set_cooperative_matrix_software_lowering(
             cooperative_matrix_software_lowering
         )
@@ -6899,6 +6901,16 @@ class GLSLCodeGen:
         return f"{base_type}(0)"
 
     def generate_program(self, ast, target_stage=None):
+        self.float_atomic_storage = FloatAtomicStorage(self, discover=True)
+        code = self._generate_program(ast, target_stage)
+        roots = self.float_atomic_storage.roots
+        if roots:
+            self.float_atomic_storage = FloatAtomicStorage(self, roots=roots)
+            code = self._generate_program(ast, target_stage)
+            self.float_atomic_storage.verify()
+        return code
+
+    def _generate_program(self, ast, target_stage=None):
         """Render an AST to GLSL, optionally filtering stage entry points."""
         ast = lower_resource_aggregates(ast, storage_pointer_parameters=True)
         ast = self.with_glsl_builtin_option_prelude(ast)
@@ -7952,9 +7964,11 @@ class GLSLCodeGen:
                         image_formats=self.image_variable_formats,
                         image_accesses=self.image_variable_accesses,
                     )
-            declaration = format_c_style_array_declaration(
+            storage_type = self.float_atomic_storage.declaration(
                 f"{mapped_type}{array_suffix}", var_name
             )
+            code += self.float_atomic_storage.take_definitions()
+            declaration = format_c_style_array_declaration(storage_type, var_name)
             if id(node) in empty_struct_global_ids:
                 code += self.generate_glsl_empty_struct_global_declaration(
                     node,
@@ -8329,6 +8343,7 @@ class GLSLCodeGen:
             + self.generate_glsl_signed_remainder_helpers()
             + self.generate_glsl_complex64_helpers()
             + self.generate_glsl_expected_compare_helpers()
+            + self.float_atomic_storage.helper_definitions()
         )
         if generated_helpers:
             code = (
@@ -26607,8 +26622,14 @@ class GLSLCodeGen:
             )
         vtype = self.local_variable_declared_type(node)
         vtype = self.resolve_glsl_shared_array_dimensions(vtype)
-        declaration = format_c_style_array_declaration(self.map_type(vtype), alias)
-        return f"{self.global_variable_qualifier(node)}{declaration};\n"
+        storage_type = self.float_atomic_storage.declaration(
+            self.map_type(vtype), alias
+        )
+        declaration = format_c_style_array_declaration(storage_type, alias)
+        return (
+            self.float_atomic_storage.take_definitions()
+            + f"{self.global_variable_qualifier(node)}{declaration};\n"
+        )
 
     def activate_glsl_hoisted_shared_declaration(self, node):
         """Alias a hoisted shared local to its global name for the current scope."""
@@ -32852,6 +32873,11 @@ complex64_t crossgl_complex64_mod_assign(
         self.validate_glsl_private_pointer_byte_view_mutation(left_node)
         self.validate_glsl_storage_pointer_mutation_target(left_node)
         self.validate_glsl_buffer_block_assignment_target(left_node, op)
+        storage_assignment = self.float_atomic_storage.assignment(
+            node, left_node, right_node, op, statement_context
+        )
+        if storage_assignment is not None:
+            return storage_assignment
         expected_type = self.glsl_tessellation_factor_assignment_expected_type(
             left_node
         )
@@ -33826,6 +33852,9 @@ complex64_t crossgl_complex64_mod_assign(
 
     def generate_expression(self, expr, is_main=False):
         """Render a CrossGL AST expression into GLSL expression syntax."""
+        storage_read = self.float_atomic_storage.read(expr, is_main)
+        if storage_read is not None:
+            return storage_read
         if expr is None:
             return ""
         if isinstance(expr, PointerReinterpretNode):
@@ -34114,6 +34143,9 @@ complex64_t crossgl_complex64_mod_assign(
                 self.validate_glsl_buffer_block_member_access(
                     expr.operand, "read_write"
                 )
+                storage_update = self.float_atomic_storage.unary_update(expr, op)
+                if storage_update is not None:
+                    return storage_update
                 narrow_update = self.generate_glsl_narrow_unary_update(expr, op)
                 if narrow_update is not None:
                     return narrow_update
@@ -36806,6 +36838,9 @@ complex64_t crossgl_complex64_mod_assign(
                 self.expression_result_type(args[0])
             )
             value = self.generate_expression_with_expected(args[2], element_type)
+            value = self.float_atomic_storage.buffer_value(
+                args[0], element_type, value, True
+            )
             array_access = self.structured_buffer_array_parameter_access(args[0])
             if array_access is not None:
                 info, selector = array_access
@@ -36823,6 +36858,9 @@ complex64_t crossgl_complex64_mod_assign(
                 self.expression_result_type(args[0])
             )
             value = self.generate_expression_with_expected(args[1], element_type)
+            value = self.float_atomic_storage.buffer_value(
+                args[0], element_type, value, True
+            )
             counter = self.structured_buffer_counter_reference(args[0])
             if counter is None:
                 return (
@@ -36842,7 +36880,13 @@ complex64_t crossgl_complex64_mod_assign(
                     "counter buffer */"
                 )
             index = f"(atomicAdd({counter}, uint(-1)) - 1u)"
-            return self.structured_buffer_access_expression(args[0], index)
+            value = self.structured_buffer_access_expression(args[0], index)
+            element_type = self.structured_buffer_source_element_type(
+                self.expression_result_type(args[0])
+            )
+            return self.float_atomic_storage.buffer_value(
+                args[0], element_type, value, False
+            )
         if func_name == "buffer_dimensions" and args:
             length_expr = self.structured_buffer_length_expression(args[0])
             if len(args) >= 2:
@@ -38459,6 +38503,7 @@ complex64_t crossgl_complex64_mod_assign(
             return data_arg
         parameter_qualifiers = set(param_qualifiers)
         if parameter_qualifiers.intersection({"out", "inout"}):
+            self.float_atomic_storage.validate_reference(arg)
             if (
                 "inout" in parameter_qualifiers
                 and self.glsl_reference_parameter_type_name(param_type)
@@ -38922,7 +38967,9 @@ complex64_t crossgl_complex64_mod_assign(
         if isinstance(target, MemberAccessNode):
             storage = self.glsl_expected_compare_storage(target.object)
             if storage is not None:
-                storage["target"] += f".{target.member}"
+                storage[
+                    "target"
+                ] += f".{self.glsl_member_access_name(target.object, target.member)}"
             return storage
         if not isinstance(target, ArrayAccessNode):
             return None
@@ -39038,6 +39085,9 @@ complex64_t crossgl_complex64_mod_assign(
             return None
         if func_name in self.function_return_types:
             return None
+        float_atomic = self.float_atomic_storage.atomic(func_name, args)
+        if float_atomic is not None:
+            return float_atomic
         if func_name == "atomicCompareExchangeWeak":
             self.validate_glsl_buffer_block_atomic_call(func_name, args)
             return self.generate_glsl_expected_compare_call(args)
@@ -47875,6 +47925,8 @@ complex64_t crossgl_complex64_mod_assign(
         self, vtype, name, binding, array_size=None, node=None
     ):
         element_type = self.structured_buffer_element_type(vtype)
+        element_type = self.float_atomic_storage.declaration(element_type, name)
+        definitions = self.float_atomic_storage.take_definitions()
         memory_qualifiers = self.structured_buffer_memory_qualifiers(vtype, node)
         qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
         layout = self.glsl_resource_layout_prefix("std430", binding=binding)
@@ -47887,12 +47939,12 @@ complex64_t crossgl_complex64_mod_assign(
             self.structured_buffer_instance_members[name] = instance_member
             array_suffix = f"[{array_size}]" if array_size else "[]"
             return (
-                f"{layout} {qualifier_prefix}buffer "
+                definitions + f"{layout} {qualifier_prefix}buffer "
                 f"{block_name} {{ {element_type} {instance_member}[]; }} "
                 f"{name}{array_suffix};\n"
             )
         return (
-            f"{layout} {qualifier_prefix}buffer "
+            definitions + f"{layout} {qualifier_prefix}buffer "
             f"{block_name} {{ {element_type} {name}[]; }};\n"
         )
 

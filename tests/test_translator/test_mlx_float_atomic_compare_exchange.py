@@ -126,6 +126,7 @@ def _workload(case):
 
 
 def _request(root, target, work, case):
+    count, inputs, outputs = _workload(case)
     body = """float expected = as_type<float>(incoming[tid * 2u]);
     float desired = as_type<float>(incoming[tid * 2u + 1u]);
     bool first = mlx_atomic_compare_exchange_weak_explicit(values, &expected, desired, offset);
@@ -182,11 +183,26 @@ kernel void atomic_compare(device mlx_atomic<float>* values [[buffer(0)]],
                 output_dir=f"{staging.name}/out",
                 entry_points={relative: ("atomic_compare",)},
                 workgroup_size=(width, 1, 1),
+                index_range_assertions=(
+                    (
+                        {
+                            "source": relative,
+                            "expression": "offset",
+                            "minimum": 1,
+                            "maximum": 1 if case == "contention" else count,
+                        },
+                    )
+                    if target == "opengl"
+                    else ()
+                ),
             ),
             format_output=False,
         )
         descriptor, package = _prepare_native_package(report, work)
-    count, inputs, outputs = _workload(case)
+    if target == "opengl":
+        for values in (inputs, outputs):
+            values["values"]["dtype"] = "uint32"
+            del values["values"]["encoding"]
     expected = _bound_values(descriptor, outputs)
     request = build_native_loader_dispatch_request(
         descriptor,

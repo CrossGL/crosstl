@@ -66,6 +66,7 @@ jobs:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_REQUIRE_MLX_OPENGL_GENERAL_GATHER: "1"
           CROSTL_REQUIRE_OPENGL_RESOURCE_AGGREGATES: "1"
+          CROSTL_REQUIRE_OPENGL_FLOAT_ATOMIC_STORAGE: "1"
           CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
           CROSTL_REQUIRE_TEMPLATE_WRAPPER_RUNTIME: "1"
           CROSTL_REQUIRE_FUNCTOR_MEMBER_RUNTIME: "1"
@@ -92,6 +93,7 @@ jobs:
               tests/test_translator/test_mlx_general_gather_opengl.py \
               tests/test_translator/test_float_atomic_memory.py \
               tests/test_translator/test_float_atomic_compare_exchange.py \
+              tests/test_translator/test_opengl_float_atomic_storage.py \
               tests/test_translator/test_resource_aggregates_opengl.py \
               tests/test_translator/test_void_return_effects.py \
               tests/test_translator/test_template_wrapper_runtime.py \

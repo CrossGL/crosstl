@@ -17539,7 +17539,9 @@ def test_codegen_mixed_ssbo_invalid_glsl_atomic_operand_types_raise(
     with pytest.raises(
         ValueError,
         match=(
-            "OpenGL buffer block atomic 'atomicAdd' requires a scalar int or "
+            "Cannot preserve OpenGL float atomic storage: unresolved-storage-allocation"
+            if expected_type == "float"
+            else "OpenGL buffer block atomic 'atomicAdd' requires a scalar int or "
             f"uint buffer block member for block.value: got {expected_type}"
         ),
     ):

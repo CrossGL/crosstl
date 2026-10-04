@@ -535,7 +535,7 @@ def test_workgroup_pointer_struct_member_access_materializes_pointee():
     assert codegen.expression_result_type(dot) == "int"
 
 
-def test_workgroup_atomic_rejects_non_integer_element_type():
+def test_workgroup_float_atomic_uses_word_backing():
     shader = """
     shader WorkgroupPointerFloatAtomic {
         compute {
@@ -550,11 +550,11 @@ def test_workgroup_atomic_rejects_non_integer_element_type():
     }
     """
 
-    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
-        GLSLCodeGen().generate(crosstl.translator.parse(shader))
-
-    assert exc_info.value.parameter_name == "p"
-    assert exc_info.value.reason == "atomic-element-type-unsupported"
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "shared uint main_values[8];" in generated
+    assert "atomicCompSwap(main_values[" in generated
+    assert "uintBitsToFloat(" in generated
+    assert "crossgl_pending_float_atomic" not in generated
 
 
 def test_generic_workgroup_pointer_helper_specializes_without_pointer(tmp_path):

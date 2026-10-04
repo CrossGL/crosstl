@@ -152,6 +152,7 @@ def _package(
     source=None,
     software_subgroups=True,
     index_range_assertions=(),
+    workgroup_access_assertions=(),
 ):
     if source is None:
         source = _source(kind, math.prod(shape))
@@ -171,6 +172,7 @@ def _package(
             workgroup_size=shape,
             source_options=options,
             index_range_assertions=index_range_assertions,
+            workgroup_access_assertions=workgroup_access_assertions,
         ),
         format_output=False,
     )

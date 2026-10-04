@@ -5658,7 +5658,7 @@ def test_glsl_buffer_block_nested_and_array_atomically_mutable_members():
             "float value;",
             "data.value",
             "1.0",
-            r"requires a scalar int or uint buffer block member.*got float",
+            r"Cannot preserve OpenGL float atomic storage: unresolved-storage-allocation",
         ),
         (
             "uvec2 value;",

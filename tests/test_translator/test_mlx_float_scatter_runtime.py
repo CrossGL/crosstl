@@ -143,6 +143,10 @@ def _workload(operation, layout, target="metal"):
 def _request(root, target, work, operation, layout):
     entry, source = _source(root, operation, layout)
     supplied, expected, grid = _workload(operation, layout, target)
+    if target == "opengl":
+        for value in (supplied["out"], expected):
+            value["dtype"] = "uint32"
+            del value["encoding"]
     return _prepare_request(root, target, work, entry, source, supplied, expected, grid)
 
 

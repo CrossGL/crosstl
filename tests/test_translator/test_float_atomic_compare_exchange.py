@@ -118,6 +118,18 @@ def _request(root, target, case):
         (count if shared else 1, 1, 1),
         source=_source(case),
         software_subgroups=False,
+        index_range_assertions=(
+            (
+                {
+                    "source": "products.metal",
+                    "expression": "reference.offset + index",
+                    "minimum": 2,
+                    "maximum": count + 1,
+                },
+            )
+            if target == "opengl" and case == "aggregate"
+            else ()
+        ),
     )
     stride = 1 if case in {"scalar", "pointer"} else 3
     initial = [GUARD] * ((count + 4) * stride)
@@ -142,10 +154,10 @@ def _request(root, target, case):
 
     def typed(values, floating=False):
         return {
-            "dtype": "float32" if floating else "uint32",
+            "dtype": "float32" if floating and target != "opengl" else "uint32",
             "shape": [count + 4, stride] if floating and stride > 1 else [len(values)],
             "values": values,
-            **({"encoding": FLOAT32_BITS} if floating else {}),
+            **({"encoding": FLOAT32_BITS} if floating and target != "opengl" else {}),
         }
 
     inputs = {
@@ -223,23 +235,22 @@ def test_float_compare_exchange_executes_natively(tmp_path, case):
 
 
 @pytest.mark.parametrize("case", CASES)
-def test_float_compare_exchange_opengl_rejects_unsupported_storage(tmp_path, case):
+def test_float_compare_exchange_opengl_preserves_index_contract(tmp_path, case):
     report = _report(tmp_path, _source(case), "opengl")
-    assert report["summary"]["failedCount"] == 1
-    assert all(
-        not (tmp_path / artifact["path"]).exists() for artifact in report["artifacts"]
-    )
-    code = {
-        "aggregate": "project.translate.opengl-index-type-unsupported",
-        "workgroup": "project.translate.opengl-workgroup-pointer-unsupported",
-        "collision": "project.translate.opengl-workgroup-pointer-unsupported",
-    }.get(case, "project.translate.failed")
-    assert [item["code"] for item in report["diagnostics"]] == [code]
-    if code == "project.translate.failed":
-        assert (
-            "atomicCompareExchangeWeak requires matching integer target and expected"
-            in report["diagnostics"][0]["message"]
+    if case == "aggregate":
+        assert report["summary"]["failedCount"] == 1
+        assert all(
+            not (tmp_path / artifact["path"]).exists()
+            for artifact in report["artifacts"]
         )
+        assert [item["code"] for item in report["diagnostics"]] == [
+            "project.translate.opengl-index-type-unsupported"
+        ]
+    else:
+        assert report["summary"]["failedCount"] == 0
+        generated = (tmp_path / report["artifacts"][0]["path"]).read_text()
+        assert "atomicCompSwap(" in generated
+        assert "crossgl_pending_float_atomic" not in generated
 
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))

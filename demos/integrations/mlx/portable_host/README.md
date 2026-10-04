@@ -292,8 +292,25 @@ Every case retains 32 output guard words. Required macOS and Windows checks run
 the generated kernels; macOS also executes the original pinned wrapper. This is
 kernel execution coverage, not float scatter routing through the MLX host API.
 
-OpenGL float atomic storage is still unsupported. Kernel controls are separate
-from the host profile above and do not establish complete upstream-suite parity.
+OpenGL lowers binary32 atomic allocations to unsigned-word storage and keeps
+logical float arithmetic behind bit-preserving loads and stores. Struct-backed
+allocations use separate physical types; private struct values retain their
+original types. Atomic load, store, exchange, addition and compare-exchange use
+core integer atomics, without vendor float-atomic extensions. Compare-exchange
+uses bitwise equality and preserves expected-value writeback.
+
+The Linux gate runs the reduced memory/compare cases, ordinary storage updates,
+unchanged MLX atomic helpers and the same sixteen scatter cases. Reflection
+describes the physical uint32 storage. Test uploads and readbacks carry those
+words unchanged; non-atomic float input buffers remain float32. Configured index
+and shared-access bounds are tied to each fixture's actual dispatch geometry.
+Mixed interface blocks, narrow-float or matrix-backed atomic allocations,
+whole-array transfers, mixed-precision updates and escaping mutable logical
+references retain structured diagnostics.
+
+OpenGL float scatter routing through the MLX host adapter is not enabled yet.
+These package-level numerical controls do not establish complete upstream-suite
+parity or arbitrary floating-point reduction-order equivalence.
 
 Generated Metal shared float loads, stores and compare-exchange use atomic uint
 storage with bitcasts, so they also compile under Metal 4.0. Native shared float
@@ -866,7 +883,8 @@ A separate required compiler gate translates the pinned
 Shader Model 6.2 and native 16-bit types. That gate retains the source identity,
 translation report and compiled module. It does not establish numerical
 correctness of the full backward kernel or add that operation to the MLX host
-adapter. OpenGL floating-point atomic lowering remains outstanding.
+adapter. The OpenGL word-backed float atomic controls above do not establish
+numerical parity for the complete gated-delta backward kernel.
 
 Float atomic load/store checks require native execution on Metal and DirectX,
 including the unchanged pinned `mlx_atomic_load_explicit<float>` and

@@ -148,6 +148,32 @@ def _request(root, target, operation, case):
         (count if shared else 1, 1, 1),
         source=_source(operation, case),
         software_subgroups=False,
+        index_range_assertions=(
+            (
+                {
+                    "source": "products.metal",
+                    "expression": "reference.offset + index",
+                    "minimum": 2,
+                    "maximum": count + 1,
+                },
+            )
+            if target == "opengl" and case == "aggregate"
+            else ()
+        ),
+        workgroup_access_assertions=(
+            (
+                {
+                    "source": "products.metal",
+                    "entry_point": "atomic_memory",
+                    "function": "initialize",
+                    "parameter": "shared",
+                    "minimum": 0,
+                    "maximum": count - 1,
+                },
+            )
+            if target == "opengl" and case == "nested-return"
+            else ()
+        ),
     )
     stride = 1 if case in {"scalar", "pointer"} else 3
     initial = [GUARD] * ((count + 4) * stride)
@@ -173,6 +199,7 @@ def _request(root, target, operation, case):
         counts[2 * i + 1] = i + int(active and operation == "store" and case != "loop")
 
     def typed(values, *, floating=False, shape=None):
+        floating = floating and target != "opengl"
         return {
             "dtype": "float32" if floating else "uint32",
             "shape": shape or [len(values)],
@@ -261,22 +288,13 @@ def test_float_atomic_memory_executes_natively(tmp_path, operation, case):
 
 
 @pytest.mark.parametrize("operation", ("load", "store"))
-def test_float_atomic_memory_opengl_does_not_publish_unsupported_storage(
-    tmp_path, operation
-):
+def test_float_atomic_memory_opengl_publishes_word_storage(tmp_path, operation):
     report = _report(tmp_path, _source(operation, "member"), "opengl")
-    assert report["summary"]["failedCount"] == 1
-    assert all(
-        not (tmp_path / artifact["path"]).exists() for artifact in report["artifacts"]
-    )
-    name = "atomicLoad" if operation == "load" else "atomicStore"
-    assert [item["code"] for item in report["diagnostics"]] == [
-        "project.translate.failed"
-    ]
-    assert (
-        f"{name} requires a scalar int or uint target"
-        in report["diagnostics"][0]["message"]
-    )
+    assert report["summary"]["failedCount"] == 0
+    generated = (tmp_path / report["artifacts"][0]["path"]).read_text()
+    assert "crossgl_words_Counter" in generated
+    assert "uintBitsToFloat(atomicOr(" in generated
+    assert "crossgl_pending_float_atomic" not in generated
 
 
 def _resource_request(root, target, operation):

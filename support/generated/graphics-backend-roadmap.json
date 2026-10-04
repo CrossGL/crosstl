@@ -738,9 +738,14 @@
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_append_consume_structured_buffers_use_sidecar_counters",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_append_consume_structured_buffer_helpers_thread_sidecar_counters",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_append_structured_buffer_arrays_use_sidecar_counter_arrays",
+            "tests/test_translator/test_opengl_float_atomic_storage.py::def test_float_memory_has_physical_word_storage",
+            "tests/test_translator/test_opengl_float_atomic_storage.py::def test_float_compare_has_physical_word_storage",
+            "tests/test_translator/test_opengl_float_atomic_storage.py::def test_mixed_struct_transfer_and_neighbor_updates",
+            "tests/test_translator/test_opengl_float_atomic_storage.py::def test_unchanged_mlx_atomic_helpers_use_word_storage",
+            "tests/test_translator/test_opengl_float_atomic_storage.py::def test_unchanged_mlx_float_scatter_uses_word_storage",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract"
           ],
-          "notes": "Covers StructuredBuffer/RWStructuredBuffer as SSBOs, fixed and inferred resource arrays, load/store/dimensions helpers, and AppendStructuredBuffer/ConsumeStructuredBuffer lowering through generated sidecar counter SSBOs.",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer as SSBOs, fixed and inferred resource arrays, load/store/dimensions helpers, and AppendStructuredBuffer/ConsumeStructuredBuffer lowering through generated sidecar counter SSBOs. Binary32 atomic allocations use uint word storage with logical float access conversion, physical struct clones, core integer atomics and bitwise compare-exchange. Reduced controls and unchanged MLX atomic/scatter wrappers require native Linux execution. Mixed interface blocks, matrix-backed atomics and escaping mutable logical references remain diagnostic; complete MLX host integration is not implied.",
           "status": "supported"
         }
       }
@@ -1748,8 +1753,9 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_workgroup_barrier_builtin_lowers_to_native_barrier",
-            "tests/test_translator/test_float_atomic_compare_exchange.py::def test_float_compare_exchange_opengl_rejects_unsupported_storage",
-            "tests/test_translator/test_float_atomic_memory.py::def test_float_atomic_memory_opengl_does_not_publish_unsupported_storage",
+            "tests/test_translator/test_float_atomic_compare_exchange.py::def test_float_compare_exchange_opengl_preserves_index_contract",
+            "tests/test_translator/test_float_atomic_memory.py::def test_float_atomic_memory_opengl_publishes_word_storage",
+            "tests/test_translator/test_opengl_float_atomic_storage.py::def test_float_storage_requires_native_linux_execution",
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_translates",
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_executes_natively",
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_order_is_not_silently_weakened",
