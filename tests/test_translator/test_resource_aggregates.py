@@ -33,6 +33,7 @@ from crosstl.translator.codegen.resource_aggregates import (
     ResourceAggregateError,
     lower_resource_aggregates,
 )
+from tests.ci_helpers import assert_paths_covered
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
@@ -528,7 +529,7 @@ def test_resource_aggregate_gate_requires_native_execution():
 
     workflow = (
         Path(__file__).resolve().parents[2]
-        / ".github/workflows/mlx-gather-roundtrip.yml"
+        / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     step = ci_coverage.workflow_step_section(
         workflow, "Validate indexed DirectX gather and resource aggregates"
@@ -536,7 +537,7 @@ def test_resource_aggregate_gate_requires_native_execution():
     assert f'{REQUIRE_ENV}: "1"' in step
     assert 'CROSTL_REQUIRE_MLX_DIRECTX_GENERAL_GATHER: "1"' in step
     assert (
-        "test_mlx_general_gather_directx.py" in step
+        "test_general_gather_directx.py" in step
         and "test_resource_aggregates.py" in step
     )
     assert "--timeout-seconds 1200" in step and "--junitxml=" in step
@@ -555,6 +556,7 @@ def test_resource_aggregate_gate_requires_native_execution():
     assert "set -euo pipefail" in install
     assert "tee .mlx-gather-directx/dependencies.log" in install
     for event in ("push", "pull_request"):
-        assert "tests/test_translator/**" in ci_coverage.workflow_event_path_filters(
-            workflow, event
+        assert_paths_covered(
+            ci_coverage.workflow_event_path_filters(workflow, event),
+            "tests/test_translator/**",
         )

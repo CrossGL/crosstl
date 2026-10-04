@@ -499,7 +499,7 @@ kernel void copy(const device bfloat* values [[buffer(0)]], device bfloat* resul
 def test_bfloat_conversion_native_gate_is_required():
     from tools import ci_coverage
 
-    workflow = Path(".github/workflows/mlx-gather-roundtrip.yml").read_text()
+    workflow = Path(".github/workflows/demo-project-testing.yml").read_text()
     for name in (
         "Validate indexed OpenGL gather and resource aggregates",
         "Validate indexed DirectX gather and resource aggregates",

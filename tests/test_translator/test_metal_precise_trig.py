@@ -447,7 +447,7 @@ def test_precise_trig_executes(tmp_path):
 def test_ci_requires_precise_trig_execution():
     workflow = (
         Path(__file__).resolve().parents[2]
-        / ".github/workflows/mlx-project-porting.yml"
+        / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     step = workflow.split("      - name: Validate Metal builtin ownership\n", 1)[
         1

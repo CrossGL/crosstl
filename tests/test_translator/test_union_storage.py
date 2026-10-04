@@ -292,7 +292,7 @@ def test_union_storage_initializer_uses_one_physical_member(tmp_path, initialize
 
 def test_union_storage_and_opengl_random_are_required_in_ci():
     workflow = (
-        Path(__file__).parents[2] / ".github/workflows/mlx-gather-roundtrip.yml"
+        Path(__file__).parents[2] / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     assert workflow.count(f'{REQUIRE_ENV}: "1"') == 3
     assert workflow.count("tests/test_translator/test_union_storage.py") == 3

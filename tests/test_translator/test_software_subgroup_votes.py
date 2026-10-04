@@ -29,6 +29,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     GLSLCodeGen,
     OpenGLSoftwareSubgroupError,
 )
+from tests.ci_helpers import assert_paths_covered
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_native_runtime import _native_request
@@ -201,7 +202,7 @@ def test_software_votes_are_required_in_native_workflow():
     from tools import ci_coverage
 
     root = Path(__file__).resolve().parents[2]
-    workflow = (root / ".github/workflows/mlx-portable-host.yml").read_text()
+    workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
     step = ci_coverage.workflow_step_section(
         workflow, "Validate software subgroup votes"
     )
@@ -212,13 +213,13 @@ def test_software_votes_are_required_in_native_workflow():
     assert "--timeout-seconds" in step and "--junitxml" in step
     assert "if:" not in step
     for event in ("pull_request", "push"):
-        assert (
-            "tests/test_translator/test_software_subgroup_votes.py"
-            in ci_coverage.workflow_event_path_filters(workflow, event)
+        assert_paths_covered(
+            ci_coverage.workflow_event_path_filters(workflow, event),
+            "tests/test_translator/test_software_subgroup_votes.py",
         )
-        assert (
-            "tests/test_translator/test_opengl_subgroup_wrappers.py"
-            in ci_coverage.workflow_event_path_filters(workflow, event)
+        assert_paths_covered(
+            ci_coverage.workflow_event_path_filters(workflow, event),
+            "tests/test_translator/test_opengl_subgroup_wrappers.py",
         )
 
 

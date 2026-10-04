@@ -10,9 +10,9 @@ from crosstl.project import (
     build_native_loader_dispatch_request,
     translate_project,
 )
+from tests.runtime_helpers import _validate
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_loop_updates import _execute
-from tests.test_translator.test_mlx_current_gather import _validate
 from tests.test_translator.test_software_subgroup_product import _package
 
 REQUIRE_ENV = "CROSTL_REQUIRE_METAL_EMPTY_ARRAYS"

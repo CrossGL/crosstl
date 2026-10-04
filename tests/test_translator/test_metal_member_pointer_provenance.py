@@ -11,6 +11,7 @@ from crosstl.project import (
     build_native_loader_dispatch_request,
     translate_project,
 )
+from tests.ci_helpers import assert_paths_covered
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
@@ -262,7 +263,8 @@ def test_member_pointer_metal_gate_is_required():
     from tools import ci_coverage
 
     workflow = (
-        Path(__file__).resolve().parents[2] / ".github/workflows/mlx-metal-host.yml"
+        Path(__file__).resolve().parents[2]
+        / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     step = ci_coverage.workflow_step_section(
         workflow, "Validate pointer member round trips"
@@ -275,7 +277,7 @@ def test_member_pointer_metal_gate_is_required():
     assert "if:" not in step and "continue-on-error" not in step
     assert "cancel-in-progress: false" in workflow
     for event in ("push", "pull_request"):
-        assert (
-            "tests/test_translator/test_metal_member_pointer_provenance.py"
-            in ci_coverage.workflow_event_path_filters(workflow, event)
+        assert_paths_covered(
+            ci_coverage.workflow_event_path_filters(workflow, event),
+            "tests/test_translator/test_metal_member_pointer_provenance.py",
         )

@@ -182,12 +182,12 @@ environment with `setuptools`, `wheel`, `cmake`, `ninja`, `nanobind`, `numpy` an
 `packaging` installed. Install CrossTL in the environment running the harness.
 
 ```sh
-python demos/integrations/mlx/run_mlx_metal_host.py prepare \
+python demos/integrations/mlx/run_metal_host.py prepare \
   --mlx-root /path/to/mlx --output-dir /path/to/proof/preparation
 CMAKE_ARGS='-DMLX_METAL_JIT=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF' \
   CMAKE_BUILD_PARALLEL_LEVEL=4 /path/to/mlx-env/bin/python -m pip install \
   -e /path/to/mlx --no-build-isolation
-python demos/integrations/mlx/run_mlx_metal_host.py verify \
+python demos/integrations/mlx/run_metal_host.py verify \
   --mlx-root /path/to/mlx --python /path/to/mlx-env/bin/python \
   --output-dir /path/to/proof/execution
 ```

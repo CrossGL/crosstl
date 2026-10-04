@@ -356,7 +356,7 @@ def test_atomic_loads_are_required_on_each_native_target():
 
     workflow = (
         Path(__file__).resolve().parents[2]
-        / ".github/workflows/mlx-gather-roundtrip.yml"
+        / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     for name in (
         "Validate general gather and empty arrays",
@@ -366,7 +366,7 @@ def test_atomic_loads_are_required_on_each_native_target():
         step = ci_coverage.workflow_step_section(workflow, name)
         assert f'{REQUIRE_ENV}: "1"' in step
         assert "test_atomic_load_runtime.py" in step
-        assert "test_mlx_atomic_load_runtime.py" in step
+        assert "test_atomic_load_runtime.py" in step
         timeout = 1800 if name == "Validate general gather and empty arrays" else 1200
         assert f"--timeout-seconds {timeout}" in step
         assert "if:" not in step and "continue-on-error" not in workflow

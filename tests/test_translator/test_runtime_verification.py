@@ -2705,7 +2705,9 @@ def test_mlx_file_scope_immutable_lookup_fixture_is_value_sensitive():
 
 
 def test_mlx_workflow_requires_directx_lookup_numerical_execution():
-    workflow = (ROOT / ".github" / "workflows" / "mlx-project-porting.yml").read_text(
+    from tests.ci_helpers import assert_workflow_triggers
+
+    workflow = (ROOT / ".github" / "workflows" / "demo-project-testing.yml").read_text(
         encoding="utf-8"
     )
     for watched_path in (
@@ -2713,7 +2715,7 @@ def test_mlx_workflow_requires_directx_lookup_numerical_execution():
         "tests/test_translator/test_native_runtime_drivers.py",
         "tests/test_translator/test_runtime_verification.py",
     ):
-        assert workflow.count(f'- "{watched_path}"') == 2
+        assert_workflow_triggers(workflow, watched_path)
 
     compile_start = workflow.index("- name: Run MLX project-porting checks")
     runtime_start = workflow.index(

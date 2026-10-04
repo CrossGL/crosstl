@@ -1,4 +1,47 @@
-# MLX Project Porting Integration
+# MLX Integration Demo
+
+MLX is an external test corpus for CrossTL's repository translation and runtime
+APIs. Its host adaptations, pinned contracts, execution evidence checks and tests
+belong to this demo; the translator does not depend on MLX.
+
+## Directory Guide
+
+| Path | Purpose |
+| --- | --- |
+| `project.toml`, `run_porting.py` | Repository scan and translation harness |
+| `contracts/` | Pinned discovery, artifact and dispatch contracts |
+| `portable_host/` | DirectX/OpenGL host adapter and bounded execution checks |
+| `run_metal_host.py`, [METAL_HOST.md](METAL_HOST.md) | Generated Metal host integration |
+| `run_native_metal.py`, [NATIVE_METAL.md](NATIVE_METAL.md) | Unchanged upstream Metal reference |
+| `tests/` | Harness, contract, discovery and CI tests |
+| `tests/host/` | Portable host adapter tests |
+| `tests/kernels/` | Pinned kernel translation and native execution tests |
+| `tests/fixtures/` | MLX-specific reference programs |
+
+Run the demo's local tests from the repository root:
+
+```sh
+python -m pytest -q -n auto demos/integrations/mlx/tests
+```
+
+Native execution remains opt-in locally and mandatory in its corresponding CI
+job. The [Project Demo Testing workflow](../../../.github/workflows/demo-project-testing.yml)
+contains the Windows DirectX, Linux OpenGL and macOS Metal jobs, including the
+reference baseline and host integration checks. Each job retains its own pinned
+source revision, required toolchains, numerical assertions and evidence uploads.
+Complete DirectX corpus compilation uses pinned DXC on Ubuntu; Direct3D runtime
+execution remains on Windows. Metal compilation and execution remain on macOS.
+See the [CI coverage policy](../../../.github/TESTING.md) for the platform split.
+Scheduled runs cover the existing corpus audits; changes to translation code,
+tests, demo inputs or toolchain configuration run the complete workflow on pull
+requests and main-branch pushes. In-progress proof runs are not cancelled by a
+newer revision. Core and demo tests also remain part of the complete test suite.
+
+The host adaptation documentation records upstream changes explicitly. A passing
+kernel or bounded host check is not a claim that the entire upstream MLX suite
+passes on a translated backend.
+
+## Corpus Revisions
 
 This directory contains the project-level MLX porting checks used by CrossTL.
 The checks are pinned to MLX commit
@@ -35,7 +78,7 @@ backward kernels. These files are included in discovery; they are not covered by
 the arg-reduce translation and numerical checks above.
 
 A separate native gate exercises all 15 discovered `Powercomplex64` entry
-shapes at the same `d9add9d` pin. Its 873 complex outputs cover scalar/vector
+shapes at the same `9c3d3557` pin. Its 873 complex outputs cover scalar/vector
 broadcasting, multidimensional grids, non-contiguous inputs, zero strides,
 32/64-bit index variants, and partial final tiles in four-dimensional gathers.
 Every shape retains its random cases and tests both signed-zero sides of the
@@ -58,7 +101,7 @@ not cover arbitrary dynamic indexing.
 
 ## Scope
 
-The independent [general-gather round-trip workflow](../../../.github/workflows/mlx-gather-roundtrip.yml)
+The general-gather jobs in [Project Demo Testing](../../../.github/workflows/demo-project-testing.yml)
 uses the unchanged JIT template and indexing headers at
 `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. It executes 24 original/generated
 Metal workloads through public project, package and native-dispatch APIs.
@@ -737,13 +780,13 @@ git -C /tmp/mlx checkout 4367c73b60541ddd5a266ce4644fd93d20223b6e
 Run the project-porting harness from the CrossTL repository:
 
 ```bash
-python demos/integrations/mlx/run_mlx_porting.py --mlx-root /tmp/mlx
+python demos/integrations/mlx/run_porting.py --mlx-root /tmp/mlx
 ```
 
 Run the full-corpus artifact scout:
 
 ```bash
-python demos/integrations/mlx/run_mlx_porting.py \
+python demos/integrations/mlx/run_porting.py \
   --mode full-corpus \
   --mlx-root /tmp/mlx \
   --summary /tmp/mlx/.crosstl-mlx-porting/full-corpus-summary.json
@@ -757,7 +800,7 @@ OpenGL and Vulkan execution of the generated MLX `arange` artifacts:
 sudo apt-get update
 sudo apt-get install -y glslang-tools libegl1 libgl1-mesa-dri libglx-mesa0 mesa-vulkan-drivers spirv-tools vulkan-tools
 python -m pip install moderngl==5.12.0 PyOpenGL==3.1.10 vulkan==1.3.275.1
-python demos/integrations/mlx/run_mlx_porting.py \
+python demos/integrations/mlx/run_porting.py \
   --mlx-root /tmp/mlx \
   --require-opengl-frontier-toolchain \
   --require-opengl-gemv-toolchain \
@@ -793,7 +836,7 @@ all three reference-accessor artifact proofs, the selected LayerNorm entries,
 and the selected complex-copy entry:
 
 ```bash
-python demos/integrations/mlx/run_mlx_porting.py \
+python demos/integrations/mlx/run_porting.py \
   --mlx-root C:/path/to/mlx \
   --require-directx-toolchain \
   --require-directx-gemv-compiler-frontier
@@ -843,13 +886,13 @@ translated artifact through the native loader on Direct3D 12 WARP:
 $env:CROSTL_MLX_ROOT = "C:/path/to/mlx"
 $env:CROSTL_REQUIRE_MLX_FFT_DIRECTX_NATIVE_LOADER = "1"
 python -m pytest -q -n auto `
-  tests/test_translator/test_mlx_fft_native_loader.py::test_pinned_mlx_fft_executes_through_directx_native_loader
+  demos/integrations/mlx/tests/kernels/test_fft_native_loader.py::test_pinned_mlx_fft_executes_through_directx_native_loader
 ```
 
 On macOS, require native compilation of the generated Metal round-trip artifact:
 
 ```bash
-python demos/integrations/mlx/run_mlx_porting.py \
+python demos/integrations/mlx/run_porting.py \
   --mlx-root /tmp/mlx \
   --require-metal-toolchain
 ```
@@ -900,7 +943,7 @@ To run the gate locally with `glslangValidator` and `spirv-val` on `PATH`:
 CROSTL_MLX_ROOT=/path/to/pinned/mlx \
 CROSTL_REQUIRE_MLX_QUANTIZED_WIDE_OPENGL=1 \
 python -m pytest -q -n auto \
-  tests/test_translator/test_mlx_quantized_wide_opengl.py
+  demos/integrations/mlx/tests/kernels/test_quantized_wide_opengl.py
 ```
 
 This is selected-entry compiler coverage, not completion of all 2,052 quantized
@@ -1961,7 +2004,7 @@ evaluation with:
 
 ```bash
 .venv/bin/python -m pytest -q -n auto \
-  tests/test_mlx_dispatch_contract_fixture.py
+  demos/integrations/mlx/tests/test_dispatch_contract_fixture.py
 ```
 
 The checked-in
@@ -2052,7 +2095,7 @@ and bounded workload set with:
 
 ```bash
 .venv/bin/python -m pytest -q -n auto \
-  tests/test_mlx_logsumexp_dispatch_contract_fixture.py
+  demos/integrations/mlx/tests/test_logsumexp_dispatch_contract_fixture.py
 ```
 
 The checked-in
@@ -2412,7 +2455,7 @@ bounded workload set with:
 
 ```bash
 .venv/bin/python -m pytest -q -n auto \
-  tests/test_mlx_rms_norm_dispatch_contract_fixture.py
+  demos/integrations/mlx/tests/test_rms_norm_dispatch_contract_fixture.py
 ```
 
 The focused `prove_rms_norm_specialization.py` gate fixes the project-level

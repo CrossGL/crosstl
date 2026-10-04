@@ -21,6 +21,7 @@ from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.glsl_float_atomic_storage import (
     OpenGLFloatAtomicStorageError,
 )
+from tests.runtime_helpers import _prepare_native_package
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_float_atomic_compare_exchange import (
     CASES as COMPARE_CASES,
@@ -31,8 +32,6 @@ from tests.test_translator.test_float_atomic_compare_exchange import (
 from tests.test_translator.test_float_atomic_memory import CASES, _request
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
-from tests.test_translator.test_mlx_current_binary_shapes import _prepare_native_package
-from tests.test_translator.test_mlx_float_scatter_runtime import CASES as SCATTER_CASES
 
 REQUIRE_ENV = "CROSTL_REQUIRE_OPENGL_FLOAT_ATOMIC_STORAGE"
 
@@ -42,7 +41,7 @@ def test_float_storage_requires_native_linux_execution():
 
     workflow = (
         Path(__file__).resolve().parents[2]
-        / ".github/workflows/mlx-gather-roundtrip.yml"
+        / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     step = ci_coverage.workflow_step_section(
         workflow, "Validate indexed OpenGL gather and resource aggregates"
@@ -354,75 +353,3 @@ def test_mixed_struct_transfer_and_neighbor_updates(tmp_path):
     _compile(generated, "opengl", tmp_path)
     if os.environ.get(REQUIRE_ENV) == "1":
         _execute(request, expected, tmp_path)
-
-
-@pytest.mark.parametrize(
-    "case", ("load", "store", "compare", "multiply", "minimum", "maximum", "contention")
-)
-def test_unchanged_mlx_atomic_helpers_use_word_storage(tmp_path, case):
-    if os.environ.get(REQUIRE_ENV) != "1":
-        pytest.skip(f"set {REQUIRE_ENV}=1 for native unchanged MLX helpers")
-    assert sys.platform == "linux"
-    from demos.integrations.mlx.portable_host.prepare import COMMIT
-    from tests.test_translator.test_mlx_atomic_load_runtime import HEADER
-    from tests.test_translator.test_mlx_float_atomic_compare_exchange import (
-        _request as compare_request,
-    )
-    from tests.test_translator.test_mlx_float_atomic_memory import (
-        _request as memory_request,
-    )
-    from tests.test_translator.test_mlx_general_scatter_runtime import _verify_source
-
-    root = Path(os.environ["CROSTL_MLX_CURRENT_ROOT"]).resolve()
-    hashes = _verify_source(root, (HEADER,))
-    try:
-        request_builder = (
-            memory_request if case in {"load", "store"} else compare_request
-        )
-        _, request, expected = request_builder(root, "opengl", tmp_path, case)
-        (tmp_path / "workload.json").write_text(
-            json.dumps({"commit": COMMIT, "headers": hashes, "case": case}),
-            encoding="utf-8",
-        )
-        _execute(request, expected, tmp_path)
-    finally:
-        assert _verify_source(root, (HEADER,)) == hashes
-
-
-@pytest.mark.parametrize("operation,layout", SCATTER_CASES)
-def test_unchanged_mlx_float_scatter_uses_word_storage(tmp_path, operation, layout):
-    if os.environ.get(REQUIRE_ENV) != "1":
-        pytest.skip(f"set {REQUIRE_ENV}=1 for native unchanged MLX scatter")
-    assert sys.platform == "linux"
-    from demos.integrations.mlx.portable_host.prepare import COMMIT
-    from tests.test_translator.test_mlx_atomic_load_runtime import HEADER
-    from tests.test_translator.test_mlx_float_scatter_runtime import (
-        _request as scatter_request,
-    )
-    from tests.test_translator.test_mlx_general_scatter_runtime import (
-        HEADERS,
-        JIT,
-        _verify_source,
-    )
-
-    root = Path(os.environ["CROSTL_MLX_CURRENT_ROOT"]).resolve()
-    hashes = _verify_source(root, (*HEADERS, JIT, HEADER))
-    try:
-        entry, _, request, expected = scatter_request(
-            root, "opengl", tmp_path, operation, layout
-        )
-        (tmp_path / "workload.json").write_text(
-            json.dumps(
-                {
-                    "commit": COMMIT,
-                    "headers": hashes,
-                    "entry": entry,
-                    "operation": operation,
-                    "layout": layout,
-                }
-            ),
-            encoding="utf-8",
-        )
-        _execute(request, expected, tmp_path)
-    finally:
-        assert _verify_source(root, (*HEADERS, JIT, HEADER)) == hashes

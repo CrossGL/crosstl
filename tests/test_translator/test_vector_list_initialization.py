@@ -275,7 +275,7 @@ def test_vector_list_native_checks_are_required():
 
     workflow = (
         Path(__file__).resolve().parents[2]
-        / ".github/workflows/mlx-gather-roundtrip.yml"
+        / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     for name in (
         "Validate Metal byte and vector storage",

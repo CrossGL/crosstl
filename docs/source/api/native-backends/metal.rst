@@ -19,7 +19,7 @@ original and translated module pairs, then execute both entries and check their
 individual results.
 
 Precise Inverse Trigonometry
----------------------------
+------------------------------
 
 ``metal::precise::asin`` and ``metal::precise::acos`` retain their precision
 mode through portable float32 helpers instead of the target's ordinary
@@ -44,7 +44,7 @@ target source, including entry-scoped artifacts, rather than relying on source
 comments surviving parsing.
 
 Precise Sine and Cosine
-----------------------
+-------------------------
 
 ``metal::precise::sin`` and ``metal::precise::cos`` use portable binary32
 helpers for scalar and two- to four-component vectors. Large finite arguments
@@ -69,7 +69,7 @@ NaN payload identity, exception flags and other precise transcendental
 operations are not covered by this contract.
 
 Precise Inverse Hyperbolic Cosine
---------------------------------
+-----------------------------------
 
 ``metal::precise::acosh`` uses a portable binary32 helper for scalar and two-
 to four-component vectors. A near-one series avoids cancellation, a stable
@@ -90,7 +90,7 @@ near-one region through ``mx.arccosh`` at unchanged upstream tolerances.
 These sampled execution checks are not an exhaustive binary32 error proof.
 
 Precise Arctangent
------------------
+--------------------
 
 ``metal::precise::atan`` uses a binary32 scalar/vector helper with reciprocal
 and pi/4 range reduction and an alternating series. Tiny inputs return their

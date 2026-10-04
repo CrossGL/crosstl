@@ -448,7 +448,7 @@
           1
         ],
         "status": "required-on-ci",
-        "test": "tests/test_translator/test_mlx_logsumexp_native_loader.py::test_pinned_mlx_logsumexp_executes_through_opengl_native_loader"
+        "test": "demos/integrations/mlx/tests/kernels/test_logsumexp_native_loader.py::test_pinned_mlx_logsumexp_executes_through_opengl_native_loader"
       },
       "remaining_scope": {
         "workload": "block-float32-axis-1025",
@@ -536,7 +536,7 @@
           "platform": "windows-latest",
           "runtime": "direct3d-12-warp",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_copy_native_loader.py::test_pinned_mlx_copy_executes_through_directx_native_loader"
+          "test": "demos/integrations/mlx/tests/kernels/test_copy_native_loader.py::test_pinned_mlx_copy_executes_through_directx_native_loader"
         }
       },
       "opengl": {
@@ -560,7 +560,7 @@
           "platform": "ubuntu-latest",
           "runtime": "headless-egl-software",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_copy_native_loader.py::test_pinned_mlx_copy_executes_through_opengl_native_loader"
+          "test": "demos/integrations/mlx/tests/kernels/test_copy_native_loader.py::test_pinned_mlx_copy_executes_through_opengl_native_loader"
         }
       }
     },
@@ -685,7 +685,7 @@
     "native_runtime": {
       "runtime": "direct3d-12-warp",
       "status": "passed",
-      "test": "tests/test_translator/test_mlx_fft_native_loader.py::test_pinned_mlx_fft_executes_through_directx_native_loader",
+      "test": "demos/integrations/mlx/tests/kernels/test_fft_native_loader.py::test_pinned_mlx_fft_executes_through_directx_native_loader",
       "workgroup_count": [
         1,
         1,
@@ -766,7 +766,7 @@
           "platform": "windows-latest",
           "runtime": "direct3d-12-warp",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_dot_native_loader.py::test_pinned_mlx_dot_executes_through_directx_native_loader"
+          "test": "demos/integrations/mlx/tests/kernels/test_dot_native_loader.py::test_pinned_mlx_dot_executes_through_directx_native_loader"
         }
       },
       "opengl": {
@@ -779,7 +779,7 @@
           "compiler": "glslangValidator",
           "validator": "spirv-val",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_dot_native_loader.py::test_pinned_mlx_dot_translates_to_guarded_opengl_artifact"
+          "test": "demos/integrations/mlx/tests/kernels/test_dot_native_loader.py::test_pinned_mlx_dot_translates_to_guarded_opengl_artifact"
         },
         "native_runtime_executed": false,
         "software_runtime_artifact": {
@@ -805,7 +805,7 @@
             "runtime": "mesa-llvmpipe-opengl",
             "adapter": "opengl-native-runtime",
             "status": "required-on-ci",
-            "test": "tests/test_translator/test_mlx_dot_native_loader.py::test_pinned_mlx_dot_executes_with_opengl_software_subgroups"
+            "test": "demos/integrations/mlx/tests/kernels/test_dot_native_loader.py::test_pinned_mlx_dot_executes_with_opengl_software_subgroups"
           }
         }
       },
@@ -816,7 +816,7 @@
         "missing_capability": "pointer.reinterpretation",
         "reason": "target-lowering-unavailable",
         "tracked_by": "https://github.com/CrossGL/crosstl/issues/1903",
-        "test": "tests/test_translator/test_mlx_dot_native_loader.py::test_pinned_mlx_dot_records_metal_roundtrip_boundary"
+        "test": "demos/integrations/mlx/tests/kernels/test_dot_native_loader.py::test_pinned_mlx_dot_records_metal_roundtrip_boundary"
       }
     },
     "workload": {
@@ -887,7 +887,7 @@
           "runtime": "direct3d-12-warp",
           "compiler": "dxc",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_square_executes_through_directx_native_loader"
+          "test": "demos/integrations/mlx/tests/kernels/test_unary_native_loader.py::test_pinned_mlx_unary_square_executes_through_directx_native_loader"
         }
       },
       "metal": {
@@ -903,7 +903,7 @@
           "platform": "macos-latest",
           "compiler": "xcrun -sdk macosx metal",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_square_roundtrips_through_metal"
+          "test": "demos/integrations/mlx/tests/kernels/test_unary_native_loader.py::test_pinned_mlx_unary_square_roundtrips_through_metal"
         },
         "numerical_runtime_included": false
       },
@@ -916,7 +916,7 @@
           "runtime": "mesa-opengl-4.3",
           "compiler": "glslangValidator",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_square_executes_through_opengl_native_loader"
+          "test": "demos/integrations/mlx/tests/kernels/test_unary_native_loader.py::test_pinned_mlx_unary_square_executes_through_opengl_native_loader"
         }
       }
     },
@@ -1000,7 +1000,7 @@
           "runtime": "direct3d-12-warp",
           "compiler": "dxc",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_arccos_executes_through_directx_native_loader"
+          "test": "demos/integrations/mlx/tests/kernels/test_unary_native_loader.py::test_pinned_mlx_unary_arccos_executes_through_directx_native_loader"
         }
       },
       "metal": {
@@ -1016,7 +1016,7 @@
           "platform": "macos-latest",
           "compiler": "xcrun -sdk macosx metal",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_arccos_roundtrips_through_metal"
+          "test": "demos/integrations/mlx/tests/kernels/test_unary_native_loader.py::test_pinned_mlx_unary_arccos_roundtrips_through_metal"
         },
         "numerical_runtime_included": false
       },
@@ -1029,7 +1029,7 @@
           "runtime": "mesa-opengl-4.3",
           "compiler": "glslangValidator",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_arccos_executes_through_opengl_native_loader"
+          "test": "demos/integrations/mlx/tests/kernels/test_unary_native_loader.py::test_pinned_mlx_unary_arccos_executes_through_opengl_native_loader"
         }
       }
     },
@@ -1256,7 +1256,7 @@
       "status": "required-on-ci",
       "compiled_artifact_count": 877,
       "all_air_artifacts_nonempty": true,
-      "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_current_mlx_unary_family_roundtrips_through_metal"
+      "test": "demos/integrations/mlx/tests/kernels/test_unary_native_loader.py::test_current_mlx_unary_family_roundtrips_through_metal"
     },
     "host_interface_reflection_included": true,
     "metal_roundtrip_included": true,
@@ -1455,7 +1455,7 @@
       "validated_artifact_count": 877,
       "all_spirv_artifacts_nonempty": true,
       "ci_shard_count": 5,
-      "test": "tests/test_translator/test_mlx_unary_complete_opengl.py::test_current_mlx_unary_family_translates_to_opengl"
+      "test": "demos/integrations/mlx/tests/kernels/test_unary_complete_opengl.py::test_current_mlx_unary_family_translates_to_opengl"
     },
     "host_interface_reflection_included": true,
     "opengl_family_translation_included": true,
@@ -1690,7 +1690,7 @@
       "compiled_artifact_count": 877,
       "all_dxil_artifacts_nonempty": true,
       "ci_shard_count": 5,
-      "test": "tests/test_translator/test_mlx_unary_complete_directx.py::test_current_mlx_unary_family_translates_to_directx"
+      "test": "demos/integrations/mlx/tests/kernels/test_unary_complete_directx.py::test_current_mlx_unary_family_translates_to_directx"
     },
     "host_interface_reflection_included": true,
     "opengl_family_translation_included": true,
@@ -1845,7 +1845,7 @@
       "status": "required-on-ci",
       "compiled_artifact_count": 238,
       "all_air_artifacts_nonempty": true,
-      "test": "tests/test_translator/test_mlx_binary_metal_roundtrip.py::test_current_mlx_binary_scalar_family_roundtrips_through_metal"
+      "test": "demos/integrations/mlx/tests/kernels/test_binary_metal_roundtrip.py::test_current_mlx_binary_scalar_family_roundtrips_through_metal"
     },
     "host_interface_reflection_included": true,
     "metal_roundtrip_included": true,
@@ -2018,7 +2018,7 @@
       "ci_shard_count": 24,
       "compiled_artifact_count": 4122,
       "all_air_artifacts_nonempty": true,
-      "test": "tests/test_translator/test_mlx_binary_complete_metal_roundtrip.py::test_current_mlx_binary_family_roundtrips_through_metal"
+      "test": "demos/integrations/mlx/tests/kernels/test_binary_complete_metal_roundtrip.py::test_current_mlx_binary_family_roundtrips_through_metal"
     },
     "scalar_contract_preserved_as_exact_subset": true,
     "host_interface_reflection_included": true,
@@ -2208,7 +2208,7 @@
       "validated_artifact_count": 4122,
       "all_spirv_artifacts_nonempty": true,
       "ci_shard_count": 24,
-      "test": "tests/test_translator/test_mlx_binary_complete_opengl.py::test_current_mlx_binary_family_translates_to_opengl"
+      "test": "demos/integrations/mlx/tests/kernels/test_binary_complete_opengl.py::test_current_mlx_binary_family_translates_to_opengl"
     },
     "host_interface_reflection_included": true,
     "metal_roundtrip_included": true,
@@ -2399,7 +2399,7 @@
       "compiled_artifact_count": 4122,
       "all_dxil_artifacts_nonempty": true,
       "ci_shard_count": 24,
-      "test": "tests/test_translator/test_mlx_binary_complete_directx.py::test_current_mlx_binary_family_translates_to_directx"
+      "test": "demos/integrations/mlx/tests/kernels/test_binary_complete_directx.py::test_current_mlx_binary_family_translates_to_directx"
     },
     "host_interface_reflection_included": true,
     "metal_roundtrip_included": true,
@@ -2647,7 +2647,7 @@
       "entries_per_shard": 104,
       "compiled_artifact_count": 2496,
       "all_air_artifacts_nonempty": true,
-      "test": "tests/test_translator/test_mlx_copy_complete_metal_roundtrip.py::test_current_mlx_copy_family_roundtrips_through_metal"
+      "test": "demos/integrations/mlx/tests/kernels/test_copy_complete_metal_roundtrip.py::test_current_mlx_copy_family_roundtrips_through_metal"
     },
     "host_interface_reflection_included": true,
     "metal_roundtrip_included": true,
@@ -2819,7 +2819,7 @@
       ],
       "compiled_artifact_count": 2396,
       "all_air_artifacts_nonempty": true,
-      "test": "tests/test_translator/test_mlx_reduce_complete_metal_roundtrip.py::test_current_mlx_reduce_family_roundtrips_through_metal"
+      "test": "demos/integrations/mlx/tests/kernels/test_reduce_complete_metal_roundtrip.py::test_current_mlx_reduce_family_roundtrips_through_metal"
     },
     "host_interface_reflection_included": true,
     "metal_roundtrip_included": true,
@@ -2996,8 +2996,8 @@
       ],
       "compiled_artifact_count": 2052,
       "all_air_artifacts_nonempty": true,
-      "discovery_test": "tests/test_translator/test_mlx_quantized_complete_metal_roundtrip.py::test_current_mlx_quantized_metal_discovery_matches_contract",
-      "test": "tests/test_translator/test_mlx_quantized_complete_metal_roundtrip.py::test_current_mlx_quantized_family_roundtrips_through_metal"
+      "discovery_test": "demos/integrations/mlx/tests/kernels/test_quantized_complete_metal_roundtrip.py::test_current_mlx_quantized_metal_discovery_matches_contract",
+      "test": "demos/integrations/mlx/tests/kernels/test_quantized_complete_metal_roundtrip.py::test_current_mlx_quantized_family_roundtrips_through_metal"
     },
     "host_interface_reflection_included": true,
     "metal_roundtrip_included": true,
@@ -3244,7 +3244,7 @@
       "compiled_artifact_count": 2396,
       "validated_artifact_count": 2396,
       "all_spirv_artifacts_nonempty": true,
-      "test": "tests/test_translator/test_mlx_reduce_complete_opengl.py::test_current_mlx_reduce_family_translates_to_opengl"
+      "test": "demos/integrations/mlx/tests/kernels/test_reduce_complete_opengl.py::test_current_mlx_reduce_family_translates_to_opengl"
     },
     "host_interface_reflection_included": true,
     "metal_roundtrip_included": true,
@@ -3478,7 +3478,7 @@
       "all_spirv_artifacts_nonempty": true,
       "ci_shard_count": 24,
       "entries_per_shard": 104,
-      "test": "tests/test_translator/test_mlx_copy_complete_opengl.py::test_current_mlx_copy_family_translates_to_opengl"
+      "test": "demos/integrations/mlx/tests/kernels/test_copy_complete_opengl.py::test_current_mlx_copy_family_translates_to_opengl"
     },
     "host_interface_reflection_included": true,
     "metal_roundtrip_included": true,
@@ -3696,7 +3696,7 @@
       "all_dxil_artifacts_nonempty": true,
       "ci_shard_count": 24,
       "entries_per_shard": 104,
-      "test": "tests/test_translator/test_mlx_copy_complete_directx.py::test_current_mlx_copy_family_translates_to_directx"
+      "test": "demos/integrations/mlx/tests/kernels/test_copy_complete_directx.py::test_current_mlx_copy_family_translates_to_directx"
     },
     "host_interface_reflection_included": true,
     "metal_roundtrip_included": true,
@@ -3785,7 +3785,7 @@
     "native_runtime": {
       "runtime": "direct3d-12-warp",
       "status": "required-on-ci",
-      "test": "tests/test_translator/test_mlx_fft_native_loader.py::test_current_mlx_fft_executes_through_directx_native_loader",
+      "test": "demos/integrations/mlx/tests/kernels/test_fft_native_loader.py::test_current_mlx_fft_executes_through_directx_native_loader",
       "workgroup_count": [
         1,
         1,
@@ -3957,7 +3957,7 @@
       "adapter": "opengl-native-runtime",
       "specialization_mode": "deferred-spirv",
       "status": "required-on-ci",
-      "test": "tests/test_translator/test_mlx_fft_native_loader.py::test_current_mlx_fft_executes_through_opengl_native_loader",
+      "test": "demos/integrations/mlx/tests/kernels/test_fft_native_loader.py::test_current_mlx_fft_executes_through_opengl_native_loader",
       "workgroup_count": [
         1,
         1,
@@ -4859,14 +4859,14 @@
         "platform": "windows-latest",
         "runtime": "direct3d-12-warp",
         "status": "required-on-ci",
-        "test": "tests/test_translator/test_mlx_gemv_native_loader.py::test_current_mlx_gemv_executes_through_directx_native_loader"
+        "test": "demos/integrations/mlx/tests/kernels/test_gemv_native_loader.py::test_current_mlx_gemv_executes_through_directx_native_loader"
       },
       "opengl": {
         "platform": "ubuntu-latest",
         "runtime": "mesa-headless-egl-software-opengl",
         "status": "required-on-ci",
         "local_linux_arm64_validation": "passed",
-        "test": "tests/test_translator/test_mlx_gemv_native_loader.py::test_current_mlx_gemv_executes_with_opengl_software_subgroups"
+        "test": "demos/integrations/mlx/tests/kernels/test_gemv_native_loader.py::test_current_mlx_gemv_executes_with_opengl_software_subgroups"
       }
     },
     "metal_roundtrip_boundary": {
@@ -5199,13 +5199,13 @@
         "platform": "windows-latest",
         "runtime": "direct3d-12-warp",
         "status": "required-on-ci",
-        "test": "tests/test_translator/test_mlx_fp_quantized_native_loader.py::test_current_mlx_mxfp4_executes_through_directx_native_loader"
+        "test": "demos/integrations/mlx/tests/kernels/test_fp_quantized_native_loader.py::test_current_mlx_mxfp4_executes_through_directx_native_loader"
       },
       "opengl": {
         "platform": "ubuntu-latest",
         "runtime": "mesa-headless-egl-software-opengl",
         "status": "required-on-ci",
-        "test": "tests/test_translator/test_mlx_fp_quantized_native_loader.py::test_current_mlx_mxfp4_executes_with_opengl_software_subgroups"
+        "test": "demos/integrations/mlx/tests/kernels/test_fp_quantized_native_loader.py::test_current_mlx_mxfp4_executes_with_opengl_software_subgroups"
       }
     },
     "metal_roundtrip_boundary": {
@@ -5447,14 +5447,14 @@
         "platform": "windows-latest",
         "runtime": "direct3d-12-warp",
         "status": "required-on-ci",
-        "test": "tests/test_translator/test_mlx_arg_reduce_native_loader.py::test_pinned_mlx_arg_reduce_executes_through_directx_native_loader"
+        "test": "demos/integrations/mlx/tests/kernels/test_arg_reduce_native_loader.py::test_pinned_mlx_arg_reduce_executes_through_directx_native_loader"
       },
       "opengl": {
         "platform": "ubuntu-latest",
         "runtime": "mesa-headless-egl-software-opengl",
         "status": "required-on-ci",
         "local_linux_arm64_validation": "passed",
-        "test": "tests/test_translator/test_mlx_arg_reduce_native_loader.py::test_pinned_mlx_arg_reduce_executes_through_opengl_native_loader"
+        "test": "demos/integrations/mlx/tests/kernels/test_arg_reduce_native_loader.py::test_pinned_mlx_arg_reduce_executes_through_opengl_native_loader"
       }
     },
     "metal_roundtrip_boundary": {
@@ -5701,7 +5701,7 @@
         "platform": "windows-latest",
         "runtime": "direct3d-12-warp",
         "status": "required-on-ci",
-        "test": "tests/test_translator/test_mlx_scaled_dot_product_attention_native_loader.py::test_pinned_mlx_attention_executes_through_directx_native_loader"
+        "test": "demos/integrations/mlx/tests/kernels/test_scaled_dot_product_attention_native_loader.py::test_pinned_mlx_attention_executes_through_directx_native_loader"
       },
       "opengl": {
         "platform": "ubuntu-latest",
@@ -5710,7 +5710,7 @@
         "local_linux_mesa_validation": "passed",
         "local_max_absolute_error": 4.082320426146424e-08,
         "local_max_relative_error": 4.2163276126605175e-06,
-        "test": "tests/test_translator/test_mlx_scaled_dot_product_attention_native_loader.py::test_pinned_mlx_attention_executes_through_opengl_native_loader"
+        "test": "demos/integrations/mlx/tests/kernels/test_scaled_dot_product_attention_native_loader.py::test_pinned_mlx_attention_executes_through_opengl_native_loader"
       }
     },
     "metal_roundtrip_boundary": {
@@ -5975,14 +5975,14 @@
         "platform": "windows-latest",
         "runtime": "direct3d-12-warp",
         "status": "required-on-ci",
-        "test": "tests/test_translator/test_mlx_softmax_native_loader.py::test_pinned_mlx_softmax_executes_through_directx_native_loader"
+        "test": "demos/integrations/mlx/tests/kernels/test_softmax_native_loader.py::test_pinned_mlx_softmax_executes_through_directx_native_loader"
       },
       "opengl": {
         "platform": "ubuntu-latest",
         "runtime": "mesa-headless-egl-software-opengl",
         "status": "required-on-ci",
         "local_linux_arm64_validation": "passed",
-        "test": "tests/test_translator/test_mlx_softmax_native_loader.py::test_pinned_mlx_softmax_executes_through_opengl_native_loader"
+        "test": "demos/integrations/mlx/tests/kernels/test_softmax_native_loader.py::test_pinned_mlx_softmax_executes_through_opengl_native_loader"
       }
     },
     "metal_roundtrip_boundary": {
@@ -6221,7 +6221,7 @@
           "platform": "windows-latest",
           "runtime": "direct3d-12-warp",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_rms_norm_native_loader.py::test_pinned_mlx_rms_norm_executes_through_directx_native_loader"
+          "test": "demos/integrations/mlx/tests/kernels/test_rms_norm_native_loader.py::test_pinned_mlx_rms_norm_executes_through_directx_native_loader"
         }
       },
       "opengl": {
@@ -6237,7 +6237,7 @@
           "platform": "ubuntu-latest",
           "runtime": "mesa-headless-egl-software-opengl",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_rms_norm_native_loader.py::test_pinned_mlx_rms_norm_executes_through_opengl_native_loader"
+          "test": "demos/integrations/mlx/tests/kernels/test_rms_norm_native_loader.py::test_pinned_mlx_rms_norm_executes_through_opengl_native_loader"
         }
       }
     },
@@ -6451,7 +6451,7 @@
           "platform": "windows-latest",
           "runtime": "direct3d-12-warp",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_rms_norm_vjp_native_loader.py::test_pinned_mlx_rms_norm_vjp_executes_through_directx_native_loader"
+          "test": "demos/integrations/mlx/tests/kernels/test_rms_norm_vjp_native_loader.py::test_pinned_mlx_rms_norm_vjp_executes_through_directx_native_loader"
         }
       },
       "opengl": {
@@ -6477,7 +6477,7 @@
           "platform": "ubuntu-latest",
           "runtime": "mesa-headless-egl-software-opengl",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_rms_norm_vjp_native_loader.py::test_pinned_mlx_rms_norm_vjp_executes_through_opengl_native_loader"
+          "test": "demos/integrations/mlx/tests/kernels/test_rms_norm_vjp_native_loader.py::test_pinned_mlx_rms_norm_vjp_executes_through_opengl_native_loader"
         }
       }
     },
@@ -6720,7 +6720,7 @@
           "platform": "windows-latest",
           "runtime": "direct3d-12-warp",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_layer_norm_native_loader.py::test_pinned_mlx_layer_norm_executes_through_directx_native_loader"
+          "test": "demos/integrations/mlx/tests/kernels/test_layer_norm_native_loader.py::test_pinned_mlx_layer_norm_executes_through_directx_native_loader"
         }
       },
       "opengl": {
@@ -6743,7 +6743,7 @@
           "platform": "ubuntu-latest",
           "runtime": "mesa-headless-egl-software-opengl",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_layer_norm_native_loader.py::test_pinned_mlx_layer_norm_executes_through_opengl_native_loader"
+          "test": "demos/integrations/mlx/tests/kernels/test_layer_norm_native_loader.py::test_pinned_mlx_layer_norm_executes_through_opengl_native_loader"
         }
       }
     },
@@ -6993,7 +6993,7 @@
           "platform": "windows-latest",
           "runtime": "direct3d-12-warp",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_layer_norm_vjp_native_loader.py::test_pinned_mlx_layer_norm_vjp_executes_through_directx_native_loader"
+          "test": "demos/integrations/mlx/tests/kernels/test_layer_norm_vjp_native_loader.py::test_pinned_mlx_layer_norm_vjp_executes_through_directx_native_loader"
         }
       },
       "opengl": {
@@ -7019,7 +7019,7 @@
           "platform": "ubuntu-latest",
           "runtime": "mesa-headless-egl-software-opengl",
           "status": "required-on-ci",
-          "test": "tests/test_translator/test_mlx_layer_norm_vjp_native_loader.py::test_pinned_mlx_layer_norm_vjp_executes_through_opengl_native_loader"
+          "test": "demos/integrations/mlx/tests/kernels/test_layer_norm_vjp_native_loader.py::test_pinned_mlx_layer_norm_vjp_executes_through_opengl_native_loader"
         }
       }
     },

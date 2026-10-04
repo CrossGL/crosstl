@@ -389,7 +389,7 @@ def test_half_storage_comparisons_cannot_use_numeric_tolerance(change):
 def test_half_native_proofs_are_required_on_all_platforms():
     from tools import ci_coverage
 
-    workflow = Path(".github/workflows/mlx-gather-roundtrip.yml").read_text()
+    workflow = Path(".github/workflows/demo-project-testing.yml").read_text()
     for name in (
         "Validate indexed OpenGL gather and resource aggregates",
         "Validate indexed DirectX gather and resource aggregates",

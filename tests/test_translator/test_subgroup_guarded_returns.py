@@ -16,6 +16,7 @@ from crosstl.translator.ast import IfNode, ReturnNode
 from crosstl.translator.codegen.subgroup_control_flow import (
     converge_subgroup_guarded_returns,
 )
+from tests.ci_helpers import assert_paths_covered
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_native_runtime import _native_request
@@ -163,7 +164,7 @@ def test_guarded_return_gate_is_required_on_every_native_target():
     from tools import ci_coverage
 
     root = Path(__file__).resolve().parents[2]
-    workflow = (root / ".github/workflows/mlx-portable-host.yml").read_text()
+    workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
     step = ci_coverage.workflow_step_section(
         workflow, "Validate subgroup-guarded returns"
     )
@@ -176,9 +177,9 @@ def test_guarded_return_gate_is_required_on_every_native_target():
         and "--junitxml=" in step
     )
     for event in ("pull_request", "push"):
-        assert (
-            "tests/test_translator/test_subgroup_guarded_returns.py"
-            in ci_coverage.workflow_event_path_filters(workflow, event)
+        assert_paths_covered(
+            ci_coverage.workflow_event_path_filters(workflow, event),
+            "tests/test_translator/test_subgroup_guarded_returns.py",
         )
 
 

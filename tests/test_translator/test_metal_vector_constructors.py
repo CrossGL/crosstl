@@ -9,9 +9,10 @@ from pathlib import Path
 import pytest
 
 from crosstl.project import build_native_loader_dispatch_request
+from tests.ci_helpers import assert_paths_covered
+from tests.runtime_helpers import _validate
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_loop_updates import _execute
-from tests.test_translator.test_mlx_current_gather import _validate
 from tests.test_translator.test_software_subgroup_product import _package
 
 REQUIRE_ENV = "CROSTL_REQUIRE_VECTOR_CONSTRUCTOR_RUNTIME"
@@ -291,7 +292,8 @@ def test_generic_vector_constructor_gate_is_required():
     from tools import ci_coverage
 
     workflow = (
-        Path(__file__).resolve().parents[2] / ".github/workflows/mlx-portable-host.yml"
+        Path(__file__).resolve().parents[2]
+        / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     step = ci_coverage.workflow_step_section(
         workflow, "Validate generic vector constructors"
@@ -302,7 +304,7 @@ def test_generic_vector_constructor_gate_is_required():
     )
     assert "if:" not in step and "continue-on-error" not in step
     for event in ("push", "pull_request"):
-        assert (
-            "tests/test_translator/test_metal_vector_constructors.py"
-            in ci_coverage.workflow_event_path_filters(workflow, event)
+        assert_paths_covered(
+            ci_coverage.workflow_event_path_filters(workflow, event),
+            "tests/test_translator/test_metal_vector_constructors.py",
         )

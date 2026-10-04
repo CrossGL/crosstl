@@ -122,7 +122,7 @@ def test_void_return_effects_are_required_on_each_native_target():
 
     workflow = (
         Path(__file__).resolve().parents[2]
-        / ".github/workflows/mlx-gather-roundtrip.yml"
+        / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     for name in (
         "Validate general gather and empty arrays",

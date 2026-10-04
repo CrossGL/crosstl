@@ -388,7 +388,7 @@ def test_float_atomic_memory_requires_native_metal_and_directx_evidence():
 
     workflow = (
         Path(__file__).resolve().parents[2]
-        / ".github/workflows/mlx-gather-roundtrip.yml"
+        / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     for name in (
         "Validate general gather and empty arrays",
@@ -397,7 +397,7 @@ def test_float_atomic_memory_requires_native_metal_and_directx_evidence():
         step = ci_coverage.workflow_step_section(workflow, name)
         assert f'{REQUIRE_ENV}: "1"' in step
         assert "test_float_atomic_memory.py" in step
-        assert "test_mlx_float_atomic_memory.py" in step
+        assert "test_float_atomic_memory.py" in step
         timeout = 1800 if name == "Validate general gather and empty arrays" else 1200
         assert f"--timeout-seconds {timeout}" in step
         assert "if:" not in step and "continue-on-error" not in workflow

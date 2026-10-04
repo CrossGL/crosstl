@@ -24,6 +24,7 @@ from crosstl.project import (
 from crosstl.project.native_loader_abi import NativeLoaderABIError
 from crosstl.project.native_loader_dispatch import NativeLoaderDispatchError
 from crosstl.translator.dispatch_regions import DispatchRegion, plan_dispatch_regions
+from tests.ci_helpers import assert_paths_covered
 from tests.test_translator.test_dispatch_regions import REQUIRE_ENV, _case
 from tests.test_translator.test_exact_thread_grid_runtime import GRIDS, SOURCE
 from tests.test_translator.test_metal_builtin_ownership import _compile
@@ -509,7 +510,8 @@ def test_region_package_native_gate_is_required():
     from tools import ci_coverage
 
     workflow = (
-        Path(__file__).resolve().parents[2] / ".github/workflows/mlx-portable-host.yml"
+        Path(__file__).resolve().parents[2]
+        / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     step = ci_coverage.workflow_step_section(
         workflow, "Validate exact dispatch regions"
@@ -518,9 +520,9 @@ def test_region_package_native_gate_is_required():
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "if:" not in step and "continue-on-error" not in step
     for event in ("push", "pull_request"):
-        assert (
-            "tests/test_translator/test_dispatch_region_project.py"
-            in ci_coverage.workflow_event_path_filters(workflow, event)
+        assert_paths_covered(
+            ci_coverage.workflow_event_path_filters(workflow, event),
+            "tests/test_translator/test_dispatch_region_project.py",
         )
 
 

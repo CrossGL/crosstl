@@ -144,7 +144,7 @@ def test_half_numeric_constructors_still_require_rounding(tmp_path, expression):
 def test_half_copy_controls_are_required_on_each_platform():
     from tools import ci_coverage
 
-    workflow = Path(".github/workflows/mlx-gather-roundtrip.yml").read_text()
+    workflow = Path(".github/workflows/demo-project-testing.yml").read_text()
     for name in (
         "Validate indexed OpenGL gather and resource aggregates",
         "Validate indexed DirectX gather and resource aggregates",

@@ -12,6 +12,7 @@ from crosstl.project import (
     build_native_loader_dispatch_request,
     translate_project,
 )
+from tests.ci_helpers import assert_paths_covered
 from tests.test_backend.test_metal.test_constrained_specialization import CASES, source
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_loop_updates import _execute
@@ -114,7 +115,7 @@ def test_constrained_specialization_execution_is_required_on_each_target():
 
     workflow = (
         Path(__file__).resolve().parents[2]
-        / ".github/workflows/mlx-gather-roundtrip.yml"
+        / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     for name in (
         "Validate general gather and empty arrays",
@@ -128,6 +129,7 @@ def test_constrained_specialization_execution_is_required_on_each_target():
         assert f"--timeout-seconds {timeout}" in step and "-n auto" in step
         assert "if:" not in step and "continue-on-error" not in workflow
     for event in ("pull_request", "push"):
-        assert "tests/test_translator/**" in ci_coverage.workflow_event_path_filters(
-            workflow, event
+        assert_paths_covered(
+            ci_coverage.workflow_event_path_filters(workflow, event),
+            "tests/test_translator/**",
         )

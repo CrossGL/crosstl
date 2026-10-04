@@ -1790,8 +1790,8 @@
             "tests/test_translator/test_opengl_float_atomic_storage.py::def test_float_memory_has_physical_word_storage",
             "tests/test_translator/test_opengl_float_atomic_storage.py::def test_float_compare_has_physical_word_storage",
             "tests/test_translator/test_opengl_float_atomic_storage.py::def test_mixed_struct_transfer_and_neighbor_updates",
-            "tests/test_translator/test_opengl_float_atomic_storage.py::def test_unchanged_mlx_atomic_helpers_use_word_storage",
-            "tests/test_translator/test_opengl_float_atomic_storage.py::def test_unchanged_mlx_float_scatter_uses_word_storage",
+            "demos/integrations/mlx/tests/kernels/test_float_atomic_storage_opengl.py::def test_unchanged_mlx_atomic_helpers_use_word_storage",
+            "demos/integrations/mlx/tests/kernels/test_float_atomic_storage_opengl.py::def test_unchanged_mlx_float_scatter_uses_word_storage",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract"
           ]
         },
@@ -3887,7 +3887,7 @@
             "tests/test_translator/test_resource_aggregates.py::def test_resource_aggregate_rejects_unproven_operations",
             "tests/test_translator/test_pointer_offset_address_spaces.py::def test_project_preserves_pointer_offset_calls",
             "tests/test_translator/test_pointer_offset_address_spaces.py::def test_pointer_offsets_execute_natively",
-            "tests/test_translator/test_mlx_general_gather_directx.py::def test_indexed_general_gather_executes_natively"
+            "demos/integrations/mlx/tests/kernels/test_general_gather_directx.py::def test_indexed_general_gather_executes_natively"
           ]
         },
         "opengl": {
@@ -3903,7 +3903,7 @@
             "tests/test_translator/test_resource_aggregates_opengl.py::def test_opengl_resource_aggregate_requires_index_range_proof",
             "tests/test_translator/test_pointer_offset_address_spaces.py::def test_project_preserves_pointer_offset_calls",
             "tests/test_translator/test_pointer_offset_address_spaces.py::def test_pointer_offsets_execute_natively",
-            "tests/test_translator/test_mlx_general_gather_opengl.py::def test_opengl_indexed_general_gather_executes_natively"
+            "demos/integrations/mlx/tests/kernels/test_general_gather_opengl.py::def test_opengl_indexed_general_gather_executes_natively"
           ]
         },
         "metal": {
@@ -4030,7 +4030,7 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_array_handling",
             "tests/test_translator/test_metal_empty_arrays.py::def test_zero_extent_standard_arrays_execute_natively",
-            "tests/test_translator/test_mlx_general_gather.py::def test_pinned_general_gather_executes_original_and_generated"
+            "demos/integrations/mlx/tests/kernels/test_general_gather.py::def test_pinned_general_gather_executes_original_and_generated"
           ]
         },
         "vulkan": {
@@ -4350,7 +4350,7 @@
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fixed_array_for_in_validates_with_dxc",
             "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_translate_and_compile",
             "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_execute_natively",
-            "tests/test_translator/test_mlx_current_gather.py::def test_pinned_gather_front_native_parity"
+            "demos/integrations/mlx/tests/kernels/test_current_gather.py::def test_pinned_gather_front_native_parity"
           ]
         },
         "opengl": {
@@ -4366,7 +4366,7 @@
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_fixed_array_for_in_validates_with_glslang_and_spirv_val",
             "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_translate_and_compile",
             "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_execute_natively",
-            "tests/test_translator/test_mlx_current_gather.py::def test_pinned_gather_front_native_parity"
+            "demos/integrations/mlx/tests/kernels/test_current_gather.py::def test_pinned_gather_front_native_parity"
           ]
         },
         "metal": {
@@ -4377,7 +4377,7 @@
             "tests/test_translator/test_range_bindings.py::def test_range_binding_contract_survives_import",
             "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_translate_and_compile",
             "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_execute_natively",
-            "tests/test_translator/test_mlx_current_gather.py::def test_pinned_gather_front_native_parity"
+            "demos/integrations/mlx/tests/kernels/test_current_gather.py::def test_pinned_gather_front_native_parity"
           ]
         },
         "vulkan": {
@@ -4449,21 +4449,21 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics",
             "tests/test_translator/test_float_atomic_compare_exchange.py::def test_float_compare_exchange_",
-            "tests/test_translator/test_mlx_float_atomic_compare_exchange.py::def test_",
+            "demos/integrations/mlx/tests/kernels/test_float_atomic_compare_exchange.py::def test_",
             "tests/test_translator/test_float_atomic_memory.py::def test_float_atomic_memory_",
-            "tests/test_translator/test_mlx_float_atomic_memory.py::def test_pinned_float_atomic_memory_",
+            "demos/integrations/mlx/tests/kernels/test_float_atomic_memory.py::def test_pinned_float_atomic_memory_",
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_translates",
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_executes_natively",
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_order_is_not_silently_weakened",
             "tests/test_translator/test_atomic_store_runtime.py::def test_unsupported_atomic_store_type_does_not_publish_a_noop",
             "tests/test_translator/test_atomic_load_runtime.py::def test_atomic_load_",
             "tests/test_translator/test_atomic_load_runtime.py::def test_unsupported_atomic_load_type_does_not_publish_a_noop",
-            "tests/test_translator/test_mlx_atomic_load_runtime.py::def test_pinned_atomic_load_executes_natively",
+            "demos/integrations/mlx/tests/kernels/test_atomic_load_runtime.py::def test_pinned_atomic_load_executes_natively",
             "tests/test_translator/test_atomic_compare_exchange_runtime.py::def test_",
-            "tests/test_translator/test_mlx_atomic_compare_exchange_runtime.py::def test_",
-            "tests/test_translator/test_mlx_scatter_axis_runtime.py::def test_pinned_scatter_axis_executes_natively",
+            "demos/integrations/mlx/tests/kernels/test_atomic_compare_exchange_runtime.py::def test_",
+            "demos/integrations/mlx/tests/kernels/test_scatter_axis_runtime.py::def test_pinned_scatter_axis_executes_natively",
             "tests/test_translator/test_atomic_resource_runtime.py::def test_resource_atomics_",
-            "tests/test_translator/test_mlx_general_scatter_runtime.py::def test_pinned_general_scatter_executes_natively",
+            "demos/integrations/mlx/tests/kernels/test_general_scatter_runtime.py::def test_pinned_general_scatter_executes_natively",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_user_defined_synchronization_names_are_not_lowered",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_hlsl_compute_synchronization_compiles_with_dxc"
           ]
@@ -4482,12 +4482,12 @@
             "tests/test_translator/test_atomic_store_runtime.py::def test_unsupported_atomic_store_type_does_not_publish_a_noop",
             "tests/test_translator/test_atomic_load_runtime.py::def test_atomic_load_",
             "tests/test_translator/test_atomic_load_runtime.py::def test_unsupported_atomic_load_type_does_not_publish_a_noop",
-            "tests/test_translator/test_mlx_atomic_load_runtime.py::def test_pinned_atomic_load_executes_natively",
+            "demos/integrations/mlx/tests/kernels/test_atomic_load_runtime.py::def test_pinned_atomic_load_executes_natively",
             "tests/test_translator/test_atomic_compare_exchange_runtime.py::def test_",
-            "tests/test_translator/test_mlx_atomic_compare_exchange_runtime.py::def test_",
-            "tests/test_translator/test_mlx_scatter_axis_runtime.py::def test_pinned_scatter_axis_executes_natively",
+            "demos/integrations/mlx/tests/kernels/test_atomic_compare_exchange_runtime.py::def test_",
+            "demos/integrations/mlx/tests/kernels/test_scatter_axis_runtime.py::def test_pinned_scatter_axis_executes_natively",
             "tests/test_translator/test_atomic_resource_runtime.py::def test_resource_atomics_",
-            "tests/test_translator/test_mlx_general_scatter_runtime.py::def test_pinned_general_scatter_executes_natively",
+            "demos/integrations/mlx/tests/kernels/test_general_scatter_runtime.py::def test_pinned_general_scatter_executes_natively",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_user_defined_workgroup_barrier_is_not_lowered",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_glsl_compute_synchronization_validates_with_glslangvalidator"
           ]
@@ -4498,21 +4498,21 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_synchronization_builtins_lower_to_threadgroup_barriers",
             "tests/test_translator/test_float_atomic_compare_exchange.py::def test_float_compare_exchange_",
-            "tests/test_translator/test_mlx_float_atomic_compare_exchange.py::def test_",
+            "demos/integrations/mlx/tests/kernels/test_float_atomic_compare_exchange.py::def test_",
             "tests/test_translator/test_float_atomic_memory.py::def test_float_atomic_memory_",
-            "tests/test_translator/test_mlx_float_atomic_memory.py::def test_pinned_float_atomic_memory_",
+            "demos/integrations/mlx/tests/kernels/test_float_atomic_memory.py::def test_pinned_float_atomic_memory_",
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_translates",
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_executes_natively",
             "tests/test_translator/test_atomic_store_runtime.py::def test_atomic_store_order_is_not_silently_weakened",
             "tests/test_translator/test_atomic_store_runtime.py::def test_unsupported_atomic_store_type_does_not_publish_a_noop",
             "tests/test_translator/test_atomic_load_runtime.py::def test_atomic_load_",
             "tests/test_translator/test_atomic_load_runtime.py::def test_unsupported_atomic_load_type_does_not_publish_a_noop",
-            "tests/test_translator/test_mlx_atomic_load_runtime.py::def test_pinned_atomic_load_executes_natively",
+            "demos/integrations/mlx/tests/kernels/test_atomic_load_runtime.py::def test_pinned_atomic_load_executes_natively",
             "tests/test_translator/test_atomic_compare_exchange_runtime.py::def test_",
-            "tests/test_translator/test_mlx_atomic_compare_exchange_runtime.py::def test_",
-            "tests/test_translator/test_mlx_scatter_axis_runtime.py::def test_pinned_scatter_axis_executes_natively",
+            "demos/integrations/mlx/tests/kernels/test_atomic_compare_exchange_runtime.py::def test_",
+            "demos/integrations/mlx/tests/kernels/test_scatter_axis_runtime.py::def test_pinned_scatter_axis_executes_natively",
             "tests/test_translator/test_atomic_resource_runtime.py::def test_resource_atomics_",
-            "tests/test_translator/test_mlx_general_scatter_runtime.py::def test_pinned_general_scatter_executes_natively",
+            "demos/integrations/mlx/tests/kernels/test_general_scatter_runtime.py::def test_pinned_general_scatter_executes_natively",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_threadgroup_array_helpers_preserve_address_space_and_barriers",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_threadgroup_atomic_array_elements_use_address_arguments",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_atomic_compare_exchange_addresses_targets_and_expected_values",
@@ -4634,8 +4634,8 @@
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_software_subgroup_rejects_masked_shuffle",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_software_subgroup_accepts_helper_calls_in_uniform_halving_loop",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_software_subgroup_halving_helper_loop_fails_closed",
-            "tests/test_translator/test_mlx_gemv_native_loader.py::def test_current_mlx_gemv_executes_with_opengl_software_subgroups",
-            "tests/test_translator/test_mlx_softmax_native_loader.py::def test_pinned_mlx_softmax_translates_to_software_subgroup_opengl",
+            "demos/integrations/mlx/tests/kernels/test_gemv_native_loader.py::def test_current_mlx_gemv_executes_with_opengl_software_subgroups",
+            "demos/integrations/mlx/tests/kernels/test_softmax_native_loader.py::def test_pinned_mlx_softmax_translates_to_software_subgroup_opengl",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_wave_intrinsics_compute_validates_with_glslang"
           ]
         },
@@ -7712,7 +7712,7 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
-            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7724,7 +7724,7 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
-            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7736,7 +7736,7 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
-            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7748,7 +7748,7 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
-            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7760,7 +7760,7 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
-            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7772,7 +7772,7 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
-            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7784,7 +7784,7 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
-            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7796,7 +7796,7 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
-            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7808,7 +7808,7 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
-            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7820,7 +7820,7 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
-            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7832,7 +7832,7 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
-            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
             "docs/source/project-porting.rst"
           ]
         }
@@ -7853,7 +7853,7 @@
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
-            "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
+            "demos/integrations/mlx/tests/test_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7866,7 +7866,7 @@
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
-            "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
+            "demos/integrations/mlx/tests/test_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7879,7 +7879,7 @@
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
-            "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
+            "demos/integrations/mlx/tests/test_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7892,7 +7892,7 @@
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
-            "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
+            "demos/integrations/mlx/tests/test_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7905,7 +7905,7 @@
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
-            "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
+            "demos/integrations/mlx/tests/test_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7918,7 +7918,7 @@
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
-            "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
+            "demos/integrations/mlx/tests/test_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7931,7 +7931,7 @@
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
-            "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
+            "demos/integrations/mlx/tests/test_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7944,7 +7944,7 @@
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
-            "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
+            "demos/integrations/mlx/tests/test_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7957,7 +7957,7 @@
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
-            "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
+            "demos/integrations/mlx/tests/test_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7970,7 +7970,7 @@
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
-            "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
+            "demos/integrations/mlx/tests/test_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
           ]
         },
@@ -7983,7 +7983,7 @@
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovery_exclusion_queries_do_not_rescan_span_collections",
             "tests/test_backend/test_metal/test_entry_discovery.py::def test_entry_discovery_rebuilds_indexes_for_changed_includes_and_defines",
             "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
-            "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
+            "demos/integrations/mlx/tests/test_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
             "docs/source/project-porting.rst"
           ]
         }
@@ -8023,7 +8023,7 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_reports_missing_selected_opengl_entry",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_requires_configured_entry_point_metadata",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_checkpoint_resumes_pending_entry_artifact",
-            "tests/test_mlx_porting_harness.py::def test_arange_opengl_check_confirms_native_validation"
+            "demos/integrations/mlx/tests/test_porting_harness.py::def test_arange_opengl_check_confirms_native_validation"
           ]
         },
         "metal": {
@@ -8237,7 +8237,7 @@
             "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_probes_exact_subgroup_width",
             "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_executes_exact_subgroup_width_on_device",
             "tests/test_translator/test_native_opengl_adapter.py::def test_generated_opengl_adapter_runs_execution_abi_and_enforces_lifecycle",
-            "tests/test_translator/test_mlx_logsumexp_native_loader.py::def test_pinned_mlx_logsumexp_translates_to_guarded_opengl_artifacts"
+            "demos/integrations/mlx/tests/kernels/test_logsumexp_native_loader.py::def test_pinned_mlx_logsumexp_translates_to_guarded_opengl_artifacts"
           ]
         },
         "metal": {
@@ -11318,45 +11318,45 @@
           "notes": "HLSL host reflection records exact supported scalar and vector structured-buffer layouts and one-member constant blocks. Flat homogeneous structs with 1-64 float, int, uint, int64_t or uint64_t members retain their actual type, member names, offsets, scalar alignment and stride through packaging and dispatch. Allocation sizing uses complete struct elements, and request validation rejects mixed, nested, padded or malformed layouts rather than treating structs as native vectors. Windows CI requires generic struct-buffer readback and the current-pinned MLX complex-power kernel through the public native-loader path. Existing MLX arange scalar execution remains covered. This is bounded layout and kernel execution support, not whole-repository runtime redirection.",
           "evidence": [
             "tests/test_translator/test_host_reflection.py::def test_hlsl_reflection_preserves_entry_points_resources_and_constants",
-            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_validates_update_and_output_geometry",
-            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_uploads_initialized_output_and_guards_writeback",
-            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_audit_rejects_corrupt_native_evidence",
-            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_requires_complete_workload_traces",
-            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_ci_requires_native_execution_on_all_targets",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_validates_workload_allocations_and_launch",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_rejects_invalid_layout_before_translation",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_preserves_initialized_output_and_guards_writeback",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_audit_rejects_corrupt_execution_evidence",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_requires_complete_workload_and_upstream_traces",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_ci_requires_separate_three_os_host_execution",
-            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_preserves_all_workload_layouts",
-            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_rejects_invalid_layout_before_dispatch",
-            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_audit_reconstructs_outputs_and_rejects_corruption",
-            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_ci_requires_native_unchanged_upstream_test",
-            "tests/test_mlx_portable_gather.py::def test_gather_layout_matches_all_supported_storage_types",
-            "tests/test_mlx_portable_gather.py::def test_gather_host_writeback_requires_valid_native_readback",
-            "tests/test_mlx_portable_gather.py::def test_gather_audit_reconciles_native_storage_and_rejects_corruption",
-            "tests/test_mlx_portable_gather.py::def test_gather_ci_requires_unchanged_tests_on_all_three_targets",
-            "tests/test_mlx_portable_host.py::def test_translated_binding_contract_and_typed_readback",
-            "tests/test_mlx_portable_host.py::def test_invalid_dispatch_never_reaches_executor",
-            "tests/test_mlx_portable_host.py::def test_unary_dispatch_contract",
-            "tests/test_mlx_portable_host.py::def test_unary_nonfinite_transport",
-            "tests/test_mlx_portable_host.py::def test_unary_verifier_requires_complete_independent_results",
+            "demos/integrations/mlx/tests/host/test_portable_scatter_axis.py::def test_axis_scatter_validates_update_and_output_geometry",
+            "demos/integrations/mlx/tests/host/test_portable_scatter_axis.py::def test_axis_scatter_uploads_initialized_output_and_guards_writeback",
+            "demos/integrations/mlx/tests/host/test_portable_scatter_axis.py::def test_axis_scatter_audit_rejects_corrupt_native_evidence",
+            "demos/integrations/mlx/tests/host/test_portable_scatter_axis.py::def test_axis_scatter_requires_complete_workload_traces",
+            "demos/integrations/mlx/tests/host/test_portable_scatter_axis.py::def test_axis_scatter_ci_requires_native_execution_on_all_targets",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_validates_workload_allocations_and_launch",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_rejects_invalid_layout_before_translation",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_preserves_initialized_output_and_guards_writeback",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_audit_rejects_corrupt_execution_evidence",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_requires_complete_workload_and_upstream_traces",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_ci_requires_separate_three_os_host_execution",
+            "demos/integrations/mlx/tests/host/test_portable_gather_axis.py::def test_axis_gather_preserves_all_workload_layouts",
+            "demos/integrations/mlx/tests/host/test_portable_gather_axis.py::def test_axis_gather_rejects_invalid_layout_before_dispatch",
+            "demos/integrations/mlx/tests/host/test_portable_gather_axis.py::def test_axis_gather_audit_reconstructs_outputs_and_rejects_corruption",
+            "demos/integrations/mlx/tests/host/test_portable_gather_axis.py::def test_axis_gather_ci_requires_native_unchanged_upstream_test",
+            "demos/integrations/mlx/tests/host/test_portable_gather.py::def test_gather_layout_matches_all_supported_storage_types",
+            "demos/integrations/mlx/tests/host/test_portable_gather.py::def test_gather_host_writeback_requires_valid_native_readback",
+            "demos/integrations/mlx/tests/host/test_portable_gather.py::def test_gather_audit_reconciles_native_storage_and_rejects_corruption",
+            "demos/integrations/mlx/tests/host/test_portable_gather.py::def test_gather_ci_requires_unchanged_tests_on_all_three_targets",
+            "demos/integrations/mlx/tests/host/test_portable_host.py::def test_translated_binding_contract_and_typed_readback",
+            "demos/integrations/mlx/tests/host/test_portable_host.py::def test_invalid_dispatch_never_reaches_executor",
+            "demos/integrations/mlx/tests/host/test_portable_host.py::def test_unary_dispatch_contract",
+            "demos/integrations/mlx/tests/host/test_portable_host.py::def test_unary_nonfinite_transport",
+            "demos/integrations/mlx/tests/host/test_portable_host.py::def test_unary_verifier_requires_complete_independent_results",
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_reflection_retains_exact_members",
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_dispatch_rejects_forged_layout",
             "tests/test_translator/test_buffer_requirements.py::def test_package_dispatch_enforces_minimum_not_exact_extent",
             "tests/test_translator/test_buffer_requirements.py::def test_minimum_applies_to_view_not_larger_allocation",
             "tests/test_translator/test_buffer_requirements.py::def test_minimum_footprint_native_readback",
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_buffer_native_readback",
-            "tests/test_translator/test_mlx_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
-            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
-            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
+            "demos/integrations/mlx/tests/kernels/test_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
+            "demos/integrations/mlx/tests/kernels/test_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
+            "demos/integrations/mlx/tests/kernels/test_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
             "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
             "tests/test_translator/test_native_runtime_drivers.py::def test_prepare_directx_buffers_rejects_missing_scalar_block_layout",
             "tests/test_translator/test_native_runtime_drivers.py::def test_prepare_directx_buffers_uses_reflected_block_size_as_allocation_minimum",
-            "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_directx_native_loader"
+            "demos/integrations/mlx/tests/kernels/test_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_directx_native_loader"
           ]
         },
         "opengl": {
@@ -11369,48 +11369,48 @@
             "tests/test_translator/test_uniform_block_layouts.py::def test_uniform_dispatch_requires_complete_word_payload",
             "tests/test_translator/test_uniform_block_layouts.py::def test_uniform_layout_survives_public_package_dispatch",
             "tests/test_translator/test_uniform_block_layouts.py::def test_uniform_block_native_readback",
-            "tests/test_translator/test_mlx_attention_ds_opengl.py::def test_pinned_opengl_attention_derivative",
-            "tests/test_translator/test_mlx_attention_ds_opengl.py::def test_opengl_derivative_verifier_rejects_corruption",
+            "demos/integrations/mlx/tests/kernels/test_attention_ds_opengl.py::def test_pinned_opengl_attention_derivative",
+            "demos/integrations/mlx/tests/kernels/test_attention_ds_opengl.py::def test_opengl_derivative_verifier_rejects_corruption",
             "tests/test_translator/test_host_reflection.py::def test_glsl_reflection_records_exact_mlx_scalar_block_layouts",
-            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_validates_update_and_output_geometry",
-            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_uploads_initialized_output_and_guards_writeback",
-            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_audit_rejects_corrupt_native_evidence",
-            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_requires_complete_workload_traces",
-            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_ci_requires_native_execution_on_all_targets",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_validates_workload_allocations_and_launch",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_rejects_invalid_layout_before_translation",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_preserves_initialized_output_and_guards_writeback",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_audit_rejects_corrupt_execution_evidence",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_requires_complete_workload_and_upstream_traces",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_ci_requires_separate_three_os_host_execution",
-            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_preserves_all_workload_layouts",
-            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_rejects_invalid_layout_before_dispatch",
-            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_audit_reconstructs_outputs_and_rejects_corruption",
-            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_ci_requires_native_unchanged_upstream_test",
-            "tests/test_mlx_portable_gather.py::def test_gather_layout_matches_all_supported_storage_types",
-            "tests/test_mlx_portable_gather.py::def test_gather_host_writeback_requires_valid_native_readback",
-            "tests/test_mlx_portable_gather.py::def test_gather_audit_reconciles_native_storage_and_rejects_corruption",
-            "tests/test_mlx_portable_gather.py::def test_gather_ci_requires_unchanged_tests_on_all_three_targets",
-            "tests/test_mlx_portable_host.py::def test_translated_binding_contract_and_typed_readback",
-            "tests/test_mlx_portable_host.py::def test_invalid_dispatch_never_reaches_executor",
-            "tests/test_mlx_portable_host.py::def test_unary_dispatch_contract",
-            "tests/test_mlx_portable_host.py::def test_unary_nonfinite_transport",
-            "tests/test_mlx_portable_host.py::def test_unary_verifier_requires_complete_independent_results",
+            "demos/integrations/mlx/tests/host/test_portable_scatter_axis.py::def test_axis_scatter_validates_update_and_output_geometry",
+            "demos/integrations/mlx/tests/host/test_portable_scatter_axis.py::def test_axis_scatter_uploads_initialized_output_and_guards_writeback",
+            "demos/integrations/mlx/tests/host/test_portable_scatter_axis.py::def test_axis_scatter_audit_rejects_corrupt_native_evidence",
+            "demos/integrations/mlx/tests/host/test_portable_scatter_axis.py::def test_axis_scatter_requires_complete_workload_traces",
+            "demos/integrations/mlx/tests/host/test_portable_scatter_axis.py::def test_axis_scatter_ci_requires_native_execution_on_all_targets",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_validates_workload_allocations_and_launch",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_rejects_invalid_layout_before_translation",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_preserves_initialized_output_and_guards_writeback",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_audit_rejects_corrupt_execution_evidence",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_requires_complete_workload_and_upstream_traces",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_ci_requires_separate_three_os_host_execution",
+            "demos/integrations/mlx/tests/host/test_portable_gather_axis.py::def test_axis_gather_preserves_all_workload_layouts",
+            "demos/integrations/mlx/tests/host/test_portable_gather_axis.py::def test_axis_gather_rejects_invalid_layout_before_dispatch",
+            "demos/integrations/mlx/tests/host/test_portable_gather_axis.py::def test_axis_gather_audit_reconstructs_outputs_and_rejects_corruption",
+            "demos/integrations/mlx/tests/host/test_portable_gather_axis.py::def test_axis_gather_ci_requires_native_unchanged_upstream_test",
+            "demos/integrations/mlx/tests/host/test_portable_gather.py::def test_gather_layout_matches_all_supported_storage_types",
+            "demos/integrations/mlx/tests/host/test_portable_gather.py::def test_gather_host_writeback_requires_valid_native_readback",
+            "demos/integrations/mlx/tests/host/test_portable_gather.py::def test_gather_audit_reconciles_native_storage_and_rejects_corruption",
+            "demos/integrations/mlx/tests/host/test_portable_gather.py::def test_gather_ci_requires_unchanged_tests_on_all_three_targets",
+            "demos/integrations/mlx/tests/host/test_portable_host.py::def test_translated_binding_contract_and_typed_readback",
+            "demos/integrations/mlx/tests/host/test_portable_host.py::def test_invalid_dispatch_never_reaches_executor",
+            "demos/integrations/mlx/tests/host/test_portable_host.py::def test_unary_dispatch_contract",
+            "demos/integrations/mlx/tests/host/test_portable_host.py::def test_unary_nonfinite_transport",
+            "demos/integrations/mlx/tests/host/test_portable_host.py::def test_unary_verifier_requires_complete_independent_results",
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_reflection_retains_exact_members",
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_dispatch_rejects_forged_layout",
             "tests/test_translator/test_buffer_requirements.py::def test_package_dispatch_enforces_minimum_not_exact_extent",
             "tests/test_translator/test_buffer_requirements.py::def test_minimum_applies_to_view_not_larger_allocation",
             "tests/test_translator/test_buffer_requirements.py::def test_minimum_footprint_native_readback",
             "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_buffer_native_readback",
-            "tests/test_translator/test_mlx_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
-            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
-            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
+            "demos/integrations/mlx/tests/kernels/test_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
+            "demos/integrations/mlx/tests/kernels/test_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
+            "demos/integrations/mlx/tests/kernels/test_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
             "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
             "tests/test_translator/test_native_runtime_drivers.py::def test_prepare_opengl_buffers_rejects_missing_scalar_block_layout",
             "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_zero_pads_scalar_uniform_block_allocation",
-            "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_opengl_native_loader"
+            "demos/integrations/mlx/tests/kernels/test_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_opengl_native_loader"
           ]
         },
         "webgl": {
@@ -11437,26 +11437,26 @@
             "tests/test_translator/test_metal_native_runtime.py::def test_metal_unproven_layouts_remain_unavailable",
             "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_preserves_layouts_and_single_buffer_namespace",
             "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_native_readback",
-            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_validates_update_and_output_geometry",
-            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_uploads_initialized_output_and_guards_writeback",
-            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_audit_rejects_corrupt_native_evidence",
-            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_requires_complete_workload_traces",
-            "tests/test_mlx_portable_scatter_axis.py::def test_axis_scatter_ci_requires_native_execution_on_all_targets",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_validates_workload_allocations_and_launch",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_rejects_invalid_layout_before_translation",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_preserves_initialized_output_and_guards_writeback",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_audit_rejects_corrupt_execution_evidence",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_requires_complete_workload_and_upstream_traces",
-            "tests/test_mlx_portable_scatter.py::def test_scatter_ci_requires_separate_three_os_host_execution",
-            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_preserves_all_workload_layouts",
-            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_rejects_invalid_layout_before_dispatch",
-            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_audit_reconstructs_outputs_and_rejects_corruption",
-            "tests/test_mlx_portable_gather_axis.py::def test_axis_gather_ci_requires_native_unchanged_upstream_test",
-            "tests/test_mlx_portable_gather.py::def test_gather_layout_matches_all_supported_storage_types",
-            "tests/test_mlx_portable_gather.py::def test_gather_host_writeback_requires_valid_native_readback",
-            "tests/test_mlx_portable_gather.py::def test_gather_audit_reconciles_native_storage_and_rejects_corruption",
-            "tests/test_mlx_portable_gather.py::def test_gather_ci_requires_unchanged_tests_on_all_three_targets",
-            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity"
+            "demos/integrations/mlx/tests/host/test_portable_scatter_axis.py::def test_axis_scatter_validates_update_and_output_geometry",
+            "demos/integrations/mlx/tests/host/test_portable_scatter_axis.py::def test_axis_scatter_uploads_initialized_output_and_guards_writeback",
+            "demos/integrations/mlx/tests/host/test_portable_scatter_axis.py::def test_axis_scatter_audit_rejects_corrupt_native_evidence",
+            "demos/integrations/mlx/tests/host/test_portable_scatter_axis.py::def test_axis_scatter_requires_complete_workload_traces",
+            "demos/integrations/mlx/tests/host/test_portable_scatter_axis.py::def test_axis_scatter_ci_requires_native_execution_on_all_targets",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_validates_workload_allocations_and_launch",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_rejects_invalid_layout_before_translation",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_preserves_initialized_output_and_guards_writeback",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_audit_rejects_corrupt_execution_evidence",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_requires_complete_workload_and_upstream_traces",
+            "demos/integrations/mlx/tests/host/test_portable_scatter.py::def test_scatter_ci_requires_separate_three_os_host_execution",
+            "demos/integrations/mlx/tests/host/test_portable_gather_axis.py::def test_axis_gather_preserves_all_workload_layouts",
+            "demos/integrations/mlx/tests/host/test_portable_gather_axis.py::def test_axis_gather_rejects_invalid_layout_before_dispatch",
+            "demos/integrations/mlx/tests/host/test_portable_gather_axis.py::def test_axis_gather_audit_reconstructs_outputs_and_rejects_corruption",
+            "demos/integrations/mlx/tests/host/test_portable_gather_axis.py::def test_axis_gather_ci_requires_native_unchanged_upstream_test",
+            "demos/integrations/mlx/tests/host/test_portable_gather.py::def test_gather_layout_matches_all_supported_storage_types",
+            "demos/integrations/mlx/tests/host/test_portable_gather.py::def test_gather_host_writeback_requires_valid_native_readback",
+            "demos/integrations/mlx/tests/host/test_portable_gather.py::def test_gather_audit_reconciles_native_storage_and_rejects_corruption",
+            "demos/integrations/mlx/tests/host/test_portable_gather.py::def test_gather_ci_requires_unchanged_tests_on_all_three_targets",
+            "demos/integrations/mlx/tests/kernels/test_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity"
           ]
         },
         "vulkan": {
@@ -11635,8 +11635,8 @@
             "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic",
             "tests/test_translator/test_runtime_graph_device.py::def test_reduction_device_fixture_matches_runtime_graph_contract",
             "tests/test_translator/test_runtime_graph_device.py::def test_directx_dispatch_sequence_executes_shared_temporary_on_device",
-            "tests/test_translator/test_mlx_attention_reduce_runtime.py::def test_pinned_resident_attention_reductions",
-            "tests/test_translator/test_mlx_attention_reduce_runtime.py::def test_resident_reduction_rejects_conflicting_accumulator_upload"
+            "demos/integrations/mlx/tests/kernels/test_attention_reduce_runtime.py::def test_pinned_resident_attention_reductions",
+            "demos/integrations/mlx/tests/kernels/test_attention_reduce_runtime.py::def test_resident_reduction_rejects_conflicting_accumulator_upload"
           ]
         },
         "opengl": {
@@ -11653,8 +11653,8 @@
             "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic",
             "tests/test_translator/test_runtime_graph_device.py::def test_reduction_device_fixture_matches_runtime_graph_contract",
             "tests/test_translator/test_runtime_graph_device.py::def test_opengl_dispatch_sequence_executes_shared_temporary_on_device",
-            "tests/test_translator/test_mlx_attention_reduce_runtime.py::def test_pinned_resident_attention_reductions",
-            "tests/test_translator/test_mlx_attention_reduce_runtime.py::def test_resident_reduction_rejects_conflicting_accumulator_upload"
+            "demos/integrations/mlx/tests/kernels/test_attention_reduce_runtime.py::def test_pinned_resident_attention_reductions",
+            "demos/integrations/mlx/tests/kernels/test_attention_reduce_runtime.py::def test_resident_reduction_rejects_conflicting_accumulator_upload"
           ]
         },
         "webgl": {
@@ -12104,7 +12104,7 @@
             "tests/test_translator/test_float_storage_encoding.py::def test_public_dispatch_rejects_invalid_storage",
             "tests/test_translator/test_float_storage_encoding.py::def test_encoded_payload_cannot_reinterpret_reflected_storage",
             "tests/test_translator/test_float_storage_encoding.py::def test_float_storage_executes_natively",
-            "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_directx_native_loader"
+            "demos/integrations/mlx/tests/kernels/test_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_directx_native_loader"
           ]
         },
         "opengl": {
@@ -12131,7 +12131,7 @@
             "tests/test_translator/test_float_storage_encoding.py::def test_public_dispatch_rejects_invalid_storage",
             "tests/test_translator/test_float_storage_encoding.py::def test_encoded_payload_cannot_reinterpret_reflected_storage",
             "tests/test_translator/test_float_storage_encoding.py::def test_float_storage_executes_natively",
-            "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_opengl_native_loader"
+            "demos/integrations/mlx/tests/kernels/test_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_opengl_native_loader"
           ]
         },
         "webgl": {
@@ -12166,7 +12166,7 @@
             "tests/test_translator/test_float_storage_encoding.py::def test_runtime_value_serialization_retains_exact_storage",
             "tests/test_translator/test_float_storage_encoding.py::def test_storage_comparison_is_exact_even_with_large_numeric_tolerance",
             "tests/test_translator/test_float_storage_encoding.py::def test_float_storage_executes_natively",
-            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity"
+            "demos/integrations/mlx/tests/kernels/test_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity"
           ]
         },
         "vulkan": {

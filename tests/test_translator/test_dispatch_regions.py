@@ -25,6 +25,7 @@ from crosstl.project.runtime_verification import (
 from crosstl.translator import parse
 from crosstl.translator.dispatch_region_lowering import specialize_dispatch_region
 from crosstl.translator.dispatch_regions import DispatchRegion, plan_dispatch_regions
+from tests.ci_helpers import assert_paths_covered
 from tests.test_backend.test_metal.test_codegen import convert, parse_crossgl
 from tests.test_translator.test_exact_thread_grid_runtime import (
     GRIDS,
@@ -44,7 +45,7 @@ def test_region_execution_gate_is_required_on_every_native_target():
     from tools import ci_coverage
 
     root = Path(__file__).resolve().parents[2]
-    workflow = (root / ".github/workflows/mlx-portable-host.yml").read_text()
+    workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
     step = ci_coverage.workflow_step_section(
         workflow, "Validate exact dispatch regions"
     )
@@ -58,9 +59,9 @@ def test_region_execution_gate_is_required_on_every_native_target():
     )
     for event in ("pull_request", "push"):
         for name in ("test_dispatch_regions.py", "test_exact_thread_grid_runtime.py"):
-            assert (
-                f"tests/test_translator/{name}"
-                in ci_coverage.workflow_event_path_filters(workflow, event)
+            assert_paths_covered(
+                ci_coverage.workflow_event_path_filters(workflow, event),
+                f"tests/test_translator/{name}",
             )
 
 

@@ -79,7 +79,7 @@ def test_metal_aggregate_lookup_executes_original_and_generated(
 
 def test_metal_aggregate_lookup_is_required_in_native_ci():
     workflow = (
-        Path(__file__).parents[2] / ".github/workflows/mlx-gather-roundtrip.yml"
+        Path(__file__).parents[2] / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     step = workflow.split("- name: Validate Metal byte and vector storage\n", 1)[
         1

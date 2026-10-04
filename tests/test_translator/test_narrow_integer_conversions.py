@@ -204,7 +204,7 @@ def test_byte_update_does_not_repeat_an_index_effect(tmp_path, target, update):
 
 def test_byte_conversions_and_directx_random_are_required_in_ci():
     workflow = (
-        Path(__file__).parents[2] / ".github/workflows/mlx-gather-roundtrip.yml"
+        Path(__file__).parents[2] / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     assert workflow.count(f'{REQUIRE_ENV}: "1"') == 3
     assert (

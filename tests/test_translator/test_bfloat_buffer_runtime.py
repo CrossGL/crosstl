@@ -367,7 +367,7 @@ def test_bfloat_native_storage_covers_every_payload(tmp_path, start):
 def test_bfloat_native_gate_is_required_on_every_target():
     from tools import ci_coverage
 
-    workflow = Path(".github/workflows/mlx-gather-roundtrip.yml").read_text()
+    workflow = Path(".github/workflows/demo-project-testing.yml").read_text()
     for name in (
         "Validate indexed OpenGL gather and resource aggregates",
         "Validate indexed DirectX gather and resource aggregates",

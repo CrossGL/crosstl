@@ -31,9 +31,8 @@ from crosstl.translator.codegen.GLSL_codegen import (
     GLSLCodeGen,
     OpenGLScalarConversionError,
 )
-from demos.integrations.mlx.run_mlx_metal_host import run
+from tests.runtime_helpers import compile_metal, run
 from tests.test_translator.test_directx_float_atomics import _compile as compile_directx
-from tests.test_translator.test_mlx_gated_delta_runtime import _compile as compile_metal
 
 REQUIRE_ENV = "CROSTL_REQUIRE_HALF_CONVERSION_RUNTIME"
 TARGET_ENV = "CROSTL_HALF_CONVERSION_TARGET"

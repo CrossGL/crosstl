@@ -13,6 +13,7 @@ import pytest
 
 from crosstl.project import build_native_loader_dispatch_request
 from crosstl.translator import parse
+from tests.ci_helpers import assert_paths_covered
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_native_runtime import _native_request
@@ -316,7 +317,8 @@ def test_partial_native_gate_is_required_on_every_target():
     from tools import ci_coverage
 
     workflow = (
-        Path(__file__).resolve().parents[2] / ".github/workflows/mlx-portable-host.yml"
+        Path(__file__).resolve().parents[2]
+        / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     step = ci_coverage.workflow_step_section(
         workflow, "Validate exact partial subgroup execution"
@@ -325,7 +327,7 @@ def test_partial_native_gate_is_required_on_every_target():
     assert f'{REQUIRE_ENV}: "1"' in step and "test_software_subgroup_partial.py" in step
     assert "-n auto" in step and "--basetemp=" in step and "--junitxml=" in step
     for event in ("pull_request", "push"):
-        assert (
-            "tests/test_translator/test_software_subgroup_partial.py"
-            in ci_coverage.workflow_event_path_filters(workflow, event)
+        assert_paths_covered(
+            ci_coverage.workflow_event_path_filters(workflow, event),
+            "tests/test_translator/test_software_subgroup_partial.py",
         )

@@ -267,14 +267,17 @@ def test_inferred_pointer_offsets_execute(tmp_path, original):
     assert actual == expected
 
 
-@pytest.mark.parametrize("filename", ["mlx-portable-host.yml", "mlx-metal-host.yml"])
-def test_ci_requires_native_argument_inference(filename):
+@pytest.mark.parametrize("job", ["metal-host", "portable-host"])
+def test_ci_requires_native_argument_inference(job):
+    from tools import ci_coverage
+
     workflow = (
-        Path(__file__).resolve().parents[2] / ".github/workflows" / filename
+        Path(__file__).resolve().parents[2]
+        / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = workflow.split("      - name: Validate Metal argument inference\n", 1)[
-        1
-    ].split("      - name:", 1)[0]
+    step = ci_coverage.workflow_job_step_section(
+        workflow, job, "Validate Metal argument inference"
+    )
     assert "if:" not in step
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_project_metal_discovery.py" in step

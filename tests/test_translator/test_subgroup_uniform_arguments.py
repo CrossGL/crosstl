@@ -14,6 +14,7 @@ from crosstl.project import build_native_loader_dispatch_request
 from crosstl.translator import parse
 from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
 from crosstl.translator.codegen.GLSL_codegen import OpenGLSoftwareSubgroupError
+from tests.ci_helpers import assert_paths_covered
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_native_runtime import _native_request
@@ -543,7 +544,7 @@ def test_uniform_argument_native_gate_is_required_on_every_target():
     from tools import ci_coverage
 
     root = Path(__file__).resolve().parents[2]
-    workflow = (root / ".github/workflows/mlx-portable-host.yml").read_text()
+    workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
     step = ci_coverage.workflow_step_section(
         workflow, "Validate collective helper arguments"
     )
@@ -557,7 +558,7 @@ def test_uniform_argument_native_gate_is_required_on_every_target():
     assert "--timeout-seconds 360" in step
     assert "--basetemp=" in step and "--junitxml=" in step
     for event in ("pull_request", "push"):
-        assert (
-            "tests/test_translator/test_subgroup_uniform_arguments.py"
-            in ci_coverage.workflow_event_path_filters(workflow, event)
+        assert_paths_covered(
+            ci_coverage.workflow_event_path_filters(workflow, event),
+            "tests/test_translator/test_subgroup_uniform_arguments.py",
         )

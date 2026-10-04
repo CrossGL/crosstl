@@ -3,7 +3,6 @@
 import os
 import shutil
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -278,28 +277,3 @@ def test_atomic_store_nested_storage_compiles(tmp_path, target, kind, case):
     if shutil.which(tool):
         _, module = _compile(generated, target, tmp_path)
         assert module.is_file() and module.stat().st_size
-
-
-def test_atomic_stores_and_pinned_scatter_are_required_on_each_native_target():
-    from tests.test_translator.test_mlx_scatter_axis_runtime import (
-        REQUIRE_ENV as SCATTER_ENV,
-    )
-    from tools import ci_coverage
-
-    workflow = (
-        Path(__file__).resolve().parents[2]
-        / ".github/workflows/mlx-gather-roundtrip.yml"
-    ).read_text()
-    for name in (
-        "Validate general gather and empty arrays",
-        "Validate indexed DirectX gather and resource aggregates",
-        "Validate indexed OpenGL gather and resource aggregates",
-    ):
-        step = ci_coverage.workflow_step_section(workflow, name)
-        assert f'{REQUIRE_ENV}: "1"' in step
-        assert f'{SCATTER_ENV}: "1"' in step
-        assert "test_atomic_store_runtime.py" in step
-        assert "test_mlx_scatter_axis_runtime.py" in step
-        timeout = 1800 if name == "Validate general gather and empty arrays" else 1200
-        assert f"--timeout-seconds {timeout}" in step
-        assert "if:" not in step and "continue-on-error" not in workflow

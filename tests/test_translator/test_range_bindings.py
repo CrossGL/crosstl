@@ -244,7 +244,7 @@ kernel void range_shadow(device uint* results [[buffer(0)]]) {{
 
 def test_range_binding_native_checks_are_required_on_three_platforms():
     workflow = (
-        Path(__file__).parents[2] / ".github/workflows/mlx-gather-roundtrip.yml"
+        Path(__file__).parents[2] / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     assert workflow.count('CROSTL_REQUIRE_RANGE_BINDINGS: "1"') == 3
     assert workflow.count("tests/test_translator/test_range_bindings.py") == 3

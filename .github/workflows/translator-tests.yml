@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ${{ matrix.runner || matrix.OS }}
+    runs-on: ${{ matrix.OS }}
     timeout-minutes: 45
     strategy:
       matrix:
@@ -40,10 +40,25 @@ jobs:
         exclude:
           - python-version: "3.8"
             OS: windows-latest
-        include:
           - python-version: "3.9"
             OS: windows-latest
-            runner: windows-2022
+          - python-version: "3.10"
+            OS: windows-latest
+          - python-version: "3.11"
+            OS: windows-latest
+          - python-version: "3.12"
+            OS: windows-latest
+          - python-version: "3.8"
+            OS: macOS-latest
+          - python-version: "3.9"
+            OS: macOS-latest
+          - python-version: "3.10"
+            OS: macOS-latest
+          - python-version: "3.11"
+            OS: macOS-latest
+          - python-version: "3.12"
+            OS: macOS-latest
+
       fail-fast: false
 
     steps:

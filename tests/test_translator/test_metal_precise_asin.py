@@ -149,7 +149,7 @@ def test_ci_requires_native_precise_asin_on_all_three_platforms():
 
     workflow = (
         Path(__file__).resolve().parents[2]
-        / ".github/workflows/mlx-project-porting.yml"
+        / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     step = workflow.split("      - name: Validate Metal builtin ownership\n", 1)[
         1

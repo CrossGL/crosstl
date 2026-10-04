@@ -1052,7 +1052,7 @@ source words. Other sizes and storage widths remain explicit errors. The runtime
 checks an additional 128-byte destination guard before copying device results
 back into the MLX array.
 The complete platform setup is in
-[`mlx-portable-host.yml`](../../../../.github/workflows/mlx-portable-host.yml).
+[`demo-project-testing.yml`](../../../../.github/workflows/demo-project-testing.yml).
 Output directories must be new so evidence from different runs cannot mix.
 
 The host workflow first runs required native scalar-math and fused-arithmetic

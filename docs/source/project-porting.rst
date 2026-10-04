@@ -2062,7 +2062,7 @@ execution. These Python-driver checks do not add limit validation to generated
 C++ loader adapters or establish complete host-runtime integration.
 
 Lossless Float Buffer Storage
-----------------------------
+-----------------------------
 
 Typed float32 buffers can opt into ``encoding: "ieee754-binary32"`` in the
 Python native dispatch API and runtime-verification fixtures. Each ``values``

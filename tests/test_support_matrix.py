@@ -413,7 +413,7 @@ def test_project_subgroup_width_specialization_support_is_target_scoped():
         "test_subgroup_width_rules_emit_guarded_opengl_contracts"
     ) in opengl["evidence"]
     assert (
-        "tests/test_translator/test_mlx_logsumexp_native_loader.py::def "
+        "demos/integrations/mlx/tests/kernels/test_logsumexp_native_loader.py::def "
         "test_pinned_mlx_logsumexp_translates_to_guarded_opengl_artifacts"
     ) in opengl["evidence"]
 

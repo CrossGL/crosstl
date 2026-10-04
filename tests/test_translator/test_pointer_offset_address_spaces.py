@@ -375,7 +375,7 @@ def test_pointer_offset_execution_is_required_on_each_target():
 
     workflow = (
         Path(__file__).resolve().parents[2]
-        / ".github/workflows/mlx-gather-roundtrip.yml"
+        / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     for name in (
         "Validate general gather and empty arrays",

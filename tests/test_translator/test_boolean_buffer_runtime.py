@@ -36,6 +36,7 @@ from crosstl.project.runtime_verification import (
     RuntimeValue,
     _values_match,
 )
+from tests.ci_helpers import assert_paths_covered
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_native_runtime import _native_request
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
@@ -343,23 +344,19 @@ def test_boolean_storage_is_required_in_native_workflows():
     from tools import ci_coverage
 
     root = Path(__file__).resolve().parents[2]
-    for name in (
-        "mlx-portable-host.yml",
-        "mlx-metal-host.yml",
-        "mlx-project-porting.yml",
-    ):
-        workflow = (root / ".github/workflows" / name).read_text()
-        step = ci_coverage.workflow_step_section(
-            workflow, "Validate pinned comparison arithmetic"
+    workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
+    for job in ("mlx-metal-porting", "metal-host", "portable-host"):
+        step = ci_coverage.workflow_job_step_section(
+            workflow, job, "Validate pinned comparison arithmetic"
         )
         assert "test_boolean_buffer_runtime.py" in step
         assert f'{REQUIRE_ENV}: "1"' in step
         assert "-n auto" in step and "continue-on-error" not in step
         assert "--timeout-seconds" in step and "--junitxml" in step
         for event in ("pull_request", "push"):
-            assert (
-                "tests/test_translator/test_boolean_buffer_runtime.py"
-                in ci_coverage.workflow_event_path_filters(workflow, event)
+            assert_paths_covered(
+                ci_coverage.workflow_event_path_filters(workflow, event),
+                "tests/test_translator/test_boolean_buffer_runtime.py",
             )
 
 
