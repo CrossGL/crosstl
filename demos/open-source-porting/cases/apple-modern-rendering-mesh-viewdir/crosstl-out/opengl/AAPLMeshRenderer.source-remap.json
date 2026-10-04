@@ -27,12 +27,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 10,
-        "endOffset": 237,
+        "endLine": 48,
+        "endOffset": 1736,
         "file": "crosstl-out/opengl/AAPLMeshRenderer.glsl",
-        "length": 73,
-        "line": 9,
-        "offset": 164
+        "length": 94,
+        "line": 47,
+        "offset": 1642
       },
       "original": {
         "column": 1,

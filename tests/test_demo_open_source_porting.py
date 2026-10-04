@@ -422,16 +422,24 @@ def test_open_source_demo_runner_requires_toolchain_runs_per_selected_target(tmp
         runner.subprocess.run = original_run
 
 
-def test_open_source_demo_runner_verifies_fast_reference_subset():
+@pytest.mark.parametrize(
+    "case,target",
+    [
+        ("directx-graphics-samples-hello-triangle", "cgl"),
+        ("apple-modern-rendering-mesh-viewdir", "directx"),
+        ("apple-modern-rendering-mesh-viewdir", "opengl"),
+    ],
+)
+def test_open_source_demo_runner_verifies_fast_reference_subset(case, target):
     result = subprocess.run(
         [
             sys.executable,
             "demos/open-source-porting/run_demo.py",
             "--check",
             "--case",
-            "directx-graphics-samples-hello-triangle",
+            case,
             "--target",
-            "cgl",
+            target,
         ],
         cwd=str(ROOT),
         capture_output=True,
@@ -440,7 +448,7 @@ def test_open_source_demo_runner_verifies_fast_reference_subset():
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "directx-graphics-samples-hello-triangle: verified cgl" in result.stdout
+    assert f"{case}: verified {target}" in result.stdout
 
 
 def test_open_source_demo_runner_ignores_trailing_text_artifact_whitespace(tmp_path):

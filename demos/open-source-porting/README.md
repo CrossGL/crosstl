@@ -105,6 +105,12 @@ examples so the demo remains small and deterministic. The reductions remove
 unrelated code around the shader construct being demonstrated; they do not
 patch translator output.
 
+The Apple mesh view-direction case retains its explicit three-component half
+conversion. Its DirectX and OpenGL references include binary16 nearest-even
+rounding before the result is stored in the vertex output. OpenGL represents
+that rounded value in a float vector; widening the storage must not remove the
+source conversion. The input slice and upstream pin are unchanged.
+
 The ROCm add-kernel DirectX artifact is checked after HIP pointer-parameter
 lowering landed in #1219. The SPIR-V Tools basic-source DirectX artifact is
 checked after the corresponding DirectX lowering fix landed on main. OpenCL

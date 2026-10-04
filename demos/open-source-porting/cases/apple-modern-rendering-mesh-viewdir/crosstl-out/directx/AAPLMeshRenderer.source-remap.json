@@ -5,12 +5,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 4,
-        "endOffset": 56,
+        "endLine": 34,
+        "endOffset": 1293,
         "file": "crosstl-out/directx/AAPLMeshRenderer.hlsl",
         "length": 39,
-        "line": 3,
-        "offset": 17
+        "line": 33,
+        "offset": 1254
       },
       "original": {
         "column": 1,
@@ -27,12 +27,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 14,
-        "endOffset": 252,
+        "endLine": 44,
+        "endOffset": 1489,
         "file": "crosstl-out/directx/AAPLMeshRenderer.hlsl",
         "length": 27,
-        "line": 13,
-        "offset": 225
+        "line": 43,
+        "offset": 1462
       },
       "original": {
         "column": 1,
@@ -49,12 +49,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 16,
-        "endOffset": 357,
+        "endLine": 46,
+        "endOffset": 1613,
         "file": "crosstl-out/directx/AAPLMeshRenderer.hlsl",
-        "length": 88,
-        "line": 15,
-        "offset": 269
+        "length": 107,
+        "line": 45,
+        "offset": 1506
       },
       "original": {
         "column": 1,
