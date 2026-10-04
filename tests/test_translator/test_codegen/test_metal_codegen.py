@@ -5835,8 +5835,8 @@ def test_metal_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "int bytes[2];" in generated_code
-    assert "uint words[3];" in generated_code
+    assert "char bytes[2];" in generated_code
+    assert "ushort words[3];" in generated_code
     assert "int64_t signedValue;" in generated_code
     assert "uint64_t offsets[2];" in generated_code
     assert "constant int globalBytes[2] = {};" in generated_code
@@ -5921,7 +5921,7 @@ def test_metal_fixed_width_nested_array_aliases_map_to_valid_metal_types():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "int bytes[2][3];" in generated_code
+    assert "char bytes[2][3];" in generated_code
     assert "uint64_t offsets[2][3];" in generated_code
     assert "uint bumpNested(uint values[2][3], int row, int col)" in generated_code
     assert "uint grid[2][3];" in generated_code

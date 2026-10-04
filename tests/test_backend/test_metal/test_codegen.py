@@ -11181,7 +11181,7 @@ def test_metal_target_lowers_local_single_field_parameter_reinterpret_read(tmp_p
             """))
 
     assert "ByteView read(uint value)" in metal
-    assert "return ByteView{value};" in metal
+    assert "return ByteView{uchar(value)};" in metal
     assert "reinterpret" not in metal
     assert "PointerReinterpretNode" not in metal
     assert_metal_compute_validates_if_available(

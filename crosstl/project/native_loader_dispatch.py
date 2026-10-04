@@ -22,6 +22,7 @@ from crosstl.project.native_loader_abi import (
 from crosstl.project.runtime_value_encoding import validate_value_encoding
 from crosstl.project.runtime_verification import (
     RuntimeAdapterContract,
+    RuntimeAllocationView,
     RuntimeArtifactIdentity,
     RuntimeArtifactSelector,
     RuntimeDispatchGeometry,
@@ -72,6 +73,14 @@ _BUFFER_KIND_ALIASES = {
     "uniform": "constant-buffer",
 }
 _BUFFER_DTYPE_ALIASES = {
+    "char": "int8",
+    "i8": "int8",
+    "int8": "int8",
+    "int8_t": "int8",
+    "uchar": "uint8",
+    "u8": "uint8",
+    "uint8": "uint8",
+    "uint8_t": "uint8",
     "bool": "bool",
     "boolean": "bool",
     "float": "float32",
@@ -102,6 +111,8 @@ _SPECIALIZATION_DTYPE_ALIASES = {
 }
 _SPECIALIZATION_DTYPE_ALIASES.update({"bool": "bool", "boolean": "bool"})
 _DTYPE_SIZES = {
+    "int8": 1,
+    "uint8": 1,
     "bool": 1,
     "float32": 4,
     "int32": 4,
@@ -110,6 +121,8 @@ _DTYPE_SIZES = {
     "uint64": 8,
 }
 _PHYSICAL_TYPES = {
+    "int8": "char",
+    "uint8": "uchar",
     "bool": "bool",
     "float32": "float",
     "int32": "int",
@@ -141,7 +154,6 @@ _VALUE_FIELDS = frozenset(
 _ALIAS_METADATA_FIELDS = frozenset(("aliases", "resourceAliases", "bindingAliases"))
 _ENTRY_POINT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _UINT32_MAX = (1 << 32) - 1
-_UINT64_MAX = (1 << 64) - 1
 
 
 class NativeLoaderDispatchError(ValueError):
@@ -694,6 +706,14 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             details={"aliasFields": aliases, "name": runtime_value.name},
         )
     dtype = _buffer_dtype(runtime_value.dtype, path=f"{path}.dtype")
+    if runtime_value.allocation is not None and not isinstance(
+        runtime_value.allocation, RuntimeAllocationView
+    ):
+        raise NativeLoaderDispatchError(
+            "value-allocation-invalid",
+            "Typed runtime allocations must be RuntimeAllocationView instances.",
+            path=f"{path}.allocation",
+        )
     try:
         validate_value_encoding(runtime_value.encoding, dtype, runtime_value.values)
     except ValueError as exc:
@@ -750,6 +770,7 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
         tolerance=runtime_value.tolerance,
         metadata=copy.deepcopy(dict(metadata)),
         encoding=runtime_value.encoding,
+        allocation=copy.deepcopy(runtime_value.allocation),
     )
 
 
@@ -818,7 +839,7 @@ def _buffer_dtype(value: Any, *, path: str) -> str:
         raise NativeLoaderDispatchError(
             "value-dtype-unsupported",
             "Native runtime buffers support float32, int32, uint32, int64, "
-            "uint64, and Metal bool values only.",
+            "uint64, and Metal bool, int8 and uint8 values only.",
             path=path,
             details={"dtype": value},
         )
@@ -845,15 +866,15 @@ def _validate_buffer_values(
         valid = False
         if dtype == "bool":
             valid = type(value) is bool
-        elif dtype in {"int32", "int64"}:
+        elif dtype in {"int8", "int32", "int64"}:
             bit_width = _DTYPE_SIZES[dtype] * 8
             valid = (
                 isinstance(value, int)
                 and not isinstance(value, bool)
                 and -(1 << (bit_width - 1)) <= value < (1 << (bit_width - 1))
             )
-        elif dtype in {"uint32", "uint64"}:
-            maximum = _UINT32_MAX if dtype == "uint32" else _UINT64_MAX
+        elif dtype in {"uint8", "uint32", "uint64"}:
+            maximum = (1 << (_DTYPE_SIZES[dtype] * 8)) - 1
             valid = (
                 isinstance(value, int)
                 and not isinstance(value, bool)
@@ -1213,6 +1234,13 @@ def _validated_scalar_layout(
             path=path,
             details={"binding": runtime_value.name, "target": target},
         )
+    if runtime_value.dtype in {"int8", "uint8"} and target != "metal":
+        raise NativeLoaderDispatchError(
+            "resource-layout-mismatch",
+            "Byte-sized integers require Metal storage; other targets use their reflected physical representation.",
+            path=path,
+            details={"binding": runtime_value.name, "target": target},
+        )
     # Metal's constant address space does not imply a fixed-size argument.
     if (
         target == "metal"
@@ -1305,6 +1333,15 @@ def _validated_scalar_layout(
     if vector_width != 1:
         expected_physical_type = f"{expected_physical_type}{vector_width}"
     expected_element_size = _DTYPE_SIZES[runtime_value.dtype] * vector_width
+    if runtime_value.dtype in {"int8", "uint8"} and (
+        vector_width not in {1, 2, 4} or alignment != expected_element_size
+    ):
+        raise NativeLoaderDispatchError(
+            "resource-layout-unsupported",
+            "Metal byte buffers require the natural scalar, two-lane or four-lane alignment.",
+            path=path,
+            details={"binding": runtime_value.name, "vectorWidth": vector_width},
+        )
     expected_storage_layout = _TARGET_STORAGE_LAYOUTS[target][resource_kind]
     if (
         element_type != runtime_value.dtype

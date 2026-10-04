@@ -12,6 +12,7 @@ from crosstl.project.native_loader_dispatch import (
     build_native_loader_dispatch_request,
 )
 from crosstl.project.runtime_verification import (
+    RuntimeAllocationView,
     RuntimeDispatchGeometry,
     RuntimeExecutionRequest,
     RuntimeValue,
@@ -217,6 +218,36 @@ def _build(tmp_path, target="directx", **overrides):
         expected_target=overrides.pop("expected_target", target),
         **overrides,
     )
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_native_loader_preserves_explicit_allocation_views(tmp_path, target):
+    inputs = {
+        name: RuntimeValue(
+            name=name, **value, allocation=RuntimeAllocationView(name, 16, 16, 48)
+        )
+        for name, value in _inputs().items()
+    }
+    outputs = {
+        name: RuntimeValue(
+            name=name, **value, allocation=RuntimeAllocationView(name, 8, 16, 32)
+        )
+        for name, value in _outputs().items()
+    }
+    request = _build(tmp_path, target, input_values=inputs, output_values=outputs)
+    expected = {**inputs, **outputs}
+    for resource in request.execution_plan.resource_bindings:
+        assert resource.allocation == expected[resource.binding.name].allocation
+
+
+@pytest.mark.parametrize("allocation", ({}, 0, "buffer"))
+def test_native_loader_rejects_invalid_allocation_objects(tmp_path, allocation):
+    inputs = {
+        name: RuntimeValue(name=name, **value, allocation=allocation)
+        for name, value in _inputs().items()
+    }
+    with pytest.raises(NativeLoaderDispatchError, match="value-allocation-invalid"):
+        _build(tmp_path, input_values=inputs)
 
 
 @pytest.mark.parametrize(

@@ -3802,13 +3802,19 @@ class MetalCodeGen:
         code = f"struct {name} {{\n"
         dependencies = set()
         for field_name, field_type in fields:
-            mapped_type = self.map_type(field_type)
+            mapped_type = self.metal_struct_storage_type(field_type)
             declaration = format_c_style_array_declaration(mapped_type, field_name)
             code += f"    {declaration};\n"
             dependencies.update(self.metal_struct_type_dependencies(mapped_type))
         code += "};\n\n"
         dependencies.discard(name)
         return {"name": name, "dependencies": dependencies, "code": code}
+
+    def metal_struct_storage_type(self, value_type):
+        """Keep declared integer widths in aggregate storage, not arithmetic."""
+        base, suffix = split_array_type_suffix(self.type_name_string(value_type))
+        native = self.metal_native_narrow_bitcast_storage_type(base)
+        return native + suffix if native is not None else self.map_type(value_type)
 
     def metal_plain_struct_definition(self, node):
         if not isinstance(node, StructNode):
@@ -3840,7 +3846,10 @@ class MetalCodeGen:
                 member,
                 default_member_semantics,
                 node.name,
-                preserve_native_narrow_storage=alignment is not None,
+                preserve_native_narrow_storage=(
+                    alignment is not None
+                    or node.name not in self.metal_stage_io_struct_names
+                ),
             )
             code += member_code
             dependencies.update(member_dependencies)
@@ -4214,6 +4223,8 @@ class MetalCodeGen:
             semantic_attr = self.map_semantic(semantic) if semantic else ""
             interpolation_attr = self.metal_interpolation_attribute_suffix(member)
             mapped_type = self.map_type(element_type)
+            if preserve_native_narrow_storage:
+                mapped_type = self.metal_struct_storage_type(element_type)
             dependencies.update(self.metal_struct_type_dependencies(mapped_type))
             if member.size:
                 if self.metal_array_semantic_attribute_precedes_extent(semantic):
@@ -4278,12 +4289,7 @@ class MetalCodeGen:
                 member_type_str = self.convert_type_node_to_string(member.member_type)
                 member_type = self.map_type(member_type_str)
                 if preserve_native_narrow_storage:
-                    base_type, array_suffix = split_array_type_suffix(member_type_str)
-                    native_type = self.metal_native_narrow_bitcast_storage_type(
-                        base_type
-                    )
-                    if native_type is not None:
-                        member_type = f"{native_type}{array_suffix}"
+                    member_type = self.metal_struct_storage_type(member_type_str)
                 dependencies.update(self.metal_struct_type_dependencies(member_type))
                 declaration = format_c_style_array_declaration(member_type, member.name)
                 if self.metal_array_semantic_attribute_precedes_extent(semantic):
@@ -4322,6 +4328,10 @@ class MetalCodeGen:
         else:
             member_type = "float"
 
+        if preserve_native_narrow_storage:
+            raw_type = self.struct_member_raw_type(member)
+            if self.metal_native_narrow_bitcast_storage_type(raw_type) is not None:
+                member_type = self.metal_struct_storage_type(raw_type)
         dependencies.update(self.metal_struct_type_dependencies(member_type))
         return (
             f"    {member_type} {member.name}{abi_attr}{semantic_attr}"
@@ -20287,7 +20297,24 @@ class MetalCodeGen:
                 func_name, index
             ):
                 continue
-            args.append(self.generate_expression(arg))
+            rendered = self.generate_expression(arg)
+            native_type = self.metal_native_narrow_bitcast_storage_type(param_type)
+            parameters = self.function_parameter_nodes.get(func_name, [])
+            qualifiers = (
+                set(getattr(parameters[index], "qualifiers", []) or [])
+                if index < len(parameters)
+                else set()
+            )
+            if (
+                native_type is not None
+                and native_type[-1:] in {"2", "3", "4"}
+                and not qualifiers.intersection({"out", "inout"})
+                and len(self.function_overloads_by_name.get(func_name, [])) <= 1
+            ):
+                # Native aggregate vectors need an explicit value conversion
+                # when the callee uses the widened arithmetic representation.
+                rendered = f"{self.map_type(param_type)}({rendered})"
+            args.append(rendered)
             if self.structured_buffer_parameter_requires_length(func_name, param_name):
                 length = self.structured_buffer_length_data_argument(arg)
                 if length is not None:
@@ -26118,7 +26145,13 @@ class MetalCodeGen:
         if source is None:
             return None
         target_type = self.map_type(contract["targetType"])
-        return f"{target_type}{{{self.generate_expression(source)}}}"
+        value = self.generate_expression(source)
+        native_type = self.metal_native_narrow_bitcast_storage_type(
+            contract["sourceType"]
+        )
+        if native_type is not None:
+            value = f"{native_type}({value})"
+        return f"{target_type}{{{value}}}"
 
     def map_operator(self, op):
         op_map = {

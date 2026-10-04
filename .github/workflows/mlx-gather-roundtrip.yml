@@ -146,6 +146,7 @@ jobs:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_REQUIRE_MLX_GENERAL_GATHER: "1"
           CROSTL_REQUIRE_METAL_EMPTY_ARRAYS: "1"
+          CROSTL_REQUIRE_BYTE_BUFFER_RUNTIME: "1"
           CROSTL_REQUIRE_FLOAT_ATOMIC_MEMORY: "1"
           CROSTL_REQUIRE_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
@@ -171,6 +172,8 @@ jobs:
               --junitxml=.mlx-gather/results.xml \
               tests/test_translator/test_mlx_general_gather.py \
               tests/test_translator/test_metal_empty_arrays.py \
+              tests/test_translator/test_byte_buffer_runtime.py \
+              tests/test_translator/test_metal_narrow_aggregate_runtime.py \
               tests/test_translator/test_float_atomic_memory.py \
               tests/test_translator/test_mlx_float_atomic_memory.py \
               tests/test_translator/test_resource_aggregates.py \

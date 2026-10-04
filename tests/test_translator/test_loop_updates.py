@@ -1,5 +1,6 @@
 """Ordered for-loop updates through project packages and native execution."""
 
+import copy
 import hashlib
 import json
 import os
@@ -146,7 +147,7 @@ def _execute(
         actual = executor.runtime_adapter.dispatch(state, native)
         records["generated"] = {
             "outputs": actual,
-            "details": state.details,
+            "details": copy.deepcopy(state.details),
             "request": native.to_json(),
             "adapterSteps": [step.to_json() for step in state.adapter_steps],
             "moduleFile": retained.name,
@@ -200,6 +201,10 @@ def _execute(
         assert actual == expected
         if "originalMetal" in records:
             assert records["originalMetal"]["outputs"] == expected
+            assert (
+                records["generated"]["details"]["metalRuntime"]["librarySHA256"]
+                == records["generated"]["moduleSha256"]
+            )
     finally:
         for directory in state.temporary_directories:
             directory.cleanup()

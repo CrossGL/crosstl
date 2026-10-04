@@ -646,7 +646,8 @@ def _metal_buffer_layout(
         return None
     type_name = match.group("type")
     scalar = re.fullmatch(
-        r"(float|int|uint|long|ulong|int64_t|uint64_t|bool)([24]?)", type_name
+        r"(float|int|uint|long|ulong|int64_t|uint64_t|bool|char|uchar|int8_t|uint8_t)([24]?)",
+        type_name,
     )
     if scalar is None:
         return (
@@ -657,7 +658,12 @@ def _metal_buffer_layout(
             else None
         )
     base, width_text = scalar.groups()
-    base = {"long": "int64_t", "ulong": "uint64_t"}.get(base, base)
+    base = {
+        "long": "int64_t",
+        "ulong": "uint64_t",
+        "int8_t": "char",
+        "uint8_t": "uchar",
+    }.get(base, base)
     width = int(width_text or 1)
     if base in {"int64_t", "uint64_t", "bool"} and width != 1:
         return None
@@ -712,6 +718,8 @@ HLSL_DISPATCH_INFO_BUFFER_RE = re.compile(r"\ACrossGLDispatchInfo_*\Z")
 HLSL_DISPATCH_INFO_MEMBER_RE = re.compile(r"\AcrossglNumWorkGroups_*\Z")
 
 SCALAR_PHYSICAL_TYPES = {
+    "char": "int8",
+    "uchar": "uint8",
     "float": "float32",
     "int": "int32",
     "uint": "uint32",
@@ -719,6 +727,8 @@ SCALAR_PHYSICAL_TYPES = {
     "uint64_t": "uint64",
 }
 SCALAR_PHYSICAL_SIZES = {
+    "char": 1,
+    "uchar": 1,
     "float": 4,
     "int": 4,
     "uint": 4,
@@ -1216,6 +1226,8 @@ def _homogeneous_struct_buffer_layout(
     if members is None:
         return None
     scalar_type = members[0][0]
+    if scalar_type in {"char", "uchar"} and storage_layout != "metal-buffer":
+        return None
     scalar_size = SCALAR_PHYSICAL_SIZES[scalar_type]
     layout = {
         "physicalType": type_name,

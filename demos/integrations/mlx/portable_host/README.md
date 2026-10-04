@@ -792,6 +792,28 @@ gate and does not count toward upstream-suite coverage. After the blockers are
 resolved, require this native audit in CI before enabling `RandomBits` dispatch.
 No kernel edits, generated-source repairs or readback corrections are applied.
 
+The required macOS gather workflow separately verifies the byte-storage and
+narrow-aggregate prerequisites. Signed and unsigned byte buffers retain one-byte
+elements through reflection, packaging, native upload and readback. Its 32
+original/generated controls cover scalar and constant buffers, references,
+two- and four-lane vectors, aliases, homogeneous structures and nonzero allocation
+offsets. Invalid values and layouts fail before dispatch. DirectX/OpenGL widened
+storage cannot accept these Metal byte payloads without a supported physical
+representation.
+
+Twenty additional original/generated controls verify 8- and 16-bit aggregate
+members, overlapping unions, vector arrays, nested and generic structures,
+dynamic lane reads and native sizes, with poisoned result guards. Narrow
+aggregate storage remains distinct from widened arithmetic values. The public
+loader also preserves explicit allocation views instead of silently replacing
+them with offset-zero buffers
+([#2063](https://github.com/CrossGL/crosstl/issues/2063)).
+
+These controls do not establish random-generation parity. The unchanged Metal
+random audit still fails native compilation on partial vector initialization,
+fixed-array range iteration and aggregate name shadowing; `RandomBits` host
+dispatch remains disabled.
+
 ## Run
 
 Use Python 3.12, a C++20 toolchain, CMake, Ninja and the relevant runtime.

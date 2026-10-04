@@ -4710,6 +4710,12 @@ def _int_field(value: Any, *, default: int | None = None) -> int:
 
 def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
     aliases = {
+        "char": "int8",
+        "i8": "int8",
+        "int8_t": "int8",
+        "uchar": "uint8",
+        "u8": "uint8",
+        "uint8_t": "uint8",
         "boolean": "bool",
         "float": "float32",
         "f32": "float32",
@@ -4729,7 +4735,7 @@ def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
     }
     normalized = str(dtype or "").strip().lower()
     value = aliases.get(normalized, normalized)
-    if value == "bool" and target.lower() == "metal":
+    if value in {"bool", "int8", "uint8"} and target.lower() == "metal":
         return value
     if value not in {"float32", "uint32", "int32", "uint64", "int64"}:
         raise RuntimeExecutorUnavailable(
@@ -4741,6 +4747,8 @@ def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
 
 def _dtype_format(dtype: str) -> str:
     return {
+        "int8": "b",
+        "uint8": "B",
         "bool": "?",
         "float32": "f",
         "uint32": "I",
@@ -4790,6 +4798,12 @@ def _pack_values(
         raise RuntimeExecutorUnavailable(
             f"{target} boolean buffer values must be true or false."
         )
+    if dtype in {"int8", "uint8"}:
+        low, high = (-128, 127) if dtype == "int8" else (0, 255)
+        if any(type(item) is not int or not low <= item <= high for item in values):
+            raise RuntimeExecutorUnavailable(
+                f"{target} byte buffer values must be integers in [{low}, {high}]."
+            )
     if dtype == "float32":
         special_bits = {
             "nan": 0x7FC00000,
