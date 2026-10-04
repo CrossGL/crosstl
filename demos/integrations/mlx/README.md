@@ -2316,9 +2316,16 @@ pinned by
 [`contracts/binary.metal-roundtrip.json`](contracts/binary.metal-roundtrip.json)
 and linked by hash from ``expected-gaps.json``. The prior
 [`contracts/binary.scalar-metal-roundtrip.json`](contracts/binary.scalar-metal-roundtrip.json)
-remains an exact 238-entry ``ss_`` subset. Required native macOS CI invokes
-``xcrun -sdk macosx metal -Werror -c`` across 24 disjoint shards and requires
-4,122 non-empty AIR outputs; no source-warning exemption is used. This closes
+remains an exact 238-entry ``ss_`` subset. Ubuntu runs the complete translation,
+body, materialization and reflection checks across 24 disjoint shards. Each
+shard exports the exact pinned sources and retains its reports and JUnit results.
+One dependent macOS job verifies complete entry coverage and every source hash
+against the checked-in contract before invoking
+``xcrun -sdk macosx metal -Werror -c``. It requires 4,122 non-empty AIR outputs;
+no source-warning exemption is used. Missing, duplicate or altered bundle entries
+fail before compilation. Compiler commands, diagnostics and output identities are
+retained even on failure. The local round-trip test still performs both phases.
+This closes
 selected-entry translation, reflection, and native compilation for every
 discovered binary instantiation. It is not Metal numerical execution, MLX
 host-runtime redirection, or an MLX test-suite claim.

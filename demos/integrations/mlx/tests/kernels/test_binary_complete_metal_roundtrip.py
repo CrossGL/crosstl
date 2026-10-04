@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import textwrap
 from collections import Counter
 from dataclasses import dataclass
@@ -20,11 +19,16 @@ from crosstl.project import (
     validate_project_report,
 )
 from tests.test_translator.metal_contract import operator_implementations
+from tools.compile_artifact_bundle import write_bundle_entry
+
+from ..corpus_evidence import corpus_workspace
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_BINARY_SOURCE = "mlx/backend/metal/kernels/binary.metal"
 MLX_BINARY_SHA256 = "4dadb612a9b768f9d51b3b394b32fc0129d361a55b35d545b3c014c87e00897e"
 REQUIRE_BINARY_METAL_ENV = "CROSTL_REQUIRE_MLX_BINARY_METAL_ROUNDTRIP"
+REQUIRE_BINARY_METAL_SOURCE_ENV = "CROSTL_REQUIRE_MLX_BINARY_METAL_SOURCE"
+BINARY_METAL_BUNDLE_ENV = "CROSTL_CORPUS_BUNDLE_ROOT"
 BINARY_METAL_SHARD_INDEX_ENV = "CROSTL_MLX_BINARY_METAL_SHARD_INDEX"
 BINARY_METAL_SHARD_COUNT_ENV = "CROSTL_MLX_BINARY_METAL_SHARD_COUNT"
 BINARY_METAL_CI_SHARD_COUNT = 24
@@ -610,7 +614,10 @@ def _project_config(workload: BinaryMetalWorkload) -> str:
 def _pinned_mlx_root() -> Path:
     root_value = os.environ.get("CROSTL_MLX_ROOT")
     if not root_value:
-        if os.environ.get(REQUIRE_BINARY_METAL_ENV) == "1":
+        if any(
+            os.environ.get(name) == "1"
+            for name in (REQUIRE_BINARY_METAL_ENV, REQUIRE_BINARY_METAL_SOURCE_ENV)
+        ):
             pytest.fail("CROSTL_MLX_ROOT is not configured")
         pytest.skip("CROSTL_MLX_ROOT is not configured")
 
@@ -690,6 +697,8 @@ def _translate_binary_metal_artifact(
         run_toolchains=False,
     )
     payload = report.to_json()
+    report_path = work_dir / "portability-report.json"
+    report.write_json(report_path)
 
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["artifactCount"] == 1
@@ -751,21 +760,19 @@ def _translate_binary_metal_artifact(
     ):
         assert residue not in generated
 
-    report_path = work_dir / "portability-report.json"
-    report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
     return report_path, generated_path
 
 
 def _roundtrip_pinned_mlx_binary_through_metal(
     workload: BinaryMetalWorkload,
+    *,
+    bundle_root: Path | None = None,
 ) -> None:
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=f".crosstl-binary-{workload.entry_point}-metal-roundtrip-",
-        dir=mlx_root,
-    ) as temporary_directory:
-        work_dir = Path(temporary_directory)
+    with corpus_workspace(
+        mlx_root, family="binary", target="metal", entry_point=workload.entry_point
+    ) as work_dir:
         report_path, generated_path = _translate_binary_metal_artifact(
             mlx_root,
             work_dir,
@@ -804,6 +811,15 @@ def _roundtrip_pinned_mlx_binary_through_metal(
             for resource in reflected["resources"]
         } == expected_resources
 
+        if bundle_root is not None:
+            write_bundle_entry(
+                generated_path,
+                BINARY_METAL_CONTRACT_PATH,
+                workload.entry_point,
+                bundle_root,
+            )
+            return
+
         xcrun = shutil.which("xcrun")
         if xcrun is None:
             message = "xcrun is required for the MLX binary Metal proof"
@@ -839,3 +855,17 @@ def _roundtrip_pinned_mlx_binary_through_metal(
 )
 def test_current_mlx_binary_family_roundtrips_through_metal(workload):
     _roundtrip_pinned_mlx_binary_through_metal(workload)
+
+
+@pytest.mark.parametrize(
+    "workload",
+    CURRENT_BINARY_METAL_WORKLOADS,
+    ids=lambda workload: workload.entry_point,
+)
+def test_current_mlx_binary_family_exports_native_compilation_bundle(
+    workload, tmp_path
+):
+    bundle_root = Path(
+        os.environ.get(BINARY_METAL_BUNDLE_ENV, str(tmp_path / "bundle"))
+    )
+    _roundtrip_pinned_mlx_binary_through_metal(workload, bundle_root=bundle_root)

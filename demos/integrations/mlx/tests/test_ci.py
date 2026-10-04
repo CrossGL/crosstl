@@ -67,7 +67,7 @@ def test_project_demo_queues_each_job_and_matrix_leg_independently():
     coverage = _load_ci_coverage_module()
     assert not coverage.nested_yaml_section(workflow, "concurrency", 0)
     jobs = coverage.workflow_job_names(workflow)
-    assert len(jobs) == 32
+    assert len(jobs) == 33
     groups = set()
     for name in jobs:
         job = _workflow_job_section(workflow, name)
@@ -2250,51 +2250,127 @@ def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
         "demos/integrations/mlx/tests/kernels/test_binary_complete_metal_roundtrip.py"
     )
 
-    binary_metal_job = _workflow_job_section(
-        mlx_porting,
-        "mlx-binary-complete-metal-roundtrip",
+    sources = _workflow_job_section(mlx_porting, "mlx-binary-metal-sources")
+    assert (
+        "name: MLX complete binary Metal sources "
+        "(shard ${{ matrix.shard_index }} of 24)" in sources
+    )
+    assert "if: github.event_name != 'schedule'" in sources
+    assert "runs-on: ubuntu-24.04" in sources
+    assert "timeout-minutes: 180" in sources
+    assert "fail-fast: false" in sources
+    assert _matrix_values(sources, "shard_index") == {str(index) for index in range(24)}
+    assert 'python-version: "3.12"' in sources
+    assert "python -m pip install -e . pytest-xdist" in sources
+    assert "xcrun" not in sources
+    assert 'MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"' in sources
+    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in sources
+    source_step = ci_coverage.workflow_step_section(
+        sources, "Verify and export complete binary Metal sources"
     )
     assert (
-        "name: MLX complete binary Metal round-trip "
-        "(shard ${{ matrix.shard_index }} of 24)" in binary_metal_job
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in source_step
     )
-    assert "if: github.event_name != 'schedule'" in binary_metal_job
-    assert "runs-on: macOS-latest" in binary_metal_job
-    assert "timeout-minutes: 180" in binary_metal_job
-    assert "fail-fast: false" in binary_metal_job
-    assert _matrix_values(binary_metal_job, "shard_index") == {
-        str(index) for index in range(24)
-    }
-    assert 'python-version: "3.12"' in binary_metal_job
-    assert "python -m pip install -e . pytest-xdist" in binary_metal_job
-    assert "xcrun --sdk macosx metal --version" in binary_metal_job
-    assert "Checkout current MLX binary corpus" in binary_metal_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in binary_metal_job
+    assert 'CROSTL_REQUIRE_MLX_BINARY_METAL_SOURCE: "1"' in source_step
+    assert (
+        "CROSTL_MLX_BINARY_METAL_SHARD_INDEX: ${{ matrix.shard_index }}" in source_step
+    )
+    assert 'CROSTL_MLX_BINARY_METAL_SHARD_COUNT: "24"' in source_step
+    assert 'CROSTL_KEEP_CORPUS_EVIDENCE: "1"' in source_step
+    assert (
+        "CROSTL_CORPUS_BUNDLE_ROOT: ${{ github.workspace }}/.binary-metal-sources"
+        in source_step
+    )
+    assert (
+        f"{test_path}::test_current_mlx_binary_family_exports_native_compilation_bundle"
+        in source_step
+    )
+    assert "-q -n auto --junitxml=binary-metal-source-junit.xml" in source_step
+    assert "-k" not in source_step
+    for name, artifact in (
+        (
+            "Retain binary Metal source bundle",
+            "binary-metal-sources-${{ matrix.shard_index }}",
+        ),
+        (
+            "Retain binary Metal source evidence",
+            "binary-metal-evidence-${{ matrix.shard_index }}",
+        ),
+    ):
+        step = ci_coverage.workflow_step_section(sources, name)
+        assert "if: always()" in step
+        assert "uses: actions/upload-artifact@v4" in step
+        assert f"name: {artifact}" in step
+        assert "include-hidden-files: true" in step
+        assert "if-no-files-found: error" in step
 
-    binary_metal_step = ci_coverage.workflow_step_section(
-        binary_metal_job,
-        "Prove current MLX complete binary family Metal round-trips",
+    native = _workflow_job_section(mlx_porting, "mlx-binary-complete-metal-roundtrip")
+    assert "if: github.event_name != 'schedule'" in native
+    assert "needs: mlx-binary-metal-sources" in native
+    assert "runs-on: macOS-latest" in native
+    assert "timeout-minutes: 60" in native
+    assert "strategy:" not in native
+    assert 'python-version: "3.12"' in native
+    assert "xcrun --sdk macosx metal --version" in native
+    assert "pytest" not in native
+    download = ci_coverage.workflow_step_section(
+        native, "Download all binary Metal source shards"
     )
-    assert "if: runner.os" not in binary_metal_step
+    assert "uses: actions/download-artifact@v4" in download
+    assert "pattern: binary-metal-sources-*" in download
+    assert "merge-multiple: false" in download
+    assert "run-id:" not in download
+    compile_step = ci_coverage.workflow_step_section(
+        native, "Compile every pinned binary Metal artifact"
+    )
+    assert "python tools/compile_artifact_bundle.py" in compile_step
+    assert "--bundle-root .binary-metal-sources" in compile_step
     assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in binary_metal_step
+        "--contract demos/integrations/mlx/contracts/binary.metal-roundtrip.json"
+        in compile_step
     )
-    assert 'CROSTL_REQUIRE_MLX_BINARY_METAL_ROUNDTRIP: "1"' in binary_metal_step
+    assert "--output-dir .binary-metal-native" in compile_step
+    assert "--jobs 2 --timeout 120" in compile_step
     assert (
-        "CROSTL_MLX_BINARY_METAL_SHARD_INDEX: ${{ matrix.shard_index }}"
-        in binary_metal_step
+        """--compiler-command '["xcrun", "-sdk", "macosx", "metal", "-Werror", "-c", "{artifact}", "-o", "{output}"]' """.strip()
+        in compile_step
     )
-    assert 'CROSTL_MLX_BINARY_METAL_SHARD_COUNT: "24"' in binary_metal_step
+    evidence = ci_coverage.workflow_step_section(
+        native, "Retain binary Metal native compilation evidence"
+    )
+    assert "if: always()" in evidence
+    assert "uses: actions/upload-artifact@v4" in evidence
+    assert "path: .binary-metal-native" in evidence
+    assert "include-hidden-files: true" in evidence
+    assert "if-no-files-found: error" in evidence
+    for step in (source_step, compile_step):
+        assert "if:" not in step
+    for job in (sources, native):
+        assert "continue-on-error" not in job
+    for path in (
+        test_path,
+        "tools/compile_artifact_bundle.py",
+        "tests/test_compile_artifact_bundle.py",
+    ):
+        _assert_workflow_triggers(mlx_porting, path)
+
+
+def test_binary_metal_report_describes_split_ci():
+    gaps = json.loads((ROOT / "demos/integrations/mlx/expected-gaps.json").read_text())
+    status = gaps["binary_metal_roundtrip_status"]
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    source_job = _workflow_job_section(workflow, "mlx-binary-metal-sources")
+    source = status["translation_validation"]
+    assert f"runs-on: {source['platform']}" in source_job
+    assert source["test"] in source_job
+    assert len(_matrix_values(source_job, "shard_index")) == source["ci_shard_count"]
+    native_job = _workflow_job_section(workflow, "mlx-binary-complete-metal-roundtrip")
+    assert status["native_validation"]["ci_job_count"] == 1
+    assert status["native_validation"]["bundle_compiler"] in native_job
     assert (
-        f"{test_path}::test_current_mlx_binary_family_roundtrips_through_metal"
-        in binary_metal_step
-    )
-    assert "-n auto" in binary_metal_step
-    assert "-k" not in binary_metal_step
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX complete binary family Metal round-trips" not in (
-        matrix_job
+        source["artifact_count"]
+        == status["native_validation"]["compiled_artifact_count"]
+        == 4122
     )
 
 

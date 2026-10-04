@@ -783,7 +783,7 @@ checks cover the regression in
 `issue #1947 <https://github.com/CrossGL/crosstl/issues/1947>`_, not general C++
 namespace conformance or whole-repository runtime integration.
 
-Required CI partitions the family across five disjoint Windows shards. Each
+Required CI partitions the family across five disjoint Ubuntu shards. Each
 shard retranslates its exact entries, verifies deterministic identity,
 materialization, ``CSMain`` workgroup metadata, and reflected ABI, then compiles
 with pinned DXC using ``-enable-16bit-types -WX -T cs_6_2 -E CSMain`` and
@@ -1034,7 +1034,7 @@ project diagnostics, and unregistered lookalikes remain untouched. Unlike the
 OpenGL lowering, this native HLSL path introduces no additional source-scoped
 32-bit index-range portability promise.
 
-Required Windows CI partitions the DirectX family into 24 disjoint 104-entry
+Required Ubuntu CI partitions the DirectX family into 24 disjoint 104-entry
 shards. Each shard retranslates its exact entries, verifies deterministic HLSL
 identity, materialization provenance, ``CSMain`` workgroup metadata, and exact
 reflected ABI, then compiles with checksum-pinned DXC using
@@ -1072,10 +1072,13 @@ promotion. Focused tests retain conservative rejection boundaries for each
 contextual operation.
 
 A schema-v2 hash-pinned contract records every identity, shape, template,
-classification, byte count, materialization, and resource ABI. Required macOS
-CI compiles all 4,122 exact artifacts in 24 disjoint shards with
-``xcrun -sdk macosx metal -Werror -c`` and requires non-empty AIR without a
-warning exemption. This closes discovered selected-entry translation,
+classification, byte count, materialization, and resource ABI. Required Ubuntu
+CI verifies translation, bodies and reflection across 24 disjoint shards and
+exports the exact pinned sources. One dependent macOS job rejects missing,
+duplicate or changed entries before compilation. It compiles all 4,122 exact artifacts
+with ``xcrun -sdk macosx metal -Werror -c`` and requires non-empty AIR without a
+warning exemption. Both phases retain failure evidence; the local round-trip
+test still translates and compiles together. This closes discovered selected-entry translation,
 reflection, and native compiler coverage. It does not claim Metal numerical
 execution, host-runtime redirection, or MLX test-suite parity.
 
@@ -1124,7 +1127,7 @@ comparison, but preserve and return the selected original low-16-bit bfloat
 payload without requantization. Unproven bfloat builtins remain fail-closed,
 and native 16-bit storage remains a Shader Model 6.2 requirement.
 
-Required Windows CI partitions the family into 24 disjoint shards. Each shard
+Required Ubuntu CI partitions the family into 24 disjoint shards. Each shard
 retranslates its exact entries, checks deterministic identity, materialization
 provenance, standalone ``CSMain`` workgroup metadata, and target reflection,
 then compiles every artifact with checksum-pinned DXC using
@@ -1258,7 +1261,7 @@ source-scoped 32-bit index-range portability promise.
 The pre-release native proof preserves one HLSL and one DXIL artifact for each
 entry and independently recompiles all 2,396 HLSL artifacts with
 checksum-pinned DXC, requiring byte-identical non-empty DXIL before accepting
-the compact contract. Required Windows CI partitions the contract into 24
+the compact contract. Required Ubuntu CI partitions the contract into 24
 disjoint shards: 20 contain 100 entries and four contain 99. Each shard
 retranslates its exact entries, verifies deterministic HLSL identity,
 materialization provenance, ``CSMain`` workgroup metadata, and exact reflected
