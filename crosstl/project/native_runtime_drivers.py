@@ -2913,22 +2913,22 @@ def _prepare_directx_buffers(
             allocation_size = _align_to(max(requested_allocation_size, block_size), 256)
         else:
             allocation_size = requested_allocation_size
-            if byte_offset or byte_length != allocation_size:
-                raise _directx_setup_error(
-                    "DirectX runtime buffer views currently require the complete allocation range.",
-                    "unsupported-allocation-subview",
-                    resource=name,
-                    allocationId=allocation_id,
-                    byteOffset=byte_offset,
-                    byteLength=byte_length,
-                    allocationByteLength=allocation_size,
-                    coordinates={
-                        "set": resource.set,
-                        "binding": resource.binding,
-                        "index": resource.index,
-                    },
-                    targetConstraint="compushady-buffer-view-range",
-                )
+        if byte_offset or (namespace != "cbv" and byte_length != allocation_size):
+            raise _directx_setup_error(
+                "DirectX runtime cannot bind the requested allocation subrange.",
+                "unsupported-allocation-subview",
+                resource=name,
+                allocationId=allocation_id,
+                byteOffset=byte_offset,
+                byteLength=byte_length,
+                allocationByteLength=allocation_size,
+                coordinates={
+                    "set": resource.set,
+                    "binding": resource.binding,
+                    "index": resource.index,
+                },
+                targetConstraint="compushady-buffer-view-range",
+            )
         prepared.append(
             _PreparedDirectXBuffer(
                 name=name,

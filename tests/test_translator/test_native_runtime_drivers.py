@@ -1691,6 +1691,39 @@ def test_prepare_directx_buffers_rejects_allocation_subview_with_constraint(
     assert excinfo.value.details["targetConstraint"] == ("compushady-buffer-view-range")
 
 
+@pytest.mark.parametrize("offset", [4, 256, 512])
+def test_directx_constant_subview_fails_before_resource_creation(tmp_path, offset):
+    request = _directx_dispatch_request(tmp_path)
+    constant = replace(
+        request.buffers["params"],
+        allocation=RuntimeAllocationView(
+            allocation_id="parameters",
+            byte_offset=offset,
+            byte_length=4,
+            allocation_byte_length=offset + 256,
+        ),
+    )
+    request = replace(request, buffers={**request.buffers, "params": constant})
+    module = _FakeCompushady()
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: module, platform_name="win32"
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        runtime.dispatch_sequence(None, None, (request,))
+
+    details = excinfo.value.details
+    assert details["reasonKind"] == "unsupported-allocation-subview"
+    assert details["targetConstraint"] == "compushady-buffer-view-range"
+    assert details["resource"] == "params"
+    assert details["allocationId"] == "parameters"
+    assert details["byteOffset"] == offset
+    assert details["byteLength"] == 4
+    assert details["coordinates"] == {"set": 0, "binding": 0, "index": None}
+    assert not module.buffers
+    assert not module.computes
+
+
 def test_prepare_directx_buffers_rejects_sparse_registers(tmp_path):
     request = _directx_dispatch_request(tmp_path)
     lhs = request.buffers["lhs"]
