@@ -47,12 +47,61 @@ def cases():
             }
 
 
+def float_cases():
+    for operation in ("none", "sum", "prod", "min", "max"):
+        for i, layout in enumerate((*LAYOUTS, "work4", "work8", "work16", "work32")):
+            yield {
+                "id": f"float32-{operation}-{layout}",
+                "dtype": "float32",
+                "operation": operation,
+                "layout": layout,
+                "index_dtype": ("int32", "uint32", "int64", "uint64")[i % 4],
+            }
+    yield {
+        "id": "float32-none-payloads",
+        "dtype": "float32",
+        "operation": "none",
+        "layout": "payloads",
+        "index_dtype": "int64",
+    }
+
+
 def arrays(xp, np, case):
     layout = case["layout"]
     shape = (2, 2) if layout.startswith("work") else (3, 4)
-    source = xp.array(
-        (np.arange(np.prod(shape)).reshape(shape) + 10).astype(case["dtype"])
-    )
+    raw_source = np.arange(np.prod(shape)).reshape(shape)
+    if case["dtype"] == "float32":
+        raw_source = (raw_source + 1) * np.where(raw_source % 2, -0.5, 0.5)
+    else:
+        raw_source = raw_source + 10
+    source = xp.array(raw_source.astype(case["dtype"]))
+    if layout == "payloads":
+        payloads = (
+            np.array(
+                [
+                    0,
+                    0x80000000,
+                    1,
+                    0x80000001,
+                    0x007FFFFF,
+                    0x807FFFFF,
+                    0x7F800000,
+                    0xFF800000,
+                    0x7FC12345,
+                    0xFFC12345,
+                    0x7FA00001,
+                    0xFFA00001,
+                ],
+                dtype=np.uint32,
+            )
+            .view(np.float32)
+            .reshape(shape)
+        )
+        return (
+            xp.array(payloads[::-1].copy()),
+            [xp.array(np.array([2, 0, 1], dtype=np.int64))],
+            xp.array(payloads),
+        )
     if layout == "source-transposed":
         source = xp.transpose(source)
     elif layout == "source-broadcast":
@@ -101,15 +150,28 @@ def arrays(xp, np, case):
         if case["dtype"] == "int32":
             update = np.where(positions % 7 == 1, -update, update)
         update = np.where(positions == 0, 0, update)
+        if case["dtype"] == "float32":
+            update = np.where(
+                positions < 8, np.take([-1.0, 0.5, -2.0, 1.0], positions % 4), 1.0
+            )
     elif case["operation"] != "none":
         update = np.arange(update.size).reshape(update.shape) % 19 + 1
+    if case["dtype"] == "float32" and case["operation"] != "prod":
+        update = -update / 4 if case["operation"] == "none" else (update - 10) / 4
     update = update.astype(case["dtype"])
     if layout == "update-strided":
         update = xp.array(np.repeat(update, 2, axis=-1))[..., ::2]
     elif layout == "update-broadcast":
         update = xp.broadcast_to(
             xp.array(
-                np.array(2 if case["operation"] == "prod" else 7, dtype=case["dtype"])
+                np.array(
+                    (
+                        (0.5 if case["operation"] == "prod" else -1.75)
+                        if case["dtype"] == "float32"
+                        else (2 if case["operation"] == "prod" else 7)
+                    ),
+                    dtype=case["dtype"],
+                )
             ),
             update.shape,
         )

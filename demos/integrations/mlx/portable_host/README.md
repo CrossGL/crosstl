@@ -212,7 +212,29 @@ signed results retain their exact bit patterns.
 A separate three-OS CI job requires this proof without extending the existing
 indexing job's execution budget.
 
-Float and packed storage, zero-index specializations, larger
+Metal and DirectX also route float32 indexed assignment and `array.at` updates
+through the same unchanged scatter kernels. Initial output storage, updates and
+readbacks retain raw binary32 encoding; the adapter validates the reflected float
+atomic member before dispatch. OpenGL rejects nonempty float scatter until its
+physical atomic storage is supported.
+
+```sh
+python -m demos.integrations.mlx.portable_host.verify_scatter \
+  --mlx-root mlx-upstream --packages host-packages \
+  --integer64 integer64-packages --float32 --output-dir float-scatter-evidence
+```
+
+This separate profile runs 81 CPU/native workloads across the five policies,
+all existing view layouts and work-per-thread settings. Fractional arithmetic
+inputs have exactly representable results regardless of update order; a
+replacement case preserves signed zero, subnormals, infinities and NaN payloads.
+It also runs the unchanged list-index assignment test above, which is integer
+coverage, not an additional upstream float test. Required Windows and Xcode 27.1
+jobs retain separate artifacts; the original three-OS integer profile remains
+unchanged. These bounded workloads do not establish arbitrary floating reduction
+order, nonfinite arithmetic or full upstream indexing-suite parity.
+
+Packed storage, zero-index specializations, larger
 allocations and the complete upstream indexing/autodiff suite remain unsupported.
 
 Integer atomic loads have a separate required numerical gate on all three native
@@ -270,8 +292,8 @@ Every case retains 32 output guard words. Required macOS and Windows checks run
 the generated kernels; macOS also executes the original pinned wrapper. This is
 kernel execution coverage, not float scatter routing through the MLX host API.
 
-OpenGL float atomic storage is still unsupported. These controls do not enable
-float scatter in the host adapter or establish complete upstream-suite parity.
+OpenGL float atomic storage is still unsupported. Kernel controls are separate
+from the host profile above and do not establish complete upstream-suite parity.
 
 Generated Metal shared float loads, stores and compare-exchange use atomic uint
 storage with bitcasts, so they also compile under Metal 4.0. Native shared float

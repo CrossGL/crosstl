@@ -89,6 +89,8 @@ def dispatch(host, entry, buffers, count, threads, launch):
     )
     parameters = layout_module.signature(entry)
     dtype, indices = parameters[0], parameters[2]
+    if scatter and dtype == "float32" and host.target == "opengl":
+        raise ValueError("OpenGL float scatter requires float atomic storage support")
     if count != (11 if axis else (15 if scatter else 11) + indices) or not buffers:
         raise ValueError("Native gather buffer count does not match its entry")
     supplied = {}
@@ -124,10 +126,8 @@ def dispatch(host, entry, buffers, count, threads, launch):
         size = 1 if storage == "bool" else ctypes.sizeof(gather_layout.TYPES[storage])
         if layout["elementType"] != storage or layout["elementStrideBytes"] != size:
             raise ValueError("Native and reflected gather layouts disagree")
-        if name == "out":
-            values = (
-                gather_layout.values(buffer) if scatter else [guard[0]] * buffer.count
-            ) + guard
+        if name == "out" and not scatter:
+            values = [guard[0]] * buffer.count
         elif kind == "float32":
             values = list(
                 ctypes.cast(
@@ -136,6 +136,8 @@ def dispatch(host, entry, buffers, count, threads, launch):
             )
         else:
             values = gather_layout.values(buffer)
+        if name == "out":
+            values += guard
         if kind == "bool_":
             values = boolean_values(values, "uint32" if name != "out" else storage)
             values = [
@@ -152,7 +154,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
                     {
                         "name": "val",
                         "offsetBytes": 0,
-                        "physicalType": "int" if dtype == "int32" else "uint",
+                        "physicalType": scatter_layout.ATOMIC_TYPES[dtype],
                     }
                 ]
             )

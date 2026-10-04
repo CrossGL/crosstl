@@ -18,8 +18,8 @@ from demos.integrations.mlx.portable_host.verify_gather import validate_upstream
 UPSTREAM_TESTS = ("test_array.TestArray.test_setitem_with_list",)
 
 
-def validate_records(np, records, *, native):
-    cases = list(workloads.cases())
+def validate_records(np, records, *, native, float32=False):
+    cases = list(workloads.float_cases() if float32 else workloads.cases())
     if len(records) != len(cases):
         raise ValueError("Scatter evidence does not cover every workload")
     cursor = 0
@@ -60,7 +60,7 @@ def worker(args):
         mx.set_default_device(mx.cpu)
     os.environ["DEVICE"] = "gpu" if host else "cpu"
     records = []
-    for case in workloads.cases():
+    for case in workloads.float_cases() if args.float32 else workloads.cases():
         start = host.dispatch_count if host else 0
         source, result = workloads.expression(mx, np, case)
         expected_source, _, _, expected = workloads.reference(np, case)
@@ -83,7 +83,7 @@ def worker(args):
         ):
             raise RuntimeError(f"Scatter numerical mismatch: {case['id']}")
         print(case["id"], flush=True)
-    validate_records(np, records, native=host is not None)
+    validate_records(np, records, native=host is not None, float32=args.float32)
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
     suite = unittest.defaultTestLoader.loadTestsFromNames(UPSTREAM_TESTS)
     start = host.dispatch_count if host else 0
@@ -129,6 +129,8 @@ def verify(args):
                 ["--" + name.replace("_", "-"), str(getattr(args, name).resolve())]
             )
         command.extend(["--output-dir", str(args.output_dir.resolve() / mode)])
+        if args.float32:
+            command.append("--float32")
         with (args.output_dir / f"{mode}.stdout").open("w") as stdout, (
             args.output_dir / f"{mode}.stderr"
         ).open("w") as stderr:
@@ -141,7 +143,9 @@ def verify(args):
         records[mode] = json.loads(
             (args.output_dir / mode / "results.json").read_text()
         )
-        validate_records(np, records[mode], native=mode == "native")
+        validate_records(
+            np, records[mode], native=mode == "native", float32=args.float32
+        )
         upstream[mode] = json.loads(
             (args.output_dir / mode / "upstream.json").read_text()
         )
@@ -150,7 +154,9 @@ def verify(args):
         json.loads(line)
         for line in (args.output_dir / "native/dispatch.jsonl").read_text().splitlines()
     ]
-    audit = validate(np, records["native"], trace, upstream["native"])
+    audit = validate(
+        np, records["native"], trace, upstream["native"], float32=args.float32
+    )
     if (
         verify_prepared(args.mlx_root) != before
         or upstream_test_sources(args.mlx_root) != test_sources
@@ -164,6 +170,7 @@ def verify(args):
         "upstreamTests": list(UPSTREAM_TESTS),
         "upstreamTestsPerPath": len(UPSTREAM_TESTS),
         "casesPerPath": len(records["native"]),
+        "workloadProfile": "float32" if args.float32 else "integer",
         "numericalParity": True,
         "fullTranslatedBackend": False,
         "fullUpstreamSuite": False,
@@ -177,5 +184,6 @@ if __name__ == "__main__":
     for name in ("mlx-root", "packages", "integer64", "output-dir"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--worker", choices=("cpu", "native"))
+    parser.add_argument("--float32", action="store_true")
     args = parser.parse_args()
     worker(args) if args.worker else verify(args)

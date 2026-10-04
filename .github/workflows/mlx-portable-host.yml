@@ -28,6 +28,7 @@ on:
       - "tests/test_mlx_portable_gather_axis.py"
       - "tests/test_mlx_portable_scatter_axis.py"
       - "tests/test_mlx_portable_scatter.py"
+      - "tests/test_mlx_portable_float_scatter.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
       - "tests/test_translator/test_directx_half_conversion.py"
@@ -120,6 +121,7 @@ on:
       - "tests/test_mlx_portable_gather_axis.py"
       - "tests/test_mlx_portable_scatter_axis.py"
       - "tests/test_mlx_portable_scatter.py"
+      - "tests/test_mlx_portable_float_scatter.py"
       - "tests/test_translator/test_directx_atan2.py"
       - "tests/test_translator/test_opengl_half_conversion.py"
       - "tests/test_translator/test_directx_half_conversion.py"
@@ -1435,7 +1437,7 @@ jobs:
           retention-days: 14
 
   scatter-host:
-    name: MLX general scatter host (${{ matrix.target }})
+    name: MLX general scatter host (${{ matrix.target }}, ${{ matrix.profile }})
     needs: integer64-host
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
@@ -1445,10 +1447,19 @@ jobs:
         include:
           - os: ubuntu-24.04
             target: opengl
+            profile: integer
           - os: windows-2025
             target: directx
+            profile: integer
           - os: macos-26
             target: metal
+            profile: integer
+          - os: windows-2025
+            target: directx
+            profile: float32
+          - os: xcode-27
+            target: metal
+            profile: float32
     defaults:
       run:
         shell: bash
@@ -1461,6 +1472,9 @@ jobs:
           python-version: "3.12"
       - name: Initialize general scatter evidence
         run: mkdir -p .mlx-portable-scatter
+      - name: Select float scatter Metal toolchain
+        if: runner.os == 'macOS' && matrix.profile == 'float32'
+        run: echo "DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer" >> "$GITHUB_ENV"
       - name: Install Linux build and graphics dependencies
         if: runner.os == 'Linux'
         run: |
@@ -1553,13 +1567,14 @@ jobs:
           python tools/run_bounded_command.py --timeout-seconds 3600 --label "MLX general scatter verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_scatter --mlx-root mlx-upstream \
               --packages .mlx-portable-scatter/base/base/packages --integer64 .mlx-portable-scatter/base/integer64-packages \
+              ${{ matrix.profile == 'float32' && '--float32' || '' }} \
               --output-dir .mlx-portable-scatter/scatter-evidence \
               2>&1 | tee .mlx-portable-scatter/scatter-verification.log
       - name: Retain general scatter execution evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mlx-portable-scatter-${{ matrix.target }}-${{ github.run_attempt }}
+          name: mlx-portable-scatter-${{ matrix.target }}-${{ matrix.profile }}-${{ github.run_attempt }}
           path: .mlx-portable-scatter
           include-hidden-files: true
           if-no-files-found: error

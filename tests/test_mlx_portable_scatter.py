@@ -265,7 +265,7 @@ def test_scatter_rejects_invalid_layout_before_translation(fault):
 @pytest.mark.parametrize(
     "entry",
     (
-        "scatterfloat32int32_sum_1_updc_true_nwork1_int",
+        "scatterfloat16int32_sum_1_updc_true_nwork1_int",
         "scatterint32int32_median_1_updc_true_nwork1_int",
         "scatterint32int32_sum_0_updc_true_nwork1_int",
         "scatterint32int32_sum_01_updc_true_nwork1_int",
@@ -405,7 +405,11 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
     event.update(entry=entry, target=target, threads=expected.size, **execution)
     event.update(
         scatterMetadata=layout.validate(entry, supplied, expected.size, execution),
-        scatterValues=expected.reshape(-1).tolist(),
+        scatterValues=(
+            words(np, expected)
+            if case["dtype"] == "float32"
+            else expected.reshape(-1).tolist()
+        ),
         scatterGuardValues=runtime.COPY_GUARD.copy(),
         scatterStorageType=case["dtype"],
         outputHash=hashlib.sha256(expected.tobytes()).hexdigest(),
@@ -427,7 +431,15 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
     for name, buffer in supplied.items():
         kind = buffer.dtype.decode()
         storage = runtime.physical_dtype(kind, target)
-        values = layout.values(buffer)
+        values = (
+            list(
+                ctypes.cast(
+                    buffer.data, ctypes.POINTER(ctypes.c_uint32 * buffer.count)
+                ).contents
+            )
+            if kind == "float32"
+            else layout.values(buffer)
+        )
         if name == "idx_contigs":
             values = [
                 bool(value) if target == "metal" else int(value) for value in values
@@ -449,7 +461,7 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
                     {
                         "name": "val",
                         "offsetBytes": 0,
-                        "physicalType": "int" if case["dtype"] == "int32" else "uint",
+                        "physicalType": layout.ATOMIC_TYPES[case["dtype"]],
                     }
                 ],
             )
@@ -458,6 +470,9 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
             "shape": shape,
             "binding": {"metadata": {"scalarLayout": scalar}},
         }
+        if kind == "float32":
+            event["inputs"][name]["encoding"] = "ieee754-binary32"
+            request["buffers"][name]["encoding"] = "ieee754-binary32"
     if target != "metal":
         module = tmp_path / ("test.dxil" if target == "directx" else "test.glsl")
         module.write_bytes(b"retained-test-module")

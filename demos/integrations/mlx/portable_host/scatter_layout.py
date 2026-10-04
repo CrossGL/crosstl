@@ -26,11 +26,12 @@ METADATA = {
     "idx_ndim": "int32",
     "idx_size": "uint64",
 }
+ATOMIC_TYPES = {"int32": "int", "uint32": "uint", "float32": "float"}
 
 
 def signature(entry):
     match = re.fullmatch(
-        r"scatter(int32|uint32)(int32|uint32|int64|uint64)_(none|sum|prod|min|max)_"
+        r"scatter(int32|uint32|float32)(int32|uint32|int64|uint64)_(none|sum|prod|min|max)_"
         r"([1-9]|10)_updc_(true|false)_nwork(1|4|8|16|32)_int",
         entry,
     )

@@ -3,6 +3,7 @@
 import hashlib
 import math
 
+from crosstl.project.runtime_value_encoding import FLOAT32_BITS
 from demos.integrations.mlx.portable_host import scatter_workloads as workloads
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_input_bindings,
@@ -12,13 +13,20 @@ from demos.integrations.mlx.portable_host.gather_evidence import (
 )
 from demos.integrations.mlx.portable_host.gather_workloads import words
 from demos.integrations.mlx.portable_host.runtime import COPY_GUARD
-from demos.integrations.mlx.portable_host.scatter_layout import METADATA, signature
+from demos.integrations.mlx.portable_host.scatter_layout import (
+    ATOMIC_TYPES,
+    METADATA,
+    signature,
+)
 
 
 def audit_event(np, event):
     dtype, index_dtype, count, operation, contiguous, work = signature(event["entry"])
     target = event["target"]
     require(target in {"metal", "directx", "opengl"}, "Unknown scatter target")
+    require(
+        dtype != "float32" or target != "opengl", "Unsupported OpenGL float scatter"
+    )
     request = event["details"]["request"]
     audit_input_bindings(event)
     inputs = {}
@@ -31,8 +39,13 @@ def audit_event(np, event):
         require(
             binding["dtype"] == value["dtype"] == layout["elementType"]
             and binding["shape"] == value["shape"]
-            and binding.get("encoding") is None
-            and "encoding" not in value
+            and binding.get("encoding")
+            == (FLOAT32_BITS if value["dtype"] == "float32" else None)
+            and (
+                value.get("encoding") == FLOAT32_BITS
+                if value["dtype"] == "float32"
+                else "encoding" not in value
+            )
             and layout["elementStrideBytes"]
             == (1 if value["dtype"] == "bool" else np.dtype(value["dtype"]).itemsize),
             "Scatter binding layout changed",
@@ -52,7 +65,7 @@ def audit_event(np, event):
                     {
                         "name": "val",
                         "offsetBytes": 0,
-                        "physicalType": "int" if dtype == "int32" else "uint",
+                        "physicalType": ATOMIC_TYPES[dtype],
                     }
                 ],
                 "Scatter atomic storage layout changed",
@@ -72,10 +85,20 @@ def audit_event(np, event):
         all(value in (0, 1) for value in inputs["idx_contigs"]["values"]),
         "Scatter Boolean upload changed",
     )
-    arrays = {
-        name: np.array(value["values"], dtype=value["dtype"])
-        for name, value in inputs.items()
-    }
+    arrays = {}
+    for name, value in inputs.items():
+        if value["dtype"] == "float32":
+            require(
+                isinstance(value["values"], list)
+                and all(
+                    type(word) is int and 0 <= word <= 0xFFFFFFFF
+                    for word in value["values"]
+                ),
+                "Scatter float upload is not raw binary32 storage",
+            )
+            arrays[name] = np.array(value["values"], dtype=np.uint32).view(np.float32)
+        else:
+            arrays[name] = np.array(value["values"], dtype=value["dtype"])
     scalar_names = ("upd_ndim", "upd_size", "out_ndim", "idx_ndim", "idx_size")
     require(
         all(arrays[name].size == 1 for name in scalar_names),
@@ -217,7 +240,7 @@ def audit_event(np, event):
         ),
     }
     readback = event["scatterValues"]
-    limits = np.iinfo(dtype)
+    limits = np.iinfo("uint32" if dtype == "float32" else dtype)
     require(
         isinstance(readback, list)
         and len(readback) == size
@@ -227,13 +250,13 @@ def audit_event(np, event):
         ),
         "Scatter readback is outside its storage type",
     )
-    raw = np.array(readback, dtype=dtype)
+    raw = np.array(readback, dtype="uint32" if dtype == "float32" else dtype)
     actual = words(np, raw)
     require(
         actual == words(np, expected), "Scatter native readback disagrees with uploads"
     )
     require(
-        event["scatterGuardValues"] == arrays["out"][size:].tolist() == COPY_GUARD,
+        event["scatterGuardValues"] == words(np, arrays["out"][size:]) == COPY_GUARD,
         "Scatter output guards changed",
     )
     require(
@@ -265,7 +288,7 @@ def audit_event(np, event):
     return initial, indices, updates, actual
 
 
-def validate(np, records, trace, upstream):
+def validate(np, records, trace, upstream, *, float32=False):
     from demos.integrations.mlx.portable_host.verify_bitwise import (
         verify_native_identity,
     )
@@ -275,10 +298,11 @@ def validate(np, records, trace, upstream):
         validate_records,
     )
 
-    validate_records(np, records, native=True)
+    validate_records(np, records, native=True, float32=float32)
     validate_upstream(upstream, native=True, tests=UPSTREAM_TESTS)
     cursor, count, targets = 0, 0, set()
-    for case, record in zip(workloads.cases(), records):
+    cases = workloads.float_cases() if float32 else workloads.cases()
+    for case, record in zip(cases, records):
         end = cursor + record["dispatchCount"]
         require(end <= len(trace), "Scatter trace ends before its workload")
         events = [

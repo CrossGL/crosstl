@@ -1096,13 +1096,13 @@ void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
 void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   if (inputs.size() < 3 || inputs.size() > 12 || axes_.size() != inputs.size() - 2 ||
-      (out.dtype() != int32 && out.dtype() != uint32) ||
+      (out.dtype() != int32 && out.dtype() != uint32 && out.dtype() != float32) ||
       inputs[0].dtype() != out.dtype() || inputs.back().dtype() != out.dtype() ||
       inputs[0].shape() != out.shape() || out.ndim() == 0 || out.ndim() > 64 ||
       out.size() > 65535 || inputs.back().size() > 65535 ||
       (reduce_type_ != None && reduce_type_ != Sum && reduce_type_ != Prod &&
        reduce_type_ != Min && reduce_type_ != Max)) {
-    throw std::invalid_argument("CrossTL scatter requires bounded int32 or uint32 indexed updates.");
+    throw std::invalid_argument("CrossTL scatter requires bounded int32, uint32 or float32 indexed updates.");
   }
   const auto index_dtype = inputs[1].dtype();
   if (index_dtype != int32 && index_dtype != uint32 &&
