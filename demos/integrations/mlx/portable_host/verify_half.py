@@ -142,9 +142,29 @@ def verify(args):
             index,
             variants=False,
         )
-    for event in trace:
-        if event["entry"] not in HALF_ENTRIES:
-            continue
+    audit_half_events(
+        [event for event in trace if event["entry"] in HALF_ENTRIES], output
+    )
+    after = verify_prepared(args.mlx_root)
+    write_json(output / "adaptation-after.json", after)
+    if before != after:
+        raise ValueError("Half verification changed pinned sources")
+    write_json(
+        output / "summary.json",
+        {
+            "passed": True,
+            "commit": COMMIT,
+            "target": base["target"],
+            "workloads": len(half_workloads.cases()),
+            "nativeDispatches": len(trace),
+            "allBinary16WordsCopied": True,
+            "fullUpstreamSuite": False,
+        },
+    )
+
+
+def audit_half_events(events, output):
+    for event in events:
         audit_input_bindings(event)
         audit_native_execution(event)
         details = event["details"]
@@ -179,22 +199,6 @@ def verify(args):
                 or hashlib.sha256(path.read_bytes()).hexdigest() != module["sha256"]
             ):
                 raise ValueError("Half retained module identity differs")
-    after = verify_prepared(args.mlx_root)
-    write_json(output / "adaptation-after.json", after)
-    if before != after:
-        raise ValueError("Half verification changed pinned sources")
-    write_json(
-        output / "summary.json",
-        {
-            "passed": True,
-            "commit": COMMIT,
-            "target": base["target"],
-            "workloads": len(half_workloads.cases()),
-            "nativeDispatches": len(trace),
-            "allBinary16WordsCopied": True,
-            "fullUpstreamSuite": False,
-        },
-    )
 
 
 if __name__ == "__main__":

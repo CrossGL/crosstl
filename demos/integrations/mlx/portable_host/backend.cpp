@@ -108,7 +108,8 @@ void dispatch_unary(
   const bool logical = std::string(operation) == "LogicalNot";
   const bool invert = std::string(operation) == "BitwiseInvert";
   const bool absolute = std::string(operation) == "Abs" && inputs.size() == 1 &&
-      (inputs[0].dtype() == mlx::core::int32 ||
+      (inputs[0].dtype() == mlx::core::float16 ||
+       inputs[0].dtype() == mlx::core::int32 ||
        inputs[0].dtype() == mlx::core::uint32 ||
        inputs[0].dtype() == mlx::core::int64 ||
        inputs[0].dtype() == mlx::core::uint64 ||
@@ -124,7 +125,7 @@ void dispatch_unary(
   const auto type = (invert || absolute) ? inputs[0].dtype()
       : logical                         ? mlx::core::bool_
                                         : mlx::core::float32;
-  const char* dtype = storage_type(type);
+  const char* dtype = type == mlx::core::float16 ? "float16" : storage_type(type);
   if (inputs.size() != 1 || inputs[0].dtype() != type || out.dtype() != type) {
     throw std::invalid_argument(
         "CrossTL unary dispatch requires float32 arrays, or bool for LogicalNot.");
@@ -758,20 +759,23 @@ void dispatch_binary(
       inputs[1].shape() != out.shape()) {
     throw std::invalid_argument("CrossTL binary inputs must match output shape and dtype.");
   }
-  const char* dtype = storage_type(inputs[0].dtype());
+  const char* dtype = inputs[0].dtype() == mlx::core::float16 ?
+      "float16" : storage_type(inputs[0].dtype());
   if (!dtype || (!comparison && !bitwise && inputs[0].dtype() == mlx::core::bool_) ||
       (bitwise && inputs[0].dtype() != mlx::core::int32 &&
        inputs[0].dtype() != mlx::core::uint32 && inputs[0].dtype() != mlx::core::bool_)) {
     throw std::invalid_argument("CrossTL binary dispatch requires a supported dtype.");
   }
-  if (std::string(operation) == "Divide" && out.dtype() != mlx::core::float32) {
-    throw std::invalid_argument("CrossTL division requires float32 arrays.");
+  if (std::string(operation) == "Divide" && out.dtype() != mlx::core::float32 &&
+      out.dtype() != mlx::core::float16) {
+    throw std::invalid_argument("CrossTL division requires float16 or float32 arrays.");
   }
   if ((std::string(operation) == "LogicalAnd" || std::string(operation) == "LogicalOr") &&
       inputs[0].dtype() != mlx::core::bool_) {
     throw std::invalid_argument("CrossTL logical operations require bool arrays.");
   }
-  if (std::string(operation) == "NaNEqual" && inputs[0].dtype() != mlx::core::float32) {
+  if (std::string(operation) == "NaNEqual" && inputs[0].dtype() != mlx::core::float32 &&
+      inputs[0].dtype() != mlx::core::float16) {
     operation = "Equal";
   }
   if (out.size() > 65535) {

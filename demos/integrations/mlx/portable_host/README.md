@@ -778,8 +778,40 @@ binary16 words; other cases exercise casts, empty arrays, scalars, tails,
 matrices, transposes, negative strides and broadcasts. Exact logical results,
 native readbacks, trailing guards, dispatch identities and retained compiler
 artifacts are checked. A separate process rejects missing half packages before
-dispatch. No upstream kernel or test is modified. This family does not yet
-enable half arithmetic, bfloat16 operations or full upstream-suite parity.
+dispatch. No upstream kernel or test is modified. This family covers storage
+and casts; arithmetic uses the separate family below. Neither family establishes
+bfloat16 operations or full upstream-suite parity.
+
+### Half Arithmetic
+
+The `half-arithmetic` family adds the pinned half-precision Add, Subtract,
+Multiply, Divide, Minimum, Maximum, Abs and comparison entries, including
+NaN-aware equality. `HostRuntime(..., half=..., half_arithmetic=...)` uses
+translated copies to materialize noncontiguous operands and sends the logical
+half values to these kernels. Results must already be representable as
+binary16 when read back; host code does not round or repair arithmetic results.
+
+```sh
+python -m demos.integrations.mlx.portable_host.packages \
+  --mlx-root mlx-upstream --target metal --family half-arithmetic \
+  --output-dir half-arithmetic-packages
+python -m demos.integrations.mlx.portable_host.random_packages \
+  --mlx-root mlx-upstream --target metal --output-dir random-packages
+python -m demos.integrations.mlx.portable_host.verify_half_arithmetic \
+  --mlx-root mlx-upstream --packages host-packages --half half-packages \
+  --arithmetic half-arithmetic-packages --random random-packages \
+  --output-dir half-arithmetic-evidence
+```
+
+The three-platform gate requires 120 public-API workloads and the unchanged
+upstream `test_random.TestRandom.test_broadcastable_scale_loc` in separate CPU
+and native processes. Workloads cover all 14 entries, dense and strided layouts,
+empty inputs, rounding boundaries, subnormals, overflow and comparisons involving
+NaNs and infinities. It checks exact workload results, dispatch accounting,
+native guards, source identity and retained compiler artifacts. Missing
+arithmetic packages must fail before dispatch. These checks do not establish
+all half transcendental operations, arbitrary allocation sizes or the complete
+random test module.
 
 ## Random Generation
 
@@ -828,9 +860,11 @@ random suite remains outside the demonstrated coverage.
 A full-module probe of the pinned `test_random.py` completes 14 tests on CPU
 and initially reported eight errors through generated Metal. Supplying the
 Boolean and sum reduction variants resolves the uniform and Gumbel failures
-without changing either test. The remaining work includes
-half-precision casts, arg-reductions, sorting, larger random and reduction
-allocations. Tests that inspect
+without changing either test. With the half storage and arithmetic families,
+the same module reports five errors: the broadcast scale/location test now
+passes, while normal/Laplace still encounters an unsupported dtype. Remaining
+work includes further dtype support, arg-reductions, sorting, and larger random
+and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 

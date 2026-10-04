@@ -132,6 +132,19 @@ HALF_CAST_ENTRIES = {
     "v_copyfloat32float16": ("float32", "float16"),
 }
 HALF_ENTRIES = (HALF_COPY_ENTRY, *HALF_CAST_ENTRIES)
+HALF_BINARY_ENTRIES = {
+    f"vv_{operation}float16": "float16" for operation in BINARY_OPERATIONS
+}
+HALF_COMPARISON_ENTRIES = {
+    f"vv_{operation}float16": "float16"
+    for operation in (*COMPARISON_OPERATIONS, "NaNEqual")
+}
+HALF_ABSOLUTE_ENTRIES = {"v_Absfloat16float16": "float16"}
+HALF_ARITHMETIC_ENTRIES = (
+    *HALF_BINARY_ENTRIES,
+    *HALF_COMPARISON_ENTRIES,
+    *HALF_ABSOLUTE_ENTRIES,
+)
 INTEGER64_COPY_ENTRIES = {
     f"ggn2_dynamic_copy{dtype}{dtype}": dtype for dtype in INTEGER64_TYPES
 }
@@ -212,6 +225,7 @@ def build_packages(root, output, target, *, family="base"):
         "absolute": ABSOLUTE_ENTRIES,
         "integer64": INTEGER64_ENTRIES,
         "half": HALF_ENTRIES,
+        "half-arithmetic": HALF_ARITHMETIC_ENTRIES,
         "slice-update": SLICE_UPDATE_ENTRIES,
     }
     if family not in families:
@@ -242,6 +256,10 @@ def build_packages(root, output, target, *, family="base"):
         },
         "slice-update": {},
         "half": {COPY_SOURCE: HALF_ENTRIES},
+        "half-arithmetic": {
+            BINARY_SOURCE: (*HALF_BINARY_ENTRIES, *HALF_COMPARISON_ENTRIES),
+            UNARY_SOURCE: tuple(HALF_ABSOLUTE_ENTRIES),
+        },
     }[family]
     patterns = {
         SOURCE: "arange*",
@@ -365,6 +383,7 @@ if __name__ == "__main__":
             "absolute",
             "integer64",
             "half",
+            "half-arithmetic",
             "slice-update",
         ),
         default="base",

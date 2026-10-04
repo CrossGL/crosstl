@@ -55,7 +55,11 @@ from demos.integrations.mlx.portable_host.packages import (
     COMPARISON_ENTRIES,
     COPY_ENTRY,
     ENTRIES,
+    HALF_ABSOLUTE_ENTRIES,
+    HALF_ARITHMETIC_ENTRIES,
+    HALF_BINARY_ENTRIES,
     HALF_CAST_ENTRIES,
+    HALF_COMPARISON_ENTRIES,
     HALF_COPY_ENTRY,
     HALF_ENTRIES,
     INTEGER64_ABSOLUTE_ENTRIES,
@@ -163,9 +167,23 @@ ALL_CAST_ENTRIES = {
     **INTEGER64_CAST_ENTRIES,
     **HALF_CAST_ENTRIES,
 }
-ALL_BINARY_ENTRIES = {**BINARY_ENTRIES, **BITWISE_ENTRIES, **INTEGER64_BINARY_ENTRIES}
-ALL_COMPARISON_ENTRIES = {**COMPARISON_ENTRIES, **INTEGER64_COMPARISON_ENTRIES}
-ALL_ABSOLUTE_ENTRIES = {**ABSOLUTE_ENTRIES, **INTEGER64_ABSOLUTE_ENTRIES}
+ALL_BINARY_ENTRIES = {
+    **BINARY_ENTRIES,
+    **BITWISE_ENTRIES,
+    **INTEGER64_BINARY_ENTRIES,
+    **HALF_BINARY_ENTRIES,
+}
+ALL_COMPARISON_ENTRIES = {
+    **COMPARISON_ENTRIES,
+    **INTEGER64_COMPARISON_ENTRIES,
+    **HALF_COMPARISON_ENTRIES,
+}
+ALL_ABSOLUTE_ENTRIES = {
+    **ABSOLUTE_ENTRIES,
+    **INTEGER64_ABSOLUTE_ENTRIES,
+    **HALF_ABSOLUTE_ENTRIES,
+}
+ALL_HALF_ENTRIES = (*HALF_ENTRIES, *HALF_ARITHMETIC_ENTRIES)
 ALL_COPY_ENTRIES = {
     COPY_ENTRY: "uint32",
     BOOLEAN_COPY_ENTRY: "bool_",
@@ -210,6 +228,7 @@ class HostRuntime:
         slice_updates=None,
         random=None,
         half=None,
+        half_arithmetic=None,
     ):
         self.directory = Path(directory).resolve()
         self.trace = Path(trace).resolve()
@@ -249,6 +268,9 @@ class HostRuntime:
             Path(slice_updates).resolve() if slice_updates is not None else None
         )
         self.half_directory = Path(half).resolve() if half is not None else None
+        self.half_arithmetic_directory = (
+            Path(half_arithmetic).resolve() if half_arithmetic is not None else None
+        )
         for family, directory, entries in (
             ("bitwise", self.bitwise_directory, BITWISE_PACKAGE_ENTRIES),
             ("selection", self.selection_directory, SELECTION_ENTRIES),
@@ -256,6 +278,11 @@ class HostRuntime:
             ("integer64", self.integer64_directory, INTEGER64_ENTRIES),
             ("slice-update", self.slice_update_directory, SLICE_UPDATE_ENTRIES),
             ("half", self.half_directory, HALF_ENTRIES),
+            (
+                "half-arithmetic",
+                self.half_arithmetic_directory,
+                HALF_ARITHMETIC_ENTRIES,
+            ),
         ):
             if directory is None:
                 continue
@@ -445,8 +472,12 @@ class HostRuntime:
         elif not small_row:
             descriptor = self.descriptors[entry]
             package_directory = (
-                self.half_directory
-                if entry in HALF_ENTRIES
+                (
+                    self.half_directory
+                    if entry in HALF_ENTRIES
+                    else self.half_arithmetic_directory
+                )
+                if entry in ALL_HALF_ENTRIES
                 else (
                     self.slice_update_directory
                     if slice_update
@@ -749,7 +780,13 @@ class HostRuntime:
                 initial_value = int("sum" in entry or entry == "init_reduce_orbool_")
                 values = [initial_value] * buffer.count
             if (bitwise or absolute) and buffer.output:
-                values = [1 if dtype == "bool_" else COPY_GUARD[0]] * buffer.count
+                values = [
+                    (
+                        half_storage.GUARD[0]
+                        if dtype == "float16"
+                        else 1 if dtype == "bool_" else COPY_GUARD[0]
+                    )
+                ] * buffer.count
             if selection and buffer.output:
                 values = [
                     int(guard[0]) if dtype == "bool_" else guard[0]
@@ -837,7 +874,7 @@ class HostRuntime:
             )
             result = (
                 gather_dispatch.execute(self, request)
-                if entry in HALF_ENTRIES
+                if entry in ALL_HALF_ENTRIES
                 else self.executor.run(request)
             )
         if result.status != "ok" or set(result.outputs) != set(destinations):
@@ -948,7 +985,7 @@ class HostRuntime:
                                 "inputs": inputs,
                                 "packageRoot": str(package_directory),
                             }
-                            if entry in HALF_ENTRIES
+                            if entry in ALL_HALF_ENTRIES
                             else {}
                         ),
                         **(
