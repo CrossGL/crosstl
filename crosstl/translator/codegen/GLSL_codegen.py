@@ -17281,13 +17281,23 @@ class GLSLCodeGen:
         for alias_name, binding in workgroup_pointer_aliases.items():
             pointer_type = f"{binding.get('element_type', 'float')}*"
             self.local_variable_types[alias_name] = pointer_type
-            self.local_variable_source_types[alias_name] = pointer_type
+            source_element = binding.get("source_element_type")
+            self.local_variable_source_types[alias_name] = (
+                f"{source_element}*"
+                if self.glsl_half_width(source_element) is not None
+                else pointer_type
+            )
         for alias_name, binding in storage_pointer_aliases.items():
             if binding.get("resource_root"):
                 continue
             pointer_type = f"{binding.get('element_type', 'float')}*"
             self.local_variable_types[alias_name] = pointer_type
-            self.local_variable_source_types[alias_name] = pointer_type
+            source_element = binding.get("source_element_type")
+            self.local_variable_source_types[alias_name] = (
+                f"{source_element}*"
+                if self.glsl_half_width(source_element) is not None
+                else pointer_type
+            )
         for index, p in enumerate(param_list):
             if hasattr(p, "param_type"):
                 raw_param_type = (
@@ -30106,6 +30116,17 @@ complex64_t crossgl_complex64_mod_assign(
             self.glsl_scalar_conversion_error(
                 source_node, source_type, expected_type, "half-global-initializer"
             )
+        # Repacking existing half components does not perform a numeric conversion.
+        if (
+            isinstance(source_node, FunctionCallNode)
+            and self.glsl_half_width(self.function_call_name(source_node)) == width
+            and source_node.args
+            and all(
+                self.glsl_half_width(self.glsl_source_expression_type(arg)) is not None
+                for arg in source_node.args
+            )
+        ):
+            return value
         for builtin in ("floatBitsToUint", "uintBitsToFloat", "findMSB"):
             if (
                 builtin in self.function_return_types
@@ -30333,7 +30354,12 @@ complex64_t crossgl_complex64_mod_assign(
                     self.glsl_storage_pointer_aliases(),
                 )
             if binding is not None and binding.get("element_type") is not None:
-                return binding["element_type"]
+                source_element = binding.get("source_element_type")
+                return (
+                    source_element
+                    if self.glsl_half_width(source_element) is not None
+                    else binding["element_type"]
+                )
 
             pointee_type = self.glsl_source_pointee_type(
                 self.glsl_source_expression_type(expression.operand)
@@ -34701,7 +34727,23 @@ complex64_t crossgl_complex64_mod_assign(
                 target_function=call_target_function,
                 source_target_name=original_func_name,
             )
-            return f"{emitted_call_name}({args})"
+            generated_call = f"{emitted_call_name}({args})"
+            if call_target_function is None and emitted_call_name not in {
+                "abs",
+                "ceil",
+                "floor",
+                "round",
+                "roundEven",
+                "sign",
+                "trunc",
+            }:
+                # These intrinsics compute in the physical float type; their
+                # logical half result must be rounded before any further use.
+                result_type = self.glsl_componentwise_unary_result_type(
+                    original_func_name, expr.args
+                )
+                return self.glsl_apply_half_contract(generated_call, result_type, expr)
+            return generated_call
         elif hasattr(expr, "__class__") and "MemberAccessNode" in str(type(expr)):
             flattened_member = self.flattened_stage_member_name(expr)
             if flattened_member is not None:
@@ -36983,6 +37025,9 @@ complex64_t crossgl_complex64_mod_assign(
             args[0], self.glsl_storage_pointer_aliases()
         )
         if binding is not None and binding.get("element_type") is not None:
+            source_element = binding.get("source_element_type")
+            if source_type and self.glsl_half_width(source_element) is not None:
+                return source_element
             return binding["element_type"]
 
         if source_type:
@@ -38222,6 +38267,9 @@ complex64_t crossgl_complex64_mod_assign(
                 return type_name.rstrip()[:-1].strip()
             if self.is_structured_buffer_type(type_name):
                 return self.structured_buffer_source_element_type(type_name)
+            half_width = self.glsl_half_width(type_name)
+            if half_width is not None and half_width > 1:
+                return "half"
             component_type = self.vector_component_type(type_name)
             if component_type is not None:
                 return component_type
@@ -38284,6 +38332,14 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 if member_type is not None:
                     return member_type
+            half_width = self.glsl_half_width(object_type)
+            member = str(expression.member)
+            if half_width is not None and half_width > 1 and 1 <= len(member) <= 4:
+                for components in ("xyzw", "rgba", "stpq"):
+                    if all(
+                        component in components[:half_width] for component in member
+                    ):
+                        return "half" + (str(len(member)) if len(member) > 1 else "")
             return self.expression_result_type(expression)
         if isinstance(expression, ConstructorNode):
             return self.type_name_string(getattr(expression, "constructor_type", None))

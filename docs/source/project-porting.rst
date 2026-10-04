@@ -2132,6 +2132,22 @@ native two-byte OpenGL storage. Required native tests cover copy payloads,
 conversion rounding and output guards, but do not by themselves establish
 complete MLX half-precision operation coverage.
 
+Same-type half copies preserve their logical representation, including NaN
+payloads, through buffer loads, local storage, helper arguments and returns,
+vector components and homogeneous structures. OpenGL uses exact widened
+binary32 words for this contract; callers must supply the representation of
+the logical binary16 value. Repacking existing half components does not round
+them again. Actual conversions from float32 and half arithmetic still apply
+the binary16 rounding contract. Required native copy controls cover every
+binary16 word as well as pointer and vector access paths.
+
+Rounding a mathematical result to binary16 does not establish bitwise parity
+with every native half-precision intrinsic. The sine control currently matches
+the unchanged source in the Metal round trip but differs from the mathematical
+reference used by OpenGL. Its evidence retains both comparisons; it is not a
+cross-backend parity claim. Compiler/profile accuracy remains tracked in
+`issue #2068 <https://github.com/CrossGL/crosstl/issues/2068>`_.
+
 This contract applies to the Python native runtime drivers. The generated C++
 DirectX adapter still requires four-byte-multiple structured-buffer strides;
 its two-byte view support and encoded-value serialization remain separate work.

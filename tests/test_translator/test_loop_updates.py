@@ -126,8 +126,11 @@ def _execute(
     original_entry=None,
     metal_compile_flags=(),
     validate=None,
+    compare_with_original=False,
 ):
     target = request.artifact["target"]
+    if compare_with_original:
+        assert target == "metal" and original_source is not None
     executor = _executor(target)
     state = RuntimeExecutionState(request=request, plan=request.execution_plan)
     records = {}
@@ -192,15 +195,26 @@ def _execute(
                     "artifactSha256": (
                         hashlib.sha256(request.artifact_path.read_bytes()).hexdigest()
                     ),
+                    **(
+                        {
+                            "comparison": "original-metal",
+                            "mathematicalReference": expected,
+                        }
+                        if compare_with_original
+                        else {}
+                    ),
                 },
                 indent=2,
                 allow_nan=False,
             ),
             encoding="utf-8",
         )
-        assert actual == expected
+        reference = (
+            records["originalMetal"]["outputs"] if compare_with_original else expected
+        )
+        assert actual == reference
         if "originalMetal" in records:
-            assert records["originalMetal"]["outputs"] == expected
+            assert records["originalMetal"]["outputs"] == reference
             assert (
                 records["generated"]["details"]["metalRuntime"]["librarySHA256"]
                 == records["generated"]["moduleSha256"]
