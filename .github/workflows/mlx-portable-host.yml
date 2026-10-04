@@ -22,6 +22,7 @@ on:
       - "tests/test_mlx_portable_concatenate.py"
       - "tests/test_mlx_portable_selection.py"
       - "tests/test_mlx_portable_integer64.py"
+      - "tests/test_mlx_portable_half.py"
       - "tests/test_mlx_portable_padding.py"
       - "tests/test_mlx_portable_slice_updates.py"
       - "tests/test_mlx_portable_slice_update_workloads.py"
@@ -116,6 +117,7 @@ on:
       - "tests/test_mlx_portable_concatenate.py"
       - "tests/test_mlx_portable_selection.py"
       - "tests/test_mlx_portable_integer64.py"
+      - "tests/test_mlx_portable_half.py"
       - "tests/test_mlx_portable_padding.py"
       - "tests/test_mlx_portable_slice_updates.py"
       - "tests/test_mlx_portable_slice_update_workloads.py"
@@ -1108,6 +1110,145 @@ jobs:
         with:
           name: mlx-portable-small-rows-${{ matrix.target }}-${{ github.run_attempt }}
           path: .mlx-portable-small-rows
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  half-host:
+    name: MLX half host (${{ matrix.target }})
+    needs: portable-host
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: opengl
+          - os: windows-2025
+            target: directx
+          - os: macos-26
+            target: metal
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Initialize half evidence
+        run: mkdir -p .mlx-portable-half
+      - name: Install Linux build and graphics dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - name: Install CrossTL and MLX build dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging \
+            2>&1 | tee .mlx-portable-half/dependencies.log
+      - name: Validate half host contracts
+        run: python -m pytest -q -n auto tests/test_mlx_portable_half.py
+      - name: Install OpenGL runtime dependencies
+        if: runner.os == 'Linux'
+        run: python -m pip install moderngl PyOpenGL
+      - name: Verify macOS Metal toolchain
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk macosx metal --version | tee .mlx-portable-half/metal-version.txt
+          xcrun --sdk macosx swiftc --version | tee .mlx-portable-half/swift-version.txt
+      - name: Install pinned DirectX tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $root = Join-Path $env:RUNNER_TEMP "dxc"
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4") {
+            throw "DXC archive checksum mismatch."
+          }
+          Expand-Archive $archive -DestinationPath $root
+          $bin = Join-Path $root "bin/x64"
+          if (-not (Test-Path "$bin/dxc.exe")) { throw "DXC executable missing." }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $warpArchive = Join-Path $env:RUNNER_TEMP "warp.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "warp"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg" -OutFile $warpArchive
+          if ((Get-FileHash $warpArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681") {
+            throw "WARP archive checksum mismatch."
+          }
+          Expand-Archive $warpArchive -DestinationPath $warpRoot
+          Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
+      - name: Select same-run host packages
+        uses: actions/github-script@v7
+        id: host-artifact
+        env:
+          MLX_TARGET: ${{ matrix.target }}
+        with:
+          script: |
+            const prefix = `mlx-portable-host-${process.env.MLX_TARGET}-`;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
+            });
+            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
+              && /^\d+$/.test(item.name.slice(prefix.length)));
+            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
+            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
+            core.setOutput("id", candidates[0].id);
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.host-artifact.outputs.id }}
+          path: .mlx-portable-half/base
+          merge-multiple: true
+      - name: Prepare pinned MLX
+        run: |
+          set -euo pipefail
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-half/adaptation.json
+      - name: Build adapted upstream MLX
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX half host build" -- \
+            python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-half/build.log
+      - name: Translate half host packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX half translation" -- \
+            python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family half --output-dir .mlx-portable-half/half-packages \
+              2>&1 | tee .mlx-portable-half/translation.log
+      - name: Execute half host operations
+        env:
+          PYOPENGL_PLATFORM: egl
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          CROSTL_DIRECTX_FORCE_WARP: "1"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX half verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_half --mlx-root mlx-upstream \
+              --packages .mlx-portable-half/base/packages --half .mlx-portable-half/half-packages \
+              --output-dir .mlx-portable-half/evidence 2>&1 | tee .mlx-portable-half/verification.log
+      - name: Retain half execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-portable-half-${{ matrix.target }}-${{ github.run_attempt }}
+          path: .mlx-portable-half
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14

@@ -30,6 +30,7 @@ from demos.integrations.mlx.portable_host import (
     column_reduction_layout,
     copy_layout,
     gather_dispatch,
+    half_storage,
     random_dispatch,
     reduction_layout,
     row_reduction_layout,
@@ -43,6 +44,7 @@ from demos.integrations.mlx.portable_host.gather_packages import (
 )
 from demos.integrations.mlx.portable_host.packages import (
     ABSOLUTE_ENTRIES,
+    ARANGE_ENTRIES,
     BINARY_ENTRIES,
     BITWISE_ENTRIES,
     BITWISE_INVERT_ENTRIES,
@@ -53,6 +55,9 @@ from demos.integrations.mlx.portable_host.packages import (
     COMPARISON_ENTRIES,
     COPY_ENTRY,
     ENTRIES,
+    HALF_CAST_ENTRIES,
+    HALF_COPY_ENTRY,
+    HALF_ENTRIES,
     INTEGER64_ABSOLUTE_ENTRIES,
     INTEGER64_BINARY_ENTRIES,
     INTEGER64_CAST_ENTRIES,
@@ -143,6 +148,7 @@ ENTRY_AVAILABLE = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_char_p)
 TYPES = {
     "bool_": ctypes.c_uint8,
     "float32": ctypes.c_float,
+    "float16": ctypes.c_uint16,
     "int32": ctypes.c_int32,
     "uint32": ctypes.c_uint32,
     "int64": ctypes.c_int64,
@@ -151,18 +157,26 @@ TYPES = {
 _installed_runtime = None
 COPY_GUARD = [0x6A15BEEF] * 32
 BOOLEAN_GUARD = [index % 2 == 0 for index in range(32)]
-ALL_CAST_ENTRIES = {**CAST_ENTRIES, **BOOLEAN_CAST_ENTRIES, **INTEGER64_CAST_ENTRIES}
+ALL_CAST_ENTRIES = {
+    **CAST_ENTRIES,
+    **BOOLEAN_CAST_ENTRIES,
+    **INTEGER64_CAST_ENTRIES,
+    **HALF_CAST_ENTRIES,
+}
 ALL_BINARY_ENTRIES = {**BINARY_ENTRIES, **BITWISE_ENTRIES, **INTEGER64_BINARY_ENTRIES}
 ALL_COMPARISON_ENTRIES = {**COMPARISON_ENTRIES, **INTEGER64_COMPARISON_ENTRIES}
 ALL_ABSOLUTE_ENTRIES = {**ABSOLUTE_ENTRIES, **INTEGER64_ABSOLUTE_ENTRIES}
 ALL_COPY_ENTRIES = {
     COPY_ENTRY: "uint32",
     BOOLEAN_COPY_ENTRY: "bool_",
+    HALF_COPY_ENTRY: "float16",
     **INTEGER64_COPY_ENTRIES,
 }
 
 
 def physical_dtype(dtype, target):
+    if dtype == "float16" and target == "opengl":
+        return "float32"
     if dtype == "bool_":
         return "bool" if target == "metal" else "uint32"
     return dtype
@@ -195,6 +209,7 @@ class HostRuntime:
         integer64=None,
         slice_updates=None,
         random=None,
+        half=None,
     ):
         self.directory = Path(directory).resolve()
         self.trace = Path(trace).resolve()
@@ -233,12 +248,14 @@ class HostRuntime:
         self.slice_update_directory = (
             Path(slice_updates).resolve() if slice_updates is not None else None
         )
+        self.half_directory = Path(half).resolve() if half is not None else None
         for family, directory, entries in (
             ("bitwise", self.bitwise_directory, BITWISE_PACKAGE_ENTRIES),
             ("selection", self.selection_directory, SELECTION_ENTRIES),
             ("absolute", self.absolute_directory, ABSOLUTE_ENTRIES),
             ("integer64", self.integer64_directory, INTEGER64_ENTRIES),
             ("slice-update", self.slice_update_directory, SLICE_UPDATE_ENTRIES),
+            ("half", self.half_directory, HALF_ENTRIES),
         ):
             if directory is None:
                 continue
@@ -428,18 +445,26 @@ class HostRuntime:
         elif not small_row:
             descriptor = self.descriptors[entry]
             package_directory = (
-                self.slice_update_directory
-                if slice_update
+                self.half_directory
+                if entry in HALF_ENTRIES
                 else (
-                    self.integer64_directory
-                    if entry in INTEGER64_ENTRIES
+                    self.slice_update_directory
+                    if slice_update
                     else (
-                        self.bitwise_directory
-                        if bitwise
+                        self.integer64_directory
+                        if entry in INTEGER64_ENTRIES
                         else (
-                            self.selection_directory
-                            if selection
-                            else self.absolute_directory if absolute else self.directory
+                            self.bitwise_directory
+                            if bitwise
+                            else (
+                                self.selection_directory
+                                if selection
+                                else (
+                                    self.absolute_directory
+                                    if absolute
+                                    else self.directory
+                                )
+                            )
                         )
                     )
                 )
@@ -483,6 +508,8 @@ class HostRuntime:
                 or not buffer.data
             ):
                 raise ValueError("Invalid native buffer")
+            if entry in ARANGE_ENTRIES and dtype != entry.removeprefix("arange"):
+                raise ValueError("Native arange buffer dtype does not match its entry")
             if initialization:
                 expected = threads
                 if dtype != INIT_ENTRIES[entry]:
@@ -643,14 +670,18 @@ class HostRuntime:
             or slice_update
         )
         output_dtype = supplied[output_name].dtype.decode("ascii")
-        bit_storage = slice_update and output_dtype == "float32"
+        bit_storage = (
+            slice_update and output_dtype == "float32"
+        ) or entry in HALF_CAST_ENTRIES
+        if output_dtype == "float16":
+            guard = half_storage.pack(half_storage.GUARD, self.target)
         if output_dtype == "bool_":
             guard = (
                 BOOLEAN_GUARD
                 if self.target == "metal"
                 else [int(value) for value in BOOLEAN_GUARD]
             )
-        if (
+        if not bit_storage and (
             (reduction and output_dtype == "float32")
             or (binary and ALL_BINARY_ENTRIES[entry] == "float32")
             or (cast and ALL_CAST_ENTRIES[entry][1] == "float32")
@@ -727,6 +758,8 @@ class HostRuntime:
                 values = boolean_values(values, "uint32")
                 if storage == "bool":
                     values = [bool(value) for value in values]
+            if dtype == "float16":
+                values = half_storage.pack(values, self.target)
             value = {
                 "dtype": storage,
                 "shape": [buffer.count],
@@ -734,6 +767,8 @@ class HostRuntime:
             }
             if bit_storage and dtype == "float32":
                 value["encoding"] = FLOAT32_BITS
+            elif dtype == "float16":
+                value["encoding"] = half_storage.encoding(self.target)
             if guarded and buffer.output:
                 value["shape"] = [buffer.count + len(guard)]
                 value["values"].extend(guard)
@@ -800,7 +835,11 @@ class HostRuntime:
                 execution,
                 expected_target=self.target,
             )
-            result = self.executor.run(request)
+            result = (
+                gather_dispatch.execute(self, request)
+                if entry in HALF_ENTRIES
+                else self.executor.run(request)
+            )
         if result.status != "ok" or set(result.outputs) != set(destinations):
             raise RuntimeError("Native executor did not return the required outputs")
         for name, (buffer, ctype) in destinations.items():
@@ -810,13 +849,20 @@ class HostRuntime:
             storage = physical_dtype(dtype, self.target)
             if output["dtype"] != storage or output["shape"] != [size]:
                 raise RuntimeError("Native readback layout does not match the output")
-            if output.get("encoding") != (FLOAT32_BITS if bit_storage else None):
+            expected_encoding = (
+                half_storage.encoding(self.target)
+                if dtype == "float16"
+                else FLOAT32_BITS if bit_storage else None
+            )
+            if output.get("encoding") != expected_encoding:
                 raise RuntimeError(
                     "Native readback storage encoding does not match the output"
                 )
             if len(output["values"]) != size:
                 raise RuntimeError("Native readback size does not match the output")
-            if dtype == "bool_":
+            if dtype == "float16":
+                half_storage.unpack(output["values"], self.target)
+            elif dtype == "bool_":
                 boolean_values(output["values"], storage)
             elif (
                 bitwise
@@ -825,6 +871,7 @@ class HostRuntime:
                 or slice_update
                 or (selection and dtype != "float32")
                 or dtype in {"int64", "uint64"}
+                or bit_storage
             ):
                 bits = ctypes.sizeof(ctype) * 8
                 low, high = (
@@ -864,11 +911,16 @@ class HostRuntime:
                     raise RuntimeError(
                         "Native operation changed untouched destination storage"
                     )
-            storage_type = ctypes.c_uint32 if bit_storage else ctype
+            storage_type = (
+                ctypes.c_uint32 if bit_storage and dtype == "float32" else ctype
+            )
+            result_values = output["values"][: buffer.count]
+            if dtype == "float16":
+                result_values = half_storage.unpack(result_values, self.target)
             values = (storage_type * buffer.count)(
                 *(
                     float(value) if storage_type is ctypes.c_float else value
-                    for value in output["values"][: buffer.count]
+                    for value in result_values
                 )
             )
             ctypes.memmove(buffer.data, values, ctypes.sizeof(values))
@@ -883,6 +935,22 @@ class HostRuntime:
                         "dispatchVersion": DISPATCH_VERSION,
                         "artifact": descriptor["artifact"],
                         "details": result.details,
+                        **(
+                            {
+                                "halfStorage": {
+                                    "logicalType": output_dtype,
+                                    "physicalType": storage,
+                                    "encoding": expected_encoding,
+                                    "values": output["values"][: buffer.count],
+                                    "guardValues": output["values"][buffer.count :],
+                                    "logicalWords": list(values),
+                                },
+                                "inputs": inputs,
+                                "packageRoot": str(package_directory),
+                            }
+                            if entry in HALF_ENTRIES
+                            else {}
+                        ),
                         **(
                             {
                                 "sliceUpdateValues": output["values"][: buffer.count],

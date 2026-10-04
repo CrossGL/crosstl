@@ -126,6 +126,12 @@ ABSOLUTE_ENTRIES = {
     f"v_Abs{dtype}{dtype}": dtype for dtype in ("int32", "uint32", "bool_")
 }
 INTEGER64_TYPES = ("int64", "uint64")
+HALF_COPY_ENTRY = "ggn2_dynamic_copyfloat16float16"
+HALF_CAST_ENTRIES = {
+    "v_copyfloat16float32": ("float16", "float32"),
+    "v_copyfloat32float16": ("float32", "float16"),
+}
+HALF_ENTRIES = (HALF_COPY_ENTRY, *HALF_CAST_ENTRIES)
 INTEGER64_COPY_ENTRIES = {
     f"ggn2_dynamic_copy{dtype}{dtype}": dtype for dtype in INTEGER64_TYPES
 }
@@ -205,6 +211,7 @@ def build_packages(root, output, target, *, family="base"):
         "selection": SELECTION_ENTRIES,
         "absolute": ABSOLUTE_ENTRIES,
         "integer64": INTEGER64_ENTRIES,
+        "half": HALF_ENTRIES,
         "slice-update": SLICE_UPDATE_ENTRIES,
     }
     if family not in families:
@@ -234,6 +241,7 @@ def build_packages(root, output, target, *, family="base"):
             BINARY_SOURCE: (*INTEGER64_BINARY_ENTRIES, *INTEGER64_COMPARISON_ENTRIES),
         },
         "slice-update": {},
+        "half": {COPY_SOURCE: HALF_ENTRIES},
     }[family]
     patterns = {
         SOURCE: "arange*",
@@ -356,6 +364,7 @@ if __name__ == "__main__":
             "selection",
             "absolute",
             "integer64",
+            "half",
             "slice-update",
         ),
         default="base",

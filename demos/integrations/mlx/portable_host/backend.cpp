@@ -179,10 +179,11 @@ void dispatch_copy_into(
   require_runtime();
   if (in.dtype() != out.dtype() ||
       (in.dtype() != mlx::core::float32 && in.dtype() != mlx::core::int32 &&
+       in.dtype() != mlx::core::float16 &&
        in.dtype() != mlx::core::uint32 && in.dtype() != mlx::core::bool_ &&
        in.dtype() != mlx::core::int64 && in.dtype() != mlx::core::uint64)) {
     throw std::invalid_argument(
-        "CrossTL copying layouts require matching float32, int32, uint32, int64, uint64 or bool arrays.");
+        "CrossTL copying layouts require matching float16, float32, int32, uint32, int64, uint64 or bool arrays.");
   }
   if (in.size() > 65535 || in.ndim() > 64 ||
       dst_strides.size() != in.ndim() ||
@@ -243,7 +244,8 @@ void dispatch_copy_into(
   // Copy storage words to preserve NaN payloads, subnormals and signed zero.
   const bool boolean = in.dtype() == mlx::core::bool_;
   const bool wide = in.dtype() == mlx::core::int64 || in.dtype() == mlx::core::uint64;
-  const char* dtype = wide ? storage_type(in.dtype()) : boolean ? "bool_" : "uint32";
+  const char* dtype = in.dtype() == mlx::core::float16 ? "float16" :
+      wide ? storage_type(in.dtype()) : boolean ? "bool_" : "uint32";
   CrosstlMlxBuffer buffers[] = {
       {"src", dtype, const_cast<uint8_t*>(in.data<uint8_t>() + low * item_size), uint64_t(span), 0},
       {"dst", dtype, out.data<void>(), out.size(),
@@ -678,10 +680,12 @@ void dispatch_cast(const std::vector<mlx::core::array>& inputs, mlx::core::array
   if (inputs.size() != 1 || inputs[0].shape() != out.shape()) {
     throw std::invalid_argument("CrossTL cast input must match output shape.");
   }
-  const char* source_type = storage_type(inputs[0].dtype());
-  const char* destination_type = storage_type(out.dtype());
+  const char* source_type = inputs[0].dtype() == mlx::core::float16 ?
+      "float16" : storage_type(inputs[0].dtype());
+  const char* destination_type = out.dtype() == mlx::core::float16 ?
+      "float16" : storage_type(out.dtype());
   if (!source_type || !destination_type) {
-    throw std::invalid_argument("CrossTL casts require float32, int32, uint32, int64, uint64 or bool arrays.");
+    throw std::invalid_argument("CrossTL casts require float16, float32, int32, uint32, int64, uint64 or bool arrays.");
   }
   if (out.size() > 65535) {
     throw std::invalid_argument("CrossTL cast supports at most 65535 elements.");

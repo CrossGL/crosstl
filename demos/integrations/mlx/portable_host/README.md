@@ -53,7 +53,8 @@ gather support.
 Contiguous conversion, reshape, flatten and unflatten
 dispatch translated copies when sharing storage is insufficient. Copies support
 matching float32, int32, uint32 and bool arrays, including negative and zero strides.
-The optional integer64 packages extend copies to int64 and uint64.
+The optional integer64 packages extend copies to int64 and uint64. The optional
+half packages provide float16 copies and float16/float32 casts as described below.
 `Full`, including `zeros`, `ones` and `full_like`, uses those copies to materialize
 broadcast values in these types, including int64 and uint64 with the optional
 packages. Other storage widths are not yet
@@ -746,6 +747,39 @@ Compiler acceptance and passing local readbacks do not establish portable
 barrier participation. The host continues to reject this plan until the source
 semantics are established and the target lowering or checked launch contract
 preserves them. The existing looped and two-pass gates do not cover this kernel.
+
+## Half-Precision Storage
+
+The `half` package family contains the unchanged pinned
+`ggn2_dynamic_copyfloat16float16`, `v_copyfloat16float32` and
+`v_copyfloat32float16` entries. `HostRuntime(..., half=...)` enables their
+dispatch through MLX's existing contiguous-copy and cast primitives. Positive,
+negative and broadcast strides use the same allocation validation as other
+copy types, with two-byte logical element sizes.
+
+Metal and DirectX transfer raw binary16 words. OpenGL uses exact binary32
+carriers for the same logical words, preserving signed zero, subnormals,
+infinities and NaN payloads during copies. Transfer code only encodes and
+decodes storage; numeric casts run in the translated kernel. An OpenGL
+readback that is not an exact binary16 representation is rejected rather than
+rounded by the host.
+
+```sh
+python -m demos.integrations.mlx.portable_host.packages \
+  --mlx-root mlx-upstream --target metal --family half --output-dir half-packages
+python -m demos.integrations.mlx.portable_host.verify_half \
+  --mlx-root mlx-upstream --packages host-packages --half half-packages \
+  --output-dir half-evidence
+```
+
+The required three-platform job runs 28 public-API workloads in separate CPU
+and translated-backend processes. Four reversed-copy batches cover all 65,536
+binary16 words; other cases exercise casts, empty arrays, scalars, tails,
+matrices, transposes, negative strides and broadcasts. Exact logical results,
+native readbacks, trailing guards, dispatch identities and retained compiler
+artifacts are checked. A separate process rejects missing half packages before
+dispatch. No upstream kernel or test is modified. This family does not yet
+enable half arithmetic, bfloat16 operations or full upstream-suite parity.
 
 ## Random Generation
 
