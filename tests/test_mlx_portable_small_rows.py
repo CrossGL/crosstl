@@ -672,6 +672,7 @@ def test_small_row_ci_requires_native_execution_on_all_targets():
         600,
         1800,
         600,
+        600,
         2200,
     ]
     assert sum(deadlines) + 1800 < job["timeout-minutes"] * 60 <= 360 * 60

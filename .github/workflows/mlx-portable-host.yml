@@ -1082,6 +1082,14 @@ jobs:
             python -m demos.integrations.mlx.portable_host.random_packages --mlx-root mlx-upstream \
               --target ${{ matrix.target }} --output-dir .mlx-portable-small-rows/random-packages \
               2>&1 | tee .mlx-portable-small-rows/random-translation.log
+      - name: Translate random assertion reductions
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX random reduction packages" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --entry all_reduce_andbool_ --entry all_reduce_sumfloat32 \
+              --width 32 --width 256 --jobs 2 --output-dir .mlx-portable-small-rows/random-reductions \
+              2>&1 | tee .mlx-portable-small-rows/random-reductions.log
       - name: Execute random workloads and unchanged upstream tests
         env:
           EGL_PLATFORM: surfaceless
@@ -1092,7 +1100,7 @@ jobs:
           python tools/run_bounded_command.py --timeout-seconds 2200 --label "MLX random host verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_random --mlx-root mlx-upstream \
               --packages .mlx-portable-small-rows/base/packages --random .mlx-portable-small-rows/random-packages \
-              --reductions .mlx-portable-small-rows/concatenate-reductions --output-dir .mlx-portable-small-rows/random-evidence \
+              --reductions .mlx-portable-small-rows/random-reductions --output-dir .mlx-portable-small-rows/random-evidence \
               2>&1 | tee .mlx-portable-small-rows/random-verification.log
       - name: Retain small-row execution evidence
         if: always()

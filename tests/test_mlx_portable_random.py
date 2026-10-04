@@ -617,23 +617,78 @@ def test_random_host_ci_requires_all_three_platforms():
     }
     steps = {step.get("name"): step for step in job["steps"]}
     build = steps["Translate random kernels"]
+    reductions = steps["Translate random assertion reductions"]
     execute = steps["Execute random workloads and unchanged upstream tests"]
-    for step in (build, execute):
+    for step in (build, reductions, execute):
         assert not step.get("continue-on-error") and not step.get("if")
         assert "set -euo pipefail" in step["run"]
+    assert "portable_host.reduction_packages" in reductions["run"]
     assert (
-        "--entry all_reduce_andbool_ --width 32"
-        in steps["Translate concatenation test reduction"]["run"]
+        "--entry all_reduce_andbool_ --entry all_reduce_sumfloat32" in reductions["run"]
+    )
+    assert "--width 32 --width 256" in reductions["run"]
+    assert '--target "${{ matrix.target }}"' in reductions["run"]
+    assert (
+        "--output-dir .mlx-portable-small-rows/random-reductions" in reductions["run"]
     )
     assert "portable_host.random_packages" in build["run"]
     assert "--target ${{ matrix.target }}" in build["run"]
     assert "portable_host.verify_random" in execute["run"]
     assert "--timeout-seconds 2200" in execute["run"]
     assert "--random .mlx-portable-small-rows/random-packages" in execute["run"]
-    assert (
-        "--reductions .mlx-portable-small-rows/concatenate-reductions" in execute["run"]
-    )
+    assert "--reductions .mlx-portable-small-rows/random-reductions" in execute["run"]
     assert steps["Retain small-row execution evidence"]["if"] == "always()"
+
+
+def test_random_upstream_inventory_includes_distribution_assertions():
+    assert verify_random.UPSTREAM_TESTS == tuple(
+        "test_random.TestRandom." + name
+        for name in (
+            "test_global_rng",
+            "test_key",
+            "test_key_split",
+            "test_uniform",
+            "test_gumbel",
+        )
+    )
+    assert verify_random.REQUIRED_REDUCTIONS == {
+        "w32/all_reduce_andbool_",
+        "w256/all_reduce_andbool_",
+        "w32/all_reduce_sumfloat32",
+    }
+
+
+@pytest.mark.parametrize("missing", sorted(verify_random.REQUIRED_REDUCTIONS))
+def test_random_assertion_packages_are_checked_before_workers(
+    tmp_path, monkeypatch, missing
+):
+    (tmp_path / "index.json").write_text(json.dumps({"target": "metal"}))
+    args = SimpleNamespace(
+        mlx_root=tmp_path,
+        packages=tmp_path,
+        random=tmp_path,
+        reductions=tmp_path,
+        output_dir=tmp_path / "evidence",
+    )
+    monkeypatch.setattr(verify_random, "verify_prepared", lambda root: {})
+    monkeypatch.setattr(verify_random, "upstream_test_sources", lambda *args: {})
+    monkeypatch.setattr(verify_random, "load_index", lambda *args: {})
+    monkeypatch.setattr(
+        verify_random,
+        "load_reductions",
+        lambda *args: {
+            "descriptors": {
+                name: {} for name in verify_random.REQUIRED_REDUCTIONS - {missing}
+            }
+        },
+    )
+    monkeypatch.setattr(
+        verify_random.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("Workers must not start without packages"),
+    )
+    with pytest.raises(ValueError, match=missing):
+        verify_random.verify(args)
 
 
 def test_random_verifier_preserves_all_failed_worker_attempts(tmp_path, monkeypatch):
@@ -655,7 +710,9 @@ def test_random_verifier_preserves_all_failed_worker_attempts(tmp_path, monkeypa
     monkeypatch.setattr(
         verify_random,
         "load_reductions",
-        lambda root, target: {"descriptors": {"w32/all_reduce_andbool_": {}}},
+        lambda root, target: {
+            "descriptors": {name: {} for name in verify_random.REQUIRED_REDUCTIONS}
+        },
     )
     commands = []
 

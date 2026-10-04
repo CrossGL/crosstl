@@ -769,8 +769,9 @@ not a complete random API or backend.
 python -m demos.integrations.mlx.portable_host.random_packages \
   --mlx-root mlx-upstream --target metal --output-dir random-packages
 python -m demos.integrations.mlx.portable_host.reduction_packages \
-  --mlx-root mlx-upstream --target metal --entry all_reduce_andbool_ --width 32 \
-  --output-dir random-reductions
+  --mlx-root mlx-upstream --target metal \
+  --entry all_reduce_andbool_ --entry all_reduce_sumfloat32 \
+  --width 32 --width 256 --output-dir random-reductions
 python -m demos.integrations.mlx.portable_host.verify_random \
   --mlx-root mlx-upstream --packages host-packages --random random-packages \
   --reductions random-reductions --output-dir random-evidence
@@ -778,22 +779,26 @@ python -m demos.integrations.mlx.portable_host.verify_random \
 
 The verifier runs 42 public-API workloads: key splitting with six key layouts,
 including empty outputs, and float32 uniform generation with three explicit
-seeds. It also runs the unchanged upstream `test_global_rng`, `test_key` and
-`test_key_split` in separate CPU and translated-backend processes. Results are
+seeds. It also runs the unchanged upstream `test_global_rng`, `test_key`,
+`test_key_split`, `test_uniform` and `test_gumbel` in separate CPU and
+translated-backend processes. Results are
 checked against an integer Threefry reference, with exact float32 output words
 for the maintained uniform cases. Every random dispatch retains its uploads,
 complete native bytes, guards, logical output hash, generated source and native
 compiler evidence. Two separate processes check missing-package and oversized
 output rejection before dispatch. CI requires this verification on all three
-platforms. The full upstream `test_uniform` also needs bfloat16 operations;
-the complete random suite remains outside the demonstrated coverage.
+platforms. The upstream uniform test checks bfloat16 metadata without evaluating
+that array; passing it does not establish bfloat16 execution support. The complete
+random suite remains outside the demonstrated coverage.
 
 A full-module probe of the pinned `test_random.py` completes 14 tests on CPU
-and reports eight errors through generated Metal. The remaining work includes
+and initially reported eight errors through generated Metal. Supplying the
+Boolean and sum reduction variants resolves the uniform and Gumbel failures
+without changing either test. The remaining work includes
 half-precision casts, arg-reductions, sorting, larger random and reduction
-allocations, and additional reduction package variants. Tests that inspect
+allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
-not skipped or reclassified by the required three-test profile above.
+not skipped or reclassified by the required five-test profile above.
 
 ### Kernel Evidence
 

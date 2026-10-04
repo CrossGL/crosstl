@@ -21,7 +21,16 @@ from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
 
 UPSTREAM_TESTS = tuple(
     "test_random.TestRandom." + name
-    for name in ("test_global_rng", "test_key", "test_key_split")
+    for name in (
+        "test_global_rng",
+        "test_key",
+        "test_key_split",
+        "test_uniform",
+        "test_gumbel",
+    )
+)
+REQUIRED_REDUCTIONS = frozenset(
+    ("w32/all_reduce_andbool_", "w256/all_reduce_andbool_", "w32/all_reduce_sumfloat32")
 )
 NEGATIVE_CHECKS = {
     "missing": "No translated package for rbitsc",
@@ -140,9 +149,11 @@ def verify(args):
     target = base["target"]
     random = {"target": target, "descriptors": load_index(args.random, target)}
     reductions = load_reductions(args.reductions, target)
-    if "w32/all_reduce_andbool_" not in reductions["descriptors"]:
+    missing = REQUIRED_REDUCTIONS - reductions["descriptors"].keys()
+    if missing:
         raise ValueError(
-            "Random upstream assertions require the Boolean reduction package"
+            "Random upstream assertions require reduction packages: "
+            + ", ".join(sorted(missing))
         )
     evidence = {
         "commit": COMMIT,
