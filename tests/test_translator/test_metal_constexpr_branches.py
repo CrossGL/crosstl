@@ -53,7 +53,7 @@ def _source(case):
     instantiation = "int"
     parameters = "typename T"
     if case.startswith("trait-"):
-        instantiation = case.removeprefix("trait-")
+        instantiation = case[len("trait-") :]
         argument = f"{instantiation}(inputs[tid])"
         body = """if constexpr (metal::is_floating_point_v<T>) {
             return isnan(value) ? T(7) : value + T(2);

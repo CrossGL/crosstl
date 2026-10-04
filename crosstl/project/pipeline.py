@@ -4079,13 +4079,31 @@ def _supported_target_names() -> list[str]:
     return sorted(set(backend_names()) | CROSSL_TARGETS)
 
 
+def _resolved_comparison_path(path: Path) -> Path | PureWindowsPath:
+    resolved = path.resolve()
+    if isinstance(resolved, PureWindowsPath):
+        # Windows resolution can retain the extended prefix for the same location.
+        value = str(resolved)
+        if re.match(r"^\\\\\?\\[A-Za-z]:\\", value):
+            return PureWindowsPath(value[4:])
+        if value.lower().startswith("\\\\?\\unc\\"):
+            unc_path = PureWindowsPath("\\\\" + value[8:])
+            if unc_path.is_absolute():
+                return unc_path
+    return resolved
+
+
 def _relpath(path: Path, root: Path) -> str:
-    return path.resolve().relative_to(root.resolve()).as_posix()
+    return (
+        _resolved_comparison_path(path)
+        .relative_to(_resolved_comparison_path(root))
+        .as_posix()
+    )
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
     try:
-        path.resolve().relative_to(root.resolve())
+        _resolved_comparison_path(path).relative_to(_resolved_comparison_path(root))
     except ValueError:
         return False
     return True

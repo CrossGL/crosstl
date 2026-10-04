@@ -1,5 +1,7 @@
 """Assertions shared by native Metal corpus proofs."""
 
+from __future__ import annotations
+
 import re
 
 
