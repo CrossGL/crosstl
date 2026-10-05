@@ -202,6 +202,31 @@ accuracy policy remain tracked in
 Whole-family DirectX/OpenGL reference reconciliation remains incomplete.
 Required Square and ArcCos numerical cases remain separate and unchanged.
 
+A separate local binary-math comparison at `9c3d3557` covers all 65,536 half
+or bfloat input payloads against 12 fixed partners: signed zero, positive and
+negative 0.5, 1, 2, 3, and infinity. Each selected `vv_` entry executes 786,432
+pairs through unchanged original Metal, generated Metal and generated OpenGL.
+The Metal round trip matches every comparison; OpenGL results are:
+
+| Entry | Differing results | Output guards checked |
+| --- | ---: | ---: |
+| `vv_LogAddExpfloat16` | 1,123 | 112 |
+| `vv_LogAddExpbfloat16` | 746 | 112 |
+| `vv_Remainderfloat16` | 0 | 112 |
+| `vv_Remainderbfloat16` | 271,292 | 112 |
+
+Comparisons preserve finite bits, infinities and signed zeros; NaNs are compared
+by classification, not payload. The remainder count includes signed-zero and
+special-value differences, including 512 zero-to-infinity results. A reduced
+float kernel confirms that translating `fmod` to GLSL `mod` loses source
+semantics ([crosstl#2097](https://github.com/CrossGL/crosstl/issues/2097)).
+LogAddExp also loses some nonzero results; its accuracy investigation remains
+under [crosstl#2068](https://github.com/CrossGL/crosstl/issues/2068). All four
+HLSL artifacts compile with strict DXC options and all four GLSL artifacts pass
+glslangValidator and SPIR-V validation. These compiler results do not resolve
+the numerical differences. This local review adds no required CI case, changes
+no reference identity or tolerance, and establishes no Windows numerical result.
+
 The alias-bitcast defect in
 [crosstl#2088](https://github.com/CrossGL/crosstl/issues/2088) is corrected by
 resolving logical bfloat aliases before OpenGL bitcast lowering and resolving
