@@ -90,8 +90,10 @@ sentinel, and logical half loads from integer storage. Source hashes, template
 materializations, resource registers, launch geometry, reduction comparisons
 and tie-breaking remain unchanged. The 32-lane software subgroup path remains
 required for the two float32 entries. The updated identities allow the existing
-Windows numerical gate to run; local compilation and body review do not establish
-a native Windows pass or expand the required numerical subset.
+Windows numerical gate to run. Its 16 cases pass with the reviewed shaders;
+an independent audit of retained uploads and outputs verifies all 32 reduction
+indices, parameter bindings and executed module identities. This confirms the
+existing float32 subset, not numerical coverage of all 24 scalar entries.
 
 Original Metal reference libraries use the unchanged upstream sources with
 compiler warnings retained but not promoted to errors. The pinned headers use

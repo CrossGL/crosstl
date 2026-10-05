@@ -540,7 +540,11 @@ decode logical half values from integer storage. Source hashes, template
 materializations, resource registers, launch geometry, reduction comparisons
 and tie-breaking are unchanged. The two float32 entries retain the required
 32-lane software subgroup path. The existing Windows numerical gate remains
-required; compilation and body review alone are not native execution proof.
+required and passes all 16 float32 cases with these reviewed shaders. A separate
+audit verifies all 32 reduction indices against retained uploaded input words,
+including strides, tails, ties and non-finite values, and checks parameter
+bindings and executed module identities. This does not expand numerical
+coverage to the other scalar entries or establish upstream-suite parity.
 
 Constrained Metal free-function fallbacks are materialized only when their
 recognized constraints select a unique implementation. A visible ordinary or
