@@ -29,17 +29,18 @@ checksum and does not fall back to another release. These jobs do not execute
 Direct3D; WARP numerical execution and Windows host integration remain required.
 Metal corpus compilation stays on macOS because it requires Apple's toolchain.
 
-The complete binary, copy, reduction and quantized Metal corpora separate portable translation
-from native compilation. Each family has 24 source-generation shards on Ubuntu,
+The complete unary, binary, copy, reduction and quantized Metal corpora separate portable translation
+from native compilation. Unary uses five source-generation shards on Ubuntu;
+each other family uses 24 shards,
 preserving every body, materialization and resource-interface assertion. One
 dependent macOS job per family verifies all artifact identities against the
-checked-in contract and compiles every source with warnings fatal: 4,122 binary,
+checked-in contract and compiles every source with warnings fatal: 877 unary, 4,122 binary,
 2,496 copy, 2,396 reduction and 2,052 quantized artifacts. Quantized compilation
 retains the Metal 3.1 language standard and empty-compiler-stream requirement.
 Shard downloads remain separate so duplicate
 entries cannot overwrite each other. Missing, duplicated or changed sources fail
 before any compilation; compiler failures retain diagnostics and output identities.
-This removes 92 macOS jobs without sampling any corpus. Metal numerical and host
+This removes 96 macOS jobs without sampling any corpus. Metal numerical and host
 integration checks still run natively and are not replaced by this compiler job.
 The quantized consumer also executes all 108 affine quantization and
 dequantization variants from the same verified source bundle. Five groups per
@@ -48,9 +49,12 @@ Metal and generated Metal must both match independently calculated packed bytes,
 scales and biases; readonly inputs and output guards are checked exactly. The
 15-minute native step retains commands, modules and readbacks in the existing
 job artifact. It adds no runner and does not repeat translation on macOS.
-The copy, reduction and quantized source phases permit only the explicit Metal toolchain-unavailable
+The unary, copy, reduction and quantized source phases permit only the explicit Metal toolchain-unavailable
 warning when that toolchain is absent, retain it in the report and reject all
 other diagnostics. Their dependent macOS phases still require native compilation.
+The unary source shards also retain their configuration, generated shaders,
+reports and JUnit results when a reference check fails. The native consumer
+cannot run until all source shards succeed; stale references remain failures.
 
 The four DirectX corpus families retain each case's configuration, generated
 shader and portability report before checking the recorded artifact identity.

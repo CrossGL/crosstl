@@ -5273,9 +5273,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  mlx-unary-metal-roundtrip:
+  mlx-unary-metal-sources:
     concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}-mlx-unary-metal-roundtrip-${{ strategy.job-index }}
+      group: ${{ github.workflow }}-${{ github.ref }}-mlx-unary-metal-sources-${{ strategy.job-index }}
       cancel-in-progress: false
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -5283,9 +5283,9 @@ jobs:
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
-    name: MLX complete unary Metal round-trip (shard ${{ matrix.shard_index }} of 5)
+    name: MLX complete unary Metal sources (shard ${{ matrix.shard_index }} of 5)
     if: github.event_name != 'schedule'
-    runs-on: macOS-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
       fail-fast: false
@@ -5308,15 +5308,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e . pytest-xdist
 
-      - name: Install macOS Metal Toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
-          xcrun --sdk macosx metal --version
-
       - name: Checkout current MLX unary corpus
         shell: bash
         run: |
@@ -5328,15 +5319,96 @@ jobs:
           git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
           test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
 
-      - name: Prove current MLX complete unary family Metal round-trips
+      - name: Verify and export complete unary Metal sources
         env:
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
-          CROSTL_REQUIRE_MLX_UNARY_METAL_ROUNDTRIP: "1"
+          CROSTL_REQUIRE_MLX_UNARY_METAL_SOURCE: "1"
           CROSTL_MLX_UNARY_METAL_SHARD_INDEX: ${{ matrix.shard_index }}
           CROSTL_MLX_UNARY_METAL_SHARD_COUNT: "5"
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
+          CROSTL_CORPUS_BUNDLE_ROOT: ${{ github.workspace }}/.unary-metal-sources
         run: >-
-          python -m pytest -q -n auto
-          demos/integrations/mlx/tests/kernels/test_unary_native_loader.py::test_current_mlx_unary_family_roundtrips_through_metal
+          python -m pytest -q -n auto --junitxml=unary-metal-source-junit.xml
+          demos/integrations/mlx/tests/kernels/test_unary_native_loader.py::test_current_mlx_unary_family_exports_native_compilation_bundle
+
+      - name: Retain unary Metal source bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unary-metal-sources-${{ matrix.shard_index }}
+          path: .unary-metal-sources
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Retain unary Metal source evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unary-metal-evidence-${{ matrix.shard_index }}
+          path: |
+            mlx-current-upstream/.crosstl-corpus-evidence
+            unary-metal-source-junit.xml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  mlx-unary-metal-roundtrip:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-mlx-unary-metal-roundtrip
+      cancel-in-progress: false
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    name: MLX complete unary Metal compilation
+    if: github.event_name != 'schedule'
+    needs: mlx-unary-metal-sources
+    runs-on: macOS-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout CrossTL
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install macOS Metal Toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk macosx metal --version
+
+      - name: Download all unary Metal source shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: unary-metal-sources-*
+          path: .unary-metal-sources
+          merge-multiple: false
+
+      - name: Compile every pinned unary Metal artifact
+        run: >-
+          python tools/compile_artifact_bundle.py
+          --bundle-root .unary-metal-sources
+          --contract demos/integrations/mlx/contracts/unary.metal-roundtrip.json
+          --output-dir .unary-metal-native
+          --compiler-command '["xcrun", "-sdk", "macosx", "metal", "-Werror", "-c", "{artifact}", "-o", "{output}"]'
+          --jobs 2 --timeout 120
+
+      - name: Retain unary Metal native compilation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unary-metal-native-compilation
+          path: .unary-metal-native
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   mlx-unary-complete-opengl-translation:
     concurrency:

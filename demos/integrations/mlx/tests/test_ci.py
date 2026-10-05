@@ -68,7 +68,7 @@ def test_project_demo_queues_each_job_and_matrix_leg_independently():
     coverage = _load_ci_coverage_module()
     assert not coverage.nested_yaml_section(workflow, "concurrency", 0)
     jobs = coverage.workflow_job_names(workflow)
-    assert len(jobs) == 36
+    assert len(jobs) == 37
     groups = set()
     for name in jobs:
         job = _workflow_job_section(workflow, name)
@@ -2039,48 +2039,20 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
         mlx_porting,
         "mlx-unary-metal-roundtrip",
     )
-    assert (
-        "name: MLX complete unary Metal round-trip "
-        "(shard ${{ matrix.shard_index }} of 5)" in family_metal_job
-    )
+    assert "name: MLX complete unary Metal compilation" in family_metal_job
     assert "if: github.event_name != 'schedule'" in family_metal_job
     assert "runs-on: macOS-latest" in family_metal_job
     assert "timeout-minutes: 75" in family_metal_job
-    assert "fail-fast: false" in family_metal_job
-    assert _matrix_values(family_metal_job, "shard_index") == {
-        "0",
-        "1",
-        "2",
-        "3",
-        "4",
-    }
+    assert "needs: mlx-unary-metal-sources" in family_metal_job
+    assert "strategy:" not in family_metal_job
     assert 'python-version: "3.12"' in family_metal_job
-    assert "python -m pip install -e . pytest-xdist" in family_metal_job
     assert "xcrun --sdk macosx metal --version" in family_metal_job
-    assert "Checkout current MLX unary corpus" in family_metal_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in family_metal_job
-
-    family_metal_step = ci_coverage.workflow_step_section(
-        family_metal_job,
-        "Prove current MLX complete unary family Metal round-trips",
-    )
-    assert "if: runner.os" not in family_metal_step
+    assert "tools/compile_artifact_bundle.py" in family_metal_job
     assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in family_metal_step
+        "--contract demos/integrations/mlx/contracts/unary.metal-roundtrip.json"
+        in family_metal_job
     )
-    assert 'CROSTL_REQUIRE_MLX_UNARY_METAL_ROUNDTRIP: "1"' in family_metal_step
-    assert (
-        "CROSTL_MLX_UNARY_METAL_SHARD_INDEX: ${{ matrix.shard_index }}"
-        in family_metal_step
-    )
-    assert 'CROSTL_MLX_UNARY_METAL_SHARD_COUNT: "5"' in family_metal_step
-    assert (
-        f"{test_path}::"
-        "test_current_mlx_unary_family_roundtrips_through_metal" in family_metal_step
-    )
-    assert "-n auto" in family_metal_step
-    assert "-k" not in family_metal_step
+    assert "--jobs 2 --timeout 120" in family_metal_job
     matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
     assert "Prove current MLX complete unary family Metal round-trips" not in matrix_job
 
@@ -2864,7 +2836,7 @@ def test_mlx_project_porting_workflow_runs_copy_complete_directx_proof():
     )
 
 
-@pytest.mark.parametrize("family", ("reduce", "copy", "quantized"))
+@pytest.mark.parametrize("family", ("unary", "reduce", "copy", "quantized"))
 def test_mlx_project_porting_workflow_runs_complete_metal_proof(family):
     workflow = _workflow_texts()["demo-project-testing.yml"]
     jobs = yaml.safe_load(workflow)["jobs"]
@@ -2881,6 +2853,24 @@ def test_mlx_project_porting_workflow_runs_complete_metal_proof(family):
     # Every family requires the same complete source/consumer policy above.
     for suffix in ("metal-sources", "complete-metal-roundtrip"):
         expected = family_job(jobs[f"mlx-binary-{suffix}"])
+        actual_suffix = suffix
+        if family == "unary":
+            expected["timeout-minutes"] = 75
+            if suffix == "metal-sources":
+                expected["name"] = expected["name"].replace("of 24", "of 5")
+                expected["strategy"]["matrix"]["shard_index"] = list(range(5))
+                for step in expected["steps"]:
+                    if "exports_native_compilation_bundle" in step.get("run", ""):
+                        step["env"]["CROSTL_MLX_UNARY_METAL_SHARD_COUNT"] = "5"
+                        step["run"] = step["run"].replace(
+                            "test_unary_complete_metal_roundtrip.py",
+                            "test_unary_native_loader.py",
+                        )
+            else:
+                actual_suffix = "metal-roundtrip"
+                expected["concurrency"]["group"] = expected["concurrency"][
+                    "group"
+                ].replace("complete-metal-roundtrip", "metal-roundtrip")
         if family == "quantized":
             for step in expected["steps"]:
                 command = step.get("run", "")
@@ -2899,7 +2889,7 @@ def test_mlx_project_porting_workflow_runs_complete_metal_proof(family):
                     step["run"] = command.replace(
                         '"metal", "-Werror"', '"metal", "-std=metal3.1", "-Werror"'
                     )
-        actual = jobs[f"mlx-{family}-{suffix}"]
+        actual = jobs[f"mlx-{family}-{actual_suffix}"]
         if family == "quantized" and suffix == "complete-metal-roundtrip":
             # The separate native-affine policy test covers these extra steps.
             extra_steps = {
@@ -2926,7 +2916,11 @@ def test_mlx_project_porting_workflow_runs_complete_metal_proof(family):
         assert actual == expected
     _assert_workflow_triggers(
         workflow,
-        f"demos/integrations/mlx/tests/kernels/test_{family}_complete_metal_roundtrip.py",
+        (
+            "demos/integrations/mlx/tests/kernels/test_unary_native_loader.py"
+            if family == "unary"
+            else f"demos/integrations/mlx/tests/kernels/test_{family}_complete_metal_roundtrip.py"
+        ),
     )
 
 

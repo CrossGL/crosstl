@@ -29,6 +29,13 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from tools.compile_artifact_bundle import write_bundle_entry
+
+from ..corpus_evidence import (
+    assert_deferred_metal_compiler_diagnostics,
+    corpus_workspace,
+    run_compiler,
+)
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_UNARY_SOURCE = "mlx/backend/metal/kernels/unary.metal"
@@ -38,6 +45,8 @@ REQUIRE_PROOF_ENVS = {
     "metal": "CROSTL_REQUIRE_MLX_UNARY_METAL_ROUNDTRIP",
     "opengl": "CROSTL_REQUIRE_MLX_UNARY_OPENGL_NATIVE_LOADER",
 }
+REQUIRE_UNARY_METAL_SOURCE_ENV = "CROSTL_REQUIRE_MLX_UNARY_METAL_SOURCE"
+UNARY_METAL_BUNDLE_ENV = "CROSTL_CORPUS_BUNDLE_ROOT"
 ROOT = Path(__file__).resolve().parents[5]
 SCALAR_UNARY_METAL_CONTRACT_PATH = (
     ROOT
@@ -948,7 +957,10 @@ def _skip_or_fail(target: str, message: str) -> None:
 def _pinned_mlx_root() -> Path:
     root_value = os.environ.get("CROSTL_MLX_ROOT")
     if not root_value:
-        if any(os.environ.get(name) == "1" for name in REQUIRE_PROOF_ENVS.values()):
+        if any(
+            os.environ.get(name) == "1"
+            for name in (*REQUIRE_PROOF_ENVS.values(), REQUIRE_UNARY_METAL_SOURCE_ENV)
+        ):
             pytest.fail("CROSTL_MLX_ROOT is not configured")
         pytest.skip("CROSTL_MLX_ROOT is not configured")
 
@@ -990,6 +1002,8 @@ def _translate_unary_artifact(
         run_toolchains=target != "metal",
     )
     payload = report.to_json()
+    report_path = work_dir / "portability-report.json"
+    report.write_json(report_path)
 
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
@@ -1079,6 +1093,7 @@ def _translate_unary_artifact(
                 cursor = end + 2
         validator = "xcrun"
     if target == "metal":
+        assert_deferred_metal_compiler_diagnostics(payload)
         assert payload["validation"].get("toolchainRuns", []) == []
     elif shutil.which(validator) is not None:
         toolchain_runs = payload["validation"]["toolchainRuns"]
@@ -1087,8 +1102,6 @@ def _translate_unary_artifact(
     elif os.environ.get(REQUIRE_PROOF_ENVS[target]) == "1":
         pytest.fail(f"{validator} is required for the MLX unary {target} proof")
 
-    report_path = work_dir / "portability-report.json"
-    report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
     return report_path
 
@@ -1108,13 +1121,13 @@ def test_pinned_mlx_unary_square_translates_to_selected_target(target):
         )
 
 
-def _roundtrip_pinned_mlx_unary_through_metal(workload: UnaryWorkload) -> None:
+def _roundtrip_pinned_mlx_unary_through_metal(
+    workload: UnaryWorkload, *, bundle_root: Path | None = None
+) -> None:
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=f".crosstl-unary-{workload.name}-metal-roundtrip-",
-        dir=mlx_root,
-    ) as temporary_directory:
-        work_dir = Path(temporary_directory)
+    with corpus_workspace(
+        mlx_root, family="unary", target="metal", entry_point=workload.entry_point
+    ) as work_dir:
         report_path = _translate_unary_artifact(
             mlx_root,
             work_dir,
@@ -1178,11 +1191,20 @@ def _roundtrip_pinned_mlx_unary_through_metal(workload: UnaryWorkload) -> None:
             for resource in reflected["resources"]
         } == expected_resources
 
+        if bundle_root is not None:
+            write_bundle_entry(
+                generated_path,
+                UNARY_METAL_CONTRACT_PATH,
+                workload.entry_point,
+                bundle_root,
+            )
+            return
+
         xcrun = shutil.which("xcrun")
         if xcrun is None:
             _skip_or_fail("metal", "xcrun is required for the MLX unary Metal proof")
         air_path = work_dir / f"{workload.entry_point}.air"
-        compiled = subprocess.run(
+        compiled = run_compiler(
             [
                 xcrun,
                 "-sdk",
@@ -1194,9 +1216,8 @@ def _roundtrip_pinned_mlx_unary_through_metal(workload: UnaryWorkload) -> None:
                 "-o",
                 str(air_path),
             ],
-            check=False,
-            capture_output=True,
-            text=True,
+            work_dir=work_dir,
+            timeout=120,
         )
         assert compiled.returncode == 0, compiled.stdout + compiled.stderr
         assert air_path.is_file()
@@ -1218,6 +1239,16 @@ def test_pinned_mlx_unary_arccos_roundtrips_through_metal():
 )
 def test_current_mlx_unary_family_roundtrips_through_metal(workload):
     _roundtrip_pinned_mlx_unary_through_metal(workload)
+
+
+@pytest.mark.parametrize(
+    "workload",
+    CURRENT_UNARY_METAL_WORKLOADS,
+    ids=lambda workload: workload.entry_point,
+)
+def test_current_mlx_unary_family_exports_native_compilation_bundle(workload, tmp_path):
+    bundle_root = Path(os.environ.get(UNARY_METAL_BUNDLE_ENV, str(tmp_path / "bundle")))
+    _roundtrip_pinned_mlx_unary_through_metal(workload, bundle_root=bundle_root)
 
 
 @pytest.mark.parametrize("target", ["directx", "opengl"])

@@ -118,14 +118,16 @@ def test_compiler_retains_launch_error_and_reraises(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "family,target",
     [(name, "directx") for name in ("unary", "binary", "copy", "reduce")]
-    + [(name, "metal") for name in ("binary", "reduce", "copy", "quantized")],
+    + [(name, "metal") for name in ("unary", "binary", "reduce", "copy", "quantized")],
 )
 def test_corpus_retains_report_before_translation_assertions(
     family, target, tmp_path, monkeypatch
 ):
     suffix = "metal_roundtrip" if target == "metal" else target
     module = importlib.import_module(
-        f"demos.integrations.mlx.tests.kernels.test_{family}_complete_{suffix}"
+        "demos.integrations.mlx.tests.kernels.test_unary_native_loader"
+        if (family, target) == ("unary", "metal")
+        else f"demos.integrations.mlx.tests.kernels.test_{family}_complete_{suffix}"
     )
     payload = {
         "summary": {"unitCount": 0},
@@ -144,13 +146,15 @@ def test_corpus_retains_report_before_translation_assertions(
     workload = getattr(module, f"CURRENT_{family.upper()}_{target.upper()}_WORKLOADS")[
         0
     ]
-    translate = (
-        getattr(module, f"_translate_{family}_metal_artifact")
-        if target == "metal"
-        else module._translate_and_validate
-    )
     with pytest.raises(AssertionError):
-        translate(tmp_path, tmp_path, workload)
+        if (family, target) == ("unary", "metal"):
+            module._translate_unary_artifact(tmp_path, tmp_path, target, workload)
+        elif target == "metal":
+            getattr(module, f"_translate_{family}_metal_artifact")(
+                tmp_path, tmp_path, workload
+            )
+        else:
+            module._translate_and_validate(tmp_path, tmp_path, workload)
     assert (
         json.loads((tmp_path / "portability-report.json").read_text(encoding="utf-8"))
         == payload
@@ -162,16 +166,29 @@ def test_corpus_retains_report_before_translation_assertions(
 @pytest.mark.parametrize(
     "damage", (None, "translation", "manifest", "entry_point", "resources")
 )
-@pytest.mark.parametrize("family", ("binary", "reduce", "copy", "quantized"))
+@pytest.mark.parametrize("family", ("unary", "binary", "reduce", "copy", "quantized"))
 def test_metal_bundle_export_requires_translation_and_host_interface(
     family, damage, tmp_path, monkeypatch
 ):
     module = importlib.import_module(
-        f"demos.integrations.mlx.tests.kernels.test_{family}_complete_metal_roundtrip"
+        "demos.integrations.mlx.tests.kernels.test_unary_native_loader"
+        if family == "unary"
+        else f"demos.integrations.mlx.tests.kernels.test_{family}_complete_metal_roundtrip"
     )
     workload = getattr(module, f"CURRENT_{family.upper()}_METAL_WORKLOADS")[0]
     monkeypatch.setattr(module, "_pinned_mlx_root", lambda: tmp_path)
-    if family == "binary":
+    if family == "unary":
+        resources = [
+            {"name": name, "kind": kind, "binding": binding, "access": access}
+            for name, kind, binding, access in (
+                ("in_", "buffer", 0, "read"),
+                ("out_", "buffer", 1, "read_write"),
+                ("in_shape", "constant-buffer", 2, "read"),
+                ("in_strides", "constant-buffer", 3, "read"),
+                ("ndim", "buffer", 4, "read"),
+            )
+        ]
+    elif family == "binary":
         resources = module._resources(
             module.BINARY_SHAPE_SPECS[workload.shape].resource_kind
         )
@@ -216,10 +233,17 @@ def test_metal_bundle_export_requires_translation_and_host_interface(
 
     def translate(*args, **kwargs):
         assert kwargs == (
-            {"defer_native_compilation": True} if family != "binary" else {}
+            {"defer_native_compilation": True}
+            if family not in {"unary", "binary"}
+            else {}
         )
         calls.append("translation")
         assert damage != "translation"
+        if family == "unary":
+            assert args[2:] == ("metal", workload)
+            path = tmp_path / "report.json"
+            path.write_text(json.dumps({"artifacts": [{"path": "source.metal"}]}))
+            return path
         return tmp_path / "report.json", tmp_path / "source.metal"
 
     def reflect(*args):
@@ -234,7 +258,15 @@ def test_metal_bundle_export_requires_translation_and_host_interface(
         assert root == tmp_path / "bundle"
         calls.append("export")
 
-    monkeypatch.setattr(module, f"_translate_{family}_metal_artifact", translate)
+    monkeypatch.setattr(
+        module,
+        (
+            "_translate_unary_artifact"
+            if family == "unary"
+            else f"_translate_{family}_metal_artifact"
+        ),
+        translate,
+    )
     monkeypatch.setattr(module, "build_runtime_artifact_manifest", reflect)
     monkeypatch.setattr(module, "write_bundle_entry", export)
     monkeypatch.setattr(
@@ -250,12 +282,18 @@ def test_metal_bundle_export_requires_translation_and_host_interface(
 
 
 @pytest.mark.parametrize("mode", ("native", "source"))
-@pytest.mark.parametrize("family", ("binary", "reduce", "copy", "quantized"))
+@pytest.mark.parametrize("family", ("unary", "binary", "reduce", "copy", "quantized"))
 def test_metal_required_source_cannot_skip(family, mode, monkeypatch):
     module = importlib.import_module(
-        f"demos.integrations.mlx.tests.kernels.test_{family}_complete_metal_roundtrip"
+        "demos.integrations.mlx.tests.kernels.test_unary_native_loader"
+        if family == "unary"
+        else f"demos.integrations.mlx.tests.kernels.test_{family}_complete_metal_roundtrip"
     )
-    native_flag = getattr(module, f"REQUIRE_{family.upper()}_METAL_ENV")
+    native_flag = (
+        module.REQUIRE_PROOF_ENVS["metal"]
+        if family == "unary"
+        else getattr(module, f"REQUIRE_{family.upper()}_METAL_ENV")
+    )
     source_flag = getattr(module, f"REQUIRE_{family.upper()}_METAL_SOURCE_ENV")
     monkeypatch.delenv("CROSTL_MLX_ROOT", raising=False)
     monkeypatch.delenv(native_flag, raising=False)

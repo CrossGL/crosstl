@@ -153,10 +153,12 @@ Mixed integer-lvalue compound assignments retain both the integer-to-bfloat
 conversion and the rounded arithmetic result before integer writeback
 ([crosstl#2083](https://github.com/CrossGL/crosstl/issues/2083)). Forty-eight
 reduced cases cover signed and unsigned 32-bit integers, aliases, local and
-resource arrays, and struct members. Original/generated Metal and generated
-OpenGL match over 576 values per path; all 48 corresponding HLSL cases compile
-with warnings fatal. The tests use existing native CI jobs. Windows numerical
-execution is still required. Unproven wide-integer conversions and operands
+resource arrays, and struct members. Original/generated Metal, generated
+OpenGL and Windows DirectX match over 576 values per path. The Windows artifact
+audit verifies all 48 cases, 60 output buffers and 120 guard words against the
+unchanged original Metal controls, with fresh generated-source identities
+([native Windows run](https://github.com/CrossGL/crosstl/actions/runs/37308563739/job/111758088868)).
+The tests use existing native CI jobs. Unproven wide-integer conversions and operands
 with observable side effects produce structured diagnostics; these checks do
 not claim complete mixed compound-assignment support.
 
@@ -164,6 +166,13 @@ The obsolete HLSL Sigmoid half-type assertion is corrected, but whole-family
 unary acceptance remains blocked. No complete unary reference refresh or
 numerical parity is claimed. Required Square and ArcCos
 numerical cases remain separate.
+
+The complete unary Metal compile gate generates sources in five Ubuntu shards
+and compiles all 877 verified artifacts in one macOS job. It retains every
+entry, template-materialization and resource-interface check. Source reports
+and JUnit results survive failed reference checks; missing, duplicate or
+changed artifacts cannot pass the native consumer. This saves four macOS
+runner starts without replacing any numerical execution gate.
 
 The current pin adds cross-entropy, gated-delta forward and backward kernels
 (including NAX variants), matrix-multiplication gather offsets, and attention
