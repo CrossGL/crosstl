@@ -127,11 +127,26 @@ Windows numerical execution of these new cases remains pending. The two
 bfloat-vector cases retain DirectX unsupported-type diagnostics rather than
 claiming execution coverage.
 
+The math-wrapper correction for
+[crosstl#2084](https://github.com/CrossGL/crosstl/issues/2084) preserves float
+computation and the source's bfloat return before subsequent arithmetic.
+Nine reduced default, fast and precise wrapper cases match original Metal and
+generated Metal/OpenGL over 108 values per path; all nine HLSL cases compile
+with warnings fatal. They run within the existing native conversion jobs.
+Fresh current and historical `v_Sigmoidbfloat16bfloat16` entries compile to all
+three targets. Local Metal execution matches the unchanged original kernel for
+all 65,282 non-NaN bfloat inputs at each pin, including infinities and signed
+zeros. Inputs and guards are checked; outputs are not preloaded with expected
+values. The same OpenGL sweep has four differences with intact guards:
+one exponential rounding midpoint
+([crosstl#2085](https://github.com/CrossGL/crosstl/issues/2085)) and three
+subnormal division results
+([crosstl#2086](https://github.com/CrossGL/crosstl/issues/2086)). Independent
+stage and division-only probes retain these failures. This does not establish
+Windows Sigmoid parity or resolve the separate NaN policy.
+
 The obsolete HLSL Sigmoid half-type assertion is corrected, but whole-family
-unary acceptance remains blocked. Fresh current and historical Sigmoid entries
-compile to HLSL and GLSL; their Metal round trips still lose narrow math-result
-boundaries, tracked in
-[crosstl#2084](https://github.com/CrossGL/crosstl/issues/2084). Mixed integer-lvalue
+unary acceptance remains blocked. Mixed integer-lvalue
 compound assignments expose another OpenGL rounding defect in
 [crosstl#2083](https://github.com/CrossGL/crosstl/issues/2083). No complete unary
 reference refresh or numerical parity is claimed. Required Square and ArcCos
@@ -312,8 +327,9 @@ The current harness verifies:
   [crosstl#2082](https://github.com/CrossGL/crosstl/issues/2082) changes the
   affected Sigmoid bodies again. Their reference identities remain under
   review; successful DXC compilation is not numerical acceptance. The Metal
-  math-boundary defect in [crosstl#2084](https://github.com/CrossGL/crosstl/issues/2084)
-  also remains unresolved;
+  math-boundary correction in [crosstl#2084](https://github.com/CrossGL/crosstl/issues/2084)
+  now has exact non-NaN Sigmoid Metal evidence at both pins, but does not approve
+  the remaining family identities;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 2,496
   discovered copy entries from `copy.metal` at the legacy reference revision
   `846d176227a0ac13d2667e58d2bb68b322109ab0`. The schema-v2

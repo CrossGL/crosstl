@@ -47,6 +47,14 @@ aliases are also diagnosed because their value qualification is not yet
 represented in the shared source. Pointer, aggregate and template aliases
 continue to use their existing resolution paths.
 
+Materialized bfloat math wrappers retain their float computation and explicit
+narrow return at each call. Nested calls, widening expressions and inferred
+locals therefore observe the source rounding boundary. This applies to a
+selected source wrapper, not to bare precise builtins whose result is float.
+Native controls cover default, fast and precise wrappers and single evaluation
+of arguments. The Metal target identifies whole-expression constructors from
+the syntax tree before omitting a redundant expected-type conversion.
+
 Byte-valued struct initializers convert expression carriers back to the declared
 ``char`` or ``uchar`` storage type. The same rule covers byte vectors, aliases,
 materialized generic fields, nested aggregates and fixed arrays; omitted byte

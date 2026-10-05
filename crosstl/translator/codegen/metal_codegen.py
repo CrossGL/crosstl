@@ -8874,9 +8874,11 @@ class MetalCodeGen:
         # uniformly also covers ternaries/arithmetic without guessing their
         # target overload result; an existing bfloat construction is idempotent
         # and is left intact to keep output stable.
-        if self.map_type(expected_type_name) == "bfloat" and not re.match(
-            r"^\s*bfloat\s*[({]", rendered
-        ):
+        is_bfloat_constructor = (
+            self.is_discarded_metal_type_constructor(expr)
+            and self.map_type(self.function_call_name(expr)) == "bfloat"
+        )
+        if self.map_type(expected_type_name) == "bfloat" and not is_bfloat_constructor:
             return f"bfloat({rendered})"
         return (
             self.metal_byte_conversion_expression(rendered, expected_type) or rendered

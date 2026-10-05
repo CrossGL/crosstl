@@ -188,6 +188,29 @@ def test_metal_unregistered_structure_lookalike_is_not_projected():
     assert "(value).real" not in generated
 
 
+@pytest.mark.parametrize(
+    "expression,expected",
+    [
+        ("bfloat16(value)", "bfloat(value)"),
+        ("bfloat16(1.0) + value", "bfloat(bfloat(1.0) + value)"),
+        ("bfloat16(1.0) / (1.0 + value)", "bfloat(bfloat(1.0) / (1.0 + value))"),
+        (
+            "value > 0.0 ? bfloat16(1.0) : value",
+            "bfloat(value > 0.0 ? bfloat(1.0) : value)",
+        ),
+    ],
+)
+def test_metal_bfloat_expected_conversion_covers_the_whole_expression(
+    expression, expected
+):
+    shader = f"""shader NarrowResult {{
+        bfloat16 evaluate(float value) {{ return {expression}; }}
+    }}"""
+    generated = MetalCodeGen().generate(crosstl.translator.parse(shader))
+    assert f"return {expected};" in generated
+    compile_with_metal_if_available(generated)
+
+
 def test_metal_bfloat_asuint_uses_native_width_and_compiles_warning_fatal():
     shader = """
     shader MetalNarrowBitcast {

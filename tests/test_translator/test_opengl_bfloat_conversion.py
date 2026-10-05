@@ -90,9 +90,10 @@ def _round(word):
     return (word + 0x7FFF + ((word >> 16) & 1)) & 0xFFFF0000
 
 
-def _source(body):
+def _source(body, declarations=""):
     return f"""#include <metal_stdlib>
 using namespace metal;
+{declarations}
 struct Cell {{ bfloat value; }};
 bfloat narrow(float value) {{ return bfloat(value); }}
 float widen(bfloat value) {{ return float(value); }}
@@ -104,9 +105,11 @@ kernel void bfloat_conversion(const device float* values [[buffer(0)]],
 """
 
 
-def _case(root, target, name, words=WORDS, *, body=None, expected_words=None):
+def _case(
+    root, target, name, words=WORDS, *, body=None, expected_words=None, declarations=""
+):
     root.mkdir(parents=True, exist_ok=True)
-    source = _source(CASES[name] if body is None else body)
+    source = _source(CASES[name] if body is None else body, declarations)
     _, descriptor, package = _package(
         root, target, "uint", (1, 1, 1), source=source, software_subgroups=False
     )
@@ -495,6 +498,73 @@ def test_inferred_bfloat_arithmetic_executes_natively(tmp_path, operation):
         expected_words=[
             _inferred_arithmetic_reference(value, operation) for value in values
         ],
+    )
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source,
+        original_entry="bfloat_conversion",
+        validate=_validate_half,
+    )
+
+
+@pytest.mark.parametrize("namespace", ("metal", "metal::fast", "metal::precise"))
+@pytest.mark.parametrize("operation", ("widened", "nested", "side-effect"))
+def test_bfloat_math_wrapper_boundaries_execute_natively(
+    tmp_path, namespace, operation
+):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required bfloat math boundaries")
+    mode = (
+        "__METAL_FAST_MATH__"
+        if namespace.endswith("fast")
+        else "__METAL_PRECISE_MATH__"
+    )
+    open_namespace = " ".join(f"namespace {name} {{" for name in namespace.split("::"))
+    declarations = f"""{open_namespace}
+    METAL_FUNC bfloat exp(bfloat value) {{
+        return bfloat(__metal_exp(float(value), {mode}));
+    }}
+    METAL_FUNC bfloat abs(bfloat value) {{
+        return bfloat(__metal_fabs(float(value), {mode}));
+    }}
+{"}" * len(namespace.split("::"))}"""
+    values = [-8.0, -4.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 4.0, 6.0, 8.0]
+
+    def bits(value):
+        return struct.unpack("<I", struct.pack("<f", value))[0]
+
+    def narrow(value):
+        return struct.unpack("<f", struct.pack("<I", _round(bits(value))))[0]
+
+    expected_words = []
+    for value in values:
+        exponential = narrow(math.exp(abs(value) if operation == "nested" else value))
+        result = (
+            narrow(1.0 / narrow(1.0 + exponential))
+            if operation == "nested"
+            else exponential + 0.25
+        )
+        expected_words.append(bits(result))
+    body = "bfloat x = bfloat(values[i]); "
+    if operation == "nested":
+        body += f"auto y = 1 / (1 + {namespace}::exp({namespace}::abs(x))); "
+        body += "results[i + 1u] = float(y);"
+    elif operation == "side-effect":
+        body = "uint index = i; "
+        body += f"float y = float({namespace}::exp(bfloat(values[index++]))) + 0.25f; "
+        body += "results[i + 1u] = index == i + 1u ? y : -99999.0f;"
+    else:
+        body += f"results[i + 1u] = float({namespace}::exp(x)) + 0.25f;"
+    source, request, expected = _case(
+        tmp_path,
+        TARGET,
+        "math-wrapper",
+        [bits(value) for value in values],
+        body=body,
+        expected_words=expected_words,
+        declarations=declarations,
     )
     _execute(
         request,

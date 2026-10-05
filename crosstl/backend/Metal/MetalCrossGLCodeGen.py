@@ -11039,6 +11039,11 @@ class MetalToCrossGLConverter:
             )
             if materialized_wave_call is not None:
                 return materialized_wave_call
+            materialized_math_call = (
+                self.generate_materialized_bfloat_math_wrapper_call(expr, is_main)
+            )
+            if materialized_math_call is not None:
+                return materialized_math_call
             fused_call = self.generate_metal_fma_call(expr, is_main)
             if fused_call is not None:
                 return fused_call
@@ -14466,6 +14471,47 @@ float {scalar}(float value) {{
             intrinsics,
             getattr(expression, "source_location", None),
         )
+
+    def generate_materialized_bfloat_math_wrapper_call(self, expression, is_main=False):
+        """Preserve float computation and the narrow return of bfloat wrappers."""
+        public_name = str(getattr(expression, "name", "")).rsplit("::", 1)[-1]
+        if public_name not in self.metal_math_intrinsics:
+            return None
+        selected = self.selected_metal_callable(expression)
+        if not self.is_materialized_metal_stdlib_wrapper(selected):
+            return None
+        return_type = self.metal_source_overload_value_type(
+            self.selected_metal_callable_return_type(selected)
+        )
+        normalized = self.normalized_metal_type(self.resolve_type_alias(return_type))
+        if normalized not in self.metal_source_bfloat_types:
+            return None
+        rendered = self.generate_metal_fma_call(expression, is_main)
+        if rendered is None:
+            function_name = self.map_function_call_name(
+                expression.name,
+                expression.args,
+                source_offset=self.alias_source_offset(expression),
+            )
+            parameters = list(getattr(selected, "params", []) or [])
+            if len(parameters) != len(expression.args):
+                raise MetalStandardLibraryWrapperLoweringError(
+                    str(expression.name),
+                    self.materialized_metal_stdlib_wrapper_intrinsics(selected),
+                    getattr(expression, "source_location", None),
+                )
+            arguments = []
+            for parameter, argument in zip(parameters, expression.args):
+                value = self.generate_expression(argument, is_main)
+                parameter_type = self.metal_source_overload_parameter_type(parameter)
+                normalized_parameter = self.normalized_metal_type(
+                    self.resolve_type_alias(parameter_type)
+                )
+                if normalized_parameter in self.metal_source_bfloat_types:
+                    value = f"float({value})"
+                arguments.append(value)
+            rendered = f"{function_name}({', '.join(arguments)})"
+        return f"{self.map_type(return_type)}({rendered})"
 
     def generate_materialized_bfloat_wave_wrapper_call(self, expression, is_main=False):
         """Preserve the float compute contract of Metal bfloat SIMD wrappers."""

@@ -11700,7 +11700,7 @@ def test_codegen_canonicalizes_qualified_log10_stdlib_wrapper(namespace):
     crossgl = convert_without_preprocessing(source)
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
-    assert "bfloat16 result = log10(value);" in normalize(crossgl)
+    assert "bfloat16 result = bfloat16(log10(float(value)));" in normalize(crossgl)
     assert (
         "uint result = __crossgl_bfloat16_from_float("
         "float(log10(__crossgl_bfloat16_to_float(uint(value)))));" in normalize(hlsl)
@@ -11737,19 +11737,53 @@ def test_codegen_canonicalizes_qualified_rint_stdlib_wrapper(namespace):
     hlsl = TranslatorHLSLCodeGen().generate(ast)
     glsl = GLSLCodeGen().generate(ast)
 
-    assert "bfloat16 wrapper_result = rint(value);" in normalize(crossgl)
+    assert "bfloat16 wrapper_result = bfloat16(rint(float(value)));" in normalize(
+        crossgl
+    )
     assert "vec4 vector_result = rint(values);" in normalize(crossgl)
     assert (
         "uint wrapper_result = __crossgl_bfloat16_from_float("
         "float(round(__crossgl_bfloat16_to_float(uint(value)))));" in normalize(hlsl)
     )
     assert "float4 vector_result = round(values);" in normalize(hlsl)
-    assert "float wrapper_result = roundEven(value);" in normalize(glsl)
+    assert (
+        "float wrapper_result = crossgl_round_bfloat1(float(roundEven(float(value))));"
+        in normalize(glsl)
+    )
     assert "vec4 vector_result = roundEven(values);" in normalize(glsl)
     for generated in (crossgl, hlsl, glsl):
         assert "__metal_rint" not in generated
         assert "metal::" not in generated
         assert "<unknown>" not in generated
+
+
+@pytest.mark.parametrize("namespace", ["metal", "metal::fast", "metal::precise"])
+def test_codegen_preserves_materialized_math_return_before_widening(namespace):
+    source = f"""
+    typedef bfloat Narrow;
+    namespace {namespace} {{
+      METAL_FUNC Narrow exp(Narrow value) {{
+        return Narrow(__metal_exp(float(value), false));
+      }}
+    }}
+    float evaluate(Narrow value) {{
+      return float({namespace}::exp(value++)) + 0.25f;
+    }}
+    """
+    crossgl = normalize(convert_without_preprocessing(source))
+    assert "float(bfloat16(exp(float(value++)))) + 0.25f" in crossgl
+    assert crossgl.count("value++") == 1
+
+
+def test_codegen_keeps_bare_precise_math_result_wide():
+    crossgl = normalize(convert_without_preprocessing("""
+    float evaluate(bfloat value) {
+      auto result = metal::precise::exp(value);
+      return result;
+    }
+    """))
+    assert "float result = exp(value);" in crossgl
+    assert "bfloat16(exp(" not in crossgl
 
 
 def test_codegen_canonicalizes_qualified_copysign_without_shadowing_user_code():
