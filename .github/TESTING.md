@@ -123,6 +123,13 @@ inconclusive and leaves tool discovery unchanged. Required native tests still
 perform their own compiler and execution checks; a timeout is not a native pass.
 The existing three-platform deferred-compilation jobs test this distinction.
 
+The existing builtin-ownership jobs also execute scalar and vector truncation
+with standard, fast and precise Metal namespace calls. They cover every half
+and bfloat input payload, binary32 exponent boundaries, signed zeros, infinities,
+NaN classification, source overloads and single evaluation. Exact finite result
+bits and output guards are required; macOS compares unchanged source and generated
+Metal. The same cases run on Linux OpenGL and Windows DirectX without new jobs.
+
 The base-to-head coverage comparison accepts explicitly reviewed workflow moves
 from `.github/ci-coverage-migrations.json`. Only workflow filenames are mapped;
 job identities and coverage requirements are not removed. Each old job must

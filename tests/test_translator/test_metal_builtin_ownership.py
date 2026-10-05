@@ -139,6 +139,7 @@ def test_qualified_metal_builtin_and_source_overloads_compile(tmp_path, target):
         ("copysign", "2.0f, -3.0f", "float value, float other"),
         ("select", "2.0f, 3.0f, false", "float value, float other, bool condition"),
         ("sin", "2.0f", "float value"),
+        ("trunc", "2.75f", "float value"),
     ],
 )
 def test_qualified_math_keeps_source_calls_distinct(

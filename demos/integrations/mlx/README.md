@@ -1121,6 +1121,16 @@ the MLX host runtime, or run the upstream MLX test suite on OpenGL.
 
 ## Current Translator Gaps
 
+The historical five-file DirectX frontier at `4367c73b` translates after
+canonical lowering of materialized Metal `trunc` wrappers
+([#2091](https://github.com/CrossGL/crosstl/issues/2091)). Reduced controls execute
+on original/generated Metal and OpenGL with exact finite bits; the corresponding
+Windows execution remains required. This does not establish full-tree parity.
+The same whole-file configuration at `9c3d3557` currently rejects bfloat vector
+construction in all five units with `project.translate.directx-bfloat16-unsupported`
+for `bfloat16vec2`, under [#1488](https://github.com/CrossGL/crosstl/issues/1488).
+Selected-entry contracts and this whole-file boundary are separate coverage.
+
 The current-pin gated-delta backward kernels still need OpenGL floating-point
 atomic lowering ([#1986](https://github.com/CrossGL/crosstl/issues/1986)). Struct
 selection now preserves anonymous type-parameter defaults and evaluates supported

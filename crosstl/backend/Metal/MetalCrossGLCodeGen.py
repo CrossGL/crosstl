@@ -977,6 +977,7 @@ class MetalToCrossGLConverter:
         "step",
         "tan",
         "tanh",
+        "trunc",
     }
     materialized_metal_stdlib_body_wrappers = {"fdim"}
     metal_math_builtin_result_rules = {
@@ -1037,6 +1038,7 @@ class MetalToCrossGLConverter:
         "step": ("same", "floating", 2),
         "tan": ("same", "floating", 1),
         "tanh": ("same", "floating", 1),
+        "trunc": ("same", "floating", 1),
     }
     metal_bit_intrinsics = {
         "popcount": "bitCount",
@@ -14447,6 +14449,62 @@ float {scalar}(float value) {{
     def is_materialized_metal_stdlib_wrapper(self, function):
         return bool(self.materialized_metal_stdlib_wrapper_intrinsics(function))
 
+    def materialized_metal_trunc_wrapper_is_canonical(self, function):
+        """Accept a direct intrinsic wrapper, not additional source computation."""
+        body = list(getattr(function, "body", None) or [])
+        parameters = list(getattr(function, "params", None) or [])
+        if (
+            len(body) != 1
+            or not isinstance(body[0], ReturnNode)
+            or len(parameters) != 1
+        ):
+            return False
+
+        def canonical_type(value):
+            return self.map_type(self.resolve_type_alias(value))
+
+        result_type = canonical_type(function.return_type)
+        parameter = parameters[0]
+        if (
+            canonical_type(self.metal_source_overload_parameter_type(parameter))
+            != result_type
+        ):
+            return False
+
+        def unwrap_conversion(node, allowed_types):
+            if isinstance(node, CastNode):
+                if canonical_type(node.target_type) in allowed_types:
+                    return node.expression
+            elif isinstance(node, (FunctionCallNode, VectorConstructorNode)):
+                name = getattr(node, "vector_type", None) or getattr(node, "name", None)
+                if len(node.args) == 1 and canonical_type(name) in allowed_types:
+                    return node.args[0]
+            return node
+
+        operation = unwrap_conversion(body[0].value, {result_type})
+        if (
+            not isinstance(operation, FunctionCallNode)
+            or str(operation.name).rsplit("::", 1)[-1] != "__metal_trunc"
+            or len(operation.args) not in {1, 2}
+        ):
+            return False
+        if len(operation.args) == 2:
+            mode = operation.args[1]
+            mode_name = mode.name if isinstance(mode, VariableNode) else mode
+            if not isinstance(mode_name, str) or mode_name not in {
+                "true",
+                "false",
+                "__METAL_MAYBE_FAST_MATH__",
+                "__METAL_FAST_MATH__",
+                "__METAL_PRECISE_MATH__",
+            }:
+                return False
+        input_types = {result_type}
+        if result_type in {"f16", "float16", "bfloat16"}:
+            input_types.add("float")
+        operand = unwrap_conversion(operation.args[0], input_types)
+        return isinstance(operand, VariableNode) and operand.name == parameter.name
+
     def validate_materialized_metal_stdlib_wrapper_call(self, expression):
         selected = self.selected_metal_callable(expression)
         intrinsics = self.materialized_metal_stdlib_wrapper_intrinsics(selected)
@@ -14455,6 +14513,12 @@ float {scalar}(float value) {{
 
         name = str(getattr(expression, "name", ""))
         unscoped_name = name.rsplit("::", 1)[-1]
+        if unscoped_name == "trunc":
+            if self.materialized_metal_trunc_wrapper_is_canonical(selected):
+                return
+            raise MetalStandardLibraryWrapperLoweringError(
+                name, intrinsics, getattr(expression, "source_location", None)
+            )
         if unscoped_name in self.metal_wave_intrinsics:
             public_operation = self.metal_wave_intrinsics[unscoped_name]
             internal_operations = tuple(

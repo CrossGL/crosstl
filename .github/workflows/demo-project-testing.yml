@@ -3304,6 +3304,7 @@ jobs:
               --basetemp="metal-ownership-results/pytest" \
               --junitxml="metal-ownership-results/results.xml" \
               tests/test_translator/test_metal_builtin_ownership.py \
+              tests/test_translator/test_metal_trunc.py \
               tests/test_translator/test_metal_precise_asin.py \
               tests/test_translator/test_metal_precise_trig.py \
               tests/test_translator/test_float_negation.py \
