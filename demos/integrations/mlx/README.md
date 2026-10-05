@@ -81,8 +81,17 @@ specialization counts, workgroup metadata and the 16 other bodies are unchanged.
 A local execution review compares the four byte entries against the unchanged
 upstream metallib and independent integer indices across 64 cases, including
 extrema, ties, constant rows, tails and strided inputs. These cases supplement,
-but do not expand, the required float32 CI runtime subset. DirectX identities
-remain independently gated.
+but do not expand, the required float32 CI runtime subset.
+
+The DirectX identities have a separate complete-body review and strict DXC
+compilation for all 24 entries. Changes preserve source-width index arithmetic,
+byte conversions at aggregate and call boundaries, the negative-infinity
+sentinel, and logical half loads from integer storage. Source hashes, template
+materializations, resource registers, launch geometry, reduction comparisons
+and tie-breaking remain unchanged. The 32-lane software subgroup path remains
+required for the two float32 entries. The updated identities allow the existing
+Windows numerical gate to run; local compilation and body review do not establish
+a native Windows pass or expand the required numerical subset.
 
 Original Metal reference libraries use the unchanged upstream sources with
 compiler warnings retained but not promoted to errors. The pinned headers use

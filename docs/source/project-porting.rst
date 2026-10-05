@@ -531,8 +531,16 @@ bodies retain their source, specialization and execution metadata, while the
 16 other bodies are unchanged. The four byte entries also match unchanged
 upstream Metal execution and independent integer indices in 64 local cases
 covering extrema, ties, constant rows, tails and strides. Required CI runtime
-coverage remains the stated float32 subset. DirectX identities remain
-independently gated.
+coverage remains the stated float32 subset.
+
+All 24 DirectX identities have complete-body review and warning-fatal DXC
+compilation. Reviewed changes make source-width index conversions and byte
+conversion boundaries explicit, preserve the negative-infinity sentinel, and
+decode logical half values from integer storage. Source hashes, template
+materializations, resource registers, launch geometry, reduction comparisons
+and tie-breaking are unchanged. The two float32 entries retain the required
+32-lane software subgroup path. The existing Windows numerical gate remains
+required; compilation and body review alone are not native execution proof.
 
 Constrained Metal free-function fallbacks are materialized only when their
 recognized constraints select a unique implementation. A visible ordinary or
