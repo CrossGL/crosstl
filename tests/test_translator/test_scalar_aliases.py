@@ -16,6 +16,8 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.project import translate_project
+from crosstl.translator import parse
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_precise_trig import GUARD, _execute
 
@@ -380,6 +382,205 @@ def test_scalar_aliases_execute(tmp_path, dtype, syntax):
         )
     (tmp_path / "evidence.json").write_text(
         json.dumps({"target": target, "records": records}, indent=2), encoding="utf-8"
+    )
+
+
+def _bitcast_source(syntax):
+    return f"""#include <metal_stdlib>
+using namespace metal;
+{_alias('Base', 'bfloat', syntax)}
+{_alias('Value', 'Base', syntax)}
+{_alias('ReadOnly', 'const Value', syntax)}
+Value decode(ushort bits) {{ return as_type<Value>(bits); }}
+ushort record(thread uint& count, ushort bits) {{ count += 1u; return bits; }}
+kernel void aliases(device const uint* values [[buffer(0)]],
+                    device uint* results [[buffer(1)]],
+                    uint i [[thread_position_in_grid]]) {{
+    {_alias('Local', 'Value', syntax)}
+    uint count = 0u;
+    Value aliased = as_type<Value>(ushort(values[i]));
+    bfloat explicit_value = as_type<bfloat>(ushort(values[i]));
+    ReadOnly qualified = as_type<ReadOnly>(ushort(values[i]));
+    results[7u * i] = uint(as_type<ushort>(aliased));
+    results[7u * i + 1u] = uint(as_type<ushort>(explicit_value));
+    results[7u * i + 2u] = uint(as_type<ushort>(decode(ushort(values[i]))));
+    results[7u * i + 3u] = uint(as_type<ushort>(as_type<Value>(ushort(values[i]))));
+    results[7u * i + 4u] = uint(as_type<ushort>(as_type<Local>(record(count, ushort(values[i])))));
+    results[7u * i + 5u] = uint(as_type<ushort>(qualified));
+    results[7u * i + 6u] = count;
+}}
+"""
+
+
+@pytest.mark.parametrize("syntax", ["using", "typedef"])
+@pytest.mark.parametrize("target", ["opengl", "directx", "metal"])
+def test_bfloat_alias_bitcasts_translate_and_compile(tmp_path, syntax, target):
+    source = _bitcast_source(syntax)
+    generated = _translate(tmp_path, source, target)
+    if target == "opengl":
+        assert "float decode(uint bits)" in generated
+        assert "return uintBitsToFloat((bits << 16u));" in generated
+        assert "float aliased = uintBitsToFloat((" in generated
+    _compile(
+        generated, target, tmp_path, directx_compile_flags=("-enable-16bit-types",)
+    )
+
+
+@pytest.mark.parametrize("alias", ["Value", "Chained", "ReadOnly"])
+def test_glsl_bfloat_bitcast_alias_keeps_its_logical_result_type(alias):
+    generated = GLSLCodeGen().generate(parse(f"""shader AliasBits {{
+            typedef bfloat Value;
+            typedef Value Chained;
+            typedef const Value ReadOnly;
+            uint unpack(uint bits) {{ return asuint(as_type<{alias}>(bits)); }}
+            uint pack({alias} value) {{ return asuint(value); }}
+        }}"""))
+    assert (
+        "return (floatBitsToUint(uintBitsToFloat((bits << 16u))) >> 16u);" in generated
+    )
+    assert "return (floatBitsToUint(value) >> 16u);" in generated
+
+
+@pytest.mark.parametrize("alias", ["Value", "Chained", "ReadOnly"])
+def test_glsl_bfloat_bitcast_alias_rejects_a_float_payload(alias):
+    with pytest.raises(ValueError, match="requires an integer payload"):
+        GLSLCodeGen().generate(parse(f"""shader InvalidBits {{
+                typedef bfloat Value;
+                typedef Value Chained;
+                typedef const Value ReadOnly;
+                {alias} unpack(float value) {{ return as_type<{alias}>(value); }}
+            }}"""))
+
+
+@pytest.mark.parametrize("qualified", ["const B", "thread B&"])
+def test_glsl_qualified_alias_cycles_are_rejected(qualified):
+    generator = GLSLCodeGen()
+    generator.current_type_aliases = {"A": qualified, "B": "A"}
+    with pytest.raises(ValueError, match="Cyclic OpenGL type alias"):
+        generator.glsl_normalized_source_type("A")
+
+
+@pytest.mark.parametrize("syntax", ["using", "typedef"])
+def test_bfloat_alias_bitcasts_execute(tmp_path, syntax):
+    if os.environ.get("CROSTL_REQUIRE_SCALAR_ALIASES") != "1":
+        pytest.skip("set CROSTL_REQUIRE_SCALAR_ALIASES=1 for native alias checks")
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    source = _bitcast_source(syntax)
+    generated = _translate(tmp_path, source, target)
+    records = {}
+    # A single 65,536-workgroup dispatch exceeds the DirectX axis limit.
+    for start in (0, 32768):
+        directory = tmp_path / f"payloads-{start}"
+        directory.mkdir()
+        inputs = list(range(start, start + 32768))
+        expected = [word for value in inputs for word in [value] * 6 + [1]] + GUARD
+        for name, words in (("inputs", inputs), ("expected", expected)):
+            (directory / f"{name}.bin").write_bytes(
+                struct.pack(f"<{len(words)}I", *words)
+            )
+        records[str(start)] = {}
+        for name, code in (("generated", generated), ("original", source)):
+            if name == "original" and target != "metal":
+                continue
+            records[str(start)][name] = _execute(
+                directory / name,
+                target,
+                code,
+                inputs,
+                expected,
+                metal_entry="aliases",
+                check_outputs=_check,
+                metal_compile_flags=("-fno-fast-math",),
+                directx_compile_flags=("-enable-16bit-types",),
+            )
+    (tmp_path / "evidence.json").write_text(
+        json.dumps(
+            {
+                "target": target,
+                "syntax": syntax,
+                "payloadCount": 65536,
+                "bitcastPaths": 6,
+                "oracle": (
+                    "Exact 16-bit payloads, single operand evaluation and intact guards"
+                ),
+                "records": records,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _namespace_bitcast_source(syntax):
+    return f"""#include <metal_stdlib>
+using namespace metal;
+{_alias('Value', 'float', syntax)}
+namespace Payload {{ {_alias('Value', 'bfloat', syntax)} }}
+kernel void aliases(device const uint* values [[buffer(0)]],
+                    device uint* results [[buffer(1)]],
+                    uint i [[thread_position_in_grid]]) {{
+    {_alias('Local', 'Payload::Value', syntax)}
+    Payload::Value qualified = as_type<Payload::Value>(ushort(values[i]));
+    Local local = as_type<Local>(ushort(values[i]));
+    results[3u * i] = as_type<uint>(float(qualified));
+    results[3u * i + 1u] = as_type<uint>(float(local));
+    results[3u * i + 2u] = as_type<uint>(as_type<Value>(values[i] << 16u));
+}}
+"""
+
+
+@pytest.mark.parametrize("syntax", ["using", "typedef"])
+@pytest.mark.parametrize("target", ["opengl", "directx", "metal"])
+def test_namespace_alias_bitcasts_translate_and_compile(tmp_path, syntax, target):
+    source = _namespace_bitcast_source(syntax)
+    canonical = _convert(source)
+    assert "as_type<Payload::Value>" not in canonical
+    assert "as_type<Local>" not in canonical
+    generated = _translate(tmp_path, source, target)
+    _compile(
+        generated, target, tmp_path, directx_compile_flags=("-enable-16bit-types",)
+    )
+
+
+@pytest.mark.parametrize("syntax", ["using", "typedef"])
+def test_namespace_alias_bitcasts_execute(tmp_path, syntax):
+    if os.environ.get("CROSTL_REQUIRE_SCALAR_ALIASES") != "1":
+        pytest.skip("set CROSTL_REQUIRE_SCALAR_ALIASES=1 for native alias checks")
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    source = _namespace_bitcast_source(syntax)
+    generated = _translate(tmp_path, source, target)
+    inputs = [0, 1, 0x3F80, 0x8000, 0xBF80, 0x7F80, 0xFF80]
+    expected = [value << 16 for value in inputs for _ in range(3)] + GUARD
+    records = {}
+    for name, code in (("generated", generated), ("original", source)):
+        if name == "original" and target != "metal":
+            continue
+        records[name] = _execute(
+            tmp_path / name,
+            target,
+            code,
+            inputs,
+            expected,
+            metal_entry="aliases",
+            check_outputs=_check,
+            metal_compile_flags=("-fno-fast-math",),
+            directx_compile_flags=("-enable-16bit-types",),
+        )
+    (tmp_path / "evidence.json").write_text(
+        json.dumps(
+            {
+                "target": target,
+                "syntax": syntax,
+                "oracle": (
+                    "Exact bfloat-to-binary32 widening despite a conflicting outer alias"
+                ),
+                "inputs": inputs,
+                "expected": expected,
+                "records": records,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
     )
 
 

@@ -30064,14 +30064,22 @@ complex64_t crossgl_complex64_mod_assign(
         type_name = self.type_name_string(vtype)
         if not type_name:
             return None
-        type_name = self.resolve_glsl_type_alias(type_name)
-        type_name = re.sub(
-            r"\b(?:const|volatile|restrict|device|constant|thread|threadgroup)\b",
-            "",
-            type_name,
-        )
-        type_name = re.sub(r"\s+", " ", type_name).strip()
-        return type_name[:-1].rstrip() if type_name.endswith("&") else type_name
+        seen = []
+        while type_name not in seen:
+            seen.append(type_name)
+            alias_target = self.resolve_glsl_type_alias(type_name)
+            resolved = re.sub(
+                r"\b(?:const|volatile|restrict|device|constant|thread|threadgroup)\b",
+                "",
+                alias_target,
+            )
+            resolved = re.sub(r"\s+", " ", resolved).strip()
+            if resolved.endswith("&"):
+                resolved = resolved[:-1].rstrip()
+            if resolved == type_name == alias_target:
+                return resolved
+            type_name = resolved
+        raise ValueError(f"Cyclic OpenGL type alias: {' -> '.join([*seen, type_name])}")
 
     def glsl_narrow_integer_contract(self, vtype):
         source_type = self.glsl_normalized_source_type(vtype)
@@ -31866,7 +31874,7 @@ complex64_t crossgl_complex64_mod_assign(
             ):
                 return self.glsl_bitcast_result_type(func_name, args[0])
             metal_as_type_target = self.metal_as_type_target(func_name)
-            if metal_as_type_target in self.GLSL_BFLOAT16_ALIASES:
+            if self.glsl_bfloat_width(metal_as_type_target) == 1:
                 return "bfloat16_t"
             if (
                 metal_as_type_target is not None
@@ -35944,7 +35952,7 @@ complex64_t crossgl_complex64_mod_assign(
 
     def glsl_bitcast_target(self, func_name, value_expr):
         source_type = self.expression_result_type(value_expr)
-        source_type_name = self.type_name_string(source_type)
+        source_type_name = self.glsl_normalized_source_type(source_type)
         source_component_type = (
             self.vector_component_type(source_type_name) or source_type_name
         )
@@ -36273,7 +36281,7 @@ complex64_t crossgl_complex64_mod_assign(
         if widened_16bit is not None:
             return widened_16bit
 
-        if target_type in self.GLSL_BFLOAT16_ALIASES:
+        if self.glsl_bfloat_width(target_type) == 1:
             value_type = self.map_type(source_type)
             component_type = self.vector_component_type(value_type) or value_type
             if component_type not in {"int", "uint"}:

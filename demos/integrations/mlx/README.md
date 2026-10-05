@@ -182,13 +182,18 @@ accuracy policy remain tracked in
 Whole-family DirectX/OpenGL reference reconciliation remains incomplete.
 Required Square and ArcCos numerical cases remain separate and unchanged.
 
-The precision review also reproduced a distinct OpenGL alias-bitcast defect:
-`as_type<Alias>` with a bfloat alias does not match explicit `as_type<bfloat>`.
-Original/generated Metal controls pass, while real OpenGL execution changes six
-of seven tested payloads with intact guards. The reduced reproduction is retained
-in [crosstl#2088](https://github.com/CrossGL/crosstl/issues/2088). Precision tests
-use explicit input bitcast types to isolate arithmetic; the alias defect is not
-covered by, or waived through, the floating-point accuracy bound.
+The alias-bitcast defect in
+[crosstl#2088](https://github.com/CrossGL/crosstl/issues/2088) is corrected by
+resolving logical bfloat aliases before OpenGL bitcast lowering and resolving
+elided local/namespace aliases in Metal bitcast type arguments. Generic translator
+tests exercise every 16-bit payload through six paths, including qualified
+aliases, helper returns, nested bitcasts and an operand evaluated exactly once.
+Original/generated Metal and OpenGL execution preserve all 65,536 payloads,
+including NaNs, without numerical tolerances. Separate exact widening controls
+cover namespace aliases that conflict with an outer float alias. Required
+Windows execution remains pending; strict DXC compilation alone is not runtime
+proof. These tests reuse the existing native jobs. Precision tests retain explicit
+input bitcast types to isolate arithmetic from alias resolution.
 
 The complete unary Metal compile gate generates sources in five Ubuntu shards
 and compiles all 877 verified artifacts in one macOS job. It retains every

@@ -12541,7 +12541,16 @@ class MetalToCrossGLConverter:
                 source_type
             ) == self.crossgl_type_shape(mapped_type):
                 return alias_name
-        return f"as_type<{mapped_type}>" if alias_name is not None else name
+        target_name = match.group(1).strip()
+        inline_alias = target_name in self.local_type_alias_names or any(
+            self.scalar_alias_needs_inline(alias)
+            for alias in self.scalar_alias_declarations(target_name)
+        )
+        if alias_name is not None or (
+            inline_alias and self.crossgl_typedef_source_type(mapped_type) is not None
+        ):
+            return f"as_type<{mapped_type}>"
+        return name
 
     def metal_numeric_limits_expression(self, name, args=None):
         """Lower a concrete Metal numeric_limits call to an exact CrossGL value."""
