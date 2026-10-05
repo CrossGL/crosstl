@@ -5973,6 +5973,7 @@ jobs:
       cancel-in-progress: false
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
     name: MLX complete quantized Metal compilation
     if: github.event_name != 'schedule'
     needs: mlx-quantized-metal-sources
@@ -5998,6 +5999,17 @@ jobs:
           fi
           xcrun --sdk macosx metal --version
 
+      - name: Checkout original quantized kernels
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-affine-upstream
+          git -C mlx-affine-upstream config core.autocrlf false
+          git -C mlx-affine-upstream sparse-checkout init --cone
+          git -C mlx-affine-upstream sparse-checkout set mlx/backend/metal/kernels
+          git -C mlx-affine-upstream checkout --detach "$MLX_CORPUS_COMMIT"
+          test "$(git -C mlx-affine-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+
       - name: Download all quantized Metal source shards
         uses: actions/download-artifact@v4
         with:
@@ -6013,6 +6025,16 @@ jobs:
           --output-dir .quantized-metal-native
           --compiler-command '["xcrun", "-sdk", "macosx", "metal", "-std=metal3.1", "-Werror", "-c", "{artifact}", "-o", "{output}"]'
           --jobs 2 --timeout 120
+
+      - name: Verify affine Metal numerical roundtrip
+        run: >-
+          python tools/run_bounded_command.py
+          --timeout-seconds 900 --label "Affine Metal roundtrip" --
+          python demos/integrations/mlx/prove_quantized_metal.py
+          --mlx-root mlx-affine-upstream
+          --bundle-root .quantized-metal-sources
+          --contract demos/integrations/mlx/contracts/quantized.metal-roundtrip.json
+          --output-dir .quantized-metal-native/affine
 
       - name: Retain quantized Metal native compilation evidence
         if: always()

@@ -41,6 +41,13 @@ entries cannot overwrite each other. Missing, duplicated or changed sources fail
 before any compilation; compiler failures retain diagnostics and output identities.
 This removes 92 macOS jobs without sampling any corpus. Metal numerical and host
 integration checks still run natively and are not replaced by this compiler job.
+The quantized consumer also executes all 108 affine quantization and
+dequantization variants from the same verified source bundle. Five groups per
+variant cover both scale signs, dyadic values and zero ranges. Unchanged upstream
+Metal and generated Metal must both match independently calculated packed bytes,
+scales and biases; readonly inputs and output guards are checked exactly. The
+15-minute native step retains commands, modules and readbacks in the existing
+job artifact. It adds no runner and does not repeat translation on macOS.
 The copy, reduction and quantized source phases permit only the explicit Metal toolchain-unavailable
 warning when that toolchain is absent, retain it in the report and reject all
 other diagnostics. Their dependent macOS phases still require native compilation.

@@ -84,6 +84,40 @@ def test_project_demo_queues_each_job_and_matrix_leg_independently():
         groups.add(expected)
 
 
+def test_affine_metal_numerics_reuse_the_complete_source_bundle():
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    job = _workflow_job_section(workflow, "mlx-quantized-complete-metal-roundtrip")
+    coverage = _load_ci_coverage_module()
+    step = coverage.workflow_step_section(
+        job, "Verify affine Metal numerical roundtrip"
+    )
+    assert "runs-on: macOS-latest" in job
+    assert "needs: mlx-quantized-metal-sources" in job
+    assert 'MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"' in job
+    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in job
+    assert "sparse-checkout set mlx/backend/metal/kernels" in job
+    assert '--timeout-seconds 900 --label "Affine Metal roundtrip" --' in step
+    assert "python demos/integrations/mlx/prove_quantized_metal.py" in step
+    assert "--mlx-root mlx-affine-upstream" in step
+    assert "--bundle-root .quantized-metal-sources" in step
+    assert (
+        "--contract demos/integrations/mlx/contracts/quantized.metal-roundtrip.json"
+        in step
+    )
+    assert "--output-dir .quantized-metal-native/affine" in step
+    assert "if:" not in step and "continue-on-error" not in step
+    assert job.index("Compile every pinned quantized Metal artifact") < job.index(
+        "Verify affine Metal numerical roundtrip"
+    )
+    upload = coverage.workflow_step_section(
+        job, "Retain quantized Metal native compilation evidence"
+    )
+    assert "if: always()" in upload and "path: .quantized-metal-native" in upload
+    _assert_workflow_triggers(
+        workflow, "demos/integrations/mlx/prove_quantized_metal.py"
+    )
+
+
 def test_metal_execution_budget_preserves_all_storage_cases():
     job = _workflow_job_section(_workflow_texts()["demo-project-testing.yml"], "metal")
     step = _load_ci_coverage_module().workflow_step_section(
@@ -2865,7 +2899,31 @@ def test_mlx_project_porting_workflow_runs_complete_metal_proof(family):
                     step["run"] = command.replace(
                         '"metal", "-Werror"', '"metal", "-std=metal3.1", "-Werror"'
                     )
-        assert jobs[f"mlx-{family}-{suffix}"] == expected
+        actual = jobs[f"mlx-{family}-{suffix}"]
+        if family == "quantized" and suffix == "complete-metal-roundtrip":
+            # The separate native-affine policy test covers these extra steps.
+            extra_steps = {
+                "Checkout original quantized kernels",
+                "Verify affine Metal numerical roundtrip",
+            }
+            assert [
+                step["name"] for step in actual["steps"] if step["name"] in extra_steps
+            ] == [
+                "Checkout original quantized kernels",
+                "Verify affine Metal numerical roundtrip",
+            ]
+            actual = {
+                **actual,
+                "env": dict(actual["env"]),
+                "steps": [
+                    step for step in actual["steps"] if step["name"] not in extra_steps
+                ],
+            }
+            assert (
+                actual["env"].pop("MLX_CORPUS_COMMIT")
+                == "846d176227a0ac13d2667e58d2bb68b322109ab0"
+            )
+        assert actual == expected
     _assert_workflow_triggers(
         workflow,
         f"demos/integrations/mlx/tests/kernels/test_{family}_complete_metal_roundtrip.py",

@@ -295,14 +295,16 @@ The current harness verifies:
   nested specialization on exactly 14 complex-to-Boolean entries, preserves
   explicit float and bfloat16 bit-pattern semantics, and validates registered
   complex representation shape before scalar projection. Twenty-four required
-  macOS shards each compile 104 exact artifacts with warnings fatal and require
-  2,496 non-empty AIR objects in aggregate. This is complete copy translation,
+  Ubuntu shards each export 104 exact artifacts; one macOS consumer compiles
+  all 2,496 sources with warnings fatal and requires a non-empty AIR object for
+  every entry. This is complete copy translation,
   reflection, and native compiler coverage, not numerical execution or MLX host
   runtime redirection. The compiler-gated identity refresh retains source
-  coverage, materializations and resource ABI; generated differences are limited
-  to helper linkage qualifiers. `artifactIdentityRefresh` records the new audit
-  separately from the historical `proof` metadata. Neither record establishes
-  coverage of a newer MLX revision;
+  coverage, materializations and resource ABI. `artifactIdentityRefresh` retains
+  the historical linkage-only audit separately from the earlier `proof` metadata.
+  The subsequent complete review also accounts for byte conversions and typed
+  vector initializers in 736 changed bodies, with 1,760 bodies unchanged. These
+  reference updates do not establish coverage of a newer MLX revision;
 - selected-entry translation of all 2,496 discovered current-pinned
   `copy.metal` entries to OpenGL. The schema-v2
   `contracts/copy.opengl-translation.json` contract pins every standalone
@@ -397,9 +399,9 @@ The current harness verifies:
   materialization and resource digests while avoiding transient proof rows in
   git. The one- through twelve-resource interfaces contain 25,088 reflected
   resources in aggregate and retain a host-owned `[1, 1, 1]` workgroup
-  contract. Twenty-four required macOS shards cover 20 groups of 100 entries
-  and four groups of 99, compile every artifact with warnings fatal, and require
-  2,396 non-empty AIR objects. This is complete reduce translation, reflection,
+  contract. Twenty-four required Ubuntu shards cover 20 groups of 100 entries
+  and four groups of 99. One macOS consumer compiles every exported artifact
+  with warnings fatal and requires 2,396 non-empty AIR objects. This is complete reduce translation, reflection,
   and native compiler coverage, not numerical execution or MLX host runtime
   redirection;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 2,052 host-named
@@ -421,8 +423,16 @@ The current harness verifies:
   sources fail before compilation, and the gate requires all 2,052 AIR outputs
   to be non-empty. This
   is complete quantized Metal translation, reflection, and native compiler
-  coverage; it does not claim Metal numerical execution or MLX host runtime
-  redirection;
+  coverage. The same macOS job additionally executes the 108 affine quantization
+  and dequantization variants from the verified source bundle: three scalar
+  types, three group sizes and six bit widths for both operations. Five groups
+  per variant exercise positive and negative scales, exact dyadic values and
+  zero ranges. Original upstream Metal and generated Metal must independently
+  match expected packed bytes, scales and biases, with readonly inputs and
+  output guards preserved. `prove_quantized_metal.py` retains native commands,
+  modules, inputs, expected outputs and readbacks. This bounded numerical check
+  adds no macOS runner or repeated translation and does not establish numerical
+  coverage of the remaining quantized families or MLX host runtime redirection;
 - selected-entry translation of all 2,396 discovered current-pinned
   `reduce.metal` entries to OpenGL. The compact schema-v2
   `contracts/reduce.opengl-translation.json` contract spans the same 39 exact
