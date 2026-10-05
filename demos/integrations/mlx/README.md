@@ -2244,11 +2244,11 @@ the float16 and bfloat16 entries remain outside this bounded contract.
 
 The companion
 [`contracts/logsumexp.native-loader.dispatch.json`](contracts/logsumexp.native-loader.dispatch.json)
-pins the same bounded workloads to current corpus commit
+pins the same bounded workloads to historical corpus commit
 `846d176227a0ac13d2667e58d2bb68b322109ab0`. The upstream kernel, host dispatch
 formula, and referenced workload coverage are unchanged between the two
 revisions, so the two evaluated variant sets are identical; only revision
-provenance differs. Current-corpus Direct3D execution, OpenGL toolchain, and
+provenance differs. The bounded Direct3D execution, OpenGL toolchain, and
 bounded OpenGL software-runtime tests use this companion contract. The
 historical contract remains attached to the recorded 40-unit frontier.
 
@@ -2260,6 +2260,14 @@ exponential, logarithm, output store, workgroup size, and `[WaveSize(32)]`; and
 requires official DXC `cs_6_6` compilation with warnings as errors on Windows.
 This establishes translation and native compiler acceptance for the two listed
 test-derived dispatches.
+
+The refreshed HLSL references retain the exact dispatch and resource interfaces.
+Complete body comparison identifies only explicit unsigned 64-bit operand
+promotions and sign-bit negation of the infinity and maximum-finite constants.
+Both workgroup variants compile to byte-identical DXIL before and after these
+source changes with the pinned DXC release and warnings fatal. Windows native
+execution remains required; matching compiled modules is not a new execution
+result or a full upstream-suite claim.
 
 Both revision-specific contracts produce the same two dispatch variants as
 standalone OpenGL artifacts.

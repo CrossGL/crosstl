@@ -45,15 +45,15 @@ MLX_LOGSUMEXP_GENERATED_ARTIFACTS = {
     "directx": {
         "sha256:ae512c102a88628c05a49f28a872c44ab582bacf74584e8ca7e6ae765263afe0": {
             "sha256": (
-                "10bd87353f571d5c88cf1cde5d60e078f1a5aba2e6ab05a142b198f6debd2b80"
+                "b4200bfe212325a6c7f59e4dab20a74fd834121fdac570b7ff876fa829cb4e68"
             ),
-            "sizeBytes": 3799,
+            "sizeBytes": 3909,
         },
         MLX_LOGSUMEXP_AXIS_32_ARTIFACT: {
             "sha256": (
-                "4fdd1aed2689ccdaefc718edddc550ea12577a91166a610cc5b9865748abb097"
+                "6d70a5b43c6b10b6c99fdd55e357f0f56a3edb1d8201886128eacc6bbc86a569"
             ),
-            "sizeBytes": 3228,
+            "sizeBytes": 3338,
         },
     },
     "opengl": {
