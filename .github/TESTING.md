@@ -85,6 +85,14 @@ results and constant-reference payloads using logical half values over integer
 storage. Compiler inspection alone does not establish native correctness.
 No runner is added and the existing execution bound is unchanged.
 
+The same Windows and Metal storage jobs test direct 64-bit integer-to-bfloat
+rounding over 64,276 signed and unsigned inputs. Every rounding midpoint and
+its adjacent integer values, signed limits, carry into the next exponent,
+single evaluation and explicit float32-mediated conversion are covered.
+Original Metal and generated output must match an independent integer reference;
+the corresponding DirectX execution is required on Windows. Compiler-only
+checks remain distinct from these numerical results. No platform job is added.
+
 The Metal runtime reuses its unchanged host helper within each Python test
 process. Source, compiler options, toolchain, SDK and architecture are part of
 the cache identity; missing or modified executables are rebuilt. The native

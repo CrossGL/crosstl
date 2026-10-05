@@ -278,6 +278,7 @@ jobs:
               tests/test_translator/test_bfloat_buffer_runtime.py \
               tests/test_translator/test_opengl_bfloat_conversion.py \
               tests/test_translator/test_bfloat_constants.py \
+              tests/test_translator/test_wide_integer_bfloat.py \
               tests/test_translator/test_half_copy_identity.py \
               tests/test_translator/test_metal_aggregate_lookup.py \
               tests/test_translator/test_metal_narrow_aggregate_runtime.py \
@@ -476,6 +477,7 @@ jobs:
               tests/test_translator/test_bfloat_buffer_runtime.py \
               tests/test_translator/test_opengl_bfloat_conversion.py \
               tests/test_translator/test_bfloat_constants.py \
+              tests/test_translator/test_wide_integer_bfloat.py \
               tests/test_translator/test_half_copy_identity.py \
               tests/test_translator/test_range_bindings.py \
               tests/test_translator/test_union_storage.py \

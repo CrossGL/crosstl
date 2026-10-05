@@ -2063,11 +2063,17 @@ versions and compiles every entry with warnings fatal. The 1,820 changed bodies
 retain source-width byte conversions, explicit integer arithmetic and half
 rounding; all 6,566 materializations and 10,036 reflected resources are checked.
 Half buffers use two-byte `uint16_t` storage with explicit binary16 metadata,
-rather than a floating storage type. The generated source total is 4,847,510 bytes.
-The unchanged 28 wide-integer-to-bfloat entries still have the double-rounding
-limitation tracked in [#2089](https://github.com/CrossGL/crosstl/issues/2089).
-Compiler success and reference identity are not numerical approval of those
-conversions. Nested bfloat constructors in Metal bitcasts have a separate
+rather than a floating storage type. A subsequent 28-entry correction replaces
+float32-mediated wide-integer-to-bfloat conversions with direct integer rounding
+([#2089](https://github.com/CrossGL/crosstl/issues/2089)). Each changed body and
+binding is reviewed and compiled with warnings fatal; four unchanged conversion
+controls retain their previous identities. The generated source total is
+4,859,340 bytes. Generic native tests cover 64,276 signed and unsigned inputs,
+including every integer midpoint and adjacent value across the representable
+exponents, limits, single evaluation and explicit float32-mediated controls.
+Original and generated Metal results are verified independently; required
+Windows execution remains separate from compiler acceptance. Nested bfloat
+constructors in Metal bitcasts have a separate
 type-inference rejection tracked in [#2090](https://github.com/CrossGL/crosstl/issues/2090).
 
 The current-pin native copy gate separately tests 11 float32 layouts and the

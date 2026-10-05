@@ -16151,8 +16151,8 @@ def test_copy_directx_translation_evidence_records_complete_family():
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
     assert "all 2,496 discovered historical `copy.metal` entries to DirectX" in readme
     assert "1,820 changed bodies" in readme
-    assert "4,847,510 bytes" in readme
-    assert "unchanged 28 wide-integer-to-bfloat entries" in readme
+    assert "4,859,340 bytes" in readme
+    assert "subsequent 28-entry correction" in readme
     assert "Exact HLSL target reflection contains 10,036 resources" in readme
     assert "150 complex-to-scalar entries" in readme
     assert (

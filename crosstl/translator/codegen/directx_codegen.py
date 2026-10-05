@@ -6297,6 +6297,32 @@ uint __crossgl_bfloat16_from_int(int value) {
 }
 """
             ),
+            "from_uint64": (
+                """
+uint __crossgl_bfloat16_from_uint64(uint64_t value) {
+    if (value < uint64_t(256)) { return asuint(float(uint(value))) >> 16u; }
+    uint high = uint(value >> 32u);
+    uint leading = high != 0u ? 32u + uint(firstbithigh(high)) : uint(firstbithigh(uint(value)));
+    uint shift = leading - 7u;
+    uint retained = uint(value >> shift);
+    uint64_t remainder = value & ((uint64_t(1) << shift) - uint64_t(1));
+    uint64_t midpoint = uint64_t(1) << (shift - 1u);
+    if (remainder > midpoint || (remainder == midpoint && (retained & 1u) != 0u)) {
+        retained += 1u;
+    }
+    return ((leading + 126u) << 7u) + retained;
+}
+"""
+            ),
+            "from_int64": (
+                """
+uint __crossgl_bfloat16_from_uint64(uint64_t value);
+uint __crossgl_bfloat16_from_int64(int64_t value) {
+    uint64_t magnitude = value < int64_t(0) ? uint64_t(0) - uint64_t(value) : uint64_t(value);
+    return __crossgl_bfloat16_from_uint64(magnitude) | (value < int64_t(0) ? 0x8000u : 0u);
+}
+"""
+            ),
             "from_float": (
                 """
 uint __crossgl_bfloat16_from_float(float value) {
@@ -11740,6 +11766,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.require_hlsl_bfloat16_helper("from_uint")
                 self.require_hlsl_bfloat16_helper(f"from_{mapped_source}")
                 return f"__crossgl_bfloat16_from_{mapped_source}({mapped_source}({rendered}))"
+            if mapped_source in {"int64_t", "uint64_t"}:
+                helper = "from_int64" if mapped_source == "int64_t" else "from_uint64"
+                self.require_hlsl_bfloat16_helper("from_uint64")
+                self.require_hlsl_bfloat16_helper(helper)
+                return f"__crossgl_bfloat16_{helper}({mapped_source}({rendered}))"
             return self.hlsl_float_to_bfloat16_expression(rendered)
 
         decoded = self.hlsl_bfloat16_to_float_expression(rendered)
