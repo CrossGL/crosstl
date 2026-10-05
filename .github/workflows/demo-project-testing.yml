@@ -3006,7 +3006,7 @@ jobs:
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
 
       - name: Install macOS Metal Toolchain
         if: runner.os == 'macOS'

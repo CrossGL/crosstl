@@ -270,23 +270,61 @@ def decode_readbacks(payload, allocations):
     return results, addresses
 
 
+def _device_identity(device):
+    name = getattr(device, "name", None)
+    hardware = getattr(device, "is_hardware", None)
+    if (
+        not isinstance(name, str)
+        or not name
+        or "\0" in name
+        or type(hardware) is not bool
+    ):
+        raise _error(
+            "DirectX buffer views require a named adapter and its hardware flag.",
+            "device-selection-failed",
+        )
+    identity = {"name": name, "isHardware": hardware}
+    for field, key, maximum in (
+        ("vendor_id", "vendorId", (1 << 32) - 1),
+        ("dedicated_video_memory", "dedicatedVideoMemory", (1 << 64) - 1),
+        ("dedicated_system_memory", "dedicatedSystemMemory", (1 << 64) - 1),
+        ("shared_system_memory", "sharedSystemMemory", (1 << 64) - 1),
+    ):
+        value = getattr(device, field, None)
+        if type(value) is not int or not 0 <= value <= maximum:
+            raise _error(
+                "DirectX adapter identity is incomplete or invalid.",
+                "device-selection-failed",
+                field=field,
+            )
+        identity[key] = value
+    return identity
+
+
 def execute_buffer_views(dispatches, allocations, view_keys, state, *, device):
     """Run unchanged DXIL using native CBV/SRV/UAV descriptors and shared buffers."""
     from .native_runtime_drivers import _buffer_readback
 
     payload, descriptions = encode_dispatches(dispatches, allocations, view_keys)
-    device_name = getattr(device, "name", None)
-    if not isinstance(device_name, str) or not device_name:
-        raise _error(
-            "DirectX buffer views require a named adapter.", "device-selection-failed"
-        )
+    identity = _device_identity(device)
     executable = _worker()
     with tempfile.TemporaryDirectory(prefix="crosstl-directx-dispatch-") as directory:
         request = Path(directory) / "request.bin"
         output = Path(directory) / "readbacks.bin"
         request.write_bytes(payload)
         result = _run(
-            [str(executable), str(request), str(output), device_name], timeout=120
+            [
+                str(executable),
+                str(request),
+                str(output),
+                identity["name"],
+                str(int(identity["isHardware"])),
+                str(identity["vendorId"]),
+                str(identity["dedicatedVideoMemory"]),
+                str(identity["dedicatedSystemMemory"]),
+                str(identity["sharedSystemMemory"]),
+            ],
+            timeout=120,
         )
         if result.returncode or not output.is_file():
             raise RuntimeAdapterDispatchError(
@@ -296,6 +334,7 @@ def execute_buffer_views(dispatches, allocations, view_keys, state, *, device):
                     "reasonKind": "native-buffer-view-failed",
                     "stderr": result.stderr.decode(errors="replace"),
                     "returnCode": result.returncode,
+                    "adapterIdentity": identity,
                 },
             )
         readbacks, addresses = decode_readbacks(output.read_bytes(), allocations)
@@ -317,7 +356,8 @@ def execute_buffer_views(dispatches, allocations, view_keys, state, *, device):
         state.details["directxRuntime"] = {
             "runtime": "native-buffer-views",
             "timeoutSeconds": 120,
-            "device": device_name,
+            "device": identity["name"],
+            "adapterIdentity": identity,
             "requestSHA256": hashlib.sha256(payload).hexdigest(),
             "allocations": [
                 {

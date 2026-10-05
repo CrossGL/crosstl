@@ -25,6 +25,18 @@ struct Request {
     std::vector<Dispatch> dispatches;
 };
 
+struct AdapterIdentity {
+    std::wstring name;
+    bool hardware;
+    uint32_t vendor;
+    uint64_t video_memory, dedicated_memory, shared_memory;
+    bool matches(const AdapterIdentity& other) const {
+        return name == other.name && hardware == other.hardware && vendor == other.vendor &&
+            video_memory == other.video_memory && dedicated_memory == other.dedicated_memory &&
+            shared_memory == other.shared_memory;
+    }
+};
+
 uint64_t read_integer(std::istream& input, unsigned bytes) {
     uint64_t value = 0;
     for (unsigned index = 0; index < bytes; ++index) {
@@ -152,7 +164,7 @@ struct Device {
     ComPtr<ID3D12GraphicsCommandList> list;
     HANDLE event = nullptr;
     uint64_t serial = 0;
-    explicit Device(const std::wstring& selected_name) {
+    explicit Device(const AdapterIdentity& identity) {
         ComPtr<IDXGIFactory4> factory;
         check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "CreateDXGIFactory1");
         ComPtr<IDXGIAdapter1> selected;
@@ -163,8 +175,14 @@ struct Device {
             check(status, "EnumAdapters1");
             DXGI_ADAPTER_DESC1 description = {};
             check(candidate->GetDesc1(&description), "GetDesc1");
-            if (selected_name != description.Description) continue;
-            if (selected) throw std::runtime_error("adapter name is ambiguous");
+            if (!matches(identity, description)) continue;
+            if (selected) {
+                DXGI_ADAPTER_DESC1 previous = {};
+                check(selected->GetDesc1(&previous), "GetDesc1 selected");
+                if (previous.AdapterLuid.LowPart != description.AdapterLuid.LowPart ||
+                    previous.AdapterLuid.HighPart != description.AdapterLuid.HighPart)
+                    throw std::runtime_error("adapter identity is ambiguous");
+            }
             selected = candidate;
         }
         if (!selected) {
@@ -172,8 +190,8 @@ struct Device {
             check(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp)), "EnumWarpAdapter");
             DXGI_ADAPTER_DESC1 description = {};
             check(warp->GetDesc1(&description), "GetDesc1 WARP");
-            if (selected_name != description.Description)
-                throw std::runtime_error("selected Direct3D adapter was not found");
+            if (!matches(identity, description))
+                throw std::runtime_error("selected Direct3D adapter identity was not found");
             selected = warp;
         }
         check(D3D12CreateDevice(selected.Get(), D3D_FEATURE_LEVEL_12_0,
@@ -187,6 +205,12 @@ struct Device {
                                        IID_PPV_ARGS(&list)), "CreateCommandList");
         event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         if (!event) throw std::runtime_error("CreateEvent failed");
+    }
+    static bool matches(const AdapterIdentity& identity, const DXGI_ADAPTER_DESC1& description) {
+        return identity.matches({description.Description,
+            (description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) == 0, description.VendorId,
+            description.DedicatedVideoMemory, description.DedicatedSystemMemory,
+            description.SharedSystemMemory});
     }
     ~Device() { if (event) CloseHandle(event); }
     void submit() {
@@ -239,8 +263,8 @@ struct Device {
     }
 };
 
-void execute(const Request& request, std::ostream& output, const std::wstring& selected_name) {
-    Device runtime(selected_name);
+void execute(const Request& request, std::ostream& output, const AdapterIdentity& identity) {
+    Device runtime(identity);
     std::vector<ComPtr<ID3D12Resource>> buffers, uploads;
     std::vector<D3D12_RESOURCE_STATES> states(request.allocations.size(), D3D12_RESOURCE_STATE_COPY_DEST);
     for (const auto& payload : request.allocations) {
@@ -369,6 +393,13 @@ void execute(const Request& request, std::ostream& output, const std::wstring& s
         readbacks[index]->Unmap(0, &no_writes);
     }
 }
+
+uint64_t adapter_number(const wchar_t* argument) {
+    std::wstring text(argument);
+    if (text.empty() || text.find_first_not_of(L"0123456789") != std::wstring::npos)
+        throw std::runtime_error("invalid adapter identity number");
+    return std::stoull(text);
+}
 } // namespace
 #endif
 
@@ -378,7 +409,7 @@ int wmain(int argc, wchar_t** argv) {
 int main(int argc, char** argv) {
 #endif
     try {
-        if (argc != 3 && argc != 4) throw std::runtime_error("expected request and output paths");
+        if (argc != 3 && argc != 9) throw std::runtime_error("expected request, output and adapter identity");
         std::ifstream input(std::filesystem::path(argv[1]), std::ios::binary);
         if (!input) throw std::runtime_error("cannot open request");
         auto request = read_request(input);
@@ -388,10 +419,16 @@ int main(int argc, char** argv) {
             return 0;
         }
 #ifdef _WIN32
-        if (argc != 4) throw std::runtime_error("selected adapter name is required");
+        if (argc != 9) throw std::runtime_error("selected adapter identity is required");
+        auto hardware = adapter_number(argv[4]);
+        auto vendor = adapter_number(argv[5]);
+        if (hardware > 1 || vendor > UINT32_MAX)
+            throw std::runtime_error("invalid adapter identity flag or vendor");
+        AdapterIdentity identity = {argv[3], hardware != 0, static_cast<uint32_t>(vendor),
+            adapter_number(argv[6]), adapter_number(argv[7]), adapter_number(argv[8])};
         std::ofstream output(std::filesystem::path(argv[2]), std::ios::binary | std::ios::trunc);
         if (!output) throw std::runtime_error("cannot open output");
-        execute(request, output, argv[3]);
+        execute(request, output, identity);
         if (!output) throw std::runtime_error("cannot write output");
 #else
         throw std::runtime_error("Direct3D 12 execution requires Windows");

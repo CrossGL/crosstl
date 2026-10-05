@@ -18,6 +18,7 @@ import pytest
 from crosstl.project import directx_runtime
 from crosstl.project.native_runtime_drivers import DirectXComputeRuntime
 from crosstl.project.runtime_verification import (
+    RuntimeAdapterDispatchError,
     RuntimeAdapterSetupError,
     RuntimeAllocationView,
     RuntimeExecutorUnavailable,
@@ -241,7 +242,7 @@ def test_view_executor_reads_the_requested_output_slice(tmp_path, monkeypatch):
     monkeypatch.setattr(directx_runtime, "_worker", lambda: Path("worker.exe"))
 
     def execute(command, **kwargs):
-        assert command[-1] == "selected adapter"
+        assert command[3:] == ["selected adapter", "0", "5140", "0", "0", "1024"]
         payload = bytearray(_response(allocations))
         offset = 8
         for allocation in allocations:
@@ -255,10 +256,154 @@ def test_view_executor_reads_the_requested_output_slice(tmp_path, monkeypatch):
     monkeypatch.setattr(directx_runtime, "_run", execute)
     state = SimpleNamespace(details={})
     result = directx_runtime.execute_buffer_views(
-        nodes, allocations, keys, state, device=SimpleNamespace(name="selected adapter")
+        nodes, allocations, keys, state, device=_device()
     )
     assert result["result"]["values"] == [3.0, 6.0]
     assert len(state.details["directxRuntime"]["allocations"]) == 3
+    assert state.details["directxRuntime"][
+        "adapterIdentity"
+    ] == directx_runtime._device_identity(_device())
+
+
+def _device(**overrides):
+    return SimpleNamespace(
+        **{
+            "name": "selected adapter",
+            "is_hardware": False,
+            "vendor_id": 5140,
+            "dedicated_video_memory": 0,
+            "dedicated_system_memory": 0,
+            "shared_system_memory": 1024,
+            **overrides,
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("name", ""),
+        ("name", "bad\0name"),
+        ("name", None),
+        ("is_hardware", None),
+        ("is_hardware", 1),
+        ("vendor_id", -1),
+        ("vendor_id", 1 << 32),
+        ("vendor_id", True),
+        ("dedicated_video_memory", None),
+        ("dedicated_system_memory", 1.5),
+        ("shared_system_memory", -1),
+        ("shared_system_memory", 1 << 64),
+    ],
+)
+def test_device_identity_rejects_missing_or_invalid_properties(field, value):
+    with pytest.raises(RuntimeAdapterSetupError) as caught:
+        directx_runtime._device_identity(_device(**{field: value}))
+    assert caught.value.details["reasonKind"] == "device-selection-failed"
+
+
+def test_device_identity_retains_unicode_and_full_width_memory_sizes():
+    identity = directx_runtime._device_identity(
+        _device(
+            name="Adapter \u03b1",
+            is_hardware=True,
+            vendor_id=(1 << 32) - 1,
+            dedicated_video_memory=(1 << 64) - 1,
+        )
+    )
+    assert identity["name"] == "Adapter \u03b1" and identity["isHardware"] is True
+    assert identity["vendorId"] == (1 << 32) - 1
+    assert identity["dedicatedVideoMemory"] == (1 << 64) - 1
+
+
+def test_native_adapter_matching_checks_every_identity_field(tmp_path, protocol_worker):
+    source = Path(directx_runtime.__file__).with_name("directx_runtime_worker.cpp")
+    shutil.copy2(source, tmp_path / "worker.cpp")
+    harness = tmp_path / "identity.cpp"
+    harness.write_text(
+        """#define main worker_entry
+#define wmain worker_wide_entry
+#include "worker.cpp"
+#undef main
+#undef wmain
+int main() {
+    AdapterIdentity expected = {L"Same adapter name", false, 5140, 0, 0, UINT64_MAX};
+    if (!expected.matches(expected)) return 1;
+    auto other = expected;
+    other.name = L"Other adapter";
+    if (expected.matches(other)) return 2;
+    other = expected; other.hardware = true;
+    if (expected.matches(other)) return 3;
+    other = expected; other.vendor = 1;
+    if (expected.matches(other)) return 4;
+    other = expected; other.video_memory = 1;
+    if (expected.matches(other)) return 5;
+    other = expected; other.dedicated_memory = 1;
+    if (expected.matches(other)) return 6;
+    other = expected; other.shared_memory = 1;
+    if (expected.matches(other)) return 7;
+    return 0;
+}
+""",
+        encoding="utf-8",
+    )
+    environment = None
+    executable = tmp_path / ("identity.exe" if sys.platform == "win32" else "identity")
+    if sys.platform == "win32":
+        compiler, environment = directx_runtime._compiler_environment()
+        command = [
+            compiler,
+            "/nologo",
+            "/std:c++17",
+            "/EHsc",
+            "/W4",
+            "/WX",
+            str(harness),
+            f"/Fe{executable}",
+            f"/Fo{tmp_path / 'identity.obj'}",
+            "/link",
+            "d3d12.lib",
+            "dxgi.lib",
+        ]
+    else:
+        command = [
+            shutil.which("c++"),
+            "-std=c++17",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            str(harness),
+            "-o",
+            str(executable),
+        ]
+    compiled = subprocess.run(
+        command, env=environment, capture_output=True, text=True, timeout=120
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    result = subprocess.run(
+        [str(executable)], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_adapter_selection_failures_retain_requested_identity(tmp_path, monkeypatch):
+    monkeypatch.setattr(directx_runtime, "_worker", lambda: Path("worker.exe"))
+    monkeypatch.setattr(
+        directx_runtime,
+        "_run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 1, b"", b"adapter identity is ambiguous\n"
+        ),
+    )
+    with pytest.raises(RuntimeAdapterDispatchError) as caught:
+        directx_runtime.execute_buffer_views(
+            *_plan((_request(tmp_path),)), SimpleNamespace(details={}), device=_device()
+        )
+    assert caught.value.details["adapterIdentity"] == directx_runtime._device_identity(
+        _device()
+    )
+    assert caught.value.details["stderr"] == "adapter identity is ambiguous\n"
+    assert caught.value.details["returnCode"] == 1
 
 
 SOURCE = """cbuffer Params : register(b0) { uint multiplier; };
@@ -306,7 +451,8 @@ def retain_native_packets(tmp_path, monkeypatch):
                         "workerSHA256": (
                             hashlib.sha256(Path(command[0]).read_bytes()).hexdigest()
                         ),
-                        "adapter": command[-1],
+                        "adapter": command[3],
+                        "adapterProperties": command[4:],
                         "returnCode": result.returncode,
                         "stderr": result.stderr.decode(errors="replace"),
                     },
@@ -630,6 +776,8 @@ def test_required_native_view_gate_keeps_existing_windows_runner():
     assert "--timeout-seconds 180" in step["run"]
     assert "-n auto" in step["run"]
     assert "tests/test_translator/test_directx_buffer_views.py" in step["run"]
+    dependencies = next(item for item in steps if item["name"] == "Install CrossTL")
+    assert "PyYAML" in dependencies["run"]
     upload = next(
         item
         for item in steps
