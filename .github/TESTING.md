@@ -63,6 +63,12 @@ reuse. The check is bounded and retains shader/module identities, physical
 allocation addresses and full-allocation readback hashes. It adds no runner
 and does not replace the public loader's numerical offset regressions.
 
+The existing Windows storage gate also exercises explicitly encoded binary16
+buffers through native loader descriptors. It checks all 65,536 payload words
+in scalar, vector and homogeneous-struct integer storage, plus decoded arithmetic
+and output guards. These handwritten ABI controls do not replace generated
+half-copy tests or claim that compiler lowering is complete. No runner is added.
+
 The Metal runtime reuses its unchanged host helper within each Python test
 process. Source, compiler options, toolchain, SDK and architecture are part of
 the cache identity; missing or modified executables are rebuilt. The native

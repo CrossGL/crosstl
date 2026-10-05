@@ -2275,6 +2275,32 @@ Metal supports aligned offset views. The DirectX Python driver realizes aligned
 structured-buffer ranges with native descriptors; this does not change the
 shader's storage type or repair values after readback.
 
+An HLSL artifact may explicitly distinguish logical binary16 values from native
+unsigned 16-bit storage. Its first line contains a versioned resource contract,
+serialized by ``crosstl.translator.resource_storage.resource_storage_header``:
+
+.. code-block:: hlsl
+
+   // crosstl-resource-storage: {"schemaVersion":1,"resources":{"values":{"logicalElementType":"float16","encoding":"ieee754-binary16"}}}
+   StructuredBuffer<uint16_t> values : register(t0);
+
+Reflection retains ``elementType: "uint16"`` and the actual ``physicalType``;
+it adds ``storageEncoding`` containing the logical type and encoding above.
+The loader accepts ``float16`` values for that declared representation without
+changing their bytes. Shader loads decode with ``asfloat16`` and stores encode
+with ``asuint16``; arithmetic remains floating-point arithmetic. This contract
+supports tightly packed scalar, vector and homogeneous-struct structured
+buffers, not constant buffers, textures, padded structures or widened storage.
+Unknown encodings, duplicate or misplaced headers, undeclared resources and
+incompatible physical layouts fail before dispatch. The comment declares an
+ABI convention, not proof of the shader's implementation or numerical behavior.
+
+The explicit representation is currently exercised by native loader controls;
+the translator does not yet emit it for half resources. Generated DirectX
+``float16_t`` loads can quiet signaling NaNs on the pinned Windows software
+device, so exact generated half-copy support remains tracked in issue #2066.
+The existing payload and numerical gates remain required.
+
 OpenGL's widened half lowering continues to expose float32 physical storage.
 A binary16 payload cannot bind that storage. Conversion tests use the reported
 physical representation and verify the half-rounded result; they do not claim
@@ -2282,8 +2308,9 @@ native two-byte OpenGL storage. Required native tests cover copy payloads,
 conversion rounding and output guards, but do not by themselves establish
 complete MLX half-precision operation coverage.
 
-Same-type half copies preserve their logical representation, including NaN
-payloads, through buffer loads, local storage, helper arguments and returns,
+Metal roundtrip and OpenGL same-type half copies preserve their logical
+representation, including NaN payloads, through buffer loads, local storage,
+helper arguments and returns,
 vector components and homogeneous structures. OpenGL uses exact widened
 binary32 words for this contract; callers must supply the representation of
 the logical binary16 value. Repacking existing half components does not round

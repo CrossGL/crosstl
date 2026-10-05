@@ -37,6 +37,7 @@ from crosstl.project.runtime_verification import (
 )
 from crosstl.project.uniform_layout import validate_std140_block_layout
 from crosstl.translator.dispatch_regions import DispatchRegion
+from crosstl.translator.resource_storage import encoded_storage_dtype
 
 _ERROR_PREFIX = "project.native-loader-dispatch"
 _COMPUTE_STAGE = "compute"
@@ -1298,6 +1299,13 @@ def _validated_scalar_layout(
             path=f"{path}.minimumBindingSizeBytes",
             details={"binding": runtime_value.name},
         )
+    storage_dtype = _encoded_storage_dtype(
+        layout,
+        runtime_value=runtime_value,
+        target=target,
+        resource_kind=resource_kind,
+        path=path,
+    )
     if "structMembers" in layout or "componentCount" in layout:
         return _validated_struct_layout(
             layout,
@@ -1369,9 +1377,9 @@ def _validated_scalar_layout(
     physical_type = layout.get("physicalType")
     storage_layout = layout.get("storageLayout")
     runtime_sized = layout.get("runtimeSized")
-    expected_physical_type = _PHYSICAL_TYPES[runtime_value.dtype]
-    if runtime_value.dtype in {"float16", "int16", "uint16"} and target == "directx":
-        expected_physical_type = f"{runtime_value.dtype}_t"
+    expected_physical_type = _PHYSICAL_TYPES[storage_dtype]
+    if storage_dtype in {"float16", "int16", "uint16"} and target == "directx":
+        expected_physical_type = f"{storage_dtype}_t"
     if vector_width != 1:
         expected_physical_type = f"{expected_physical_type}{vector_width}"
     expected_element_size = _DTYPE_SIZES[runtime_value.dtype] * vector_width
@@ -1389,7 +1397,7 @@ def _validated_scalar_layout(
         )
     expected_storage_layout = _TARGET_STORAGE_LAYOUTS[target][resource_kind]
     if (
-        element_type != runtime_value.dtype
+        element_type != storage_dtype
         or element_size != expected_element_size
         or physical_type != expected_physical_type
         or storage_layout != expected_storage_layout
@@ -1478,6 +1486,30 @@ def _validated_scalar_layout(
     return copy.deepcopy(dict(layout))
 
 
+def _encoded_storage_dtype(
+    layout: Mapping[str, Any],
+    *,
+    runtime_value: RuntimeValue,
+    target: str,
+    resource_kind: str,
+    path: str,
+) -> str:
+    try:
+        return encoded_storage_dtype(
+            layout,
+            target=target,
+            resource_kind=resource_kind,
+            logical_dtype=runtime_value.dtype,
+        )
+    except ValueError as exc:
+        raise NativeLoaderDispatchError(
+            "resource-storage-encoding-invalid",
+            str(exc),
+            path=f"{path}.storageEncoding",
+            details={"binding": runtime_value.name},
+        ) from exc
+
+
 def _validated_struct_layout(
     layout: Mapping[str, Any],
     *,
@@ -1488,9 +1520,16 @@ def _validated_struct_layout(
 ) -> dict[str, Any]:
     members = layout.get("structMembers")
     count = layout.get("componentCount")
-    scalar_type = _PHYSICAL_TYPES[runtime_value.dtype]
-    if runtime_value.dtype in {"float16", "int16", "uint16"} and target == "directx":
-        scalar_type = f"{runtime_value.dtype}_t"
+    storage_dtype = _encoded_storage_dtype(
+        layout,
+        runtime_value=runtime_value,
+        target=target,
+        resource_kind=resource_kind,
+        path=path,
+    )
+    scalar_type = _PHYSICAL_TYPES[storage_dtype]
+    if storage_dtype in {"float16", "int16", "uint16"} and target == "directx":
+        scalar_type = f"{storage_dtype}_t"
     scalar_size = _DTYPE_SIZES[runtime_value.dtype]
     type_name = layout.get("physicalType")
     valid = (
@@ -1504,7 +1543,7 @@ def _validated_struct_layout(
         and re.fullmatch(r"[A-Za-z_]\w*", type_name) is not None
         and type_name not in _PHYSICAL_TYPES.values()
         and "vectorWidth" not in layout
-        and layout.get("elementType") == runtime_value.dtype
+        and layout.get("elementType") == storage_dtype
         and layout.get("storageLayout")
         == _TARGET_STORAGE_LAYOUTS[target][resource_kind]
         and layout.get("runtimeSized") is True

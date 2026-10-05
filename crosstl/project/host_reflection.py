@@ -19,6 +19,10 @@ from crosstl.project.integral_literals import (
     parse_c_family_integral_literal,
 )
 from crosstl.project.uniform_layout import std140_block_layout
+from crosstl.translator.resource_storage import (
+    apply_resource_storage,
+    parse_resource_storage_header,
+)
 
 REFLECTION_DIAGNOSTIC_PREFIX = "project.runtime-package-inspection"
 REFLECTION_TOOL_UNAVAILABLE = (
@@ -994,7 +998,24 @@ def _is_hlsl_identifier_character(character: str) -> bool:
 def _reflect_hlsl_source(
     artifact_path: Path, *, artifact_format: str, stage: str | None
 ) -> dict[str, Any]:
-    source = _strip_comments(_read_text(artifact_path))
+    raw_source = _read_text(artifact_path)
+    try:
+        storage_contracts = parse_resource_storage_header(raw_source)
+    except ValueError as exc:
+        return empty_host_interface_record(
+            "failed",
+            parser="directx-reflection",
+            artifact_format=artifact_format,
+            diagnostics=(
+                ReflectionDiagnostic(
+                    REFLECTION_PARSE_FAILED,
+                    str(exc),
+                    severity="error",
+                    details={"contract": "resource-storage"},
+                ),
+            ),
+        )
+    source = _strip_comments(raw_source)
     struct_declarations = _homogeneous_struct_declarations(source)
     entry_points = []
     for name, attributes in _iter_hlsl_function_declarations(source):
@@ -1064,6 +1085,23 @@ def _reflect_hlsl_source(
         if scalar_layout is not None:
             resource["scalarLayout"] = scalar_layout
         resources.append(resource)
+
+    try:
+        apply_resource_storage(resources, storage_contracts)
+    except ValueError as exc:
+        return empty_host_interface_record(
+            "failed",
+            parser="directx-reflection",
+            artifact_format=artifact_format,
+            diagnostics=(
+                ReflectionDiagnostic(
+                    REFLECTION_PARSE_FAILED,
+                    str(exc),
+                    severity="error",
+                    details={"contract": "resource-storage"},
+                ),
+            ),
+        )
 
     _reflect_buffer_requirements(
         source,
