@@ -909,8 +909,8 @@
       },
       "opengl": {
         "target_entry_point": "main",
-        "sha256": "2bb46a3bb0858eb849e533bfe46eff1d59b9192436e15b2639c7998698db6a48",
-        "size_bytes": 3613,
+        "sha256": "2e7be60b5eced34c4801917287aa27f666e3203307d30af81085c22ffbcbf4ba",
+        "size_bytes": 3611,
         "native_runtime": {
           "platform": "ubuntu-latest",
           "runtime": "mesa-opengl-4.3",
@@ -1498,8 +1498,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
       "schema_version": 2,
-      "sha256": "2f7617926d5b5f2d9798b49d26aaa9c55139f5b56c50b1e8f5f91200deffb0cc",
-      "size_bytes": 318602,
+      "sha256": "0a2c0ea2eacdc97ec3d3da60ac5314e121dbe73bbe93dbc16da8bea86674afb5",
+      "size_bytes": 318751,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -1668,15 +1668,15 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 3182068,
+      "generated_size_bytes_total": 3714678,
       "generated_size_range": {
         "minimum": {
-          "entryPoint": "v_Absint8int8",
-          "sizeBytes": 2252
+          "entryPoint": "v_Absint32int32",
+          "sizeBytes": 2262
         },
         "maximum": {
-          "entryPoint": "gn4large_ArcTancomplex64complex64",
-          "sizeBytes": 10930
+          "entryPoint": "gn4large_Sinfloat16float16",
+          "sizeBytes": 12022
         }
       }
     },

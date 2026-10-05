@@ -101,9 +101,9 @@ SQUARE_WORKLOAD = UnaryWorkload(
         },
         "opengl": {
             "sha256": (
-                "2bb46a3bb0858eb849e533bfe46eff1d59b9192436e15b2639c7998698db6a48"
+                "2e7be60b5eced34c4801917287aa27f666e3203307d30af81085c22ffbcbf4ba"
             ),
-            "sizeBytes": 3613,
+            "sizeBytes": 3611,
         },
     },
     input_values=(-3.0, -1.5, 0.0, 2.0, 4.25),
@@ -139,9 +139,9 @@ ARCCOS_WORKLOAD = UnaryWorkload(
         },
         "opengl": {
             "sha256": (
-                "e383cc2b3bf900c5d2974c716e36068014841dae82e2ce6ed65bb8dfab8216fc"
+                "bc420d338b5c995e110dea0f98c9ffd3aa0ae8c77f1ea4bbe13df5acd4462b9e"
             ),
-            "sizeBytes": 6220,
+            "sizeBytes": 6450,
         },
     },
     input_values=(-1.0, -0.5, 0.0, 0.5, 1.0),

@@ -11477,8 +11477,8 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     }
     assert status["artifacts"]["opengl"] == {
         "target_entry_point": "main",
-        "sha256": "2bb46a3bb0858eb849e533bfe46eff1d59b9192436e15b2639c7998698db6a48",
-        "size_bytes": 3613,
+        "sha256": "2e7be60b5eced34c4801917287aa27f666e3203307d30af81085c22ffbcbf4ba",
+        "size_bytes": 3611,
         "native_runtime": {
             "platform": "ubuntu-latest",
             "runtime": "mesa-opengl-4.3",
@@ -12081,8 +12081,8 @@ def test_unary_directx_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
         "schema_version": 2,
-        "sha256": "2f7617926d5b5f2d9798b49d26aaa9c55139f5b56c50b1e8f5f91200deffb0cc",
-        "size_bytes": 318602,
+        "sha256": "0a2c0ea2eacdc97ec3d3da60ac5314e121dbe73bbe93dbc16da8bea86674afb5",
+        "size_bytes": 318751,
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12198,12 +12198,12 @@ def test_unary_directx_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 3182068,
+        "generated_size_bytes_total": 3714678,
         "generated_size_range": {
-            "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 2252},
+            "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 2262},
             "maximum": {
-                "entryPoint": "gn4large_ArcTancomplex64complex64",
-                "sizeBytes": 10930,
+                "entryPoint": "gn4large_Sinfloat16float16",
+                "sizeBytes": 12022,
             },
         },
     }
@@ -12248,7 +12248,8 @@ def test_unary_directx_translation_evidence_records_complete_family():
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
     assert (
-        "all 877 discovered current-pinned `unary.metal` entries to DirectX" in readme
+        "all 877 discovered `unary.metal` entries at the legacy reference revision"
+        in readme
     )
     assert "3,912 reflected HLSL resources" in readme
     assert "requires 877 non-empty DXIL modules" in readme
@@ -12257,7 +12258,7 @@ def test_unary_directx_translation_evidence_records_complete_family():
         .read_text(encoding="utf-8")
         .split()
     )
-    assert "all 877 current-pinned unary entries to standalone DirectX" in guide
+    assert "all 877 unary entries from the legacy reference revision" in guide
     assert "five disjoint Ubuntu shards" in guide
     assert "non-empty DXIL modules" in guide
 

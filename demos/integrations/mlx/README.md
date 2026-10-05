@@ -271,15 +271,21 @@ The current harness verifies:
   entry point `CSMain`; the gate requires 877 non-empty DXIL modules. Together
   with the OpenGL proof this records complete discovered unary translation,
   reflection, and native compiler coverage at the recorded revisions, not
-  numerical execution or MLX host runtime redirection. The checkpoint review
-  separately compiles all 877 current HLSL outputs and compares their complete
+  numerical execution or MLX host runtime redirection. The reference update
+  compiles all 877 current HLSL outputs and compares their complete
   bodies against hash-verified originals: 603 changed and 274 unchanged. The
   differences are accounted for by source-width arithmetic, byte and half
   conversions, Boolean promotion, sign preservation and precise math helpers.
   Checks with deliberately altered bindings, index steps, conversion widths
-  and helper coefficients fail. Reference identities remain unchanged pending
-  the remaining platform and numerical review in
-  [crosstl#2071](https://github.com/CrossGL/crosstl/issues/2071);
+  and helper coefficients fail. The reviewed references total 3,714,678 bytes;
+  source identities, classifications, resource bindings and dispatch contracts
+  are unchanged. The required Windows Square and ArcCos numerical tests retain
+  their existing shader identities, inputs and tolerances. Other historical
+  HLSL families remain under review in
+  [crosstl#2071](https://github.com/CrossGL/crosstl/issues/2071). Whole-family
+  numerical parity is not claimed; bit-observable floating conversions also
+  require the source-policy work tracked in
+  [crosstl#2081](https://github.com/CrossGL/crosstl/issues/2081);
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 2,496
   discovered copy entries from `copy.metal` at the legacy reference revision
   `846d176227a0ac13d2667e58d2bb68b322109ab0`. The schema-v2
@@ -2290,6 +2296,13 @@ function return types while preserving SPIR-V `NoContraction`. The generated
 artifacts also retain a one-thread workgroup, the source and output buffers, and
 the size constant in their reflected runtime interfaces. Deterministic artifact
 hashes and the pinned upstream source hash are checked before packaging.
+
+The selected OpenGL references include shared union storage and bit-preserving
+selection in the precise ArcCos helper. Both complete bodies were compared with
+hash-verified original references and passed their existing Linux/Mesa compiler
+and numerical tests without changing inputs or tolerances. This bounded loader
+proof is separate from the complete historical OpenGL corpus review in
+[crosstl#2073](https://github.com/CrossGL/crosstl/issues/2073).
 
 The Square and ArcCos entries now also round-trip through Metal. Square is one
 1,015-byte artifact with SHA-256

@@ -38,7 +38,7 @@ UNARY_DIRECTX_CONTRACT_PATH = (
     / "unary.directx-translation.json"
 )
 UNARY_DIRECTX_CONTRACT_SHA256 = (
-    "2f7617926d5b5f2d9798b49d26aaa9c55139f5b56c50b1e8f5f91200deffb0cc"
+    "0a2c0ea2eacdc97ec3d3da60ac5314e121dbe73bbe93dbc16da8bea86674afb5"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
@@ -259,12 +259,12 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
             "gn4large": 1098,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 3182068,
+        "generatedSizeBytesTotal": 3714678,
         "generatedSizeRange": {
-            "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 2252},
+            "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 2262},
             "maximum": {
-                "entryPoint": "gn4large_ArcTancomplex64complex64",
-                "sizeBytes": 10930,
+                "entryPoint": "gn4large_Sinfloat16float16",
+                "sizeBytes": 12022,
             },
         },
         "nativeCompiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
@@ -298,14 +298,14 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 3182068
+    assert sum(entry["sizeBytes"] for entry in entries) == 3714678
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
-        2252,
-        "v_Absint8int8",
+        2262,
+        "v_Absint32int32",
     )
     assert max((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
-        10930,
-        "gn4large_ArcTancomplex64complex64",
+        12022,
+        "gn4large_Sinfloat16float16",
     )
 
     metal_entries = {
@@ -506,19 +506,27 @@ def test_unary_precise_math_dependencies_preserve_corpus_scope():
     assert len(affected) == 30
 
 
-def test_unary_atan2_artifact_refresh_preserves_corpus_scope():
+def test_unary_artifact_refresh_preserves_corpus_scope():
     assert UNARY_DIRECTX_CONTRACT["artifactIdentityRefresh"] == {
-        "reason": "Preserve finite atan2 accuracy and signed-zero quadrants in HLSL.",
-        "previousContractSha256": (
-            "90937acb39015301a3e22858f946d9ec95ee4785ee32c37a23f6a47718ee2ccd"
+        "reason": (
+            "Preserve source-width arithmetic, narrow storage and precise unary math in HLSL."
         ),
-        "changedEntryCount": 28,
-        "unaffectedEntryCount": 849,
-        "nativeCompiledChangedEntryCount": 28,
+        "previousContractSha256": (
+            "2f7617926d5b5f2d9798b49d26aaa9c55139f5b56c50b1e8f5f91200deffb0cc"
+        ),
+        "changedEntryCount": 603,
+        "unaffectedEntryCount": 274,
+        "nativeCompiledChangedEntryCount": 603,
+        "reviewedBodyCount": 877,
+        "nativeCompiledEntryCount": 877,
+        "requiredNumericalEntryIdentitiesUnchanged": True,
         "unchangedSourceAndInterfaceContracts": True,
         "numericalExecution": False,
         "fullUpstreamSuite": False,
     }
+
+
+def test_unary_complex_atan2_dependencies_preserve_corpus_scope():
     affected = [
         workload
         for workload in UNARY_DIRECTX_WORKLOADS
@@ -527,6 +535,21 @@ def test_unary_atan2_artifact_refresh_preserves_corpus_scope():
         in {"Log", "Log2", "Log10", "Log1p", "ArcSin", "ArcCos", "ArcTan"}
     ]
     assert len(affected) == 28
+
+
+def test_unary_artifact_refresh_retains_required_native_loader_identities():
+    from demos.integrations.mlx.tests.kernels.test_unary_native_loader import (
+        ARCCOS_WORKLOAD,
+        SQUARE_WORKLOAD,
+    )
+
+    entries = {entry["entryPoint"]: entry for entry in UNARY_DIRECTX_ENTRIES}
+    for workload in (SQUARE_WORKLOAD, ARCCOS_WORKLOAD):
+        entry = entries[workload.entry_point]
+        assert {
+            "sha256": entry["sha256"],
+            "sizeBytes": entry["sizeBytes"],
+        } == workload.generated_artifacts["directx"]
 
 
 def _expected_resources(workload: UnaryDirectXWorkload) -> dict[str, tuple]:
@@ -682,28 +705,37 @@ def _translate_and_validate(
         assert "__crossgl_bfloat16_to_float" in generated
         assert "__crossgl_bfloat16_from_float" in generated
     if workload.input_type == "half" and workload.operator_type == "ArcCos":
-        assert "return float16_t(__crossgl_metal_precise_acos_float(x));" in generated
+        assert (
+            "return __crossgl_round_half1(__crossgl_metal_precise_acos_float("
+            "__crossgl_binary16_to_float(uint(asuint16(x)))));"
+        ) in generated
     if workload.input_type == "bfloat16_t" and workload.operator_type == "Sigmoid":
-        assert "float16_t y = float16_t(" in generated
+        assert "float16_t y = __crossgl_round_half1(" in generated
     if workload.input_type == "bfloat16_t" and workload.operator_type in {
         "ArcCosh",
         "ArcSinh",
         "ArcTanh",
     }:
         helper = {
-            "ArcCosh": "acosh",
-            "ArcSinh": "asinh",
-            "ArcTanh": "atanh",
+            "ArcCosh": "__crossgl_metal_precise_acosh_float",
+            "ArcSinh": "__crossgl_asinh_float",
+            "ArcTanh": "__crossgl_atanh_float",
         }[workload.operator_type]
-        assert f"__crossgl_{helper}_float" in generated
+        assert helper in generated
 
     if workload.shape.startswith("gn"):
         assert "StructuredBuffer<int> ndim : register(t4);" in generated
         assert "ndim[0]" in generated
-        if workload.shape == "gn1":
+        if workload.shape == "gn1" and workload.output_type not in {
+            "half",
+            "float16_t",
+        }:
             assert "out_[out_idx++]" in generated
         else:
-            assert workload.shape == "gn4large"
+            assert workload.shape == "gn4large" or workload.output_type in {
+                "half",
+                "float16_t",
+            }
             assert "out_[uint(out_idx++)]" in generated
         assert "++out_idx" not in generated
 

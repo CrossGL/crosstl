@@ -712,8 +712,9 @@ non-empty. This closes whole-family OpenGL translation, reflection, and native
 compiler coverage; it does not claim OpenGL numerical execution, MLX host
 runtime redirection, or MLX test-suite parity.
 
-The same entry-scoped pipeline now translates all 877 current-pinned unary
-entries to standalone DirectX ``CSMain`` artifacts. The schema-v2
+The same entry-scoped pipeline translates all 877 unary entries from the legacy
+reference revision ``846d176227a0ac13d2667e58d2bb68b322109ab0`` to standalone
+DirectX ``CSMain`` artifacts. The schema-v2
 ``unary.directx-translation.json`` contract retains the exact five-shape,
 37-operator, 20-type-pair classification and 1,243 materializations. ``v_`` and
 ``vn_`` artifacts reflect input, output, and entry-scoped size resources;
@@ -724,6 +725,13 @@ shape, stride, and read-only ``ndim`` structured buffers plus their generated
 in total. Source scalar uses of
 ``device const int& ndim`` alias ``ndim[0]`` and source ``out_idx++`` remains a
 postfix update.
+
+The reviewed HLSL references total 3,714,678 bytes. Every artifact has a complete
+comparison against its hash-verified original and warnings-fatal DXC compilation.
+This updates 603 identities and retains 274; source pins, materialization, ABI
+and launch contracts are unchanged. The separate required Windows Square and
+ArcCos numerical tests keep their existing artifact identities and tolerances.
+This compiler contract does not establish numerical parity for all 877 entries.
 
 DirectX bfloat support covers every unary intrinsic required by the family.
 The inverse-hyperbolic ``acosh``, ``asinh``, and ``atanh`` paths decode bfloat
