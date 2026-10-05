@@ -421,8 +421,9 @@ The current harness verifies:
   SPIR-V modules. Together with the Metal proof this closes complete copy
   translation, reflection, and native compiler coverage for those two targets,
   not numerical execution or MLX host runtime redirection;
-- selected-entry translation of all 2,496 discovered current-pinned
-  `copy.metal` entries to DirectX. The compact schema-v2
+- selected-entry translation of all 2,496 discovered historical
+  `copy.metal` entries to DirectX at revision
+  `846d176227a0ac13d2667e58d2bb68b322109ab0`. The compact schema-v2
   `contracts/copy.directx-translation.json` contract pins every standalone
   `CSMain` artifact across all 30 shapes, 16 templates, 13 input/output types,
   169 conversion pairs, and 6,566 exact materializations. Exact HLSL target
@@ -2057,6 +2058,18 @@ Historical proof and linkage-refresh metadata remain unchanged. This refresh
 does not add numerical execution or newer upstream coverage; other families
 remain under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
 
+The HLSL copy reference refresh compares all 2,496 bodies with their recorded
+versions and compiles every entry with warnings fatal. The 1,820 changed bodies
+retain source-width byte conversions, explicit integer arithmetic and half
+rounding; all 6,566 materializations and 10,036 reflected resources are checked.
+Half buffers use two-byte `uint16_t` storage with explicit binary16 metadata,
+rather than a floating storage type. The generated source total is 4,847,510 bytes.
+The unchanged 28 wide-integer-to-bfloat entries still have the double-rounding
+limitation tracked in [#2089](https://github.com/CrossGL/crosstl/issues/2089).
+Compiler success and reference identity are not numerical approval of those
+conversions. Nested bfloat constructors in Metal bitcasts have a separate
+type-inference rejection tracked in [#2090](https://github.com/CrossGL/crosstl/issues/2090).
+
 The current-pin native copy gate separately tests 11 float32 layouts and the
 contiguous and strided half-copy entries at
 `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. Both half entries transport all
@@ -2064,6 +2077,12 @@ contiguous and strided half-copy entries at
 dispatches with 32 untouched output guards. OpenGL uses the exact widened
 binary32 representation; DirectX and Metal retain two-byte encoded storage.
 The existing native jobs run these checks without additional platform runners.
+The [Windows copy step](https://github.com/CrossGL/crosstl/actions/runs/37329793271/job/111829705702)
+passes all 35 checks. Independent inspection confirms 131,072 half payloads,
+128 guards and matching source/DXIL identities. The job later fails an unrelated
+LogSumExp reference check, so this is not a passing-job or full-suite claim.
+Copy evidence uploads include hidden generated-package directories as well as
+the separately retained shaders, compiler results and readbacks.
 Metal also executes the unchanged upstream entries and verifies read-only
 inputs. Reports retain source identities, packages, compiler results and raw
 readbacks. The HLSL corpus gate checks the physical `uint16_t` half-buffer layout

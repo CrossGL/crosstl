@@ -1114,6 +1114,19 @@ discovered-copy translation, reflection, and native compiler coverage on all
 three targets; it does not claim numerical execution, MLX host-runtime
 redirection, or MLX test-suite parity.
 
+The reviewed HLSL copy refresh at historical source revision ``846d1762``
+compares all 2,496 bodies and compiles each one with warnings fatal. The 1,820
+changed bodies preserve byte conversions, explicit integer arithmetic and
+half rounding. All 6,566 materializations and 10,036 resource bindings are
+checked; half resources use two-byte ``uint16_t`` storage with explicit
+binary16 metadata. The source total is 4,847,510 bytes. This is not blanket
+numerical approval: 28 unchanged wide-integer-to-bfloat entries retain the
+double-rounding defect tracked in
+`#2089 <https://github.com/CrossGL/crosstl/issues/2089>`_. Nested bfloat
+constructors in Metal bitcasts have a separate type-inference rejection in
+`#2090 <https://github.com/CrossGL/crosstl/issues/2090>`_. These remain explicit
+limitations while the compiler contracts preserve complete entry coverage.
+
 The current-pinned MLX binary integration independently proves all 4,122
 discovered entries from ``binary.metal``. Fifteen 238-entry base shapes and
 three 184-entry work-per-thread shapes span 18 shapes, 11 concrete kernel

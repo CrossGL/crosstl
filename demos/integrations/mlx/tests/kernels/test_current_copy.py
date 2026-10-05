@@ -227,7 +227,17 @@ def test_ci_requires_native_copy_parity(job):
     assert_workflow_triggers(
         workflow, "demos/integrations/mlx/tests/kernels/test_current_copy.py"
     )
-    assert "if: always()" in workflow
+    upload_name, upload_path = {
+        "portable-host": ("Retain native execution evidence", ".mlx-portable-host"),
+        "metal-host": ("Retain native host execution evidence", ".mlx-metal-host"),
+        "mlx-metal-porting": ("Upload pinned copy evidence", "mlx-copy-results"),
+    }[job]
+    upload = ci_coverage.workflow_job_step_section(workflow, job, upload_name)
+    assert "if: always()" in upload
+    assert "include-hidden-files: true" in upload
+    assert upload_path in upload
+    assert "if-no-files-found: error" in upload
+    assert "retention-days: 14" in upload
     assert len({item[0] for item in CASES.values()}) == 8
 
 

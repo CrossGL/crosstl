@@ -3611,6 +3611,7 @@ jobs:
         with:
           name: mlx-copy-${{ runner.os }}
           path: mlx-copy-results
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
 
