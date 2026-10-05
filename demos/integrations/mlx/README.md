@@ -149,14 +149,23 @@ subnormal division results
 stage and division-only probes retain these failures. This does not establish
 Windows Sigmoid parity or resolve the separate NaN policy.
 
-With the explicit `binary32_division_profile = "rne-flush"` source option,
-the current-pin OpenGL sweep fixes all three division differences. One of
-65,282 inputs still differs at the exponential midpoint in #2085; guards
-remain intact. The profile is recorded in report and runtime-artifact provenance.
-The existing native project jobs also check 18 exact bfloat Sigmoid boundary
-results and eight trailing guards, including the three previously failing
-inputs and their neighbors. These selected checks do not replace the full
-sweep or establish full MLX-suite parity. No upstream kernel is changed.
+The portable precise-exponential lowering and explicit
+`binary32_division_profile = "rne-flush"` source option resolve those four
+differences at the current pin. Generated Metal and OpenGL now match the
+unchanged original Metal kernel for all 65,282 non-NaN bfloat inputs, with
+guards intact. An independent Decimal reference, rounded at the source's
+binary32 and bfloat boundaries, also matches every original readback. The
+division profile is retained in report and runtime-artifact provenance.
+
+The existing native project job now checks that full domain and eight trailing
+guards on each platform, instead of adding a separate runner. It retains 19
+explicit original-Metal boundary results, including the exponential midpoint
+and division underflow neighbors. Required primitive exponential tests also
+exercise 16,132 binary32 inputs, scalar/vector calls and exact narrowing of
+the computed float result against a 100-digit reference. Windows execution
+of these new checks remains pending. This is not full MLX-suite parity, a
+universal device-equivalence claim or a NaN payload policy. No upstream kernel
+is changed.
 
 Mixed integer-lvalue compound assignments retain both the integer-to-bfloat
 conversion and the rounded arithmetic result before integer writeback

@@ -121,6 +121,28 @@ inputs. Metal's permitted subnormal flushing is described in sections 8.1 and
 8.5 of the `Metal Shading Language specification
 <https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf>`_.
 
+Precise Exponential
+-------------------
+
+``metal::precise::exp`` uses an fdlibm-derived binary32 helper for scalar and
+two- to four-component float vectors. Split-ln(2) range reduction and rational
+evaluation avoid dependence on a target's approximate exponential intrinsic.
+Integer exponent scaling retains subnormal results without executing subnormal
+arithmetic. Scalar half and bfloat operands promote to binary32; unsupported
+precise operand types receive a structured diagnostic. Default and fast calls
+and user-defined functions keep their existing behavior.
+
+Required native checks use a 100-digit Decimal reference, both signs at every
+binary32 exponent, reduction and overflow boundaries, a dense neighborhood of
+``6.84375``, vector lanes, single evaluation and output guards. Generated values
+must be within two ULPs; zero, infinity and the reported bfloat midpoint have
+exact checks. Narrowing must round the computed float bits, not an independently
+rounded real exponential. The unchanged Metal control permits four ULPs and
+subnormal flushing, as allowed by the Metal specification. These sampled checks
+are not a correctly rounded exp implementation or a guarantee of bitwise parity
+with every original Metal device. NaN payloads and exception flags are not
+represented. The upstream license notice is retained in generated sources.
+
 Scalar Boolean Arithmetic
 -------------------------
 

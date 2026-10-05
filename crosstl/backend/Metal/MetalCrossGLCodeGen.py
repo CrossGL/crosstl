@@ -9,6 +9,7 @@ from ...translator.cooperative_matrix import (
 )
 from ...translator.division_math import binary32_division_support
 from ...translator.fused_math import FMA_HELPER_KEYS, binary32_fma_support
+from ...translator.precise_exp import binary32_exp_support
 from ...translator.precise_trig import TRIG_HELPER_KEYS, binary32_trig_support
 from ...translator.standard_constants import standard_math_constant
 from .MetalAst import *
@@ -1642,6 +1643,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_asin_widths = set()
         self.required_metal_precise_acosh_widths = set()
         self.required_metal_precise_atan_widths = set()
+        self.required_metal_precise_exp_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
         self.required_metal_division_widths = set()
@@ -2792,6 +2794,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_asin_widths = set()
         self.required_metal_precise_acosh_widths = set()
         self.required_metal_precise_atan_widths = set()
+        self.required_metal_precise_exp_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
         self.required_metal_division_widths = set()
@@ -13958,7 +13961,7 @@ class MetalToCrossGLConverter:
         if self.metal_math_builtin_namespace_mode(text) != "precise":
             return None
         operation = text.rsplit("::", 1)[-1]
-        if operation not in {"acos", "asin", "acosh", "atan", "sin", "cos"}:
+        if operation not in {"acos", "asin", "acosh", "atan", "sin", "cos", "exp"}:
             return None
         arguments = list(args or [])
         source_location = (
@@ -14028,6 +14031,16 @@ class MetalToCrossGLConverter:
                 )
             self.required_metal_precise_atan_widths.add(width)
             return self.metal_precise_atan_helper_name(width)
+        if operation == "exp":
+            if not binary32_operand:
+                raise MetalPreciseMathLoweringError(
+                    operation,
+                    operand_type,
+                    "precise exponential lowering requires binary32 operands",
+                    source_location,
+                )
+            self.required_metal_precise_exp_widths.add(width)
+            return self.metal_precise_exp_helper_name(width)
         if operation == "acosh":
             if not binary32_operand:
                 raise MetalPreciseMathLoweringError(
@@ -14390,6 +14403,7 @@ class MetalToCrossGLConverter:
         independent_code = self.generate_metal_precise_trig_support_code(indent)
         independent_code += self.generate_metal_precise_acosh_support_code(indent)
         independent_code += self.generate_metal_precise_atan_support_code(indent)
+        independent_code += self.generate_metal_precise_exp_support_code(indent)
         widths = sorted(self.required_metal_precise_acos_widths)
         if not widths and not self.required_metal_precise_asin_widths:
             return independent_code
@@ -14500,6 +14514,27 @@ class MetalToCrossGLConverter:
             + code
             + self.generate_metal_precise_asin_support_code(indent)
         )
+
+    def metal_precise_exp_helper_name(self, width):
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            f"exp-float{suffix}", f"__crossgl_metal_precise_exp_float{suffix}"
+        )
+
+    def generate_metal_precise_exp_support_code(self, indent=0):
+        if not self.required_metal_precise_exp_widths:
+            return ""
+        scalar = self.metal_precise_exp_helper_name(1)
+        code = binary32_exp_support(scalar)
+        for width in sorted(self.required_metal_precise_exp_widths - {1}):
+            vector = self.metal_precise_exp_helper_name(width)
+            arguments = ", ".join(f"{scalar}(value.{lane})" for lane in "xyzw"[:width])
+            code += (
+                f"@precise\n@metal_static\nvec{width} {vector}(vec{width} value) {{\n"
+                f"    return vec{width}({arguments});\n}}\n"
+            )
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
 
     def metal_precise_atan_helper_name(self, width):
         suffix = "" if width == 1 else str(width)

@@ -1,4 +1,4 @@
-"""Pinned bfloat Sigmoid boundaries with an explicit division profile."""
+"""Pinned bfloat Sigmoid boundaries with precise exponential and division."""
 
 import json
 import os
@@ -6,6 +6,8 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import replace
+from decimal import Decimal, localcontext
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -27,14 +29,17 @@ from tests.test_translator.test_bfloat_buffer_runtime import _storage
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values, _request
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
+from tests.test_translator.test_metal_precise_exp import _narrow, _oracle
+from tests.test_translator.test_metal_precise_trig import _float, _round_decimal
 from tools import ci_coverage
 
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_UNARY_DIVISION"
 ENTRY = "v_Sigmoidbfloat16bfloat16"
 SOURCE = "mlx/backend/metal/kernels/unary.metal"
 # Original Metal 3.1, -fno-fast-math readbacks at MLX_COMMIT. These cover the
-# division underflow boundary, not the separate exponential midpoint failure.
+# division underflow boundary and the exponential's bfloat rounding midpoint.
 CASES = (
+    (0xC0DB, 0x3A8B),
     (0xC2AC, 0x0173),
     (0xC2AD, 0x0114),
     (0xC2AE, 0x00B3),
@@ -56,6 +61,50 @@ CASES = (
 )
 
 
+@lru_cache(maxsize=None)
+def _sigmoid_reference(word):
+    """Evaluate the source's bfloat boundaries with binary32 result flushing."""
+    magnitude = word & 0x7FFF
+    assert magnitude <= 0x7F80, "NaN inputs require a separate payload policy"
+    exponential = _narrow(_oracle(magnitude << 16))
+    with localcontext() as context:
+        context.prec = 100
+        if exponential == 0x7F800000:
+            quotient = 0
+        else:
+            denominator = _narrow(
+                _round_decimal(Decimal(1) + Decimal.from_float(_float(exponential)))
+            )
+            quotient = _round_decimal(
+                Decimal(1) / Decimal.from_float(_float(denominator))
+            )
+            if quotient < 0x800000:
+                quotient = 0
+        narrowed = _narrow(quotient)
+        if word & 0x8000 and magnitude:
+            return narrowed >> 16
+        return (
+            _narrow(_round_decimal(Decimal(1) - Decimal.from_float(_float(narrowed))))
+            >> 16
+        )
+
+
+def _sigmoid_cases():
+    return tuple(
+        (word, _sigmoid_reference(word))
+        for word in range(65536)
+        if word & 0x7FFF <= 0x7F80
+    )
+
+
+def test_sigmoid_reference_matches_original_boundary_readbacks():
+    cases = _sigmoid_cases()
+    assert len(cases) == 65282
+    assert all(_sigmoid_reference(word) == result for word, result in CASES)
+    assert (0x0000, 0x3F00) in cases and (0x8000, 0x3F00) in cases
+    assert (0x7F80, 0x3F80) in cases and (0xFF80, 0x0000) in cases
+
+
 def test_ci_requires_pinned_division_once_per_platform():
     workflow = (
         Path(__file__).resolve().parents[5]
@@ -66,6 +115,7 @@ def test_ci_requires_pinned_division_once_per_platform():
     )
     assert "if:" not in step
     assert f'{REQUIRE_ENV}: "1"' in step
+    assert 'CROSTL_REQUIRE_METAL_PRECISE_EXP: "1"' in step
     assert "CROSTL_MLX_CURRENT_ROOT:" in step
     assert "CROSTL_MLX_CURRENT_TARGET" in step
     assert (
@@ -75,11 +125,13 @@ def test_ci_requires_pinned_division_once_per_platform():
         == 1
     )
     assert "test_current_unary_division.py" in step
+    assert "tests/test_translator/test_metal_precise_exp.py" in step
+    assert workflow.count("tests/test_translator/test_metal_precise_exp.py") == 1
     assert "pytest -q -n auto" in step
     assert "--basetemp=" in step and "--junitxml=" in step
 
 
-def test_current_bfloat_sigmoid_division_boundaries(tmp_path):
+def test_current_bfloat_sigmoid_non_nan_domain(tmp_path):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for pinned Sigmoid execution")
     root = Path(os.environ["CROSTL_MLX_CURRENT_ROOT"]).resolve()
@@ -105,6 +157,7 @@ def test_current_bfloat_sigmoid_division_boundaries(tmp_path):
         timeout=30,
     )
     workload = next(w for w in UNARY_DIRECTX_WORKLOADS if w.entry_point == ENTRY)
+    cases = _sigmoid_cases()
     with tempfile.TemporaryDirectory(prefix=".unary-division-", dir=root) as directory:
         work = Path(directory)
         try:
@@ -151,22 +204,25 @@ def test_current_bfloat_sigmoid_division_boundaries(tmp_path):
             )
             guard = [0x422A] * 8
             inputs = {
-                "in_": _storage(target, [word for word, _ in CASES] + guard),
-                "out_": _storage(target, [0x422A] * (len(CASES) + len(guard))),
-                "size": {"dtype": "uint32", "shape": [1], "values": [len(CASES)]},
+                "in_": _storage(target, [word for word, _ in cases] + guard),
+                "out_": _storage(target, [0x422A] * (len(cases) + len(guard))),
+                "size": {"dtype": "uint32", "shape": [1], "values": [len(cases)]},
             }
-            outputs = {"out_": _storage(target, [word for _, word in CASES] + guard)}
-            request = _request(descriptor, package, inputs, outputs, len(CASES))
+            outputs = {"out_": _storage(target, [word for _, word in cases] + guard)}
+            request = _request(descriptor, package, inputs, outputs, len(cases))
             assert not request.execution_plan.diagnostics
             (work / "reference.json").write_text(
                 json.dumps(
                     {
                         "commit": revision,
                         "entry": ENTRY,
-                        "cases": CASES,
+                        "cases": cases,
                         "guardCount": len(guard),
-                        "fullSigmoidParity": False,
-                        "remainingIssue": 2085,
+                        "coverage": "all 65282 non-NaN bfloat inputs",
+                        "oracle": (
+                            "Decimal exponential and arithmetic, binary32/bfloat rounding at source boundaries"
+                        ),
+                        "originalBoundaryReadbacks": CASES,
                     },
                     indent=2,
                 ),

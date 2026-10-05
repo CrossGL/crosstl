@@ -11655,12 +11655,17 @@ def test_codegen_keeps_metal_stdlib_wrappers_as_non_emitted_builtin_metadata():
             "simd_result",
         ):
             assert f"{result_type} {result_name}" in normalized
-        assert generated.count("exp(") == 3
+        assert generated.count("exp(") == 2
+        assert "metal_precise_exp_float(" in generated
         assert "simd_max" not in generated
         assert "__metal_" not in generated
         assert "__METAL_" not in generated
         assert "<unknown>" not in generated
 
+    assert (
+        "bfloat16 precise_result = bfloat16(__crossgl_metal_precise_exp_float(float(value)));"
+        in normalize(crossgl)
+    )
     assert "bfloat16 simd_result = bfloat16(WaveActiveMax(float(value)));" in normalize(
         crossgl
     )
@@ -11771,7 +11776,10 @@ def test_codegen_preserves_materialized_math_return_before_widening(namespace):
     }}
     """
     crossgl = normalize(convert_without_preprocessing(source))
-    assert "float(bfloat16(exp(float(value++)))) + 0.25f" in crossgl
+    exponential = (
+        "__crossgl_metal_precise_exp_float" if namespace == "metal::precise" else "exp"
+    )
+    assert f"float(bfloat16({exponential}(float(value++)))) + 0.25f" in crossgl
     assert crossgl.count("value++") == 1
 
 
@@ -11782,8 +11790,8 @@ def test_codegen_keeps_bare_precise_math_result_wide():
       return result;
     }
     """))
-    assert "float result = exp(value);" in crossgl
-    assert "bfloat16(exp(" not in crossgl
+    assert "float result = __crossgl_metal_precise_exp_float(value);" in crossgl
+    assert "bfloat16(__crossgl_metal_precise_exp_float(" not in crossgl
 
 
 def test_codegen_canonicalizes_qualified_copysign_without_shadowing_user_code():
