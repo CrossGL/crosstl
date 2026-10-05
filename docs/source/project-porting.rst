@@ -524,10 +524,15 @@ The current OpenGL identities were reviewed against retained sources after
 signed 64-bit remainder and narrow-value lowering changed. All 24 entries
 compile and validate, and the 16 required float32 execution cases pass on Mesa
 EGL. A separate local review covers 80 half/bfloat cases with source-rounded
-inputs; it does not expand the required CI runtime subset. Metal and DirectX
-identities remain independently gated. Strict Metal compilation currently
-rejects the four signed/unsigned byte entries due to aggregate-initializer
-narrowing, tracked in `issue 2074 <https://github.com/CrossGL/crosstl/issues/2074>`_.
+inputs; it does not expand the required CI runtime subset. A separate Metal
+identity review covers native narrow aggregate fields and contextual byte-field
+initializers. All 24 generated entries compile with ``-Werror``. The eight changed
+bodies retain their source, specialization and execution metadata, while the
+16 other bodies are unchanged. The four byte entries also match unchanged
+upstream Metal execution and independent integer indices in 64 local cases
+covering extrema, ties, constant rows, tails and strides. Required CI runtime
+coverage remains the stated float32 subset. DirectX identities remain
+independently gated.
 
 Constrained Metal free-function fallbacks are materialized only when their
 recognized constraints select a unique implementation. A visible ordinary or

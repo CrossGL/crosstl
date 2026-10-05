@@ -34,6 +34,14 @@ The backend focuses on Apple GPU shader integration:
   mappings
 * Metal-specific handling for char-like types through ``CharTypeMapper``
 
+Byte-valued struct initializers convert expression carriers back to the declared
+``char`` or ``uchar`` storage type. The same rule covers byte vectors, aliases,
+materialized generic fields, nested aggregates and fixed arrays; omitted byte
+fields are zero-initialized. It does not widen aggregate storage or change
+arithmetic promotion. Native controls compare original and generated Metal over
+all byte input values, checking signedness, field sizes, zero initialization,
+single evaluation and guarded outputs.
+
 Member-template deduction retains the primary argument list of materialized
 structs, including when an enabled partial specialization supplies the body.
 Omitted arguments are expanded from that primary declaration's defaults before

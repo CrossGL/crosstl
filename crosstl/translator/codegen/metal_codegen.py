@@ -4007,6 +4007,45 @@ class MetalCodeGen:
             None,
         )
 
+    def generate_struct_constructor_argument(self, expr, field_type):
+        """Convert promoted byte values back to the aggregate's physical field type."""
+        raw_type = self.resolve_metal_type_alias(self.type_name_string(field_type))
+        base_type, array_suffix = split_array_type_suffix(raw_type)
+        native = self.metal_native_narrow_bitcast_storage_type(base_type)
+        if native is None or not re.fullmatch(r"u?char[234]?", native):
+            return None
+        if expr is None:
+            return "{}" if array_suffix else f"{native}(0)"
+        if array_suffix:
+            if not isinstance(expr, ArrayLiteralNode):
+                return None
+            element_type = self.metal_for_in_array_element_type(raw_type)
+            elements = [
+                self.generate_struct_constructor_argument(
+                    element,
+                    (
+                        element_type
+                        if isinstance(element, ArrayLiteralNode)
+                        else base_type
+                    ),
+                )
+                for element in expr.elements
+            ]
+            return "{" + ", ".join(elements) + "}"
+        if isinstance(expr, ArrayLiteralNode):
+            component_type = native[:-1] if native[-1:] in {"2", "3", "4"} else native
+            elements = []
+            for element in expr.elements:
+                width = self.expression_component_count(element)
+                storage_type = (
+                    f"{component_type}{width}" if width in {2, 3, 4} else component_type
+                )
+                rendered = self.generate_expression_with_expected(element, None)
+                elements.append(f"{storage_type}({rendered})")
+            return native + "{" + ", ".join(elements) + "}"
+        rendered = self.generate_expression_with_expected(expr, field_type)
+        return f"{native}({rendered})"
+
     def generate_metal_aggregate_constructor_call(self, expr, function_name):
         """Restore Metal brace semantics lost when aggregate IR uses a call."""
         constructor_name = self.metal_aggregate_constructor_name(function_name)
