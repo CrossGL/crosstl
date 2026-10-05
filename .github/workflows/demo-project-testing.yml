@@ -3339,6 +3339,30 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Validate DirectX allocation views
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          CROSTL_REQUIRE_DIRECTX_BUFFER_VIEWS: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p directx-buffer-view-results
+          python tools/run_bounded_command.py \
+            --label "DirectX allocation views" --timeout-seconds 180 -- \
+            python -m pytest -q -n auto \
+              --basetemp="directx-buffer-view-results/pytest" \
+              --junitxml="directx-buffer-view-results/results.xml" \
+              tests/test_translator/test_directx_buffer_views.py
+
+      - name: Upload DirectX allocation view evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: directx-buffer-views-Windows
+          path: directx-buffer-view-results
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Checkout pinned MLX
         shell: bash
         run: |

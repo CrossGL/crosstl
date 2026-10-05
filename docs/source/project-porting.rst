@@ -2271,9 +2271,9 @@ overflow is rejected. Explicit non-finite input tokens remain available.
 Use encoded values when signed-zero or NaN payload identity must be checked.
 Boolean words, negative words, values above 65535, inconsistent encodings,
 misaligned views and truncated allocations fail before dispatch.
-Metal supports aligned offset views. The DirectX Python driver retains its
-existing full-allocation binding requirement and rejects partial views before
-device submission.
+Metal supports aligned offset views. The DirectX Python driver realizes aligned
+structured-buffer ranges with native descriptors; this does not change the
+shader's storage type or repair values after readback.
 
 OpenGL's widened half lowering continues to expose float32 physical storage.
 A binary16 payload cannot bind that storage. Conversion tests use the reported
@@ -2400,17 +2400,36 @@ The DirectX and OpenGL reference drivers group compatible bindings by allocation
 ID, combine non-conflicting fixture uploads, create one physical device
 allocation for the group, and bind that allocation at each reflected coordinate.
 Conflicting upload bytes fail setup instead of causing an implicit conversion or
-per-binding allocation. DirectX currently requires every structured-buffer view
-to cover the complete allocation, requires one dtype and stride across the
-group, and rejects simultaneous aliases of a constant buffer within one dispatch.
+per-binding allocation. DirectX requires one dtype and stride across the group
+and rejects simultaneous aliases of a constant buffer within one dispatch.
 An ordered DirectX sequence may reuse an immutable constant allocation across
-nodes when every view has the same scalar layout and extent at offset zero.
+nodes when every view has the same scalar layout and extent at a 256-byte-aligned offset.
 Conflicting uploads, different allocation sizes, and mixing constant buffers with
 SRV/UAV resources remain errors. Source constants are uploaded once; derived
 region constants retain distinct allocations. OpenGL supports bounded
 uniform-block and storage-buffer ranges, subject to the offset-alignment limits
 reported by the active context. It rejects mixed uniform/storage groups,
 incompatible overlapping scalar layouts, and overlapping writable ranges.
+
+DirectX requests containing allocation subranges use a process-isolated D3D12
+worker. MSVC with the Windows SDK is required to build this worker; unchanged
+builds are reused within the Python process. The selected adapter must match
+the caller's device. Each allocation ID creates one physical buffer, while
+CBV addresses and structured SRV/UAV descriptors preserve the requested offset
+and extent. Ordered dispatches keep that allocation alive and synchronize queue
+completion before the next dispatch. Output decoding selects the requested
+range from a complete allocation readback, retaining its hash and GPU address
+in runtime evidence. Execution is bounded to 120 seconds, with a 256 MiB limit
+per allocation and 512 MiB per request. No shader rewriting, host evaluation or
+independent zero-offset copies substitute for ranged binding.
+
+Ranged execution supports shared read-only views, disjoint UAV views and
+cross-dispatch read/write reuse. Simultaneous SRV/CBV reads and UAV writes to one
+allocation within a dispatch remain unsupported by the worker's classic
+resource-state model and fail with ``allocation-state-incompatible``. This
+limitation is not evidence that an equivalent enhanced-barrier implementation
+is impossible. Windows CI requires native offset, shared-allocation and
+ordered-reuse controls, including complete allocation guards.
 
 The built-in Vulkan driver does not currently realize shared allocation IDs or
 bounded allocation views, and no native shared-allocation support is claimed for

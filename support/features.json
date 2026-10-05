@@ -11517,7 +11517,7 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "RuntimeAllocationView preserves explicit id, byteOffset, byteLength, and allocationByteLength fields while RuntimeValue and RuntimeResourceBinding retain dtype, shape, physical layout, access, and binding coordinates. Runtime planning assigns deterministic per-binding allocation IDs when the field is absent and rejects conflicting sizes, out-of-bounds or misaligned views, incompatible overlapping layouts, and overlapping writable views before dispatch. The DirectX reference driver groups full-allocation structured-buffer bindings by allocation ID, combines non-conflicting uploads, creates one physical device allocation, and binds it at each SRV or UAV coordinate. Ordered sequences also permit immutable constant-buffer reuse across nodes with identical scalar layouts and extents at offset zero; simultaneous CBV aliases, CBV/SRV/UAV mixing, conflicting uploads and incompatible views remain rejected. Derived region constants use distinct allocations. Ranged structured-buffer views remain unsupported. Regression tests cover allocation identity and rejection paths; the exact-grid Windows gate requires native numerical execution. This bounded resource-binding contract does not provide repository scheduling, framework memory management, host-code rewriting, or full MLX runtime integration.",
+          "notes": "RuntimeAllocationView preserves explicit id, byteOffset, byteLength, and allocationByteLength fields while bindings retain dtype, shape, physical layout, access and coordinates. Planning rejects conflicting sizes or uploads, invalid ranges, incompatible layouts and overlapping writes before dispatch. The DirectX reference driver creates one physical buffer per allocation ID. Ranged requests use a bounded native D3D12 worker with real CBV addresses and structured SRV/UAV descriptors, shared read-only or disjoint writable views, and ordered read/write reuse. MSVC and the Windows SDK are required for the worker. Immutable constants may be reused across nodes with identical layouts and ranges at 256-byte-aligned offsets. Simultaneous CBV aliases and CBV/structured mixing remain rejected. Ranged execution also rejects simultaneous SRV and UAV access to one allocation because its classic resource-state model cannot express it. Derived region constants retain distinct allocations. Windows gates require numerical offset, shared-view and sequence controls with physical allocation identities and full readback hashes; protocol tests do not claim native execution. This bounded binding contract does not provide framework memory planning, host-code rewriting or complete repository runtime integration.",
           "evidence": [
             "tests/test_translator/test_runtime_verification.py::def test_runtime_fixture_round_trips_native_allocation_view",
             "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_coalesces_read_write_allocation_metadata",
@@ -11528,12 +11528,15 @@
             "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_rejects_misaligned_allocation_view",
             "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_rejects_overlapping_writable_views",
             "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_rejects_incompatible_overlapping_layouts",
-            "tests/test_translator/test_native_runtime_drivers.py::def test_prepare_directx_buffers_rejects_allocation_subview_with_constraint",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_prepare_directx_buffers_preserves_allocation_subview",
             "tests/test_translator/test_native_runtime_drivers.py::def test_directx_compute_runtime_reuses_explicit_shared_allocation",
             "tests/test_translator/test_native_runtime_drivers.py::def test_directx_sequence_reuses_immutable_constant_allocation",
             "tests/test_translator/test_native_runtime_drivers.py::def test_directx_sequence_rejects_incompatible_constant_reuse",
             "tests/test_translator/test_dispatch_region_project.py::def test_packaged_regions_reuse_source_constants",
-            "tests/test_translator/test_shared_native_allocations_runtime.py::def test_directx_shared_native_allocation_executes_on_device"
+            "tests/test_translator/test_shared_native_allocations_runtime.py::def test_directx_shared_native_allocation_executes_on_device",
+            "tests/test_translator/test_directx_buffer_views.py::def test_directx_buffer_views_execute",
+            "tests/test_translator/test_directx_buffer_views.py::def test_shared_allocations_execute",
+            "tests/test_translator/test_directx_buffer_views.py::def test_ranged_execution_rejects_mixed_access_states"
           ]
         },
         "opengl": {

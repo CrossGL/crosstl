@@ -1663,7 +1663,7 @@ def test_prepare_directx_buffers_rejects_views_compushady_cannot_describe(
     assert excinfo.value.details["type"] == type_name
 
 
-def test_prepare_directx_buffers_rejects_allocation_subview_with_constraint(
+def test_prepare_directx_buffers_preserves_allocation_subview(
     tmp_path,
 ):
     request = _directx_dispatch_request(tmp_path)
@@ -1680,18 +1680,14 @@ def test_prepare_directx_buffers_rejects_allocation_subview_with_constraint(
         }
     )
 
-    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
-        _prepare_directx_buffers({"lhs": binding})
-
-    assert excinfo.value.details["reasonKind"] == "unsupported-allocation-subview"
-    assert excinfo.value.details["allocationId"] == "working-set"
-    assert excinfo.value.details["byteOffset"] == 4
-    assert excinfo.value.details["byteLength"] == 8
-    assert excinfo.value.details["allocationByteLength"] == 12
-    assert excinfo.value.details["targetConstraint"] == ("compushady-buffer-view-range")
+    (prepared,) = _prepare_directx_buffers({"lhs": binding})
+    assert prepared.allocation_id == "working-set"
+    assert prepared.byte_offset == 4
+    assert prepared.byte_length == 8
+    assert prepared.allocation_size == 12
 
 
-@pytest.mark.parametrize("offset", [4, 256, 512])
+@pytest.mark.parametrize("offset", [4, 252, 260])
 def test_directx_constant_subview_fails_before_resource_creation(tmp_path, offset):
     request = _directx_dispatch_request(tmp_path)
     constant = replace(
@@ -1713,8 +1709,8 @@ def test_directx_constant_subview_fails_before_resource_creation(tmp_path, offse
         runtime.dispatch_sequence(None, None, (request,))
 
     details = excinfo.value.details
-    assert details["reasonKind"] == "unsupported-allocation-subview"
-    assert details["targetConstraint"] == "compushady-buffer-view-range"
+    assert details["reasonKind"] == "allocation-view-misaligned"
+    assert details["targetConstraint"] == "constant-buffer-offset-alignment"
     assert details["resource"] == "params"
     assert details["allocationId"] == "parameters"
     assert details["byteOffset"] == offset

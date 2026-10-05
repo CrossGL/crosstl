@@ -25,7 +25,6 @@ from crosstl.project.native_runtime_drivers import (
 )
 from crosstl.project.runtime_value_encoding import FLOAT16_BITS, FLOAT32_BITS
 from crosstl.project.runtime_verification import (
-    RuntimeAdapterSetupError,
     RuntimeAllocationView,
     RuntimeExecutionState,
     RuntimeExecutorUnavailable,
@@ -248,14 +247,6 @@ def test_half_bitcast_controls_execute_natively(tmp_path, case):
     _execute(request, expected, tmp_path, validate=_validate_half)
 
 
-def _assert_directx_subview_rejected(request):
-    with pytest.raises(RuntimeAdapterSetupError) as error:
-        _directx_buffers(request)
-    assert error.value.details["reasonKind"] == "unsupported-allocation-subview"
-    assert error.value.details["byteOffset"] == 6
-    assert error.value.details["targetConstraint"] == "compushady-buffer-view-range"
-
-
 @pytest.mark.parametrize("target", ("metal", "directx"))
 @pytest.mark.parametrize("form", FORMS)
 def test_half_packages_retain_two_byte_storage(tmp_path, target, form):
@@ -293,26 +284,30 @@ def test_half_packages_retain_two_byte_storage(tmp_path, target, form):
                 }
             ]
         assert all(value[0] == "float16" for value in readbacks.values())
-    elif form == "offset":
-        _assert_directx_subview_rejected(request)
     else:
         bound = _bound_values(descriptor, inputs)
         for buffer in _directx_buffers(request):
-            values = bound[buffer.name]["values"]
+            value = bound[buffer.name]
+            values = (
+                value.values if isinstance(value, RuntimeValue) else value["values"]
+            )
             layout = next(
                 binding["scalarLayout"]
                 for binding in descriptor["bindings"]
                 if binding["name"] == buffer.name
             )
             assert buffer.payload == struct.pack("<" + "H" * len(values), *values)
-            assert buffer.dtype == "float16" and buffer.byte_offset == 0
+            assert buffer.dtype == "float16"
+            assert buffer.byte_offset == (6 if form == "offset" else 0)
             if buffer.namespace == "cbv":
                 assert buffer.byte_length == layout["blockSizeBytes"] == 16
                 assert buffer.stride == 0 and buffer.allocation_size == 256
             else:
                 assert buffer.byte_length == len(values) * 2
                 assert buffer.stride == layout["elementStrideBytes"]
-                assert buffer.allocation_size == len(values) * 2
+                assert buffer.allocation_size == len(values) * 2 + (
+                    14 if form == "offset" else 0
+                )
 
 
 def test_half_encoding_round_trips_every_storage_word():
@@ -477,9 +472,6 @@ def test_half_buffers_execute_native_storage(tmp_path, form):
         test_half_payload_cannot_bind_widened_opengl_storage(tmp_path)
         return
     source, descriptor, _, _, outputs, request = _case(tmp_path, target, form)
-    if target == "directx" and form == "offset":
-        _assert_directx_subview_rejected(request)
-        return
     expected = _bound_values(
         descriptor,
         {

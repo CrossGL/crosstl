@@ -57,6 +57,12 @@ Each native job keeps its source pin, numerical comparisons, guards, bounded exe
 and retained evidence. Moving a compiler-only job must not disable an execution
 gate or be presented as proof of runtime parity.
 
+The existing Windows project job also checks native CBV/SRV/UAV allocation
+ranges, shared read-only and disjoint writable views, and ordered allocation
+reuse. The check is bounded and retains shader/module identities, physical
+allocation addresses and full-allocation readback hashes. It adds no runner
+and does not replace the public loader's numerical offset regressions.
+
 Concurrency is scoped to each job and matrix leg on a branch. Running native
 work is allowed to finish, while only the newest waiting revision of that job
 is retained. A long Metal corpus run therefore does not hold up an unrelated

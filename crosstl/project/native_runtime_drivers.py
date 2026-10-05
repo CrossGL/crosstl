@@ -280,9 +280,11 @@ class DirectXComputeRuntime:
         *,
         module_loader: Any | None = None,
         platform_name: str | None = None,
+        buffer_view_executor: Any | None = None,
     ):
         self._module_loader = module_loader or importlib.import_module
         self.platform_name = platform_name or sys.platform
+        self._buffer_view_executor = buffer_view_executor
 
     def is_available(
         self,
@@ -478,11 +480,18 @@ class DirectXComputeRuntime:
                     workgroup_count=counts,
                 )
             )
+        ranged = any(
+            view.byte_offset
+            or (view.namespace != "cbv" and view.size != view.allocation_size)
+            for node in prepared_dispatches
+            for view in node.buffers
+        )
         allocation_plan, view_keys = _prepare_sequence_allocations(
             [item.buffers for item in prepared_dispatches],
             target="directx",
+            max_allocation_bytes=256 * 1024 * 1024 if ranged else None,
+            max_total_allocation_bytes=512 * 1024 * 1024 if ranged else None,
         )
-
         owned_objects: list[Any] = []
         node_resources: list[list[_DirectXBufferResource]] = []
         computes: list[Any] = []
@@ -510,6 +519,21 @@ class DirectXComputeRuntime:
                         "reasonKind": "device-selection-failed",
                     },
                 ) from exc
+
+            if ranged:
+                from .directx_runtime import execute_buffer_views
+
+                if self._buffer_view_executor is not None:
+                    return self._buffer_view_executor(
+                        prepared_dispatches, allocation_plan, view_keys, state
+                    )
+                return execute_buffer_views(
+                    prepared_dispatches,
+                    allocation_plan,
+                    view_keys,
+                    state,
+                    device=device,
+                )
 
             physical_resources: dict[tuple[Any, ...], _DirectXBufferResource] = {}
             try:
@@ -2536,9 +2560,9 @@ def _validate_directx_allocation_views(
             layouts = {
                 (view.dtype, view.stride, view.byte_offset, view.size) for view in views
             }
-            if len(layouts) != 1 or any(view.byte_offset for view in views):
+            if len(layouts) != 1 or any(view.byte_offset % 256 for view in views):
                 raise _directx_setup_error(
-                    "DirectX sequential constant-buffer views require the same layout at offset zero.",
+                    "DirectX sequential constant-buffer views require the same layout and range.",
                     "allocation-layout-incompatible",
                     allocationId=allocation_id,
                     views=[_prepared_allocation_view_payload(view) for view in views],
@@ -2685,6 +2709,8 @@ def _prepare_sequence_allocations(
     prepared_nodes: Sequence[Sequence[Any]],
     *,
     target: str,
+    max_allocation_bytes: int | None = None,
+    max_total_allocation_bytes: int | None = None,
 ) -> tuple[tuple[_PreparedSequenceAllocation, ...], Mapping[int, tuple[Any, ...]]]:
     groups: dict[tuple[Any, ...], list[Any]] = {}
     display_ids: dict[tuple[Any, ...], str] = {}
@@ -2708,6 +2734,33 @@ def _prepare_sequence_allocations(
             view_keys[id(prepared)] = key
         for key, views in node_groups.items():
             validate(display_ids[key], views)
+
+    # Bound the physical footprint before constructing any merged host payload.
+    sizes = {
+        key: max(view.allocation_size for view in views)
+        for key, views in groups.items()
+    }
+    error = _directx_setup_error if target == "directx" else _opengl_setup_error
+    if max_allocation_bytes is not None:
+        for key, size in sizes.items():
+            if size > max_allocation_bytes:
+                raise error(
+                    "Native allocation exceeds its bounded execution limit.",
+                    "allocation-size-limit",
+                    allocationId=display_ids[key],
+                    allocationByteLength=size,
+                    maxBufferBytes=max_allocation_bytes,
+                )
+    if (
+        max_total_allocation_bytes is not None
+        and sum(sizes.values()) > max_total_allocation_bytes
+    ):
+        raise error(
+            "Native allocations exceed the bounded request size limit.",
+            "request-size-limit",
+            allocationByteLength=sum(sizes.values()),
+            maxAllocationBytes=max_total_allocation_bytes,
+        )
 
     allocations = []
     for key, views in groups.items():
@@ -2913,10 +2966,10 @@ def _prepare_directx_buffers(
             allocation_size = _align_to(max(requested_allocation_size, block_size), 256)
         else:
             allocation_size = requested_allocation_size
-        if byte_offset or (namespace != "cbv" and byte_length != allocation_size):
+        if namespace == "cbv" and byte_offset % 256:
             raise _directx_setup_error(
-                "DirectX runtime cannot bind the requested allocation subrange.",
-                "unsupported-allocation-subview",
+                "DirectX constant-buffer view offsets must be 256-byte aligned.",
+                "allocation-view-misaligned",
                 resource=name,
                 allocationId=allocation_id,
                 byteOffset=byte_offset,
@@ -2927,7 +2980,8 @@ def _prepare_directx_buffers(
                     "binding": resource.binding,
                     "index": resource.index,
                 },
-                targetConstraint="compushady-buffer-view-range",
+                targetConstraint="constant-buffer-offset-alignment",
+                alignmentBytes=256,
             )
         prepared.append(
             _PreparedDirectXBuffer(
