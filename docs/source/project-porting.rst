@@ -1012,12 +1012,16 @@ qualifiers. ``artifactIdentityRefresh`` records this audit separately from the
 historical ``proof`` metadata; it does not establish coverage of a newer MLX
 revision or add numerical execution claims.
 
-Current byte-width narrowing and typed vector initialization changes require
-a further copy identity review
-under `issue #1966 <https://github.com/CrossGL/crosstl/issues/1966>`_.
-Until that review is complete, affected entries fail the existing identity check
-before export or compilation. Moving generation to Ubuntu does not replace these
-checks or establish fresh translation evidence from older compiled references.
+A subsequent complete copy review accepts byte conversions and typed vector
+initialization: 1,760 artifacts are unchanged, and reversing only the reviewed
+conversions and ``int2``/``long2`` initializer syntax recovers all 736 changed
+bodies. All 2,496 freshly generated artifacts compile with warnings fatal;
+materializations, source/default provenance and resource ABI remain unchanged.
+Negative controls reject changed indexing, byte widths, address arithmetic and
+loop bounds. Historical proof and linkage-refresh metadata are preserved.
+This is reference and compiler evidence, not an additional numerical-runtime
+claim. Other families remain under
+`issue #1966 <https://github.com/CrossGL/crosstl/issues/1966>`_.
 
 The same selected-entry pipeline translates all 2,496 copy entries to
 standalone OpenGL ``main`` artifacts. The schema-v2

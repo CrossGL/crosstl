@@ -1877,12 +1877,16 @@ evidence, not Metal numerical execution, MLX host-runtime redirection, or MLX
 test-suite parity. The older selected OpenGL, DirectX, and native-loader checks
 remain separate bounded evidence.
 
-The checked-in copy identities are compiler-gated reference artifacts. Current
-byte-width narrowing and typed vector initialization changes produce identity
-mismatches in byte-copy and generalized complex-copy entries;
-the complete refresh remains under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
-These cases fail before export or compilation. The CI split does not change
-their expected hashes or treat an earlier compiled reference as a fresh translation.
+The current copy references include a complete, compiler-gated review of byte
+conversions and typed vector initialization. Of 2,496 freshly translated
+artifacts, 1,760 are unchanged; reversing only the reviewed conversions and
+`int2`/`long2` initializer syntax recovers every previous source body. All
+2,496 current artifacts compile with warnings fatal, preserving the 6,566
+materializations and 8,684 resources above. Changed indexing, byte widths,
+address arithmetic, and loop bounds are rejected by negative review controls.
+Historical proof and linkage-refresh metadata remain unchanged. This refresh
+does not add numerical execution or newer upstream coverage; other families
+remain under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
 
 The focused `prove_layer_norm_directx.py` gate translates two host-selected
 single-row entries from the pinned `layer_norm.metal` source: forward float32
