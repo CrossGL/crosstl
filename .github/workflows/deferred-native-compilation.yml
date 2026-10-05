@@ -21,6 +21,8 @@ on:
       - "crosstl/project/runtime_verification.py"
       - "crosstl/project/__init__.py"
       - "setup.py"
+      - "conftest.py"
+      - "tests/test_toolchain_discovery.py"
       - "tests/test_translator/test_native_deferred_compilation*.py"
       - "tests/test_translator/test_native_loader_dispatch.py"
       - "tests/test_translator/test_native_runtime_drivers.py"
@@ -43,6 +45,8 @@ on:
       - "crosstl/project/runtime_verification.py"
       - "crosstl/project/__init__.py"
       - "setup.py"
+      - "conftest.py"
+      - "tests/test_toolchain_discovery.py"
       - "tests/test_translator/test_native_deferred_compilation*.py"
       - "tests/test_translator/test_native_loader_dispatch.py"
       - "tests/test_translator/test_native_runtime_drivers.py"
@@ -88,6 +92,7 @@ jobs:
       - name: Verify deterministic request, package, cache, and loader contracts
         run: >-
           python -m pytest -q -n auto
+          tests/test_toolchain_discovery.py
           tests/test_translator/test_native_deferred_compilation.py
           tests/test_translator/test_native_deferred_compilation_package.py
           tests/test_translator/test_native_deferred_compilation_cache.py

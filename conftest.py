@@ -11,17 +11,21 @@ import pytest
 
 @lru_cache(maxsize=1)
 def _xcrun_resolves_missing_metal_toolchain() -> bool:
+    """Hide only a confirmed missing component, not an inconclusive probe."""
     xcrun = shutil.which("xcrun")
     if xcrun is None:
         return False
 
-    lookup = subprocess.run(
-        [xcrun, "-sdk", "macosx", "-f", "metal"],
-        capture_output=True,
-        check=False,
-        text=True,
-        timeout=30,
-    )
+    try:
+        lookup = subprocess.run(
+            [xcrun, "-sdk", "macosx", "-f", "metal"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return False
     if lookup.returncode != 0:
         return False
 
@@ -36,22 +40,25 @@ kernel void probe() {}
 """.lstrip(),
             encoding="utf-8",
         )
-        probe = subprocess.run(
-            [
-                xcrun,
-                "-sdk",
-                "macosx",
-                "metal",
-                "-c",
-                str(source_path),
-                "-o",
-                str(output_path),
-            ],
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=30,
-        )
+        try:
+            probe = subprocess.run(
+                [
+                    xcrun,
+                    "-sdk",
+                    "macosx",
+                    "metal",
+                    "-c",
+                    str(source_path),
+                    "-o",
+                    str(output_path),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            return False
 
     diagnostics = "\n".join(
         part for part in (probe.stdout, probe.stderr) if part.strip()

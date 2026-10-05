@@ -705,6 +705,8 @@ def test_deferred_native_compilation_workflow_proves_contracts_and_device_dispat
         "crosstl/project/runtime_verification.py",
         "crosstl/project/__init__.py",
         "setup.py",
+        "conftest.py",
+        "tests/test_toolchain_discovery.py",
         "tests/test_translator/test_native_deferred_compilation*.py",
         "tests/test_translator/test_native_loader_dispatch.py",
         "tests/test_translator/test_native_runtime_drivers.py",
@@ -750,6 +752,7 @@ def test_deferred_native_compilation_workflow_proves_contracts_and_device_dispat
     assert _matrix_values(contract, "os") == RUNNER_OSES
     assert "runs-on: ${{ matrix.os }}" in contract
     assert "timeout-minutes: 30" in contract
+    assert "test_toolchain_discovery.py" in contract
     assert "test_native_deferred_compilation.py" in contract
     assert "test_native_deferred_compilation_package.py" in contract
     assert "test_native_deferred_compilation_cache.py" in contract

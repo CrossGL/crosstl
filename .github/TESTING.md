@@ -117,6 +117,12 @@ The full local command is `python -m pytest -q -n auto`. The all-file pre-commit
 checks validate workflow contracts and generated support artifacts. Changes to
 matrix coverage must update those contracts and this policy together.
 
+The optional Metal discovery probe hides `xcrun` only when it confirms that the
+Metal toolchain component is missing. A bounded lookup or probe timeout is
+inconclusive and leaves tool discovery unchanged. Required native tests still
+perform their own compiler and execution checks; a timeout is not a native pass.
+The existing three-platform deferred-compilation jobs test this distinction.
+
 The base-to-head coverage comparison accepts explicitly reviewed workflow moves
 from `.github/ci-coverage-migrations.json`. Only workflow filenames are mapped;
 job identities and coverage requirements are not removed. Each old job must
