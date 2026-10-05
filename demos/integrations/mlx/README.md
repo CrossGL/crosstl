@@ -382,10 +382,13 @@ The current harness verifies:
   aggregate, all with host-owned `[1, 1, 1]` workgroups. The terminal external
   proof compiled every entry twice with Metal 3.1 and warnings fatal, required
   byte-identical non-empty AIR, and is bound by the checked-in terminal,
-  independent-audit, and adversarial identities. Twenty-four required macOS CI
-  shards rediscover the exact source entries, retranslate and reflect each one,
-  and compile them warning-fatally; twelve shards contain 86 entries and twelve
-  contain 85, and the gate requires all 2,052 AIR outputs to be non-empty. This
+  independent-audit, and adversarial identities. Twenty-four required Ubuntu CI
+  shards rediscover the exact source entries, retranslate and reflect each one;
+  twelve shards contain 86 entries and twelve contain 85. One dependent macOS
+  job verifies every source identity and compiles all entries with Metal 3.1,
+  warnings fatal and empty compiler streams. Missing, duplicate or changed
+  sources fail before compilation, and the gate requires all 2,052 AIR outputs
+  to be non-empty. This
   is complete quantized Metal translation, reflection, and native compiler
   coverage; it does not claim Metal numerical execution or MLX host runtime
   redirection;

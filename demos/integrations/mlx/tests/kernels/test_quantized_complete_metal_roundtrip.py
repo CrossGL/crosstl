@@ -6,7 +6,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import textwrap
 from collections import Counter
 from dataclasses import dataclass
@@ -22,6 +21,11 @@ from crosstl.project import (
 )
 from crosstl.translator.entry_discovery import ENTRY_DISCOVERY_AVAILABLE
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
+from demos.integrations.mlx.tests.corpus_evidence import (
+    assert_deferred_metal_compiler_diagnostics,
+    corpus_workspace,
+)
+from tools.compile_artifact_bundle import write_bundle_entry
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_QUANTIZED_SOURCE = "mlx/backend/metal/kernels/quantized.metal"
@@ -29,6 +33,8 @@ MLX_QUANTIZED_SHA256 = (
     "292aab5a98e3fc047b8ed91343fc10b66e5a92e12c258cde168929520ab2abfd"
 )
 REQUIRE_QUANTIZED_METAL_ENV = "CROSTL_REQUIRE_MLX_QUANTIZED_METAL_ROUNDTRIP"
+REQUIRE_QUANTIZED_METAL_SOURCE_ENV = "CROSTL_REQUIRE_MLX_QUANTIZED_METAL_SOURCE"
+QUANTIZED_METAL_BUNDLE_ENV = "CROSTL_CORPUS_BUNDLE_ROOT"
 QUANTIZED_METAL_SHARD_INDEX_ENV = "CROSTL_MLX_QUANTIZED_METAL_SHARD_INDEX"
 QUANTIZED_METAL_SHARD_COUNT_ENV = "CROSTL_MLX_QUANTIZED_METAL_SHARD_COUNT"
 QUANTIZED_METAL_CI_SHARD_COUNT = 24
@@ -618,7 +624,13 @@ def test_current_mlx_quantized_metal_ci_shards_are_complete_and_disjoint():
 def _pinned_mlx_root() -> Path:
     root_value = os.environ.get("CROSTL_MLX_ROOT")
     if not root_value:
-        if os.environ.get(REQUIRE_QUANTIZED_METAL_ENV) == "1":
+        if any(
+            os.environ.get(name) == "1"
+            for name in (
+                REQUIRE_QUANTIZED_METAL_ENV,
+                REQUIRE_QUANTIZED_METAL_SOURCE_ENV,
+            )
+        ):
             pytest.fail("CROSTL_MLX_ROOT is not configured")
         pytest.skip("CROSTL_MLX_ROOT is not configured")
     mlx_root = Path(root_value).resolve()
@@ -709,6 +721,8 @@ def _translate_quantized_metal_artifact(
     mlx_root: Path,
     work_dir: Path,
     workload: QuantizedMetalWorkload,
+    *,
+    defer_native_compilation: bool = False,
 ) -> tuple[Path, Path]:
     relative_work = work_dir.relative_to(mlx_root).as_posix()
     output_dir = f"{relative_work}/out"
@@ -726,16 +740,25 @@ def _translate_quantized_metal_artifact(
         run_toolchains=False,
     )
     payload = report.to_json()
+    report_path = work_dir / "portability-report.json"
+    report.write_json(report_path)
     expected_summary = {
         "unitCount": 1,
         "artifactCount": 1,
         "translatedCount": 1,
         "failedCount": 0,
-        "diagnosticCounts": {"note": 0, "warning": 0, "error": 0},
     }
     for field, expected in expected_summary.items():
         assert payload["summary"][field] == expected
-    assert payload["diagnostics"] == []
+    if defer_native_compilation:
+        assert_deferred_metal_compiler_diagnostics(payload)
+    else:
+        assert payload["summary"]["diagnosticCounts"] == {
+            "note": 0,
+            "warning": 0,
+            "error": 0,
+        }
+        assert payload["diagnostics"] == []
     assert len(payload["artifacts"]) == 1
     artifact = payload["artifacts"][0]
     assert artifact["status"] == "translated"
@@ -777,25 +800,24 @@ def _translate_quantized_metal_artifact(
         assert residue not in generated
     assert re.search(r"(?<![A-Za-z0-9_])type\s*\(", generated) is None
 
-    report_path = work_dir / "portability-report.json"
-    report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
     return report_path, generated_path
 
 
 def _roundtrip_pinned_mlx_quantized_through_metal(
     workload: QuantizedMetalWorkload,
+    *,
+    bundle_root: Path | None = None,
 ) -> None:
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=f".crosstl-quantized-{workload.entry_point}-metal-roundtrip-",
-        dir=mlx_root,
-    ) as temporary_directory:
-        work_dir = Path(temporary_directory)
+    with corpus_workspace(
+        mlx_root, family="quantized", target="metal", entry_point=workload.entry_point
+    ) as work_dir:
         report_path, generated_path = _translate_quantized_metal_artifact(
             mlx_root,
             work_dir,
             workload,
+            defer_native_compilation=bundle_root is not None,
         )
         runtime_artifacts = build_runtime_artifact_manifest(report_path)
         assert runtime_artifacts["success"] is True, json.dumps(
@@ -829,6 +851,15 @@ def _roundtrip_pinned_mlx_quantized_through_metal(
         assert [resource["metadata"] for resource in host_interface["resources"]] == [
             {"entryPoint": workload.entry_point}
         ] * workload.resource_count
+
+        if bundle_root is not None:
+            write_bundle_entry(
+                generated_path,
+                QUANTIZED_METAL_CONTRACT_PATH,
+                workload.entry_point,
+                bundle_root,
+            )
+            return
 
         xcrun = shutil.which("xcrun")
         if xcrun is None:
@@ -868,3 +899,17 @@ def _roundtrip_pinned_mlx_quantized_through_metal(
 )
 def test_current_mlx_quantized_family_roundtrips_through_metal(workload):
     _roundtrip_pinned_mlx_quantized_through_metal(workload)
+
+
+@pytest.mark.parametrize(
+    "workload",
+    CURRENT_QUANTIZED_METAL_WORKLOADS,
+    ids=lambda workload: workload.entry_point,
+)
+def test_current_mlx_quantized_family_exports_native_compilation_bundle(
+    workload, tmp_path
+):
+    bundle_root = Path(
+        os.environ.get(QUANTIZED_METAL_BUNDLE_ENV, str(tmp_path / "bundle"))
+    )
+    _roundtrip_pinned_mlx_quantized_through_metal(workload, bundle_root=bundle_root)

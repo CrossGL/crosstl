@@ -221,6 +221,10 @@ def compile_bundle(
     _write_json(report_path, report)
     try:
         contract, expected, contract_hash = _contract(contract_path)
+        empty_streams = contract.get("artifactContract", {}).get(
+            "requiresEmptyCompilerStreams", False
+        )
+        _require(type(empty_streams) is bool, "Compiler stream policy must be Boolean")
         report.update(
             contractSha256=contract_hash,
             expectedCount=len(expected),
@@ -234,6 +238,18 @@ def compile_bundle(
                 records,
             )
             for result in compiled:
+                if (
+                    result["status"] == "passed"
+                    and empty_streams
+                    and (result["stdout"] or result["stderr"])
+                ):
+                    result.update(
+                        status="failed",
+                        error="Compiler output violates the empty-stream contract",
+                    )
+                    _write_json(
+                        Path(result["compiledPath"]).parent / "evidence.json", result
+                    )
                 report["records"].append(result)
                 if result["status"] != "passed":
                     report["failures"].append(result["entryPoint"])

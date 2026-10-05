@@ -10,7 +10,7 @@ import pytest
 from tools import compile_artifact_bundle as bundles
 
 
-def _fixture(tmp_path):
+def _fixture(tmp_path, *, artifact_contract=None):
     sources = {}
     entries = []
     for name in ("first", "second"):
@@ -29,7 +29,10 @@ def _fixture(tmp_path):
         json.dumps(
             {
                 "target": "metal",
-                "artifactContract": {"artifactCount": len(entries)},
+                "artifactContract": {
+                    "artifactCount": len(entries),
+                    **(artifact_contract or {}),
+                },
                 "entries": entries,
             }
         ),
@@ -53,8 +56,14 @@ def _command(
     ]
 
 
-def test_bundle_compiles_complete_shards_and_retains_evidence(tmp_path):
-    contract, root, _ = _fixture(tmp_path)
+@pytest.mark.parametrize("required_empty_streams", (False, True))
+def test_bundle_compiles_complete_shards_and_retains_evidence(
+    tmp_path, required_empty_streams
+):
+    contract, root, _ = _fixture(
+        tmp_path,
+        artifact_contract={"requiresEmptyCompilerStreams": required_empty_streams},
+    )
     result = bundles.compile_bundle(root, contract, tmp_path / "compiled", _command())
     assert result["status"] == "passed"
     assert result["expectedCount"] == len(result["records"]) == 2
@@ -69,6 +78,51 @@ def test_bundle_compiles_complete_shards_and_retains_evidence(tmp_path):
             hashlib.sha256(output.read_bytes()).hexdigest() == record["compiledSha256"]
         )
         assert json.loads((output.parent / "evidence.json").read_text()) == record
+
+
+@pytest.mark.parametrize("required", (False, True))
+@pytest.mark.parametrize("stream", ("stdout", "stderr"))
+def test_bundle_preserves_empty_compiler_stream_contract(tmp_path, required, stream):
+    contract, root, _ = _fixture(
+        tmp_path, artifact_contract={"requiresEmptyCompilerStreams": required}
+    )
+    result = bundles.compile_bundle(
+        root,
+        contract,
+        tmp_path / "compiled",
+        _command(
+            f"Path(sys.argv[2]).write_bytes(b'compiled'); sys.{stream}.write('diagnostic')"
+        ),
+    )
+    assert result["status"] == ("failed" if required else "passed")
+    assert result["failures"] == (["first", "second"] if required else [])
+    for record in result["records"]:
+        assert record[stream] == "diagnostic"
+        assert record["returncode"] == 0
+        assert (
+            json.loads(
+                (Path(record["compiledPath"]).parent / "evidence.json").read_text()
+            )
+            == record
+        )
+
+
+@pytest.mark.parametrize("policy", (1, None, "true"))
+def test_bundle_rejects_invalid_stream_policy_before_compilation(
+    tmp_path, monkeypatch, policy
+):
+    contract, root, _ = _fixture(
+        tmp_path, artifact_contract={"requiresEmptyCompilerStreams": policy}
+    )
+    monkeypatch.setattr(
+        bundles,
+        "_compile",
+        lambda *args: pytest.fail("Invalid stream policy reached compiler"),
+    )
+    result = bundles.compile_bundle(root, contract, tmp_path / "compiled", _command())
+    assert result["status"] == "failed"
+    assert result["error"] == "Compiler stream policy must be Boolean"
+    assert result["records"] == []
 
 
 @pytest.mark.parametrize(

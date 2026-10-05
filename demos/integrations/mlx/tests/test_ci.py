@@ -68,7 +68,7 @@ def test_project_demo_queues_each_job_and_matrix_leg_independently():
     coverage = _load_ci_coverage_module()
     assert not coverage.nested_yaml_section(workflow, "concurrency", 0)
     jobs = coverage.workflow_job_names(workflow)
-    assert len(jobs) == 35
+    assert len(jobs) == 36
     groups = set()
     for name in jobs:
         job = _workflow_job_section(workflow, name)
@@ -2357,7 +2357,8 @@ def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
 
 
 @pytest.mark.parametrize(
-    "family,artifact_count", [("binary", 4122), ("reduce", 2396), ("copy", 2496)]
+    "family,artifact_count",
+    [("binary", 4122), ("reduce", 2396), ("copy", 2496), ("quantized", 2052)],
 )
 def test_metal_report_describes_split_ci(family, artifact_count):
     gaps = json.loads((ROOT / "demos/integrations/mlx/expected-gaps.json").read_text())
@@ -2829,7 +2830,7 @@ def test_mlx_project_porting_workflow_runs_copy_complete_directx_proof():
     )
 
 
-@pytest.mark.parametrize("family", ("reduce", "copy"))
+@pytest.mark.parametrize("family", ("reduce", "copy", "quantized"))
 def test_mlx_project_porting_workflow_runs_complete_metal_proof(family):
     workflow = _workflow_texts()["demo-project-testing.yml"]
     jobs = yaml.safe_load(workflow)["jobs"]
@@ -2845,76 +2846,29 @@ def test_mlx_project_porting_workflow_runs_complete_metal_proof(family):
 
     # Every family requires the same complete source/consumer policy above.
     for suffix in ("metal-sources", "complete-metal-roundtrip"):
-        assert jobs[f"mlx-{family}-{suffix}"] == family_job(
-            jobs[f"mlx-binary-{suffix}"]
-        )
+        expected = family_job(jobs[f"mlx-binary-{suffix}"])
+        if family == "quantized":
+            for step in expected["steps"]:
+                command = step.get("run", "")
+                if "exports_native_compilation_bundle" in command:
+                    selector = (
+                        "demos/integrations/mlx/tests/kernels/"
+                        "test_quantized_complete_metal_roundtrip.py::"
+                    )
+                    step["run"] = command.replace(
+                        selector,
+                        selector
+                        + "test_current_mlx_quantized_metal_discovery_matches_contract "
+                        + selector,
+                    )
+                elif "compile_artifact_bundle.py" in command:
+                    step["run"] = command.replace(
+                        '"metal", "-Werror"', '"metal", "-std=metal3.1", "-Werror"'
+                    )
+        assert jobs[f"mlx-{family}-{suffix}"] == expected
     _assert_workflow_triggers(
         workflow,
         f"demos/integrations/mlx/tests/kernels/test_{family}_complete_metal_roundtrip.py",
-    )
-
-
-def test_mlx_project_porting_workflow_runs_quantized_complete_metal_proof():
-    mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "demos/integrations/mlx/tests/kernels/test_quantized_complete_metal_roundtrip.py"
-
-    quantized_metal_job = _workflow_job_section(
-        mlx_porting,
-        "mlx-quantized-complete-metal-roundtrip",
-    )
-    assert (
-        "name: MLX complete quantized Metal round-trip "
-        "(shard ${{ matrix.shard_index }} of 24)" in quantized_metal_job
-    )
-    assert "if: github.event_name != 'schedule'" in quantized_metal_job
-    assert "runs-on: macOS-latest" in quantized_metal_job
-    assert "timeout-minutes: 180" in quantized_metal_job
-    assert "fail-fast: false" in quantized_metal_job
-    assert _matrix_values(quantized_metal_job, "shard_index") == {
-        str(index) for index in range(24)
-    }
-    assert 'python-version: "3.12"' in quantized_metal_job
-    assert "python -m pip install -e . pytest-xdist" in quantized_metal_job
-    assert "persist-credentials: false" in quantized_metal_job
-    assert "continue-on-error" not in quantized_metal_job
-    assert "xcrun --sdk macosx metal --version" in quantized_metal_job
-    assert "xcodebuild -downloadComponent MetalToolchain" in quantized_metal_job
-    assert "Checkout current MLX quantized corpus" in quantized_metal_job
-    assert "config core.autocrlf false" in quantized_metal_job
-    assert "sparse-checkout init --cone" in quantized_metal_job
-    assert "sparse-checkout set mlx/backend/metal/kernels" in quantized_metal_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in quantized_metal_job
-
-    quantized_metal_step = ci_coverage.workflow_step_section(
-        quantized_metal_job,
-        "Prove current MLX complete quantized family Metal round-trips",
-    )
-    assert "if: runner.os" not in quantized_metal_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in quantized_metal_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_QUANTIZED_METAL_ROUNDTRIP: "1"' in quantized_metal_step
-    assert (
-        "CROSTL_MLX_QUANTIZED_METAL_SHARD_INDEX: ${{ matrix.shard_index }}"
-        in quantized_metal_step
-    )
-    assert 'CROSTL_MLX_QUANTIZED_METAL_SHARD_COUNT: "24"' in quantized_metal_step
-    assert (
-        f"{test_path}::test_current_mlx_quantized_metal_discovery_matches_contract"
-        in quantized_metal_step
-    )
-    assert (
-        f"{test_path}::test_current_mlx_quantized_family_roundtrips_through_metal"
-        in quantized_metal_step
-    )
-    assert "-n auto" in quantized_metal_step
-    assert "-k" not in quantized_metal_step
-    _assert_workflow_triggers(mlx_porting, test_path)
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX complete quantized family Metal round-trips" not in (
-        matrix_job
     )
 
 

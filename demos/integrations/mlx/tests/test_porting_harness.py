@@ -16635,18 +16635,29 @@ def test_quantized_metal_roundtrip_evidence_records_complete_family():
         "independent_air_byte_identity": True,
         "native_compiler_streams_empty": True,
     }
+    assert status["translation_validation"] == {
+        "platform": "ubuntu-24.04",
+        "status": "required-on-ci",
+        "ci_shard_count": 24,
+        "shard_entry_counts": [86] * 12 + [85] * 12,
+        "artifact_count": 2052,
+        "discovery_test": (
+            "demos/integrations/mlx/tests/kernels/test_quantized_complete_metal_roundtrip.py::test_current_mlx_quantized_metal_discovery_matches_contract"
+        ),
+        "test": (
+            "demos/integrations/mlx/tests/kernels/test_quantized_complete_metal_roundtrip.py::test_current_mlx_quantized_family_exports_native_compilation_bundle"
+        ),
+    }
     assert status["native_validation"] == {
         "platform": "macos-latest",
         "compiler": "xcrun -sdk macosx metal -std=metal3.1 -Werror -c",
         "source_warning_exemption": None,
         "status": "required-on-ci",
-        "ci_shard_count": 24,
-        "shard_entry_counts": [86] * 12 + [85] * 12,
+        "ci_job_count": 1,
+        "bundle_compiler": "tools/compile_artifact_bundle.py",
         "compiled_artifact_count": 2052,
         "all_air_artifacts_nonempty": True,
-        "discovery_test": (
-            "demos/integrations/mlx/tests/kernels/test_quantized_complete_metal_roundtrip.py::test_current_mlx_quantized_metal_discovery_matches_contract"
-        ),
+        "requires_empty_compiler_streams": True,
         "test": (
             "demos/integrations/mlx/tests/kernels/test_quantized_complete_metal_roundtrip.py::test_current_mlx_quantized_family_roundtrips_through_metal"
         ),

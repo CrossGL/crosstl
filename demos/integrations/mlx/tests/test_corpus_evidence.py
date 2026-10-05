@@ -118,7 +118,7 @@ def test_compiler_retains_launch_error_and_reraises(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "family,target",
     [(name, "directx") for name in ("unary", "binary", "copy", "reduce")]
-    + [(name, "metal") for name in ("binary", "reduce", "copy")],
+    + [(name, "metal") for name in ("binary", "reduce", "copy", "quantized")],
 )
 def test_corpus_retains_report_before_translation_assertions(
     family, target, tmp_path, monkeypatch
@@ -162,7 +162,7 @@ def test_corpus_retains_report_before_translation_assertions(
 @pytest.mark.parametrize(
     "damage", (None, "translation", "manifest", "entry_point", "resources")
 )
-@pytest.mark.parametrize("family", ("binary", "reduce", "copy"))
+@pytest.mark.parametrize("family", ("binary", "reduce", "copy", "quantized"))
 def test_metal_bundle_export_requires_translation_and_host_interface(
     family, damage, tmp_path, monkeypatch
 ):
@@ -177,6 +177,8 @@ def test_metal_bundle_export_requires_translation_and_host_interface(
         )
     elif family == "copy":
         resources = module.COPY_METAL_RESOURCES_BY_ENTRY[workload.entry_point]
+    elif family == "quantized":
+        resources = module.QUANTIZED_METAL_RESOURCE_CONTRACTS[workload.resources_sha256]
     else:
         resources = module._resources(
             module.EXPECTED_SHAPE_CONTRACTS[workload.shape]["templateName"],
@@ -214,7 +216,7 @@ def test_metal_bundle_export_requires_translation_and_host_interface(
 
     def translate(*args, **kwargs):
         assert kwargs == (
-            {"defer_native_compilation": True} if family in {"reduce", "copy"} else {}
+            {"defer_native_compilation": True} if family != "binary" else {}
         )
         calls.append("translation")
         assert damage != "translation"
@@ -248,7 +250,7 @@ def test_metal_bundle_export_requires_translation_and_host_interface(
 
 
 @pytest.mark.parametrize("mode", ("native", "source"))
-@pytest.mark.parametrize("family", ("binary", "reduce", "copy"))
+@pytest.mark.parametrize("family", ("binary", "reduce", "copy", "quantized"))
 def test_metal_required_source_cannot_skip(family, mode, monkeypatch):
     module = importlib.import_module(
         f"demos.integrations.mlx.tests.kernels.test_{family}_complete_metal_roundtrip"

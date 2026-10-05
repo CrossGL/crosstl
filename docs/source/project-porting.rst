@@ -2314,10 +2314,16 @@ typed textures are not rewritten. Side-effecting compound-assignment targets
 and shadowed bitcast intrinsics produce diagnostics rather than ambiguous code.
 
 This lowering avoids typed ``float16_t`` resource loads, which can quiet
-signaling NaNs on the pinned Windows software device. Required generated copy,
-update, constant-reference and exhaustive payload tests run beside the
-handwritten ABI controls. Compiler inspection is not native proof; issue #2066
-remains open until the required Windows checks establish exact transport.
+signaling NaNs on the pinned Windows runtime. The required Windows storage gate
+passes with the integer representation. An independent readback audit verifies
+49 generated cases: 19 copy forms, eight buffer forms, eight exhaustive-test
+dispatches covering all 65,536 binary16 words in two storage forms, six
+arithmetic/update cases and eight constant-reference payloads. It checks guards,
+offset-allocation bytes, freshly regenerated shader
+identities and compiled-module identities. Handwritten ABI controls remain
+separate from this generated-code evidence. This establishes exact transport for
+the tested resource forms, not numerical parity for arbitrary half arithmetic or
+complete host-runtime integration.
 
 OpenGL's widened half lowering continues to expose float32 physical storage.
 A binary16 payload cannot bind that storage. Conversion tests use the reported
