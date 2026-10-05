@@ -1131,6 +1131,13 @@ construction in all five units with `project.translate.directx-bfloat16-unsuppor
 for `bfloat16vec2`, under [#1488](https://github.com/CrossGL/crosstl/issues/1488).
 Selected-entry contracts and this whole-file boundary are separate coverage.
 
+The five-file configuration targeting Metal at `9c3d3557` translates `arange`,
+`random`, `rope` and `ternary`; all four generated files compile with warnings
+treated as errors. `binary_two` still rejects the standard-array value returned
+by `DivMod::operator()` ([#2093](https://github.com/CrossGL/crosstl/issues/2093)).
+This is separate from constructor bitcast typing and does not establish native
+execution of these complete files or full-tree parity.
+
 The current-pin gated-delta backward kernels still need OpenGL floating-point
 atomic lowering ([#1986](https://github.com/CrossGL/crosstl/issues/1986)). Struct
 selection now preserves anonymous type-parameter defaults and evaluates supported
@@ -2083,8 +2090,11 @@ including every integer midpoint and adjacent value across the representable
 exponents, limits, single evaluation and explicit float32-mediated controls.
 Original and generated Metal results are verified independently; required
 Windows execution remains separate from compiler acceptance. Nested bfloat
-constructors in Metal bitcasts have a separate
-type-inference rejection tracked in [#2090](https://github.com/CrossGL/crosstl/issues/2090).
+constructors now retain their result types before Metal bitcast validation
+([#2090](https://github.com/CrossGL/crosstl/issues/2090)). Generic native controls
+cover aliases, scalar and vector payload identity, direct wide-integer rounding
+and saved intermediate source. Unknown or unequal storage widths remain errors.
+These reduced controls do not establish full-corpus or host-runtime parity.
 
 The current-pin native copy gate separately tests 11 float32 layouts and the
 contiguous and strided half-copy entries at

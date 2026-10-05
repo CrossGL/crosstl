@@ -93,6 +93,13 @@ Original Metal and generated output must match an independent integer reference;
 the corresponding DirectX execution is required on Windows. Compiler-only
 checks remain distinct from these numerical results. No platform job is added.
 
+The existing Metal bfloat-vector job also checks nested constructor bitcasts.
+It preserves all 65,536 payloads in scalar and two-, three- and four-lane values,
+including aliases and single evaluation. Only defined lanes are inspected for
+padded three-lane vectors. Separate conversion controls compare float32 and
+wide-integer rounding with an independent reference. Unchanged source and
+generated Metal must agree; unknown and unequal bitcast widths remain errors.
+
 The Metal runtime reuses its unchanged host helper within each Python test
 process. Source, compiler options, toolchain, SDK and architecture are part of
 the cache identity; missing or modified executables are rebuilt. The native

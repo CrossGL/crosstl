@@ -9329,9 +9329,15 @@ class MetalCodeGen:
                     return member_type
             return None
         if isinstance(expr, ConstructorNode):
-            return infer_enum_constructor_type(
+            aggregate_type = infer_enum_constructor_type(
                 self, expr
             ) or infer_struct_constructor_type(self, expr)
+            if aggregate_type is not None:
+                return aggregate_type
+            constructor_type = getattr(expr, "constructor_type", None)
+            if self.is_builtin_value_constructor_type(constructor_type):
+                return self.type_name_string(constructor_type)
+            return None
         if isinstance(expr, MatchNode):
             return infer_match_expression_result_type(self, expr)
         if isinstance(expr, WaveOpNode):
@@ -9474,6 +9480,8 @@ class MetalCodeGen:
                 return self.image_load_result_type(args[0])
             if func_name == "subpassLoad":
                 return "vec4"
+            if self.is_builtin_value_constructor_type(func_name):
+                return str(func_name)
             if func_name in {
                 "float",
                 "half",
@@ -11408,8 +11416,10 @@ class MetalCodeGen:
     def metal_explicit_bitcast_type_info(self, value_type):
         """Return the exact native scalar/vector storage width for ``as_type``."""
         source_name = self.type_name_string(value_type)
+        if not source_name:
+            return None
         raw_type = self.resolve_metal_type_alias(source_name)
-        if self.metal_explicit_packed_vector_type(raw_type) is not None:
+        if not raw_type or self.metal_explicit_packed_vector_type(raw_type) is not None:
             return None
         mapped_type = self.metal_native_narrow_bitcast_storage_type(
             raw_type

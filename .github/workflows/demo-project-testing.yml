@@ -594,6 +594,7 @@ jobs:
               --basetemp=.mlx-metal-host/bfloat-vectors/pytest \
               --junitxml=.mlx-metal-host/bfloat-vectors/results.xml \
               tests/test_translator/test_metal_bfloat_vectors.py \
+              tests/test_translator/test_metal_constructor_bitcasts.py \
               2>&1 | tee .mlx-metal-host/bfloat-vectors.log
       - name: Validate half conversion reference
         env:
