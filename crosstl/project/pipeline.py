@@ -1827,7 +1827,13 @@ REPORT_ARTIFACT_INCLUDE_DEPENDENCY_PROCESSING_FIELDS = frozenset(
 )
 REPORT_HASH_FIELDS = frozenset(("algorithm", "value"))
 REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(
-    ("pipeline", "intermediate", "dispatchRegion", "dispatchRegionProgram")
+    (
+        "pipeline",
+        "intermediate",
+        "dispatchRegion",
+        "dispatchRegionProgram",
+        "binary32DivisionProfile",
+    )
 )
 REPORT_ARTIFACT_ENTRY_POINT_FIELDS = frozenset(("source", "target", "stage"))
 REPORT_ARTIFACT_EXECUTION_FIELDS = frozenset(
@@ -28401,6 +28407,15 @@ def _translate_project_impl(
                 directx_widen_native_float16 = None
                 dispatch_region = None
                 try:
+                    division_profile = source_options.get("binary32_division_profile")
+                    if unit.source_backend == "metal" and division_profile is not None:
+                        if division_profile not in ("rne-gradual", "rne-flush"):
+                            raise ValueError(
+                                "binary32_division_profile must be 'rne-gradual', 'rne-flush', or None"
+                            )
+                        artifact["provenance"][
+                            "binary32DivisionProfile"
+                        ] = division_profile
                     dispatch_region = _project_dispatch_region(target, source_options)
                     if dispatch_region is not None:
                         artifact["provenance"][
@@ -46367,6 +46382,13 @@ def _provenance_contract_reasons(
         if require_closed_fields
         else []
     )
+    if "binary32DivisionProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(f"{prefix}.binary32DivisionProfile requires a Metal source")
+        if provenance["binary32DivisionProfile"] not in ("rne-gradual", "rne-flush"):
+            reasons.append(
+                f"{prefix}.binary32DivisionProfile must be rne-gradual or rne-flush"
+            )
     if "dispatchRegion" in provenance:
         try:
             region = DispatchRegion.from_json(provenance["dispatchRegion"])
@@ -46398,6 +46420,15 @@ def _provenance_contract_reasons(
         options = _source_options_for_unit(
             config, artifact["sourceBackend"], artifact["source"], artifact["target"]
         )
+        expected_division_profile = (
+            options.get("binary32_division_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("binary32DivisionProfile") != expected_division_profile:
+            reasons.append(
+                f"{prefix}.binary32DivisionProfile must match the resolved project source options"
+            )
         if provenance.get("dispatchRegion") != options.get(
             DISPATCH_REGION_SOURCE_OPTION
         ):

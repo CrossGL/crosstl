@@ -70,7 +70,7 @@ def test_ci_requires_pinned_trigonometry(job_id):
     ).read_text()
     step = (
         ci_coverage.workflow_job_text(text, job_id)
-        .split("      - name: Validate pinned unary fused arithmetic\n", 1)[1]
+        .split("      - name: Validate pinned unary arithmetic\n", 1)[1]
         .split("      - name:", 1)[0]
     )
     assert "if:" not in step and "continue-on-error" not in step

@@ -77,6 +77,14 @@ Each native job keeps its source pin, numerical comparisons, guards, bounded exe
 and retained evidence. Moving a compiler-only job must not disable an execution
 gate or be presented as proof of runtime parity.
 
+Binary32 division source profiles run once per native target inside the existing
+arithmetic step. Exact checks cover source operators, precise builtins, compound
+writeback, narrow intermediates and guards. The project's Sigmoid boundary
+regression stays under `demos/integrations/mlx/tests` and runs in the existing
+pinned unary step. Neither adds a runner or duplicates the compiler-only corpus.
+The selected Sigmoid boundary proof is separate from the still-failing complete
+OpenGL sweep; that remaining exponential midpoint is not accepted by tolerance.
+
 The existing Windows project job also checks native CBV/SRV/UAV allocation
 ranges, shared read-only and disjoint writable views, and ordered allocation
 reuse. The check is bounded and retains shader/module identities, physical

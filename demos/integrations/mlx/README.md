@@ -149,6 +149,15 @@ subnormal division results
 stage and division-only probes retain these failures. This does not establish
 Windows Sigmoid parity or resolve the separate NaN policy.
 
+With the explicit `binary32_division_profile = "rne-flush"` source option,
+the current-pin OpenGL sweep fixes all three division differences. One of
+65,282 inputs still differs at the exponential midpoint in #2085; guards
+remain intact. The profile is recorded in report and runtime-artifact provenance.
+The existing native project jobs also check 18 exact bfloat Sigmoid boundary
+results and eight trailing guards, including the three previously failing
+inputs and their neighbors. These selected checks do not replace the full
+sweep or establish full MLX-suite parity. No upstream kernel is changed.
+
 Mixed integer-lvalue compound assignments retain both the integer-to-bfloat
 conversion and the rounded arithmetic result before integer writeback
 ([crosstl#2083](https://github.com/CrossGL/crosstl/issues/2083)). Forty-eight

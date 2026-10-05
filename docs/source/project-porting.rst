@@ -1027,12 +1027,42 @@ includes input and expected words, readbacks, generated source, native modules
 and runtime diagnostics. The macOS control also executes unchanged Metal
 division with ``-std=metal3.1 -fno-fast-math`` against the flush policy.
 
-This helper does not yet replace source division operators or reciprocal calls,
-nor select a repository's source execution policy. That requires explicit
-source configuration, expression lowering and provenance checks. The source
-control establishes behavior only for its tested device and compiler settings;
-it is not a universal Metal arithmetic contract. The numerical portability
-work in `issue #2086 <https://github.com/CrossGL/crosstl/issues/2086>`_ remains open.
+Select ``source_options={"binary32_division_profile": "rne-flush"}`` in the
+single-file API, or use the project configuration:
+
+.. code-block:: toml
+
+   [project.source_options.metal]
+   binary32_division_profile = "rne-flush"
+
+``rne-gradual`` preserves subnormal operands and results; ``rne-flush`` flushes
+them before rounding. The default is unset. Resolved binary32 division,
+reciprocal expressions such as ``1.0f / x``, and default/precise ``divide`` calls
+use the selected helper. Scalar and vector operands are evaluated once; bfloat
+results retain their narrowing before later arithmetic. User-defined operators,
+explicit fast builtins and other arithmetic types keep their separate rules.
+Compound division supports plain local storage and direct buffer elements;
+effectful operands, unsupported reference destinations and global constant
+division produce a structured diagnostic instead of silently changing the
+selected policy. Explicitly sequence effectful compound operands first.
+
+Project reports and runtime manifests retain ``binary32DivisionProfile`` in
+artifact provenance. Report validation compares it with the resolved source,
+target and path-specific configuration. Saved CrossGL includes the arithmetic
+implementation, so later target generation does not need the source option.
+Native source-expression checks cover aliases, scalar/vector operations,
+members, compound results, evaluation counts and narrow intermediates. Finite
+results and guards are bit-exact; NaNs are compared by classification only after
+the separate bfloat conversion and in the original Metal control.
+
+The source control establishes behavior only for its tested device and compiler
+settings, not a universal Metal contract. The pinned project demo tests Sigmoid
+division boundaries on all three native targets. A full current-pin OpenGL
+sweep now resolves the three subnormal-division differences but still has one
+exponential midpoint difference tracked in
+`issue #2085 <https://github.com/CrossGL/crosstl/issues/2085>`_. This is not complete
+Sigmoid or upstream-suite parity. The remaining source-profile work is tracked
+in `issue #2086 <https://github.com/CrossGL/crosstl/issues/2086>`_.
 
 The legacy MLX copy reference at
 ``846d176227a0ac13d2667e58d2bb68b322109ab0`` proves all 2,496 discovered entries

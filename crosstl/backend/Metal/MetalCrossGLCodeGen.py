@@ -7,6 +7,7 @@ from ...translator.cooperative_matrix import (
     get_cooperative_matrix_fragment_mapping,
     has_cooperative_matrix_fragment_mapping,
 )
+from ...translator.division_math import binary32_division_support
 from ...translator.fused_math import FMA_HELPER_KEYS, binary32_fma_support
 from ...translator.precise_trig import TRIG_HELPER_KEYS, binary32_trig_support
 from ...translator.standard_constants import standard_math_constant
@@ -133,6 +134,23 @@ class MetalPreciseMathLoweringError(ValueError):
         self.source_location = source_location
         super().__init__(
             f"Cannot preserve Metal precise::{operation} for "
+            f"'{operand_type or '<unknown>'}': {reason}"
+        )
+
+
+class MetalDivisionProfileError(ValueError):
+    """Raised when a selected division profile cannot be applied faithfully."""
+
+    project_diagnostic_code = "project.translate.metal-division-profile-unsupported"
+    missing_capabilities = ("metal.division-profile-lowering",)
+
+    def __init__(self, profile, operand_type, reason, source_location=None):
+        self.profile = profile
+        self.operand_type = operand_type
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(
+            f"Cannot apply Metal binary32 division profile '{profile}' to "
             f"'{operand_type or '<unknown>'}': {reason}"
         )
 
@@ -937,6 +955,7 @@ class MetalToCrossGLConverter:
         "cosh",
         "cospi",
         "distance",
+        "divide",
         "dot",
         "exp",
         "exp2",
@@ -998,6 +1017,7 @@ class MetalToCrossGLConverter:
         "cosh": ("same", "floating", 1),
         "cospi": ("same", "floating", 1),
         "distance": ("element", "floating_vector", 2),
+        "divide": ("same", "floating", 2),
         "dot": ("element", "floating_vector", 2),
         "exp": ("same", "floating", 1),
         "exp2": ("same", "floating", 1),
@@ -1209,12 +1229,18 @@ class MetalToCrossGLConverter:
         preserve_pointer_pointee_const=True,
         resolve_standard_remove_cv_aliases=True,
         binary32_fma_profile=None,
+        binary32_division_profile=None,
     ):
         if binary32_fma_profile not in (None, "rne-gradual", "rne-flush"):
             raise ValueError(
                 "binary32_fma_profile must be 'rne-gradual', 'rne-flush', or None"
             )
         self.binary32_fma_profile = binary32_fma_profile
+        if binary32_division_profile not in (None, "rne-gradual", "rne-flush"):
+            raise ValueError(
+                "binary32_division_profile must be 'rne-gradual', 'rne-flush', or None"
+            )
+        self.binary32_division_profile = binary32_division_profile
         if not isinstance(preserve_pointer_pointee_const, bool):
             raise ValueError("preserve_pointer_pointee_const must be a boolean")
         self.preserve_pointer_pointee_const = preserve_pointer_pointee_const
@@ -1618,6 +1644,8 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_atan_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
+        self.required_metal_division_widths = set()
+        self.metal_division_assignments = {}
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
         self.cooperative_matrix_fragment_type_contracts = {}
@@ -2766,6 +2794,8 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_atan_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
+        self.required_metal_division_widths = set()
+        self.metal_division_assignments = {}
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
         self.cooperative_matrix_fragment_type_contracts = {}
@@ -3204,7 +3234,8 @@ class MetalToCrossGLConverter:
         )
         code = code.replace(
             precise_math_support_marker,
-            self.generate_metal_fma_support_code(indent=1)
+            self.generate_metal_division_support_code(indent=1)
+            + self.generate_metal_fma_support_code(indent=1)
             + self.generate_metal_precise_math_support_code(indent=1),
             1,
         )
@@ -10437,6 +10468,12 @@ class MetalToCrossGLConverter:
         return f"{helper}({vector}, {index})"
 
     def generate_assignment(self, node, is_main):
+        if self.binary32_division_profile is not None and node.operator == "/=":
+            profiled_assignment = self.generate_profiled_metal_division_assignment(
+                node, is_main
+            )
+            if profiled_assignment is not None:
+                return profiled_assignment
         fragment_assignment = self.generate_cooperative_matrix_fragment_assignment(
             node, is_main
         )
@@ -10870,6 +10907,10 @@ class MetalToCrossGLConverter:
             )
             if wide_vector_binary is not None:
                 return wide_vector_binary
+            if self.binary32_division_profile is not None and expr.op == "/":
+                profiled = self.generate_profiled_metal_division(expr, is_main)
+                if profiled is not None:
+                    return profiled
             conversion_plan = self.metal_builtin_lowered_conversion_plan(
                 expr.op,
                 (expr.left, expr.right),
@@ -11049,6 +11090,29 @@ class MetalToCrossGLConverter:
             fused_call = self.generate_metal_fma_call(expr, is_main)
             if fused_call is not None:
                 return fused_call
+            if self.resolve_metal_math_builtin_name(expr.name, expr.args) == "divide":
+                result_type = self.metal_math_builtin_result_type(expr)
+                left, right = (
+                    self.generate_expression(arg, is_main) for arg in expr.args
+                )
+                if self.metal_math_builtin_namespace_mode(expr.name) != "fast":
+                    if (
+                        self.binary32_division_profile is not None
+                        and self.current_function is None
+                        and self.metal_profiled_division_type(result_type) is not None
+                    ):
+                        raise MetalDivisionProfileError(
+                            self.binary32_division_profile,
+                            result_type,
+                            "global constant division cannot call a runtime arithmetic helper",
+                            getattr(expr, "source_location", None),
+                        )
+                    profiled = self.render_profiled_metal_division(
+                        left, right, result_type
+                    )
+                    if profiled is not None:
+                        return profiled
+                return f"(({left}) / ({right}))"
             if self.resolve_metal_math_builtin_name(expr.name, expr.args) == "copysign":
                 self.metal_math_builtin_result_type(expr)
             materialized_name = self.transported_metal_source_overload_name(
@@ -13977,6 +14041,200 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_acos_widths.add(width)
         return self.metal_precise_acos_helper_name(width)
 
+    def metal_profiled_division_type(self, result_type, source_location=None):
+        info = self.metal_math_builtin_type_info(result_type)
+        if info is None or (
+            info["category"] == "object"
+            and self.normalized_metal_type(result_type) not in self.struct_member_types
+        ):
+            raise MetalDivisionProfileError(
+                self.binary32_division_profile,
+                result_type,
+                "the computation type is unresolved; materialize the source type "
+                "before selecting a division profile",
+                source_location,
+            )
+        element = self.normalized_metal_type(
+            self.resolve_type_alias(info["element_type"])
+        )
+        if element != "float" and info["category"] != "bfloat":
+            return None
+        if info["width"] not in {1, 2, 3, 4}:
+            raise MetalDivisionProfileError(
+                self.binary32_division_profile,
+                result_type,
+                "the resolved division width must be between one and four lanes",
+                source_location,
+            )
+        return info
+
+    def render_profiled_metal_division(
+        self, left, right, result_type, source_location=None
+    ):
+        if self.binary32_division_profile is None:
+            return None
+        info = self.metal_profiled_division_type(result_type, source_location)
+        if info is None:
+            return None
+        width = info["width"]
+        self.required_metal_division_widths.add(width)
+        mapped = "float" if width == 1 else f"vec{width}"
+        call = f"{self.metal_division_helper_name(width)}({mapped}({left}), {mapped}({right}))"
+        if info["category"] == "bfloat":
+            call = f"{self.map_type(result_type)}({call})"
+        return call
+
+    def generate_profiled_metal_division(self, expression, is_main=False):
+        result_type = self.metal_binary_expression_type(expression)
+        info = self.metal_profiled_division_type(
+            result_type, getattr(expression, "source_location", None)
+        )
+        if info is None:
+            return None
+        if self.current_function is None:
+            raise MetalDivisionProfileError(
+                self.binary32_division_profile,
+                result_type,
+                "global constant division cannot call a runtime arithmetic helper; "
+                "provide the explicitly rounded constant or move the operation into a function",
+                getattr(expression, "source_location", None),
+            )
+        arguments = (expression.left, expression.right)
+        conversion = self.metal_builtin_lowered_conversion_plan("/", arguments)
+        types = [self.expression_metal_type(argument) for argument in arguments]
+        if conversion is not None:
+            types = conversion[1]
+        narrow = self.metal_bfloat_arithmetic_plan("/", *types)
+        rendered = []
+        for index, argument in enumerate(arguments):
+            value = self.generate_expression(argument, is_main)
+            if conversion is not None and conversion[0][index] is not None:
+                function = conversion[0][index]
+                name = self.sanitize_identifier(self.function_output_name(function))
+                value = f"{name}({value})"
+            if narrow is not None and narrow[1][index] is not None:
+                value = f"{self.map_type(narrow[1][index])}({value})"
+            rendered.append(value)
+        return self.render_profiled_metal_division(*rendered, result_type)
+
+    def metal_division_helper_name(self, width):
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            f"division-float{suffix}", f"__crossgl_metal_divide_float{suffix}"
+        )
+
+    def generate_profiled_metal_division_assignment(self, node, is_main):
+        result_type = self.metal_binary_expression_type(
+            BinaryOpNode(node.left, "/", node.right)
+        )
+        if self.wide_vector_type_info(result_type) is not None:
+            return None
+        info = self.metal_profiled_division_type(
+            result_type, getattr(node, "source_location", None)
+        )
+        if info is None:
+            return None
+        if not all(
+            self.discarded_expression_is_proven_side_effect_free(value)
+            for value in (node.left, node.right)
+        ):
+            raise MetalDivisionProfileError(
+                self.binary32_division_profile,
+                result_type,
+                "compound operands are not proven side-effect-free; explicitly sequence them before division",
+                getattr(node, "source_location", None),
+            )
+        if self.small_vector_index_info(node.left) is not None:
+            return None
+        target_type = self.map_type(
+            self.metal_source_overload_value_type(self.expression_metal_type(node.left))
+        )
+        computation_type = self.map_type(result_type)
+        right = f"{computation_type}({self.generate_expression(node.right, is_main)})"
+        resource = self.is_structured_buffer_element_access(node.left)
+        index_type = None
+        if resource:
+            index_type = self.map_type(self.expression_metal_type(node.left.index))
+            index_info = self.metal_scalar_arithmetic_type_info(
+                self.expression_metal_type(node.left.index)
+            )
+            if index_info is None or index_info[0] != "integer":
+                raise MetalDivisionProfileError(
+                    self.binary32_division_profile,
+                    result_type,
+                    "the buffer index type is unresolved",
+                )
+            arguments = [
+                self.generate_without_structured_buffer_index_lowering(
+                    node.left.array, is_main
+                ),
+                self.generate_expression(node.left.index, is_main),
+                right,
+            ]
+        else:
+            qualifiers = self.metal_addressable_storage_qualifiers(node.left)
+            if qualifiers is None or any(q != "thread" for q in qualifiers):
+                raise MetalDivisionProfileError(
+                    self.binary32_division_profile,
+                    result_type,
+                    "compound division requires writable thread storage or a direct buffer element",
+                    getattr(node, "source_location", None),
+                )
+            arguments = [self.generate_expression(node.left, is_main), right]
+        key = (target_type, result_type, index_type)
+        if key not in self.metal_division_assignments:
+            name = self.metal_precise_math_unique_helper_name(
+                ("division-assign", key), "__crossgl_metal_divide_assign"
+            )
+            expression = self.render_profiled_metal_division(
+                "value", "right", result_type
+            )
+            if resource:
+                parameters = f"device {target_type}* data, {index_type} index, {computation_type} right"
+                load = f"{target_type} value = data[index];"
+                store = "data[index] = updated;"
+            else:
+                parameters = f"inout {target_type} value, {computation_type} right"
+                load = ""
+                store = "value = updated;"
+            self.metal_division_assignments[key] = (
+                name,
+                f"@metal_static\n{target_type} {name}({parameters}) {{\n"
+                f"    {load}\n    {target_type} updated = {target_type}({expression});\n"
+                f"    {store}\n    return updated;\n}}\n",
+            )
+        return f"{self.metal_division_assignments[key][0]}({', '.join(arguments)})"
+
+    def generate_metal_division_support_code(self, indent=0):
+        if not self.required_metal_division_widths:
+            return ""
+        bits = self.metal_precise_math_unique_helper_name(
+            "division-bits", "__crossgl_divide_bits"
+        )
+        scalar = self.metal_division_helper_name(1)
+        flush = "true" if self.binary32_division_profile == "rne-flush" else "false"
+        code = binary32_division_support(bits)
+        code += (
+            f"@metal_static\nfloat {scalar}(float a, float b) {{\n"
+            f"    return asfloat({bits}(asuint(a), asuint(b), {flush}));\n"
+            "}\n"
+        )
+        for width in sorted(self.required_metal_division_widths - {1}):
+            arguments = ", ".join(
+                f"{scalar}(a.{lane}, b.{lane})" for lane in "xyzw"[:width]
+            )
+            code += (
+                f"@metal_static\nvec{width} {self.metal_division_helper_name(width)}"
+                f"(vec{width} a, vec{width} b) {{\n"
+                f"    return vec{width}({arguments});\n"
+                "}\n"
+            )
+        code += "".join(
+            body for _name, body in self.metal_division_assignments.values()
+        )
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
+
     def generate_metal_fma_call(self, expression, is_main=False):
         if (
             self.binary32_fma_profile is None
@@ -16670,10 +16928,20 @@ float {scalar}(float value) {{
 
         compound_operator = self.small_vector_index_compound_operator(operation)
         if compound_operator is not None:
+            expression = (
+                self.render_profiled_metal_division(
+                    f"{computation_type}(original)", "right", computation_type
+                )
+                if compound_operator == "/"
+                else None
+            )
+            expression = (
+                expression or f"{computation_type}(original) {compound_operator} right"
+            )
             return (
                 f"{element_type} original = {selected}; "
                 f"{computation_type} computed = "
-                f"{computation_type}(original) {compound_operator} right; "
+                f"{expression}; "
                 f"{element_type} updated = computed; "
                 f"{selected} = updated; return updated;"
             )
@@ -17025,9 +17293,13 @@ float {scalar}(float value) {{
             for lane in range(width):
                 left = f"left.lanes[{lane}]" if left_kind == "vector" else "left"
                 right = f"right.lanes[{lane}]" if right_kind == "vector" else "right"
-                code += (
-                    f"{body_pad}result.lanes[{lane}] = " f"{left} {operator} {right};\n"
+                expression = (
+                    self.render_profiled_metal_division(left, right, element_type)
+                    if operator == "/"
+                    else None
                 )
+                expression = expression or f"{left} {operator} {right}"
+                code += f"{body_pad}result.lanes[{lane}] = {expression};\n"
             code += f"{body_pad}return result;\n"
             code += f"{pad}}}\n\n"
 
@@ -17050,10 +17322,14 @@ float {scalar}(float value) {{
             )
             for lane in range(width):
                 right = f"right.lanes[{lane}]" if right_kind == "vector" else "right"
-                code += (
-                    f"{body_pad}value.lanes[{lane}] = value.lanes[{lane}] "
-                    f"{operator} {right};\n"
+                left = f"value.lanes[{lane}]"
+                expression = (
+                    self.render_profiled_metal_division(left, right, element_type)
+                    if operator == "/"
+                    else None
                 )
+                expression = expression or f"{left} {operator} {right}"
+                code += f"{body_pad}{left} = {expression};\n"
             code += f"{pad}}}\n\n"
         return code
 

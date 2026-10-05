@@ -22722,7 +22722,7 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
     )
     assert set(artifact["provenance"]) == (
         project_pipeline.REPORT_ARTIFACT_PROVENANCE_FIELDS
-        - {"dispatchRegion", "dispatchRegionProgram"}
+        - {"dispatchRegion", "dispatchRegionProgram", "binary32DivisionProfile"}
     )
     assert set(artifact["sourceRemap"]) == (
         project_pipeline.REPORT_ARTIFACT_SOURCE_REMAP_FIELDS

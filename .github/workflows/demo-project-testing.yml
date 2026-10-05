@@ -1443,6 +1443,7 @@ jobs:
               tests/test_translator/test_fused_math.py \
               tests/test_translator/test_metal_fma.py \
               tests/test_translator/test_division_math.py \
+              tests/test_translator/test_metal_division.py \
               2>&1 | tee .mlx-portable-host/fused-math.log
       - name: Checkout and prepare pinned upstream MLX
         run: |
@@ -1547,11 +1548,12 @@ jobs:
               --junitxml=.mlx-portable-host/attention-ds/results.xml \
               demos/integrations/mlx/tests/kernels/test_attention_ds_runtime.py \
               2>&1 | tee .mlx-portable-host/attention-ds.log
-      - name: Validate pinned unary fused arithmetic
+      - name: Validate pinned unary arithmetic
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_FMA: "1"
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_DIVISION: "1"
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_TRIG: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -1564,6 +1566,7 @@ jobs:
               --basetemp=.mlx-portable-host/unary-fma/pytest \
               --junitxml=.mlx-portable-host/unary-fma/results.xml \
               demos/integrations/mlx/tests/kernels/test_current_unary_fma.py \
+              demos/integrations/mlx/tests/kernels/test_current_unary_division.py \
               demos/integrations/mlx/tests/kernels/test_current_unary_trig.py \
               2>&1 | tee .mlx-portable-host/unary-fma.log
       - name: Validate pinned inverse hyperbolic cosine
@@ -3445,7 +3448,7 @@ jobs:
             --expected-unit-count 49 \
             --expected-entry-count 17832
 
-      - name: Validate pinned unary fused arithmetic
+      - name: Validate pinned unary arithmetic
         shell: bash
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream

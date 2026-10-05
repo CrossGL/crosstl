@@ -282,7 +282,14 @@ kernel void fused_control(device const uint* values [[buffer(0)]],
 
 
 def _dispatch(
-    tmp_path, target, generated, triples, output_count, entry=None, initial_output=None
+    tmp_path,
+    target,
+    generated,
+    triples,
+    output_count,
+    entry=None,
+    initial_output=None,
+    output_dtype="uint32",
 ):
     if initial_output is not None:
         assert len(initial_output) == output_count
@@ -303,6 +310,7 @@ def _dispatch(
         ("results", 1, initial_output, output_count),
     ):
         output = name == "results"
+        floating_output = output and output_dtype == "float32"
         buffers[name] = NativeRuntimeBufferBinding(
             name=name,
             binding=RuntimeResourceBinding(
@@ -310,12 +318,14 @@ def _dispatch(
                 kind="buffer",
                 set=0,
                 binding=slot,
-                type_name=("RW" if output else "") + "StructuredBuffer<uint>",
+                type_name=("RW" if output else "")
+                + f"StructuredBuffer<{'float' if floating_output else 'uint'}>",
                 access="read_write" if output else "read",
                 metadata={"scalarLayout": layouts[name]} if layouts else {},
             ),
             source="expectedOutput" if output else "input",
-            dtype="uint32",
+            dtype=output_dtype if output else "uint32",
+            encoding="ieee754-binary32" if floating_output else None,
             shape=(count,),
             value=data,
         )
