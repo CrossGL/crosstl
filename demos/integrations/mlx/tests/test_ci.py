@@ -167,6 +167,29 @@ def test_directx_corpus_retains_failure_evidence_without_additional_jobs(family)
     assert "retention-days: 14" in upload
 
 
+@pytest.mark.parametrize(
+    "target,platform", (("directx", "Direct3D"), ("opengl", "OpenGL"))
+)
+def test_softmax_native_evidence_is_retained_in_existing_project_job(target, platform):
+    job = _workflow_job_section(
+        _workflow_texts()["demo-project-testing.yml"], "mlx-metal-porting"
+    )
+    coverage = _load_ci_coverage_module()
+    step = coverage.workflow_step_section(
+        job, f"Prove pinned MLX Softmax {platform} native-loader execution"
+    )
+    assert 'CROSTL_KEEP_CORPUS_EVIDENCE: "1"' in step
+    assert f'CROSTL_REQUIRE_MLX_SOFTMAX_{target.upper()}_NATIVE_LOADER: "1"' in step
+    assert f"--junitxml=mlx-softmax-results/{target}.xml" in step
+    assert "python -m pytest -q -n auto" in step
+    assert "continue-on-error" not in step
+    upload = coverage.workflow_step_section(job, "Upload MLX project-porting reports")
+    assert "if: always()" in upload
+    assert "mlx-current-upstream/.crosstl-corpus-evidence" in upload
+    assert "mlx-softmax-results" in upload
+    assert "include-hidden-files: true" in upload
+
+
 @pytest.mark.parametrize("family", ("unary", "binary", "copy"))
 def test_directx_corpus_report_matches_compiler_runner(family):
     report = json.loads(

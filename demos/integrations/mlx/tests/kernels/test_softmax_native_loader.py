@@ -7,7 +7,6 @@ import os
 import shutil
 import struct
 import subprocess
-import tempfile
 import textwrap
 from pathlib import Path
 
@@ -30,6 +29,7 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from demos.integrations.mlx.tests.corpus_evidence import corpus_workspace, run_compiler
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -75,15 +75,15 @@ MLX_SOFTMAX_GUARDED_ARTIFACTS = {
     "directx": {
         32: {
             "sha256": (
-                "8b5540acc90669bc8b4a75985b42ee34c9e45258c63889f703f140b1330337ee"
+                "8dd346e61bc18a553119caa1b409487f512e520f87cad9678bcd936bfe10f4d8"
             ),
-            "sizeBytes": 4213,
+            "sizeBytes": 4343,
         },
         544: {
             "sha256": (
-                "1c20679115f29d981762165f7c9e1ecd57a641ceff376b2f8d13f33520857f05"
+                "0d3a924e407847c1cfc0825af8bbffeed69ea4558bc19160c53ea166d5715cc8"
             ),
-            "sizeBytes": 4784,
+            "sizeBytes": 4914,
         },
     },
     "opengl": {
@@ -103,12 +103,12 @@ MLX_SOFTMAX_GUARDED_ARTIFACTS = {
 }
 MLX_SOFTMAX_SOFTWARE_OPENGL_ARTIFACTS = {
     32: {
-        "sha256": "f69dad597cefc34f7908799aaf0ba2eac47a0dcdd91e5f2bf3d7247172fa84b9",
-        "sizeBytes": 5585,
+        "sha256": "c77ddf1ad3c364b6e1898232f7d4ce99e2d5f859cc515089368044eb80667573",
+        "sizeBytes": 5755,
     },
     544: {
-        "sha256": "eb195e15089f4e7bade380af55e8b7e167c4b89f80b2f25675eb71196a5468ce",
-        "sizeBytes": 7204,
+        "sha256": "f0db9cf9b930224322cdd4aa2a01d6c910c1fa34a479705bd7b41de9247916be",
+        "sizeBytes": 7374,
     },
 }
 REQUIRE_DIRECTX_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_SOFTMAX_DIRECTX_NATIVE_LOADER"
@@ -248,11 +248,9 @@ def _selected_project_config(
 def test_pinned_mlx_softmax_translates_to_guarded_dispatch_artifacts(target):
     mlx_root = _pinned_mlx_root()
     variants = _evaluated_variants()
-    with tempfile.TemporaryDirectory(
-        prefix=f".crosstl-softmax-{target}-dispatch-",
-        dir=mlx_root,
-    ) as temporary_directory:
-        work_dir = Path(temporary_directory)
+    with corpus_workspace(
+        mlx_root, family="softmax", target=target, entry_point=MLX_SOFTMAX_ENTRY
+    ) as work_dir:
         contract_path = work_dir / "softmax.dispatch.json"
         shutil.copyfile(MLX_SOFTMAX_DISPATCH_CONTRACT, contract_path)
         output_dir = work_dir / "out"
@@ -275,6 +273,8 @@ def test_pinned_mlx_softmax_translates_to_guarded_dispatch_artifacts(target):
             run_toolchains=True,
         )
         payload = report.to_json()
+        report_path = work_dir / "portability-report.json"
+        report.write_json(report_path)
 
         assert payload["summary"]["unitCount"] == 1
         assert payload["summary"]["translatedCount"] == 2
@@ -337,8 +337,6 @@ def test_pinned_mlx_softmax_translates_to_guarded_dispatch_artifacts(target):
             assert {
                 run["status"] for run in payload["validation"]["toolchainRuns"]
             } == {"ok"}
-        report_path = work_dir / "portability-report.json"
-        report.write_json(report_path)
         assert validate_project_report(report_path)["success"] is True
         runtime_artifacts = build_runtime_artifact_manifest(report_path)
         assert runtime_artifacts["success"] is True
@@ -397,6 +395,7 @@ def _assert_software_spirv(
     )
     assembly = assembly_path.read_text(encoding="utf-8")
     assert assembly.count("OpControlBarrier") == 11
+    assert assembly.count("OpMemoryBarrier") == 6
     assert "OpGroupNonUniform" not in assembly
     assert f"OpExecutionMode %main LocalSize {workgroup_size} 1 1" in assembly
 
@@ -430,6 +429,8 @@ def _translate_selected_artifact(
         run_toolchains=True,
     )
     payload = report.to_json()
+    report_path = work_dir / "portability-report.json"
+    report.write_json(report_path)
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
@@ -490,6 +491,7 @@ def _translate_selected_artifact(
         assert generated.count("crossglSoftwareSubgroupMaxFloat(") == 3
         assert generated.count("crossglSoftwareSubgroupSumFloat(") == 3
         assert generated.count("barrier();") == 11
+        assert generated.count("memoryBarrierShared();") == 6
         if workgroup_size == 32:
             assert "crossglSoftwareSubgroupActive" not in generated
         else:
@@ -502,8 +504,6 @@ def _translate_selected_artifact(
             workgroup_size=workgroup_size,
         )
 
-    report_path = work_dir / "portability-report.json"
-    report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
     return report_path
 
@@ -511,13 +511,12 @@ def _translate_selected_artifact(
 @pytest.mark.parametrize("workload_id", list(MLX_SOFTMAX_VARIANTS))
 def test_pinned_mlx_softmax_translates_to_software_subgroup_opengl(workload_id):
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=f".crosstl-softmax-software-{workload_id}-",
-        dir=mlx_root,
-    ) as temporary_directory:
+    with corpus_workspace(
+        mlx_root, family="softmax", target="opengl", entry_point=workload_id
+    ) as work_dir:
         _translate_selected_artifact(
             mlx_root,
-            Path(temporary_directory),
+            work_dir,
             target="opengl",
             workload_id=workload_id,
         )
@@ -670,6 +669,7 @@ def _build_runtime_package(
     assert {
         binding["name"]: binding["scalarLayout"] for binding in descriptor["bindings"]
     } == expected_layouts
+    _write_json(work_dir / "native-abi.json", descriptor)
     return descriptor, package_dir
 
 
@@ -761,16 +761,67 @@ def _runtime_request(
     return request, output_name, expected_values
 
 
+def _native_compiler_runner(work_dir: Path):
+    def run(command, *, input_text=None):
+        assert input_text is None
+        result = run_compiler(command, work_dir=work_dir, timeout=120)
+        files = [Path(command[-1])]
+        if "-Fo" in command:
+            files.append(Path(command[command.index("-Fo") + 1]))
+        identities = []
+        retained = work_dir / "native-compiler"
+        retained.mkdir(exist_ok=True)
+        for path in files:
+            if path.is_file():
+                destination = retained / path.name
+                shutil.copyfile(path, destination)
+                raw = destination.read_bytes()
+                identities.append(
+                    {
+                        "path": destination.relative_to(work_dir).as_posix(),
+                        "sha256": hashlib.sha256(raw).hexdigest(),
+                        "sizeBytes": len(raw),
+                    }
+                )
+        _write_json(work_dir / "compiler-artifacts.json", {"files": identities})
+        return result
+
+    return run
+
+
+def _record_native_request(work_dir: Path, request, workload_id: str) -> None:
+    _write_json(
+        work_dir / "request.json",
+        {
+            "commit": MLX_COMMIT,
+            "workload": workload_id,
+            "fixture": request.fixture.to_json(),
+            "executionPlan": request.execution_plan.to_json(),
+        },
+    )
+
+
+def _record_native_result(work_dir: Path, result) -> None:
+    _write_json(
+        work_dir / "result.json",
+        {
+            "status": result.status,
+            "outputs": result.outputs,
+            "message": result.message,
+            "details": result.details,
+        },
+    )
+
+
 @pytest.mark.parametrize("workload_id", list(MLX_SOFTMAX_VARIANTS))
 def test_pinned_mlx_softmax_executes_through_directx_native_loader(workload_id):
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=f".crosstl-softmax-directx-{workload_id}-",
-        dir=mlx_root,
-    ) as temporary_directory:
+    with corpus_workspace(
+        mlx_root, family="softmax", target="directx", entry_point=workload_id
+    ) as work_dir:
         descriptor, package_dir = _build_runtime_package(
             mlx_root,
-            Path(temporary_directory),
+            work_dir,
             target="directx",
             workload_id=workload_id,
         )
@@ -780,6 +831,7 @@ def test_pinned_mlx_softmax_executes_through_directx_native_loader(workload_id):
             target="directx",
             workload_id=workload_id,
         )
+        _record_native_request(work_dir, request, workload_id)
         executor = RuntimeParityExecutor(
             RuntimeTestAdapterSpec(
                 adapter_id=f"mlx-softmax-directx-{workload_id}",
@@ -788,7 +840,8 @@ def test_pinned_mlx_softmax_executes_through_directx_native_loader(workload_id):
                 adapter_kind="directx-native-runtime",
             ),
             runtime_adapter=DirectXRuntimeParityAdapter(
-                runtime=DirectXComputeRuntime()
+                runtime=DirectXComputeRuntime(),
+                command_runner=_native_compiler_runner(work_dir),
             ),
         )
         availability = executor.is_available(request)
@@ -798,6 +851,7 @@ def test_pinned_mlx_softmax_executes_through_directx_native_loader(workload_id):
                 REQUIRE_DIRECTX_RUNTIME_ENV,
             )
         result = executor.run(request)
+        _record_native_result(work_dir, result)
 
     assert result.status == "ok"
     assert result.outputs[output_name]["dtype"] == "float32"
@@ -812,13 +866,12 @@ def test_pinned_mlx_softmax_executes_through_directx_native_loader(workload_id):
 @pytest.mark.parametrize("workload_id", list(MLX_SOFTMAX_VARIANTS))
 def test_pinned_mlx_softmax_executes_through_opengl_native_loader(workload_id):
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=f".crosstl-softmax-opengl-{workload_id}-",
-        dir=mlx_root,
-    ) as temporary_directory:
+    with corpus_workspace(
+        mlx_root, family="softmax", target="opengl", entry_point=workload_id
+    ) as work_dir:
         descriptor, package_dir = _build_runtime_package(
             mlx_root,
-            Path(temporary_directory),
+            work_dir,
             target="opengl",
             workload_id=workload_id,
         )
@@ -828,6 +881,7 @@ def test_pinned_mlx_softmax_executes_through_opengl_native_loader(workload_id):
             target="opengl",
             workload_id=workload_id,
         )
+        _record_native_request(work_dir, request, workload_id)
         executor = RuntimeParityExecutor(
             RuntimeTestAdapterSpec(
                 adapter_id=f"mlx-softmax-opengl-{workload_id}",
@@ -836,7 +890,8 @@ def test_pinned_mlx_softmax_executes_through_opengl_native_loader(workload_id):
                 adapter_kind="opengl-native-runtime",
             ),
             runtime_adapter=OpenGLRuntimeParityAdapter(
-                runtime=OpenGLComputeRuntime(context_backends=("egl",))
+                runtime=OpenGLComputeRuntime(context_backends=("egl",)),
+                command_runner=_native_compiler_runner(work_dir),
             ),
         )
         availability = executor.is_available(request)
@@ -846,6 +901,7 @@ def test_pinned_mlx_softmax_executes_through_opengl_native_loader(workload_id):
                 REQUIRE_OPENGL_RUNTIME_ENV,
             )
         result = executor.run(request)
+        _record_native_result(work_dir, result)
 
     assert result.status == "ok"
     assert result.outputs[output_name]["dtype"] == "float32"

@@ -1,8 +1,10 @@
+import hashlib
 import importlib
 import json
 import subprocess
 import sys
 from contextlib import nullcontext
+from types import SimpleNamespace
 
 import pytest
 
@@ -113,6 +115,127 @@ def test_compiler_retains_launch_error_and_reraises(tmp_path, monkeypatch):
     assert record["status"] == "launch-failed"
     assert record["error"] == "compiler unavailable"
     assert "returncode" not in record
+
+
+@pytest.mark.parametrize("dispatch", (False, True))
+def test_softmax_retains_report_before_artifact_checks(dispatch, tmp_path, monkeypatch):
+    from demos.integrations.mlx.tests.kernels import test_softmax_native_loader as proof
+
+    payload = {"summary": {"unitCount": 0}, "diagnostics": [{"message": "failed"}]}
+
+    class Report:
+        def to_json(self):
+            return payload
+
+        def write_json(self, path):
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setenv(KEEP_EVIDENCE_ENV, "1")
+    monkeypatch.setattr(proof, "_pinned_mlx_root", lambda: tmp_path)
+    monkeypatch.setattr(proof, "load_project_config", lambda *args: None)
+    monkeypatch.setattr(proof, "translate_project", lambda *args, **kwargs: Report())
+    with pytest.raises(AssertionError):
+        if dispatch:
+            proof.test_pinned_mlx_softmax_translates_to_guarded_dispatch_artifacts(
+                "directx"
+            )
+        else:
+            proof._translate_selected_artifact(
+                tmp_path,
+                tmp_path,
+                target="directx",
+                workload_id="block-float32-axis-32-two-rows",
+            )
+    reports = list(tmp_path.rglob("portability-report.json"))
+    assert len(reports) == 1
+    assert json.loads(reports[0].read_text(encoding="utf-8")) == payload
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize("returncode", (0, 7))
+def test_softmax_compiler_evidence_keeps_results_and_artifact_bytes(
+    target, returncode, tmp_path, monkeypatch
+):
+    from demos.integrations.mlx.tests.kernels import test_softmax_native_loader as proof
+
+    shader = tmp_path / ("shader.hlsl" if target == "directx" else "shader.glsl")
+    shader.write_text("shader source", encoding="utf-8")
+    module = tmp_path / "shader.dxil"
+    command = ["dxc", "-Fo", str(module), str(shader)]
+    if target == "directx":
+        module.write_bytes(b"compiled module")
+    else:
+        command = ["glslangValidator", "-S", "comp", str(shader)]
+    expected = subprocess.CompletedProcess(command, returncode, "output", "diagnostic")
+
+    def compile_record(actual, **kwargs):
+        assert actual == command
+        assert kwargs == {"work_dir": tmp_path, "timeout": 120}
+        return expected
+
+    monkeypatch.setattr(proof, "run_compiler", compile_record)
+    result = proof._native_compiler_runner(tmp_path)(command, input_text=None)
+    assert result is expected
+    record = json.loads((tmp_path / "compiler-artifacts.json").read_text())
+    paths = [shader, module] if target == "directx" else [shader]
+    assert len(record["files"]) == len(paths)
+    for source, item in zip(paths, record["files"]):
+        raw = source.read_bytes()
+        assert (tmp_path / item["path"]).read_bytes() == raw
+        assert item["sha256"] == hashlib.sha256(raw).hexdigest()
+        assert item["sizeBytes"] == len(raw)
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize("failure", (None, "status", "readback"))
+def test_softmax_retains_native_inputs_and_results_without_suppressing_failures(
+    target, failure, tmp_path, monkeypatch
+):
+    from demos.integrations.mlx.tests.kernels import test_softmax_native_loader as proof
+
+    monkeypatch.setenv(KEEP_EVIDENCE_ENV, "1")
+    monkeypatch.setattr(proof, "_pinned_mlx_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        proof, "_build_runtime_package", lambda *a, **kw: ({}, tmp_path)
+    )
+    fixture = {"inputs": [{"values": [2.0]}], "expectedOutputs": [{"values": [1.0]}]}
+    plan = {"dispatch": {"workgroupSize": [32, 1, 1]}}
+    request = SimpleNamespace(
+        fixture=SimpleNamespace(to_json=lambda: fixture),
+        execution_plan=SimpleNamespace(to_json=lambda: plan),
+    )
+    monkeypatch.setattr(
+        proof, "_runtime_request", lambda *a, **kw: (request, "out", [1.0])
+    )
+    result = SimpleNamespace(
+        status="failed" if failure == "status" else "ok",
+        outputs={
+            "out": {
+                "dtype": "float32",
+                "shape": [1],
+                "values": [0.0 if failure == "readback" else 1.0],
+            }
+        },
+        details={"device": "unit-test-only"},
+        message=None,
+    )
+    executor = SimpleNamespace(
+        is_available=lambda request: SimpleNamespace(available=True),
+        run=lambda request: result,
+    )
+    monkeypatch.setattr(proof, "RuntimeParityExecutor", lambda *a, **kw: executor)
+    test = getattr(
+        proof, f"test_pinned_mlx_softmax_executes_through_{target}_native_loader"
+    )
+    with pytest.raises(AssertionError) if failure else nullcontext():
+        test("block-float32-axis-32-two-rows")
+    workspaces = list((tmp_path / EVIDENCE_DIRECTORY).iterdir())
+    assert len(workspaces) == 1
+    saved_request = json.loads((workspaces[0] / "request.json").read_text())
+    assert saved_request["fixture"] == fixture
+    assert saved_request["executionPlan"] == plan
+    saved_result = json.loads((workspaces[0] / "result.json").read_text())
+    assert saved_result == vars(result)
 
 
 @pytest.mark.parametrize(

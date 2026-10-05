@@ -2074,16 +2074,16 @@ MLX_SOFTMAX_NATIVE_RUNTIME_EVIDENCE = {
         "directx": {
             "block-float32-axis-32-two-rows": {
                 "sha256": (
-                    "8b5540acc90669bc8b4a75985b42ee34c9e45258c63889f703f140b1330337ee"
+                    "8dd346e61bc18a553119caa1b409487f512e520f87cad9678bcd936bfe10f4d8"
                 ),
-                "size_bytes": 4213,
+                "size_bytes": 4343,
                 "subgroup_id_lowering": "fixed-single-wave-group-index-quotient",
             },
             "block-float32-axis-2049": {
                 "sha256": (
-                    "1c20679115f29d981762165f7c9e1ecd57a641ceff376b2f8d13f33520857f05"
+                    "0d3a924e407847c1cfc0825af8bbffeed69ea4558bc19160c53ea166d5715cc8"
                 ),
-                "size_bytes": 4784,
+                "size_bytes": 4914,
                 "subgroup_id_lowering": (
                     "workgroup-synchronized-physical-wave-allocation"
                 ),
@@ -2116,9 +2116,9 @@ MLX_SOFTMAX_NATIVE_RUNTIME_EVIDENCE = {
     "software_opengl_artifacts": {
         "block-float32-axis-32-two-rows": {
             "sha256": (
-                "f69dad597cefc34f7908799aaf0ba2eac47a0dcdd91e5f2bf3d7247172fa84b9"
+                "c77ddf1ad3c364b6e1898232f7d4ce99e2d5f859cc515089368044eb80667573"
             ),
-            "size_bytes": 5585,
+            "size_bytes": 5755,
             "workgroup_size": [32, 1, 1],
             "logical_subgroup_count": 1,
             "masked_collective_count": 0,
@@ -2127,9 +2127,9 @@ MLX_SOFTMAX_NATIVE_RUNTIME_EVIDENCE = {
         },
         "block-float32-axis-2049": {
             "sha256": (
-                "eb195e15089f4e7bade380af55e8b7e167c4b89f80b2f25675eb71196a5468ce"
+                "f0db9cf9b930224322cdd4aa2a01d6c910c1fa34a479705bd7b41de9247916be"
             ),
-            "size_bytes": 7204,
+            "size_bytes": 7374,
             "workgroup_size": [544, 1, 1],
             "logical_subgroup_count": 17,
             "masked_collective_count": 2,

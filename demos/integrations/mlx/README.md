@@ -2371,17 +2371,32 @@ resources: float32 input and output buffers plus the int32 axis-size block.
 DirectX emits one guarded `CSMain` artifact for each workgroup size, retaining
 `[WaveSize(32)]`. Official DXC 1.9.2602.24 accepts both under `cs_6_6` with
 `-enable-16bit-types` and warnings as errors. Their SHA-256 values are
-`8b5540acc90669bc8b4a75985b42ee34c9e45258c63889f703f140b1330337ee`
-and `1c20679115f29d981762165f7c9e1ecd57a641ceff376b2f8d13f33520857f05`.
+`8dd346e61bc18a553119caa1b409487f512e520f87cad9678bcd936bfe10f4d8`
+and `0d3a924e407847c1cfc0825af8bbffeed69ea4558bc19160c53ea166d5715cc8`.
+Both complete bodies were compared against hash-verified originals recovered
+with translator revision `22a8f69f`. Their only differences are explicit
+source-width index conversions and sign-bit negation of the negative sentinels.
+The pinned compiler produces byte-identical DXIL for each old/new pair;
+reflected resources, materialization and launch contracts are unchanged.
+The current MLX pin produces the same shaders and compiled modules, with 142
+pruned candidates rather than the historical pin's 131. This is compiler and
+contract evidence, not a new Windows numerical result. Required native tests
+retain their original workloads and tolerances. CI preserves their project
+reports, packages, compiler records, dispatch inputs and returned values on
+success or failure.
 The 32-thread entry is provably one wave and keeps the zero-ID quotient fast
 path; the 544-thread entry allocates one uniform ID per physical wave through a
 workgroup-synchronized counter. The default OpenGL path remains a separate
 guarded hardware-subgroup artifact.
 The runtime proof opts into explicit software subgroups instead, producing a
-5,585-byte axis-32 artifact with SHA-256
-`f69dad597cefc34f7908799aaf0ba2eac47a0dcdd91e5f2bf3d7247172fa84b9`
-and a 7,204-byte axis-2049 artifact with SHA-256
-`eb195e15089f4e7bade380af55e8b7e167c4b89f80b2f25675eb71196a5468ce`.
+5,755-byte axis-32 artifact with SHA-256
+`c77ddf1ad3c364b6e1898232f7d4ce99e2d5f859cc515089368044eb80667573`
+and a 7,374-byte axis-2049 artifact with SHA-256
+`f0db9cf9b930224322cdd4aa2a01d6c910c1fa34a479705bd7b41de9247916be`.
+Complete comparison against the recovered originals accounts for exactly six
+shared-memory fences in the subgroup helpers. Computation, resource bindings,
+launch geometry and control barriers are unchanged. The tests require all six
+fences in both generated GLSL and validated SPIR-V.
 Both pass `glslangValidator` and `spirv-val`, contain exactly 11
 `OpControlBarrier` instructions, and contain no `OpGroupNonUniform` operation.
 
