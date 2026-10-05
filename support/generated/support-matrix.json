@@ -146,10 +146,11 @@
           "tests/test_translator/test_directx_half_conversion.py",
           "demos/integrations/mlx/tests/kernels/test_attention_reduce_runtime.py",
           "tests/test_translator/test_metal_builtin_ownership.py",
+          "tests/test_translator/test_metal_trunc.py",
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1787
+        "test_count": 1796
       },
       "translator_codegen": {
         "exists": true,
@@ -297,10 +298,11 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_fma.py",
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_translator/test_metal_builtin_ownership.py",
+          "tests/test_translator/test_metal_trunc.py",
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 2018
+        "test_count": 2027
       },
       "translator_codegen": {
         "exists": true,
@@ -680,6 +682,7 @@
           "demos/integrations/mlx/tests/kernels/test_attention_reduce_runtime.py",
           "tests/test_translator/test_wide_integer_bfloat.py",
           "tests/test_translator/test_metal_builtin_ownership.py",
+          "tests/test_translator/test_metal_trunc.py",
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_translator/test_metal_precise_asin.py",
           "tests/test_translator/test_metal_precise_trig.py",
@@ -694,7 +697,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2184
+        "test_count": 2193
       },
       "translator_codegen": {
         "exists": true,
