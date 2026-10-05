@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
 from decimal import Decimal, localcontext
@@ -14,6 +15,7 @@ import pytest
 
 from crosstl.project import (
     build_native_loader_abi_descriptor,
+    build_native_loader_dispatch_request,
     build_runtime_artifact_manifest,
     build_runtime_loader_manifest,
     build_runtime_package,
@@ -21,16 +23,19 @@ from crosstl.project import (
     translate_project,
 )
 from demos.integrations.mlx.tests.kernels.test_current_complex_power import MLX_COMMIT
+from demos.integrations.mlx.tests.kernels.test_current_gather import _bound_inputs
 from demos.integrations.mlx.tests.kernels.test_unary_complete_directx import (
     UNARY_DIRECTX_WORKLOADS,
     _project_config,
 )
 from tests.test_translator.test_bfloat_buffer_runtime import _storage
-from tests.test_translator.test_boolean_buffer_runtime import _bound_values, _request
+from tests.test_translator.test_boolean_buffer_runtime import _bound_values
+from tests.test_translator.test_half_buffer_runtime import _directx_buffers
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_precise_exp import _narrow, _oracle
 from tests.test_translator.test_metal_precise_trig import _float, _round_decimal
+from tests.test_translator.test_software_subgroup_product import _package
 from tools import ci_coverage
 
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_UNARY_DIVISION"
@@ -119,6 +124,67 @@ def test_sigmoid_reference_matches_original_boundary_readbacks():
     assert all(_sigmoid_reference(word) == result for word, result in CASES)
     assert (0x0000, 0x3F00) in cases and (0x8000, 0x3F00) in cases
     assert (0x7F80, 0x3F80) in cases and (0xFF80, 0x0000) in cases
+
+
+def _dispatch_request(descriptor, package, cases):
+    target = descriptor["target"]
+    guard = [0x422A] * 8
+    inputs = {
+        "in_": _storage(target, [word for word, _ in cases] + guard),
+        "out_": _storage(target, [0x422A] * (len(cases) + len(guard))),
+        "size": {"dtype": "uint32", "shape": [1], "values": [len(cases)]},
+    }
+    outputs = _bound_values(
+        descriptor, {"out_": _storage(target, [word for _, word in cases] + guard)}
+    )
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        _bound_inputs(descriptor, ENTRY, inputs),
+        outputs,
+        {"workgroupCount": [len(cases), 1, 1], "workgroupSize": [1, 1, 1]},
+        expected_target=target,
+    )
+    assert not request.execution_plan.diagnostics
+    return request, outputs
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl", "metal"))
+def test_sigmoid_dispatch_binds_reflected_constant_buffer(tmp_path, target):
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+kernel void {ENTRY}(device const bfloat* in_ [[buffer(0)]],
+                    device bfloat* out_ [[buffer(1)]],
+                    constant uint& size [[buffer(2)]],
+                    uint i [[thread_position_in_grid]]) {{
+    if (i < size) {{ out_[i] = in_[i]; }}
+}}
+"""
+    _, descriptor, package = _package(
+        tmp_path, target, "bfloat", (1, 1, 1), source=source, software_subgroups=False
+    )
+    request, outputs = _dispatch_request(descriptor, package, CASES)
+    assert request.execution_plan.dispatch.global_size == (len(CASES), 1, 1)
+    output_name = "out_Buffer" if target == "opengl" else "out_"
+    assert outputs == {
+        output_name: _storage(target, [word for _, word in CASES] + [0x422A] * 8)
+    }
+    if target == "directx":
+        binding = next(
+            b for b in descriptor["bindings"] if b["kind"] == "constant-buffer"
+        )
+        assert binding["name"] == f"{ENTRY}_size_Constants"
+        assert binding["scalarLayout"]["memberName"] == f"{ENTRY}_size"
+        buffers = {buffer.name: buffer for buffer in _directx_buffers(request)}
+        constant = buffers[binding["name"]]
+        assert constant.payload == struct.pack("<I", len(CASES))
+        assert constant.byte_length == 16 and constant.allocation_size == 256
+        words = [word for word, _ in CASES] + [0x422A] * 8
+        assert buffers["in_"].payload == struct.pack(f"<{len(words)}H", *words)
+        assert buffers["out_"].payload == struct.pack(
+            f"<{len(words)}H", *([0x422A] * len(words))
+        )
+        assert buffers["in_"].stride == buffers["out_"].stride == 2
 
 
 @pytest.mark.parametrize("profile", (None, "rne-gradual", "rne-flush"))
@@ -250,22 +316,14 @@ def test_current_bfloat_sigmoid_non_nan_domain(tmp_path):
             (work / "descriptor.json").write_text(
                 json.dumps(descriptor, indent=2), encoding="utf-8"
             )
-            guard = [0x422A] * 8
-            inputs = {
-                "in_": _storage(target, [word for word, _ in cases] + guard),
-                "out_": _storage(target, [0x422A] * (len(cases) + len(guard))),
-                "size": {"dtype": "uint32", "shape": [1], "values": [len(cases)]},
-            }
-            outputs = {"out_": _storage(target, [word for _, word in cases] + guard)}
-            request = _request(descriptor, package, inputs, outputs, len(cases))
-            assert not request.execution_plan.diagnostics
+            request, outputs = _dispatch_request(descriptor, package, cases)
             (work / "reference.json").write_text(
                 json.dumps(
                     {
                         "commit": revision,
                         "entry": ENTRY,
                         "cases": cases,
-                        "guardCount": len(guard),
+                        "guardCount": 8,
                         "coverage": "all 65282 non-NaN bfloat inputs",
                         "oracle": (
                             "Decimal exponential and arithmetic, binary32/bfloat rounding at source boundaries"
@@ -286,8 +344,6 @@ def test_current_bfloat_sigmoid_non_nan_domain(tmp_path):
                     metal_compile_flags=("-std=metal3.1", "-fno-fast-math"),
                 )[1]
 
-            _execute(
-                request, _bound_values(descriptor, outputs), work, validate=validate
-            )
+            _execute(request, outputs, work, validate=validate)
         finally:
             shutil.copytree(work, tmp_path / "evidence", dirs_exist_ok=True)

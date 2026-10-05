@@ -333,9 +333,8 @@ def test_precise_exp_executes(tmp_path):
     )
 
 
-@pytest.mark.parametrize("operand", ["half", "bfloat"])
-def test_precise_exp_promotes_narrow_alias_once(tmp_path, operand):
-    source = """#include <metal_stdlib>
+def _narrow_source(operand):
+    return """#include <metal_stdlib>
 using namespace metal;
 using Narrow = $operand;
 Narrow record(thread uint& count, Narrow value) { count += 1; return value; }
@@ -351,6 +350,24 @@ kernel void exp_promoted(device const uint* values [[buffer(0)]],
     results[3 * i + 2] = count;
 }
 """.replace("$operand", operand)
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl", "metal"])
+@pytest.mark.parametrize("operand", ["half", "bfloat"])
+def test_precise_exp_narrow_alias_compiles(tmp_path, target, operand):
+    generated = _translate(tmp_path, _narrow_source(operand), target)
+    _compile(
+        generated,
+        target,
+        tmp_path,
+        directx_compile_flags=("-enable-16bit-types",),
+        metal_compile_flags=("-std=metal3.1", "-fno-fast-math"),
+    )
+
+
+@pytest.mark.parametrize("operand", ["half", "bfloat"])
+def test_precise_exp_promotes_narrow_alias_once(tmp_path, operand):
+    source = _narrow_source(operand)
     canonical = _translate(tmp_path, source, "crossgl")
     assert "__crossgl_metal_precise_exp_float(record(count, value))" in canonical
     if os.environ.get(REQUIRE_ENV) != "1":
@@ -412,6 +429,7 @@ kernel void exp_promoted(device const uint* values [[buffer(0)]],
         expected,
         metal_entry="exp_promoted",
         check_outputs=check_outputs,
+        directx_compile_flags=("-enable-16bit-types",),
         metal_compile_flags=("-std=metal3.1", "-fno-fast-math"),
     )
     (tmp_path / "reference.json").write_text(

@@ -1,6 +1,7 @@
 import ctypes
 import json
 import math
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -1904,6 +1905,69 @@ def test_ci_requires_all_native_platforms_and_retains_evidence():
     assert "test_ops.TestOps.test_logical_xor" in verify.UPSTREAM_TESTS
     assert "test_ops.TestOps.test_isclose" in verify.UPSTREAM_TESTS
     assert "test_ops.TestOps.test_allclose" in verify.UPSTREAM_TESTS
+
+
+def test_ci_limits_portable_contracts_without_removing_platform_abi_checks():
+    root = Path(__file__).resolve().parents[5]
+    jobs = yaml.safe_load(
+        (root / ".github/workflows/demo-project-testing.yml").read_text()
+    )["jobs"]
+    job = jobs["portable-host"]
+    assert job["strategy"]["matrix"]["include"] == [
+        {"os": "ubuntu-24.04", "target": "opengl"},
+        {"os": "windows-2025", "target": "directx"},
+        {"os": "macos-26", "target": "metal"},
+    ]
+    steps = {step.get("name"): step for step in job["steps"]}
+    contracts = steps["Validate portable host contracts"]
+    assert contracts["if"] == "runner.os == 'Linux'"
+    command = shlex.split(contracts["run"])
+    assert command[:6] == ["python", "-m", "pytest", "-q", "-n", "auto"]
+    assert len(command[6:]) == 17
+    assert set(command[6:]) == {
+        "demos/integrations/mlx/tests/host/test_portable_host.py",
+        "demos/integrations/mlx/tests/host/test_portable_reductions.py",
+        "demos/integrations/mlx/tests/host/test_portable_rows.py",
+        "demos/integrations/mlx/tests/host/test_portable_reduction_shards.py",
+        "demos/integrations/mlx/tests/host/test_portable_mixed_reductions.py",
+        "demos/integrations/mlx/tests/host/test_portable_columns.py",
+        "demos/integrations/mlx/tests/host/test_portable_small_rows.py",
+        "demos/integrations/mlx/tests/host/test_portable_empty_reductions.py",
+        "demos/integrations/mlx/tests/host/test_portable_bitwise.py",
+        "demos/integrations/mlx/tests/host/test_portable_concatenate.py",
+        "demos/integrations/mlx/tests/host/test_portable_selection.py",
+        "demos/integrations/mlx/tests/host/test_portable_integer64.py",
+        "demos/integrations/mlx/tests/host/test_portable_padding.py",
+        "demos/integrations/mlx/tests/host/test_portable_slice_updates.py",
+        "demos/integrations/mlx/tests/host/test_portable_slice_update_workloads.py",
+        "demos/integrations/mlx/tests/test_random_audit.py",
+        "demos/integrations/mlx/tests/host/test_portable_random.py",
+    }
+    abi = steps["Validate platform host ABI"]
+    assert abi["if"] == "runner.os != 'Linux'"
+    assert "set -euo pipefail" in abi["run"]
+    assert "python -m pytest -q -n auto" in abi["run"]
+    assert "--junitxml=.mlx-portable-host/host-abi.xml" in abi["run"]
+    required = {
+        "test_portable_host.py::test_callback_reports_bounded_error_without_unwinding",
+        "test_portable_host.py::test_native_callback_preserves_multidimensional_launch",
+        "test_portable_host.py::test_native_callback_requires_launch_pointer",
+        "test_portable_host.py::test_registration_retains_callback_and_uses_platform_library",
+        "test_portable_concatenate.py::test_concatenate_retains_input_output_abi_layout",
+        "test_portable_small_rows.py::test_callback_version_and_zero_grid_compatibility",
+    }
+    nodes = [word for word in shlex.split(abi["run"]) if "::test_" in word]
+    assert len(nodes) == len(required)
+    assert {node.rsplit("/", 1)[-1] for node in nodes} == required
+    for name in (
+        "Validate pinned unary arithmetic",
+        "Validate pinned native binary math",
+        "Build adapted upstream MLX",
+        "Translate unchanged upstream kernels",
+        "Execute upstream tests on the translated backend",
+    ):
+        assert "if" not in steps[name] and "continue-on-error" not in steps[name]
+    assert steps["Retain native execution evidence"]["if"] == "always()"
 
 
 @pytest.mark.parametrize(

@@ -77,13 +77,26 @@ Each native job keeps its source pin, numerical comparisons, guards, bounded exe
 and retained evidence. Moving a compiler-only job must not disable an execution
 gate or be presented as proof of runtime parity.
 
+The native host job runs its full set of 17 portable contract-test modules on
+Ubuntu only. Windows and macOS retain focused C callback, launch geometry,
+library registration and memory-layout checks before their native workloads.
+This avoids repeating package-generation and mocked execution tests on scarce
+platform runners. All native compiler, device execution, adapted-library build
+and unchanged upstream-test steps remain required on their respective systems;
+the focused ABI checks do not replace them. Their JUnit report is retained in
+the same native host evidence artifact. No additional runner is introduced.
+
 Binary32 division source profiles run once per native target inside the existing
 arithmetic step. Exact checks cover source operators, precise builtins, compound
 writeback, narrow intermediates and guards. The project's Sigmoid boundary
 regression stays under `demos/integrations/mlx/tests` and runs in the existing
 pinned unary step. Neither adds a runner or duplicates the compiler-only corpus.
-The selected Sigmoid boundary proof is separate from the still-failing complete
-OpenGL sweep; that remaining exponential midpoint is not accepted by tolerance.
+The Sigmoid check covers all 65,282 non-NaN bfloat inputs and eight output guards.
+The explicit division profile and precise-exponential lowering resolve the
+previous OpenGL midpoint and underflow differences without relaxing comparisons.
+The saved configuration and reviewed target identities are checked before
+execution; required Windows evidence is still distinct from local Metal/OpenGL
+results.
 
 The existing Windows project job also checks native CBV/SRV/UAV allocation
 ranges, shared read-only and disjoint writable views, and ordered allocation

@@ -81,12 +81,13 @@ def _workload(stride, width):
 
 def _bound_inputs(descriptor, entry, inputs):
     bound, matched = {}, set()
+    prefix = entry.rstrip("_") + "_"
     for binding in descriptor["bindings"]:
         if "executionInput" in binding.get("provenance", {}):
             continue
         layout = binding["scalarLayout"]
         member = layout.get("memberName", binding["name"])
-        name = member.removeprefix(entry.rstrip("_") + "_")
+        name = member[len(prefix) :] if member.startswith(prefix) else member
         assert name in inputs and name not in matched, (name, binding)
         assert binding["name"] not in bound
         matched.add(name)
