@@ -21711,6 +21711,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return f"asfloat(asuint({operand}) ^ {mask})"
             if mapped_op in {"++", "--"} and getattr(expr, "is_postfix", False):
                 return f"{operand}{mapped_op}"
+            if mapped_op in {"+", "-"} and operand.startswith(("+", "-")):
+                # Keep adjacent signs from becoming an increment or decrement.
+                operand = f"({operand})"
             return f"{mapped_op}{operand}"
         elif isinstance(expr, WaveOpNode):
             return self.generate_wave_op_expression(expr)

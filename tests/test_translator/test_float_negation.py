@@ -36,7 +36,7 @@ kernel void negate_words(device const uint* values [[buffer(0)]],
     float items[2] = {x, x};
     uint count = 0u;
     uint index = 0u;
-    results[16u * i] = as_type<uint>(-x);
+    results[16u * i] = as_type<uint>(negative);
     results[16u * i + 1u] = as_type<uint>(pair.x);
     results[16u * i + 2u] = as_type<uint>(pair.y);
     results[16u * i + 3u] = as_type<uint>(triple.x);
@@ -49,7 +49,7 @@ kernel void negate_words(device const uint* values [[buffer(0)]],
     results[16u * i + 10u] = as_type<uint>(-record(count, x));
     results[16u * i + 11u] = as_type<uint>(-payload.value);
     results[16u * i + 12u] = as_type<uint>(-items[index++]);
-    results[16u * i + 13u] = as_type<uint>(-negative);
+    results[16u * i + 13u] = as_type<uint>(-(-x));
     results[16u * i + 14u] = count;
     results[16u * i + 15u] = index;
 }
@@ -177,15 +177,10 @@ def test_float_negation_executes(tmp_path):
     for name, words in (("inputs", inputs), ("expected", expected)):
         (tmp_path / f"{name}.bin").write_bytes(struct.pack(f"<{len(words)}I", *words))
     original = tmp_path / "negate.metal"
-    source_text = (
-        SOURCE.replace("as_type<uint>(-negative)", "as_type<uint>(-(-x))")
-        if target == "directx"
-        else SOURCE
-    )
-    original.write_text(source_text, encoding="utf-8")
+    original.write_text(SOURCE, encoding="utf-8")
     generated = translate(str(original), backend=target, format_output=False)
     records = {}
-    for label, source in (("generated", generated), ("original", source_text)):
+    for label, source in (("generated", generated), ("original", SOURCE)):
         if label == "original" and target != "metal":
             continue
         records[label] = _execute(

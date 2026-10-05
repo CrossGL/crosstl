@@ -923,10 +923,14 @@ structure members, array indexing and side-effecting helper calls against an
 independent integer oracle. It retains raw input, expected and readback words,
 compiler outputs, module hashes, evaluation counts and guards. This adds no
 runner matrix and does not change the tolerance of the precise math checks.
-The cross-target control applies inverse negation in two statements. DirectX
-also exercises nested ``-(-x)``; the Metal target's incorrect concatenation of
-that expression into ``--x`` is tracked separately in
-`issue 2077 <https://github.com/CrossGL/crosstl/issues/2077>`_.
+Nested signs retain their grouping in Metal and HLSL instead of combining
+into increment or decrement tokens. The same native job checks nested signs
+on integer and binary32 scalars and vectors, genuine prefix/postfix updates,
+numeric casts and side-effecting calls. It compares both results and final
+operand values with independent word-level expectations; on macOS it also
+executes the unchanged source as a control. OpenGL retains its existing
+parenthesized expressions. These checks do not establish full application
+parity or change the separate narrow-float and complex lowering rules.
 
 **Fused arithmetic profiles.**
 

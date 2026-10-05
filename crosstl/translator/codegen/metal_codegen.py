@@ -10576,6 +10576,9 @@ class MetalCodeGen:
                     return byte_update
             if getattr(expr, "is_postfix", False):
                 return f"{operand}{operator}"
+            if operator in {"+", "-"} and operand.startswith(("+", "-")):
+                # Keep adjacent signs from becoming an increment or decrement.
+                operand = f"({operand})"
             return f"{operator}{operand}"
         elif isinstance(expr, CooperativeMatrixOpNode):
             return self.generate_cooperative_matrix_operation(expr)
