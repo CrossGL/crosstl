@@ -190,9 +190,11 @@ tests exercise every 16-bit payload through six paths, including qualified
 aliases, helper returns, nested bitcasts and an operand evaluated exactly once.
 Original/generated Metal and OpenGL execution preserve all 65,536 payloads,
 including NaNs, without numerical tolerances. Separate exact widening controls
-cover namespace aliases that conflict with an outer float alias. Required
-Windows execution remains pending; strict DXC compilation alone is not runtime
-proof. These tests reuse the existing native jobs. Precision tests retain explicit
+cover namespace aliases that conflict with an outer float alias. The required
+[Windows checks](https://github.com/CrossGL/crosstl/actions/runs/37321634266/job/111801894608)
+also pass: retained DXIL identities and readbacks verify the same exact alias
+payloads and the precise-result narrowing controls above. These tests reuse
+the existing native jobs. Precision tests retain explicit
 input bitcast types to isolate arithmetic from alias resolution.
 
 The complete unary Metal compile gate generates sources in five Ubuntu shards
@@ -2054,6 +2056,19 @@ address arithmetic, and loop bounds are rejected by negative review controls.
 Historical proof and linkage-refresh metadata remain unchanged. This refresh
 does not add numerical execution or newer upstream coverage; other families
 remain under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
+
+The current-pin native copy gate separately tests 11 float32 layouts and the
+contiguous and strided half-copy entries at
+`9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. Both half entries transport all
+65,536 binary16 payloads, including signed zero, subnormals and NaNs, in bounded
+dispatches with 32 untouched output guards. OpenGL uses the exact widened
+binary32 representation; DirectX and Metal retain two-byte encoded storage.
+The existing native jobs run these checks without additional platform runners.
+Metal also executes the unchanged upstream entries and verifies read-only
+inputs. Reports retain source identities, packages, compiler results and raw
+readbacks. The HLSL corpus gate checks the physical `uint16_t` half-buffer layout
+and logical binary16 metadata explicitly; this does not accept unreviewed
+artifact identities or claim complete copy-conversion numerical coverage.
 
 The focused `prove_layer_norm_directx.py` gate translates two host-selected
 single-row entries from the pinned `layer_norm.metal` source: forward float32

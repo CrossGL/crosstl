@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import textwrap
 from collections import Counter
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -67,7 +68,7 @@ HLSL_STORAGE_TYPES = {
     "bool": "bool",
     "complex64_t": "complex_t_float",
     "float": "float",
-    "half": "float16_t",
+    "half": "uint16_t",
     "int16_t": "int16_t",
     "int32_t": "int",
     "int64_t": "int64_t",
@@ -464,6 +465,80 @@ def _selected_cast_helper(generated: str, workload: CopyMetalWorkload) -> str:
     return match.group("body")
 
 
+def _assert_half_storage(reflected: dict, workload: CopyMetalWorkload) -> None:
+    resources = {resource["name"]: resource for resource in reflected["resources"]}
+    for name, source_type in (
+        ("src", workload.input_type),
+        ("dst", workload.output_type),
+    ):
+        if source_type != "half":
+            continue
+        layout = resources[name]["scalarLayout"]
+        assert layout["physicalType"] == "uint16_t"
+        assert layout["elementType"] == "uint16"
+        assert layout["elementSizeBytes"] == layout["elementStrideBytes"] == 2
+        assert layout["alignmentBytes"] == 2 and layout["memberOffsetBytes"] == 0
+        assert layout["storageLayout"] == "hlsl-structured-buffer"
+        assert layout["runtimeSized"] is True
+        assert layout["storageEncoding"] == {
+            "encoding": "ieee754-binary16",
+            "logicalElementType": "float16",
+        }
+
+
+def test_copy_half_storage_contract_rejects_layout_and_encoding_changes(tmp_path):
+    from crosstl import translate
+    from crosstl.project import reflect_target_host_interface
+
+    source = tmp_path / "copy.metal"
+    source.write_text(
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        "kernel void copy(const device half* src [[buffer(0)]], "
+        "device half* dst [[buffer(1)]], uint i [[thread_position_in_grid]]) "
+        "{ dst[i] = src[i]; }\n",
+        encoding="utf-8",
+    )
+    artifact = tmp_path / "copy.hlsl"
+    artifact.write_text(
+        translate(str(source), backend="directx", format_output=False),
+        encoding="utf-8",
+    )
+    reflected = reflect_target_host_interface(artifact, target="directx")
+    assert reflected["status"] == "ready" and not reflected["diagnostics"]
+    workload = next(
+        item
+        for item in COPY_DIRECTX_WORKLOADS
+        if item.entry_point == "g1_copyfloat16float16"
+    )
+    _assert_half_storage(reflected, workload)
+    expected = _expected_resources(workload)
+    assert expected["src"][-1] == "StructuredBuffer<uint16_t>"
+    assert expected["dst"][-1] == "RWStructuredBuffer<uint16_t>"
+    for name in ("src", "dst"):
+        for field, value in (
+            ("physicalType", "float16_t"),
+            ("elementType", "float16"),
+            ("elementSizeBytes", 4),
+            ("elementStrideBytes", 4),
+            ("alignmentBytes", 4),
+            ("memberOffsetBytes", 2),
+            ("storageLayout", "hlsl-constant-buffer"),
+            ("runtimeSized", False),
+            ("storageEncoding", {}),
+            (
+                "storageEncoding",
+                {"encoding": "bfloat16", "logicalElementType": "bfloat16"},
+            ),
+        ):
+            corrupted = deepcopy(reflected)
+            resource = next(
+                item for item in corrupted["resources"] if item["name"] == name
+            )
+            resource["scalarLayout"][field] = value
+            with pytest.raises(AssertionError):
+                _assert_half_storage(corrupted, workload)
+
+
 def _translate_and_validate(
     mlx_root: Path,
     work_dir: Path,
@@ -580,6 +655,7 @@ def _translate_and_validate(
         )
         for resource in reflected["resources"]
     } == _expected_resources(workload)
+    _assert_half_storage(reflected, workload)
 
     dxc = _required_tool("dxc")
     compiler_arguments = dxc_compiler_arguments_for_source(generated)

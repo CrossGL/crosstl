@@ -14,11 +14,7 @@ from pathlib import Path
 import pytest
 
 from crosstl.project import (
-    build_native_loader_abi_descriptor,
     build_native_loader_dispatch_request,
-    build_runtime_artifact_manifest,
-    build_runtime_loader_manifest,
-    build_runtime_package,
     load_project_config,
     translate_project,
 )
@@ -33,12 +29,15 @@ from demos.integrations.mlx.tests.kernels.test_current_complex_power import (
     MLX_COMMIT,
     ROOT,
 )
+from tests.runtime_helpers import _prepare_native_package
+from tests.test_translator.test_boolean_buffer_runtime import _bound_values, _request
+from tests.test_translator.test_half_copy_identity import _widen
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
 SOURCE = "mlx/backend/metal/kernels/copy.metal"
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_COPY"
 GUARD = struct.unpack("<f", struct.pack("<I", 0x6A15BEEF))[0]
-FORMATS = {"float32": "f", "uint32": "I", "int32": "i", "int64": "q"}
+FORMATS = {"float32": "f", "uint16": "H", "uint32": "I", "int32": "i", "int64": "q"}
 CASES = {
     "vector": ("v_copy", [17], [1]),
     "scalar": ("s_copy", [17], [0]),
@@ -292,11 +291,11 @@ def copy_executor(current_copy_source):
             executor.runtime_adapter.runtime.close()
 
 
-def _original_metal(work, workload, reference):
+def _original_metal(work, workload, reference, dtype="float32"):
     runner, library = reference
     bindings = {
-        0: ("float32", workload["source"]),
-        1: ("float32", [GUARD] * len(workload["expected"])),
+        0: (dtype, workload["source"]),
+        1: (dtype, workload.get("initial", [GUARD] * len(workload["expected"]))),
     }
     bindings.update(
         {
@@ -330,8 +329,11 @@ def _original_metal(work, workload, reference):
         )
     )
     raw = (output / "buffer-1.bin").read_bytes()
-    actual = [value for (value,) in struct.iter_unpack("<f", raw)]
-    _check(actual, workload["expected"])
+    actual = [value for (value,) in struct.iter_unpack("<" + FORMATS[dtype], raw)]
+    if dtype == "float32":
+        _check(actual, workload["expected"])
+    else:
+        assert raw == _bytes(dtype, workload["expected"])
     for index, filename in enumerate(files):
         if index != 1:
             assert (output / f"buffer-{index}.bin").read_bytes() == Path(
@@ -343,15 +345,10 @@ def _original_metal(work, workload, reference):
     }
 
 
-@pytest.mark.parametrize("case", CASES)
-def test_current_copy_native_parity(current_copy_source, copy_executor, tmp_path, case):
-    root, target, reference = current_copy_source
-    workload = _workload(case)
+def _copy_package(root, target, work, workload):
     entry = workload["entry"]
-    with tempfile.TemporaryDirectory(prefix=".current-copy-", dir=root) as directory:
-        work = Path(directory)
-        config = work / "crosstl.toml"
-        config.write_text(f"""[project]
+    config = work / "crosstl.toml"
+    config.write_text(f"""[project]
 source_roots = ["mlx/backend/metal/kernels"]
 include = ["{SOURCE}"]
 include_dirs = ["."]
@@ -363,31 +360,30 @@ output_dir = "{work.name}/out"
 "{entry}" = [1, 1, 1]
 {_index_contracts(target, workload)}
 """)
+    report = translate_project(load_project_config(root, config), format_output=False)
+    report.write_json(work / "report.json")
+    payload = report.to_json()
+    assert payload["summary"]["failedCount"] == 0, payload["diagnostics"]
+    (artifact,) = payload["artifacts"]
+    assert artifact["entryPoint"]["source"] == entry
+    descriptor, package = _prepare_native_package(report, work)
+    source = package / descriptor["artifact"]["packagePath"]
+    if target != "metal":
+        _validate_generated_artifact(source, work, target)
+    else:
+        _metal_library(source, work / "translated.metallib", root)
+    return descriptor, package, source
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_current_copy_native_parity(current_copy_source, copy_executor, tmp_path, case):
+    root, target, reference = current_copy_source
+    workload = _workload(case)
+    entry = workload["entry"]
+    with tempfile.TemporaryDirectory(prefix=".current-copy-", dir=root) as directory:
+        work = Path(directory)
         try:
-            report = translate_project(
-                load_project_config(root, config), format_output=False
-            )
-            report.write_json(work / "report.json")
-            payload = report.to_json()
-            assert payload["summary"]["failedCount"] == 0, payload["diagnostics"]
-            (artifact,) = payload["artifacts"]
-            assert artifact["entryPoint"]["source"] == entry
-            manifest = build_runtime_artifact_manifest(work / "report.json")
-            assert manifest["success"], manifest
-            (work / "artifacts.json").write_text(json.dumps(manifest, indent=2))
-            package = work / "package"
-            assert build_runtime_package(work / "artifacts.json", package)["success"]
-            loader = build_runtime_loader_manifest(package / "runtime-package.json")
-            assert loader["success"] and len(loader["loadUnits"]) == 1
-            descriptor = build_native_loader_abi_descriptor(
-                loader, load_unit_id=loader["loadUnits"][0]["id"]
-            )
-            (work / "descriptor.json").write_text(json.dumps(descriptor, indent=2))
-            source = package / descriptor["artifact"]["packagePath"]
-            if target != "metal":
-                _validate_generated_artifact(source, work, target)
-            else:
-                _metal_library(source, work / "translated.metallib", root)
+            descriptor, package, source = _copy_package(root, target, work, workload)
             data = {
                 "src": ("float32", workload["source"]),
                 "dst": ("float32", [GUARD] * len(workload["expected"])),
@@ -467,6 +463,125 @@ output_dir = "{work.name}/out"
             }
             if reference:
                 evidence["original"] = _original_metal(work, workload, reference)
+            (work / "evidence.json").write_text(json.dumps(evidence, indent=2))
+        finally:
+            shutil.copytree(work, tmp_path / "evidence", dirs_exist_ok=True)
+
+
+def _half_workload(prefix, start):
+    words = list(range(start, start + 32768))
+    stride = 3 if prefix == "g1_copy" else 1
+    source = [0xA55A] * (len(words) * stride)
+    source[::stride] = words
+    return {
+        "entry": prefix + "float16float16",
+        "source": source,
+        "expected": words + [0x3555] * 32,
+        "initial": [0x3555] * (len(words) + 32),
+        "grid": [len(words), 1, 1],
+        "constants": (
+            {"src_stride": ("int64", [stride], 3)}
+            if stride != 1
+            else {"size": ("uint32", [len(words)], 2)}
+        ),
+    }
+
+
+def _half_payload(target, words):
+    return {
+        "dtype": "float32" if target == "opengl" else "float16",
+        "encoding": "ieee754-binary32" if target == "opengl" else "ieee754-binary16",
+        "shape": [len(words)],
+        "values": (
+            [_widen(word) for word in words] if target == "opengl" else list(words)
+        ),
+    }
+
+
+def test_half_copy_workloads_cover_every_payload_and_preserve_guards():
+    for prefix in ("v_copy", "g1_copy"):
+        observed = []
+        for start in (0, 32768):
+            workload = _half_workload(prefix, start)
+            count = workload["grid"][0]
+            stride = 3 if prefix == "g1_copy" else 1
+            assert count <= 65535
+            assert workload["source"][::stride] == workload["expected"][:count]
+            assert workload["expected"][count:] == [0x3555] * 32
+            assert workload["initial"] == [0x3555] * (count + 32)
+            observed.extend(workload["expected"][:count])
+        assert observed == list(range(65536))
+
+
+@pytest.mark.parametrize("prefix", ("v_copy", "g1_copy"))
+@pytest.mark.parametrize("start", (0, 32768))
+def test_current_half_copy_preserves_all_payloads(
+    current_copy_source, copy_executor, tmp_path, prefix, start
+):
+    root, target, reference = current_copy_source
+    workload = _half_workload(prefix, start)
+    with tempfile.TemporaryDirectory(
+        prefix=".current-half-copy-", dir=root
+    ) as directory:
+        work = Path(directory)
+        try:
+            descriptor, package, source = _copy_package(root, target, work, workload)
+            inputs = {
+                "src": _half_payload(target, workload["source"]),
+                "dst": _half_payload(target, workload["initial"]),
+            }
+            for name, (dtype, values, _) in workload["constants"].items():
+                if target == "directx":
+                    name = workload["entry"] + "_" + name
+                inputs[name] = {
+                    "dtype": dtype,
+                    "shape": [len(values)],
+                    "values": values,
+                }
+            outputs = {"dst": _half_payload(target, workload["expected"])}
+            (work / "workload.json").write_text(json.dumps(workload, indent=2))
+            (work / "values.json").write_text(
+                json.dumps({"inputs": inputs, "outputs": outputs}, indent=2)
+            )
+            request = _request(
+                descriptor, package, inputs, outputs, workload["grid"][0]
+            )
+            assert not request.execution_plan.diagnostics
+            availability = copy_executor.is_available(request)
+            assert availability.available, availability.reason
+            result = copy_executor.run(request)
+            (work / "result.json").write_text(
+                json.dumps(
+                    {
+                        "status": result.status,
+                        "outputs": result.outputs,
+                        "details": result.details,
+                    },
+                    indent=2,
+                )
+            )
+            assert result.status == "ok"
+            assert result.outputs == _bound_values(descriptor, outputs)
+            dtype = "uint32" if target == "opengl" else "uint16"
+            (actual,) = result.outputs.values()
+            (work / "readback.bin").write_bytes(_bytes(dtype, actual["values"]))
+            (work / "expected.bin").write_bytes(_bytes(dtype, outputs["dst"]["values"]))
+            evidence = {
+                "commit": MLX_COMMIT,
+                "target": target,
+                "entry": workload["entry"],
+                "firstPayload": start,
+                "payloadCount": 32768,
+                "guardCount": 32,
+                "sourceSha256": (
+                    hashlib.sha256((root / SOURCE).read_bytes()).hexdigest()
+                ),
+                "artifactSha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            }
+            if reference:
+                evidence["original"] = _original_metal(
+                    work, workload, reference, "uint16"
+                )
             (work / "evidence.json").write_text(json.dumps(evidence, indent=2))
         finally:
             shutil.copytree(work, tmp_path / "evidence", dirs_exist_ok=True)
