@@ -1426,21 +1426,23 @@ jobs:
               tests/test_translator/test_directx_subgroup_uniformity.py \
               tests/test_translator/test_directx_subgroup_components.py \
               2>&1 | tee .mlx-portable-host/software-reductions.log
-      - name: Validate binary32 fused arithmetic
+      - name: Validate binary32 arithmetic
         env:
           CROSTL_REQUIRE_FUSED_MATH: "1"
+          CROSTL_REQUIRE_DIVISION_MATH: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
         run: |
           set -euo pipefail
           mkdir -p .mlx-portable-host/fused-math
-          python tools/run_bounded_command.py --timeout-seconds 120 --label "Native fused arithmetic" -- \
+          python tools/run_bounded_command.py --timeout-seconds 120 --label "Native binary32 arithmetic" -- \
             python -m pytest -q -n auto \
               --basetemp=.mlx-portable-host/fused-math/pytest \
               --junitxml=.mlx-portable-host/fused-math/results.xml \
               tests/test_translator/test_fused_math.py \
               tests/test_translator/test_metal_fma.py \
+              tests/test_translator/test_division_math.py \
               2>&1 | tee .mlx-portable-host/fused-math.log
       - name: Checkout and prepare pinned upstream MLX
         run: |
@@ -3381,7 +3383,7 @@ jobs:
           git -C mlx-upstream sparse-checkout set mlx/backend/metal/kernels
           git -C mlx-upstream checkout "$MLX_COMMIT"
 
-      - name: Validate binary32 fused arithmetic
+      - name: Validate binary32 arithmetic
         shell: bash
         env:
           CROSTL_REQUIRE_FUSED_MATH: "1"
@@ -3392,14 +3394,14 @@ jobs:
           set -euo pipefail
           mkdir -p fused-math-results
           python tools/run_bounded_command.py \
-            --label "binary32 fused arithmetic" --timeout-seconds 120 -- \
+            --label "binary32 arithmetic" --timeout-seconds 120 -- \
             python -m pytest -q -n auto \
               --basetemp="fused-math-results/pytest" \
               --junitxml="fused-math-results/results.xml" \
               tests/test_translator/test_fused_math.py \
               tests/test_translator/test_metal_fma.py
 
-      - name: Upload binary32 fused arithmetic evidence
+      - name: Upload binary32 arithmetic evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:

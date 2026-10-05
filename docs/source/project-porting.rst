@@ -1010,6 +1010,30 @@ separate from running the upstream Python tests through an adapted MLX host.
 `Issue #1962 <https://github.com/CrossGL/crosstl/issues/1962>`_ remains the
 integration tracker for the MLX Expm1/Erf failures.
 
+**Division arithmetic support.**
+
+``crosstl.translator.division_math`` provides an internal binary32 division
+helper using only 32-bit integer arithmetic. It rounds the exact quotient
+once, to nearest with ties to even. It supports gradual underflow or signed-zero
+flushing of subnormal operands and results before rounding, including values
+just below the normal boundary that would otherwise round up to a normal value.
+NaNs are canonicalized; payloads and exception flags are not represented.
+
+The existing native arithmetic jobs compile and execute both policies on
+DirectX, OpenGL and Metal against an independent exact-rational oracle.
+Tests cover every exponent, signed zeros, subnormal and overflow boundaries,
+infinities, NaNs, randomized operands and eight output guard words. Evidence
+includes input and expected words, readbacks, generated source, native modules
+and runtime diagnostics. The macOS control also executes unchanged Metal
+division with ``-std=metal3.1 -fno-fast-math`` against the flush policy.
+
+This helper does not yet replace source division operators or reciprocal calls,
+nor select a repository's source execution policy. That requires explicit
+source configuration, expression lowering and provenance checks. The source
+control establishes behavior only for its tested device and compiler settings;
+it is not a universal Metal arithmetic contract. The numerical portability
+work in `issue #2086 <https://github.com/CrossGL/crosstl/issues/2086>`_ remains open.
+
 The legacy MLX copy reference at
 ``846d176227a0ac13d2667e58d2bb68b322109ab0`` proves all 2,496 discovered entries
 from ``copy.metal`` through Metal-to-CrossGL-to-Metal translation. The family

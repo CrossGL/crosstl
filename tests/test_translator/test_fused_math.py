@@ -195,7 +195,7 @@ def test_ci_requires_native_fma_on_all_three_platforms(job):
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     step = ci_coverage.workflow_job_step_section(
-        workflow, job, "Validate binary32 fused arithmetic"
+        workflow, job, "Validate binary32 arithmetic"
     )
     assert "if:" not in step
     assert f'{REQUIRE_ENV}: "1"' in step
@@ -281,7 +281,11 @@ kernel void fused_control(device const uint* values [[buffer(0)]],
     assert mismatches == []
 
 
-def _dispatch(tmp_path, target, generated, triples, output_count, entry=None):
+def _dispatch(
+    tmp_path, target, generated, triples, output_count, entry=None, initial_output=None
+):
+    if initial_output is not None:
+        assert len(initial_output) == output_count
     artifact, module = _compile(generated, target, tmp_path)
     assert module.is_file(), "A native compiler must produce the module"
     values = [value for triple in triples for value in triple]
@@ -296,9 +300,9 @@ def _dispatch(tmp_path, target, generated, triples, output_count, entry=None):
     buffers = {}
     for name, slot, data, count in (
         ("values", 0, values, len(values)),
-        ("results", 1, None, output_count),
+        ("results", 1, initial_output, output_count),
     ):
-        output = data is None
+        output = name == "results"
         buffers[name] = NativeRuntimeBufferBinding(
             name=name,
             binding=RuntimeResourceBinding(
@@ -340,6 +344,8 @@ def _dispatch(tmp_path, target, generated, triples, output_count, entry=None):
     }[target]()
     state = SimpleNamespace(details={})
     (tmp_path / "inputs.json").write_text(json.dumps(triples))
+    if initial_output is not None:
+        (tmp_path / "initial-output.json").write_text(json.dumps(initial_output))
     try:
         actual = runtime.dispatch(None, state, request)["results"]["values"]
     except Exception as error:
