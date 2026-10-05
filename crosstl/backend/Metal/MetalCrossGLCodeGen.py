@@ -460,6 +460,22 @@ class MetalAliasTemplateResolutionError(ValueError):
         )
 
 
+class MetalScalarAliasResolutionError(ValueError):
+    """Raised when a concrete scalar alias has no unique declared meaning."""
+
+    project_diagnostic_code = "project.translate.metal-scalar-alias-unresolved"
+    missing_capabilities = ("metal.scalar-alias-resolution",)
+
+    def __init__(
+        self, alias_name, reason, *, source_location=None, dependency_chain=()
+    ):
+        self.alias_name = alias_name
+        self.reason = reason
+        self.source_location = source_location
+        self.dependency_chain = tuple(dependency_chain)
+        super().__init__(f"Cannot resolve Metal scalar alias '{alias_name}': {reason}")
+
+
 class MetalStructAliasResolutionError(ValueError):
     """Raised when a struct-scoped Metal alias has no unique concrete type."""
 
@@ -1484,6 +1500,10 @@ class MetalToCrossGLConverter:
         self.type_alias_pointee_qualifiers = {}
         self.alias_template_declarations = {}
         self.alias_template_plain_declarations = {}
+        self.scalar_alias_bindings = {}
+        self.scalar_alias_names = set()
+        self.parameter_type_contexts = {}
+        self.type_alias_enum_declarations = {}
         self.alias_template_cache = {}
         self.alias_template_resolution_stack = []
         self.alias_template_structs = []
@@ -2733,6 +2753,10 @@ class MetalToCrossGLConverter:
         self.cooperative_matrix_fragment_type_replacements = {}
         self.alias_template_declarations = {}
         self.alias_template_plain_declarations = {}
+        self.scalar_alias_bindings = {}
+        self.scalar_alias_names = set()
+        self.parameter_type_contexts = {}
+        self.type_alias_enum_declarations = {}
         self.alias_template_cache = {}
         self.alias_template_resolution_stack = []
         self.alias_template_structs = []
@@ -5174,6 +5198,24 @@ class MetalToCrossGLConverter:
 
         self.alias_template_declarations = declarations
         self.alias_template_plain_declarations = plain_declarations
+        self.scalar_alias_bindings = {}
+        self.scalar_alias_names = {
+            declaration.name
+            for declarations in plain_declarations.values()
+            for declaration in declarations
+        }
+        self.parameter_type_contexts = {
+            id(parameter): function
+            for function in getattr(ast, "functions", ()) or ()
+            for parameter in getattr(function, "params", ()) or ()
+        }
+        self.type_alias_enum_declarations = {}
+        for declaration in getattr(ast, "enums", ()) or ():
+            name = getattr(declaration, "qualified_name", None) or declaration.name
+            if name:
+                self.type_alias_enum_declarations.setdefault(name, []).append(
+                    declaration
+                )
         self.alias_template_cache = {}
         self.alias_template_resolution_stack = []
         self.alias_template_structs = [
@@ -5200,6 +5242,126 @@ class MetalToCrossGLConverter:
         return self.normalize_qualified_type_name(
             getattr(context, "namespace", "") if context is not None else ""
         )
+
+    def scalar_alias_declarations(self, name, context=None):
+        if str(name).rsplit("::", 1)[-1] not in self.scalar_alias_names:
+            return []
+        if not re.fullmatch(r"(?:::)?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*", str(name)):
+            return []
+        previous = self.current_type_resolution_context
+        if context is not None:
+            self.current_type_resolution_context = context
+        try:
+            for tier in self.alias_lookup_name_tiers(name):
+                declarations = [
+                    declaration
+                    for candidate in tier
+                    for declaration in self.alias_template_plain_declarations.get(
+                        candidate, ()
+                    )
+                    if self.declaration_visible_at_current_offset(declaration)
+                ]
+                if not declarations and any(
+                    self.declaration_visible_at_current_offset(declaration)
+                    for candidate in tier
+                    for declaration in (
+                        *self.alias_template_structs_by_qualified_name.get(
+                            candidate, ()
+                        ),
+                        *self.type_alias_enum_declarations.get(candidate, ()),
+                        *self.alias_template_declarations.get(candidate, ()),
+                    )
+                ):
+                    return []
+                if declarations:
+                    owners = {
+                        getattr(declaration, "qualified_name", declaration.name)
+                        for declaration in declarations
+                    }
+                    if len(owners) != 1:
+                        raise MetalScalarAliasResolutionError(
+                            str(name),
+                            "lookup is ambiguous in the declaration context",
+                            source_location=getattr(
+                                self.current_type_resolution_context,
+                                "source_location",
+                                None,
+                            )
+                            or getattr(
+                                self.current_type_resolution_context,
+                                "declaration_source_location",
+                                None,
+                            ),
+                        )
+                    return declarations
+            return []
+        finally:
+            self.current_type_resolution_context = previous
+
+    def scalar_alias_binding(self, name, *, context=None, stack=()):
+        if context is None and str(name) in self.alias_resolution_shadow_names():
+            return None
+        declarations = self.scalar_alias_declarations(name, context)
+        if not declarations:
+            return None
+        bindings = [
+            self.scalar_alias_declaration_binding(alias, stack)
+            for alias in declarations
+        ]
+        concrete = [binding for binding in bindings if binding is not None]
+        if concrete and (len(concrete) != len(bindings) or len(set(concrete)) != 1):
+            raise MetalScalarAliasResolutionError(
+                str(name),
+                "visible declarations define conflicting concrete alias targets",
+                source_location=getattr(declarations[-1], "source_location", None),
+            )
+        return concrete[0] if concrete else None
+
+    def scalar_alias_needs_inline(self, alias):
+        if getattr(alias, "namespace", ""):
+            return True
+        return any(
+            name.rsplit("::", 1)[-1] == alias.name
+            for name in (
+                *self.alias_template_structs_by_qualified_name,
+                *self.type_alias_enum_declarations,
+                *self.alias_template_declarations,
+            )
+        )
+
+    def scalar_alias_declaration_binding(self, alias, stack=()):
+        key = id(alias)
+        if key in self.scalar_alias_bindings:
+            return self.scalar_alias_bindings[key]
+        if alias in stack:
+            raise MetalScalarAliasResolutionError(
+                alias.name,
+                "the alias dependency chain is recursive",
+                source_location=getattr(alias, "source_location", None),
+                dependency_chain=[node.name for node in (*stack, alias)],
+            )
+        target = str(alias.alias_type).strip()
+        if (
+            getattr(alias, "array_sizes", None)
+            or getattr(alias, "declarator_type_suffix", "")
+            or any(token in target for token in "*&[]")
+            or self.is_template_alias_declaration(alias)
+            or getattr(alias, "is_function_type", False)
+        ):
+            return None
+        qualifiers = set(getattr(alias, "qualifiers", ()) or ())
+        parent = self.scalar_alias_binding(target, context=alias, stack=(*stack, alias))
+        if parent is not None:
+            target, inherited = parent
+            qualifiers.update(inherited)
+        mapped = self.type_map.get(target)
+        if mapped is None or self.crossgl_typedef_source_type(mapped) is None:
+            return None
+        if qualifiers - {"const", "volatile"}:
+            return None
+        binding = (target, tuple(sorted(qualifiers)))
+        self.scalar_alias_bindings[key] = binding
+        return binding
 
     def alias_resolution_offset(self):
         return self.alias_source_offset(self.current_type_resolution_context)
@@ -5260,6 +5422,7 @@ class MetalToCrossGLConverter:
                         name == candidate or name.startswith(f"{candidate}::")
                         for name in (
                             *self.alias_template_declarations,
+                            *self.alias_template_plain_declarations,
                             *self.alias_template_structs_by_qualified_name,
                         )
                     )
@@ -8066,6 +8229,13 @@ class MetalToCrossGLConverter:
         while metal_type.endswith(("*", "&")):
             metal_type = metal_type[:-1].strip()
 
+        binding = self.scalar_alias_binding(
+            metal_type, context=self.parameter_type_contexts.get(id(var))
+        )
+        if binding is not None:
+            qualifiers.extend(binding[1])
+            return list(dict.fromkeys(qualifiers))
+
         seen = set()
         while metal_type in self.type_aliases and metal_type not in seen:
             seen.add(metal_type)
@@ -8238,6 +8408,23 @@ class MetalToCrossGLConverter:
             type_str = f"{mapped_type}{type_array_suffix}"
         address_space = self.address_space_qualifier_prefix(var)
         qualifiers = set(self.effective_declaration_qualifiers(var))
+        alias_name = str(getattr(var, "vtype", ""))
+        if (
+            "volatile" in qualifiers
+            and not self.declaration_has_resource_storage(var)
+            and (
+                self.scalar_alias_binding(alias_name) is not None
+                or alias_name in self.local_type_alias_names
+            )
+        ):
+            raise MetalScalarAliasResolutionError(
+                alias_name,
+                "volatile-qualified scalar aliases require resource storage",
+                source_location=getattr(var, "source_location", None)
+                or getattr(
+                    self.current_type_resolution_context, "source_location", None
+                ),
+            )
         lowered_buffer_type = self.constant_buffer_pointer_type(
             var
         ) or self.structured_buffer_pointer_type(var)
@@ -8273,6 +8460,13 @@ class MetalToCrossGLConverter:
             "const "
             if (
                 getattr(var, "is_const", False)
+                or (
+                    "const" in qualifiers
+                    and (
+                        self.scalar_alias_binding(alias_name) is not None
+                        or alias_name in self.local_type_alias_names
+                    )
+                )
                 or const_pointer_pointee
                 or const_device_indirection
             )
@@ -9860,6 +10054,16 @@ class MetalToCrossGLConverter:
         if not name or not alias_type:
             return
         alias_qualifiers = list(getattr(alias, "qualifiers", None) or [])
+        binding = self.scalar_alias_binding(alias_type)
+        if binding is not None:
+            alias_type, inherited = binding
+            alias_qualifiers = list(dict.fromkeys([*alias_qualifiers, *inherited]))
+        elif alias_type in self.local_type_alias_names:
+            alias_qualifiers = list(
+                dict.fromkeys(
+                    [*alias_qualifiers, *self.type_alias_qualifiers.get(alias_type, ())]
+                )
+            )
         self.type_alias_pointee_qualifiers[name] = list(
             getattr(alias, "pointee_qualifiers", alias_qualifiers) or []
         )
@@ -9908,7 +10112,12 @@ class MetalToCrossGLConverter:
             )
         ):
             return
-        self.type_aliases[name] = alias_type
+        # Bind primitive dependencies now, before later declarations shadow them.
+        self.type_aliases[name] = (
+            self.resolve_type_alias(alias_type)
+            if self.crossgl_typedef_source_type(mapped_alias_type) is not None
+            else alias_type
+        )
         self.type_alias_qualifiers[name] = alias_qualifiers
         self.local_type_alias_names.add(name)
 
@@ -12460,6 +12669,13 @@ class MetalToCrossGLConverter:
         metal_type = self.metal_declaration_expression_type(parameter)
         if metal_type is None:
             return None
+        context = self.parameter_type_contexts.get(id(parameter))
+        if context is not None:
+            base = str(metal_type).rstrip("*&").strip()
+            suffix = str(metal_type)[len(base) :]
+            binding = self.scalar_alias_binding(base, context=context)
+            if binding is not None:
+                return f"{binding[0]}{suffix}"
         resolved = self.resolve_local_type_aliases(metal_type)
         resolved = self.substitute_template_type_text(resolved)
         resolved = self.resolve_type_alias(resolved)
@@ -14848,6 +15064,12 @@ float {scalar}(float value) {{
         while alias_base.endswith("*") or alias_base.endswith("&"):
             alias_suffix = alias_base[-1] + alias_suffix
             alias_base = alias_base[:-1].strip()
+        scalar_alias = self.scalar_alias_binding(alias_base)
+        if scalar_alias is not None and any(
+            self.scalar_alias_needs_inline(alias)
+            for alias in self.scalar_alias_declarations(alias_base)
+        ):
+            return f"{self.map_type(scalar_alias[0])}{alias_suffix}"
         resolved_alias = self.resolve_type_alias(alias_base)
         if resolved_alias != alias_base:
             wide_vector_alias = self.wide_vector_type_info(resolved_alias)
@@ -15567,8 +15789,29 @@ float {scalar}(float value) {{
         ):
             return None
 
+        scalar_binding = self.scalar_alias_binding(alias.name, context=alias)
+        if scalar_binding is not None and self.scalar_alias_needs_inline(alias):
+            # Namespace-local primitive aliases are resolved at each use, so
+            # flattening namespaces cannot merge unrelated typedef names.
+            return None
         mapped_type = self.crossgl_typedef_source_type(self.map_type_alias(alias))
         alias_name = self.sanitize_identifier(alias.name)
+        target = str(alias.alias_type).strip()
+        if (
+            not mapped_type
+            and re.fullmatch(r"[A-Za-z_]\w*", target)
+            and target not in self.type_map
+            and target not in self.struct_name_map
+            and target not in self.metal_enum_arithmetic_types
+            and not self.scalar_alias_declarations(target, context=alias)
+            and not getattr(alias, "array_sizes", None)
+            and not getattr(alias, "declarator_type_suffix", "")
+        ):
+            raise MetalScalarAliasResolutionError(
+                alias.name,
+                f"target '{target}' has no concrete visible declaration",
+                source_location=getattr(alias, "source_location", None),
+            )
         if not mapped_type or not alias_name or mapped_type == alias_name:
             return None
         return f"typedef {mapped_type} {alias_name};"
@@ -15577,9 +15820,11 @@ float {scalar}(float value) {{
         storage_type = self.map_storage_texture_type(alias.alias_type)
         if storage_type:
             return storage_type
-        if self.normalized_metal_type(alias.alias_type) == "half":
+        scalar_binding = self.scalar_alias_declaration_binding(alias)
+        target = scalar_binding[0] if scalar_binding is not None else alias.alias_type
+        if self.normalized_metal_type(target) == "half":
             return "f16"
-        return self.map_type(alias.alias_type)
+        return self.map_type(target)
 
     def crossgl_typedef_source_type(self, mapped_type):
         mapped_type = str(mapped_type).strip()
@@ -15707,17 +15952,46 @@ float {scalar}(float value) {{
             suffix = base[-1] + suffix
             base = base[:-1].strip()
 
+        scalar_binding = self.scalar_alias_binding(base)
+        if scalar_binding is not None:
+            return f"{scalar_binding[0]}{suffix}"
         base = self.materialize_alias_template_type(base)
         seen = set()
-        while base in self.type_aliases and base not in seen:
-            seen.add(base)
-            aliased = str(self.type_aliases[base]).strip()
-            alias_suffix = ""
-            while aliased.endswith("*") or aliased.endswith("&"):
-                alias_suffix = aliased[-1] + alias_suffix
-                aliased = aliased[:-1].strip()
-            base = self.materialize_alias_template_type(aliased)
-            suffix = alias_suffix + suffix
+        previous_context = self.current_type_resolution_context
+        local = True
+        try:
+            while True:
+                active_binding = local and (
+                    base in self.local_type_alias_names
+                    or any(base in scope for scope in self.template_type_bindings)
+                )
+                declarations = (
+                    [] if active_binding else self.scalar_alias_declarations(base)
+                )
+                if declarations:
+                    declaration = declarations[0]
+                    key = id(declaration)
+                    aliased = str(declaration.alias_type).strip()
+                    self.current_type_resolution_context = declaration
+                    local = False
+                elif base in self.type_aliases and (
+                    active_binding or base not in self.scalar_alias_names
+                ):
+                    key = ("local", base)
+                    aliased = str(self.type_aliases[base]).strip()
+                else:
+                    break
+                if key in seen:
+                    break
+                seen.add(key)
+                alias_suffix = ""
+                while aliased.endswith("*") or aliased.endswith("&"):
+                    alias_suffix = aliased[-1] + alias_suffix
+                    aliased = aliased[:-1].strip()
+                base = self.materialize_alias_template_type(aliased)
+                suffix = alias_suffix + suffix
+        finally:
+            self.current_type_resolution_context = previous_context
         return f"{base}{suffix}"
 
     def atomic_element_type(self, metal_type):
@@ -16903,7 +17177,9 @@ float {scalar}(float value) {{
         if return_type is None:
             return None
         return_type = self.substitute_template_type_text(return_type)
-        return self.substitute_template_value_text(return_type)
+        return_type = self.substitute_template_value_text(return_type)
+        binding = self.scalar_alias_binding(return_type, context=function)
+        return binding[0] if binding is not None else return_type
 
     def unresolved_selected_return_parameters(self, function, return_type, arguments):
         identifiers = set(re.findall(r"\b[A-Za-z_]\w*\b", str(return_type or "")))

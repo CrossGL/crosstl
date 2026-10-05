@@ -163,14 +163,20 @@
         },
         "metal": {
           "status": "supported",
-          "notes": "Qualified Metal math builtins retain ownership across colliding source helpers, explicit global calls, imported names, and source-owned namespace extensions through collision-safe overload transport. Required bounded numerical CI executes the reduced fixture on DirectX, OpenGL, and Metal, with original-source Metal parity; this does not establish general C++ namespace conformance or whole-repository runtime coverage.",
+          "notes": "Qualified Metal math builtins retain ownership across colliding source helpers, explicit global calls, imported names, and source-owned namespace extensions through collision-safe overload transport. Primitive using/typedef chains bind in declaration context, preserving local shadowing, namespace ownership, inherited read-only qualification and logical half/bfloat types. Invalid primitive aliases and unsupported volatile scalar values produce structured diagnostics. Required bounded numerical CI executes reduced controls on DirectX, OpenGL, and Metal, with original-source Metal parity; this does not establish general C++ namespace conformance or whole-repository runtime coverage.",
           "evidence": [
             "tests/test_backend/test_metal/test_parser.py::def test_",
             "tests/test_backend/test_metal/test_codegen.py::def test_buffer_compound_assignment_preserves_single_index_evaluation",
             "tests/test_translator/test_metal_builtin_ownership.py::def test_qualified_metal_builtin_and_source_overloads_compile",
             "tests/test_translator/test_metal_builtin_ownership.py::def test_imported_builtin_does_not_bind_unrelated_namespace_helper",
             "tests/test_translator/test_metal_builtin_ownership.py::def test_builtin_transport_avoids_source_identifiers",
-            "tests/test_translator/test_metal_builtin_ownership.py::def test_metal_builtin_ownership_executes"
+            "tests/test_translator/test_metal_builtin_ownership.py::def test_metal_builtin_ownership_executes",
+            "tests/test_translator/test_scalar_aliases.py::def test_scalar_aliases_translate_and_compile",
+            "tests/test_translator/test_scalar_aliases.py::def test_scalar_alias_resource_elements_translate_and_compile",
+            "tests/test_translator/test_scalar_aliases.py::def test_scalar_aliases_execute",
+            "tests/test_translator/test_scalar_aliases.py::def test_namespace_scalar_aliases_execute",
+            "tests/test_translator/test_scalar_aliases.py::def test_project_reports_scalar_alias_failure_without_an_artifact",
+            "tests/test_translator/test_scalar_aliases.py::def test_scalar_aliases_do_not_silently_drop_volatile_value_qualification"
           ]
         },
         "vulkan": {

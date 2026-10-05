@@ -23570,6 +23570,29 @@ def _metal_template_argument_failure_details(
     return dict(sorted(details.items()))
 
 
+def _metal_scalar_alias_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-scalar-alias-unresolved"
+    ):
+        return {}
+    alias: dict[str, Any] = {
+        "aliasName": str(exc.alias_name),
+        "reason": str(exc.reason),
+    }
+    chain = getattr(exc, "dependency_chain", ())
+    if chain:
+        alias["dependencyChain"] = list(chain)
+    return {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+        "scalarAlias": alias,
+    }
+
+
 def _metal_struct_alias_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -24934,6 +24957,7 @@ def _translation_failure_details(
         **_metal_static_constant_failure_details(exc, unit, artifact_path),
         **_metal_sizeof_failure_details(exc, unit, artifact_path),
         **_metal_template_argument_failure_details(exc, unit, artifact_path),
+        **_metal_scalar_alias_failure_details(exc, unit, artifact_path),
         **_metal_struct_alias_failure_details(exc, unit, artifact_path),
         **_metal_callable_failure_details(exc, unit, artifact_path),
         **_metal_callable_alias_failure_details(exc, unit, artifact_path),

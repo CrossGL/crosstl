@@ -34,6 +34,19 @@ The backend focuses on Apple GPU shader integration:
   mappings
 * Metal-specific handling for char-like types through ``CharTypeMapper``
 
+Primitive ``using`` and ``typedef`` chains retain their declaration context,
+including namespace imports, qualified names, declaration order and local
+shadowing. Scalar ``half`` and ``bfloat`` aliases retain their logical types
+through helper parameters, return values, constructors and buffer elements.
+Read-only qualification is inherited through alias chains. Namespace-local
+primitive aliases are resolved at use sites rather than emitted as conflicting
+global typedefs. Cyclic, ambiguous, conflicting or missing primitive targets
+produce ``project.translate.metal-scalar-alias-unresolved`` diagnostics with
+source locations; no target artifact is emitted. Non-resource volatile scalar
+aliases are also diagnosed because their value qualification is not yet
+represented in the shared source. Pointer, aggregate and template aliases
+continue to use their existing resolution paths.
+
 Byte-valued struct initializers convert expression carriers back to the declared
 ``char`` or ``uchar`` storage type. The same rule covers byte vectors, aliases,
 materialized generic fields, nested aggregates and fixed arrays; omitted byte

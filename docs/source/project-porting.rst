@@ -1661,9 +1661,16 @@ commands must preserve the same option.
 HLSL resolves retained scalar type aliases before selecting bfloat conversions.
 Their logical bfloat type remains distinct from the physical ``uint`` register
 payload, including initialization, helper parameters, returns and arithmetic.
-Alias chains work when the intermediate representation retains each declaration.
-The Metal frontend can still omit a dependent alias declaration; that separate
-limitation remains tracked in `issue 2075 <https://github.com/CrossGL/crosstl/issues/2075>`_.
+The Metal frontend retains dependent primitive aliases and resolves namespace
+ownership before emitting the intermediate source. Dependencies bind at their
+declarations, so a later local alias cannot change a helper's parameter or return
+type. Required native controls cover floating-point, integer, half and bfloat
+chains, local shadowing and namespace-owned overloads, with unchanged Metal
+sources as controls on macOS. Invalid primitive alias resolution produces
+``project.translate.metal-scalar-alias-unresolved`` with a ``scalarAlias`` detail
+record containing ``aliasName``, ``reason`` and, for cycles, ``dependencyChain``.
+This does not establish arbitrary C++ name lookup or volatile scalar-value
+support; unsupported volatile value aliases fail translation.
 
 Successful artifacts that use this path record a ``bfloat16Lowering`` object
 with ``status`` set to ``exact``, ``approximationUsed`` set to ``false``, and

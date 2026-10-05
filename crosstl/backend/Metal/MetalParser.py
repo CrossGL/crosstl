@@ -1872,13 +1872,17 @@ class MetalParser:
         return union_node
 
     def parse_enum(self):
+        start_token = self.current_token
         name, is_scoped, underlying_type = self.parse_enum_header()
         self.eat("LBRACE")
         members = self.parse_enum_members()
         self.eat("RBRACE")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-        enum = EnumNode(name, members)
+        enum = self.annotate_declaration_scope(EnumNode(name, members))
+        enum.source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
+        )
         enum.is_scoped = is_scoped
         enum.underlying_type = underlying_type
         return enum

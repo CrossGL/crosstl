@@ -3313,6 +3313,32 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Validate scalar alias resolution
+        shell: bash
+        env:
+          CROSTL_REQUIRE_SCALAR_ALIASES: "1"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+          EGL_PLATFORM: surfaceless
+        run: |
+          set -euo pipefail
+          mkdir -p scalar-alias-results
+          python tools/run_bounded_command.py \
+            --label "Scalar alias resolution" --timeout-seconds 120 -- \
+            python -m pytest -q -n auto \
+              --basetemp="scalar-alias-results/pytest" \
+              --junitxml="scalar-alias-results/results.xml" \
+              tests/test_translator/test_scalar_aliases.py
+
+      - name: Upload scalar alias evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scalar-alias-resolution-${{ runner.os }}
+          path: scalar-alias-results
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Checkout pinned MLX
         shell: bash
         run: |
