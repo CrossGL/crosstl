@@ -38,7 +38,7 @@ UNARY_DIRECTX_CONTRACT_PATH = (
     / "unary.directx-translation.json"
 )
 UNARY_DIRECTX_CONTRACT_SHA256 = (
-    "0a2c0ea2eacdc97ec3d3da60ac5314e121dbe73bbe93dbc16da8bea86674afb5"
+    "936601b95f9099df378f7d0c7266f1595c648caf75304c789b60f252ead8db75"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
@@ -259,7 +259,7 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
             "gn4large": 1098,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 3714678,
+        "generatedSizeBytesTotal": 3766443,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 2262},
             "maximum": {
@@ -298,7 +298,7 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 3714678
+    assert sum(entry["sizeBytes"] for entry in entries) == 3766443
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
         2262,
         "v_Absint32int32",
@@ -430,7 +430,13 @@ def _expected_materializations(workload: UnaryDirectXWorkload) -> list[dict]:
     return records
 
 
-def _project_config(workload: UnaryDirectXWorkload) -> str:
+def _project_config(
+    workload: UnaryDirectXWorkload, *, binary32_division_profile: str | None = None
+) -> str:
+    profile_option = ""
+    if binary32_division_profile is not None:
+        assert binary32_division_profile in {"rne-gradual", "rne-flush"}
+        profile_option = f'binary32_division_profile = "{binary32_division_profile}"'
     assertions = "\n\n".join(textwrap.dedent(f"""
             [[project.index_range_assertions]]
             source = "{MLX_UNARY_SOURCE}"
@@ -458,6 +464,7 @@ def _project_config(workload: UnaryDirectXWorkload) -> str:
         [project.source_options.metal]
         max_template_specializations = 64
         max_template_materialization_work = 4096
+        {profile_option}
 
         {assertions}
         """).strip()
@@ -523,6 +530,24 @@ def test_unary_artifact_refresh_preserves_corpus_scope():
         "unchangedSourceAndInterfaceContracts": True,
         "numericalExecution": False,
         "fullUpstreamSuite": False,
+        "followupReviews": [
+            {
+                "reason": (
+                    "Preserve precise exponential calls and bfloat arithmetic boundaries."
+                ),
+                "previousContractSha256": (
+                    "0a2c0ea2eacdc97ec3d3da60ac5314e121dbe73bbe93dbc16da8bea86674afb5"
+                ),
+                "changedEntryCount": 20,
+                "unaffectedEntryCount": 857,
+                "reviewedBodyCount": 34,
+                "nativeCompiledEntryCount": 34,
+                "requiredNumericalEntryIdentitiesUnchanged": True,
+                "unchangedSourceAndInterfaceContracts": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            }
+        ],
     }
 
 
@@ -712,6 +737,12 @@ def _translate_and_validate(
     if workload.input_type == "bfloat16_t" and workload.operator_type == "Sigmoid":
         assert "uint y = __crossgl_bfloat16_from_float(" in generated
         assert "float16_t y" not in generated
+        assert "__crossgl_metal_precise_exp_float" not in generated
+    if workload.operator_type == "Exp" and workload.input_type != "complex64_t":
+        assert (
+            "precise float __crossgl_metal_precise_exp_float(float value)" in generated
+        )
+        assert "Permission to use, copy, modify, and distribute" in generated
     if workload.input_type == "bfloat16_t" and workload.operator_type in {
         "ArcCosh",
         "ArcSinh",

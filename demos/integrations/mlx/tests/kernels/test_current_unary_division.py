@@ -1,11 +1,11 @@
 """Pinned bfloat Sigmoid boundaries with precise exponential and division."""
 
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import tempfile
-from dataclasses import replace
 from decimal import Decimal, localcontext
 from functools import lru_cache
 from pathlib import Path
@@ -36,6 +36,22 @@ from tools import ci_coverage
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_UNARY_DIVISION"
 ENTRY = "v_Sigmoidbfloat16bfloat16"
 SOURCE = "mlx/backend/metal/kernels/unary.metal"
+SOURCE_SHA256 = "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b"
+PROFILE = "rne-flush"
+ARTIFACTS = {
+    "metal": {
+        "sha256": "435a8a36730f33d9f7edd0cb8cea7961b57aea7bfcb909011d070f8c88be2e86",
+        "sizeBytes": 6528,
+    },
+    "opengl": {
+        "sha256": "c875953cd46217256c9228247220ebec524bb8b938b03b6733799e53bddfeeaa",
+        "sizeBytes": 10670,
+    },
+    "directx": {
+        "sha256": "26d709850bef007fc27f68de6f624120c4cb93b711ee9b649401d854cc272a0d",
+        "sizeBytes": 9914,
+    },
+}
 # Original Metal 3.1, -fno-fast-math readbacks at MLX_COMMIT. These cover the
 # division underflow boundary and the exponential's bfloat rounding midpoint.
 CASES = (
@@ -105,6 +121,24 @@ def test_sigmoid_reference_matches_original_boundary_readbacks():
     assert (0x7F80, 0x3F80) in cases and (0xFF80, 0x0000) in cases
 
 
+@pytest.mark.parametrize("profile", (None, "rne-gradual", "rne-flush"))
+def test_unary_project_configuration_retains_arithmetic_profile(tmp_path, profile):
+    workload = next(w for w in UNARY_DIRECTX_WORKLOADS if w.entry_point == ENTRY)
+    config_path = tmp_path / "crosstl.toml"
+    config_path.write_text(
+        _project_config(workload, binary32_division_profile=profile), encoding="utf-8"
+    )
+    config = load_project_config(tmp_path, config_path)
+    expected = {
+        "max_template_specializations": 64,
+        "max_template_materialization_work": 4096,
+    }
+    if profile is not None:
+        expected["binary32_division_profile"] = profile
+    assert config.source_options == {"metal": expected}
+    assert config.entry_points == {SOURCE: ENTRY}
+
+
 def test_ci_requires_pinned_division_once_per_platform():
     workflow = (
         Path(__file__).resolve().parents[5]
@@ -162,15 +196,12 @@ def test_current_bfloat_sigmoid_non_nan_domain(tmp_path):
         work = Path(directory)
         try:
             config_path = work / "crosstl.toml"
-            config_path.write_text(_project_config(workload), encoding="utf-8")
-            base = load_project_config(root, config_path)
-            options = {
-                "metal": {
-                    **base.source_options["metal"],
-                    "binary32_division_profile": "rne-flush",
-                }
-            }
-            config = replace(base, source_options=options)
+            config_path.write_text(
+                _project_config(workload, binary32_division_profile=PROFILE),
+                encoding="utf-8",
+            )
+            config = load_project_config(root, config_path)
+            options = config.source_options
             (work / "source-options.json").write_text(
                 json.dumps(options, indent=2), encoding="utf-8"
             )
@@ -188,7 +219,24 @@ def test_current_bfloat_sigmoid_non_nan_domain(tmp_path):
             ), data["diagnostics"]
             artifact = data["artifacts"][0]
             assert artifact["entryPoint"]["source"] == ENTRY
-            assert artifact["provenance"]["binary32DivisionProfile"] == "rne-flush"
+            assert artifact["sourceHash"] == {
+                "algorithm": "sha256",
+                "value": SOURCE_SHA256,
+            }
+            assert artifact["provenance"]["binary32DivisionProfile"] == PROFILE
+            assert data["project"]["sourceOptions"] == options
+            identity = ARTIFACTS[target]
+            generated = (root / artifact["path"]).read_bytes()
+            assert artifact["generatedHash"] == {
+                "algorithm": "sha256",
+                "value": identity["sha256"],
+            }
+            assert hashlib.sha256(generated).hexdigest() == identity["sha256"]
+            assert (
+                len(generated)
+                == artifact["generatedSizeBytes"]
+                == identity["sizeBytes"]
+            )
             manifest = build_runtime_artifact_manifest(work / "report.json")
             assert manifest["success"], manifest
             (work / "artifacts.json").write_text(json.dumps(manifest), encoding="utf-8")

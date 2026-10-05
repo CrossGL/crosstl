@@ -726,12 +726,18 @@ in total. Source scalar uses of
 ``device const int& ndim`` alias ``ndim[0]`` and source ``out_idx++`` remains a
 postfix update.
 
-The reviewed HLSL references total 3,714,678 bytes. Every artifact has a complete
-comparison against its hash-verified original and warnings-fatal DXC compilation.
-This updates 603 identities and retains 274; source pins, materialization, ABI
-and launch contracts are unchanged. The separate required Windows Square and
+The reviewed HLSL references total 3,766,443 bytes. The earlier complete review
+compared all 877 artifacts against hash-verified originals and compiled them
+with warnings fatal, updating 603 identities and retaining 274. A subsequent
+review recompiles all 34 Exp and Sigmoid entries and updates 20 identities:
+15 scalar Exp entries preserve precise exponential calls and five bfloat
+Sigmoid entries preserve source arithmetic boundaries. The remaining 14
+selected bodies are unchanged. Source pins, materialization, ABI and launch
+contracts are unchanged. The separate required Windows Square and
 ArcCos numerical tests keep their existing artifact identities and tolerances.
 This compiler contract does not establish numerical parity for all 877 entries.
+Historical Sigmoid uses the default exponential and no optional division
+profile; the current-pin, explicitly profiled numerical proof is separate.
 
 DirectX bfloat support covers every unary intrinsic required by the family.
 The inverse-hyperbolic ``acosh``, ``asinh``, and ``atanh`` paths decode bfloat

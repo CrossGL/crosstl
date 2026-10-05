@@ -155,7 +155,9 @@ differences at the current pin. Generated Metal and OpenGL now match the
 unchanged original Metal kernel for all 65,282 non-NaN bfloat inputs, with
 guards intact. An independent Decimal reference, rounded at the source's
 binary32 and bfloat boundaries, also matches every original readback. The
-division profile is retained in report and runtime-artifact provenance.
+division profile is retained in the saved project configuration, report and
+runtime-artifact provenance. The numerical test checks the generated source
+hash and size against the reviewed artifact for each target before execution.
 
 The existing native project job now checks that full domain and eight trailing
 guards on each platform, instead of adding a separate runner. It retains 19
@@ -378,13 +380,19 @@ The current harness verifies:
   entry point `CSMain`; the gate requires 877 non-empty DXIL modules. Together
   with the OpenGL proof this records complete discovered unary translation,
   reflection, and native compiler coverage at the recorded revisions, not
-  numerical execution or MLX host runtime redirection. The reference update
-  compiles all 877 current HLSL outputs and compares their complete
+  numerical execution or MLX host runtime redirection. The earlier reference
+  update compiled all 877 HLSL outputs and compared their complete
   bodies against hash-verified originals: 603 changed and 274 unchanged. The
   differences are accounted for by source-width arithmetic, byte and half
   conversions, Boolean promotion, sign preservation and precise math helpers.
   Checks with deliberately altered bindings, index steps, conversion widths
-  and helper coefficients fail. The reviewed references total 3,714,678 bytes;
+  and helper coefficients fail. A subsequent review recompiles all 34 Exp and
+  Sigmoid entries: 15 scalar Exp and five bfloat Sigmoid bodies change, while
+  the other 14 bodies are unchanged. The Exp changes preserve the source's
+  precise exponential call and half/bfloat return boundaries; the Sigmoid
+  changes preserve bfloat arithmetic instead of inferring a half temporary.
+  Their complete body review rejects altered bindings, index steps, rounding
+  constants and temporary types. The references now total 3,766,443 bytes;
   source identities, classifications, resource bindings and dispatch contracts
   are unchanged. The required Windows Square and ArcCos numerical tests retain
   their existing shader identities, inputs and tolerances. Other historical
@@ -392,14 +400,11 @@ The current harness verifies:
   [crosstl#2071](https://github.com/CrossGL/crosstl/issues/2071). Whole-family
   numerical parity is not claimed; bit-observable floating conversions also
   require the source-policy work tracked in
-  [crosstl#2081](https://github.com/CrossGL/crosstl/issues/2081). The subsequent
-  bfloat inferred-arithmetic correction in
-  [crosstl#2082](https://github.com/CrossGL/crosstl/issues/2082) changes the
-  affected Sigmoid bodies again. Their reference identities remain under
-  review; successful DXC compilation is not numerical acceptance. The Metal
-  math-boundary correction in [crosstl#2084](https://github.com/CrossGL/crosstl/issues/2084)
-  now has exact non-NaN Sigmoid Metal evidence at both pins, but does not approve
-  the remaining family identities;
+  [crosstl#2081](https://github.com/CrossGL/crosstl/issues/2081). The historical
+  Sigmoid source uses the default exponential, unlike the current pin's
+  precise call. This contract retains that distinction and does not enable
+  the optional binary32 division profile. The separately configured current-pin
+  full-domain Sigmoid test does not establish historical whole-family parity;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 2,496
   discovered copy entries from `copy.metal` at the legacy reference revision
   `846d176227a0ac13d2667e58d2bb68b322109ab0`. The schema-v2
