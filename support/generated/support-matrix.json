@@ -683,6 +683,7 @@
           "tests/test_translator/test_wide_integer_bfloat.py",
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_translator/test_metal_trunc.py",
+          "tests/test_translator/test_metal_constructor_bitcasts.py",
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_translator/test_metal_precise_asin.py",
           "tests/test_translator/test_metal_precise_trig.py",
@@ -697,7 +698,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2193
+        "test_count": 2204
       },
       "translator_codegen": {
         "exists": true,
