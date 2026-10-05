@@ -142,6 +142,113 @@ def test_structured_load_requires_indexed_element(tmp_path):
     assert _reflect(tmp_path, "directx", "result[0] = data.Load(3);")["data"] == 16
 
 
+@pytest.mark.parametrize(
+    "target,call",
+    [
+        ("directx", "asfloat"),
+        ("directx", "asint"),
+        ("directx", "asuint"),
+        ("directx", "asfloat16"),
+        ("directx", "asint16"),
+        ("directx", "asuint16"),
+        ("opengl", "floatBitsToInt"),
+        ("opengl", "floatBitsToUint"),
+        ("opengl", "intBitsToFloat"),
+        ("opengl", "uintBitsToFloat"),
+    ],
+)
+def test_bitcast_arguments_preserve_proven_footprints(tmp_path, target, call):
+    assert _reflect(tmp_path, target, f"result[0] = {call}(data[3]);")["data"] == 16
+
+
+@pytest.mark.parametrize(
+    "target,body,helper",
+    [
+        ("directx", "int i = asint(3.0); result[0] = data[i];", ""),
+        ("opengl", "int i = floatBitsToInt(3.0); result[0] = data[i];", ""),
+        ("directx", "result[0] = floatBitsToInt(data[3]);", ""),
+        ("opengl", "result[0] = asint(data[3]);", ""),
+        ("directx", "asuint(1.0, data[3], result[0]);", ""),
+        (
+            "directx",
+            "int i=3; result[0] = data[i] + asint(i);",
+            "int asint(inout int i);",
+        ),
+        (
+            "opengl",
+            "int i=3; result[0] = data[i] + floatBitsToInt(i);",
+            "int floatBitsToInt(inout int i);",
+        ),
+        (
+            "directx",
+            "int i=3; result[0] = data[i] + asint(i);",
+            "int asint(inout int i) { i=0; return 0; }",
+        ),
+        (
+            "opengl",
+            "int i=3; result[0] = data[i] + floatBitsToInt(i);",
+            "int floatBitsToInt(inout int i) { i=0; return 0; }",
+        ),
+    ],
+)
+def test_bitcasts_do_not_invent_values_or_bypass_mutations(
+    tmp_path, target, body, helper
+):
+    assert _reflect(tmp_path, target, body, helper)["data"] is None
+
+
+@pytest.mark.parametrize("count", [3, 4, 5])
+def test_half_bitcast_storage_enforces_minimum_input_extent(tmp_path, count):
+    from tests.test_translator.test_software_subgroup_product import (
+        _package as package_source,
+    )
+
+    source = """#include <metal_stdlib>
+using namespace metal;
+kernel void read_half(const device half* values [[buffer(0)]],
+                      device half* results [[buffer(1)]]) {
+    results[0] = values[3];
+}
+"""
+    _, descriptor, package = package_source(
+        tmp_path, "directx", "half", (1, 1, 1), source=source, software_subgroups=False
+    )
+    layouts = {b["name"]: b["scalarLayout"] for b in descriptor["bindings"]}
+    assert layouts["values"].get("minimumBindingSizeBytes") == 8
+    assert layouts["results"].get("minimumBindingSizeBytes") == 2
+    assert layouts["values"]["elementStrideBytes"] == 2
+
+    def payload(size):
+        return {
+            "dtype": "float16",
+            "encoding": "ieee754-binary16",
+            "shape": [size],
+            "values": [0x3C00] * size,
+        }
+
+    inputs = {"values": payload(count), "results": payload(1)}
+    outputs = {"results": payload(1)}
+    if count < 4:
+        with pytest.raises(NativeLoaderDispatchError) as caught:
+            build_native_loader_dispatch_request(
+                descriptor,
+                package,
+                inputs,
+                outputs,
+                [1, 1, 1],
+                expected_target="directx",
+            )
+        assert any(
+            diagnostic["code"].endswith("resource-view-too-small")
+            for diagnostic in caught.value.details["diagnostics"]
+        )
+    else:
+        request = build_native_loader_dispatch_request(
+            descriptor, package, inputs, outputs, [1, 1, 1], expected_target="directx"
+        )
+        assert request.execution_plan.diagnostics == ()
+
+
 def test_named_glsl_block_preserves_resource_identity(tmp_path):
     artifact = tmp_path / "instance.comp"
     artifact.write_text(

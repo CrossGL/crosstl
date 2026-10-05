@@ -16,6 +16,15 @@ from crosstl.project.integral_literals import (
 MAX_BINDING_SIZE = (1 << 63) - 1
 _MAX_INDEX = (1 << 31) - 1
 _INTEGER_TYPES = {"int", "uint", "int64_t", "uint64_t"}
+_VALUE_BITCASTS = {
+    "directx": {"asfloat", "asint", "asuint", "asfloat16", "asint16", "asuint16"},
+    "opengl": {
+        "floatBitsToInt",
+        "floatBitsToUint",
+        "intBitsToFloat",
+        "uintBitsToFloat",
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -61,7 +70,7 @@ def source_buffer_minimum_elements(
             return {}
     except (SyntaxError, ValueError, TypeError, IndexError, RecursionError):
         return {}
-    analyzer = _FootprintAnalyzer(tree, resource_names)
+    analyzer = _FootprintAnalyzer(tree, resource_names, target)
     try:
         analyzer.call(entry_points[0], [], ())
     except (_StopAnalysis, RecursionError):
@@ -99,12 +108,15 @@ def _integer(value: Any) -> int | None:
 
 
 class _FootprintAnalyzer:
-    def __init__(self, tree: Any, resources: Mapping[str, str]):
+    def __init__(self, tree: Any, resources: Mapping[str, str], target: str):
         self.functions: dict[str, list[Any]] = {}
         for function in tree.functions:
             if not getattr(function, "is_prototype", False):
                 self.functions.setdefault(function.name, []).append(function)
         self.globals = {name: _Buffer(binding) for name, binding in resources.items()}
+        self.value_bitcasts = _VALUE_BITCASTS.get(target, set()) - {
+            function.name for function in tree.functions
+        }
         self.requirements: dict[str, int] = {}
         self.remaining = 20000
 
@@ -190,7 +202,9 @@ class _FootprintAnalyzer:
                         for param in functions[0].params
                     ):
                         raise _StopAnalysis
-                elif not self.is_constructor(name):
+                elif not (
+                    self.is_constructor(name) or self.is_value_bitcast(name, node.args)
+                ):
                     method = node.name
                     if not (
                         isinstance(method, ast.MemberAccessNode)
@@ -211,6 +225,10 @@ class _FootprintAnalyzer:
         return name in _INTEGER_TYPES | {"float", "double", "bool"} or (
             name is not None and re.fullmatch(r"[iubd]?vec[234]", name) is not None
         )
+
+    def is_value_bitcast(self, name, arguments):
+        # The three-argument HLSL asuint overload writes through out parameters.
+        return name in self.value_bitcasts and len(arguments) == 1
 
     def expression(self, node, environment, stack):
         self.remaining -= 1
@@ -281,6 +299,8 @@ class _FootprintAnalyzer:
             # GLSL constructors do not mutate their scalar arguments. Other
             # unresolved calls may write through out parameters: stop here.
             if self.is_constructor(name):
+                return None
+            if self.is_value_bitcast(name, node.args):
                 return None
             raise _StopAnalysis
         raise _StopAnalysis

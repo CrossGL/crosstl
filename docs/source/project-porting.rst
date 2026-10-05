@@ -2972,6 +2972,10 @@ For a single reflected HLSL or GLSL entry, ``minimumBindingSizeBytes`` records
 the minimum buffer footprint proven by constant-index accesses in its mandatory
 straight-line prefix. Analysis uses the existing target parsers, follows unique
 helper definitions, and propagates buffer identity and bounded integer offsets.
+Known single-argument HLSL and GLSL bitcasts retain accesses in their operands,
+including HLSL's 16-bit storage bitcasts. Their result bits are not treated as
+known integer offsets. User-defined overloads still follow the helper rules;
+output-parameter overloads such as three-argument HLSL ``asuint`` stop analysis.
 It stops at unresolved calls, ambiguous overloads, recursion and dynamic control
 flow. Unresolved preprocessing disables this analysis; array parameter extents
 alone do not establish required sizes. Missing metadata means unknown, not zero.
