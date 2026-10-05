@@ -6,7 +6,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import textwrap
 from pathlib import Path
 
@@ -28,6 +27,12 @@ from crosstl.project import (
     load_project_config,
     translate_project,
     validate_project_report,
+)
+from demos.integrations.mlx.tests.corpus_evidence import (
+    corpus_workspace,
+    native_compiler_runner,
+    record_native_request,
+    record_native_result,
 )
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -85,29 +90,29 @@ MLX_ARG_REDUCE_ARTIFACTS = {
     "directx": {
         "argmin_float32": {
             "sha256": (
-                "e3f7392023bbb6457eb03398a766bdaa128ed709d66ce814c7209cd13de7e896"
+                "6a2667147d9a6fb8260e3cff1e5fd4c87e97d647653bf1d7bc704ab719c72c91"
             ),
-            "sizeBytes": 6655,
+            "sizeBytes": 6793,
         },
         "argmax_float32": {
             "sha256": (
-                "ef67c5d24ae7c7492a6676a35e0604800c1d18e4113c411fffaa2070090a92c3"
+                "33b85b7e9ec1d21af96bc52a157c46039a174233f28e4e44cfbc59e5dcde6b75"
             ),
-            "sizeBytes": 6657,
+            "sizeBytes": 6855,
         },
     },
     "opengl": {
         "argmin_float32": {
             "sha256": (
-                "b74534a5120665ad07755141af2a73702cb5ea504a0526b92306eabedfed4765"
+                "587b409127a5cec9711856acbdac69fbc05fe25fc8004f048de15057e5a9f59f"
             ),
-            "sizeBytes": 7581,
+            "sizeBytes": 8024,
         },
         "argmax_float32": {
             "sha256": (
-                "d90e758132832490b7f356c6750d4deb2bdb3341f053a921228a9f24ce8d27d8"
+                "009389698c327dde691ee87a4f34d5f80c7a33384e800d8d640f97a462ae1be6"
             ),
-            "sizeBytes": 7587,
+            "sizeBytes": 8030,
         },
     },
 }
@@ -291,6 +296,7 @@ def _assert_software_spirv(generated_path: Path, work_dir: Path) -> None:
     )
     assembly = assembly_path.read_text(encoding="utf-8")
     assert assembly.count("OpControlBarrier") == 5
+    assert assembly.count("OpMemoryBarrier") == 4
     assert "OpGroupNonUniform" not in assembly
     assert "OpExecutionMode %main LocalSize 32 1 1" in assembly
 
@@ -324,6 +330,8 @@ def _translate_artifact(
         run_toolchains=True,
     )
     payload = report.to_json()
+    report_path = work_dir / "portability-report.json"
+    report.write_json(report_path)
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
@@ -399,11 +407,12 @@ def _translate_artifact(
         assert wave_reads
         assert all(read.endswith(", sourceLane") for read in wave_reads)
         assert (
-            "__crossgl_wave_shuffle_down_self_uint(data.index, uint(delta))"
+            "__crossgl_wave_shuffle_down_self_uint(data.index, uint((uint(delta) & 65535u)))"
             in generated
         )
         assert (
-            "__crossgl_wave_shuffle_down_self_float(data.val, uint(delta))" in generated
+            "__crossgl_wave_shuffle_down_self_float(data.val, uint((uint(delta) & 65535u)))"
+            in generated
         )
     else:
         assert "subgroupWidth" not in entry_record
@@ -413,10 +422,9 @@ def _translate_artifact(
         assert "crossglSoftwareSubgroupShuffleDownFloat" in generated
         assert "crossglSoftwareSubgroupShuffleDownUint" in generated
         assert generated.count("barrier();") == 5
+        assert generated.count("memoryBarrierShared();") == 4
         _assert_software_spirv(generated_path, work_dir)
 
-    report_path = work_dir / "portability-report.json"
-    report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
     return report_path, generated_path
 
@@ -425,13 +433,12 @@ def _translate_artifact(
 @pytest.mark.parametrize("workload_id", list(MLX_ARG_REDUCE_VARIANTS))
 def test_pinned_mlx_arg_reduce_translates_to_bounded_artifact(target, workload_id):
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=f".crosstl-arg-reduce-{target}-{workload_id}-",
-        dir=mlx_root,
-    ) as temporary_directory:
+    with corpus_workspace(
+        mlx_root, family="arg-reduce", target=target, entry_point=workload_id
+    ) as work_dir:
         _translate_artifact(
             mlx_root,
-            Path(temporary_directory),
+            work_dir,
             target=target,
             workload_id=workload_id,
         )
@@ -668,13 +675,12 @@ def _runtime_request(
 def test_pinned_mlx_arg_reduce_executes_through_directx_native_loader():
     mlx_root = _pinned_mlx_root()
     for workload_id in MLX_ARG_REDUCE_VARIANTS:
-        with tempfile.TemporaryDirectory(
-            prefix=f".crosstl-arg-reduce-directx-{workload_id}-",
-            dir=mlx_root,
-        ) as temporary_directory:
+        with corpus_workspace(
+            mlx_root, family="arg-reduce", target="directx", entry_point=workload_id
+        ) as work_dir:
             descriptor, package_dir = _build_runtime_package(
                 mlx_root,
-                Path(temporary_directory),
+                work_dir,
                 target="directx",
                 workload_id=workload_id,
             )
@@ -684,6 +690,9 @@ def test_pinned_mlx_arg_reduce_executes_through_directx_native_loader():
                 target="directx",
                 workload_id=workload_id,
             )
+            record_native_request(
+                work_dir, request, commit=MLX_COMMIT, workload_id=workload_id
+            )
             executor = RuntimeParityExecutor(
                 RuntimeTestAdapterSpec(
                     adapter_id=f"mlx-arg-reduce-directx-{workload_id}",
@@ -692,7 +701,8 @@ def test_pinned_mlx_arg_reduce_executes_through_directx_native_loader():
                     adapter_kind="directx-native-runtime",
                 ),
                 runtime_adapter=DirectXRuntimeParityAdapter(
-                    runtime=DirectXComputeRuntime()
+                    runtime=DirectXComputeRuntime(),
+                    command_runner=native_compiler_runner(work_dir),
                 ),
             )
             availability = executor.is_available(request)
@@ -702,6 +712,7 @@ def test_pinned_mlx_arg_reduce_executes_through_directx_native_loader():
                     REQUIRE_DIRECTX_RUNTIME_ENV,
                 )
             result = executor.run(request)
+            record_native_result(work_dir, result)
 
         assert result.status == "ok"
         assert result.outputs[output_name]["dtype"] == "uint32"
@@ -712,13 +723,12 @@ def test_pinned_mlx_arg_reduce_executes_through_directx_native_loader():
 def test_pinned_mlx_arg_reduce_executes_through_opengl_native_loader():
     mlx_root = _pinned_mlx_root()
     for workload_id in MLX_ARG_REDUCE_VARIANTS:
-        with tempfile.TemporaryDirectory(
-            prefix=f".crosstl-arg-reduce-opengl-{workload_id}-",
-            dir=mlx_root,
-        ) as temporary_directory:
+        with corpus_workspace(
+            mlx_root, family="arg-reduce", target="opengl", entry_point=workload_id
+        ) as work_dir:
             descriptor, package_dir = _build_runtime_package(
                 mlx_root,
-                Path(temporary_directory),
+                work_dir,
                 target="opengl",
                 workload_id=workload_id,
             )
@@ -728,6 +738,9 @@ def test_pinned_mlx_arg_reduce_executes_through_opengl_native_loader():
                 target="opengl",
                 workload_id=workload_id,
             )
+            record_native_request(
+                work_dir, request, commit=MLX_COMMIT, workload_id=workload_id
+            )
             executor = RuntimeParityExecutor(
                 RuntimeTestAdapterSpec(
                     adapter_id=f"mlx-arg-reduce-opengl-{workload_id}",
@@ -736,7 +749,8 @@ def test_pinned_mlx_arg_reduce_executes_through_opengl_native_loader():
                     adapter_kind="opengl-native-runtime",
                 ),
                 runtime_adapter=OpenGLRuntimeParityAdapter(
-                    runtime=OpenGLComputeRuntime(context_backends=("egl",))
+                    runtime=OpenGLComputeRuntime(context_backends=("egl",)),
+                    command_runner=native_compiler_runner(work_dir),
                 ),
             )
             availability = executor.is_available(request)
@@ -746,6 +760,7 @@ def test_pinned_mlx_arg_reduce_executes_through_opengl_native_loader():
                     REQUIRE_OPENGL_RUNTIME_ENV,
                 )
             result = executor.run(request)
+            record_native_result(work_dir, result)
 
         assert result.status == "ok"
         assert result.outputs[output_name]["dtype"] == "uint32"

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from contextlib import contextmanager
@@ -99,3 +101,70 @@ def run_compiler(
     )
     write_record()
     return result
+
+
+def native_compiler_runner(work_dir: Path):
+    def run(command, *, input_text=None):
+        assert input_text is None
+        result = run_compiler(command, work_dir=work_dir, timeout=120)
+        files = [Path(command[-1])]
+        if "-Fo" in command:
+            files.append(Path(command[command.index("-Fo") + 1]))
+        identities = []
+        retained = work_dir / "native-compiler"
+        retained.mkdir(exist_ok=True)
+        for path in files:
+            if path.is_file():
+                destination = retained / path.name
+                shutil.copyfile(path, destination)
+                raw = destination.read_bytes()
+                identities.append(
+                    {
+                        "path": destination.relative_to(work_dir).as_posix(),
+                        "sha256": hashlib.sha256(raw).hexdigest(),
+                        "sizeBytes": len(raw),
+                    }
+                )
+        (work_dir / "compiler-artifacts.json").write_text(
+            json.dumps({"files": identities}, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return result
+
+    return run
+
+
+def record_native_request(
+    work_dir: Path, request, *, commit: str, workload_id: str
+) -> None:
+    (work_dir / "request.json").write_text(
+        json.dumps(
+            {
+                "commit": commit,
+                "workload": workload_id,
+                "fixture": request.fixture.to_json(),
+                "executionPlan": request.execution_plan.to_json(),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def record_native_result(work_dir: Path, result) -> None:
+    (work_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "status": result.status,
+                "outputs": result.outputs,
+                "message": result.message,
+                "details": result.details,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )

@@ -1859,15 +1859,15 @@ aggregate result no longer describes all available arg-reduce coverage.
 
 The checked
 [`contracts/arg_reduce.native-loader.dispatch.json`](contracts/arg_reduce.native-loader.dispatch.json)
-contract now selects current-pinned `argmin_float32` and `argmax_float32` for
+contract selects historical pin `846d1762`'s `argmin_float32` and `argmax_float32` for
 two axis-32 rows. It applies the host formula
 `roundUp(min(ceilDiv(axisSize, 4), maxThreadsPerWorkgroup), simdWidth)`, fixes a
 wave width of 32, emits `[32, 1, 1]`, and dispatches `[1, 2, 1]` workgroups.
 Signature-aware helper materialization selects the scalar
 `elem_to_loc<int64_t>` overload rather than the `uint3` overload. The HLSL
-artifacts are 6,655 and 6,657 bytes with SHA-256
-`e3f7392023bbb6457eb03398a766bdaa128ed709d66ce814c7209cd13de7e896`
-and `ef67c5d24ae7c7492a6676a35e0604800c1d18e4113c411fffaa2070090a92c3`;
+artifacts are 6,793 and 6,855 bytes with SHA-256
+`6a2667147d9a6fb8260e3cff1e5fd4c87e97d647653bf1d7bc704ab719c72c91`
+and `33b85b7e9ec1d21af96bc52a157c46039a174233f28e4e44cfbc59e5dcde6b75`;
 official DXC 1.9.2602.24 accepts both under `cs_6_6`,
 `-enable-16bit-types`, and warnings as errors. This proof explicitly sets
 `project.source_options.metal.target_options.directx.relative_wave_shuffle_out_of_range`
@@ -1878,16 +1878,27 @@ second reduction cannot consume undefined high-lane state. The default DirectX
 policy remains `"undefined"`, preserving existing artifacts unless a project
 opts in.
 
-The explicit OpenGL software-subgroup artifacts are 7,581 and 7,587 bytes with
+The explicit OpenGL software-subgroup artifacts are 8,024 and 8,030 bytes with
 SHA-256
-`b74534a5120665ad07755141af2a73702cb5ea504a0526b92306eabedfed4765`
-and `d90e758132832490b7f356c6750d4deb2bdb3341f053a921228a9f24ce8d27d8`.
+`587b409127a5cec9711856acbdac69fbc05fe25fc8004f048de15057e5a9f59f`
+and `009389698c327dde691ee87a4f34d5f80c7a33384e800d8d640f97a462ae1be6`.
 They admit direct shuffle-helper calls only inside a canonical workgroup-uniform
 halving loop (`offset > 0` with `/= constant >= 2` or `>>= constant >= 1`),
 while lane-varying, nonterminating, escaping, mutated, indirect, and nested
 forms remain rejected. Both modules pass `glslangValidator` and `spirv-val`,
-contain five control barriers, and contain no group-nonuniform SPIR-V
+contain five control barriers and four shared-memory fences, and contain no group-nonuniform SPIR-V
 instruction.
+
+The reference review compares complete generated bodies, reflected resources,
+entry points, and materialized functions. HLSL changes make integer promotions
+and 16-bit shuffle arguments explicit and preserve the negative-infinity bits.
+The compiled differences are integer no-wrap flags and a nonnegative row-index
+comparison, valid for these bounded rows and offsets. OpenGL also makes shared
+memory ordering explicit, bounds shuffle offsets before addition, and implements
+signed remainder with truncating division. Neither review substitutes for native
+execution. With `CROSTL_KEEP_CORPUS_EVIDENCE=1`, failures retain the project
+configuration, translation report, generated source, package, compiler records,
+dispatch inputs, and any returned readbacks under `.crosstl-corpus-evidence`.
 
 The native ABI reflects float32 input, uint32 output, int32 shape, int64 stride,
 and uint64 size resources exactly: nine DirectX bindings include the generated

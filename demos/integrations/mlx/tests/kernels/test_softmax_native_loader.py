@@ -29,7 +29,12 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
-from demos.integrations.mlx.tests.corpus_evidence import corpus_workspace, run_compiler
+from demos.integrations.mlx.tests.corpus_evidence import (
+    corpus_workspace,
+    native_compiler_runner,
+    record_native_request,
+    record_native_result,
+)
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -761,58 +766,6 @@ def _runtime_request(
     return request, output_name, expected_values
 
 
-def _native_compiler_runner(work_dir: Path):
-    def run(command, *, input_text=None):
-        assert input_text is None
-        result = run_compiler(command, work_dir=work_dir, timeout=120)
-        files = [Path(command[-1])]
-        if "-Fo" in command:
-            files.append(Path(command[command.index("-Fo") + 1]))
-        identities = []
-        retained = work_dir / "native-compiler"
-        retained.mkdir(exist_ok=True)
-        for path in files:
-            if path.is_file():
-                destination = retained / path.name
-                shutil.copyfile(path, destination)
-                raw = destination.read_bytes()
-                identities.append(
-                    {
-                        "path": destination.relative_to(work_dir).as_posix(),
-                        "sha256": hashlib.sha256(raw).hexdigest(),
-                        "sizeBytes": len(raw),
-                    }
-                )
-        _write_json(work_dir / "compiler-artifacts.json", {"files": identities})
-        return result
-
-    return run
-
-
-def _record_native_request(work_dir: Path, request, workload_id: str) -> None:
-    _write_json(
-        work_dir / "request.json",
-        {
-            "commit": MLX_COMMIT,
-            "workload": workload_id,
-            "fixture": request.fixture.to_json(),
-            "executionPlan": request.execution_plan.to_json(),
-        },
-    )
-
-
-def _record_native_result(work_dir: Path, result) -> None:
-    _write_json(
-        work_dir / "result.json",
-        {
-            "status": result.status,
-            "outputs": result.outputs,
-            "message": result.message,
-            "details": result.details,
-        },
-    )
-
-
 @pytest.mark.parametrize("workload_id", list(MLX_SOFTMAX_VARIANTS))
 def test_pinned_mlx_softmax_executes_through_directx_native_loader(workload_id):
     mlx_root = _pinned_mlx_root()
@@ -831,7 +784,9 @@ def test_pinned_mlx_softmax_executes_through_directx_native_loader(workload_id):
             target="directx",
             workload_id=workload_id,
         )
-        _record_native_request(work_dir, request, workload_id)
+        record_native_request(
+            work_dir, request, commit=MLX_COMMIT, workload_id=workload_id
+        )
         executor = RuntimeParityExecutor(
             RuntimeTestAdapterSpec(
                 adapter_id=f"mlx-softmax-directx-{workload_id}",
@@ -841,7 +796,7 @@ def test_pinned_mlx_softmax_executes_through_directx_native_loader(workload_id):
             ),
             runtime_adapter=DirectXRuntimeParityAdapter(
                 runtime=DirectXComputeRuntime(),
-                command_runner=_native_compiler_runner(work_dir),
+                command_runner=native_compiler_runner(work_dir),
             ),
         )
         availability = executor.is_available(request)
@@ -851,7 +806,7 @@ def test_pinned_mlx_softmax_executes_through_directx_native_loader(workload_id):
                 REQUIRE_DIRECTX_RUNTIME_ENV,
             )
         result = executor.run(request)
-        _record_native_result(work_dir, result)
+        record_native_result(work_dir, result)
 
     assert result.status == "ok"
     assert result.outputs[output_name]["dtype"] == "float32"
@@ -881,7 +836,9 @@ def test_pinned_mlx_softmax_executes_through_opengl_native_loader(workload_id):
             target="opengl",
             workload_id=workload_id,
         )
-        _record_native_request(work_dir, request, workload_id)
+        record_native_request(
+            work_dir, request, commit=MLX_COMMIT, workload_id=workload_id
+        )
         executor = RuntimeParityExecutor(
             RuntimeTestAdapterSpec(
                 adapter_id=f"mlx-softmax-opengl-{workload_id}",
@@ -891,7 +848,7 @@ def test_pinned_mlx_softmax_executes_through_opengl_native_loader(workload_id):
             ),
             runtime_adapter=OpenGLRuntimeParityAdapter(
                 runtime=OpenGLComputeRuntime(context_backends=("egl",)),
-                command_runner=_native_compiler_runner(work_dir),
+                command_runner=native_compiler_runner(work_dir),
             ),
         )
         availability = executor.is_available(request)
@@ -901,7 +858,7 @@ def test_pinned_mlx_softmax_executes_through_opengl_native_loader(workload_id):
                 REQUIRE_OPENGL_RUNTIME_ENV,
             )
         result = executor.run(request)
-        _record_native_result(work_dir, result)
+        record_native_result(work_dir, result)
 
     assert result.status == "ok"
     assert result.outputs[output_name]["dtype"] == "float32"

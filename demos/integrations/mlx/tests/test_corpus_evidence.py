@@ -153,10 +153,10 @@ def test_softmax_retains_report_before_artifact_checks(dispatch, tmp_path, monke
 
 @pytest.mark.parametrize("target", ("directx", "opengl"))
 @pytest.mark.parametrize("returncode", (0, 7))
-def test_softmax_compiler_evidence_keeps_results_and_artifact_bytes(
+def test_native_compiler_evidence_keeps_results_and_artifact_bytes(
     target, returncode, tmp_path, monkeypatch
 ):
-    from demos.integrations.mlx.tests.kernels import test_softmax_native_loader as proof
+    from demos.integrations.mlx.tests import corpus_evidence as proof
 
     shader = tmp_path / ("shader.hlsl" if target == "directx" else "shader.glsl")
     shader.write_text("shader source", encoding="utf-8")
@@ -174,7 +174,7 @@ def test_softmax_compiler_evidence_keeps_results_and_artifact_bytes(
         return expected
 
     monkeypatch.setattr(proof, "run_compiler", compile_record)
-    result = proof._native_compiler_runner(tmp_path)(command, input_text=None)
+    result = proof.native_compiler_runner(tmp_path)(command, input_text=None)
     assert result is expected
     record = json.loads((tmp_path / "compiler-artifacts.json").read_text())
     paths = [shader, module] if target == "directx" else [shader]
@@ -186,12 +186,17 @@ def test_softmax_compiler_evidence_keeps_results_and_artifact_bytes(
         assert item["sizeBytes"] == len(raw)
 
 
+@pytest.mark.parametrize("family", ("softmax", "arg_reduce"))
 @pytest.mark.parametrize("target", ("directx", "opengl"))
 @pytest.mark.parametrize("failure", (None, "status", "readback"))
-def test_softmax_retains_native_inputs_and_results_without_suppressing_failures(
-    target, failure, tmp_path, monkeypatch
+def test_selected_corpus_retains_native_inputs_and_results_without_suppressing_failures(
+    family, target, failure, tmp_path, monkeypatch
 ):
-    from demos.integrations.mlx.tests.kernels import test_softmax_native_loader as proof
+    proof = importlib.import_module(
+        f"demos.integrations.mlx.tests.kernels.test_{family}_native_loader"
+    )
+    dtype = "float32" if family == "softmax" else "uint32"
+    values = [1.0] if family == "softmax" else [5, 7]
 
     monkeypatch.setenv(KEEP_EVIDENCE_ENV, "1")
     monkeypatch.setattr(proof, "_pinned_mlx_root", lambda: tmp_path)
@@ -205,15 +210,15 @@ def test_softmax_retains_native_inputs_and_results_without_suppressing_failures(
         execution_plan=SimpleNamespace(to_json=lambda: plan),
     )
     monkeypatch.setattr(
-        proof, "_runtime_request", lambda *a, **kw: (request, "out", [1.0])
+        proof, "_runtime_request", lambda *a, **kw: (request, "out", values)
     )
     result = SimpleNamespace(
         status="failed" if failure == "status" else "ok",
         outputs={
             "out": {
-                "dtype": "float32",
-                "shape": [1],
-                "values": [0.0 if failure == "readback" else 1.0],
+                "dtype": dtype,
+                "shape": [len(values)],
+                "values": [0] * len(values) if failure == "readback" else values,
             }
         },
         details={"device": "unit-test-only"},
@@ -225,17 +230,69 @@ def test_softmax_retains_native_inputs_and_results_without_suppressing_failures(
     )
     monkeypatch.setattr(proof, "RuntimeParityExecutor", lambda *a, **kw: executor)
     test = getattr(
-        proof, f"test_pinned_mlx_softmax_executes_through_{target}_native_loader"
+        proof, f"test_pinned_mlx_{family}_executes_through_{target}_native_loader"
     )
     with pytest.raises(AssertionError) if failure else nullcontext():
-        test("block-float32-axis-32-two-rows")
+        if family == "softmax":
+            test("block-float32-axis-32-two-rows")
+        else:
+            test()
     workspaces = list((tmp_path / EVIDENCE_DIRECTORY).iterdir())
-    assert len(workspaces) == 1
-    saved_request = json.loads((workspaces[0] / "request.json").read_text())
-    assert saved_request["fixture"] == fixture
-    assert saved_request["executionPlan"] == plan
-    saved_result = json.loads((workspaces[0] / "result.json").read_text())
-    assert saved_result == vars(result)
+    assert len(workspaces) == (2 if family == "arg_reduce" and not failure else 1)
+    for work_dir in workspaces:
+        saved_request = json.loads((work_dir / "request.json").read_text())
+        assert saved_request["commit"] == proof.MLX_COMMIT
+        assert saved_request["fixture"] == fixture
+        assert saved_request["executionPlan"] == plan
+        saved_result = json.loads((work_dir / "result.json").read_text())
+        assert saved_result == vars(result)
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize("failure", ("translation", "identity"))
+def test_arg_reduce_retains_failed_translation_before_artifact_checks(
+    target, failure, tmp_path, monkeypatch
+):
+    from demos.integrations.mlx.tests.kernels import (
+        test_arg_reduce_native_loader as proof,
+    )
+
+    payload = {"summary": {"unitCount": 0}, "diagnostics": [{"message": "failed"}]}
+    if failure == "identity":
+        payload = {
+            "summary": {"unitCount": 1, "translatedCount": 1, "failedCount": 0},
+            "diagnostics": [],
+            "artifacts": [
+                {
+                    "source": proof.MLX_ARG_REDUCE_SOURCE,
+                    "sourceHash": {
+                        "algorithm": "sha256",
+                        "value": proof.MLX_ARG_REDUCE_SHA256,
+                    },
+                    "generatedHash": {"algorithm": "sha256", "value": "0" * 64},
+                }
+            ],
+        }
+
+    class Report:
+        def to_json(self):
+            return payload
+
+        def write_json(self, path):
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setenv(KEEP_EVIDENCE_ENV, "1")
+    monkeypatch.setattr(proof, "_pinned_mlx_root", lambda: tmp_path)
+    monkeypatch.setattr(proof, "load_project_config", lambda *args: None)
+    monkeypatch.setattr(proof, "translate_project", lambda *args, **kwargs: Report())
+    with pytest.raises(AssertionError):
+        proof.test_pinned_mlx_arg_reduce_translates_to_bounded_artifact(
+            target, "argmin-float32-axis-32-two-rows"
+        )
+    reports = list(tmp_path.rglob("portability-report.json"))
+    assert len(reports) == 1
+    assert json.loads(reports[0].read_text(encoding="utf-8")) == payload
+    assert (reports[0].parent / "crosstl.toml").is_file()
 
 
 @pytest.mark.parametrize(

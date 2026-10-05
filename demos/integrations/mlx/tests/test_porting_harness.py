@@ -10201,12 +10201,12 @@ def test_arg_reduce_native_runtime_evidence_records_bounded_cross_target_proof()
 
     directx = status["artifacts"]["directx"]
     assert directx["argmin_float32"] == {
-        "sha256": "e3f7392023bbb6457eb03398a766bdaa128ed709d66ce814c7209cd13de7e896",
-        "size_bytes": 6655,
+        "sha256": "6a2667147d9a6fb8260e3cff1e5fd4c87e97d647653bf1d7bc704ab719c72c91",
+        "size_bytes": 6793,
     }
     assert directx["argmax_float32"] == {
-        "sha256": "ef67c5d24ae7c7492a6676a35e0604800c1d18e4113c411fffaa2070090a92c3",
-        "size_bytes": 6657,
+        "sha256": "33b85b7e9ec1d21af96bc52a157c46039a174233f28e4e44cfbc59e5dcde6b75",
+        "size_bytes": 6855,
     }
     assert directx["compiler"] == "dxc"
     assert directx["compiler_version"] == "1.9.2602.24"

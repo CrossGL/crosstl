@@ -1633,15 +1633,15 @@ MLX_ARG_REDUCE_NATIVE_RUNTIME_EVIDENCE = {
         "directx": {
             "argmin_float32": {
                 "sha256": (
-                    "e3f7392023bbb6457eb03398a766bdaa128ed709d66ce814c7209cd13de7e896"
+                    "6a2667147d9a6fb8260e3cff1e5fd4c87e97d647653bf1d7bc704ab719c72c91"
                 ),
-                "size_bytes": 6655,
+                "size_bytes": 6793,
             },
             "argmax_float32": {
                 "sha256": (
-                    "ef67c5d24ae7c7492a6676a35e0604800c1d18e4113c411fffaa2070090a92c3"
+                    "33b85b7e9ec1d21af96bc52a157c46039a174233f28e4e44cfbc59e5dcde6b75"
                 ),
-                "size_bytes": 6657,
+                "size_bytes": 6855,
             },
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
@@ -1653,15 +1653,15 @@ MLX_ARG_REDUCE_NATIVE_RUNTIME_EVIDENCE = {
         "opengl": {
             "argmin_float32": {
                 "sha256": (
-                    "b74534a5120665ad07755141af2a73702cb5ea504a0526b92306eabedfed4765"
+                    "587b409127a5cec9711856acbdac69fbc05fe25fc8004f048de15057e5a9f59f"
                 ),
-                "size_bytes": 7581,
+                "size_bytes": 8024,
             },
             "argmax_float32": {
                 "sha256": (
-                    "d90e758132832490b7f356c6750d4deb2bdb3341f053a921228a9f24ce8d27d8"
+                    "009389698c327dde691ee87a4f34d5f80c7a33384e800d8d640f97a462ae1be6"
                 ),
-                "size_bytes": 7587,
+                "size_bytes": 8030,
             },
             "subgroup_enforcement": "explicit-32-lane-software-subgroup",
             "compiler": "glslangValidator",
