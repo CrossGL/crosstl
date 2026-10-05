@@ -27,6 +27,11 @@ from crosstl.project.runtime_verification import (
     RuntimeResourceBinding,
     RuntimeSpecializationConstant,
 )
+from crosstl.translator.resource_storage import (
+    BINARY16_STORAGE,
+    parse_resource_storage_header,
+    resource_storage_header,
+)
 from demos.integrations.mlx.tests.kernels.test_gated_delta_metal import (
     _translate_pinned,
 )
@@ -61,6 +66,12 @@ BUFFER_NAMES = (
 
 def _request(np, case, buffers, artifact, module):
     source = artifact.read_text(encoding="utf-8")
+    assert len(buffers) == len(BUFFER_NAMES)
+    assert parse_resource_storage_header(source) == {
+        name: BINARY16_STORAGE
+        for name, buffer in zip(BUFFER_NAMES, buffers)
+        if buffer.dtype == np.dtype("<f2")
+    }
     bindings = {}
     for slot, (name, buffer) in enumerate(zip(BUFFER_NAMES, buffers)):
         if slot == 8:
@@ -71,7 +82,7 @@ def _request(np, case, buffers, artifact, module):
         element = (
             "mlx_atomic_float_void"
             if atomic
-            else "float16_t" if buffer.itemsize == 2 else "float"
+            else "uint16_t" if buffer.dtype == np.dtype("<f2") else "float"
         )
         type_name = f"{'RW' if slot >= 9 else ''}StructuredBuffer<{element}>"
         register = f"{'u' if slot >= 9 else 't'}{slot}"
@@ -122,6 +133,95 @@ def _request(np, case, buffers, artifact, module):
             workgroup_count=(1, 32, case.batch * case.value_heads),
         ),
     )
+
+
+@pytest.fixture(params=("float16", "float32"))
+def request_inputs(request, tmp_path):
+    np = pytest.importorskip("numpy")
+    case = SimpleNamespace(entry="gated_delta", length=1, batch=1, value_heads=16)
+    buffers = []
+    declarations = ["struct mlx_atomic_float_void {\n    float val;\n};"]
+    encodings = {}
+    for slot, name in enumerate(BUFFER_NAMES):
+        if slot == 8:
+            buffers.append(np.array([case.length], dtype="<i4"))
+            declarations.append(
+                f"cbuffer {case.entry}_T_Constants : register(b8) {{ int T; }};"
+            )
+            continue
+        if slot < 6 and request.param == "float16":
+            buffer = np.array([0, 0x8000, 1, 0x7C01, 0x7FFF, 0xFC01], dtype="<u2").view(
+                "<f2"
+            )
+            element = "uint16_t"
+            encodings[name] = BINARY16_STORAGE
+        else:
+            buffer = np.array([0, 0x80000000, 1, 0x7F812345], dtype="<u4").view("<f4")
+            element = "mlx_atomic_float_void" if slot in {9, 10, 12, 13} else "float"
+        buffers.append(buffer)
+        declarations.append(
+            f"{'RW' if slot >= 9 else ''}StructuredBuffer<{element}> {name} : register({'u' if slot >= 9 else 't'}{slot});"
+        )
+    source = (resource_storage_header(encodings) if encodings else "") + "\n".join(
+        declarations
+    )
+    artifact, module = tmp_path / "bindings.hlsl", tmp_path / "bindings.dxil"
+    artifact.write_text(source, encoding="utf-8")
+    module.write_bytes(b"binding-test-module")
+    return np, case, buffers, artifact, module
+
+
+def test_directx_backward_request_preserves_storage_bytes(request_inputs):
+    np, case, buffers, artifact, module = request_inputs
+    request = _request(np, case, buffers, artifact, module)
+    prepared = _validate_directx_register_layout(
+        _complete_directx_register_layout(
+            (
+                *_prepare_directx_buffers(request.buffers),
+                *_prepare_directx_constants(request.constants),
+            )
+        )
+    )
+    actual = {item.name: item for item in prepared if item.source != "descriptor-gap"}
+    assert len(actual) == 15
+    for slot, (name, buffer) in enumerate(zip(BUFFER_NAMES, buffers)):
+        if slot == 8:
+            assert actual["constants[T]"].payload[:4] == struct.pack("<i", case.length)
+        else:
+            assert actual[name].payload == buffer.tobytes() + GUARD
+            assert actual[name].stride == buffer.itemsize
+            assert actual[name].binding_index == slot
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ("missing", "extra", "wrong-declaration", "wrong-register", "missing-buffer"),
+)
+def test_directx_backward_request_rejects_storage_mismatch(request_inputs, damage):
+    np, case, buffers, artifact, module = request_inputs
+    source = artifact.read_text(encoding="utf-8")
+    encodings = parse_resource_storage_header(source)
+    if encodings:
+        source = source.partition("\n")[2]
+    if damage == "missing":
+        if encodings:
+            encodings.pop("q")
+        else:
+            encodings["q"] = BINARY16_STORAGE
+    elif damage == "extra":
+        encodings["missing"] = BINARY16_STORAGE
+    elif damage == "wrong-declaration":
+        source = source.replace(
+            "StructuredBuffer<uint16_t> q", "StructuredBuffer<float16_t> q"
+        ).replace("StructuredBuffer<float> q", "StructuredBuffer<uint> q")
+    elif damage == "wrong-register":
+        source = source.replace("register(t0)", "register(t15)")
+    else:
+        buffers.pop()
+    source = (resource_storage_header(encodings) if encodings else "") + source
+    artifact.write_text(source, encoding="utf-8")
+    with pytest.raises(AssertionError):
+        _request(np, case, buffers, artifact, module)
 
 
 @pytest.fixture(scope="module", params=CONFIGURATIONS)

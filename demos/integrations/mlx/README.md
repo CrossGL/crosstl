@@ -996,6 +996,9 @@ Eight gated-delta backward configurations have required Windows DirectX and
 original/generated Metal numerical gates, checking all six gradients against an
 independent reference. This covers selected head layouts, checkpoint intervals,
 partial segments and float16/float32 storage, not complete MLX host integration.
+The DirectX fixture validates the generated binary16 storage metadata before
+binding physical `uint16_t` inputs. It uploads the original half bytes without
+numeric conversion and retains the same strides, guards and gradient checks.
 
 The attention backward row-dot stage has required Windows, Linux and macOS
 gates. They translate all 24 declared float32/float16/bfloat16 entries across
