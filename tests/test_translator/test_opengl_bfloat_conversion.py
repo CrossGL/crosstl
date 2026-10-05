@@ -13,9 +13,13 @@ import pytest
 
 from crosstl import translate
 from crosstl.translator.ast import FunctionCallNode
-from crosstl.translator.codegen.directx_codegen import DirectXBFloat16UnsupportedError
+from crosstl.translator.codegen.directx_codegen import (
+    DirectXBFloat16UnsupportedError,
+    HLSLCodeGen,
+)
 from crosstl.translator.codegen.GLSL_codegen import (
     GLSLCodeGen,
+    OpenGLCompoundAssignmentError,
     OpenGLScalarConversionError,
 )
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values, _request
@@ -257,6 +261,201 @@ def test_bfloat_aliases_retain_arithmetic_precision(tmp_path, left, right):
 )
 def test_bfloat_common_arithmetic_type(left, right, expected):
     assert GLSLCodeGen().glsl_common_arithmetic_type(left, right, "+") == expected
+
+
+@pytest.mark.parametrize("target", ("opengl", "directx"))
+@pytest.mark.parametrize("dtype", ("int", "uint"))
+@pytest.mark.parametrize("operator", ("+", "-", "*", "/"))
+@pytest.mark.parametrize("operand", ("x", "bfloat(x)"))
+def test_integer_bfloat_compound_rounds_operands_and_result(
+    tmp_path, target, dtype, operator, operand
+):
+    generator = GLSLCodeGen() if target == "opengl" else HLSLCodeGen()
+    generated = generator.generate(
+        _shader(
+            f"bfloat16_t x = bfloat16_t(output[0]); {dtype} y = {dtype}(257); "
+            f"y {operator}= {operand}; output[0] = float(y);"
+        )
+    )
+    assignment = next(
+        line for line in generated.splitlines() if line.strip().startswith("y = ")
+    )
+    if target == "opengl":
+        assert "crossgl_integer_to_bfloat" in assignment
+        assert "crossgl_round_bfloat1" in assignment
+        _compile(generated, tmp_path)
+    else:
+        assert f"__crossgl_bfloat16_from_{dtype}" in assignment
+        assert "__crossgl_bfloat16_from_float" in assignment
+        assert "__crossgl_bfloat16_to_float" in assignment
+
+
+@pytest.mark.parametrize("target", ("opengl", "directx"))
+@pytest.mark.parametrize("side_effect", ("index", "value"))
+def test_integer_bfloat_compound_diagnoses_unsafe_evaluation(target, side_effect):
+    generator = GLSLCodeGen() if target == "opengl" else HLSLCodeGen()
+    error_type = (
+        OpenGLCompoundAssignmentError
+        if target == "opengl"
+        else DirectXBFloat16UnsupportedError
+    )
+    body = (
+        "int cells[2]; cells[0] = 257; cells[1] = 259; uint index = 0u; "
+        "bfloat x = bfloat(output[0]); "
+    )
+    body += (
+        "cells[index++] += x;"
+        if side_effect == "index"
+        else "cells[index] += change(index, x);"
+    )
+    with pytest.raises(error_type) as error:
+        generator.generate(
+            _shader(
+                body, "bfloat change(inout uint index, bfloat x) { index++; return x; }"
+            )
+        )
+    assert error.value.reason == (
+        "rhs-may-change-assignment-target"
+        if side_effect == "value"
+        else (
+            "lvalue-side-effects"
+            if target == "opengl"
+            else "side-effecting-assignment-target"
+        )
+    )
+
+
+@pytest.mark.parametrize("target", ("opengl", "directx"))
+def test_integer_bfloat_compound_rejects_unproven_wide_conversion(target):
+    generator = GLSLCodeGen() if target == "opengl" else HLSLCodeGen()
+    error_type = (
+        OpenGLScalarConversionError
+        if target == "opengl"
+        else DirectXBFloat16UnsupportedError
+    )
+    with pytest.raises(error_type) as error:
+        generator.generate(
+            _shader(
+                "bfloat x = bfloat(output[0]); int64_t y = int64_t(257); y += x; output[0] = float(y);"
+            )
+        )
+    assert error.value.reason == (
+        "bfloat-double-rounding"
+        if target == "opengl"
+        else "unsupported-bfloat16-compound-integer-width"
+    )
+
+
+@pytest.mark.parametrize("dtype,initial", (("int", 257), ("uint", 257), ("int", -257)))
+@pytest.mark.parametrize("operator", ("+", "-", "*", "/"))
+@pytest.mark.parametrize("lvalue", ("local", "member", "array", "resource"))
+def test_integer_bfloat_compound_executes_natively(
+    tmp_path, dtype, initial, operator, lvalue
+):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required bfloat compound assignments")
+    values = [
+        0.25,
+        0.5,
+        0.99609375,
+        1.0,
+        1.0078125,
+        1.5,
+        2.0,
+        3.0,
+        63.0,
+        127.5,
+        128.0,
+        255.0,
+    ]
+
+    def bits(value):
+        return struct.unpack("<I", struct.pack("<f", value))[0]
+
+    def narrow(value):
+        return struct.unpack("<f", struct.pack("<I", _round(bits(value))))[0]
+
+    def reference(value):
+        x = narrow(value)
+        left = narrow(initial)
+        computed = {
+            "+": lambda: left + x,
+            "-": lambda: left - x,
+            "*": lambda: left * x,
+            "/": lambda: left / x,
+        }[operator]()
+        return bits(float(int(narrow(computed))))
+
+    declaration, target = {
+        "local": (f"{dtype} y = {initial};", "y"),
+        "member": (f"IntegerCell cell; cell.value = {initial};", "cell.value"),
+        "array": (
+            f"{dtype} cells[2]; cells[0] = {initial}; cells[1] = 259; uint index = 0u;",
+            "cells[index]",
+        ),
+        "resource": ("", "cells[i + 1u]"),
+    }[lvalue]
+    body = f"narrow_t x = narrow_t(values[i]); {declaration} {target} {operator}= x; "
+    body += f"results[i + 1u] = float({target});"
+    declarations = f"using narrow_t = bfloat; struct IntegerCell {{ {dtype} value; }};"
+    if lvalue == "resource":
+        source = _source(body, declarations).replace(
+            "uint i [[thread_position_in_grid]]",
+            f"device {dtype}* cells [[buffer(2)]], uint i [[thread_position_in_grid]]",
+        )
+        _, descriptor, package = _package(
+            tmp_path, TARGET, "uint", (1, 1, 1), source=source, software_subgroups=False
+        )
+
+        def floats(words):
+            return {
+                "dtype": "float32",
+                "encoding": "ieee754-binary32",
+                "values": words,
+                "shape": [len(words)],
+            }
+
+        def integers(numbers):
+            return {
+                "dtype": "int32" if dtype == "int" else "uint32",
+                "values": numbers,
+                "shape": [len(numbers)],
+            }
+
+        expected_numbers = [
+            int(struct.unpack("<f", struct.pack("<I", reference(v)))[0]) for v in values
+        ]
+        inputs = {
+            "values": floats([bits(v) for v in values]),
+            "results": floats([bits(42.0)] * (len(values) + 2)),
+            "cells": integers([42, *([initial] * len(values)), 42]),
+        }
+        outputs = {
+            "results": floats(
+                [bits(42.0), *[reference(v) for v in values], bits(42.0)]
+            ),
+            "cells": integers([42, *expected_numbers, 42]),
+        }
+        request = _request(descriptor, package, inputs, outputs, len(values))
+        expected = _bound_values(descriptor, outputs)
+    else:
+        source, request, expected = _case(
+            tmp_path,
+            TARGET,
+            "integer-compound",
+            [bits(v) for v in values],
+            body=body,
+            expected_words=[reference(v) for v in values],
+            declarations=declarations,
+        )
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source,
+        original_entry="bfloat_conversion",
+        validate=_validate_half,
+    )
 
 
 def test_bfloat_constants_are_rounded_before_global_initialization(tmp_path):

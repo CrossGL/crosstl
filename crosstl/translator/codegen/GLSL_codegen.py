@@ -32968,6 +32968,48 @@ complex64_t crossgl_complex64_mod_assign(
         )
         return self.generate_expression_with_expected(operation, expected_type)
 
+    def glsl_bfloat_integer_compound_assignment_value(
+        self, target, value, binary_operator, expected_type, source_node
+    ):
+        if binary_operator not in {"+", "-", "*", "/"}:
+            return None
+        value_type = self.glsl_source_expression_type(value)
+        target_info = self.glsl_value_type_info(expected_type)
+        if (
+            self.glsl_bfloat_width(value_type) != 1
+            or target_info is None
+            or target_info["family"] not in {"int", "uint"}
+            or target_info["width"] != 1
+        ):
+            return None
+        reason = None
+        if not self.glsl_stable_update_target(target):
+            reason = "lvalue-side-effects"
+        elif not self.glsl_side_effect_free_expression(value):
+            reason = "rhs-may-change-assignment-target"
+        if reason is not None:
+            raise OpenGLCompoundAssignmentError(
+                "OpenGL bfloat compound assignment requires a stable integer "
+                "target and a right operand without observable side effects; "
+                "materialize side effects before the assignment",
+                operator=f"{binary_operator}=",
+                target=expression_debug_name(target),
+                target_type=self.type_name_string(expected_type),
+                value_type=self.type_name_string(value_type),
+                common_type="bfloat",
+                reason=reason,
+                source_location=getattr(source_node, "source_location", None),
+            )
+        # The integer is converted before arithmetic, and the bfloat result is
+        # rounded before conversion back to the destination's integer type.
+        operation = BinaryOpNode(
+            FunctionCallNode("bfloat", [target]),
+            binary_operator,
+            value,
+            source_location=getattr(source_node, "source_location", None),
+        )
+        return self.generate_expression_with_expected(operation, expected_type)
+
     def glsl_converted_compound_assignment_value(
         self, target, value, binary_operator, expected_type, source_node
     ):
@@ -33210,6 +33252,11 @@ complex64_t crossgl_complex64_mod_assign(
         if boolean_arithmetic_assignment is not None:
             return boolean_arithmetic_assignment
         left = self.generate_glsl_buffer_block_mutation_target(left_node)
+        bfloat_integer_assignment = self.glsl_bfloat_integer_compound_assignment_value(
+            left_node, right_node, binary_operator, expected_type, node
+        )
+        if bfloat_integer_assignment is not None:
+            return f"{left} = {bfloat_integer_assignment}"
         if binary_operator is not None and (
             self.glsl_narrow_integer_contract(expected_type) is not None
             or self.glsl_narrow_float_width(expected_type) is not None

@@ -19830,9 +19830,50 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self, node, target, value, operator, *, target_type=None, lhs=None
     ):
         target_type = target_type or self.hlsl_source_expression_type(target)
-        if not self.is_hlsl_bfloat16_type(target_type):
-            return None
         mapped_operator = self.map_operator(operator)
+        if not self.is_hlsl_bfloat16_type(target_type):
+            if mapped_operator not in {"+=", "-=", "*=", "/="}:
+                return None
+            value_type = self.hlsl_source_expression_type(value)
+            integer_info = self.hlsl_integer_arithmetic_type_info(target_type)
+            if (
+                self.is_hlsl_bfloat16_type(value_type)
+                and integer_info is not None
+                and integer_info["width"] == 1
+            ):
+                reason = None
+                if integer_info["base_type"] not in {"int", "uint"}:
+                    reason = "unsupported-bfloat16-compound-integer-width"
+                elif not self.hlsl_expression_is_repeatable(
+                    target
+                ) or self.hlsl_expression_has_observable_side_effects(target):
+                    reason = "side-effecting-assignment-target"
+                elif self.hlsl_expression_has_observable_side_effects(
+                    value,
+                    allow_integer_constructors=True,
+                    allow_bfloat_constructors=True,
+                ):
+                    reason = "rhs-may-change-assignment-target"
+                if reason is not None:
+                    raise self.directx_bfloat16_unsupported(
+                        "DirectX bfloat compound assignment requires a stable "
+                        "32-bit integer target and a right operand without "
+                        "observable side effects; materialize side effects "
+                        "before the assignment",
+                        operation=mapped_operator,
+                        source_type=target_type,
+                        reason=reason,
+                        source_location=getattr(node, "source_location", None),
+                    )
+                operation = BinaryOpNode(
+                    FunctionCallNode("bfloat", [target]),
+                    mapped_operator[0],
+                    value,
+                    source_location=getattr(node, "source_location", None),
+                )
+                rhs = self.generate_expression_with_expected(operation, target_type)
+                return f"{lhs or self.generate_expression(target)} = {rhs}"
+            return None
         if mapped_operator not in {"+=", "-=", "*=", "/="}:
             if mapped_operator == "=":
                 return None
@@ -42733,7 +42774,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def hlsl_expression_has_observable_side_effects(
-        self, expr, *, allow_integer_constructors=False
+        self, expr, *, allow_integer_constructors=False, allow_bfloat_constructors=False
     ):
         for node in self.walk_ast(expr):
             if isinstance(node, AssignmentNode):
@@ -42754,10 +42795,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     # The walk still checks all argument evaluation below them.
                     continue
                 if (
-                    allow_integer_constructors
-                    and isinstance(name, str)
+                    isinstance(name, str)
                     and not self.hlsl_function_name_is_shadowed(name)
-                    and self.hlsl_integer_arithmetic_type_info(name) is not None
+                    and (
+                        (
+                            allow_integer_constructors
+                            and self.hlsl_integer_arithmetic_type_info(name) is not None
+                        )
+                        or (
+                            allow_bfloat_constructors
+                            and self.is_hlsl_bfloat16_type(name)
+                        )
+                    )
                 ):
                     continue
                 return True

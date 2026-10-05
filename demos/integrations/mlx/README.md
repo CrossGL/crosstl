@@ -122,8 +122,8 @@ intermediates instead of inferring half precision from their storage width.
 Mixed integer operands are converted before arithmetic; each narrow result
 boundary remains observable. Nineteen reduced cases match unchanged original
 Metal and generated Metal/OpenGL over 228 values per path, with exact output
-bits and guards. Seventeen supported HLSL cases compile with warnings fatal;
-Windows numerical execution of these new cases remains pending. The two
+bits and guards. Seventeen supported HLSL cases compile with warnings fatal
+and pass Windows numerical execution. The two
 bfloat-vector cases retain DirectX unsupported-type diagnostics rather than
 claiming execution coverage.
 
@@ -132,7 +132,11 @@ The math-wrapper correction for
 computation and the source's bfloat return before subsequent arithmetic.
 Nine reduced default, fast and precise wrapper cases match original Metal and
 generated Metal/OpenGL over 108 values per path; all nine HLSL cases compile
-with warnings fatal. They run within the existing native conversion jobs.
+with warnings fatal and pass Windows numerical execution. Independent review
+of the [Windows artifacts](https://github.com/CrossGL/crosstl/actions/runs/37305074470/job/111746672534)
+checks all 26 arithmetic/math cases against original Metal readbacks: 312
+values, 52 guard words and fresh matching shader identities. They run within
+the existing native conversion jobs.
 Fresh current and historical `v_Sigmoidbfloat16bfloat16` entries compile to all
 three targets. Local Metal execution matches the unchanged original kernel for
 all 65,282 non-NaN bfloat inputs at each pin, including infinities and signed
@@ -145,11 +149,20 @@ subnormal division results
 stage and division-only probes retain these failures. This does not establish
 Windows Sigmoid parity or resolve the separate NaN policy.
 
+Mixed integer-lvalue compound assignments retain both the integer-to-bfloat
+conversion and the rounded arithmetic result before integer writeback
+([crosstl#2083](https://github.com/CrossGL/crosstl/issues/2083)). Forty-eight
+reduced cases cover signed and unsigned 32-bit integers, aliases, local and
+resource arrays, and struct members. Original/generated Metal and generated
+OpenGL match over 576 values per path; all 48 corresponding HLSL cases compile
+with warnings fatal. The tests use existing native CI jobs. Windows numerical
+execution is still required. Unproven wide-integer conversions and operands
+with observable side effects produce structured diagnostics; these checks do
+not claim complete mixed compound-assignment support.
+
 The obsolete HLSL Sigmoid half-type assertion is corrected, but whole-family
-unary acceptance remains blocked. Mixed integer-lvalue
-compound assignments expose another OpenGL rounding defect in
-[crosstl#2083](https://github.com/CrossGL/crosstl/issues/2083). No complete unary
-reference refresh or numerical parity is claimed. Required Square and ArcCos
+unary acceptance remains blocked. No complete unary reference refresh or
+numerical parity is claimed. Required Square and ArcCos
 numerical cases remain separate.
 
 The current pin adds cross-entropy, gated-delta forward and backward kernels
