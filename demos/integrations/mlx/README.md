@@ -116,6 +116,17 @@ reproduces the source-profile gap tracked in
 lossless-copy defect or permission to canonicalize uploads. These local probes
 do not establish Windows FP8 execution or expand the required CI runtime set.
 
+Arithmetic inference also has a known bfloat limitation:
+`auto y = 1 / (1 + x)` with bfloat `x` incorrectly becomes half precision.
+The unchanged source compiles and executes on Metal; generated Metal rejects
+the conversion, while generated OpenGL returns incorrect bits in 15 of 16
+reduced cases despite successful compilation. The same inferred-type change
+appears in the historical bfloat Sigmoid specialization. Its existing HLSL
+half-type assertion and reviewed artifact identity are not correctness evidence.
+[crosstl#2082](https://github.com/CrossGL/crosstl/issues/2082) tracks the general
+inference and intermediate-rounding correction. Whole-family unary acceptance
+remains blocked; required Square and ArcCos numerical cases are separate.
+
 The current pin adds cross-entropy, gated-delta forward and backward kernels
 (including NAX variants), matrix-multiplication gather offsets, and attention
 backward kernels. These files are included in discovery; they are not covered by
@@ -221,7 +232,8 @@ The current harness verifies:
   [#1660](https://github.com/CrossGL/crosstl/issues/1660), so this is not yet a
   complete semantic-equivalence claim;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 877 discovered
-  current-pinned entries in ``unary.metal``: 183 each for ``v_``, ``v2_``,
+  entries in ``unary.metal`` at the legacy reference revision
+  `846d176227a0ac13d2667e58d2bb68b322109ab0`: 183 each for ``v_``, ``v2_``,
   ``gn1_``, and ``gn4large_``, plus 145 ``vn_`` entries. The exact contract
   spans 37 operators and 20 input/output type pairs across bfloat16, Boolean,
   complex64, float16, float32, signed and unsigned integers, FP8 encode/decode,
@@ -233,8 +245,8 @@ The current harness verifies:
   ``[1, 1, 1]`` dispatch contract is preserved, and macOS CI compiles every
   deterministic artifact to non-empty AIR. This is complete discovered unary
   Metal compiler/reflection coverage, not Metal numerical execution;
-- selected-entry translation of all 877 discovered current-pinned
-  `unary.metal` entries to OpenGL. The schema-v2
+- selected-entry translation of all 877 discovered `unary.metal` entries
+  at the same legacy reference revision to OpenGL. The schema-v2
   `contracts/unary.opengl-translation.json` contract pins every standalone
   `main` artifact across the same five shapes, 37 operators, 20 type pairs,
   1,243 materializations, and 3,363 reflected resources, totaling 4,119,841
@@ -285,7 +297,10 @@ The current harness verifies:
   [crosstl#2071](https://github.com/CrossGL/crosstl/issues/2071). Whole-family
   numerical parity is not claimed; bit-observable floating conversions also
   require the source-policy work tracked in
-  [crosstl#2081](https://github.com/CrossGL/crosstl/issues/2081);
+  [crosstl#2081](https://github.com/CrossGL/crosstl/issues/2081). The subsequent
+  bfloat inferred-arithmetic reproduction in
+  [crosstl#2082](https://github.com/CrossGL/crosstl/issues/2082) blocks acceptance
+  of the affected Sigmoid bodies despite their successful DXC compilation;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 2,496
   discovered copy entries from `copy.metal` at the legacy reference revision
   `846d176227a0ac13d2667e58d2bb68b322109ab0`. The schema-v2
@@ -2330,8 +2345,9 @@ Their ``[1, 1, 1]`` workgroup sizes are explicitly host-dispatch-owned because
 MSL has no fixed source attribute equivalent to HLSL ``numthreads``. Both exact
 artifacts compile with ``xcrun -sdk macosx metal -c`` on macOS CI.
 
-The required family gate now covers all 877 discovered current-pinned unary
-entries, adding the complete 694-entry non-scalar frontier to the earlier 183
+The required family gate covers all 877 unary entries at the legacy reference
+revision `846d176227a0ac13d2667e58d2bb68b322109ab0`, including 694 non-scalar
+entries in addition to the 183
 scalar ``v_`` entries. The shape split is exact: 183 ``v_`` kernels instantiate
 ``unary_v`` with explicit ``N=1``; 183 ``v2_`` kernels instantiate ``unary_v2``
 with the source default ``N=WorkPerThread<T>::n``; 145 ``vn_`` kernels use that
