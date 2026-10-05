@@ -2752,6 +2752,11 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _strip_sha256_prefix(value: str) -> str:
+    prefix = "sha256:"
+    return value[len(prefix) :] if value.startswith(prefix) else value
+
+
 def _normalized_text_sha256(path: Path) -> str:
     text = path.read_text(encoding="utf-8")
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -3014,7 +3019,7 @@ def _prepare_layer_norm_dispatch_contract(
     content_identity = manifest.content_identity.to_json()
     expected_identity = {
         "algorithm": "sha256",
-        "value": MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY.removeprefix("sha256:"),
+        "value": _strip_sha256_prefix(MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY),
     }
     _require(
         content_identity == expected_identity,
@@ -3081,7 +3086,7 @@ def _prepare_logsumexp_dispatch_contract(
     content_identity = manifest.content_identity.to_json()
     expected_identity = {
         "algorithm": "sha256",
-        "value": MLX_LOGSUMEXP_DISPATCH_CONTENT_IDENTITY.removeprefix("sha256:"),
+        "value": _strip_sha256_prefix(MLX_LOGSUMEXP_DISPATCH_CONTENT_IDENTITY),
     }
     _require(
         content_identity == expected_identity,
@@ -3149,7 +3154,7 @@ def _prepare_rms_norm_dispatch_contract(
     content_identity = manifest.content_identity.to_json()
     expected_identity = {
         "algorithm": "sha256",
-        "value": MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY.removeprefix("sha256:"),
+        "value": _strip_sha256_prefix(MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY),
     }
     _require(
         content_identity == expected_identity,
@@ -5381,7 +5386,7 @@ def _require_layer_norm_dispatch_frontier_report(
         )
         expected = MLX_LAYER_NORM_DISPATCH_VARIANTS[entry_point]
         plan = plan_by_entry[entry_point]
-        variant_name = "dispatch-" + expected["artifactId"].removeprefix("sha256:")
+        variant_name = "dispatch-" + _strip_sha256_prefix(expected["artifactId"])
         _require(
             artifact.get("source") == MLX_LAYER_NORM_SOURCE
             and artifact.get("sourceBackend") == "metal"
@@ -5732,7 +5737,7 @@ def _require_logsumexp_dispatch_frontier_report(
             == expected["dispatchWorkgroupCount"],
             f"LogSumExp evaluated dispatch changed for {workload_id}",
         )
-        variant_name = "dispatch-" + artifact_id.removeprefix("sha256:")
+        variant_name = "dispatch-" + _strip_sha256_prefix(artifact_id)
         _require(
             artifact.get("source") == MLX_LOGSUMEXP_SOURCE
             and artifact.get("sourceBackend") == "metal"
@@ -6073,7 +6078,7 @@ def _require_rms_norm_dispatch_frontier_report(
             == expected["dispatchWorkgroupCount"],
             f"RMSNorm evaluated dispatch changed for {workload_id}",
         )
-        variant_name = "dispatch-" + artifact_id.removeprefix("sha256:")
+        variant_name = "dispatch-" + _strip_sha256_prefix(artifact_id)
         _require(
             artifact.get("source") == MLX_RMS_NORM_SOURCE
             and artifact.get("sourceBackend") == "metal"

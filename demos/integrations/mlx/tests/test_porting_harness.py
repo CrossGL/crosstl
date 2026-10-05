@@ -40,6 +40,23 @@ def _load_rms_norm_harness():
     return module
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("sha256:" + "a" * 64, "a" * 64),
+        ("a" * 64, "a" * 64),
+        ("sha256:", ""),
+        ("", ""),
+        ("sha256:sha256:value", "sha256:value"),
+        ("prefix-sha256:value", "prefix-sha256:value"),
+        ("SHA256:value", "SHA256:value"),
+        ("sha512:value", "sha512:value"),
+    ],
+)
+def test_sha256_prefix_removal_preserves_unprefixed_values(value, expected):
+    assert _load_harness()._strip_sha256_prefix(value) == expected
+
+
 def test_mlx_porting_contract_uses_exact_pinned_revision():
     module = _load_harness()
     expected_gaps = json.loads(
@@ -234,9 +251,7 @@ def test_layer_norm_dispatch_contract_preparation_copies_verified_manifest(
         "path": ".crosstl-mlx-porting/contracts/layer_norm.dispatch.json",
         "contentIdentity": {
             "algorithm": "sha256",
-            "value": module.MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY.removeprefix(
-                "sha256:"
-            ),
+            "value": module.MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY.split(":", 1)[1],
         },
         "variantCount": len(module.MLX_LAYER_NORM_DISPATCH_VARIANTS),
     }
@@ -273,9 +288,7 @@ def test_layer_norm_dispatch_contract_accepts_crlf_checkout(tmp_path, monkeypatc
     assert copied_path.read_bytes() == contract_source.read_bytes()
     assert contract["contentIdentity"] == {
         "algorithm": "sha256",
-        "value": module.MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY.removeprefix(
-            "sha256:"
-        ),
+        "value": module.MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY.split(":", 1)[1],
     }
 
 
@@ -307,9 +320,7 @@ def test_rms_norm_dispatch_contract_preparation_copies_verified_manifest(
         "path": ".crosstl-mlx-porting/contracts/rms_norm.dispatch.json",
         "contentIdentity": {
             "algorithm": "sha256",
-            "value": module.MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY.removeprefix(
-                "sha256:"
-            ),
+            "value": module.MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY.split(":", 1)[1],
         },
         "variantCount": len(module.MLX_RMS_NORM_DISPATCH_VARIANTS),
     }
@@ -346,7 +357,7 @@ def test_rms_norm_dispatch_contract_accepts_crlf_checkout(tmp_path, monkeypatch)
     assert copied_path.read_bytes() == contract_source.read_bytes()
     assert contract["contentIdentity"] == {
         "algorithm": "sha256",
-        "value": module.MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY.removeprefix("sha256:"),
+        "value": module.MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY.split(":", 1)[1],
     }
 
 
@@ -4736,7 +4747,7 @@ def _write_layer_norm_dispatch_report(
     artifacts = []
     planned_artifacts = []
     for entry_point, expected in module.MLX_LAYER_NORM_DISPATCH_VARIANTS.items():
-        variant = "dispatch-" + expected["artifactId"].removeprefix("sha256:")
+        variant = "dispatch-" + expected["artifactId"].split(":", 1)[1]
         generated_path = (
             output_dir
             / "directx"
@@ -4923,7 +4934,7 @@ def _write_logsumexp_dispatch_report(
     evaluated_variants = []
     for workload_id, expected in module.MLX_LOGSUMEXP_DISPATCH_VARIANTS.items():
         entry_point = expected["entryPoint"]
-        variant = "dispatch-" + expected["artifactId"].removeprefix("sha256:")
+        variant = "dispatch-" + expected["artifactId"].split(":", 1)[1]
         generated_path = (
             output_dir
             / "directx"
@@ -5128,7 +5139,7 @@ def _write_rms_norm_dispatch_report(
     evaluated_variants = []
     for workload_id, expected in module.MLX_RMS_NORM_DISPATCH_VARIANTS.items():
         entry_point = expected["entryPoint"]
-        variant = "dispatch-" + expected["artifactId"].removeprefix("sha256:")
+        variant = "dispatch-" + expected["artifactId"].split(":", 1)[1]
         generated_path = (
             output_dir
             / "directx"
@@ -8918,9 +8929,7 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
         "path": ".crosstl-mlx-porting/contracts/layer_norm.dispatch.json",
         "contentIdentity": {
             "algorithm": "sha256",
-            "value": module.MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY.removeprefix(
-                "sha256:"
-            ),
+            "value": module.MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY.split(":", 1)[1],
         },
         "variantCount": len(module.MLX_LAYER_NORM_DISPATCH_VARIANTS),
     }
@@ -8933,9 +8942,7 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
         "path": ".crosstl-mlx-porting/contracts/logsumexp.dispatch.json",
         "contentIdentity": {
             "algorithm": "sha256",
-            "value": module.MLX_LOGSUMEXP_DISPATCH_CONTENT_IDENTITY.removeprefix(
-                "sha256:"
-            ),
+            "value": module.MLX_LOGSUMEXP_DISPATCH_CONTENT_IDENTITY.split(":", 1)[1],
         },
         "variantCount": len(module.MLX_LOGSUMEXP_DISPATCH_VARIANTS),
     }
@@ -8948,9 +8955,7 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
         "path": ".crosstl-mlx-porting/contracts/rms_norm.dispatch.json",
         "contentIdentity": {
             "algorithm": "sha256",
-            "value": module.MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY.removeprefix(
-                "sha256:"
-            ),
+            "value": module.MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY.split(":", 1)[1],
         },
         "variantCount": len(module.MLX_RMS_NORM_DISPATCH_VARIANTS),
     }
