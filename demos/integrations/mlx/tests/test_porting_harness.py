@@ -11830,8 +11830,11 @@ def test_unary_metal_roundtrip_evidence_records_complete_family():
     assert status["runtime_parity_claimed"] is False
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "all 877 discovered current-pinned unary entries" in readme
-    assert "adding the complete 694-entry non-scalar frontier" in readme
+    assert (
+        "all 877 discovered entries in ``unary.metal`` at the legacy reference revision"
+    ) in readme
+    assert f"`{CURRENT_MLX_COMMIT}`" in readme
+    assert "including 694 non-scalar entries in addition to the 183 scalar" in readme
     assert "1,243 specializations across 877 artifacts" in readme
     assert "requires 877 non-empty AIR outputs" in readme
     assert "every discovered unary instantiation" in readme
@@ -12037,7 +12040,10 @@ def test_unary_opengl_translation_evidence_records_complete_family():
     assert status["runtime_parity_claimed"] is False
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "all 877 discovered current-pinned `unary.metal` entries to OpenGL" in readme
+    assert (
+        "all 877 discovered `unary.metal` entries at the same legacy reference revision to OpenGL"
+    ) in readme
+    assert f"`{CURRENT_MLX_COMMIT}`" in readme
     assert "4,119,841 generated GLSL bytes" in readme
     assert "three explicit host/runtime index-range preconditions" in readme
     assert "requires 877 non-empty SPIR-V 1.3 modules" in readme

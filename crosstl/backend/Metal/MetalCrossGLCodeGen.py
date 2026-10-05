@@ -188,6 +188,23 @@ class MetalSourceOverloadResolutionError(ValueError):
         )
 
 
+class MetalArithmeticTypeResolutionError(ValueError):
+    """Raised when source arithmetic has no valid common operand type."""
+
+    project_diagnostic_code = "project.translate.metal-arithmetic-type-invalid"
+    missing_capabilities = ("metal.source-arithmetic-types",)
+
+    def __init__(self, operator, operand_types, reason, source_location=None):
+        self.operator = operator
+        self.operand_types = tuple(operand_types)
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(
+            f"Cannot preserve Metal operator '{operator}' for "
+            f"'{operand_types[0]}' and '{operand_types[1]}': {reason}"
+        )
+
+
 class MetalAutoTypeInferenceError(ValueError):
     """Raised when a selected Metal callable has no determinate value type."""
 
@@ -10484,6 +10501,14 @@ class MetalToCrossGLConverter:
                 self.materialized_constexpr_expression_contexts.pop()
         op = node.operator
         if op != "=" and op.endswith("="):
+            bfloat_plan = self.metal_bfloat_arithmetic_plan(
+                op[:-1],
+                self.expression_metal_type(node.left),
+                self.expression_metal_type(node.right),
+                getattr(node, "source_location", None),
+            )
+            if bfloat_plan is not None and bfloat_plan[1][1] is not None:
+                rhs = f"{self.map_type(bfloat_plan[1][1])}({rhs})"
             conversion = self.metal_integer_vector_scalar_conversion(
                 op[:-1],
                 self.expression_metal_type(node.left),
@@ -10876,6 +10901,17 @@ class MetalToCrossGLConverter:
                 self.expression_metal_type(operand)
                 for operand in (expr.left, expr.right)
             ]
+            bfloat_plan = self.metal_bfloat_arithmetic_plan(
+                expr.op, *source_types, getattr(expr, "source_location", None)
+            )
+            if bfloat_plan is not None:
+                operands = [left, right]
+                for index, conversion_type in enumerate(bfloat_plan[1]):
+                    if conversion_type is not None:
+                        operands[index] = (
+                            f"{self.map_type(conversion_type)}({operands[index]})"
+                        )
+                return f"{operands[0]} {expr.op} {operands[1]}"
             conversion = self.metal_integer_vector_scalar_conversion(
                 expr.op, *source_types
             )
@@ -17944,7 +17980,77 @@ float {scalar}(float value) {{
         # conversion in CrossGL also preserves it through saved intermediates.
         return f"{self.map_type(element_type)}({rendered})"
 
+    def metal_bfloat_arithmetic_plan(
+        self, operator, left_type, right_type, source_location=None
+    ):
+        """Retain the source floating family and its operand conversions."""
+        if operator not in {"+", "-", "*", "/", "==", "!=", "<", "<=", ">", ">="}:
+            return None
+        types = (left_type, right_type)
+        if any(
+            self.metal_pointer_pointee_type_once(vtype) is not None
+            or self.split_outer_metal_declarator_array_type(vtype) is not None
+            for vtype in types
+        ):
+            return None
+        vectors = [self.metal_small_vector_type_parts(vtype) for vtype in types]
+        elements = [
+            self.normalized_metal_type(
+                self.resolve_type_alias(vector[0] if vector is not None else vtype)
+            )
+            for vtype, vector in zip(types, vectors)
+        ]
+        bfloat = [element in self.metal_source_bfloat_types for element in elements]
+        if not any(bfloat):
+            return None
+        infos = [
+            self.metal_scalar_arithmetic_type_info(element) for element in elements
+        ]
+        if any(info is None for info in infos):
+            return None
+
+        def invalid(reason):
+            raise MetalArithmeticTypeResolutionError(
+                operator, types, reason, source_location
+            )
+
+        conversions = [None, None]
+        if any(vectors):
+            vector_index = 0 if vectors[0] is not None else 1
+            scalar_index = 1 - vector_index
+            element, width = vectors[vector_index]
+            if all(vectors):
+                if vectors[0][1] != vectors[1][1] or not all(bfloat):
+                    invalid("implicit conversion between these vector types is invalid")
+            elif bfloat[vector_index]:
+                if not bfloat[scalar_index]:
+                    if infos[scalar_index][0] != "integer":
+                        invalid("scalar rank is greater than or unordered with bfloat")
+                    conversions[scalar_index] = "bfloat"
+            else:
+                if infos[vector_index][0] != "floating" or infos[vector_index][2] < 32:
+                    invalid(
+                        "bfloat scalar rank is greater than or unordered with vector element"
+                    )
+                conversions[scalar_index] = element
+            return self.metal_vector_type_from_element(element, width), conversions
+
+        if all(bfloat):
+            return "bfloat", conversions
+        other = 1 if bfloat[0] else 0
+        if infos[other][0] == "integer":
+            # Preserve both the operand conversion and every narrow intermediate.
+            conversions[other] = "bfloat"
+            return "bfloat", conversions
+        if infos[other][2] < 32:
+            invalid("bfloat and half have unordered floating-point ranks")
+        conversions[1 - other] = elements[other]
+        return elements[other], conversions
+
     def metal_scalar_binary_result_type(self, operator, left_type, right_type):
+        bfloat_plan = self.metal_bfloat_arithmetic_plan(operator, left_type, right_type)
+        if bfloat_plan is not None:
+            return bfloat_plan[0]
         left_info = self.metal_scalar_arithmetic_type_info(left_type)
         right_info = self.metal_scalar_arithmetic_type_info(right_type)
 
@@ -17990,6 +18096,11 @@ float {scalar}(float value) {{
             )
         left_type = self.expression_metal_type(expr.left)
         right_type = self.expression_metal_type(expr.right)
+        bfloat_plan = self.metal_bfloat_arithmetic_plan(
+            expr.op, left_type, right_type, getattr(expr, "source_location", None)
+        )
+        if bfloat_plan is not None and expr.op in {"+", "-", "*", "/"}:
+            return bfloat_plan[0]
         if expr.op in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
             left_vector = self.metal_small_vector_type_parts(left_type)
             right_vector = self.metal_small_vector_type_parts(right_type)
@@ -18855,6 +18966,14 @@ float {scalar}(float value) {{
             binary_op = compound_ops.get(operator)
             if binary_op is None:
                 return None
+            bfloat_plan = self.metal_bfloat_arithmetic_plan(
+                binary_op,
+                self.expression_metal_type(access),
+                self.expression_metal_type(value),
+                getattr(access, "source_location", None),
+            )
+            if bfloat_plan is not None and bfloat_plan[1][1] is not None:
+                rendered_value = f"{self.map_type(bfloat_plan[1][1])}({rendered_value})"
             conversion = self.metal_integer_vector_scalar_conversion(
                 binary_op,
                 self.expression_metal_type(access),

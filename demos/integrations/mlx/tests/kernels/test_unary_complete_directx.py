@@ -710,7 +710,8 @@ def _translate_and_validate(
             "__crossgl_binary16_to_float(uint(asuint16(x)))));"
         ) in generated
     if workload.input_type == "bfloat16_t" and workload.operator_type == "Sigmoid":
-        assert "float16_t y = __crossgl_round_half1(" in generated
+        assert "uint y = __crossgl_bfloat16_from_float(" in generated
+        assert "float16_t y" not in generated
     if workload.input_type == "bfloat16_t" and workload.operator_type in {
         "ArcCosh",
         "ArcSinh",

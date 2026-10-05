@@ -1,6 +1,7 @@
 """Bfloat narrowing retains value precision with widened OpenGL storage."""
 
 import json
+import math
 import os
 import random
 import re
@@ -12,6 +13,7 @@ import pytest
 
 from crosstl import translate
 from crosstl.translator.ast import FunctionCallNode
+from crosstl.translator.codegen.directx_codegen import DirectXBFloat16UnsupportedError
 from crosstl.translator.codegen.GLSL_codegen import (
     GLSLCodeGen,
     OpenGLScalarConversionError,
@@ -390,6 +392,135 @@ def test_bfloat_arithmetic_executes_natively(tmp_path, operation):
         original_entry="bfloat_conversion",
         validate=_validate_half,
     )
+
+
+INFERRED_ARITHMETIC = {
+    "right-add": "x + 257",
+    "left-add": "257 + x",
+    "right-subtract": "x - 257",
+    "left-subtract": "257 - x",
+    "right-multiply": "x * 257",
+    "left-multiply": "257 * x",
+    "right-divide": "x / 3",
+    "left-divide": "3 / x",
+    "nested": "1 / (1 + x)",
+    "cancellation": "(x + 1) - x",
+    "comparison": "x == 257",
+    "widened": "x + 257.0f",
+    "boolean": "x + true",
+    "compound": "x",
+    "side-effect": "counter++ + x",
+    "vector-right-add": "(bfloat2(x) + 257).x",
+    "vector-left-add": "(257 + bfloat2(x)).x",
+    "vector-widened": "(float2(257.0f) + x).x",
+    "vector-widened-reverse": "(x + float2(257.0f)).x",
+}
+BFLOAT_VECTOR_ARITHMETIC = {"vector-right-add", "vector-left-add"}
+
+
+def _inferred_arithmetic_reference(value, operation):
+    def bits(number):
+        return struct.unpack("<I", struct.pack("<f", number))[0]
+
+    def narrow(number):
+        return struct.unpack("<f", struct.pack("<I", _round(bits(number))))[0]
+
+    def divide(left, right):
+        if right == 0:
+            return math.copysign(math.inf, left * math.copysign(1.0, right))
+        return left / right
+
+    x = narrow(value)
+    rounded_integer = narrow(257)
+    result = {
+        "right-add": lambda: x + rounded_integer,
+        "left-add": lambda: rounded_integer + x,
+        "right-subtract": lambda: x - rounded_integer,
+        "left-subtract": lambda: rounded_integer - x,
+        "right-multiply": lambda: x * rounded_integer,
+        "left-multiply": lambda: rounded_integer * x,
+        "right-divide": lambda: x / 3,
+        "left-divide": lambda: divide(3, x),
+        "nested": lambda: divide(1, narrow(1 + x)),
+        "cancellation": lambda: narrow(x + 1) - x,
+        "comparison": lambda: float(x == rounded_integer),
+        "widened": lambda: x + 257.0,
+        "boolean": lambda: x + 1,
+        "compound": lambda: narrow(x + rounded_integer) / 3,
+        "side-effect": lambda: rounded_integer + x,
+        "vector-right-add": lambda: x + rounded_integer,
+        "vector-left-add": lambda: rounded_integer + x,
+        "vector-widened": lambda: 257.0 + x,
+        "vector-widened-reverse": lambda: x + 257.0,
+    }[operation]()
+    return bits(result) if "widened" in operation else _round(bits(result))
+
+
+def test_inferred_bfloat_reference_requires_operand_and_intermediate_rounding():
+    assert _inferred_arithmetic_reference(0.0, "right-add") == 0x43800000
+    assert _inferred_arithmetic_reference(256.0, "cancellation") == 0
+    assert _inferred_arithmetic_reference(256.0, "comparison") == 0x3F800000
+    assert _inferred_arithmetic_reference(0.0, "widened") == 0x43808000
+
+
+@pytest.mark.parametrize(
+    "operation",
+    tuple(
+        operation
+        for operation in INFERRED_ARITHMETIC
+        if TARGET != "directx" or operation not in BFLOAT_VECTOR_ARITHMETIC
+    ),
+)
+def test_inferred_bfloat_arithmetic_executes_natively(tmp_path, operation):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required inferred bfloat arithmetic")
+    values = [0.0, -0.0, 0.25, -0.5, 1.0, -1.0, 2.0, 3.0, 128.0, 256.0, 257.0, 65536.0]
+    words = [struct.unpack("<I", struct.pack("<f", value))[0] for value in values]
+    body = "bfloat x = bfloat(values[i]); "
+    if operation == "side-effect":
+        body += "uint counter = 257u; "
+    body += f"auto y = {INFERRED_ARITHMETIC[operation]}; "
+    if operation == "compound":
+        body += "y += 257; y /= 3; "
+    if operation == "side-effect":
+        body += "results[i + 1u] = counter == 258u ? float(y) : -99999.0f;"
+    else:
+        body += "results[i + 1u] = float(y);"
+    source, request, expected = _case(
+        tmp_path,
+        TARGET,
+        "inferred-arithmetic",
+        words,
+        body=body,
+        expected_words=[
+            _inferred_arithmetic_reference(value, operation) for value in values
+        ],
+    )
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source,
+        original_entry="bfloat_conversion",
+        validate=_validate_half,
+    )
+
+
+@pytest.mark.parametrize("operation", sorted(BFLOAT_VECTOR_ARITHMETIC))
+def test_inferred_bfloat_vector_arithmetic_keeps_directx_diagnostic(
+    tmp_path, operation
+):
+    source = tmp_path / "vector.metal"
+    source.write_text(
+        _source(
+            "bfloat x = bfloat(values[i]); "
+            f"auto y = {INFERRED_ARITHMETIC[operation]}; results[i] = float(y);"
+        )
+    )
+    with pytest.raises(DirectXBFloat16UnsupportedError) as error:
+        translate(str(source), backend="directx", format_output=False)
+    assert error.value.reason == "unsupported-bfloat16-builtin"
+    assert error.value.operation == "bfloat2"
 
 
 def test_bfloat_random_finite_rounding_executes_natively(tmp_path):

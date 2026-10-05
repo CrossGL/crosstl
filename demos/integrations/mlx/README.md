@@ -116,16 +116,26 @@ reproduces the source-profile gap tracked in
 lossless-copy defect or permission to canonicalize uploads. These local probes
 do not establish Windows FP8 execution or expand the required CI runtime set.
 
-Arithmetic inference also has a known bfloat limitation:
-`auto y = 1 / (1 + x)` with bfloat `x` incorrectly becomes half precision.
-The unchanged source compiles and executes on Metal; generated Metal rejects
-the conversion, while generated OpenGL returns incorrect bits in 15 of 16
-reduced cases despite successful compilation. The same inferred-type change
-appears in the historical bfloat Sigmoid specialization. Its existing HLSL
-half-type assertion and reviewed artifact identity are not correctness evidence.
-[crosstl#2082](https://github.com/CrossGL/crosstl/issues/2082) tracks the general
-inference and intermediate-rounding correction. Whole-family unary acceptance
-remains blocked; required Square and ArcCos numerical cases are separate.
+The arithmetic correction for
+[crosstl#2082](https://github.com/CrossGL/crosstl/issues/2082) retains bfloat
+intermediates instead of inferring half precision from their storage width.
+Mixed integer operands are converted before arithmetic; each narrow result
+boundary remains observable. Nineteen reduced cases match unchanged original
+Metal and generated Metal/OpenGL over 228 values per path, with exact output
+bits and guards. Seventeen supported HLSL cases compile with warnings fatal;
+Windows numerical execution of these new cases remains pending. The two
+bfloat-vector cases retain DirectX unsupported-type diagnostics rather than
+claiming execution coverage.
+
+The obsolete HLSL Sigmoid half-type assertion is corrected, but whole-family
+unary acceptance remains blocked. Fresh current and historical Sigmoid entries
+compile to HLSL and GLSL; their Metal round trips still lose narrow math-result
+boundaries, tracked in
+[crosstl#2084](https://github.com/CrossGL/crosstl/issues/2084). Mixed integer-lvalue
+compound assignments expose another OpenGL rounding defect in
+[crosstl#2083](https://github.com/CrossGL/crosstl/issues/2083). No complete unary
+reference refresh or numerical parity is claimed. Required Square and ArcCos
+numerical cases remain separate.
 
 The current pin adds cross-entropy, gated-delta forward and backward kernels
 (including NAX variants), matrix-multiplication gather offsets, and attention
@@ -298,9 +308,12 @@ The current harness verifies:
   numerical parity is not claimed; bit-observable floating conversions also
   require the source-policy work tracked in
   [crosstl#2081](https://github.com/CrossGL/crosstl/issues/2081). The subsequent
-  bfloat inferred-arithmetic reproduction in
-  [crosstl#2082](https://github.com/CrossGL/crosstl/issues/2082) blocks acceptance
-  of the affected Sigmoid bodies despite their successful DXC compilation;
+  bfloat inferred-arithmetic correction in
+  [crosstl#2082](https://github.com/CrossGL/crosstl/issues/2082) changes the
+  affected Sigmoid bodies again. Their reference identities remain under
+  review; successful DXC compilation is not numerical acceptance. The Metal
+  math-boundary defect in [crosstl#2084](https://github.com/CrossGL/crosstl/issues/2084)
+  also remains unresolved;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 2,496
   discovered copy entries from `copy.metal` at the legacy reference revision
   `846d176227a0ac13d2667e58d2bb68b322109ab0`. The schema-v2

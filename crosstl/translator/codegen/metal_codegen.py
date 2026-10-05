@@ -11305,6 +11305,8 @@ class MetalCodeGen:
                 obj = self.generate_expression_with_expected(expr.object, None)
             finally:
                 self.suppress_image_load_component_suffix = previous_suppression
+            if isinstance(expr.object, (BinaryOpNode, TernaryOpNode, UnaryOpNode)):
+                obj = f"({obj})"
             if self.member_access_uses_pointer_operator(expr):
                 return f"{obj}->{expr.member}"
             return f"{obj}.{expr.member}"

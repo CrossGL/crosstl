@@ -939,6 +939,25 @@ def test_binary_expression_precedence_preserves_grouping_in_metal():
     assert "float3(t) * farPoint - nearPoint" not in generated_code
 
 
+@pytest.mark.parametrize(
+    "expression,expected",
+    [
+        ("(left + right).y", "(left + right).y"),
+        ("(choose ? left : right).y", "(choose ? left : right).y"),
+        ("(-left).y", "(-left).y"),
+    ],
+)
+def test_metal_member_selection_preserves_expression_grouping(expression, expected):
+    shader = f"""shader MemberGrouping {{
+        float select_member(vec2 left, vec2 right, bool choose) {{
+            return {expression};
+        }}
+    }}"""
+    generated = MetalCodeGen().generate(crosstl.translator.parse(shader))
+    assert f"return {expected};" in generated
+    compile_with_metal_if_available(generated)
+
+
 def test_metal_reconstructs_retained_source_union_layout_and_compiles():
     shader = """
     shader MetalRetainedUnionLayout {
