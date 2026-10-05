@@ -57,13 +57,13 @@ SCALAR_UNARY_METAL_CONTRACT_PATH = (
     / "unary.scalar-metal-roundtrip.json"
 )
 SCALAR_UNARY_METAL_CONTRACT_SHA256 = (
-    "e0321176a9c188603180db9c6b7251d9ed9cec3413490aa9d41485bfebd0f73d"
+    "40fc920ceb22ba321c1df4d8a0dcd19d99ebb0e23d883e0f0a4dadf678c2794a"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "e05dee4143cc3ccaa68841fab43a08756e4d7c9d73bbe370fa383bd50b110dc4"
+    "8e0a2d7e49d8b1b7235b3c5c8195e2f1054de2feeeaed43b2c3b33b2fe5944d6"
 )
 
 
@@ -142,9 +142,9 @@ ARCCOS_WORKLOAD = UnaryWorkload(
         },
         "metal": {
             "sha256": (
-                "a6a870e3c299a0b69b3fd3fbcebe729a44876294c2129d5c5fa689249c26dd48"
+                "352e14c92299445a80e72876025534c6e9a4a8e944f81932594d16897ac083f9"
             ),
-            "sizeBytes": 3087,
+            "sizeBytes": 3163,
         },
         "opengl": {
             "sha256": (
@@ -726,12 +726,12 @@ def test_current_mlx_unary_metal_contract_is_complete_and_classified():
         "intermediate": "crossgl",
         "hostInterfaceStatus": "ready",
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 1444855,
+        "generatedSizeBytesTotal": 1757878,
         "generatedSizeRange": {
-            "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 1050},
+            "minimum": {"entryPoint": "v_Absfloat16float16", "sizeBytes": 1052},
             "maximum": {
-                "entryPoint": "gn4large_ArcTancomplex64complex64",
-                "sizeBytes": 4745,
+                "entryPoint": "gn4large_Sinhcomplex64complex64",
+                "sizeBytes": 7822,
             },
         },
         "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",

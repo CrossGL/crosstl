@@ -162,10 +162,33 @@ The tests use existing native CI jobs. Unproven wide-integer conversions and ope
 with observable side effects produce structured diagnostics; these checks do
 not claim complete mixed compound-assignment support.
 
-The obsolete HLSL Sigmoid half-type assertion is corrected, but whole-family
-unary acceptance remains blocked. No complete unary reference refresh or
-numerical parity is claimed. Required Square and ArcCos
-numerical cases remain separate.
+The Metal unary references have a complete review of all 877 artifacts:
+538 are unchanged and 339 retain explicit byte conversions, Boolean promotions,
+bfloat computation boundaries or the existing precise math implementations.
+All 877 compile with warnings fatal. Their 3,363 reflected resources and 1,243
+materializations are unchanged. The separate scalar contract and ArcCos loader
+identity match the same reviewed artifacts; no source selection or tolerance
+was changed.
+
+A local original/generated Metal comparison covers 69 changed operator/type
+selections and 1,863,009 values per path. Fifty-three selections match exactly;
+sixteen have floating-point bit differences. Sampled scalar float32 results
+satisfy their existing four-ULP bounds. Required native precision checks also
+verify exact narrowing of each computed float result near half/bfloat rounding
+midpoints. They retain the original Metal controls separately, without claiming
+bitwise transcendental parity. Complex differences and wider source/target
+accuracy policy remain tracked in
+[crosstl#2068](https://github.com/CrossGL/crosstl/issues/2068).
+Whole-family DirectX/OpenGL reference reconciliation remains incomplete.
+Required Square and ArcCos numerical cases remain separate and unchanged.
+
+The precision review also reproduced a distinct OpenGL alias-bitcast defect:
+`as_type<Alias>` with a bfloat alias does not match explicit `as_type<bfloat>`.
+Original/generated Metal controls pass, while real OpenGL execution changes six
+of seven tested payloads with intact guards. The reduced reproduction is retained
+in [crosstl#2088](https://github.com/CrossGL/crosstl/issues/2088). Precision tests
+use explicit input bitcast types to isolate arithmetic; the alias defect is not
+covered by, or waived through, the floating-point accuracy bound.
 
 The complete unary Metal compile gate generates sources in five Ubuntu shards
 and compiles all 877 verified artifacts in one macOS job. It retains every

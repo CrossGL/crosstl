@@ -669,3 +669,224 @@ def test_ci_requires_precise_trig_execution():
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_metal_precise_trig.py" in step
     assert "pytest -q -n auto" in step
+
+
+NARROW_INPUTS = tuple(
+    sorted(
+        set(PROMOTED_INPUTS)
+        | {
+            (center + offset) ^ sign
+            for center in (0x32B3, 0x4578, 0x2CAF, 0x2F4C, 0x3094, 0x7D29)
+            for offset in (-1, 0, 1)
+            for sign in (0, 0x8000)
+        }
+    )
+)
+
+
+def _narrow_word(word, operand):
+    if operand == "half":
+        return struct.unpack("<H", struct.pack("<e", _float(word)))[0]
+    return (word + 0x7FFF + ((word >> 16) & 1)) >> 16
+
+
+def _narrow_source(operand):
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+using Narrow = {operand};
+kernel void narrow_precise(const device uint* values [[buffer(0)]],
+                          device uint* results [[buffer(1)]],
+                          uint i [[thread_position_in_grid]]) {{
+    Narrow value = as_type<{operand}>(ushort(values[i]));
+"""
+    stride = 2 * len(PROMOTED_OPERATIONS)
+    for index, operation in enumerate(PROMOTED_OPERATIONS):
+        source += f"""
+    float wide_{operation} = metal::precise::{operation}(value);
+    Narrow narrow_{operation} = Narrow(wide_{operation});
+    results[{stride} * i + {2 * index}] = as_type<uint>(wide_{operation});
+    results[{stride} * i + {2 * index + 1}] = uint(as_type<ushort>(narrow_{operation}));
+"""
+    return source + "}\n"
+
+
+def _narrow_expected(operand):
+    expected = []
+    for word in NARROW_INPUTS:
+        value = (
+            struct.unpack("<e", struct.pack("<H", word))[0]
+            if operand == "half"
+            else _float(word << 16)
+        )
+        for operation in PROMOTED_OPERATIONS:
+            try:
+                result = getattr(math, operation)(value)
+            except ValueError:
+                result = math.nan
+            wide = _bits(result)
+            expected.extend((wide, _narrow_word(wide, operand)))
+    return expected + GUARD
+
+
+def _check_narrowing(actual, expected, operand, *, original=False):
+    assert len(actual) == len(expected), "output size"
+    assert actual[-len(GUARD) :] == GUARD, "output guard"
+    maximum = 0
+    for offset in range(0, len(expected) - len(GUARD), 2):
+        wide, narrow = actual[offset : offset + 2]
+        want = expected[offset]
+        operation = PROMOTED_OPERATIONS[(offset // 2) % len(PROMOTED_OPERATIONS)]
+        if original and operation == "atan":
+            from tests.test_translator.test_metal_precise_atan import (
+                _check_original_word,
+            )
+
+            maximum = max(maximum, _check_original_word(wide, want))
+        elif want & 0x7FFFFFFF > 0x7F800000:
+            assert wide & 0x7FFFFFFF > 0x7F800000, "NaN classification"
+        elif want & 0x7FFFFFFF < 0x00800000 or want & 0x7FFFFFFF == 0x7F800000:
+            assert wide == want, "zero, subnormal or infinity"
+        else:
+            assert wide >> 31 == want >> 31, "result sign"
+            error = abs(wide - want)
+            assert error <= 4, (offset, hex(wide), hex(want), error)
+            maximum = max(maximum, error)
+
+        assert 0 <= narrow <= 0xFFFF, "narrow storage width"
+        if wide & 0x7FFFFFFF > 0x7F800000:
+            infinity = 0x7C00 if operand == "half" else 0x7F80
+            assert narrow & 0x7FFF > infinity, "narrow NaN classification"
+        else:
+            # The float operation has its own accuracy bound. Its actual result
+            # must still be narrowed exactly, including near rounding midpoints.
+            assert narrow == _narrow_word(wide, operand), "narrow conversion"
+    return maximum
+
+
+@pytest.mark.parametrize("operand", ("half", "bfloat"))
+@pytest.mark.parametrize("target", ("directx", "opengl", "metal"))
+def test_precise_narrowing_compiles(tmp_path, operand, target):
+    generated = _translate(tmp_path, _narrow_source(operand), target)
+    _compile(
+        generated,
+        target,
+        tmp_path,
+        directx_compile_flags=("-enable-16bit-types",),
+    )
+
+
+@pytest.mark.parametrize(
+    "operand,wide,expected",
+    (
+        ("half", 0x3E54D000, 0x32A6),
+        ("half", 0x3E54D001, 0x32A7),
+        ("half", 0x3E54CFFF, 0x32A6),
+        ("bfloat", 0xBED28000, 0xBED2),
+        ("bfloat", 0xBED28001, 0xBED3),
+        ("bfloat", 0xBED27FFF, 0xBED2),
+        ("half", 0x80000000, 0x8000),
+        ("bfloat", 0x80000000, 0x8000),
+    ),
+)
+def test_precise_narrowing_reference_rounds_midpoints(operand, wide, expected):
+    assert _narrow_word(wide, operand) == expected
+
+
+def test_precise_narrowing_original_policy_does_not_relax_generated_checks():
+    expected = _narrow_expected("bfloat")
+    actual = expected.copy()
+    offset = 2 * (len(PROMOTED_OPERATIONS) * NARROW_INPUTS.index(1) + 4)
+    actual[offset : offset + 2] = [0, 0]
+    _check_narrowing(actual, expected, "bfloat", original=True)
+    with pytest.raises(AssertionError):
+        _check_narrowing(actual, expected, "bfloat")
+
+
+def test_precise_narrowing_checks_the_observed_float_result():
+    expected = _narrow_expected("half")
+    actual = expected.copy()
+    offset = 2 * len(PROMOTED_OPERATIONS) * NARROW_INPUTS.index(0x32B3)
+    assert expected[offset : offset + 2] == [0x3E54D000, 0x32A6]
+    actual[offset : offset + 2] = [0x3E54D001, 0x32A7]
+    assert _check_narrowing(actual, expected, "half") == 1
+    actual[offset + 1] = expected[offset + 1]
+    with pytest.raises(AssertionError, match="narrow conversion"):
+        _check_narrowing(actual, expected, "half")
+
+
+@pytest.mark.parametrize("operand", ("half", "bfloat"))
+@pytest.mark.parametrize(
+    "corruption", ("value", "narrow", "size", "guard", "width", "zero", "nan")
+)
+def test_precise_narrowing_verifier_rejects_corruption(operand, corruption):
+    expected = _narrow_expected(operand)
+    _check_narrowing(expected, expected, operand)
+    actual = expected.copy()
+    if corruption == "value":
+        actual[2] += 5
+    elif corruption == "narrow":
+        actual[3] += 1
+    elif corruption == "size":
+        actual.pop()
+    elif corruption == "guard":
+        actual[-1] ^= 1
+    elif corruption == "width":
+        actual[3] |= 0x10000
+    elif corruption == "zero":
+        actual[:2] = [0x80000000, 0x8000]
+    else:
+        actual[11] = 0
+    with pytest.raises(AssertionError):
+        _check_narrowing(actual, expected, operand)
+
+
+@pytest.mark.parametrize("operand", ("half", "bfloat"))
+def test_precise_narrowing_executes_natively(tmp_path, operand):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required native precise narrowing")
+    target = {"win32": "directx", "linux": "opengl", "darwin": "metal"}[sys.platform]
+    source = _narrow_source(operand)
+    generated = _translate(tmp_path, source, target)
+    expected = _narrow_expected(operand)
+    (tmp_path / "inputs.bin").write_bytes(
+        struct.pack(f"<{len(NARROW_INPUTS)}I", *NARROW_INPUTS)
+    )
+    (tmp_path / "expected.bin").write_bytes(
+        struct.pack(f"<{len(expected)}I", *expected)
+    )
+    records = {}
+    for label, code in (("generated", generated), ("original", source)):
+        if label == "original" and target != "metal":
+            continue
+        records[label] = _execute(
+            tmp_path / label,
+            target,
+            code,
+            NARROW_INPUTS,
+            expected,
+            metal_entry="narrow_precise",
+            check_outputs=lambda actual, reference: _check_narrowing(
+                actual, reference, operand, original=label == "original"
+            ),
+            metal_compile_flags=("-fno-fast-math",),
+            directx_compile_flags=("-enable-16bit-types",),
+        )
+    (tmp_path / "evidence.json").write_text(
+        json.dumps(
+            {
+                "target": target,
+                "operand": operand,
+                "inputCount": len(NARROW_INPUTS),
+                "operations": PROMOTED_OPERATIONS,
+                "oracle": (
+                    "Existing four-ULP binary32 bound; exact narrowing of each observed binary32 result"
+                ),
+                "originalMetalControl": (
+                    "Separate original atan zero/subnormal policy; no claim of bitwise transcendental parity"
+                ),
+                "records": records,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )

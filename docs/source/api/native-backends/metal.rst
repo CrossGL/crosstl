@@ -68,6 +68,14 @@ execute HLSL on Windows, GLSL on Linux and original/generated Metal on macOS.
 NaN payload identity, exception flags and other precise transcendental
 operations are not covered by this contract.
 
+Precise-result narrowing is checked separately from the binary32 math bound.
+Native controls retain the computed float bits and require the subsequent half
+or bfloat conversion to round those bits exactly, including midpoint neighbors,
+signed zeros and NaN classification. A permitted binary32 approximation can
+cross a narrow rounding midpoint. These checks do not promise bitwise agreement
+with an original Metal transcendental result, or relax exact integer and copy
+contracts. They run in the existing native math jobs on all three platforms.
+
 Precise Inverse Hyperbolic Cosine
 -----------------------------------
 
