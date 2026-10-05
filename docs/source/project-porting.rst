@@ -2659,8 +2659,14 @@ memory-safety analysis.
 Compilation, probing and execution each have a default 120-second deadline,
 configurable with ``MetalRuntimeParityAdapter(timeout_seconds=...)``. A timeout
 terminates and reaps the worker process group and reports a structured failure;
-it never substitutes host computation. Call ``close()`` on the Metal runtime
-when finished to release the temporary worker executable. Device name,
+it never substitutes host computation. The default runtime shares a verified
+helper executable within the Python process when the helper source, compiler
+options, toolchain, SDK and architecture are unchanged. Every probe and dispatch
+still starts a separate bounded process; shader compilation, GPU state and
+readbacks are not cached. ``close()`` releases instance-owned resources without
+invalidating another instance's shared helper. Shared executables are removed
+at process exit; custom command runners or tool resolvers retain private helpers
+that ``close()`` removes. Device name,
 compiled-library hash, execution width and dispatch geometry accompany readback
 evidence. The implementation follows Metal's
 `compiled binding reflection

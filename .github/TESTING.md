@@ -63,6 +63,14 @@ reuse. The check is bounded and retains shader/module identities, physical
 allocation addresses and full-allocation readback hashes. It adds no runner
 and does not replace the public loader's numerical offset regressions.
 
+The Metal runtime reuses its unchanged host helper within each Python test
+process. Source, compiler options, toolchain, SDK and architecture are part of
+the cache identity; missing or modified executables are rebuilt. The native
+package job checks reuse across independent runtime instances with real
+dispatches. Shader compilation, device probing, numerical execution and
+readback checks still run. This removes repeated Swift helper compilation
+without sharing GPU state or adding a runner.
+
 Concurrency is scoped to each job and matrix leg on a branch. Running native
 work is allowed to finish, while only the newest waiting revision of that job
 is retained. A long Metal corpus run therefore does not hold up an unrelated

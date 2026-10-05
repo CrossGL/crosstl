@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import atexit
 import base64
 import hashlib
 import json
 import math
 import os
+import platform
 import shutil
 import signal
 import struct
 import subprocess
 import sys
 import tempfile
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -32,6 +35,66 @@ from .runtime_verification import (
     RuntimeExecutorAvailability,
     RuntimeValue,
 )
+
+_BUILD_LOCK = threading.Lock()
+_WORKERS = {}
+_WORKER_SOURCE = Path(__file__).with_name("metal_runtime_worker.swift")
+_WORKER_OPTIONS = ("-O", "-warnings-as-errors")
+_BUILD_ENVIRONMENT = (
+    "DEVELOPER_DIR",
+    "TOOLCHAINS",
+    "SDKROOT",
+    "MACOSX_DEPLOYMENT_TARGET",
+    "SWIFT_DRIVER_SWIFT_FRONTEND_EXEC",
+    "CPATH",
+    "C_INCLUDE_PATH",
+    "CPLUS_INCLUDE_PATH",
+    "LIBRARY_PATH",
+)
+
+
+def _clear_worker_cache():
+    with _BUILD_LOCK:
+        entries = list(_WORKERS.values())
+        _WORKERS.clear()
+        for directory, _, _ in entries:
+            shutil.rmtree(directory, ignore_errors=True)
+
+
+def _reset_worker_cache_after_fork():
+    # Inherited executables belong to the parent; child cleanup must not remove them.
+    global _BUILD_LOCK, _WORKERS
+    _BUILD_LOCK = threading.Lock()
+    _WORKERS = {}
+
+
+atexit.register(_clear_worker_cache)
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_worker_cache_after_fork)
+
+
+def _file_identity(path):
+    path = Path(path).resolve(strict=True)
+    stat = path.stat()
+    return (
+        str(path),
+        stat.st_dev,
+        stat.st_ino,
+        stat.st_size,
+        stat.st_mtime_ns,
+        stat.st_ctime_ns,
+    )
+
+
+def _valid_worker(path, digest):
+    try:
+        return (
+            path.is_file()
+            and os.access(path, os.X_OK)
+            and hashlib.sha256(path.read_bytes()).hexdigest() == digest
+        )
+    except OSError:
+        return False
 
 
 def run_metal_command(command, *, input_text=None, timeout_seconds=120):
@@ -111,6 +174,7 @@ class MetalComputeRuntime:
         self.command_runner = command_runner or run_metal_command
         self.tool_resolver = tool_resolver or shutil.which
         self.platform_name = platform_name or sys.platform
+        self._shared_worker = command_runner is None and tool_resolver is None
         self._worker_directory = None
         self._worker_path = None
 
@@ -118,7 +182,7 @@ class MetalComputeRuntime:
         if self._worker_directory is not None:
             self._worker_directory.cleanup()
             self._worker_directory = None
-            self._worker_path = None
+        self._worker_path = None
 
     def _run(self, command, *, input_text=None):
         return self.command_runner(
@@ -128,13 +192,16 @@ class MetalComputeRuntime:
     def _worker(self):
         if self.platform_name != "darwin":
             raise _setup_error("Metal runtime requires macOS.", "platform-unavailable")
-        if self._worker_path is not None:
+        if self._worker_path is not None and not self._shared_worker:
             return self._worker_path
         xcrun = self.tool_resolver("xcrun")
         if xcrun is None:
             raise _setup_error(
                 "Metal runtime requires Xcode tools.", "tool-unavailable"
             )
+        if self._shared_worker:
+            self._worker_path = self._cached_worker(xcrun)
+            return self._worker_path
         directory = tempfile.TemporaryDirectory(prefix="crosstl-metal-worker-")
         path = Path(directory.name) / "metal-runtime"
         try:
@@ -148,7 +215,7 @@ class MetalComputeRuntime:
                     "-warnings-as-errors",
                     "-module-cache-path",
                     str(Path(directory.name) / "modules"),
-                    str(Path(__file__).with_name("metal_runtime_worker.swift")),
+                    str(_WORKER_SOURCE),
                     "-o",
                     str(path),
                 ]
@@ -166,6 +233,98 @@ class MetalComputeRuntime:
         self._worker_directory = directory
         self._worker_path = path
         return path
+
+    def _tool_output(self, command):
+        result = self._run(command)
+        output = result.stdout.strip()
+        if result.returncode or not output:
+            raise _setup_error(
+                "Metal worker toolchain lookup failed.",
+                "toolchain-unavailable",
+                command=command,
+                stdout=result.stdout,
+                stderr=result.stderr,
+            )
+        return output
+
+    def _cached_worker(self, xcrun):
+        compiler = Path(
+            self._tool_output([xcrun, "--sdk", "macosx", "--find", "swiftc"])
+        )
+        sdk = Path(self._tool_output([xcrun, "--sdk", "macosx", "--show-sdk-path"]))
+        version = self._tool_output([str(compiler), "--version"])
+        source = _WORKER_SOURCE.read_bytes()
+        options = _WORKER_OPTIONS
+        settings = tuple(
+            (name, hashlib.sha256((sdk / name).read_bytes()).hexdigest())
+            for name in ("SDKSettings.json", "SDKSettings.plist")
+            if (sdk / name).is_file()
+        )
+        frontend = compiler.with_name("swift-frontend")
+        key = (
+            hashlib.sha256(source).hexdigest(),
+            options,
+            _file_identity(xcrun),
+            _file_identity(compiler),
+            _file_identity(frontend) if frontend.is_file() else None,
+            version,
+            _file_identity(sdk),
+            settings,
+            platform.machine(),
+            tuple((name, os.environ.get(name)) for name in _BUILD_ENVIRONMENT),
+        )
+        if not _BUILD_LOCK.acquire(timeout=self.timeout_seconds):
+            raise _setup_error(
+                "Metal helper build remained busy past its deadline.",
+                "worker-build-timeout",
+                timeoutSeconds=self.timeout_seconds,
+            )
+        try:
+            entry = _WORKERS.get(key)
+            if entry is not None:
+                directory, path, digest = entry
+                if _valid_worker(path, digest):
+                    return path
+                del _WORKERS[key]
+                shutil.rmtree(directory, ignore_errors=True)
+            directory = Path(tempfile.mkdtemp(prefix="crosstl-metal-worker-"))
+            path = directory / "metal-runtime"
+            try:
+                # Compile the exact source bytes represented by the cache key.
+                snapshot = directory / _WORKER_SOURCE.name
+                snapshot.write_bytes(source)
+                result = self._run(
+                    [
+                        str(compiler),
+                        "-sdk",
+                        str(sdk),
+                        *options,
+                        "-module-cache-path",
+                        str(directory / "modules"),
+                        str(snapshot),
+                        "-o",
+                        str(path),
+                    ]
+                )
+                if result.returncode or not path.is_file() or not path.stat().st_size:
+                    raise _setup_error(
+                        "Metal worker compilation failed.",
+                        "worker-compile-failed",
+                        stdout=result.stdout,
+                        stderr=result.stderr,
+                    )
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                if not _valid_worker(path, digest):
+                    raise _setup_error(
+                        "Metal helper is not executable.", "worker-compile-failed"
+                    )
+            except BaseException:
+                shutil.rmtree(directory, ignore_errors=True)
+                raise
+            _WORKERS[key] = (directory, path, digest)
+            return path
+        finally:
+            _BUILD_LOCK.release()
 
     def is_available(self, adapter, request):
         _ = adapter, request

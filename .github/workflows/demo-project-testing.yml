@@ -3267,6 +3267,7 @@ jobs:
               --basetemp="metal-package-results/pytest" \
               --junitxml="metal-package-results/results.xml" \
               tests/test_translator/test_metal_native_runtime.py \
+              tests/test_translator/test_metal_worker_cache.py \
               tests/test_translator/test_exact_thread_grid_runtime.py \
               tests/test_translator/test_metal_helper_linkage.py
 
