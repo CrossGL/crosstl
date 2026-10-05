@@ -102,6 +102,20 @@ Generated Metal libraries still compile with `-Werror`; both paths retain
 `-fno-fast-math` and the same numerical assertions. No upstream headers are
 modified to accommodate the reference compiler.
 
+A separate local FP8 review at `9c3d3557` compares all six scalar conversion
+entries against unchanged upstream Metal: all 65,536 half and bfloat input
+words, 1,024 float32 boundary inputs, and all 256 encodings for each decoder.
+Generated Metal matches the original readback bytes. OpenGL matches the other
+five entries, but its half encoder differs for all 1,023 negative NaNs:
+the Metal reference returns `0x7e`, while OpenGL returns `0xfe`. Output guards
+remain intact. Encoder comparisons are byte-exact; decoder comparisons retain
+exact finite values and signed zeros but compare NaNs by classification.
+An isolated half-to-float conversion followed by integer bit inspection
+reproduces the source-profile gap tracked in
+[crosstl#2081](https://github.com/CrossGL/crosstl/issues/2081). This is not a
+lossless-copy defect or permission to canonicalize uploads. These local probes
+do not establish Windows FP8 execution or expand the required CI runtime set.
+
 The current pin adds cross-entropy, gated-delta forward and backward kernels
 (including NAX variants), matrix-multiplication gather offsets, and attention
 backward kernels. These files are included in discovery; they are not covered by
@@ -235,8 +249,9 @@ The current harness verifies:
   requires 877 non-empty SPIR-V 1.3 modules. This is complete OpenGL
   translation, reflection, and native compiler coverage, not numerical
   execution or MLX host runtime redirection;
-- selected-entry translation of all 877 discovered current-pinned
-  `unary.metal` entries to DirectX. The schema-v2
+- selected-entry translation of all 877 discovered `unary.metal` entries at the
+  legacy reference revision `846d176227a0ac13d2667e58d2bb68b322109ab0` to DirectX.
+  The schema-v2
   `contracts/unary.directx-translation.json` contract pins every standalone
   `CSMain` artifact across the same five shapes, 37 operators, 20 type pairs,
   and 1,243 materializations, with 3,912 reflected HLSL resources: three per
@@ -254,9 +269,17 @@ The current harness verifies:
   Five required Ubuntu CI shards compile every artifact with pinned Linux DXC,
   source-derived `-enable-16bit-types`, warnings fatal, profile `cs_6_2`, and
   entry point `CSMain`; the gate requires 877 non-empty DXIL modules. Together
-  with the OpenGL proof this closes complete discovered unary translation,
-  reflection, and native compiler coverage on both targets, not numerical
-  execution or MLX host runtime redirection;
+  with the OpenGL proof this records complete discovered unary translation,
+  reflection, and native compiler coverage at the recorded revisions, not
+  numerical execution or MLX host runtime redirection. The checkpoint review
+  separately compiles all 877 current HLSL outputs and compares their complete
+  bodies against hash-verified originals: 603 changed and 274 unchanged. The
+  differences are accounted for by source-width arithmetic, byte and half
+  conversions, Boolean promotion, sign preservation and precise math helpers.
+  Checks with deliberately altered bindings, index steps, conversion widths
+  and helper coefficients fail. Reference identities remain unchanged pending
+  the remaining platform and numerical review in
+  [crosstl#2071](https://github.com/CrossGL/crosstl/issues/2071);
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 2,496
   discovered copy entries from `copy.metal` at the legacy reference revision
   `846d176227a0ac13d2667e58d2bb68b322109ab0`. The schema-v2
