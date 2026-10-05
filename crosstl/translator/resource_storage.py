@@ -94,14 +94,23 @@ def encoded_storage_dtype(
         or dict(encoding) != BINARY16_STORAGE
         or logical_dtype != "float16"
         or target != "directx"
-        or resource_kind != "buffer"
         or layout.get("elementType") != "uint16"
-        or layout.get("storageLayout") != "hlsl-structured-buffer"
-        or layout.get("runtimeSized") is not True
+        or not (
+            (
+                resource_kind == "buffer"
+                and layout.get("storageLayout") == "hlsl-structured-buffer"
+                and layout.get("runtimeSized") is True
+            )
+            or (
+                resource_kind == "constant-buffer"
+                and layout.get("storageLayout") == "hlsl-constant-buffer"
+                and layout.get("runtimeSized") is False
+            )
+        )
     ):
         raise ValueError(
             "Binary16 bit storage requires a logical float16 buffer with native "
-            "DirectX uint16 structured storage."
+            "DirectX uint16 structured or constant storage."
         )
     return "uint16"
 

@@ -764,6 +764,14 @@ decodes storage; numeric casts run in the translated kernel. An OpenGL
 readback that is not an exact binary16 representation is rejected rather than
 rounded by the host.
 
+Generated HLSL half buffers use unsigned 16-bit physical storage with an explicit
+binary16 codec in the package descriptor. The callback validates that contract
+through the translator's shared storage validator while retaining the logical
+`float16` payload, two-byte stride and exact readback checks. Missing or
+incompatible codecs are rejected; the demo does not reinterpret arbitrary integer
+buffers as half values or repair results after execution. Windows native checks
+remain required to establish correctness of the generated storage operations.
+
 ```sh
 python -m demos.integrations.mlx.portable_host.packages \
   --mlx-root mlx-upstream --target metal --family half --output-dir half-packages

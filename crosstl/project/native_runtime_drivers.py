@@ -12,6 +12,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from crosstl.translator.resource_storage import encoded_storage_dtype
+
 from .runtime_value_encoding import validate_value_encoding
 from .runtime_verification import (
     NativeRuntimeBufferBinding,
@@ -4343,6 +4345,20 @@ def _scalar_block_size(
             resource=binding.name,
             vectorWidth=vector_width,
         )
+    try:
+        storage_dtype = encoded_storage_dtype(
+            raw_layout,
+            target=target,
+            resource_kind="constant-buffer",
+            logical_dtype=dtype,
+        )
+    except ValueError as exc:
+        raise _scalar_block_error(
+            target,
+            str(exc),
+            "scalar-block-storage-encoding-invalid",
+            resource=binding.name,
+        ) from exc
     expected_physical_type = {
         "float16": "float16_t",
         "int16": "int16_t",
@@ -4352,14 +4368,14 @@ def _scalar_block_size(
         "uint32": "uint",
         "int64": "int64_t",
         "uint64": "uint64_t",
-    }[dtype]
+    }[storage_dtype]
     if vector_width != 1:
         expected_physical_type = f"{expected_physical_type}{vector_width}"
     expected_element_size = _dtype_size(dtype) * vector_width
     element_size = integer_fields["elementSizeBytes"]
     element_stride = integer_fields["elementStrideBytes"]
     if (
-        element_type != dtype
+        element_type != storage_dtype
         or physical_type != expected_physical_type
         or element_size != expected_element_size
         or element_stride != element_size

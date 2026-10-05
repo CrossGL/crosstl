@@ -160,6 +160,7 @@ from .glsl_buffer_layout import (
     matrix_column_offsets,
     vector_component_offsets,
 )
+from .hlsl_half_storage import HLSLHalfStorage
 from .image_access_contracts import (
     TEXTURE_COMPARE_INTRINSIC_NAMES,
     TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES,
@@ -2179,6 +2180,7 @@ class HLSLCodeGen:
         self.required_hlsl_complex64_helpers = set()
         self.required_hlsl_bfloat16_helpers = set()
         self.hlsl_bfloat16_storage_resource_source_types = {}
+        self.hlsl_half_storage = HLSLHalfStorage(self)
         self.requires_hlsl_bfloat16_storage = False
         self.requires_hlsl_native_16_bit_types = False
         self.required_hlsl_explicit_bitcast_helpers = set()
@@ -3150,6 +3152,7 @@ class HLSLCodeGen:
         self.required_hlsl_complex64_helpers = set()
         self.required_hlsl_bfloat16_helpers = set()
         self.hlsl_bfloat16_storage_resource_source_types = {}
+        self.hlsl_half_storage = HLSLHalfStorage(self, ast)
         self.requires_hlsl_bfloat16_storage = False
         self.requires_hlsl_native_16_bit_types = False
         self.required_hlsl_explicit_bitcast_helpers = set()
@@ -3631,6 +3634,7 @@ class HLSLCodeGen:
         code += self.generate_directx_specialization_constant_globals()
         code += self.generate_hlsl_glsl_builtin_constant_declarations(ast)
         code += self.generate_hlsl_ordered_struct_declarations(structs)
+        storage_helper_offset = len(code)
         code += self.generate_constants(ast, struct_dependent_constants)
         code += generate_enum_constructor_functions(self, self.struct_payload_enums)
         code += generate_generic_enum_constructor_functions(
@@ -3851,6 +3855,11 @@ class HLSLCodeGen:
             mapped_type = self.hlsl_struct_buffer_resource_type(
                 node, vtype
             ) or self.map_resource_type_with_format(vtype, node)
+            self.hlsl_half_storage.register_resource(
+                var_name,
+                self.global_variable_types.get(var_name, vtype),
+                array=bool(array_suffix),
+            )
             if (
                 var_name in comparison_sampler_names
                 and mapped_type == "SamplerState"
@@ -4463,8 +4472,14 @@ class HLSLCodeGen:
         code += function_declarations_code
         code += functions_code
 
+        code = (
+            code[:storage_helper_offset]
+            + self.hlsl_half_storage.declarations()
+            + code[storage_helper_offset:]
+        )
         return (
-            code[:half_helper_offset]
+            self.hlsl_half_storage.header()
+            + code[:half_helper_offset]
             + self.generate_hlsl_explicit_bitcast_helpers()
             + self.generate_hlsl_half_helpers()
             + code[half_helper_offset:]
@@ -9328,6 +9343,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 operation=f"cbuffer member '{member.name}'",
                 source_location=getattr(member, "source_location", None),
             )
+            if (getattr(member, "annotations", {}) or {}).get("directx.half_storage"):
+                member_type = self.hlsl_half_storage.physical_type(source_member_type)
             declaration = format_c_style_array_declaration(member_type, member.name)
 
         layout_qualifier = self.hlsl_cbuffer_member_layout_qualifier(member)
@@ -11335,6 +11352,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 if array_call is not None:
                     return array_call
+                storage_statement = self.hlsl_half_storage.statement(stmt.expression)
+                if storage_statement is not None:
+                    return f"{indent_str}{storage_statement};\n"
                 expression = self.generate_expression(stmt.expression)
                 return f"{indent_str}{expression};\n"
             else:
@@ -11385,6 +11405,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if array_call is not None:
                 return array_call
+            storage_statement = self.hlsl_half_storage.statement(stmt)
+            if storage_statement is not None:
+                return f"{indent_str}{storage_statement};\n"
             return f"{indent_str}{self.generate_expression(stmt)};\n"
 
     def generate_tail_expression_statement(self, stmt, indent=0):
@@ -15914,7 +15937,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 source_location=getattr(parameter, "source_location", None),
             )
         element_type = self.type_name_string(pointee_type)
-        storage_type = self.hlsl_bfloat16_storage_type(
+        storage_type = self.hlsl_structured_storage_type(
             element_type,
             operation=(
                 "storage pointer-array parameter "
@@ -16133,7 +16156,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
 
         element_type = self.type_name_string(pointee_type)
-        mapped_element_type = self.hlsl_bfloat16_storage_type(
+        mapped_element_type = self.hlsl_structured_storage_type(
             element_type,
             operation=(f"storage pointer parameter '{function_name}.{parameter_name}'"),
             source_location=getattr(parameter, "source_location", None),
@@ -17146,8 +17169,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         actual_physical_type = self.hlsl_resource_pointer_element_type(
             binding.get("resource_type")
         )
-        if self.is_hlsl_bfloat16_type(actual_physical_type):
-            actual_physical_type = self.hlsl_bfloat16_storage_type(
+        if self.is_hlsl_bfloat16_type(
+            actual_physical_type
+        ) or self.hlsl_half_storage.lowered(actual_physical_type):
+            actual_physical_type = self.hlsl_structured_storage_type(
                 actual_physical_type,
                 operation=(
                     "storage pointer-array argument "
@@ -17476,8 +17501,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         actual_type = self.hlsl_resource_pointer_element_type(
             binding.get("resource_type")
         )
-        if self.is_hlsl_bfloat16_type(actual_type):
-            actual_type = self.hlsl_bfloat16_storage_type(
+        if self.is_hlsl_bfloat16_type(actual_type) or self.hlsl_half_storage.lowered(
+            actual_type
+        ):
+            actual_type = self.hlsl_structured_storage_type(
                 actual_type,
                 operation=(
                     "storage pointer argument "
@@ -19555,6 +19582,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             load = self.hlsl_pointer_reinterpret_read_expression(binding, "offset")
             if load is None:
                 load = "source[uint(offset)]"
+                logical = self.hlsl_half_storage.binding_type(binding)
+                if logical is not None:
+                    load = self.hlsl_half_storage.convert(logical, load)
             code += (
                 f"{helper['return_type']} {helper['name']}("
                 f"{helper['resource_type']} source, inout int64_t offset) {{\n"
@@ -19566,7 +19596,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return code
 
     def generate_hlsl_resource_pointer_access(
-        self, pointer_expression, index_expression=0, *, require_write=False
+        self,
+        pointer_expression,
+        index_expression=0,
+        *,
+        require_write=False,
+        physical=False,
     ):
         binding = self.hlsl_resource_pointer_binding(pointer_expression)
         if binding is None:
@@ -19641,7 +19676,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if reinterpret_read is not None:
             return reinterpret_read
-        return f"{binding['root']}[uint({effective_index})]"
+        rendered = f"{binding['root']}[uint({effective_index})]"
+        logical = self.hlsl_half_storage.binding_type(binding)
+        if logical is not None and not require_write and not physical:
+            return self.hlsl_half_storage.convert(logical, rendered)
+        return rendered
 
     def hlsl_pointer_reinterpret_read_expression(self, binding, element_index):
         reinterpretation = binding.get("pointer_reinterpretation")
@@ -19891,6 +19930,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         self.hlsl_private_pointer_word_view_write_error(target)
         self.hlsl_storage_struct_view_write_error(target)
+        storage_assignment = self.hlsl_half_storage.assignment(
+            node, target, value, op, statement_context=statement_context
+        )
+        if storage_assignment is not None:
+            return storage_assignment
         target_type = self.hlsl_assignment_target_type(target)
         target_name = (
             target
@@ -21392,6 +21436,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def generate_expression(self, expr):
         """Render a CrossGL AST expression into HLSL expression syntax."""
+        storage_read = self.hlsl_half_storage.read(expr)
+        if storage_read is not None:
+            return storage_read
         if expr is None:
             return ""
         elif isinstance(expr, CooperativeMatrixOpNode):
@@ -25039,7 +25086,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"RWStructuredBuffer, got {resource_type}"
             )
 
-    def generate_buffer_call(self, func_name, args, *, rendered_value=None):
+    def generate_buffer_call(
+        self, func_name, args, *, rendered_value=None, statement_context=False
+    ):
         """Render canonical CrossGL buffer operations as HLSL resource methods."""
         if func_name not in self.hlsl_buffer_helper_names():
             return None
@@ -25097,7 +25146,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 rendered_resource=buffer,
                 resource_type=resource_type,
             )
-            return f"{buffer}.Load({index})"
+            rendered = f"{buffer}.Load({index})"
+            logical = self.hlsl_half_storage.binding_type(
+                self.hlsl_resource_pointer_binding(args[0])
+            )
+            return (
+                self.hlsl_half_storage.convert(logical, rendered)
+                if logical is not None
+                else rendered
+            )
         if func_name == "buffer_store" and len(args) >= 3:
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
@@ -25113,6 +25170,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 },
             )
             binding = self.hlsl_resource_pointer_binding(args[0])
+            logical_half = self.hlsl_half_storage.binding_type(binding)
+            if logical_half is not None:
+                value = (
+                    rendered_value
+                    if rendered_value is not None
+                    else self.generate_expression_with_expected(args[2], logical_half)
+                )
+                value = self.hlsl_half_storage.convert(logical_half, value, encode=True)
+                storage_access = self.generate_hlsl_resource_pointer_access(
+                    args[0], args[1], require_write=True, physical=True
+                )
+                store = f"{storage_access} = {value}"
+                return (
+                    store
+                    if statement_context
+                    else self.hlsl_half_storage.convert(logical_half, f"({store})")
+                )
             if binding is not None and self.is_hlsl_bfloat16_type(
                 binding.get("source_element_type")
             ):
@@ -25189,11 +25263,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return f"{buffer}.Store({index}, {value})"
         if func_name == "buffer_append" and len(args) >= 2:
             buffer = self.generate_expression(args[0])
-            value = self.generate_expression(args[1])
+            logical = self.hlsl_typed_buffer_element_type(
+                self.hlsl_buffer_helper_resource_type(args[0]),
+                {"AppendStructuredBuffer"},
+            )
+            value = self.generate_expression_with_expected(args[1], logical)
+            if logical is not None and self.hlsl_half_storage.lowered(logical):
+                value = self.hlsl_half_storage.convert(logical, value, encode=True)
             return f"{buffer}.Append({value})"
         if func_name == "buffer_consume" and args:
             buffer = self.generate_expression(args[0])
-            return f"{buffer}.Consume()"
+            logical = self.hlsl_typed_buffer_element_type(
+                self.hlsl_buffer_helper_resource_type(args[0]),
+                {"ConsumeStructuredBuffer"},
+            )
+            rendered = f"{buffer}.Consume()"
+            return (
+                self.hlsl_half_storage.convert(logical, rendered)
+                if logical is not None and self.hlsl_half_storage.lowered(logical)
+                else rendered
+            )
         if func_name == "buffer_increment_counter" and args:
             buffer = self.generate_expression(args[0])
             return f"{buffer}.IncrementCounter()"
@@ -25766,6 +25855,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if len(generic_args) == 1:
                 return f"{generic_base}<{annotated_source_type}>"
 
+        type_name = self.type_name_string(vtype)
+        source_element = self.hlsl_typed_buffer_element_type(
+            type_name, self.hlsl_half_storage.resource_types
+        )
+        if source_element is not None and self.hlsl_half_storage.lowered(
+            source_element
+        ):
+            return type_name
+
         qualifiers = {str(value).lower() for value in getattr(node, "qualifiers", [])}
         if (
             "buffer" not in qualifiers
@@ -25779,6 +25877,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 vtype = getattr(node, "param_type", None)
         pointee_type = self.hlsl_buffer_pointer_pointee_type(vtype)
         source_element_type = self.hlsl_bfloat16_scalar_type_name(pointee_type)
+        if source_element_type is None and self.hlsl_half_storage.lowered(pointee_type):
+            source_element_type = pointee_type
         if source_element_type is None:
             return None
 
@@ -25813,7 +25913,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             resource_name = (
                 "StructuredBuffer" if "readonly" in qualifiers else "RWStructuredBuffer"
             )
-            storage_type = self.hlsl_bfloat16_storage_type(
+            storage_type = self.hlsl_structured_storage_type(
                 pointee_type,
                 operation=f"buffer '{getattr(node, 'name', '<anonymous>')}' element",
                 source_location=getattr(node, "source_location", None),
@@ -25832,12 +25932,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         resource_name = (
             "StructuredBuffer" if "readonly" in qualifiers else "RWStructuredBuffer"
         )
-        return f"{resource_name}<{base_type}>"
+        return f"{resource_name}<{self.hlsl_half_storage.physical_type(base_type)}>"
 
     def hlsl_bfloat16_storage_resource_source_type(self, node):
-        annotated_source_type = (getattr(node, "annotations", {}) or {}).get(
-            "directx.bfloat16_storage_source_type"
-        )
+        annotations = getattr(node, "annotations", {}) or {}
+        annotated_source_type = annotations.get(
+            "directx.storage_source_type"
+        ) or annotations.get("directx.bfloat16_storage_source_type")
         if annotated_source_type:
             return annotated_source_type
         return self.hlsl_bfloat16_storage_resource_source_types.get(id(node))
@@ -25996,7 +26097,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             name = getattr(node, "name", getattr(node, "variable_name", None))
             if not name:
                 continue
-            declarations_by_name.setdefault(name, declaration_signature(node))
+            declarations_by_name.setdefault(
+                name,
+                (
+                    declaration_signature(node),
+                    self.hlsl_bfloat16_storage_resource_source_type(node),
+                ),
+            )
             used_names.add(name)
 
         entries = collect_stage_entry_records(
@@ -26008,7 +26115,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if proxy is not None:
                     original_name = getattr(parameter, "name", None)
                     emitted_name = getattr(proxy, "name", None)
-                    signature = declaration_signature(proxy)
+                    signature = (
+                        declaration_signature(proxy),
+                        self.hlsl_bfloat16_storage_resource_source_type(proxy),
+                    )
                     existing_signature = declarations_by_name.get(emitted_name)
                     if (
                         emitted_name
@@ -26086,6 +26196,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     ),
                 )
                 cbuffer.is_cbuffer = True
+                if self.hlsl_half_storage.shape(member_type):
+                    cbuffer.members[0].add_annotation("directx.half_storage", True)
+                    self.hlsl_half_storage.constant_types[member_name] = member_type
+                    self.hlsl_half_storage.resources[buffer_name] = {
+                        "logicalElementType": "float16",
+                        "encoding": "ieee754-binary16",
+                    }
                 cbuffer.add_annotation("directx.relocatable_binding", True)
                 cbuffer.add_annotation(
                     "directx.binding_provenance",
@@ -26350,6 +26467,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if source_element_type is None:
             source_element_type = self.hlsl_array_element_type_name(raw_type)
         source_bfloat_type = self.hlsl_bfloat16_scalar_type_name(source_element_type)
+        if self.hlsl_half_storage.lowered(source_element_type):
+            proxy.add_annotation("directx.storage_source_type", source_element_type)
         if source_bfloat_type is not None:
             proxy.add_annotation(
                 "directx.bfloat16_storage_source_type", source_bfloat_type
@@ -26404,7 +26523,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 qualifiers.intersection({"const", "constant", "read", "readonly"})
             )
             resource_name = "StructuredBuffer" if read_only else "RWStructuredBuffer"
-            storage_type = self.hlsl_bfloat16_storage_type(
+            storage_type = self.hlsl_structured_storage_type(
                 scalar_reference_type,
                 operation=(
                     "stage-entry scalar reference "
@@ -26464,7 +26583,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if qualifiers.intersection({"const", "read", "readonly", "read_only"})
             else "RWStructuredBuffer"
         )
-        storage_type = self.hlsl_bfloat16_storage_type(
+        storage_type = self.hlsl_structured_storage_type(
             element_type,
             operation=(
                 f"storage parameter '{getattr(parameter, 'name', '<anonymous>')}' element"
@@ -45460,7 +45579,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if qualifiers.intersection({"constant", "const"})
             else "RWStructuredBuffer"
         )
-        storage_type = self.hlsl_bfloat16_storage_type(
+        storage_type = self.hlsl_structured_storage_type(
             element_type,
             operation=f"Metal buffer '{getattr(node, 'name', '<anonymous>')}' element",
             source_location=getattr(node, "source_location", None),
@@ -47663,6 +47782,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.requires_hlsl_bfloat16_storage = True
         return self.map_type(vtype)
 
+    def hlsl_structured_storage_type(self, vtype, **options):
+        mapped = self.hlsl_bfloat16_storage_type(vtype, **options)
+        return (
+            self.hlsl_half_storage.physical_type(vtype)
+            if self.hlsl_half_storage.lowered(vtype)
+            else mapped
+        )
+
     def hlsl_bfloat16_storage_type(
         self, vtype, *, operation="storage declaration", source_location=None
     ):
@@ -47878,6 +48005,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     source_location=getattr(vtype, "source_location", None),
                 )
                 return f"{base_type}<{storage_type}>"
+            if (
+                resource_base in self.hlsl_half_storage.resource_types
+                and "," not in generic_args
+            ):
+                return (
+                    f"{base_type}<{self.hlsl_half_storage.physical_type(generic_args)}>"
+                )
             feedback_texture_types = {
                 "feedbackTexture2D": "FeedbackTexture2D",
                 "feedbackTexture2DArray": "FeedbackTexture2DArray",

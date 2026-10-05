@@ -7,6 +7,7 @@ import os
 import struct
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,8 +18,8 @@ from crosstl.project.native_loader_dispatch import (
     _validated_scalar_layout,
     build_native_loader_dispatch_request,
 )
-from crosstl.project.native_runtime_drivers import _pack_values
-from crosstl.project.runtime_verification import RuntimeValue
+from crosstl.project.native_runtime_drivers import _pack_values, _scalar_block_size
+from crosstl.project.runtime_verification import RuntimeAdapterSetupError, RuntimeValue
 from crosstl.translator.resource_storage import (
     BINARY16_STORAGE,
     MAX_RESOURCE_STORAGE_HEADER_BYTES,
@@ -410,3 +411,79 @@ def test_storage_contract_controls_join_existing_windows_job():
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "-n auto" in step
     assert "continue-on-error" not in step
+
+
+def _constant_layout(root, width):
+    physical = "uint16_t" + (str(width) if width != 1 else "")
+    source = resource_storage_header({"Constants": BINARY16_STORAGE})
+    source += f"cbuffer Constants : register(b0) {{ {physical} value; }};\n"
+    source += "[numthreads(1, 1, 1)] void CSMain() {}\n"
+    descriptor = _descriptor(root, source)
+    return descriptor["bindings"][0]["scalarLayout"]
+
+
+@pytest.mark.parametrize("width", [1, 2, 3, 4])
+def test_constant_storage_codec_retains_fixed_layout(tmp_path, width):
+    layout = _constant_layout(tmp_path, width)
+    assert layout["storageEncoding"] == BINARY16_STORAGE
+    assert layout["elementType"] == "uint16" and layout["runtimeSized"] is False
+    runtime_value = RuntimeValue(
+        name="value", kind="buffer", dtype="float16", shape=(width,), values=[0] * width
+    )
+    assert (
+        _validated_scalar_layout(
+            layout,
+            runtime_value=runtime_value,
+            target="directx",
+            resource_kind="constant-buffer",
+            path="$.layout",
+        )
+        == layout
+    )
+    binding = SimpleNamespace(
+        name="Constants", binding=SimpleNamespace(metadata={"scalarLayout": layout})
+    )
+    assert (
+        _scalar_block_size(
+            binding, target="directx", dtype="float16", payload_size=2 * width
+        )
+        == 16
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"storageEncoding": None},
+        {"storageEncoding": {**BINARY16_STORAGE, "encoding": "unknown"}},
+        {"storageEncoding": {**BINARY16_STORAGE, "extra": True}},
+        {"elementType": "float16"},
+        {"physicalType": "float16_t"},
+        {"runtimeSized": True},
+        {"storageLayout": "hlsl-structured-buffer"},
+        {"alignmentBytes": 3},
+        {"elementStrideBytes": 4},
+        {"blockSizeBytes": 1},
+        {"memberOffsetBytes": 16},
+    ],
+)
+def test_constant_storage_codec_rejects_mismatches_in_loader_and_driver(
+    tmp_path, mutation
+):
+    layout = {**_constant_layout(tmp_path, 1), **mutation}
+    runtime_value = RuntimeValue(
+        name="value", kind="buffer", dtype="float16", shape=(1,), values=[0]
+    )
+    with pytest.raises(NativeLoaderDispatchError):
+        _validated_scalar_layout(
+            layout,
+            runtime_value=runtime_value,
+            target="directx",
+            resource_kind="constant-buffer",
+            path="$.layout",
+        )
+    binding = SimpleNamespace(
+        name="Constants", binding=SimpleNamespace(metadata={"scalarLayout": layout})
+    )
+    with pytest.raises(RuntimeAdapterSetupError):
+        _scalar_block_size(binding, target="directx", dtype="float16", payload_size=2)

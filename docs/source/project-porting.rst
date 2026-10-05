@@ -2290,16 +2290,26 @@ The loader accepts ``float16`` values for that declared representation without
 changing their bytes. Shader loads decode with ``asfloat16`` and stores encode
 with ``asuint16``; arithmetic remains floating-point arithmetic. This contract
 supports tightly packed scalar, vector and homogeneous-struct structured
-buffers, not constant buffers, textures, padded structures or widened storage.
+buffers, and one reflected scalar or vector in a fixed constant buffer.
+Textures, padded structures and widened storage are not covered by this codec.
 Unknown encodings, duplicate or misplaced headers, undeclared resources and
 incompatible physical layouts fail before dispatch. The comment declares an
 ABI convention, not proof of the shader's implementation or numerical behavior.
 
-The explicit representation is currently exercised by native loader controls;
-the translator does not yet emit it for half resources. Generated DirectX
-``float16_t`` loads can quiet signaling NaNs on the pinned Windows software
-device, so exact generated half-copy support remains tracked in issue #2066.
-The existing payload and numerical gates remain required.
+The HLSL generator uses integer storage for native half structured buffers and
+promoted entry-point scalar constant references. Local variables, shared memory,
+function values and arithmetic retain their logical half types. Structures use
+separate physical declarations and member-wise conversion helpers, including
+nested structures and fixed arrays; the native loader still requires a
+representable reflected layout. Existing user-declared constant buffers and
+typed textures are not rewritten. Side-effecting compound-assignment targets
+and shadowed bitcast intrinsics produce diagnostics rather than ambiguous code.
+
+This lowering avoids typed ``float16_t`` resource loads, which can quiet
+signaling NaNs on the pinned Windows software device. Required generated copy,
+update, constant-reference and exhaustive payload tests run beside the
+handwritten ABI controls. Compiler inspection is not native proof; issue #2066
+remains open until the required Windows checks establish exact transport.
 
 OpenGL's widened half lowering continues to expose float32 physical storage.
 A binary16 payload cannot bind that storage. Conversion tests use the reported

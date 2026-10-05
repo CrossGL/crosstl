@@ -9159,15 +9159,15 @@ def test_hlsl_metal_native_half_constant_params_promote_to_cbuffers(tmp_path):
     )
 
     assert "cbuffer half_step_start_Constants" in generated_code
-    assert "float16_t half_step_start;" in generated_code
+    assert "uint16_t half_step_start;" in generated_code
     assert "cbuffer half_step_step_Constants" in generated_code
-    assert "float16_t half_step_step;" in generated_code
+    assert "uint16_t half_step_step;" in generated_code
     assert "void CSMain(float16_t start" not in generated_code
     assert "void CSMain(uint3 index_dispatchThreadID : SV_DispatchThreadID)" in (
         generated_code
     )
     assert (
-        "half_step_start + (__crossgl_round_half1(float(index)) * half_step_step)"
+        "asfloat16(half_step_start) + (__crossgl_round_half1(float(index)) * asfloat16(half_step_step))"
         in generated_code
     )
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
@@ -18978,12 +18978,13 @@ def test_hlsl_preserves_resource_overloads_with_distinct_bfloat_payloads():
     generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert (
-        "float16_t readValue(StructuredBuffer<float16_t> values, float16_t fallback)"
+        "float16_t readValue(StructuredBuffer<uint16_t> values, float16_t fallback)"
         in generated
     )
     assert (
-        "uint readValue(StructuredBuffer<float16_t> values, uint fallback)" in generated
+        "uint readValue(StructuredBuffer<uint16_t> values, uint fallback)" in generated
     )
+    assert "asfloat16(values[" in generated
     assert "__crossgl_bfloat16_from_float" in generated
     assert "__crossgl_bfloat16_to_float" in generated
 

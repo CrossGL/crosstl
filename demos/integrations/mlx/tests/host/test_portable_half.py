@@ -228,6 +228,43 @@ def test_half_callback_preserves_transport_and_rejects_invalid_readback(
     assert len(calls) == int(fault not in {"dtype", "null"})
 
 
+@pytest.mark.parametrize(
+    "fault", ["encoding", "logical", "physical", "missing", "kind"]
+)
+def test_half_callback_rejects_inconsistent_storage_codecs(host, monkeypatch, fault):
+    entry = packages.HALF_COPY_ENTRY
+    buffers, memory, _, _, launch = buffers_for(entry)
+    binding = next(
+        binding
+        for binding in host.descriptors[entry]["bindings"]
+        if binding["scalarLayout"].get("memberName", binding["name"]) == "src"
+    )
+    layout = binding["scalarLayout"]
+    if fault == "missing":
+        layout.pop("storageEncoding", None)
+        layout["elementType"] = "uint16"
+    else:
+        layout["storageEncoding"] = {
+            "logicalElementType": "float16",
+            "encoding": "ieee754-binary16",
+        }
+        if fault == "encoding":
+            layout["storageEncoding"]["encoding"] = "unknown"
+        elif fault == "logical":
+            layout["storageEncoding"]["logicalElementType"] = "uint16"
+        elif fault == "kind":
+            binding.pop("kind", None)
+        else:
+            layout["elementType"] = "uint32"
+    calls = []
+    monkeypatch.setattr(
+        runtime.gather_dispatch, "execute", lambda *args: calls.append(args)
+    )
+    with pytest.raises(ValueError):
+        host.dispatch(entry, buffers, len(buffers), 3, launch=launch)
+    assert calls == [] and list(memory["dst"]) == [0] * 3
+
+
 @pytest.mark.parametrize("fault", ("family", "target", "missing", "extra"))
 def test_half_packages_require_matching_target_and_complete_inventory(
     host, tmp_path, fault

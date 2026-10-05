@@ -471,6 +471,7 @@ jobs:
               --junitxml=.mlx-gather-directx/results.xml \
               demos/integrations/mlx/tests/kernels/test_general_gather_directx.py \
               tests/test_translator/test_resource_storage_encoding.py \
+              tests/test_translator/test_directx_half_storage.py \
               tests/test_translator/test_half_buffer_runtime.py \
               tests/test_translator/test_bfloat_buffer_runtime.py \
               tests/test_translator/test_opengl_bfloat_conversion.py \

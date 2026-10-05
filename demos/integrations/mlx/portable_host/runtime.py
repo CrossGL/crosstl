@@ -26,6 +26,7 @@ from crosstl.project.runtime_verification import (
     RuntimeParityExecutor,
     RuntimeTestAdapterSpec,
 )
+from crosstl.translator.resource_storage import encoded_storage_dtype
 from demos.integrations.mlx.portable_host import (
     column_reduction_layout,
     copy_layout,
@@ -746,9 +747,15 @@ class HostRuntime:
             buffer = supplied[name]
             dtype = buffer.dtype.decode("ascii")
             storage = physical_dtype(dtype, self.target)
-            if layout["elementType"] != storage or layout["elementStrideBytes"] != (
-                1 if storage == "bool" else ctypes.sizeof(TYPES[storage])
-            ):
+            reflected_storage = encoded_storage_dtype(
+                layout,
+                target=self.target,
+                resource_kind=binding.get("kind", ""),
+                logical_dtype=storage,
+            )
+            if layout["elementType"] != reflected_storage or layout[
+                "elementStrideBytes"
+            ] != (1 if storage == "bool" else ctypes.sizeof(TYPES[storage])):
                 raise ValueError("Native and reflected buffer layouts disagree")
             ctype = TYPES[dtype]
             view = ctypes.cast(

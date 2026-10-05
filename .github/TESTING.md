@@ -67,7 +67,10 @@ The existing Windows storage gate also exercises explicitly encoded binary16
 buffers through native loader descriptors. It checks all 65,536 payload words
 in scalar, vector and homogeneous-struct integer storage, plus decoded arithmetic
 and output guards. These handwritten ABI controls do not replace generated
-half-copy tests or claim that compiler lowering is complete. No runner is added.
+half-copy tests. The same job also checks generated half arithmetic, assignment
+results and constant-reference payloads using logical half values over integer
+storage. Compiler inspection alone does not establish native correctness.
+No runner is added and the existing execution bound is unchanged.
 
 The Metal runtime reuses its unchanged host helper within each Python test
 process. Source, compiler options, toolchain, SDK and architecture are part of

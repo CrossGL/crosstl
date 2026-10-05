@@ -253,7 +253,14 @@ def test_half_packages_retain_two_byte_storage(tmp_path, target, form):
     _, descriptor, _, inputs, _, request = _case(tmp_path, target, form)
     for binding in descriptor["bindings"]:
         layout = binding["scalarLayout"]
-        assert layout["elementType"] == "float16"
+        assert layout["elementType"] == ("uint16" if target == "directx" else "float16")
+        if target == "directx":
+            assert layout["storageEncoding"] == {
+                "logicalElementType": "float16",
+                "encoding": "ieee754-binary16",
+            }
+        else:
+            assert "storageEncoding" not in layout
         assert layout["elementSizeBytes"] == layout["elementStrideBytes"]
         assert layout["elementSizeBytes"] == 2 * layout.get(
             "vectorWidth", layout.get("componentCount", 1)
