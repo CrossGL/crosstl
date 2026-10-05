@@ -29,6 +29,10 @@ from crosstl.project.runtime_verification import (
     RuntimeResourceBinding,
     RuntimeSpecializationConstant,
 )
+from crosstl.translator.resource_storage import (
+    BINARY16_STORAGE,
+    parse_resource_storage_header,
+)
 from demos.integrations.mlx.run_metal_host import run
 from demos.integrations.mlx.tests.kernels.test_gated_delta_metal import (
     _translate_pinned,
@@ -248,13 +252,18 @@ def attention_metal_runner(tmp_path_factory):
 
 def _directx_request(np, buffers, artifact, module, dtype, length):
     source = artifact.read_text(encoding="utf-8")
+    assert parse_resource_storage_header(source) == (
+        {name: BINARY16_STORAGE for name in ("o", "cot_o")}
+        if dtype == "float16_t"
+        else {}
+    )
     assert "cbuffer " in source and ": register(b3)" in source
     bindings = {}
     for slot, (name, buffer) in enumerate(zip(("o", "cot_o", "odo"), buffers)):
         element = (
             "float"
             if slot == 2
-            else {"float": "float", "float16_t": "float16_t", "bfloat16_t": "uint16_t"}[
+            else {"float": "float", "float16_t": "uint16_t", "bfloat16_t": "uint16_t"}[
                 dtype
             ]
         )

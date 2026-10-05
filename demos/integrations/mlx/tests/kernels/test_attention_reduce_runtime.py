@@ -34,6 +34,10 @@ from crosstl.project.runtime_verification import (
     RuntimeResourceBinding,
     RuntimeSpecializationConstant,
 )
+from crosstl.translator.resource_storage import (
+    BINARY16_STORAGE,
+    parse_resource_storage_header,
+)
 from demos.integrations.mlx.run_metal_host import run
 from demos.integrations.mlx.tests.kernels.test_attention_ds_runtime import (
     TYPES,
@@ -225,6 +229,12 @@ def _requests(np, modules, sources, initial):
     for stage, mode in enumerate(MODES[: len(sources)]):
         compiled = modules["modules"][mode]
         source_text = compiled["artifact"].read_text()
+        if target == "directx":
+            assert parse_resource_storage_header(source_text) == (
+                {name: BINARY16_STORAGE for name in ("src", "out_")}
+                if dtype == "float16_t"
+                else {}
+            )
         bindings, constants = {}, {}
         for slot, (name, value) in enumerate(
             zip(("src", "acc", "out"), (sources[stage], *initial))
@@ -236,7 +246,7 @@ def _requests(np, modules, sources, initial):
             words = np.frombuffer(payload, dtype="<u4").tolist()
             element = {
                 "float": "float",
-                "float16_t": "float16_t",
+                "float16_t": "uint16_t",
                 "bfloat16_t": "uint16_t",
             }[element_dtype]
             type_name = (

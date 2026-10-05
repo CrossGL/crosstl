@@ -996,9 +996,12 @@ Eight gated-delta backward configurations have required Windows DirectX and
 original/generated Metal numerical gates, checking all six gradients against an
 independent reference. This covers selected head layouts, checkpoint intervals,
 partial segments and float16/float32 storage, not complete MLX host integration.
-The DirectX fixture validates the generated binary16 storage metadata before
-binding physical `uint16_t` inputs. It uploads the original half bytes without
-numeric conversion and retains the same strides, guards and gradient checks.
+The DirectX gated-delta and attention fixtures validate the generated binary16
+storage metadata before binding physical `uint16_t` resources. They upload the
+original half bytes without numeric conversion, retaining structured strides,
+guards, tail padding and shared-allocation identities. Half-storage metadata on
+float32 or bfloat16 resources is rejected. Numerical reference checks and
+tolerances are unchanged.
 
 The attention backward row-dot stage has required Windows, Linux and macOS
 gates. They translate all 24 declared float32/float16/bfloat16 entries across
@@ -1033,6 +1036,12 @@ compare bitwise and fractional cases use `rtol=atol=1e-5` against quantized
 float64 references. Original/generated Metal also checks input preservation
 and allocation identity. These are kernel-stage checks, not end-to-end
 attention backward or upstream host redirection.
+
+The DirectX alias cases use offset-zero views. Simultaneous SRV/UAV access to
+one ranged allocation remains unsupported by the process-isolated worker
+([#2080](https://github.com/CrossGL/crosstl/issues/2080)). It rejects that request
+before submission rather than separating the aliased storage. This limitation
+also affects float32; it is independent of binary16 storage encoding.
 
 The attention reduction stage has a separate resident-sequence gate on Windows,
 Linux and macOS. Each case executes a prefix of `set`, `add`, `add`, `set` with

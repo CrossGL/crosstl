@@ -27,6 +27,10 @@ from crosstl.project.runtime_verification import (
     RuntimeResourceBinding,
     RuntimeSpecializationConstant,
 )
+from crosstl.translator.resource_storage import (
+    BINARY16_STORAGE,
+    parse_resource_storage_header,
+)
 from demos.integrations.mlx.run_metal_host import run
 from demos.integrations.mlx.tests.kernels.test_attention_odo_runtime import (
     SOURCE,
@@ -140,13 +144,18 @@ def _payload(data):
 
 def _directx_request(np, artifact, module, buffers, parameters, dtype, alias):
     source = artifact.read_text(encoding="utf-8")
+    assert parse_resource_storage_header(source) == (
+        {name: BINARY16_STORAGE for name in ("S", "dP", "dS", "P")}
+        if dtype == "float16_t"
+        else {}
+    )
     assert "ConstantBuffer<SDPAVJPTileParams> p : register(b6);" in source
     bindings = {}
     for slot, (name, buffer) in enumerate(zip(NAMES, buffers)):
         element = (
             "uint16_t"
-            if dtype == "bfloat16_t" and slot not in (2, 3)
-            else ("float16_t" if buffer.itemsize == 2 else "float")
+            if dtype in {"float16_t", "bfloat16_t"} and slot not in (2, 3)
+            else "float"
         )
         type_name = f"{'RW' if slot >= 4 else ''}StructuredBuffer<{element}>"
         assert (
