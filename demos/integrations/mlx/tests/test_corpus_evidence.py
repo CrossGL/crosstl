@@ -11,6 +11,7 @@ import pytest
 from demos.integrations.mlx.tests.corpus_evidence import (
     EVIDENCE_DIRECTORY,
     KEEP_EVIDENCE_ENV,
+    compile_opengl_artifact,
     corpus_workspace,
     run_compiler,
 )
@@ -115,6 +116,197 @@ def test_compiler_retains_launch_error_and_reraises(tmp_path, monkeypatch):
     assert record["status"] == "launch-failed"
     assert record["error"] == "compiler unavailable"
     assert "returncode" not in record
+
+
+@pytest.mark.parametrize("timeout", (120, 180))
+@pytest.mark.parametrize(
+    "failure",
+    (
+        None,
+        "compiler",
+        "validator",
+        "compiler-timeout",
+        "validator-timeout",
+        "missing",
+        "empty",
+    ),
+)
+def test_opengl_compiler_and_validator_keep_separate_evidence(
+    failure, timeout, tmp_path, monkeypatch
+):
+    source, output = tmp_path / "shader.glsl", tmp_path / "shader.spv"
+    source.write_text("shader source", encoding="utf-8")
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        assert kwargs == {
+            "check": False,
+            "capture_output": True,
+            "text": True,
+            "timeout": timeout,
+        }
+        phase = "compiler" if command[0] == "glslangValidator" else "validator"
+        running = json.loads((tmp_path / f"{phase}.json").read_text())
+        assert running["status"] == "running"
+        if failure == f"{phase}-timeout":
+            raise subprocess.TimeoutExpired(command, timeout, output="partial")
+        if phase == "compiler" and failure != "missing":
+            output.write_bytes(b"" if failure == "empty" else b"compiled module")
+        return subprocess.CompletedProcess(
+            command,
+            7 if failure == phase else 0,
+            f"{phase} output",
+            f"{phase} diagnostic",
+        )
+
+    monkeypatch.setattr(subprocess, "run", run)
+    error = (
+        subprocess.TimeoutExpired
+        if failure and failure.endswith("timeout")
+        else AssertionError
+    )
+    with pytest.raises(error) if failure else nullcontext():
+        compile_opengl_artifact(
+            source,
+            output,
+            compiler="glslangValidator",
+            validator="spirv-val",
+            work_dir=tmp_path,
+            timeout=timeout,
+        )
+    assert commands[0] == [
+        "glslangValidator",
+        "--target-env",
+        "opengl",
+        "--target-env",
+        "spirv1.3",
+        "-S",
+        "comp",
+        str(source),
+        "-o",
+        str(output),
+    ]
+    compilation = json.loads((tmp_path / "compiler.json").read_text())
+    assert compilation["command"] == commands[0]
+    assert compilation["status"] == (
+        "timed-out" if failure == "compiler-timeout" else "completed"
+    )
+    if failure != "compiler-timeout":
+        assert compilation["stdout"] == "compiler output"
+        assert compilation["stderr"] == "compiler diagnostic"
+    reached_validation = failure in {None, "validator", "validator-timeout"}
+    assert (tmp_path / "validator.json").exists() is reached_validation
+    assert len(commands) == (2 if reached_validation else 1)
+    if reached_validation:
+        assert commands[1] == ["spirv-val", "--target-env", "spv1.3", str(output)]
+        validation = json.loads((tmp_path / "validator.json").read_text())
+        assert validation["command"] == commands[1]
+        assert validation["status"] == (
+            "timed-out" if failure == "validator-timeout" else "completed"
+        )
+        assert output.read_bytes() == b"compiled module"
+
+
+@pytest.mark.parametrize("family", ("unary", "binary", "copy", "reduce"))
+@pytest.mark.parametrize("keep", (False, True))
+@pytest.mark.parametrize("fail", (False, True))
+def test_opengl_corpus_workspace_retention_preserves_test_results(
+    family, keep, fail, tmp_path, monkeypatch
+):
+    module = importlib.import_module(
+        f"demos.integrations.mlx.tests.kernels.test_{family}_complete_opengl"
+    )
+    workload = getattr(module, f"CURRENT_{family.upper()}_OPENGL_WORKLOADS")[0]
+    monkeypatch.setenv(KEEP_EVIDENCE_ENV, "1" if keep else "0")
+    monkeypatch.setattr(module, "_pinned_mlx_root", lambda: tmp_path)
+    paths = []
+
+    def translate(root, work_dir, selected):
+        assert root == tmp_path and selected is workload
+        paths.append(work_dir)
+        (work_dir / "portability-report.json").write_text("{}", encoding="utf-8")
+        if fail:
+            raise AssertionError("reference mismatch")
+
+    monkeypatch.setattr(module, "_translate_and_validate", translate)
+    with (
+        pytest.raises(AssertionError, match="reference mismatch")
+        if fail
+        else nullcontext()
+    ):
+        getattr(module, f"test_current_mlx_{family}_family_translates_to_opengl")(
+            workload
+        )
+    assert len(paths) == 1
+    assert paths[0].exists() is keep
+    if keep:
+        assert (paths[0] / "portability-report.json").is_file()
+        assert json.loads((paths[0] / "case.json").read_text()) == {
+            "family": family,
+            "target": "opengl",
+            "entryPoint": workload.entry_point,
+        }
+
+
+@pytest.mark.parametrize("family", ("unary", "binary", "copy", "reduce"))
+def test_opengl_corpus_retains_report_on_reference_mismatch(
+    family, tmp_path, monkeypatch
+):
+    module = importlib.import_module(
+        f"demos.integrations.mlx.tests.kernels.test_{family}_complete_opengl"
+    )
+    workload = getattr(module, f"CURRENT_{family.upper()}_OPENGL_WORKLOADS")[0]
+    source = getattr(module, f"MLX_{family.upper()}_SOURCE")
+    assertions = []
+    if family == "reduce":
+        assertions = module._expected_assertions()
+    elif family in {"binary", "copy"}:
+        assertions = [
+            {
+                "source": source,
+                "expression": expression,
+                "minimum": minimum,
+                "maximum": maximum,
+            }
+            for expression, minimum, maximum in module.INDEX_RANGE_ASSERTIONS
+        ]
+    payload = {
+        "summary": {
+            "unitCount": 1,
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+            "diagnosticCounts": {"note": 0, "warning": 0, "error": 0},
+        },
+        "diagnostics": [],
+        "project": {"indexRangeAssertions": assertions},
+        "artifacts": [
+            {
+                "source": source,
+                "sourceHash": {
+                    "algorithm": "sha256",
+                    "value": getattr(module, f"MLX_{family.upper()}_SHA256"),
+                },
+                "generatedHash": {"algorithm": "sha256", "value": "0" * 64},
+            }
+        ],
+    }
+
+    class Report:
+        def to_json(self):
+            return payload
+
+        def write_json(self, path):
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setattr(module, "load_project_config", lambda *args: None)
+    monkeypatch.setattr(module, "translate_project", lambda *args, **kwargs: Report())
+    with pytest.raises(AssertionError):
+        module._translate_and_validate(tmp_path, tmp_path, workload)
+    assert json.loads((tmp_path / "portability-report.json").read_text()) == payload
+    assert not (tmp_path / "compiler.json").exists()
+    assert not (tmp_path / "validator.json").exists()
 
 
 @pytest.mark.parametrize("dispatch", (False, True))
@@ -673,7 +865,11 @@ def test_attention_retains_native_results_without_suppressing_failures(
 
 @pytest.mark.parametrize(
     "family,target",
-    [(name, "directx") for name in ("unary", "binary", "copy", "reduce")]
+    [
+        (name, target)
+        for name in ("unary", "binary", "copy", "reduce")
+        for target in ("directx", "opengl")
+    ]
     + [(name, "metal") for name in ("unary", "binary", "reduce", "copy", "quantized")],
 )
 def test_corpus_retains_report_before_translation_assertions(

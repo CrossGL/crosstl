@@ -62,10 +62,14 @@ def corpus_workspace(
 
 
 def run_compiler(
-    command: Sequence[str], *, work_dir: Path, timeout: int
+    command: Sequence[str],
+    *,
+    work_dir: Path,
+    timeout: int,
+    record_name: str = "compiler.json",
 ) -> subprocess.CompletedProcess:
     record = {"command": list(command), "timeoutSeconds": timeout, "status": "running"}
-    record_path = work_dir / "compiler.json"
+    record_path = work_dir / record_name
 
     def write_record() -> None:
         record_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
@@ -101,6 +105,43 @@ def run_compiler(
     )
     write_record()
     return result
+
+
+def compile_opengl_artifact(
+    source: Path,
+    output: Path,
+    *,
+    compiler: str,
+    validator: str,
+    work_dir: Path,
+    timeout: int = 120,
+) -> None:
+    compilation = run_compiler(
+        [
+            compiler,
+            "--target-env",
+            "opengl",
+            "--target-env",
+            "spirv1.3",
+            "-S",
+            "comp",
+            str(source),
+            "-o",
+            str(output),
+        ],
+        work_dir=work_dir,
+        timeout=timeout,
+    )
+    assert compilation.returncode == 0, compilation.stdout + compilation.stderr
+    assert output.is_file()
+    assert output.stat().st_size > 0
+    validation = run_compiler(
+        [validator, "--target-env", "spv1.3", str(output)],
+        work_dir=work_dir,
+        timeout=timeout,
+        record_name="validator.json",
+    )
+    assert validation.returncode == 0, validation.stdout + validation.stderr
 
 
 def native_compiler_runner(work_dir: Path):

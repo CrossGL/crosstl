@@ -5531,13 +5531,27 @@ jobs:
 
       - name: Prove current MLX complete unary family OpenGL translation
         env:
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_UNARY_OPENGL_TRANSLATION: "1"
           CROSTL_MLX_UNARY_OPENGL_SHARD_INDEX: ${{ matrix.shard_index }}
           CROSTL_MLX_UNARY_OPENGL_SHARD_COUNT: "5"
         run: >-
           python -m pytest -q -n auto
+          --junitxml=unary-opengl-junit.xml
           demos/integrations/mlx/tests/kernels/test_unary_complete_opengl.py::test_current_mlx_unary_family_translates_to_opengl
+
+      - name: Upload unary OpenGL corpus evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-unary-opengl-corpus-${{ matrix.shard_index }}
+          path: |
+            mlx-current-upstream/.crosstl-corpus-evidence
+            unary-opengl-junit.xml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   mlx-unary-complete-directx-translation:
     concurrency:
@@ -6307,13 +6321,27 @@ jobs:
 
       - name: Prove current MLX complete reduce family OpenGL translation
         env:
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_REDUCE_OPENGL_TRANSLATION: "1"
           CROSTL_MLX_REDUCE_OPENGL_SHARD_INDEX: ${{ matrix.shard_index }}
           CROSTL_MLX_REDUCE_OPENGL_SHARD_COUNT: "24"
         run: >-
           python -m pytest -q -n auto
+          --junitxml=reduce-opengl-junit.xml
           demos/integrations/mlx/tests/kernels/test_reduce_complete_opengl.py::test_current_mlx_reduce_family_translates_to_opengl
+
+      - name: Upload reduce OpenGL corpus evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-reduce-opengl-corpus-${{ matrix.shard_index }}
+          path: |
+            mlx-current-upstream/.crosstl-corpus-evidence
+            reduce-opengl-junit.xml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   mlx-copy-complete-opengl-translation:
     concurrency:
@@ -6369,13 +6397,27 @@ jobs:
 
       - name: Prove current MLX complete copy family OpenGL translation
         env:
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_COPY_OPENGL_TRANSLATION: "1"
           CROSTL_MLX_COPY_OPENGL_SHARD_INDEX: ${{ matrix.shard_index }}
           CROSTL_MLX_COPY_OPENGL_SHARD_COUNT: "24"
         run: >-
           python -m pytest -q -n auto
+          --junitxml=copy-opengl-junit.xml
           demos/integrations/mlx/tests/kernels/test_copy_complete_opengl.py::test_current_mlx_copy_family_translates_to_opengl
+
+      - name: Upload copy OpenGL corpus evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-copy-opengl-corpus-${{ matrix.shard_index }}
+          path: |
+            mlx-current-upstream/.crosstl-corpus-evidence
+            copy-opengl-junit.xml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   mlx-copy-complete-directx-translation:
     concurrency:
@@ -6581,13 +6623,27 @@ jobs:
 
       - name: Prove current MLX complete binary family OpenGL translation
         env:
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_BINARY_OPENGL_TRANSLATION: "1"
           CROSTL_MLX_BINARY_OPENGL_SHARD_INDEX: ${{ matrix.shard_index }}
           CROSTL_MLX_BINARY_OPENGL_SHARD_COUNT: "24"
         run: >-
           python -m pytest -q -n auto
+          --junitxml=binary-opengl-junit.xml
           demos/integrations/mlx/tests/kernels/test_binary_complete_opengl.py::test_current_mlx_binary_family_translates_to_opengl
+
+      - name: Upload binary OpenGL corpus evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-binary-opengl-corpus-${{ matrix.shard_index }}
+          path: |
+            mlx-current-upstream/.crosstl-corpus-evidence
+            binary-opengl-junit.xml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   mlx-binary-complete-directx-translation:
     concurrency:

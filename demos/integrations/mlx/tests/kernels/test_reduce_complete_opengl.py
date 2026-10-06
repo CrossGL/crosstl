@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import textwrap
 from collections import Counter
 from pathlib import Path
@@ -17,6 +16,10 @@ from crosstl.project import (
     load_project_config,
     translate_project,
     validate_project_report,
+)
+from demos.integrations.mlx.tests.corpus_evidence import (
+    compile_opengl_artifact,
+    corpus_workspace,
 )
 from demos.integrations.mlx.tests.kernels.test_reduce_complete_metal_roundtrip import (
     ENTRY_CLASSIFICATION_FIELDS,
@@ -536,6 +539,8 @@ def _translate_and_validate(
         validate=True,
         run_toolchains=False,
     )
+    report_path = work_dir / "portability-report.json"
+    report.write_json(report_path)
     payload = report.to_json()
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["artifactCount"] == 1
@@ -586,8 +591,6 @@ def _translate_and_validate(
     ):
         assert residue not in generated
 
-    report_path = work_dir / "portability-report.json"
-    report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
     runtime = build_runtime_artifact_manifest(report_path)
     assert runtime["success"] is True, json.dumps(runtime, indent=2)
@@ -619,40 +622,14 @@ def _translate_and_validate(
     } == _expected_resources(workload)
 
     spirv_path = work_dir / f"{workload.entry_point}.spv"
-    compilation = subprocess.run(
-        [
-            _required_tool("glslangValidator"),
-            "--target-env",
-            "opengl",
-            "--target-env",
-            "spirv1.3",
-            "-S",
-            "comp",
-            str(generated_path),
-            "-o",
-            str(spirv_path),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
+    compile_opengl_artifact(
+        generated_path,
+        spirv_path,
+        compiler=_required_tool("glslangValidator"),
+        validator=_required_tool("spirv-val"),
+        work_dir=work_dir,
         timeout=180,
     )
-    assert compilation.returncode == 0, compilation.stdout + compilation.stderr
-    assert spirv_path.is_file()
-    assert spirv_path.stat().st_size > 0
-    validation = subprocess.run(
-        [
-            _required_tool("spirv-val"),
-            "--target-env",
-            "spv1.3",
-            str(spirv_path),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
-    assert validation.returncode == 0, validation.stdout + validation.stderr
 
 
 @pytest.mark.parametrize(
@@ -664,12 +641,11 @@ def test_current_mlx_reduce_family_translates_to_opengl(
     workload: ReduceMetalWorkload,
 ) -> None:
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-reduce-opengl-",
-        dir=mlx_root,
-    ) as temporary_directory:
+    with corpus_workspace(
+        mlx_root, family="reduce", target="opengl", entry_point=workload.entry_point
+    ) as work_dir:
         _translate_and_validate(
             mlx_root,
-            Path(temporary_directory),
+            work_dir,
             workload,
         )

@@ -143,25 +143,31 @@ def test_metal_execution_budget_preserves_all_storage_cases():
 
 
 @pytest.mark.parametrize("family", ("unary", "binary", "copy", "reduce"))
-def test_directx_corpus_retains_failure_evidence_without_additional_jobs(family):
+@pytest.mark.parametrize(
+    "target,platform", (("directx", "DirectX"), ("opengl", "OpenGL"))
+)
+def test_corpus_retains_failure_evidence_without_additional_jobs(
+    family, target, platform
+):
     workflow = _workflow_texts()["demo-project-testing.yml"]
-    job = _workflow_job_section(workflow, f"mlx-{family}-complete-directx-translation")
+    job = _workflow_job_section(workflow, f"mlx-{family}-complete-{target}-translation")
     coverage = _load_ci_coverage_module()
     proof = coverage.workflow_step_section(
-        job, f"Prove current MLX complete {family} family DirectX translation"
+        job, f"Prove current MLX complete {family} family {platform} translation"
     )
-    assert "runs-on: ubuntu-24.04" in job
+    runner = "ubuntu-24.04" if target == "directx" else "ubuntu-latest"
+    assert f"runs-on: {runner}" in job
     assert 'CROSTL_KEEP_CORPUS_EVIDENCE: "1"' in proof
     assert "python -m pytest -q -n auto" in proof
-    assert f"--junitxml={family}-directx-junit.xml" in proof
+    assert f"--junitxml={family}-{target}-junit.xml" in proof
     assert "continue-on-error" not in job
     upload = coverage.workflow_step_section(
-        job, f"Upload {family} DirectX corpus evidence"
+        job, f"Upload {family} {platform} corpus evidence"
     )
     assert "if: always()" in upload
-    assert f"name: mlx-{family}-directx-corpus-${{{{ matrix.shard_index }}}}" in upload
+    assert f"name: mlx-{family}-{target}-corpus-${{{{ matrix.shard_index }}}}" in upload
     assert "mlx-current-upstream/.crosstl-corpus-evidence" in upload
-    assert f"{family}-directx-junit.xml" in upload
+    assert f"{family}-{target}-junit.xml" in upload
     assert "include-hidden-files: true" in upload
     assert "if-no-files-found: error" in upload
     assert "retention-days: 14" in upload

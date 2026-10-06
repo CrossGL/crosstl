@@ -65,6 +65,12 @@ not reached; a generated shader alone is not proof that compilation passed.
 Local runs clean up by default; set `CROSTL_KEEP_CORPUS_EVIDENCE=1` to retain the
 same files under the upstream checkout's `.crosstl-corpus-evidence` directory.
 
+The four OpenGL corpus families retain the same evidence in their existing
+Ubuntu shards. Compiler and SPIR-V validator commands have separate records,
+so a validation failure cannot overwrite a successful compilation record.
+Reports are saved before reference checks, and missing or empty compiled modules
+still fail. No runner, corpus sample or extra translation pass is added.
+
 The existing Windows and Linux Softmax, arg-reduce, attention, GEMV and
 normalization loader steps retain their reports before artifact checks,
 generated packages, native compiler commands and artifacts, input fixtures,
