@@ -94,12 +94,20 @@ evaluates to 32. The recorded compiler identity is the pinned Linux DXC binary.
 These are translation, interface and compiler checks, not whole-family numerical
 execution or current-pin upstream-suite parity.
 
-The separate Metal exponential review found floating-point grouping loss in
-source conversion and target generation
-([#2104](https://github.com/CrossGL/crosstl/issues/2104)). With fast math disabled,
-a native cancellation control returns 1 in the original and 0 after translation.
-The 15 affected Metal exponential references remain unchanged despite successful
-compilation; they require a semantic correction before acceptance.
+The separate Metal exponential review exposed numeric grouping loss in source
+conversion and target generation
+([#2104](https://github.com/CrossGL/crosstl/issues/2104)). Both stages now preserve
+addition, multiplication and bitwise expression trees. Generic controls compare
+cancellation, rounded products, signed zeros and mixed-width integer conversions
+on native Metal and OpenGL, including saved CrossGL intermediates and output
+guards. The exponential accuracy checks retain their existing tolerances.
+The 15 affected Metal exponential references remain unchanged pending corpus
+reconciliation; hosted Windows execution is verified separately.
+For the current pinned, profiled bfloat Sigmoid case, only the Metal helper's
+result parentheses change. Its reviewed artifact still matches original Metal
+over all 65,282 non-NaN inputs, with eight output guards. The HLSL and GLSL
+artifacts are byte-identical to their previous references; the OpenGL full-domain
+execution also remains exact.
 
 Cross-backend controls also found a separate Metal narrow-field reference
 failure ([#2102](https://github.com/CrossGL/crosstl/issues/2102)): the field

@@ -19,6 +19,14 @@ Reverse translation uses ``crosstl.backend.Metal.MetalLexer.MetalLexer`` and
 backend AST. ``crosstl.backend.Metal.MetalCrossGLCodeGen`` then serializes that
 AST back into CrossGL syntax.
 
+Both directions preserve arithmetic expression grouping. In particular,
+``a + (b + c)``, ``a * (b * c)`` and nested bitwise expressions retain their
+right-hand parentheses instead of being flattened into left-associated
+expressions. Floating-point rounding and mixed-width integer promotion make this
+distinction observable. Native
+regressions use strict compiler arithmetic settings; preserving the source tree
+does not override a caller's choice to enable compiler fast-math reassociation.
+
 Supported Surface
 -----------------
 

@@ -3313,6 +3313,7 @@ jobs:
           CROSTL_REQUIRE_METAL_PRECISE_TRIG: "1"
           CROSTL_REQUIRE_FLOAT_NEGATION: "1"
           CROSTL_REQUIRE_UNARY_GROUPING: "1"
+          CROSTL_REQUIRE_BINARY_GROUPING: "1"
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER: llvmpipe
           EGL_PLATFORM: surfaceless
@@ -3329,7 +3330,8 @@ jobs:
               tests/test_translator/test_metal_precise_asin.py \
               tests/test_translator/test_metal_precise_trig.py \
               tests/test_translator/test_float_negation.py \
-              tests/test_translator/test_unary_grouping.py
+              tests/test_translator/test_unary_grouping.py \
+              tests/test_translator/test_binary_grouping.py
 
       - name: Upload Metal builtin ownership evidence
         if: always()

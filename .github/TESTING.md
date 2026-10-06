@@ -190,6 +190,17 @@ NaN classification, source overloads and single evaluation. Exact finite result
 bits and output guards are required; macOS compares unchanged source and generated
 Metal. The same cases run on Linux OpenGL and Windows DirectX without new jobs.
 
+The same jobs verify binary addition and multiplication grouping at vector widths
+one through four. Cancellation and multiplication-rounding cases distinguish
+right-associated expressions from left-associated ones; signed zeros and output
+guards are checked bit for bit. Saved CrossGL and direct translation must agree.
+Mixed signed/unsigned 32-bit and 64-bit bitwise cases check conversion order
+before widening; expected high words distinguish the two associations.
+Metal controls use `-fno-fast-math`, and DirectX uses `-Gis`, so compiler fast-math
+reassociation does not hide a source-tree regression. Inputs, expected words,
+native readbacks and generated artifact identities are retained with the existing
+builtin-ownership evidence.
+
 The base-to-head coverage comparison accepts explicitly reviewed workflow moves
 from `.github/ci-coverage-migrations.json`. Only workflow filenames are mapped;
 job identities and coverage requirements are not removed. Each old job must

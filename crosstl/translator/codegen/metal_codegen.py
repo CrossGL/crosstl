@@ -458,7 +458,8 @@ class MetalCodeGen:
         "/": 10,
         "%": 10,
     }
-    ASSOCIATIVE_BINARY_OPS = {"+", "*", "&&", "||", "&", "|", "^"}
+    # Numeric grouping determines floating rounding and integer promotion.
+    ASSOCIATIVE_BINARY_OPS = {"&&", "||"}
     METAL_ATOMIC_FENCE_MEMORY_FLAGS = frozenset(
         {
             "mem_none",

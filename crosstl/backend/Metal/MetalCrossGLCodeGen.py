@@ -15381,10 +15381,7 @@ float {scalar}(float value) {{
         parenthesize_equal = bool(
             is_right
             and isinstance(operand, BinaryOpNode)
-            and (
-                parent_op not in {"+", "*", "&&", "||", "&", "|", "^"}
-                or operand.op != parent_op
-            )
+            and (parent_op not in {"&&", "||"} or operand.op != parent_op)
         )
         return self.generate_precedence_operand(
             operand,
