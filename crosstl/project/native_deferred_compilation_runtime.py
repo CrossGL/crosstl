@@ -19,6 +19,7 @@ from typing import Any
 from .directx_toolchain import (
     dxc_compiler_arguments_for_source,
     dxc_file_path,
+    dxc_long_path_command,
     dxc_profile_for_source,
 )
 from .host_reflection import reflect_target_host_interface
@@ -926,18 +927,23 @@ def _compiler_command(
                 },
             )
         compiler_arguments = dxc_compiler_arguments_for_source(source_text)
-        return (
-            str(toolchain.executable),
-            "-T",
-            profile,
-            *compiler_arguments,
-            "-E",
-            target["entryPoint"],
-            *defines,
-            *directx_include_arguments,
-            "-Fo",
-            dxc_file_path(output_path),
-            dxc_file_path(source_path),
+        return tuple(
+            dxc_long_path_command(
+                [
+                    str(toolchain.executable),
+                    "-T",
+                    profile,
+                    *compiler_arguments,
+                    "-E",
+                    target["entryPoint"],
+                    *defines,
+                    *directx_include_arguments,
+                    "-Fo",
+                    dxc_file_path(output_path),
+                    dxc_file_path(source_path),
+                ],
+                source_path,
+            )
         )
     opengl_include_arguments = tuple(
         f"-I{directory}" for directory in include_directories

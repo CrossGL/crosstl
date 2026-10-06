@@ -42,6 +42,8 @@ from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
     dxc_compiler_arguments_for_source,
     dxc_file_path,
+    dxc_library_command_tool,
+    dxc_long_path_command,
     dxc_profile_for_source,
     hlsl_requires_native_16bit_types,
 )
@@ -29350,7 +29352,7 @@ def _validation_toolchain_run_tool_name(run: Mapping[str, Any]) -> str | None:
         or not command
     ):
         return None
-    tool_name = command[0]
+    tool_name = dxc_library_command_tool(list(command)) or command[0]
     if isinstance(tool_name, str) and tool_name.strip():
         return tool_name.strip()
     return None
@@ -53781,7 +53783,8 @@ def _toolchain_run_contract_reasons(
     elif _is_non_empty_string(run.get("target")):
         normalized_target = _normalized_targets([str(run["target"])])[0]
         configured_tools = TOOLCHAIN_BY_BACKEND.get(normalized_target, ())
-        if configured_tools and command[0] not in configured_tools:
+        tool_name = dxc_library_command_tool(command) or command[0]
+        if configured_tools and tool_name not in configured_tools:
             reasons.append(
                 f"{prefix}.command[0] must match a configured validation tool "
                 f"for target {normalized_target}"
@@ -56789,15 +56792,18 @@ def _directx_dxc_smoke_commands(
     entry_profiles = _directx_dxc_entry_profiles(artifact_path, artifact=artifact)
     if entry_profiles is None:
         return [
-            [
-                tool,
-                "-T",
-                dxc_profile_for_source("lib_6_3", source),
-                *compiler_arguments,
-                dxc_file_path(artifact_path),
-                "-Fo",
-                os.devnull,
-            ]
+            dxc_long_path_command(
+                [
+                    tool,
+                    "-T",
+                    dxc_profile_for_source("lib_6_3", source),
+                    *compiler_arguments,
+                    dxc_file_path(artifact_path),
+                    "-Fo",
+                    os.devnull,
+                ],
+                artifact_path,
+            )
         ]
 
     return [
@@ -56820,17 +56826,20 @@ def _directx_dxc_entry_smoke_command(
     *,
     compiler_arguments: Sequence[str] = (),
 ) -> list[str]:
-    return [
-        tool,
-        "-T",
-        profile,
-        *compiler_arguments,
-        "-E",
-        entry,
-        dxc_file_path(artifact_path),
-        "-Fo",
-        os.devnull,
-    ]
+    return dxc_long_path_command(
+        [
+            tool,
+            "-T",
+            profile,
+            *compiler_arguments,
+            "-E",
+            entry,
+            dxc_file_path(artifact_path),
+            "-Fo",
+            os.devnull,
+        ],
+        artifact_path,
+    )
 
 
 def _directx_dxc_entry_profile(artifact_path: Path) -> tuple[str, str] | None:

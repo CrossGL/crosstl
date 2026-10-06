@@ -1,5 +1,6 @@
 """Keep compiler paths usable without moving project artifacts or includes."""
 
+import ctypes
 import hashlib
 import json
 import os
@@ -13,6 +14,7 @@ import pytest
 
 from crosstl.project import (
     directx_toolchain,
+    dxc_compiler,
     native_deferred_compilation_runtime,
     pipeline,
 )
@@ -43,7 +45,7 @@ def test_dxc_long_windows_paths_use_extended_namespace(monkeypatch, length, root
     expected = value
     if length >= 260:
         expected = (
-            "\\\\.\\UNC\\" + value[2:] if root.startswith("\\\\") else "\\\\.\\" + value
+            "\\\\?\\UNC\\" + value[2:] if root.startswith("\\\\") else "\\\\?\\" + value
         )
     actual = directx_toolchain.dxc_file_path(PureWindowsPath(value))
     assert actual == expected
@@ -55,7 +57,7 @@ def test_dxc_windows_path_normalizes_parent_components_before_prefix(monkeypatch
     value += "..\\shader.hlsl"
     monkeypatch.setattr(directx_toolchain.sys, "platform", "win32")
     assert directx_toolchain.dxc_file_path(PureWindowsPath(value)) == (
-        "\\\\.\\C:\\project\\" + "directory\\" * 29 + "shader.hlsl"
+        "\\\\?\\C:\\project\\" + "directory\\" * 29 + "shader.hlsl"
     )
 
 
@@ -63,7 +65,7 @@ def test_dxc_path_limit_counts_utf16_code_units(monkeypatch):
     value = "C:\\" + "directory\\" * 20 + "\U00010000" * 30 + ".hlsl"
     assert len(value) < 260 <= len(value.encode("utf-16-le")) // 2
     monkeypatch.setattr(directx_toolchain.sys, "platform", "win32")
-    assert directx_toolchain.dxc_file_path(PureWindowsPath(value)) == "\\\\.\\" + value
+    assert directx_toolchain.dxc_file_path(PureWindowsPath(value)) == "\\\\?\\" + value
 
 
 @pytest.mark.parametrize("platform", ["linux", "darwin"])
@@ -235,9 +237,13 @@ def test_native_dxc_validates_long_project_paths(tmp_path, invalid):
     assert len(runs) == 1
     run = runs[0]
     assert run["path"] == relative
+    assert pipeline._validation_toolchain_run_tool_name(run) == "dxc"
+    assert not pipeline._toolchain_run_contract_reasons(0, run, root_path=tmp_path)
     assert shader.read_text(encoding="utf-8") == source
     if sys.platform == "win32":
-        assert run["command"][-3].startswith("\\\\.\\")
+        assert run["command"][0] == sys.executable
+        assert Path(run["command"][1]).name == "dxc_compiler.py"
+        assert run["command"][run["command"].index("--source") + 1] == str(shader)
     else:
         assert run["command"][-3] == str(shader)
     if invalid:
@@ -246,7 +252,9 @@ def test_native_dxc_validates_long_project_paths(tmp_path, invalid):
         return
     assert run["status"] == "ok", run
     module = directory / "shader.dxil"
-    command = [*run["command"][:-1], directx_toolchain.dxc_file_path(module)]
+    command = list(run["command"])
+    output_flag = "--output" if sys.platform == "win32" else "-Fo"
+    command[command.index(output_flag) + 1] = directx_toolchain.dxc_file_path(module)
     completed = subprocess.run(command, capture_output=True, text=True, timeout=30)
     assert completed.returncode == 0, completed.stderr
     assert module.read_bytes().startswith(b"DXBC")
@@ -263,3 +271,224 @@ def test_native_dxc_validates_long_project_paths(tmp_path, invalid):
         + "\n",
         encoding="utf-8",
     )
+
+
+@pytest.mark.parametrize("root", ["C:\\", "\\\\server\\share\\"])
+def test_include_handler_normalizes_extended_parent_paths(monkeypatch, root):
+    monkeypatch.setattr(dxc_compiler.sys, "platform", "win32")
+    value = root + "directory\\" * 30
+    expected = directx_toolchain.dxc_file_path(PureWindowsPath(value + "factor.hlsli"))
+    assert dxc_compiler._include_path(value + "include\\..\\factor.hlsli") == expected
+    assert (
+        dxc_compiler._include_path(
+            expected.rsplit("\\", 1)[0] + "\\include\\..\\factor.hlsli"
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_dxc_api_non_windows_include_paths(monkeypatch, platform):
+    monkeypatch.setattr(dxc_compiler.sys, "platform", platform)
+    assert (
+        dxc_compiler._include_path("/project/include/../factor.hlsli")
+        == "/project/factor.hlsli"
+    )
+
+
+def test_dxc_api_handler_interface_lifetime_and_missing_include():
+    calls = []
+
+    @dxc_compiler._CALL(
+        dxc_compiler._HRESULT,
+        ctypes.c_void_p,
+        ctypes.c_wchar_p,
+        ctypes.POINTER(ctypes.c_void_p),
+    )
+    def load(this, filename, result):
+        calls.append(filename)
+        result[0] = None
+        return -2147024894
+
+    table = (ctypes.c_void_p * 4)(0, 0, 0, ctypes.cast(load, ctypes.c_void_p).value)
+    default = ctypes.pointer(ctypes.cast(table, ctypes.POINTER(ctypes.c_void_p)))
+    handler = dxc_compiler._IncludeHandler(default)
+    pointer = ctypes.byref(handler)
+    result = ctypes.c_void_p()
+    query = handler.callbacks[0]
+    assert (
+        query(
+            pointer, ctypes.byref(dxc_compiler._INCLUDE_HANDLER), ctypes.byref(result)
+        )
+        == 0
+    )
+    assert result.value == ctypes.addressof(handler)
+    assert handler.references == 2
+    assert handler.callbacks[2](pointer) == 1
+    unsupported = dxc_compiler._Guid.parse("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    assert (
+        query(pointer, ctypes.byref(unsupported), ctypes.byref(result)) == -2147467262
+    )
+    assert result.value is None and handler.references == 1
+    assert (
+        handler.callbacks[3](pointer, "missing.hlsli", ctypes.byref(result))
+        == -2147024894
+    )
+    assert result.value is None and len(calls) == 1 and not handler.errors
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux", "darwin"])
+def test_dxc_library_bridge_preserves_compiler_arguments(monkeypatch, platform):
+    source = PureWindowsPath("C:\\" + "directory\\" * 30 + "shader.hlsl")
+    monkeypatch.setattr(directx_toolchain.sys, "platform", platform)
+    monkeypatch.setattr(
+        directx_toolchain.shutil, "which", lambda value: "C:/DXC/dxc.exe"
+    )
+    arguments = [
+        "-T",
+        "cs_6_2",
+        "-E",
+        "CSMain",
+        "-DVALUE=7",
+        "-I",
+        "C:/includes",
+        "-enable-16bit-types",
+        "-WX",
+    ]
+    command = [
+        "dxc",
+        *arguments,
+        directx_toolchain.dxc_file_path(source),
+        "-Fo",
+        "output.dxil",
+    ]
+    bridge = directx_toolchain.dxc_long_path_command(command, source)
+    if platform != "win32":
+        assert bridge == command
+        return
+    assert bridge[0] == sys.executable
+    assert bridge[bridge.index("--compiler") + 1] == "dxc"
+    assert bridge[bridge.index("--source") + 1] == str(source)
+    assert bridge[bridge.index("--output") + 1] == "output.dxil"
+    assert bridge[bridge.index("--") + 1 :] == arguments
+    assert directx_toolchain.dxc_library_command_tool(bridge) == "dxc"
+
+
+def test_dxc_unavailable_tool_does_not_become_available_through_bridge(monkeypatch):
+    source = PureWindowsPath("C:\\" + "directory\\" * 30 + "shader.hlsl")
+    monkeypatch.setattr(directx_toolchain.sys, "platform", "win32")
+    monkeypatch.setattr(directx_toolchain.shutil, "which", lambda value: None)
+    command = [
+        "dxc",
+        "-T",
+        "cs_6_0",
+        directx_toolchain.dxc_file_path(source),
+        "-Fo",
+        "NUL",
+    ]
+    assert directx_toolchain.dxc_long_path_command(command, source) == command
+
+
+def test_dxc_long_defines_do_not_select_library_bridge(monkeypatch):
+    source = PureWindowsPath(r"C:\project\shader.hlsl")
+    monkeypatch.setattr(directx_toolchain.sys, "platform", "win32")
+    command = ["dxc", "-DVALUE=" + "1" * 300, str(source), "-Fo", "NUL"]
+    assert directx_toolchain.dxc_long_path_command(command, source) == command
+
+
+@pytest.mark.parametrize("field", ["-I", "-Fo"])
+def test_dxc_long_include_and_output_paths_select_library_bridge(monkeypatch, field):
+    source = PureWindowsPath(r"C:\project\shader.hlsl")
+    long_path = (
+        "C:\\" + "directory\\" * 30 + ("out.dxil" if field == "-Fo" else "include")
+    )
+    monkeypatch.setattr(directx_toolchain.sys, "platform", "win32")
+    monkeypatch.setattr(
+        directx_toolchain.shutil, "which", lambda value: "C:/DXC/dxc.exe"
+    )
+    command = [
+        "dxc",
+        "-I",
+        long_path if field == "-I" else r"C:\includes",
+        "-Fo",
+        long_path if field == "-Fo" else "NUL",
+        str(source),
+    ]
+    bridge = directx_toolchain.dxc_long_path_command(command, source)
+    assert directx_toolchain.dxc_library_command_tool(bridge) == "dxc"
+    assert bridge[bridge.index("--") + 1 :] == command[1:3]
+
+
+@pytest.mark.parametrize(
+    "index,value",
+    [
+        (0, "powershell.exe"),
+        (1, "C:/unrelated/dxc_compiler.py"),
+        (2, "--other"),
+        (3, "glslangValidator"),
+        (4, "--other"),
+        (6, "--other"),
+        (8, "--other"),
+    ],
+)
+def test_report_rejects_unrecognized_or_mismatched_dxc_bridge(index, value):
+    command = [
+        "C:/Python/python.exe",
+        "C:/installed/crosstl/project/dxc_compiler.py",
+        "--compiler",
+        "dxc",
+        "--source",
+        "shader.hlsl",
+        "--output",
+        "NUL",
+        "--",
+        "-T",
+        "cs_6_0",
+    ]
+    run = {
+        "source": "shader.cgl",
+        "target": "directx",
+        "path": "shader.hlsl",
+        "status": "ok",
+        "returncode": 0,
+        "stdout": "",
+        "stderr": "",
+        "command": command,
+    }
+    assert not pipeline._toolchain_run_contract_reasons(0, run)
+    assert pipeline._validation_toolchain_run_status_by_tool([run]) == {
+        "dxc": {"runCount": 1, "okCount": 1, "failedCount": 0}
+    }
+    command[index] = value
+    assert any(
+        "configured validation tool" in reason
+        for reason in pipeline._toolchain_run_contract_reasons(0, run)
+    )
+
+
+def test_dxc_api_callback_exceptions_fail_closed(monkeypatch):
+    @dxc_compiler._CALL(
+        dxc_compiler._HRESULT,
+        ctypes.c_void_p,
+        ctypes.c_wchar_p,
+        ctypes.POINTER(ctypes.c_void_p),
+    )
+    def load(this, filename, result):
+        pytest.fail("An invalid path must not reach the default include handler")
+
+    table = (ctypes.c_void_p * 4)(0, 0, 0, ctypes.cast(load, ctypes.c_void_p).value)
+    default = ctypes.pointer(ctypes.cast(table, ctypes.POINTER(ctypes.c_void_p)))
+    handler = dxc_compiler._IncludeHandler(default)
+
+    def reject(value):
+        raise ValueError("invalid include path")
+
+    monkeypatch.setattr(dxc_compiler, "_include_path", reject)
+    result = ctypes.c_void_p()
+    assert (
+        handler.callbacks[3](
+            ctypes.byref(handler), "header.hlsli", ctypes.byref(result)
+        )
+        == -2147467259
+    )
+    assert handler.errors == ["invalid include path"] and result.value is None

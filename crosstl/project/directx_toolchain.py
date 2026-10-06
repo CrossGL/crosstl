@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ntpath
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -31,11 +32,66 @@ def dxc_file_path(path: Path) -> str:
     absolute = ntpath.abspath(value)
     if len(absolute.encode("utf-16-le")) // 2 < 260:
         return value
-    # DXC resolves nested includes after opening the input. The question-mark
-    # namespace disables Windows normalization of their parent components.
     if absolute.startswith("\\\\"):
-        return "\\\\.\\UNC\\" + absolute[2:]
-    return "\\\\.\\" + absolute
+        return "\\\\?\\UNC\\" + absolute[2:]
+    return "\\\\?\\" + absolute
+
+
+def dxc_long_path_command(command: list[str], source_path: Path) -> list[str]:
+    """Use DXC's include API when Windows CLI paths need normalization."""
+
+    if sys.platform != "win32":
+        return command
+    paths = [str(source_path)] + [
+        command[index + 1]
+        for index, value in enumerate(command[:-1])
+        if value in ("-I", "-Fo")
+    ]
+    if not any(len(value.encode("utf-16-le")) // 2 >= 260 for value in paths):
+        return command
+    if shutil.which(command[0]) is None:
+        return command
+    source = dxc_file_path(source_path)
+    output_index = command.index("-Fo")
+    source_index = command.index(source)
+    arguments = [
+        value
+        for index, value in enumerate(command)
+        if index not in (0, source_index, output_index, output_index + 1)
+    ]
+    return [
+        sys.executable,
+        str(Path(__file__).with_name("dxc_compiler.py")),
+        "--compiler",
+        command[0],
+        "--source",
+        str(source_path),
+        "--output",
+        command[output_index + 1],
+        "--",
+        *arguments,
+    ]
+
+
+def dxc_library_command_tool(command: list[str]) -> str | None:
+    """Identify the compiler in a recorded long-path bridge invocation."""
+
+    if (
+        len(command) < 9
+        or any(not isinstance(value, str) or not value for value in command)
+        or command[2:9:2] != ["--compiler", "--source", "--output", "--"]
+        or not command[1]
+        .replace("\\", "/")
+        .endswith("/crosstl/project/dxc_compiler.py")
+        or re.fullmatch(
+            r"python(?:\d+(?:\.\d+)*)?(?:\.exe)?",
+            ntpath.basename(command[0]),
+            re.IGNORECASE,
+        )
+        is None
+    ):
+        return None
+    return command[3]
 
 
 def _mask_hlsl_comments_and_literals(source: str) -> str:

@@ -23,8 +23,12 @@ pass; the replacement revision must satisfy the same checks. This follows
 
 The existing Windows project job also checks DXC inputs and outputs longer
 than 260 characters, nested relative includes and retained error diagnostics.
-Compiler commands use extended-length Windows paths where needed; generated
-artifacts stay in their original locations and reports retain their logical paths.
+Long-path commands run the installed DXC library in a separate process, using
+an include handler that normalizes parent-relative paths before opening them.
+Short-path commands continue to use the DXC executable. Generated artifacts
+stay in their original locations; reports retain both their logical paths and
+the actual compiler invocation. The bridge requires `dxcompiler.dll` and its
+dependencies beside the selected `dxc.exe`, as provided by the DXC release.
 
 Every backend and code generator remains covered on all three operating
 systems. Python-version compatibility is exercised fully on Ubuntu; repeating
