@@ -3,6 +3,15 @@
 The CI suite separates portable Python compatibility from native GPU toolchain
 and runtime checks.
 
+Backend, translator, complete-suite, example and demo workflows replace a
+superseded pull-request run when a new revision arrives. The concurrency key
+includes the workflow name, event and PR number, so unrelated workflows and PRs
+do not cancel each other. Main, scheduled and manually dispatched runs use their
+unique run IDs and are not cancelled by this policy. Workflow-level keys are
+distinct from native job-level queues. Cancelling an obsolete run is not a test
+pass; the replacement revision must satisfy the same checks. This follows
+[GitHub's concurrency policy](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+
 | Workload | Ubuntu | Windows | macOS |
 | --- | --- | --- | --- |
 | Backend, translator and example tests | Python 3.8 through 3.13 | Python 3.13 | Python 3.13 |
@@ -21,6 +30,13 @@ component-level matrix. The version policy removes 198 duplicate jobs, and
 grouping native-platform unit suites removes another 38 runner setups per
 revision without removing a test suite. Failure reports retain individual
 test names in JUnit even when suites share a runner.
+
+The open-source porting demo runs its portable tests and all-target reference
+comparison once on Ubuntu, using two pytest workers. Windows and macOS retain
+every target-specific regeneration, comparison and compiler check, without
+repeating the other platforms' artifact checks. macOS uses Xcode's Metal compiler
+and does not install the OpenGL and SPIR-V validators used by Ubuntu. The three
+native jobs and their failure reports remain intact.
 
 The demo's 77 unary, binary, copy and reduction DirectX compilation shards run
 on Ubuntu. They retain every entry, strict compiler flags, artifact identity

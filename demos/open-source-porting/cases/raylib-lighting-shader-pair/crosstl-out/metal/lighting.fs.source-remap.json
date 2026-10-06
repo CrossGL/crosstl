@@ -534,9 +534,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 53,
-        "endOffset": 1793,
+        "endOffset": 1795,
         "file": "crosstl-out/metal/lighting.fs.metal",
-        "length": 86,
+        "length": 88,
         "line": 52,
         "offset": 1707
       },
@@ -556,11 +556,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 54,
-        "endOffset": 1866,
+        "endOffset": 1868,
         "file": "crosstl-out/metal/lighting.fs.metal",
         "length": 73,
         "line": 53,
-        "offset": 1793
+        "offset": 1795
       },
       "original": {
         "column": 1,
@@ -578,11 +578,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 55,
-        "endOffset": 1919,
+        "endOffset": 1921,
         "file": "crosstl-out/metal/lighting.fs.metal",
         "length": 53,
         "line": 54,
-        "offset": 1866
+        "offset": 1868
       },
       "original": {
         "column": 1,

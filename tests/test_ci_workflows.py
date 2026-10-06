@@ -105,6 +105,31 @@ def _workflow_texts():
     }
 
 
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "backend-tests.yml",
+        "translator-tests.yml",
+        "full-tests.yml",
+        "examples-test.yml",
+        "demo.yml",
+        "demo-project-testing.yml",
+    ],
+)
+def test_test_workflows_replace_only_superseded_pull_request_runs(filename):
+    workflow = yaml.safe_load((WORKFLOW_DIR / filename).read_text(encoding="utf-8"))
+    policy = workflow["concurrency"]
+    assert policy == {
+        "group": (
+            "ci-${{ github.workflow }}-${{ github.event_name }}-"
+            "${{ github.event.pull_request.number || github.run_id }}"
+        ),
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+    }
+    for job in workflow["jobs"].values():
+        assert job.get("concurrency", {}).get("group") != policy["group"]
+
+
 def _workflow_job_section(workflow, job_id):
     match = re.search(
         rf"^  {re.escape(job_id)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",

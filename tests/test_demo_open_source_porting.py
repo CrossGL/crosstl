@@ -190,7 +190,6 @@ def test_open_source_demo_workflow_runs_platform_toolchain_smokes():
 
     assert "os: [ubuntu-latest, macOS-latest, windows-latest]" in workflow
     assert "glslang-tools spirv-tools" in workflow
-    assert "brew install glslang spirv-tools" in workflow
     assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in workflow
     assert "--run-toolchains" in workflow
     assert "--require-toolchain-runs" in workflow
@@ -223,6 +222,29 @@ def _workflow_step_block(workflow: str, step_name: str) -> str:
     start = workflow.index(marker)
     next_step = workflow.find("\n      - name:", start + len(marker))
     return workflow[start:] if next_step == -1 else workflow[start:next_step]
+
+
+@pytest.mark.parametrize(
+    "step_name",
+    ["Run open-source porting demo tests", "Verify checked-in demo artifacts"],
+)
+def test_demo_portable_checks_run_once_on_linux(step_name):
+    workflow = DEMO_WORKFLOW_PATH.read_text(encoding="utf-8")
+    block = _workflow_step_block(workflow, step_name)
+    assert "if: runner.os == 'Linux'" in block
+    assert "continue-on-error" not in block
+
+
+def test_demo_portable_checks_keep_all_cases_and_bounded_workers():
+    workflow = DEMO_WORKFLOW_PATH.read_text(encoding="utf-8")
+    tests = _workflow_step_block(workflow, "Run open-source porting demo tests")
+    artifacts = _workflow_step_block(workflow, "Verify checked-in demo artifacts")
+    assert 'PYTEST_XDIST_AUTO_NUM_WORKERS: "2"' in workflow
+    assert "pytest pytest-xdist" in _workflow_step_block(workflow, "Install CrossTL")
+    assert "python -m pytest -q -n auto" in tests
+    assert "find demos/open-source-porting/cases" in artifacts
+    assert "--target" not in artifacts
+    assert "brew install" not in workflow
 
 
 def _cases_for_target(runner, target: str) -> set[str]:
@@ -432,6 +454,7 @@ def test_open_source_demo_runner_requires_toolchain_runs_per_selected_target(tmp
         ("directx-shader-compiler-neg1", "directx"),
         ("openframeworks-noise-shader", "directx"),
         ("raylib-lighting-shader-pair", "directx"),
+        ("raylib-lighting-shader-pair", "metal"),
         ("vulkan-samples-dynamic-line-grid", "directx"),
         ("apple-modern-rendering-mesh-viewdir", "directx"),
         ("apple-modern-rendering-mesh-viewdir", "opengl"),
@@ -456,6 +479,38 @@ def test_open_source_demo_runner_verifies_fast_reference_subset(case, target):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"{case}: verified {target}" in result.stdout
+
+
+def test_raylib_lighting_reference_preserves_source_grouping_and_spans():
+    case = CASE_ROOT / "raylib-lighting-shader-pair"
+    original = (case / "lighting.fs").read_text(encoding="utf-8")
+    generated = (case / "crosstl-out/metal/lighting.fs.metal").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "finalColor = (texelColor*((tint + vec4(specular, 1.0))*vec4(lightDot, 1.0)));"
+        in original
+    )
+    assert (
+        "finalColor = texelColor * ((tint + float4(specular, 1.0)) * float4(lightDot, 1.0));"
+        in generated
+    )
+    remap = json.loads(
+        (case / "crosstl-out/metal/lighting.fs.source-remap.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert remap["mappings"]
+    for mapping in remap["mappings"]:
+        for key, text in (("original", original), ("generated", generated)):
+            span = mapping[key]
+            lines = text.splitlines(keepends=True)
+            start = sum(len(line) for line in lines[: span["line"] - 1])
+            end = sum(len(line) for line in lines[: span["endLine"] - 1])
+            assert span["column"] == span["endColumn"] == 1
+            assert span["offset"] == start
+            assert span["endOffset"] == end
+            assert span["length"] == end - start
 
 
 @pytest.mark.parametrize("targets", [["directx"], []])
