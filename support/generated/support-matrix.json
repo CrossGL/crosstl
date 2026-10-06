@@ -312,7 +312,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 2080
+        "test_count": 2085
       },
       "translator_codegen": {
         "exists": true,
