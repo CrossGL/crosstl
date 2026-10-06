@@ -627,7 +627,7 @@ The current harness verifies:
   `contracts/binary.opengl-translation.json` contract pins every standalone
   `main` artifact across all 18 shapes, 11 templates, 24 operators, 25 type
   pairs, 6,026 materializations, and 19,106 reflected resources, totaling
-  16,276,504 generated GLSL bytes. Seven explicit
+  16,534,282 generated GLSL bytes. Seven explicit
   host/runtime index-range preconditions bound `offset + i`, `a_idx`, `b_idx`,
   `out_idx`, `out_idx++`, `idx.x`, and `idx.y` to signed 32-bit OpenGL index
   space; they are portability promises, not inferred or runtime-enforced
@@ -635,9 +635,10 @@ The current harness verifies:
   Linux CI shards retranslate every exact entry, verify deterministic identity,
   materialization, workgroup metadata, and reflected ABI, compile for
   OpenGL/SPIR-V 1.3 with `glslangValidator`, validate with `spirv-val`, and
-  require 4,122 non-empty SPIR-V modules. This is complete binary OpenGL
-  translation, reflection, and native compiler coverage, not numerical
-  execution or MLX host runtime redirection;
+  require 4,122 non-empty SPIR-V modules. The complete-family reference review
+  remains open in [#2073](https://github.com/CrossGL/crosstl/issues/2073).
+  Reviewed half-remainder entries have bounded numerical evidence described
+  below, not whole-family parity or MLX host runtime redirection;
 - selected-entry translation of all 4,122 discovered current-pinned
   `binary.metal` entries to DirectX. The schema-v2
   `contracts/binary.directx-translation.json` contract pins every standalone
@@ -2970,7 +2971,7 @@ standalone OpenGL ``main`` artifacts. The schema-v2
 [`contracts/binary.opengl-translation.json`](contracts/binary.opengl-translation.json)
 contract preserves all 18 shapes, 11 templates, 24 operators, 25 type pairs,
 and 6,026 exact materializations while pinning
-16,276,504 generated GLSL bytes and 19,106 reflected
+16,534,282 generated GLSL bytes and 19,106 reflected
 resources. Scalar artifacts expose three storage buffers; size-bounded vector
 forms add an entry-scoped uniform block. One-dimensional generalized forms add
 entry-scoped stride blocks, fixed two- and three-dimensional forms expose stride
@@ -2992,9 +2993,32 @@ call-site materialization provenance, ``main`` workgroup metadata, and exact
 three- through seven-resource host ABI, then compiles with
 ``glslangValidator --target-env opengl --target-env spirv1.3 -S comp`` and
 validates with ``spirv-val --target-env spv1.3``. All 4,122 SPIR-V modules must
-be non-empty. This closes discovered binary OpenGL translation, reflection, and
-native compiler coverage; it does not claim numerical execution, MLX
-host-runtime redirection, or MLX test-suite parity.
+be non-empty. Remaining changed references are still under review in
+[#2073](https://github.com/CrossGL/crosstl/issues/2073); the coverage definition
+does not imply that every current generated reference has passed that review.
+
+The 18 `Remainderfloat16` entries explicitly select
+`binary16_remainder_profile = "binary32-quotient"`. This preserves the observed
+Metal half-remainder arithmetic, including the source's subsequent sign
+adjustment and half rounding. Other binary entries do not enable that profile.
+All 18 complete old/new sources and resource interfaces were reviewed, and both
+versions passed GLSL compilation and module validation before updating the
+references. The generated source retains the arithmetic helpers' license notice.
+
+Native checks against unchanged upstream Metal passed at both the contract's
+`846d1762` revision and the goal's `9c3d3557` revision: 1,044 values across all
+18 layouts, plus every binary16 input word against 12 fixed partners in the
+vector-vector kernel, for 787,476 results and 624 guards per revision.
+Inputs retain signed zero and NaN payload bits; result comparisons require exact
+words except for NaN payloads, which use classification. This is bounded coverage,
+not every possible input pair or whole-family parity.
+
+`tests/kernels/test_current_half_remainder.py` makes 5,176 edge, seeded and
+rounding-boundary pairs repeatable through the generated package loader on
+each native target. The existing macOS job also runs unchanged upstream Metal;
+Windows requires DXC/WARP and Linux requires GLSL/SPIR-V validation and Mesa
+execution. Eight guards and bit-preserving input encodings are required. These
+checks do not establish MLX host-runtime redirection or upstream test-suite parity.
 
 The DirectX sibling contract translates all 4,122 discovered entries to
 standalone ``CSMain`` artifacts and pins their exact HLSL identities in

@@ -12705,7 +12705,7 @@ def test_binary_opengl_translation_evidence_records_complete_family():
     )
     status = gaps["binary_opengl_translation_status"]
     assert status["status"] == (
-        "selected-entry-complete-family-native-compilation-validated"
+        "selected-entry-complete-family-reference-review-in-progress"
     )
     assert status["commit"] == CURRENT_MLX_COMMIT
     assert status["source"] == "mlx/backend/metal/kernels/binary.metal"

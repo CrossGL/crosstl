@@ -125,6 +125,14 @@ readbacks and device details use the existing arithmetic evidence upload.
 The profile is opt-in and does not replace the unsupported-profile diagnostic
 for unconfigured half remainder or imply full corpus parity.
 
+The existing pinned binary-math steps also translate and execute MLX's actual
+half-remainder vector kernel through the generated package loader. All three
+native targets check 5,176 pairs and eight guards; macOS additionally executes
+the untouched upstream kernel. Inputs retain their IEEE bit encodings and
+comparisons permit only NaN payload differences. The cases share the existing
+900-second bounds, runners and failure-artifact uploads. This supplements the
+generic arithmetic controls; it does not replace them or claim whole-family parity.
+
 The same arithmetic step verifies source-defined bitcast-name overloads beside
 generated FMA, division and half-remainder helpers. Exact output words cover
 scalar/vector overloads, aliases, namespace-qualified calls and both binary32

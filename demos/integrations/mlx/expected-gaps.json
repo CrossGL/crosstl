@@ -2083,7 +2083,7 @@
     "runtime_parity_claimed": false
   },
   "binary_opengl_translation_status": {
-    "status": "selected-entry-complete-family-native-compilation-validated",
+    "status": "selected-entry-complete-family-reference-review-in-progress",
     "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
     "source": "mlx/backend/metal/kernels/binary.metal",
     "source_sha256": "4dadb612a9b768f9d51b3b394b32fc0129d361a55b35d545b3c014c87e00897e",
@@ -2104,8 +2104,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "041504d65e8a73f2da0fcf4d89330065fa9fd0d0260613067c06202e8ab20f67",
-      "size_bytes": 1467711,
+      "sha256": "e158293b4a1a7584dc30754b860c0fbea2645aadd9569953e4972cfff2bc3efa",
+      "size_bytes": 1467728,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -2228,15 +2228,15 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 16276504,
+      "generated_size_bytes_total": 16534282,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "ss_Addint32",
           "sizeBytes": 2875
         },
         "maximum": {
-          "entryPoint": "gn4large_LogAddExpcomplex64",
-          "sizeBytes": 8526
+          "entryPoint": "gn4large_Remainderfloat16",
+          "sizeBytes": 19553
         }
       }
     },

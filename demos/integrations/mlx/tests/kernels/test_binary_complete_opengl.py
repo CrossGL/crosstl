@@ -46,12 +46,12 @@ BINARY_OPENGL_CONTRACT_PATH = (
     / "binary.opengl-translation.json"
 )
 BINARY_OPENGL_CONTRACT_SHA256 = (
-    "041504d65e8a73f2da0fcf4d89330065fa9fd0d0260613067c06202e8ab20f67"
+    "e158293b4a1a7584dc30754b860c0fbea2645aadd9569953e4972cfff2bc3efa"
 )
-BINARY_OPENGL_CONTRACT_SIZE_BYTES = 1467711
-BINARY_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 16276504
+BINARY_OPENGL_CONTRACT_SIZE_BYTES = 1467728
+BINARY_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 16534282
 BINARY_OPENGL_GENERATED_SIZE_MINIMUM = ("ss_Addint32", 2875)
-BINARY_OPENGL_GENERATED_SIZE_MAXIMUM = ("gn4large_LogAddExpcomplex64", 8526)
+BINARY_OPENGL_GENERATED_SIZE_MAXIMUM = ("gn4large_Remainderfloat16", 19553)
 INDEX_RANGE_ASSERTIONS = (
     ("offset + i", 0, 2147483647),
     ("a_idx", 0, 2147483647),
@@ -297,6 +297,11 @@ def test_current_mlx_binary_opengl_ci_shards_are_complete_and_disjoint() -> None
 
 
 def _project_config(workload: BinaryMetalWorkload) -> str:
+    remainder_profile = (
+        'binary16_remainder_profile = "binary32-quotient"'
+        if workload.operator_type == "Remainder" and workload.input_type == "half"
+        else ""
+    )
     assertions = "\n\n".join(textwrap.dedent(f"""
             [[project.index_range_assertions]]
             source = "{MLX_BINARY_SOURCE}"
@@ -324,9 +329,34 @@ def _project_config(workload: BinaryMetalWorkload) -> str:
         [project.source_options.metal]
         max_template_specializations = 64
         max_template_materialization_work = 4096
+        {remainder_profile}
 
         {assertions}
         """).strip()
+
+
+def test_binary_half_remainder_profile_is_scoped_to_all_eighteen_shapes(tmp_path):
+    selected = []
+    checked_options = set()
+    for workload in BINARY_OPENGL_WORKLOADS:
+        text = _project_config(workload)
+        selected_profile = workload.entry_point.endswith("_Remainderfloat16")
+        assert (
+            'binary16_remainder_profile = "binary32-quotient"' in text
+        ) == selected_profile
+        option_key = (workload.operator_type, workload.input_type)
+        if selected_profile or option_key not in checked_options:
+            config_path = tmp_path / "crosstl.toml"
+            config_path.write_text(text, encoding="utf-8")
+            options = load_project_config(tmp_path, config_path).source_options["metal"]
+            assert options.get("binary16_remainder_profile") == (
+                "binary32-quotient" if selected_profile else None
+            )
+            checked_options.add(option_key)
+        if selected_profile:
+            selected.append(workload.shape)
+    assert len(selected) == 18
+    assert set(selected) == set(BINARY_OPENGL_CONTRACT["shapeContracts"])
 
 
 def _pinned_mlx_root() -> Path:
@@ -424,10 +454,17 @@ def _translate_and_validate(
         "target": "main",
         "stage": "compute",
     }
-    assert artifact["provenance"] == {
+    expected_provenance = {
         "pipeline": "entry-scoped-translate",
         "intermediate": "crossgl",
     }
+    if workload.operator_type == "Remainder" and workload.input_type == "half":
+        expected_provenance["binary16RemainderProfile"] = "binary32-quotient"
+        assert (
+            payload["project"]["sourceOptions"]["metal"]["binary16_remainder_profile"]
+            == "binary32-quotient"
+        )
+    assert artifact["provenance"] == expected_provenance
     execution_entries = artifact["execution"]["entryPoints"]
     assert len(execution_entries) == 1
     assert execution_entries[0]["sourceEntryPoint"] == workload.entry_point

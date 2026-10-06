@@ -1694,6 +1694,7 @@ jobs:
           CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
           CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_POWER: "1"
           CROSTL_REQUIRE_MLX_CURRENT_BINARY_SHAPES: "1"
+          CROSTL_REQUIRE_MLX_CURRENT_HALF_REMAINDER: "1"
           CROSTL_REQUIRE_STRUCT_BUFFER_RUNTIME: "1"
           CROSTL_RUN_NATIVE_LOADER_DIRECTX_DEVICE_TEST: ${{ runner.os == 'Windows' && '1' || '0' }}
           CROSTL_RUN_NATIVE_LOADER_OPENGL_DEVICE_TEST: ${{ runner.os == 'Linux' && '1' || '0' }}
@@ -1713,6 +1714,7 @@ jobs:
               tests/test_translator/test_native_loader_dispatch_integration.py \
               demos/integrations/mlx/tests/kernels/test_current_complex_power.py \
               demos/integrations/mlx/tests/kernels/test_current_binary_shapes.py \
+              demos/integrations/mlx/tests/kernels/test_current_half_remainder.py \
               2>&1 | tee .mlx-portable-host/binary-math.log
       - name: Execute pinned resident attention reductions
         env:
@@ -3734,6 +3736,7 @@ jobs:
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_BINARY_SHAPES: "1"
+          CROSTL_REQUIRE_MLX_CURRENT_HALF_REMAINDER: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -3752,7 +3755,8 @@ jobs:
             python -m pytest -q -n auto \
               --basetemp="mlx-binary-shape-results/pytest" \
               --junitxml="mlx-binary-shape-results/results.xml" \
-              demos/integrations/mlx/tests/kernels/test_current_binary_shapes.py
+              demos/integrations/mlx/tests/kernels/test_current_binary_shapes.py \
+              demos/integrations/mlx/tests/kernels/test_current_half_remainder.py
 
       - name: Upload current MLX binary shape evidence
         if: always()
