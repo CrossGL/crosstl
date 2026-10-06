@@ -24,6 +24,7 @@
       "native_backend": "crosstl/backend/DirectX",
       "tests": [
         "tests/test_translator/test_codegen/test_directx_codegen.py",
+        "tests/test_translator/test_directx_toolchain_paths.py",
         "tests/test_translator/test_narrow_integer_conversions.py",
         "tests/test_translator/test_vector_list_initialization.py",
         "tests/test_translator/test_half_buffer_runtime.py",

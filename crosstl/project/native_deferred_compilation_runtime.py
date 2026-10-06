@@ -18,6 +18,7 @@ from typing import Any
 
 from .directx_toolchain import (
     dxc_compiler_arguments_for_source,
+    dxc_file_path,
     dxc_profile_for_source,
 )
 from .host_reflection import reflect_target_host_interface
@@ -907,7 +908,9 @@ def _compiler_command(
         }
     )
     directx_include_arguments = tuple(
-        argument for directory in include_directories for argument in ("-I", directory)
+        argument
+        for directory in include_directories
+        for argument in ("-I", dxc_file_path(Path(directory)))
     )
     target = request["target"]
     if target["backend"] == "directx":
@@ -933,8 +936,8 @@ def _compiler_command(
             *defines,
             *directx_include_arguments,
             "-Fo",
-            str(output_path),
-            str(source_path),
+            dxc_file_path(output_path),
+            dxc_file_path(source_path),
         )
     opengl_include_arguments = tuple(
         f"-I{directory}" for directory in include_directories

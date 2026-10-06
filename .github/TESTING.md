@@ -21,6 +21,11 @@ pass; the replacement revision must satisfy the same checks. This follows
 | OpenGL execution and host integration | Required Mesa/EGL checks | Platform-specific controls | Platform-specific controls |
 | Metal compilation, reference and host integration | Not available | Not available | Required native checks |
 
+The existing Windows project job also checks DXC inputs and outputs longer
+than 260 characters, nested relative includes and retained error diagnostics.
+Compiler commands use extended-length Windows paths where needed; generated
+artifacts stay in their original locations and reports retain their logical paths.
+
 Every backend and code generator remains covered on all three operating
 systems. Python-version compatibility is exercised fully on Ubuntu; repeating
 those versions on Windows and macOS is not required. Windows and macOS each

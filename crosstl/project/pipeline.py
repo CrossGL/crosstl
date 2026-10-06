@@ -41,6 +41,7 @@ from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
     dxc_compiler_arguments_for_source,
+    dxc_file_path,
     dxc_profile_for_source,
     hlsl_requires_native_16bit_types,
 )
@@ -56793,7 +56794,7 @@ def _directx_dxc_smoke_commands(
                 "-T",
                 dxc_profile_for_source("lib_6_3", source),
                 *compiler_arguments,
-                str(artifact_path),
+                dxc_file_path(artifact_path),
                 "-Fo",
                 os.devnull,
             ]
@@ -56826,7 +56827,7 @@ def _directx_dxc_entry_smoke_command(
         *compiler_arguments,
         "-E",
         entry,
-        str(artifact_path),
+        dxc_file_path(artifact_path),
         "-Fo",
         os.devnull,
     ]

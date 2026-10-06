@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import ntpath
 import re
+import sys
+from pathlib import Path
 
 _HLSL_NATIVE_16_BIT_TYPE_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?:float16_t|int16_t|uint16_t)(?:[1-4])?" r"(?![A-Za-z0-9_])"
@@ -17,6 +20,20 @@ _DXC_EXACT_WAVE_SIZE_MINIMUM_PROFILE = (6, 6)
 _DXC_NATIVE_16_BIT_ARGUMENTS = ("-enable-16bit-types",)
 _DIRECTX_TARGET_PROFILES = ("directx-11", "directx-12")
 _DIRECTX_12_TARGET_PROFILES = ("directx-12",)
+
+
+def dxc_file_path(path: Path) -> str:
+    """Use extended-length Windows paths without relocating compiler inputs."""
+
+    value = str(path)
+    if sys.platform != "win32" or value.startswith(("\\\\?\\", "\\\\.\\")):
+        return value
+    absolute = ntpath.abspath(value)
+    if len(absolute.encode("utf-16-le")) // 2 < 260:
+        return value
+    if absolute.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + absolute[2:]
+    return "\\\\?\\" + absolute
 
 
 def _mask_hlsl_comments_and_literals(source: str) -> str:

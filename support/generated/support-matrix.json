@@ -121,6 +121,7 @@
       "tests": {
         "paths": [
           "tests/test_translator/test_codegen/test_directx_codegen.py",
+          "tests/test_translator/test_directx_toolchain_paths.py",
           "tests/test_translator/test_narrow_integer_conversions.py",
           "tests/test_translator/test_vector_list_initialization.py",
           "tests/test_translator/test_half_buffer_runtime.py",
@@ -154,7 +155,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1842
+        "test_count": 1851
       },
       "translator_codegen": {
         "exists": true,

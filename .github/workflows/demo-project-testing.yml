@@ -3327,6 +3327,30 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Validate DirectX compiler paths
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          CROSTL_REQUIRE_DXC_PATHS: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p directx-path-results
+          python tools/run_bounded_command.py \
+            --label "DirectX compiler paths" --timeout-seconds 90 -- \
+            python -m pytest -q -n auto \
+              --basetemp="directx-path-results/pytest" \
+              --junitxml="directx-path-results/results.xml" \
+              tests/test_translator/test_directx_toolchain_paths.py
+
+      - name: Upload DirectX compiler path evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: directx-compiler-paths
+          path: directx-path-results
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Validate Metal builtin ownership
         shell: bash
         env:
