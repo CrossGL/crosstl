@@ -6,7 +6,6 @@ import math
 import os
 import shutil
 import subprocess
-import tempfile
 import textwrap
 from pathlib import Path
 
@@ -37,6 +36,12 @@ from crosstl.project import (
     validate_project_report,
 )
 from crosstl.project.directx_toolchain import dxc_compiler_arguments_for_source
+from demos.integrations.mlx.tests.corpus_evidence import (
+    corpus_workspace,
+    native_compiler_runner,
+    record_native_request,
+    record_native_result,
+)
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -64,12 +69,12 @@ MLX_ATTENTION_DISPATCH_CONTRACT = (
 )
 MLX_ATTENTION_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "003c8b9e85bad7363bae2e3d80380d979cbe0b8988d0d98751131c3acfbff6b6",
-        "sizeBytes": 8721,
+        "sha256": "4f6bd4df5288687b239d09d546c903e7b4db3d14562b942f638fb160c486a46f",
+        "sizeBytes": 8841,
     },
     "opengl": {
-        "sha256": "9b7cb7dc9a76b9fb93c30fd93d13ad639f5493f60fd97b965514db0fe6b4840b",
-        "sizeBytes": 12089,
+        "sha256": "04f5c58fc3c4590c77583677f8edf261c1f5c9278a4163461c239c9e820ad9e8",
+        "sizeBytes": 12387,
     },
 }
 REQUIRE_DIRECTX_PROOF_ENV = "CROSTL_REQUIRE_MLX_ATTENTION_DIRECTX_NATIVE_LOADER"
@@ -388,6 +393,8 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         validate=True,
         run_toolchains=True,
     )
+    report_path = work_dir / f"{target}-portability-report.json"
+    report.write_json(report_path)
     payload = report.to_json()
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
@@ -482,8 +489,6 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert generated.count("barrier();") == 9
         _assert_opengl_spirv(generated_path, work_dir)
 
-    report_path = work_dir / f"{target}-portability-report.json"
-    report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
     return report_path
 
@@ -711,13 +716,12 @@ def test_attention_native_loader_dispatch_contract_is_exact():
 
 def test_pinned_mlx_attention_translates_to_directx_native_loader_artifact():
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-sdpa-dx-translate-",
-        dir=mlx_root,
-    ) as temporary_directory:
+    with corpus_workspace(
+        mlx_root, family="sdpa", target="directx", entry_point=MLX_ATTENTION_ENTRY
+    ) as work_dir:
         descriptor, package_dir, deferred = _build_runtime_package(
             mlx_root,
-            Path(temporary_directory),
+            work_dir,
             "directx",
         )
         assert deferred is None
@@ -726,13 +730,12 @@ def test_pinned_mlx_attention_translates_to_directx_native_loader_artifact():
 
 def test_pinned_mlx_attention_translates_to_deferred_software_opengl():
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-attention-opengl-translation-",
-        dir=mlx_root,
-    ) as temporary_directory:
+    with corpus_workspace(
+        mlx_root, family="sdpa", target="opengl", entry_point=MLX_ATTENTION_ENTRY
+    ) as work_dir:
         descriptor, package_dir, deferred = _build_runtime_package(
             mlx_root,
-            Path(temporary_directory),
+            work_dir,
             "opengl",
         )
         assert deferred is not None
@@ -741,18 +744,20 @@ def test_pinned_mlx_attention_translates_to_deferred_software_opengl():
 
 def test_pinned_mlx_attention_executes_through_directx_native_loader():
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        # Keep the deeply nested dispatch artifact below legacy dxc.exe MAX_PATH.
-        prefix=".crosstl-sdpa-dx-runtime-",
-        dir=mlx_root,
-    ) as temporary_directory:
+    # A short family name keeps the dispatch artifact below dxc.exe MAX_PATH.
+    with corpus_workspace(
+        mlx_root, family="sdpa", target="directx", entry_point=MLX_ATTENTION_ENTRY
+    ) as work_dir:
         descriptor, package_dir, deferred = _build_runtime_package(
             mlx_root,
-            Path(temporary_directory),
+            work_dir,
             "directx",
         )
         assert deferred is None
         request, expected = _dispatch_request(descriptor, package_dir, "directx")
+        record_native_request(
+            work_dir, request, commit=MLX_COMMIT, workload_id=MLX_ATTENTION_ENTRY
+        )
         executor = RuntimeParityExecutor(
             RuntimeTestAdapterSpec(
                 adapter_id="mlx-attention-directx-native-loader",
@@ -761,7 +766,8 @@ def test_pinned_mlx_attention_executes_through_directx_native_loader():
                 adapter_kind="directx-native-runtime",
             ),
             runtime_adapter=DirectXRuntimeParityAdapter(
-                runtime=DirectXComputeRuntime()
+                runtime=DirectXComputeRuntime(),
+                command_runner=native_compiler_runner(work_dir),
             ),
         )
         availability = executor.is_available(request)
@@ -771,6 +777,7 @@ def test_pinned_mlx_attention_executes_through_directx_native_loader():
                 require_env=REQUIRE_DIRECTX_PROOF_ENV,
             )
         result = executor.run(request)
+        record_native_result(work_dir, result)
 
     assert result.status == "ok"
     output_name = _expected_binding_names("directx")[3]
@@ -785,11 +792,9 @@ def test_pinned_mlx_attention_executes_through_directx_native_loader():
 
 def test_pinned_mlx_attention_executes_through_opengl_native_loader():
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-attention-opengl-native-loader-",
-        dir=mlx_root,
-    ) as temporary_directory:
-        work_dir = Path(temporary_directory)
+    with corpus_workspace(
+        mlx_root, family="sdpa", target="opengl", entry_point=MLX_ATTENTION_ENTRY
+    ) as work_dir:
         _descriptor, _package_dir, deferred = _build_runtime_package(
             mlx_root,
             work_dir,
@@ -798,6 +803,18 @@ def test_pinned_mlx_attention_executes_through_opengl_native_loader():
         assert deferred is not None
         abi_root, compilation_request = deferred
         inputs, outputs, expected = _runtime_values("opengl")
+        _write_json(
+            work_dir / "request.json",
+            {
+                "commit": MLX_COMMIT,
+                "workload": MLX_ATTENTION_ENTRY,
+                "compilationRequest": compilation_request,
+                "inputs": inputs,
+                "outputs": outputs,
+                "expectedValues": expected,
+                "workgroups": [1, 1, 1],
+            },
+        )
         try:
             result = execute_native_deferred_compilation_request(
                 compilation_request,
@@ -807,13 +824,15 @@ def test_pinned_mlx_attention_executes_through_opengl_native_loader():
                 outputs,
                 (1, 1, 1),
                 runtime_adapter=OpenGLRuntimeParityAdapter(
-                    runtime=OpenGLComputeRuntime(context_backends=("egl",))
+                    runtime=OpenGLComputeRuntime(context_backends=("egl",)),
+                    command_runner=native_compiler_runner(work_dir),
                 ),
             )
         except NativeDeferredCompilationRuntimeError as exc:
             if exc.code.endswith(".runtime-unavailable"):
                 _skip_or_fail(str(exc), require_env=REQUIRE_OPENGL_PROOF_ENV)
             raise
+        record_native_result(work_dir, result)
 
     assert result.status == "ok"
     output_name = _expected_binding_names("opengl")[3]

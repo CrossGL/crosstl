@@ -175,6 +175,7 @@ def test_directx_corpus_retains_failure_evidence_without_additional_jobs(family)
     (
         ("softmax", "Softmax", "mlx-softmax-results"),
         ("arg_reduce", "arg-reduce", "demo-results/arg-reduce"),
+        ("attention", "scaled-attention", "demo-results/attention"),
     ),
 )
 def test_native_loader_evidence_is_retained_in_existing_project_job(

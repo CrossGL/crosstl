@@ -1991,14 +1991,14 @@ with variant ID
 and artifact ID
 `sha256:dd0138695bd82e1f8ea49bd667052b484420ee96cb2849c6eed20ba5eae39a89`.
 
-The 8,721-byte HLSL artifact has SHA-256
-`003c8b9e85bad7363bae2e3d80380d979cbe0b8988d0d98751131c3acfbff6b6`.
+The 8,841-byte HLSL artifact has SHA-256
+`4f6bd4df5288687b239d09d546c903e7b4db3d14562b942f638fb160c486a46f`.
 Official DXC 1.9.2602.24 accepts `CSMain` under `cs_6_6`,
 `-enable-16bit-types`, and warnings as errors, producing 9,000 bytes of DXIL.
 Its 32 physical waves receive unique workgroup-synchronized subgroup IDs; no
 lane-varying `SV_GroupIndex / WaveGetLaneCount()` derivation remains. The
-12,089-byte explicit software-subgroup GLSL artifact has SHA-256
-`9b7cb7dc9a76b9fb93c30fd93d13ad639f5493f60fd97b965514db0fe6b4840b`.
+12,387-byte explicit software-subgroup GLSL artifact has SHA-256
+`04f5c58fc3c4590c77583677f8edf261c1f5c9278a4163461c239c9e820ad9e8`.
 It partitions 1,024 invocations into 32 logical subgroups and synchronizes the
 source subgroup-ID-strided runtime loop across every workgroup round. Inactive
 subgroups contribute typed collective identities, so all generated barriers
@@ -2006,6 +2006,14 @@ remain uniform. `glslangValidator` and `spirv-val` accept the resulting
 OpenGL/SPIR-V 1.3 module; disassembly contains exactly nine
 `OpControlBarrier` instructions, six `OpSpecConstantFalse` declarations,
 local size `1024 1 1`, and no `OpGroupNonUniform` instruction.
+
+The reference update compares complete old and current shader bodies and every
+reflected resource. HLSL changes are explicit source integer promotions in key
+and value offsets and sign-bit negation of the finite-limit constant. GLSL changes
+add shared-memory ordering at subgroup barriers and preserve signed remainder.
+Dispatch geometry, specializations and resource interfaces remain unchanged.
+Both old references are reproduced from the earlier translator and strictly
+compiled before comparison; fingerprints alone are not numerical evidence.
 
 Both targets package complete native-loader requests. DirectX has 19 reflected
 resources including generated `CrossGLDispatchInfo`; OpenGL has 18. Optional
@@ -2020,9 +2028,14 @@ Windows CI requires the 64-value output to execute through Direct3D 12 WARP.
 Linux CI binds PyOpenGL to surfaceless EGL, forces llvmpipe, performs deferred
 SPIR-V specialization, dispatches through the OpenGL native loader, and compares
 all values with a stable CPU scaled-attention reference at `2e-4` absolute and
-relative tolerance. The local Mesa run had maximum absolute error
+relative tolerance. The current local Mesa run has maximum absolute error
 `4.082320426146424e-08` and maximum relative error
-`4.2163276126605175e-06`. This is bounded evidence for one float32 one-pass
+`4.2163276126605175e-06`. An independent 100-digit reference using the uploaded
+binary32 inputs gives maximum absolute error `4.688126085821141e-08` across
+all 64 outputs. Windows execution of the updated artifact remains required.
+Existing native jobs retain translation reports before identity checks,
+packages, compiler records, inputs, results and JUnit reports on failure.
+This is bounded evidence for one float32 one-pass
 workload only. Masked, causal, sinks, two-pass and full-attention paths, other
 dimensions and dtypes, the remaining host-named entries, MLX host redirection,
 and the full MLX test suite remain outside the claim. The separate native Metal

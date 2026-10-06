@@ -65,10 +65,10 @@ not reached; a generated shader alone is not proof that compilation passed.
 Local runs clean up by default; set `CROSTL_KEEP_CORPUS_EVIDENCE=1` to retain the
 same files under the upstream checkout's `.crosstl-corpus-evidence` directory.
 
-The existing Windows and Linux Softmax loader steps also retain their reports
-before artifact checks, generated packages, native compiler commands and
+The existing Windows and Linux Softmax, arg-reduce and attention loader steps
+retain their reports before artifact checks, generated packages, native compiler commands and
 artifacts, input fixtures, execution plans and returned values. The project
-job's final upload includes these files and both workloads' JUnit results even
+job's final upload includes these files and each step's JUnit results even
 when a check fails. Missing native results indicate that dispatch was not
 completed; retained expected values alone are not execution evidence.
 

@@ -295,6 +295,140 @@ def test_arg_reduce_retains_failed_translation_before_artifact_checks(
     assert (reports[0].parent / "crosstl.toml").is_file()
 
 
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize("failure", ("translation", "identity"))
+def test_attention_retains_failed_translation_before_artifact_checks(
+    target, failure, tmp_path, monkeypatch
+):
+    from demos.integrations.mlx.tests.kernels import (
+        test_scaled_dot_product_attention_native_loader as proof,
+    )
+
+    payload = {"summary": {"unitCount": 0}, "diagnostics": [{"message": "failed"}]}
+    if failure == "identity":
+        payload = {
+            "summary": {
+                "unitCount": 1,
+                "translatedCount": 1,
+                "failedCount": 0,
+                "diagnosticCounts": {"error": 0},
+            },
+            "diagnostics": [],
+            "artifacts": [
+                {
+                    "source": proof.MLX_ATTENTION_SOURCE,
+                    "sourceHash": {
+                        "algorithm": "sha256",
+                        "value": proof.MLX_ATTENTION_SHA256,
+                    },
+                    "generatedHash": {"algorithm": "sha256", "value": "0" * 64},
+                }
+            ],
+        }
+
+    class Report:
+        def to_json(self):
+            return payload
+
+        def write_json(self, path):
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setenv(KEEP_EVIDENCE_ENV, "1")
+    monkeypatch.setattr(proof, "_pinned_mlx_root", lambda: tmp_path)
+    monkeypatch.setattr(proof, "load_project_config", lambda *args: None)
+    monkeypatch.setattr(proof, "translate_project", lambda *args, **kwargs: Report())
+    test = (
+        proof.test_pinned_mlx_attention_translates_to_directx_native_loader_artifact
+        if target == "directx"
+        else proof.test_pinned_mlx_attention_translates_to_deferred_software_opengl
+    )
+    with pytest.raises(AssertionError):
+        test()
+    (report,) = tmp_path.rglob(f"{target}-portability-report.json")
+    assert json.loads(report.read_text()) == payload
+    assert (report.parent / "crosstl.toml").is_file()
+    assert report.parent.parent == tmp_path / EVIDENCE_DIRECTORY
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize("failure", (None, "status", "readback"))
+def test_attention_retains_native_results_without_suppressing_failures(
+    target, failure, tmp_path, monkeypatch
+):
+    from demos.integrations.mlx.tests.kernels import (
+        test_scaled_dot_product_attention_native_loader as proof,
+    )
+
+    inputs, outputs, expected = proof._runtime_values(target)
+    name = proof._expected_binding_names(target)[3]
+    compilation = {"case": "unit-test-only"}
+    deferred = (tmp_path, compilation) if target == "opengl" else None
+    monkeypatch.setenv(KEEP_EVIDENCE_ENV, "1")
+    monkeypatch.setattr(proof, "_pinned_mlx_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        proof, "_build_runtime_package", lambda *a: ({}, tmp_path, deferred)
+    )
+    fixture = {"inputs": inputs, "expectedOutputs": outputs}
+    plan = {"dispatch": {"workgroupSize": [1024, 1, 1]}}
+    request = SimpleNamespace(
+        fixture=SimpleNamespace(to_json=lambda: fixture),
+        execution_plan=SimpleNamespace(to_json=lambda: plan),
+    )
+    monkeypatch.setattr(proof, "_dispatch_request", lambda *a: (request, expected))
+    result = SimpleNamespace(
+        status="failed" if failure == "status" else "ok",
+        outputs={
+            name: {
+                "dtype": "float32",
+                "shape": [proof.DIMENSION],
+                "values": (
+                    [1000.0] * proof.DIMENSION if failure == "readback" else expected
+                ),
+            }
+        },
+        details={
+            "nativeDeferredCompilation": {
+                "success": True,
+                "target": {"backend": target},
+                "variant": {
+                    "specializationValues": [
+                        {"id": key, "name": name, "value": False}
+                        for key, name in proof.SPECIALIZATION_NAMES.items()
+                    ]
+                },
+                "interface": {"status": "verified"},
+                "cache": {"status": "published"},
+            }
+        },
+        message=None,
+    )
+    executor = SimpleNamespace(
+        is_available=lambda request: SimpleNamespace(available=True),
+        run=lambda request: result,
+    )
+    monkeypatch.setattr(proof, "RuntimeParityExecutor", lambda *a, **kw: executor)
+    monkeypatch.setattr(
+        proof, "execute_native_deferred_compilation_request", lambda *a, **kw: result
+    )
+    test = getattr(
+        proof, f"test_pinned_mlx_attention_executes_through_{target}_native_loader"
+    )
+    with pytest.raises(AssertionError) if failure else nullcontext():
+        test()
+    (work_dir,) = (tmp_path / EVIDENCE_DIRECTORY).iterdir()
+    saved = json.loads((work_dir / "request.json").read_text())
+    assert saved["commit"] == proof.MLX_COMMIT
+    assert saved["workload"] == proof.MLX_ATTENTION_ENTRY
+    if target == "directx":
+        assert saved["fixture"] == fixture
+        assert saved["executionPlan"] == plan
+    else:
+        assert saved["compilationRequest"] == compilation
+        assert saved["inputs"] == inputs and saved["outputs"] == outputs
+        assert saved["expectedValues"] == expected and saved["workgroups"] == [1, 1, 1]
+    assert json.loads((work_dir / "result.json").read_text()) == vars(result)
+
+
 @pytest.mark.parametrize(
     "family,target",
     [(name, "directx") for name in ("unary", "binary", "copy", "reduce")]
