@@ -754,6 +754,12 @@ The current harness verifies:
   generated compute entries in total. Each LayerNorm, LogSumExp, and RMSNorm
   artifact is emitted independently with its host-derived workgroup size and
   exact subgroup width; specialization constants are retained where required.
+  The 16 normalization artifact references include explicit source-width index
+  conversions and sign-preserving floating constants. The float16 RMSNorm
+  artifact uses two-byte binary16 storage and explicit conversion at the source
+  rounding boundary. Complete old/current body and interface comparisons and
+  strict DXC compilation cover all 16 references; these updates do not expand
+  the separate numerical execution claims below.
   The
   pinned rope translation supplies required function constant IDs through the
   quoted `"1"`, `"2"`, and `"3"` selectors in

@@ -71,6 +71,61 @@ def test_mlx_porting_contract_uses_exact_pinned_revision():
     assert expected_gaps["commit"] == PINNED_MLX_COMMIT
 
 
+@pytest.mark.parametrize(
+    ("family", "hash_field"),
+    [
+        ("layer_norm", "sha256"),
+        ("logsumexp", "normalizedSha256"),
+        ("rms_norm", "normalizedSha256"),
+    ],
+)
+@pytest.mark.parametrize(
+    "mutation",
+    [None, "hash", "size", "missing-variant", "extra-variant", "missing-identity"],
+)
+def test_dispatch_artifact_identity_requires_complete_exact_variant_set(
+    family, hash_field, mutation
+):
+    module = _load_harness()
+    variants = {
+        name: {
+            "generatedHlsl": {
+                hash_field: identity["sha256"],
+                "sizeBytes": identity["sizeBytes"],
+            }
+        }
+        for name, identity in module.MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS[
+            family
+        ].items()
+    }
+    first = next(iter(variants))
+    if mutation == "hash":
+        variants[first]["generatedHlsl"][hash_field] = "0" * 64
+    elif mutation == "size":
+        variants[first]["generatedHlsl"]["sizeBytes"] += 1
+    elif mutation == "missing-variant":
+        del variants[first]
+    elif mutation == "extra-variant":
+        variants["unexpected"] = variants[first]
+    elif mutation == "missing-identity":
+        del variants[first]["generatedHlsl"]
+
+    if mutation is None:
+        module._require_directx_dispatch_generated_artifacts(
+            family, variants, hash_field=hash_field
+        )
+    else:
+        message = (
+            "identity is incomplete"
+            if mutation == "missing-identity"
+            else "identities changed"
+        )
+        with pytest.raises(module.PortingCheckError, match=message):
+            module._require_directx_dispatch_generated_artifacts(
+                family, variants, hash_field=hash_field
+            )
+
+
 def test_project_config_writer_emits_general_index_range_assertions(tmp_path):
     from crosstl.project import load_project_config
 
