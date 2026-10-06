@@ -148,13 +148,16 @@ results and constant-reference payloads using logical half values over integer
 storage. Compiler inspection alone does not establish native correctness.
 No runner is added and the existing execution bound is unchanged.
 
-The same Windows and Metal storage jobs test direct 64-bit integer-to-bfloat
+The same Windows, Metal and OpenGL storage jobs test direct 64-bit integer-to-bfloat
 rounding over 64,276 signed and unsigned inputs. Every rounding midpoint and
 its adjacent integer values, signed limits, carry into the next exponent,
 single evaluation and explicit float32-mediated conversion are covered.
 Original Metal and generated output must match an independent integer reference;
-the corresponding DirectX execution is required on Windows. Compiler-only
-checks remain distinct from these numerical results. No platform job is added.
+the corresponding DirectX execution is required on Windows, and GLSL execution
+is required on Linux. OpenGL and Metal also cover wide compound assignments
+through locals, members, arrays and resource buffers with in-range results.
+Compiler-only checks remain distinct from these numerical results. No platform
+job is added.
 
 The existing self-comparison step checks both binary16 and binary32 private
 scalar/vector predicates under optimized DXC. Native controls cover every

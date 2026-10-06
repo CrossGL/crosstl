@@ -10,6 +10,7 @@ import pytest
 
 from crosstl import translate
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values, _request
 from tests.test_translator.test_half_buffer_runtime import _validate_half
 from tests.test_translator.test_loop_updates import _execute
@@ -121,6 +122,51 @@ def test_hlsl_wide_integer_bfloat_uses_integer_rounding(dtype, body):
     )
 
 
+@pytest.mark.parametrize("dtype", ("int64_t", "uint64_t"))
+@pytest.mark.parametrize(
+    "body",
+    (
+        "bfloat value = bfloat(seed);",
+        "bfloat value = seed;",
+        "bfloat value = bfloat(0); value = seed;",
+        "bfloat value = bfloat16(seed);",
+    ),
+)
+def test_glsl_wide_integer_bfloat_uses_integer_rounding(dtype, body):
+    generator = GLSLCodeGen()
+    generated = generator.generate(
+        _shader(f"{dtype} seed = {dtype}(output[0]); {body} output[0] = float(value);")
+    )
+    assert "crossgl_integer_to_bfloat(seed)" in generated
+    assert generated.count("float crossgl_integer_to_bfloat(uint64_t value) {") == 1
+    assert "uint64_t remainder" in generated
+    assert "uint(findMSB(high))" in generated
+    assert "#extension GL_ARB_gpu_shader_int64 : require" in generated
+    assert "crossgl_round_bfloat" not in generated
+    following = generator.generate(
+        _shader("bfloat value = uint(output[0]); output[0] = float(value);")
+    )
+    assert "crossgl_integer_to_bfloat" in following
+    assert "uint64_t" not in following
+    assert "GL_ARB_gpu_shader_int64" not in following
+
+
+@pytest.mark.parametrize("signed", (False, True))
+def test_glsl_wide_integer_bfloat_preserves_saved_source(tmp_path, signed):
+    path = tmp_path / "wide.metal"
+    path.write_text(_source(signed), encoding="utf-8")
+    saved = tmp_path / "wide.cgl"
+    saved.write_text(translate(str(path), backend="cgl", format_output=False))
+    direct = translate(str(path), backend="opengl", format_output=False)
+    assert direct == translate(str(saved), backend="opengl", format_output=False)
+    assert direct.count("cursor++") == 1
+    assert "crossgl_integer_to_bfloat" in direct
+    assert "crossgl_round_bfloat" in direct
+    artifact = tmp_path / "generated.glsl"
+    artifact.write_text(direct, encoding="utf-8")
+    _validate_half(artifact, tmp_path, "opengl")
+
+
 @pytest.mark.parametrize("signed", (False, True))
 def test_metal_wide_integer_bfloat_translates_and_compiles(tmp_path, signed):
     path = tmp_path / "wide.metal"
@@ -143,8 +189,6 @@ def test_metal_wide_integer_bfloat_translates_and_compiles(tmp_path, signed):
 def test_wide_integer_bfloat_executes_natively(tmp_path, signed):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required bfloat conversions")
-    if TARGET == "opengl":
-        pytest.skip("OpenGL wide-integer bfloat conversion remains a diagnostic")
     values = _values(signed)
     source = _source(signed)
     _, descriptor, package = _package(
@@ -187,6 +231,7 @@ def test_wide_integer_bfloat_native_gates_are_required():
 
     workflow = Path(".github/workflows/demo-project-testing.yml").read_text()
     for name in (
+        "Validate indexed OpenGL gather and resource aggregates",
         "Validate indexed DirectX gather and resource aggregates",
         "Validate Metal byte and vector storage",
     ):

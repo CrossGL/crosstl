@@ -82,6 +82,7 @@
       "tests": [
         "tests/test_translator/test_arithmetic_conversions.py",
         "tests/test_translator/test_codegen/test_GLSL_codegen.py",
+        "tests/test_translator/test_wide_integer_bfloat.py",
         "tests/test_translator/test_narrow_integer_conversions.py",
         "tests/test_translator/test_vector_list_initialization.py",
         "tests/test_translator/test_half_buffer_runtime.py",

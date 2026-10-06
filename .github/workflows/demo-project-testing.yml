@@ -121,6 +121,7 @@ jobs:
               tests/test_translator/test_bfloat_buffer_runtime.py \
               tests/test_translator/test_opengl_bfloat_conversion.py \
               tests/test_translator/test_bfloat_constants.py \
+              tests/test_translator/test_wide_integer_bfloat.py \
               tests/test_translator/test_half_copy_identity.py \
               tests/test_translator/test_range_bindings.py \
               tests/test_translator/test_union_storage.py \
@@ -555,7 +556,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install CrossTL and test dependencies
-        run: python -m pip install -e . pytest pytest-xdist numpy
+        run: python -m pip install -e . pytest pytest-xdist numpy "PyYAML>=6,<7"
       - name: Prepare Metal host toolchain
         timeout-minutes: 10
         run: |

@@ -2506,6 +2506,7 @@ class GLSLCodeGen:
         self.glsl_half_helper_names = {}
         self.glsl_bfloat_helper_names = {}
         self.glsl_bfloat_integer_helper_name = None
+        self.glsl_bfloat_wide_integer_helper_required = False
         self.glsl_float_selection_helper_names = {}
         self.glsl_signed_remainder_helper_names = {}
         self.glsl_generating_global_initializer = False
@@ -7162,6 +7163,7 @@ class GLSLCodeGen:
         self.glsl_half_helper_names = {}
         self.glsl_bfloat_helper_names = {}
         self.glsl_bfloat_integer_helper_name = None
+        self.glsl_bfloat_wide_integer_helper_required = False
         self.glsl_float_selection_helper_names = {}
         self.glsl_signed_remainder_helper_names = {}
         self.glsl_generating_global_initializer = False
@@ -29390,7 +29392,7 @@ class GLSLCodeGen:
         name = self.glsl_bfloat_integer_helper_name
         if name is None:
             return ""
-        return f"""float {name}(uint value) {{
+        code = f"""float {name}(uint value) {{
     if (value < 256u) {{ return float(value); }}
     uint leading = uint(findMSB(value));
     uint shift = leading - 7u;
@@ -29409,6 +29411,28 @@ float {name}(int value) {{
 }}
 
 """
+        if self.glsl_bfloat_wide_integer_helper_required:
+            code += f"""float {name}(uint64_t value) {{
+    if (value < uint64_t(256)) {{ return float(uint(value)); }}
+    uint high = uint(value >> 32u);
+    uint leading = high != 0u ? 32u + uint(findMSB(high)) : uint(findMSB(uint(value)));
+    uint shift = leading - 7u;
+    uint retained = uint(value >> shift);
+    uint64_t remainder = value & ((uint64_t(1) << shift) - uint64_t(1));
+    uint64_t midpoint = uint64_t(1) << (shift - 1u);
+    if (remainder > midpoint || (remainder == midpoint && (retained & 1u) != 0u)) {{
+        retained += 1u;
+    }}
+    return uintBitsToFloat(((leading + 126u) << 23u) + (retained << 16u));
+}}
+float {name}(int64_t value) {{
+    uint64_t magnitude = value < int64_t(0) ? uint64_t(0) - uint64_t(value) : uint64_t(value);
+    float rounded = {name}(magnitude);
+    return value < int64_t(0) ? -rounded : rounded;
+}}
+
+"""
+        return code
 
     def generate_glsl_bfloat_helpers(self):
         if not self.glsl_bfloat_helper_names:
@@ -30176,7 +30200,7 @@ complex64_t crossgl_complex64_mod_assign(
             ):
                 if (
                     info["family"] in {"int", "uint"}
-                    and info["bits"] == 32
+                    and info["bits"] in {32, 64}
                     and info["width"] == width == 1
                     and len(operands) == 1
                     and not self.glsl_generating_global_initializer
@@ -30204,6 +30228,8 @@ complex64_t crossgl_complex64_mod_assign(
                         self.glsl_module_used_identifier_names.add(
                             self.glsl_bfloat_integer_helper_name
                         )
+                    if info["bits"] == 64:
+                        self.glsl_bfloat_wide_integer_helper_required = True
                     return f"{self.glsl_bfloat_integer_helper_name}({self.generate_expression(operand)})"
                 self.glsl_scalar_conversion_error(
                     source_node, info["source"], expected_type, "bfloat-double-rounding"

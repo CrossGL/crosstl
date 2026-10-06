@@ -170,11 +170,12 @@ def test_bfloat_helper_collision_and_reuse(tmp_path):
     assert "crossgl_round_bfloat" not in generator.generate(_shader("output[0] = 1.0;"))
 
 
-def test_bfloat_integer_helper_collision_single_evaluation_and_reuse(tmp_path):
+@pytest.mark.parametrize("dtype", ("uint", "int", "uint64_t", "int64_t"))
+def test_bfloat_integer_helper_collision_single_evaluation_and_reuse(tmp_path, dtype):
     generator = GLSLCodeGen()
     generated = generator.generate(
         _shader(
-            "uint value = uint(output[0]); float crossgl_integer_to_bfloat = 0.0; "
+            f"{dtype} value = {dtype}(output[0]); float crossgl_integer_to_bfloat = 0.0; "
             "bfloat result = bfloat(value++); output[0] = float(result);"
         )
     )
@@ -186,11 +187,13 @@ def test_bfloat_integer_helper_collision_single_evaluation_and_reuse(tmp_path):
     )
 
 
-def test_bfloat_integer_shadowed_builtin_is_rejected():
+@pytest.mark.parametrize("dtype", ("int", "int64_t", "uint64_t"))
+def test_bfloat_integer_shadowed_builtin_is_rejected(dtype):
     with pytest.raises(OpenGLScalarConversionError) as error:
         GLSLCodeGen().generate(
             _shader(
-                "bfloat value = int(output[0]);", "int findMSB(int x) { return x; }"
+                f"bfloat value = {dtype}(output[0]);",
+                "int findMSB(int x) { return x; }",
             )
         )
     assert error.value.reason == "bfloat-target-builtin-shadowed"
@@ -325,28 +328,25 @@ def test_integer_bfloat_compound_diagnoses_unsafe_evaluation(target, side_effect
     )
 
 
-@pytest.mark.parametrize("target", ("opengl", "directx"))
-def test_integer_bfloat_compound_rejects_unproven_wide_conversion(target):
-    generator = GLSLCodeGen() if target == "opengl" else HLSLCodeGen()
-    error_type = (
-        OpenGLScalarConversionError
-        if target == "opengl"
-        else DirectXBFloat16UnsupportedError
-    )
-    with pytest.raises(error_type) as error:
-        generator.generate(
+def test_directx_integer_bfloat_compound_rejects_unproven_wide_conversion():
+    with pytest.raises(DirectXBFloat16UnsupportedError) as error:
+        HLSLCodeGen().generate(
             _shader(
                 "bfloat x = bfloat(output[0]); int64_t y = int64_t(257); y += x; output[0] = float(y);"
             )
         )
-    assert error.value.reason == (
-        "bfloat-double-rounding"
-        if target == "opengl"
-        else "unsupported-bfloat16-compound-integer-width"
-    )
+    assert error.value.reason == "unsupported-bfloat16-compound-integer-width"
 
 
-@pytest.mark.parametrize("dtype,initial", (("int", 257), ("uint", 257), ("int", -257)))
+@pytest.mark.parametrize(
+    "dtype,initial",
+    [("int", 257), ("uint", 257), ("int", -257)]
+    + (
+        [("int64_t", 257), ("uint64_t", 257), ("int64_t", -257)]
+        if TARGET != "directx"
+        else []
+    ),
+)
 @pytest.mark.parametrize("operator", ("+", "-", "*", "/"))
 @pytest.mark.parametrize("lvalue", ("local", "member", "array", "resource"))
 def test_integer_bfloat_compound_executes_natively(
@@ -417,7 +417,12 @@ def test_integer_bfloat_compound_executes_natively(
 
         def integers(numbers):
             return {
-                "dtype": "int32" if dtype == "int" else "uint32",
+                "dtype": {
+                    "int": "int32",
+                    "uint": "uint32",
+                    "int64_t": "int64",
+                    "uint64_t": "uint64",
+                }[dtype],
                 "values": numbers,
                 "shape": [len(numbers)],
             }
@@ -475,7 +480,7 @@ def test_bfloat_constants_are_rounded_before_global_initialization(tmp_path):
     (
         "bfloat value = double(output[0]);",
         "output[0] = float(bfloat(double(output[0])));",
-        "bfloat value = int64_t(int(output[0]));",
+        "bfloat2 value = bfloat2(i64vec2(int(output[0])));",
     ),
 )
 def test_bfloat_unproven_double_rounding_is_rejected(body):

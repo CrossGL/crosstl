@@ -154,7 +154,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1840
+        "test_count": 1842
       },
       "translator_codegen": {
         "exists": true,
@@ -275,6 +275,7 @@
         "paths": [
           "tests/test_translator/test_arithmetic_conversions.py",
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
+          "tests/test_translator/test_wide_integer_bfloat.py",
           "tests/test_translator/test_narrow_integer_conversions.py",
           "tests/test_translator/test_vector_list_initialization.py",
           "tests/test_translator/test_half_buffer_runtime.py",
@@ -310,7 +311,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 2073
+        "test_count": 2080
       },
       "translator_codegen": {
         "exists": true,
@@ -710,7 +711,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2248
+        "test_count": 2250
       },
       "translator_codegen": {
         "exists": true,

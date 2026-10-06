@@ -65,6 +65,27 @@ Retained artifacts include source, modules, input bytes, reference bytes,
 output bytes and guards. These are numeric-conversion tests, not full MLX
 runtime coverage.
 
+Integer-To-Bfloat Conversion
+----------------------------
+
+Scalar signed and unsigned 32-bit and 64-bit integer conversions round directly
+to bfloat precision, nearest with ties to even. The generated helper operates
+on integer magnitudes and remainder bits before constructing the widened
+float32 result. It does not introduce a float32 intermediate that could round
+twice. Explicit source conversions through float32 remain distinct.
+
+The 64-bit path requires ``GL_ARB_gpu_shader_int64`` and is emitted only when
+used. It handles signed minimum values without signed negation overflow, and
+retains rounding carry at the unsigned maximum. Helper arguments are evaluated
+once; assignment, return and compound-assignment conversion boundaries are
+preserved. Unsupported double and wide-integer vector conversions still produce
+diagnostics. This support does not change the reflected buffer layout.
+
+Linux native checks cover integer rounding midpoints, extrema and seeded input
+values, with exact payloads and output guards. Original and generated Metal
+provide separate controls. Mixed compound assignments also exercise locals,
+members, indexed arrays and resource buffers with in-range results.
+
 Software Subgroup Helpers
 -------------------------
 

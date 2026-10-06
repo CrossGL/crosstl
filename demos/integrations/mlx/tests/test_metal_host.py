@@ -333,6 +333,10 @@ def test_ci_prepares_metal_before_required_native_tests():
     upload_step = yaml.safe_load(upload)[0]
     assert ".mlx-metal-host" in upload_step["with"]["path"].splitlines()
     assert upload_step["with"]["include-hidden-files"] is True
+    dependencies = ci_coverage.workflow_job_step_section(
+        workflow, "metal-host", "Install CrossTL and test dependencies"
+    )
+    assert '"PyYAML>=6,<7"' in dependencies
     for event in ("pull_request", "push"):
         assert_paths_covered(
             ci_coverage.workflow_event_path_filters(workflow, event),
