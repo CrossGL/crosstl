@@ -36,7 +36,7 @@ def run(command, directory, name, *, timeout=120):
     return result.stdout
 
 
-def compile_metal(artifact, root, directory):
+def compile_metal(artifact, root, directory, *, flags=()):
     air, module = directory / "kernel.air", directory / "kernel.metallib"
     run(
         [
@@ -45,6 +45,7 @@ def compile_metal(artifact, root, directory):
             "macosx",
             "metal",
             "-Werror",
+            *flags,
             "-I",
             root,
             "-c",

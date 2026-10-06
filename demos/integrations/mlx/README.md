@@ -232,14 +232,27 @@ LogAddExp also loses some nonzero results; its accuracy investigation remains
 under [crosstl#2068](https://github.com/CrossGL/crosstl/issues/2068). A reduced
 compensated-logarithm expression isolates lost binary32 rounding dependencies
 in GLSL ([crosstl#2098](https://github.com/CrossGL/crosstl/issues/2098)).
-Separately, nested half arithmetic can omit intermediate narrowing even when
-explicitly stored half intermediates match original Metal
-([crosstl#1992](https://github.com/CrossGL/crosstl/issues/1992#issuecomment-6006266688)).
-The historical half Sigmoid denominator uses that pattern; its GLSL reference
-has not been accepted. All four
+The nested half/integer arithmetic gap in
+[crosstl#1992](https://github.com/CrossGL/crosstl/issues/1992#issuecomment-6006266688)
+now has source-width operand conversions and intermediate rounding in GLSL.
+The generic regression executes all 65,536 half input encodings through nested
+division, vector arithmetic, comparisons and conditional selection. Original
+and generated Metal and Linux OpenGL each match 917,504 reference values,
+including single-evaluation and unselected-branch controls; all 96 output
+guard words pass. Metal uses `-fno-fast-math` for this rounding contract, and
+NaNs are compared by classification, not payload. The checks run within the
+existing native jobs without adding runners. A separate execution of the
+unchanged historical `v_Sigmoidfloat16float16` entry at `846d1762` matches
+original/generated Metal across all 63,490 non-NaN half inputs. Its generated
+OpenGL still differs on four inputs; all guards pass. These remaining numerical
+differences stay under #2068, and the historical GLSL reference is not accepted.
+An independent HLSL conditional narrowing case fails strict DXC compilation
+and remains tracked in [crosstl#2099](https://github.com/CrossGL/crosstl/issues/2099);
+the GLSL correction does not establish support for that DirectX case.
+All four binary-math
 HLSL artifacts compile with strict DXC options and all four GLSL artifacts pass
 glslangValidator and SPIR-V validation. These compiler results do not resolve
-the numerical differences. This local review adds no required CI case, changes
+the numerical differences. The four-entry binary-math review adds no required CI case, changes
 no reference identity or tolerance, and establishes no Windows numerical result.
 
 The alias-bitcast defect in

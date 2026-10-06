@@ -30529,6 +30529,20 @@ complex64_t crossgl_complex64_mod_assign(
             source_location=getattr(source_node, "source_location", None),
         )
 
+    def glsl_half_arithmetic_width(self, left_type, right_type):
+        operands = [
+            self.glsl_value_type_info(vtype) for vtype in (left_type, right_type)
+        ]
+        if any(operand is None for operand in operands):
+            return None
+        half_widths = [self.glsl_half_width(operand["source"]) for operand in operands]
+        if not any(half_widths) or any(
+            operand["family"] == "float" and half_width is None
+            for operand, half_width in zip(operands, half_widths)
+        ):
+            return None
+        return max(operand["width"] for operand in operands)
+
     def glsl_common_arithmetic_type(self, left_type, right_type, operator):
         plan = self.glsl_arithmetic_conversion_plan(left_type, right_type, operator)
         if plan is None:
@@ -30537,6 +30551,9 @@ complex64_t crossgl_complex64_mod_assign(
         right = self.glsl_value_type_info(right_type)
         if left is None or right is None:
             return None
+        half_width = self.glsl_half_arithmetic_width(left_type, right_type)
+        if half_width is not None:
+            return "half" + (str(half_width) if half_width > 1 else "")
         left_bfloat = self.glsl_bfloat_width(left["source"])
         right_bfloat = self.glsl_bfloat_width(right["source"])
         if left_bfloat is not None and right_bfloat is not None:
@@ -30577,6 +30594,18 @@ complex64_t crossgl_complex64_mod_assign(
         )
         if plan is None:
             return None
+        if self.glsl_half_arithmetic_width(left_type, right_type) is not None:
+            # Float storage must not erase the source integer-to-half conversion.
+            converted = []
+            for source, target in (
+                (left_type, plan.left_target_type),
+                (right_type, plan.right_target_type),
+            ):
+                if self.glsl_arithmetic_operand_type(source).is_integer:
+                    width = target_arithmetic_type(target).lanes
+                    target = "half" + (str(width) if width > 1 else "")
+                converted.append(target)
+            return tuple(converted)
         right_target = plan.right_target_type
         if operator in {"<<", ">>"} and self.GLSL_TARGET_DISPLAY_NAME == "OpenGL":
             count_type = target_arithmetic_type(right_target)
@@ -35117,22 +35146,22 @@ complex64_t crossgl_complex64_mod_assign(
             condition = self.generate_glsl_boolean_context(expr.condition)
             true_type = self.glsl_source_expression_type(expr.true_expr)
             false_type = self.glsl_source_expression_type(expr.false_expr)
-            plan = self.glsl_arithmetic_conversion_plan(
+            operand_types = self.glsl_binary_operand_conversion_types(
                 true_type,
                 false_type,
                 "?:",
                 source_node=expr,
                 fail_closed=True,
             )
-            if plan is None:
+            if operand_types is None:
                 true_expr = self.generate_expression(expr.true_expr)
                 false_expr = self.generate_expression(expr.false_expr)
             else:
                 true_expr = self.generate_expression_with_expected(
-                    expr.true_expr, plan.left_target_type
+                    expr.true_expr, operand_types[0]
                 )
                 false_expr = self.generate_expression_with_expected(
-                    expr.false_expr, plan.right_target_type
+                    expr.false_expr, operand_types[1]
                 )
             selection = self.generate_glsl_float_selection(
                 expr, condition, true_expr, false_expr

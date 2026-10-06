@@ -136,6 +136,53 @@ def test_half_boundaries_and_arithmetic_compile(tmp_path):
     _compile(generated, tmp_path)
 
 
+@pytest.mark.parametrize("operator", ("+", "-", "*", "/", "?:", "=="))
+@pytest.mark.parametrize(
+    "left,right,expected",
+    (
+        ("half", "int", "half"),
+        ("uint", "float16", "half"),
+        ("half", "bool", "half"),
+        ("int64_t", "half", "half"),
+        ("half2", "int", "half2"),
+        ("uint", "half3", "half3"),
+        ("half", "half4", "half4"),
+        ("f16vec2", "half2", "half2"),
+        ("half", "float16_t", "half"),
+        ("half", "float", "float"),
+        ("float", "half4", "vec4"),
+        ("double", "half", "double"),
+        ("half", "bfloat", "float"),
+    ),
+)
+def test_half_common_arithmetic_preserves_source_precision(
+    operator, left, right, expected
+):
+    generator = GLSLCodeGen()
+    assert generator.glsl_common_arithmetic_type(left, right, operator) == expected
+
+
+@pytest.mark.parametrize("dtype", ("half", "half2", "half3", "half4"))
+def test_nested_half_integer_arithmetic_compiles(tmp_path, dtype):
+    width = int(dtype[-1]) if dtype[-1] in "234" else 1
+    component = ".x" if width > 1 else ""
+    source = tmp_path / "kernel.metal"
+    source.write_text(
+        SOURCE.replace(
+            "BODY",
+            f"""{dtype} x = {dtype}(input[i]);
+            int offset = 2049;
+            auto nested = (offset - x) / (1 + x);
+            output[i] = float(nested{component});""",
+        ),
+        encoding="utf-8",
+    )
+    generated = translate(str(source), backend="opengl", format_output=False)
+    assert "crossgl_round_half1(float(offset))" in generated
+    assert f"crossgl_round_half{width}((1.0 + x))" in generated
+    _compile(generated, tmp_path)
+
+
 def test_half_helper_names_and_generator_reuse(tmp_path):
     generator = GLSLCodeGen()
     first = generator.generate(
@@ -281,7 +328,9 @@ def test_half_verifier_rejects_corruption(corruption):
         _check(data, [1.0, -0.0])
 
 
-@pytest.mark.parametrize("mode", ["rounding", "boundaries", "vectors"])
+@pytest.mark.parametrize(
+    "mode", ["rounding", "boundaries", "vectors", "nested-arithmetic"]
+)
 def test_half_rounding_native(tmp_path, mode, *, compile_only=False):
     if not compile_only and os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for native half conversion checks")
@@ -370,6 +419,73 @@ kernel void""",
         output[4 * i + 2] = widened.z;
         output[4 * i + 3] = widened.w;
         """
+    if mode == "nested-arithmetic":
+        words = [
+            _word(struct.unpack("<e", struct.pack("<H", bits))[0])
+            for bits in range(65536)
+        ]
+
+        def reciprocal(value):
+            denominator = _half(1.0 + value)
+            if denominator == 0.0:
+                return math.copysign(math.inf, denominator)
+            return _half(1.0 / denominator)
+
+        expected = []
+        for index, word in enumerate(words):
+            value = _float(word)
+            nested = reciprocal(value)
+            expected.extend(
+                (
+                    nested,
+                    nested,
+                    nested,
+                    reciprocal(-value),
+                    nested,
+                    1.0,
+                    _half(value + 2048.0),
+                    _half(2048.0 - value),
+                    float(value == 2048.0),
+                    value if index & 1 else 2048.0,
+                    _half(value + 2048.0),
+                    _half(-value + 2048.0),
+                    value if index & 1 else 2048.0,
+                    float(index & 1),
+                )
+            )
+        text = SOURCE.replace(
+            "kernel void",
+            """typedef half Value;
+Value record_half(thread uint& calls, Value value) { calls += 1u; return value; }
+kernel void""",
+        )
+        body = f"""
+        if (i >= {len(words)}u) return;
+        Value value = Value(input[i]);
+        auto nested = 1 / (1 + value);
+        Value denominator = 1 + value;
+        auto pair = 1 / (1 + half2(value, -value));
+        uint calls = 0u;
+        auto observed = 1 / (1 + record_half(calls, value));
+        int offset = 2049;
+        auto shifted = half2(value, -value) + offset;
+        uint selected_calls = 0u;
+        auto selected = (i & 1u) != 0u ? record_half(selected_calls, value) : offset;
+        output[14u * i] = float(nested);
+        output[14u * i + 1u] = float(1 / denominator);
+        output[14u * i + 2u] = float(pair.x);
+        output[14u * i + 3u] = float(pair.y);
+        output[14u * i + 4u] = float(observed);
+        output[14u * i + 5u] = float(calls);
+        output[14u * i + 6u] = float(value + offset);
+        output[14u * i + 7u] = float(offset - value);
+        output[14u * i + 8u] = float(value == offset);
+        output[14u * i + 9u] = float((i & 1u) != 0u ? value : offset);
+        output[14u * i + 10u] = float(shifted.x);
+        output[14u * i + 11u] = float(shifted.y);
+        output[14u * i + 12u] = float(selected);
+        output[14u * i + 13u] = float(selected_calls);
+        """
     source = tmp_path / "kernel.metal"
     source.write_text(text.replace("BODY", body), encoding="utf-8")
     report = translate_project(
@@ -424,7 +540,12 @@ kernel void""",
         for label, artifact in (("original", source), ("generated", generated)):
             directory = tmp_path / label
             directory.mkdir()
-            module = compile_metal(artifact, tmp_path, directory)
+            flags = (
+                ("-std=metal3.1", "-fno-fast-math")
+                if mode == "nested-arithmetic"
+                else ()
+            )
+            module = compile_metal(artifact, tmp_path, directory, flags=flags)
             run(
                 [executable, module, "narrow_half", request, directory],
                 directory,
