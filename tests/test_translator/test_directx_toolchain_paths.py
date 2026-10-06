@@ -4,6 +4,7 @@ import ctypes
 import hashlib
 import json
 import os
+import posixpath
 import shutil
 import subprocess
 import sys
@@ -290,6 +291,7 @@ def test_include_handler_normalizes_extended_parent_paths(monkeypatch, root):
 @pytest.mark.parametrize("platform", ["linux", "darwin"])
 def test_dxc_api_non_windows_include_paths(monkeypatch, platform):
     monkeypatch.setattr(dxc_compiler.sys, "platform", platform)
+    monkeypatch.setattr(dxc_compiler, "os", SimpleNamespace(path=posixpath))
     assert (
         dxc_compiler._include_path("/project/include/../factor.hlsli")
         == "/project/factor.hlsli"
