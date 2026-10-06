@@ -31,9 +31,11 @@ def dxc_file_path(path: Path) -> str:
     absolute = ntpath.abspath(value)
     if len(absolute.encode("utf-16-le")) // 2 < 260:
         return value
+    # DXC resolves nested includes after opening the input. The question-mark
+    # namespace disables Windows normalization of their parent components.
     if absolute.startswith("\\\\"):
-        return "\\\\?\\UNC\\" + absolute[2:]
-    return "\\\\?\\" + absolute
+        return "\\\\.\\UNC\\" + absolute[2:]
+    return "\\\\.\\" + absolute
 
 
 def _mask_hlsl_comments_and_literals(source: str) -> str:

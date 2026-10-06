@@ -6,7 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
@@ -43,7 +43,7 @@ def test_dxc_long_windows_paths_use_extended_namespace(monkeypatch, length, root
     expected = value
     if length >= 260:
         expected = (
-            "\\\\?\\UNC\\" + value[2:] if root.startswith("\\\\") else "\\\\?\\" + value
+            "\\\\.\\UNC\\" + value[2:] if root.startswith("\\\\") else "\\\\.\\" + value
         )
     actual = directx_toolchain.dxc_file_path(PureWindowsPath(value))
     assert actual == expected
@@ -55,7 +55,7 @@ def test_dxc_windows_path_normalizes_parent_components_before_prefix(monkeypatch
     value += "..\\shader.hlsl"
     monkeypatch.setattr(directx_toolchain.sys, "platform", "win32")
     assert directx_toolchain.dxc_file_path(PureWindowsPath(value)) == (
-        "\\\\?\\C:\\project\\" + "directory\\" * 29 + "shader.hlsl"
+        "\\\\.\\C:\\project\\" + "directory\\" * 29 + "shader.hlsl"
     )
 
 
@@ -63,14 +63,14 @@ def test_dxc_path_limit_counts_utf16_code_units(monkeypatch):
     value = "C:\\" + "directory\\" * 20 + "\U00010000" * 30 + ".hlsl"
     assert len(value) < 260 <= len(value.encode("utf-16-le")) // 2
     monkeypatch.setattr(directx_toolchain.sys, "platform", "win32")
-    assert directx_toolchain.dxc_file_path(PureWindowsPath(value)) == "\\\\?\\" + value
+    assert directx_toolchain.dxc_file_path(PureWindowsPath(value)) == "\\\\.\\" + value
 
 
 @pytest.mark.parametrize("platform", ["linux", "darwin"])
 def test_dxc_non_windows_paths_are_unchanged(monkeypatch, platform):
     value = "/project/" + "directory/" * 30 + "shader.hlsl"
     monkeypatch.setattr(directx_toolchain.sys, "platform", platform)
-    assert directx_toolchain.dxc_file_path(Path(value)) == value
+    assert directx_toolchain.dxc_file_path(PurePosixPath(value)) == value
 
 
 @pytest.mark.parametrize(
@@ -237,7 +237,7 @@ def test_native_dxc_validates_long_project_paths(tmp_path, invalid):
     assert run["path"] == relative
     assert shader.read_text(encoding="utf-8") == source
     if sys.platform == "win32":
-        assert run["command"][-3].startswith("\\\\?\\")
+        assert run["command"][-3].startswith("\\\\.\\")
     else:
         assert run["command"][-3] == str(shader)
     if invalid:
