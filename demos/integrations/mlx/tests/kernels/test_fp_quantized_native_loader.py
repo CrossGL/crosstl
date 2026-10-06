@@ -30,6 +30,12 @@ from crosstl.project import (
     validate_project_report,
 )
 from crosstl.project.directx_toolchain import dxc_compiler_arguments_for_source
+from demos.integrations.mlx.tests.corpus_evidence import (
+    corpus_workspace,
+    native_compiler_runner,
+    record_native_request,
+    record_native_result,
+)
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -56,12 +62,12 @@ MLX_MXFP4_VARIANT_ID = (
 )
 MLX_MXFP4_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "3fe38e171ba8c8ea1adfc8efad20b242ca02dd05e1a5a53a9b9d1e18459d8c7d",
-        "sizeBytes": 9123,
+        "sha256": "41852207113971342d1acbf07fe4066168601bb4db19479373a2a40c36347724",
+        "sizeBytes": 9223,
     },
     "opengl": {
-        "sha256": "cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da",
-        "sizeBytes": 9571,
+        "sha256": "aba7ea0ab5256e12d1ce0893c15b9522aa34c2dda075a794896e2f1bef051868",
+        "sizeBytes": 10751,
     },
 }
 REQUIRE_DIRECTX_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_MXFP4_DIRECTX_NATIVE_LOADER"
@@ -268,8 +274,9 @@ def _assert_directx_compiles(generated_path: Path) -> None:
         assert "fptrunc" not in assembly
         assert "fpext" not in assembly
         assert " half " not in assembly
-        assert re.search(r"shl(?: nsw)? i32 [^,\n]+, 23", assembly)
-        assert not re.search(r"shl(?: nsw)? i32 [^,\n]+, 7", assembly)
+        shift = r"shl(?: (?:nuw|nsw))* i32 [^,\n]+, "
+        assert re.search(shift + r"23\b", assembly)
+        assert not re.search(shift + r"7\b", assembly)
 
 
 def _assert_opengl_spirv(generated_path: Path, work_dir: Path) -> None:
@@ -359,6 +366,8 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         validate=True,
         run_toolchains=True,
     )
+    report_path = work_dir / "r.json"
+    report.write_json(report_path)
     payload = report.to_json()
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
@@ -452,11 +461,10 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
             "float converted = __crossgl_binary16_to_float("
             "uint(uint16_t(((self.bits & 7) << 9))));"
         ) in generated
-        assert "float converted = __crossgl_binary16_to_float(uint(v));" in generated
+        assert "fp8_e4m3__operator_float" not in generated
         assert "float16_t converted" not in generated
         assert "f16tof32(" not in generated
         assert "converted *= 16384.0;" in generated
-        assert "converted *= 256.0;" in generated
         assert "int n = int(round(le));" in generated
         assert "metal_u3a_u3a" not in generated
         assert "__crossgl_physical_subgroup" not in generated
@@ -474,13 +482,13 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "GL_KHR_shader_subgroup" not in generated
         assert "gl_Subgroup" not in generated
         assert "subgroupMax" not in generated
-        assert generated.count("unpackHalf2x16(") == 2
-        assert "float converted = unpackHalf2x16((v & 0xffffu)).x;" in generated
+        assert generated.count("unpackHalf2x16(") == 1
+        assert "fp8_e4m3_operator_float" not in generated
+        assert "converted = crossgl_round_half1((converted * 16384.0));" in generated
+        assert generated.count("memoryBarrierShared();") == 3
         assert generated.count("barrier();") == 3
         _assert_opengl_spirv(generated_path, work_dir)
 
-    report_path = work_dir / "r.json"
-    report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
     return report_path
 
@@ -649,8 +657,9 @@ def _dispatch_request(target: str, descriptor: dict, package_dir: Path):
 
 def _execute_current_mlx_mxfp4(target: str) -> None:
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(prefix=".mq-", dir=mlx_root) as temporary:
-        work_dir = Path(temporary)
+    with corpus_workspace(
+        mlx_root, family="mxfp4", target=target, entry_point=MLX_MXFP4_ENTRY
+    ) as work_dir:
         descriptor, package_dir = _build_runtime_package(
             mlx_root,
             work_dir,
@@ -661,11 +670,21 @@ def _execute_current_mlx_mxfp4(target: str) -> None:
             descriptor,
             package_dir,
         )
+        record_native_request(
+            work_dir,
+            request,
+            commit=MLX_COMMIT,
+            workload_id=_dispatch_variant().workload_id,
+        )
+        compiler_runner = native_compiler_runner(work_dir)
         runtime_adapter = (
-            DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime())
+            DirectXRuntimeParityAdapter(
+                runtime=DirectXComputeRuntime(), command_runner=compiler_runner
+            )
             if target == "directx"
             else OpenGLRuntimeParityAdapter(
-                runtime=OpenGLComputeRuntime(context_backends=("egl",))
+                runtime=OpenGLComputeRuntime(context_backends=("egl",)),
+                command_runner=compiler_runner,
             )
         )
         executor = RuntimeParityExecutor(
@@ -688,6 +707,7 @@ def _execute_current_mlx_mxfp4(target: str) -> None:
                 ),
             )
         result = executor.run(request)
+        record_native_result(work_dir, result)
 
     assert result.status == "ok"
     assert result.outputs[output_name]["dtype"] == "float32"

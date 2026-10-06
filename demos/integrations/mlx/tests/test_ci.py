@@ -183,6 +183,7 @@ def test_corpus_retains_failure_evidence_without_additional_jobs(
         ("arg_reduce", "arg-reduce", "demo-results/arg-reduce"),
         ("attention", "scaled-attention", "demo-results/attention"),
         ("gemv", "GEMV", "demo-results/gemv"),
+        ("mxfp4", "MXFP4", "demo-results/mxfp4"),
         ("rms_norm", "RMSNorm", "demo-results/normalization/rms_norm"),
         ("rms_norm_vjp", "RMSNorm VJP", "demo-results/normalization/rms_norm_vjp"),
         ("layer_norm", "LayerNorm", "demo-results/normalization/layer_norm"),
@@ -200,7 +201,7 @@ def test_native_loader_evidence_is_retained_in_existing_project_job(
         _workflow_texts()["demo-project-testing.yml"], "mlx-metal-porting"
     )
     coverage = _load_ci_coverage_module()
-    revision = "current" if family == "gemv" else "pinned"
+    revision = "current" if family in {"gemv", "mxfp4"} else "pinned"
     step = coverage.workflow_step_section(
         job, f"Prove {revision} MLX {title} {platform} native-loader execution"
     )

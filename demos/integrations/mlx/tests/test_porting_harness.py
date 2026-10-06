@@ -14111,34 +14111,41 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "3fe38e171ba8c8ea1adfc8efad20b242ca02dd05e1a5a53a9b9d1e18459d8c7d"
+                "41852207113971342d1acbf07fe4066168601bb4db19479373a2a40c36347724"
             ),
-            "size_bytes": 9123,
+            "size_bytes": 9223,
             "workgroup_size": [32, 1, 1],
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
             "compiler_profile": "cs_6_6",
             "compiler_arguments": ["-enable-16bit-types", "-WX"],
-            "compiled_artifact_size_bytes": 4716,
+            "compiled_artifact_size_bytes": 4736,
             "compiler_validation_status": "passed",
         },
         "opengl": {
             "target_entry_point": "main",
             "sha256": (
-                "cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da"
+                "aba7ea0ab5256e12d1ce0893c15b9522aa34c2dda075a794896e2f1bef051868"
             ),
-            "size_bytes": 9571,
+            "size_bytes": 10751,
             "workgroup_size": [32, 1, 1],
             "subgroup_enforcement": "explicit-32-lane-software-subgroup",
             "compiler": "glslangValidator",
             "compiler_target": "OpenGL/SPIR-V 1.3",
             "validator": "spirv-val",
-            "compiled_artifact_size_bytes": 10488,
+            "compiled_artifact_size_bytes": 14076,
             "control_barrier_instruction_count": 3,
             "group_non_uniform_instruction_count": 0,
             "compiler_validation_status": "passed",
         },
     }
+    from demos.integrations.mlx.tests.kernels.test_fp_quantized_native_loader import (
+        MLX_MXFP4_GENERATED_ARTIFACTS,
+    )
+
+    for target, reference in MLX_MXFP4_GENERATED_ARTIFACTS.items():
+        assert status["artifacts"][target]["sha256"] == reference["sha256"]
+        assert status["artifacts"][target]["size_bytes"] == reference["sizeBytes"]
     assert status["semantic_contracts"] == {
         "scale_constructor": "fp8_e8m0 source constructor factory",
         "scale_conversion": "selected sibling float conversion operator",
@@ -14230,9 +14237,9 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         },
         "corrected_dxil_contract": {
             "artifact_sha256": (
-                "3fe38e171ba8c8ea1adfc8efad20b242ca02dd05e1a5a53a9b9d1e18459d8c7d"
+                "41852207113971342d1acbf07fe4066168601bb4db19479373a2a40c36347724"
             ),
-            "artifact_size_bytes": 9123,
+            "artifact_size_bytes": 9223,
             "source_bitcast": "integer-ieee754-binary16-to-float32",
             "subnormal_decode": "integer-ieee754-binary16-to-float32",
             "arithmetic": "fmul-float",

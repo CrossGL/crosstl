@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -499,21 +500,24 @@ def test_gemv_retains_failed_translation_before_artifact_checks(
 
 @pytest.mark.parametrize("target", ("directx", "opengl"))
 @pytest.mark.parametrize("failure", (None, "status", "readback"))
-def test_gemv_retains_native_results_without_suppressing_failures(
-    target, failure, tmp_path, monkeypatch
+@pytest.mark.parametrize("family", ("gemv", "fp_quantized"))
+def test_selected_workload_retains_native_results_without_suppressing_failures(
+    family, target, failure, tmp_path, monkeypatch
 ):
-    from demos.integrations.mlx.tests.kernels import test_gemv_native_loader as proof
+    proof = importlib.import_module(
+        f"demos.integrations.mlx.tests.kernels.test_{family}_native_loader"
+    )
 
     monkeypatch.setenv(KEEP_EVIDENCE_ENV, "1")
     monkeypatch.setattr(proof, "_pinned_mlx_root", lambda: tmp_path)
     monkeypatch.setattr(proof, "_build_runtime_package", lambda *a: ({}, tmp_path))
     fixture = {"inputs": [{"values": [2.0]}]}
-    plan = {"dispatch": {"workgroupSize": [32, 2, 1]}}
+    plan = {"dispatch": {"workgroupSize": list(proof.WORKGROUP_SIZE)}}
     request = SimpleNamespace(
         fixture=SimpleNamespace(to_json=lambda: fixture),
         execution_plan=SimpleNamespace(to_json=lambda: plan),
     )
-    values = proof._gemv_workload()[-1]
+    values = proof._gemv_workload()[-1] if family == "gemv" else proof._mxfp4_workload()
     monkeypatch.setattr(proof, "_dispatch_request", lambda *a: (request, "out", values))
     result = SimpleNamespace(
         status="failed" if failure == "status" else "ok",
@@ -532,8 +536,13 @@ def test_gemv_retains_native_results_without_suppressing_failures(
         run=lambda request: result,
     )
     monkeypatch.setattr(proof, "RuntimeParityExecutor", lambda *a, **kw: executor)
+    execute = (
+        proof._execute_current_mlx_gemv
+        if family == "gemv"
+        else proof._execute_current_mlx_mxfp4
+    )
     with pytest.raises(AssertionError) if failure else nullcontext():
-        proof._execute_current_mlx_gemv(target)
+        execute(target)
     (work_dir,) = (tmp_path / EVIDENCE_DIRECTORY).iterdir()
     saved_request = json.loads((work_dir / "request.json").read_text())
     assert saved_request == {
@@ -543,6 +552,101 @@ def test_gemv_retains_native_results_without_suppressing_failures(
         "executionPlan": plan,
     }
     assert json.loads((work_dir / "result.json").read_text()) == vars(result)
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize("failure", ("translation", "identity"))
+def test_mxfp4_retains_failed_translation_before_artifact_checks(
+    target, failure, tmp_path, monkeypatch
+):
+    from demos.integrations.mlx.tests.kernels import (
+        test_fp_quantized_native_loader as proof,
+    )
+
+    payload = {"summary": {"unitCount": 0}, "diagnostics": [{"message": "failed"}]}
+    if failure == "identity":
+        options = (
+            {"widen_native_float16": True}
+            if target == "directx"
+            else {"software_subgroup_width": 32}
+        )
+        payload = {
+            "summary": {
+                "unitCount": 1,
+                "translatedCount": 1,
+                "failedCount": 0,
+                "diagnosticCounts": {"error": 0},
+            },
+            "diagnostics": [],
+            "project": {
+                "sourceOptions": {"metal": {"target_options": {target: options}}},
+                "indexRangeAssertions": [proof.INDEX_ASSERTION],
+                "subgroupWidthRules": {},
+            },
+            "artifacts": [
+                {
+                    "source": proof.MLX_MXFP4_SOURCE,
+                    "sourceHash": {
+                        "algorithm": "sha256",
+                        "value": proof.MLX_MXFP4_SHA256,
+                    },
+                    "sourceSizeBytes": proof.MLX_MXFP4_SOURCE_SIZE_BYTES,
+                    "generatedHash": {"algorithm": "sha256", "value": "0" * 64},
+                }
+            ],
+        }
+
+    class Report:
+        def to_json(self):
+            return payload
+
+        def write_json(self, path):
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setenv(KEEP_EVIDENCE_ENV, "1")
+    monkeypatch.setattr(proof, "_pinned_mlx_root", lambda: tmp_path)
+    monkeypatch.setattr(proof, "load_project_config", lambda *args: None)
+    monkeypatch.setattr(proof, "translate_project", lambda *args, **kwargs: Report())
+    with pytest.raises(AssertionError):
+        proof._execute_current_mlx_mxfp4(target)
+    (report,) = tmp_path.rglob("r.json")
+    assert json.loads(report.read_text()) == payload
+    assert (report.parent / "c.toml").is_file()
+    assert report.parent.parent == tmp_path / EVIDENCE_DIRECTORY
+
+
+@pytest.mark.parametrize("flags", ("", "nuw ", "nsw ", "nuw nsw "))
+@pytest.mark.parametrize("defect", (None, "narrow-width", "wrong-shift", "extra-shift"))
+def test_mxfp4_compiler_contract_preserves_shift_width_and_amount(
+    flags, defect, tmp_path, monkeypatch
+):
+    from demos.integrations.mlx.tests.kernels import (
+        test_fp_quantized_native_loader as proof,
+    )
+
+    monkeypatch.setattr(proof, "ROOT", tmp_path)
+    monkeypatch.setattr(proof, "_dxc_path", lambda: "dxc")
+    monkeypatch.setattr(
+        proof,
+        "dxc_compiler_arguments_for_source",
+        lambda source: ("-enable-16bit-types",),
+    )
+    source = tmp_path / "input.hlsl"
+    source.write_text("void CSMain() {}", encoding="utf-8")
+    width = 16 if defect == "narrow-width" else 32
+    amount = 7 if defect == "wrong-shift" else 23
+    assembly = f"uitofp i32 %input to float\nshl {flags}i{width} %bits, {amount}\n"
+    if defect == "extra-shift":
+        assembly += f"shl {flags}i32 %bits, 7\n"
+
+    def compile_source(command, **kwargs):
+        Path(command[command.index("-Fo") + 1]).write_bytes(b"test-module")
+        Path(command[command.index("-Fc") + 1]).write_text(assembly, encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(proof.subprocess, "run", compile_source)
+    with pytest.raises(AssertionError) if defect else nullcontext():
+        proof._assert_directx_compiles(source)
 
 
 @pytest.mark.parametrize("target", ("directx", "opengl"))

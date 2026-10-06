@@ -71,7 +71,7 @@ so a validation failure cannot overwrite a successful compilation record.
 Reports are saved before reference checks, and missing or empty compiled modules
 still fail. No runner, corpus sample or extra translation pass is added.
 
-The existing Windows and Linux Softmax, arg-reduce, attention, GEMV and
+The existing Windows and Linux Softmax, arg-reduce, attention, GEMV, MXFP4 and
 normalization loader steps retain their reports before artifact checks,
 generated packages, native compiler commands and artifacts, input fixtures,
 execution plans and returned values. The project

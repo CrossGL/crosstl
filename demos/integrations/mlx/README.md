@@ -1828,9 +1828,13 @@ workload uses `vector[row] = (row + 1) / 32` and
 relative tolerance. Linux arm64 Mesa llvmpipe executes and reads back this
 software-subgroup workload in required mode, and Windows CI requires the same
 request through Direct3D 12 WARP.
-The current local OpenGL readbacks match an independent exact-rational
-calculation from the uploaded binary32 inputs for all 32 columns. This does not
-establish Windows execution of the updated artifact. Existing Windows/Linux
+The local OpenGL and hosted Windows readbacks match an independent
+exact-rational calculation from the uploaded binary32 inputs for all 32 columns.
+Windows run 37417907211, job 112120535710 retains the executed 7,108-byte DXIL
+under SHA-256
+`8df8a620174a9813e8f2a04437710f035b1ac369c3c2de5ae74e6cf051e6aecc`.
+That job subsequently failed at the separate MXFP4 reference check; it is not a
+passing whole-project run. Existing Windows/Linux
 jobs retain the project report before identity checks, generated sources,
 runtime package, compiler records, dispatch inputs, results and JUnit output,
 including on failure. No extra runner or relaxed tolerance is required.
@@ -1844,7 +1848,7 @@ aggregate baseline continues to cover the existing round-trip boundary.
 
 The checked
 [`contracts/fp_quantized.native-loader.dispatch.json`](contracts/fp_quantized.native-loader.dispatch.json)
-contract selects current-pinned
+contract selects the historical `846d1762` entry
 `mxfp4_quantize_dequantize_float_gs_32_b_4_hgs_false` from the 9,700-byte
 `fp_quantized.metal` source with SHA-256
 `ef4ba099710a63a0b5d27d3e5ce69a8528bee8f1757805aa606c8d8e43de18d4`.
@@ -1861,11 +1865,11 @@ and
 
 Entry-scoped translation materializes only the selected specialization with
 `T=float`, `group_size=32`, `bits=4`, and `has_global_scale=false`. The
-9,123-byte HLSL has SHA-256
-`3fe38e171ba8c8ea1adfc8efad20b242ca02dd05e1a5a53a9b9d1e18459d8c7d`,
+9,223-byte HLSL has SHA-256
+`41852207113971342d1acbf07fe4066168601bb4db19479373a2a40c36347724`,
 retains `[numthreads(32, 1, 1)]` and `[WaveSize(32)]`, and passes DXC under
 `cs_6_6`, `-enable-16bit-types`, and warnings as errors. Its compiled DXIL is
-4,716 bytes. This artifact explicitly enables the DirectX-only
+4,736 bytes. This artifact explicitly enables the DirectX-only
 `project.source_options.metal.target_options.directx.widen_native_float16`
 mode. Source `as_type<float16_t>(uint16_t)` reconstructs its exact payload as
 float32 with integer IEEE-754 masks, and logical `float16_t` locals, function
@@ -1901,15 +1905,27 @@ masked with `0xffff`. The corrected HLSL emits
 `int(uint16_t(bits)) << 23`; DXIL now shifts the 32-bit value by 23 before
 `asfloat`, while retaining zero native-half instructions.
 
-The 9,571-byte GLSL has SHA-256
-`cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da`,
+The 10,751-byte GLSL has SHA-256
+`aba7ea0ab5256e12d1ce0893c15b9522aa34c2dda075a794896e2f1bef051868`,
 uses one explicit 32-lane software subgroup for `WaveActiveMax(float)`, and
-passes `glslangValidator` and `spirv-val`. Its 10,488-byte SPIR-V has three
+passes `glslangValidator` and `spirv-val`. Its 14,076-byte SPIR-V has three
 control barriers, no group-nonuniform instruction, and local size
 `[32, 1, 1]`. Because GLSL widens source binary16 values to float32, the same
 source bitcast preserves the low 16-bit payload through `unpackHalf2x16` rather
 than incorrectly reinterpreting the widened integer as a 32-bit float; the
 inverse form uses `packHalf2x16` and exact low-bit extraction.
+
+The reference update compares complete historical/current bodies and all seven
+reflected resources across both targets. HLSL preserves eight-bit assignments,
+FP4 sign bits, and source-width index arithmetic. GLSL rounds the FP4 decoding
+multiply at its source half-precision boundary, adds shared-memory ordering,
+and preserves the scale selection through a bitwise select. All 16 FP4 payloads
+decode to exact binary fractions at that rounding boundary. Both targets remove
+unused FP8 E4M3 conversion functions; the selected four-bit path retains its FP4
+conversion. Resource bindings, element widths, dispatch geometry, and template
+materializations are unchanged. The non-required HLSL `sign_bit` metadata
+retains the same 0/8 values with explicit byte conversion. Both historical
+references reproduce exactly, and all four old/new artifacts pass compilation.
 
 The scale conversion invokes the source `fp8_e8m0(float)` constructor factory
 before the selected sibling float conversion operator; aggregate field
@@ -1937,8 +1953,16 @@ through Direct3D 12 WARP; Linux CI requires the software-subgroup artifact
 through Mesa headless EGL. Both paths build the runtime artifact manifest,
 package, loader manifest, reflected ABI descriptor, and one-workgroup dispatch
 request before native execution.
+The existing platform jobs retain source and package identities, compiler
+records, uploaded inputs, readbacks, and JUnit output, including on failure.
+The project report is saved before reference assertions. No additional runner
+or tolerance change is introduced. Local Mesa execution of the updated GLSL
+returns all 32 outputs bit-exactly; an independent readback audit derives the
+FP4 alphabet and scale from the uploaded inputs rather than the saved expected
+outputs. Updated Windows execution remains required.
 
-This is one bounded float32 MXFP4/no-global-scale workload. It does not cover
+This is one bounded float32 MXFP4/no-global-scale workload at `846d1762`, not
+the current `9c3d3557` corpus. It does not cover
 the remaining `fp_quantized` entries, global-scale variants, other group sizes,
 bit widths or dtypes, MLX host redirection, selected-entry Metal compilation,
 or the full MLX test suite. The separate native Metal aggregate baseline remains
