@@ -54,24 +54,24 @@ REDUCE_DIRECTX_CONTRACT_PATH = (
     / "reduce.directx-translation.json"
 )
 REDUCE_DIRECTX_CONTRACT_SHA256 = (
-    "aea3e2639d5f46f1cc4af679c79b83eb23c6184e2687b1998b23bb24a3f184ad"
+    "05e3068da86d1ab6c7f9df7a44d2d01997a3fd6cf8ed38fd303b4133a887f170"
 )
-REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1795438
+REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1795459
 REDUCE_DIRECTX_SPECIALIZATION_COUNT = 9216
 REDUCE_DIRECTX_REFLECTED_RESOURCE_COUNT = 27382
-REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 36431375
-REDUCE_DIRECTX_DXIL_SIZE_BYTES_TOTAL = 24322760
+REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 36938786
+REDUCE_DIRECTX_DXIL_SIZE_BYTES_TOTAL = 24289872
 REDUCE_DIRECTX_GENERATED_SIZE_MINIMUM = ("init_reduce_minbool_", 1616)
 REDUCE_DIRECTX_GENERATED_SIZE_MAXIMUM = (
     "row_reduce_looped_large_5_reduce_mincomplex64",
-    30312,
+    30520,
 )
-REDUCE_DIRECTX_DXIL_SIZE_MINIMUM = ("init_reduce_andbool_", 2888)
+REDUCE_DIRECTX_DXIL_SIZE_MINIMUM = ("init_reduce_andbool_", 2852)
 REDUCE_DIRECTX_DXIL_SIZE_MAXIMUM = (
     "row_reduce_small_large_5_reduce_mincomplex64",
-    18780,
+    18760,
 )
-DXC_SHA256 = "766ebfe2bd172074aa82c2e48f9f9ecffe57abd16f689b26f632337e67fa33a4"
+DXC_SHA256 = "db50584b967fba011f571a6b63e63ae9d14a04418a52d57ff3600750b1c9940d"
 RESOURCE_ABI_FIELDS = ("name", "kind", "type", "set", "binding", "access")
 ENTRY_FIELDS = (
     "entryPoint",
@@ -93,7 +93,7 @@ HLSL_STORAGE_TYPES = {
     "bool": "bool",
     "complex64_t": "complex_t_float",
     "float": "float",
-    "float16_t": "float16_t",
+    "float16_t": "uint16_t",
     "int16_t": "int16_t",
     "int32_t": "int",
     "int64_t": "int64_t",

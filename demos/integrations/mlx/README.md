@@ -81,6 +81,26 @@ unchanged.
 Generic reference controls cover signed/unsigned overflow, aliases, nested
 calls, scalar/vector values and indexed calls under conditionals and loops.
 
+The subsequent complete historical HLSL reduction review covers all 2,396
+entries and 39 shapes. Exact old sources were reproduced before comparing every
+changed function and declaration: 2,302 artifacts change and 94 remain identical.
+All 4,792 old/current strict DXC compiles pass, and a second independent compile
+of every current artifact reproduces all 2,396 DXIL modules byte for byte.
+The 9,216 materializations and 27,382 reflected resources remain covered.
+Among them, 384 logical-half resources in 232 entries retain their two-byte
+stride while using explicit unsigned-16 storage encoding. Other binding, access,
+layout and entry-point fields agree; a non-required subgroup-size constant still
+evaluates to 32. The recorded compiler identity is the pinned Linux DXC binary.
+These are translation, interface and compiler checks, not whole-family numerical
+execution or current-pin upstream-suite parity.
+
+The separate Metal exponential review found floating-point grouping loss in
+source conversion and target generation
+([#2104](https://github.com/CrossGL/crosstl/issues/2104)). With fast math disabled,
+a native cancellation control returns 1 in the original and 0 after translation.
+The 15 affected Metal exponential references remain unchanged despite successful
+compilation; they require a semantic correction before acceptance.
+
 Cross-backend controls also found a separate Metal narrow-field reference
 failure ([#2102](https://github.com/CrossGL/crosstl/issues/2102)): the field
 retains byte storage but its writable helper parameter is widened. Unsigned
@@ -710,8 +730,9 @@ The current harness verifies:
   `spirv-val`, and require 2,396 non-empty SPIR-V modules. This is complete
   reduce OpenGL translation, reflection, and native compiler coverage, not
   numerical execution or MLX host runtime redirection;
-- selected-entry translation of all 2,396 discovered current-pinned
-  `reduce.metal` entries to DirectX. The compact schema-v2
+- selected-entry translation of all 2,396 discovered `reduce.metal` entries to
+  DirectX at the historical reference revision
+  `846d176227a0ac13d2667e58d2bb68b322109ab0`. The compact schema-v2
   `contracts/reduce.directx-translation.json` contract pins every standalone
   `CSMain` HLSL artifact and its native DXIL identity across the same 39 exact
   ABI shapes, nine kernel templates, six operator families, 44 concrete
@@ -730,10 +751,11 @@ The current harness verifies:
   shards retranslate every exact entry, verify deterministic identity,
   materialization, workgroup metadata, and reflected ABI, and compile with
   checksum-pinned DXC using `-enable-16bit-types -WX -T cs_6_2 -E CSMain`,
-  requiring 2,396 non-empty DXIL modules. Together with the Metal and OpenGL
-  proofs this closes complete reduce translation, reflection, and native
-  compiler coverage on all three targets, not numerical execution or MLX host
-  runtime redirection;
+  requiring 2,396 non-empty DXIL modules. The reviewed references total
+  36,938,786 HLSL bytes and 24,289,872 DXIL bytes. This records complete
+  translation, reflection and compiler coverage for this historical HLSL corpus,
+  not numerical execution or MLX host runtime redirection. Other target reference
+  updates remain separate;
 - a checked-in reduced Metal fixture that mirrors MLX's reference-returning
   `frag_at` accessor over `val_frags[i * width + j]`. The fixture is translated
   to DirectX and OpenGL through the public `translate-project` CLI and retains
