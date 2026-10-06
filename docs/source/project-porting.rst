@@ -4519,6 +4519,14 @@ private references. Offsets count complete vectors, not scalar components;
 guarded native controls exercise rebasing, buffer selection and untouched output
 ranges. Three-component, narrow, boolean and 64-bit typed vector pointees remain
 diagnostic because this path does not establish their storage layouts.
+An explicit null storage-pointer argument can be omitted from a private helper
+only when its formal is unused or forwarded through a proven acyclic chain of
+unused formals. Literal branches may establish that proof; runtime conditions
+cannot. Entry bindings, helper execution and all remaining argument evaluations
+are retained. Every affected call must supply a null literal or an unshadowed,
+type-compatible pointer parameter. Pointer reads, identity operations, recursion,
+ambiguous overloads and side-effecting pointer arguments remain diagnostic.
+This does not represent null handles or support null-initialized aggregate fields.
 
 DirectX contextual vector initializers retain the result width of supported
 componentwise unary builtins on 32-bit float scalars and vectors, including

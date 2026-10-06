@@ -68,6 +68,10 @@ CASES = (
     "entry-rebase",
     "alias-writeback",
     "typedef",
+    "unused-null",
+    "forwarded-null",
+    "literal-null",
+    "unused-null-vector",
 ) + VECTOR_CASES
 
 
@@ -149,6 +153,33 @@ def _source(case):
             "typedef const device int* Input; typedef Input ReadPointer; "
             + declarations.replace("const device int* input;", "ReadPointer input;")
         )
+    elif case in {
+        "unused-null",
+        "forwarded-null",
+        "literal-null",
+        "unused-null-vector",
+    }:
+        declarations += """
+        uint ignore(const device int* unused, uint value) { return value; }
+        uint forward(const device int* unused, uint value) {
+            return ignore(unused, value);
+        }
+        uint specialized(const device int* unused, uint value) {
+            if (true) { return value; } else { return uint(unused[0]); }
+        }
+        """
+        helper = {
+            "unused-null": "ignore",
+            "forwarded-null": "forward",
+            "literal-null": "specialized",
+            "unused-null-vector": "forward",
+        }[case]
+        if case == "unused-null-vector":
+            declarations = declarations.replace(
+                "int* unused", "float2* unused"
+            ).replace("uint(unused[0])", "uint(unused[0].x)")
+        setup += f"uint index = tid; uint result = {helper}(nullptr, index++);"
+        read = "cursor.input[result] + int(index - tid - 1)"
     body = f"{setup}\n    {write} = {read};"
     if case == "alias-writeback":
         body += "second[tid + 3] = cursor.input[tid] + 5;"
@@ -410,6 +441,140 @@ def test_resource_lowering_retains_source_ast_and_is_deterministic(tmp_path):
     first = generator.generate(ast)
     assert generator.generate(ast) == first
     assert pickle.dumps(ast) == original
+
+
+def _unused_pointer_ast(body="return int(value);", extra="", call="relay(nullptr, 7u)"):
+    return parse(f"""shader UnusedResource {{
+        struct Cursor {{ device int* data; }}
+        int leaf(device int* unused, uint value) {{ {body} }}
+        int relay(device int* unused, uint value) {{ return leaf(unused, value); }}
+        {extra}
+        compute {{ void main(RWStructuredBuffer<int> output @buffer(0)) {{
+            Cursor cursor = Cursor(output);
+            cursor.data[0] = {call};
+        }} }}
+    }}""")
+
+
+@pytest.mark.parametrize("stage_local", (False, True))
+@pytest.mark.parametrize(
+    "call", ("relay(nullptr, 7u)", "relay(nullptr, 7u) + relay(output, 8u)")
+)
+def test_unused_pointer_elision_preserves_entry_bindings_and_source(stage_local, call):
+    ast = _unused_pointer_ast(call=call)
+    if stage_local:
+        next(iter(ast.stages.values())).local_functions.extend(ast.functions)
+        ast.functions = []
+    before = pickle.dumps(ast)
+    lowered = lower_resource_aggregates(ast)
+    assert pickle.dumps(ast) == before
+    functions = [node for node in lowered.walk() if hasattr(node, "parameters")]
+    for function in functions:
+        if function.name in {"leaf", "relay"}:
+            assert [p.name for p in function.parameters] == [
+                "value",
+                "crosstl_resource",
+            ]
+            assert not any(
+                isinstance(n, IdentifierNode) and n.name in {"unused", "nullptr"}
+                for n in function.body.walk()
+            )
+    entry = next(iter(lowered.stages.values())).entry_point
+    assert [p.name for p in entry.parameters] == ["output"]
+    assert str(entry.parameters[0].param_type) == str(
+        next(iter(ast.stages.values())).entry_point.parameters[0].param_type
+    )
+    calls = [
+        node
+        for node in entry.body.walk()
+        if isinstance(node, FunctionCallNode) and node.function.name == "relay"
+    ]
+    assert len(calls) == (2 if " + " in call else 1)
+    assert all(len(node.arguments) == 2 for node in calls)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "return unused[value];",
+        "unused[value] = 9; return int(value);",
+        "return unused == nullptr ? 1 : 2;",
+        "return unknown(unused, value);",
+        "return relay(unused, value);",
+        "if (value != 0u) { return unused[0]; } return 1;",
+        "if (true) { return unused[0]; } else { return 1; }",
+        "if (false) { return 1; } else { return unused[0]; }",
+        "if (false) { return 1; } else if (value != 0u) { return unused[0]; } else { return 1; }",
+        "int unused = 1; return unused;",
+    ],
+)
+def test_unused_pointer_elision_rejects_observable_or_unproven_uses(body):
+    with pytest.raises(ResourceAggregateError) as error:
+        lower_resource_aggregates(_unused_pointer_ast(body))
+    assert error.value.reason == "pointer-contract-mismatch"
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "relay(nullptr, 7u) + relay(output++, 8u)",
+        "relay(nullptr, 7u) + relay(output + 1, 8u)",
+        "relay(nullptr, 7u) + relay(7u, 8u)",
+    ],
+)
+def test_unused_pointer_elision_requires_pure_compatible_arguments_at_every_call(call):
+    with pytest.raises(ResourceAggregateError) as error:
+        lower_resource_aggregates(_unused_pointer_ast(call=call))
+    assert error.value.reason == "pointer-contract-mismatch"
+
+
+def test_unused_pointer_elision_does_not_change_non_null_signatures():
+    lowered = lower_resource_aggregates(_unused_pointer_ast(call="relay(output, 7u)"))
+    leaf = next(f for f in lowered.functions if f.name == "leaf")
+    assert [p.name for p in leaf.parameters] == ["unused", "value", "crosstl_resource"]
+
+
+def test_unused_pointer_elision_rejects_overloaded_helper():
+    ast = _unused_pointer_ast(extra="int leaf(uint value) { return int(value); }")
+    with pytest.raises(ResourceAggregateError) as error:
+        lower_resource_aggregates(ast)
+    assert error.value.reason == "pointer-contract-mismatch"
+
+
+@pytest.mark.parametrize("extra_call", ("leaf(8u)", "unknown(leaf)"))
+def test_unused_pointer_elision_preserves_unresolved_call_and_function_escape(
+    extra_call,
+):
+    ast = _unused_pointer_ast(call=f"relay(nullptr, 7u) + {extra_call}")
+    with pytest.raises(ResourceAggregateError) as error:
+        lower_resource_aggregates(ast)
+    assert error.value.reason == "pointer-contract-mismatch"
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_used_null_pointer_is_reported_without_an_artifact(tmp_path, target):
+    source = _source("unused-null").replace(
+        "return value;", "return uint(unused[value]);", 1
+    )
+    (tmp_path / "source.metal").write_text(source)
+    report = translate_project(
+        ProjectConfig(
+            root=tmp_path,
+            include_patterns=("source.metal",),
+            targets=(target,),
+            output_dir="out",
+            workgroup_size=(1, 1, 1),
+        ),
+        format_output=False,
+    ).to_json()
+    assert report["summary"]["failedCount"] == 1
+    assert report["summary"]["translatedCount"] == 0
+    assert [item["code"] for item in report["diagnostics"]] == [
+        "project.translate.resource-aggregate-unsupported"
+    ]
+    assert "pointer-contract-mismatch" in report["diagnostics"][0]["message"]
+    assert not list((tmp_path / "out").rglob("*.hlsl"))
+    assert not list((tmp_path / "out").rglob("*.glsl"))
 
 
 @pytest.mark.parametrize("stage_local", (False, True))

@@ -346,6 +346,206 @@ class _Lowering:
                         raise ResourceAggregateError("recursive-entry", node)
                     self.discover(callee)
 
+    def elide_unused_null_parameters(self):
+        """Remove proven unused helper formals, never manufacture null handles."""
+        functions = {
+            id(f): f
+            for overloads in self.functions.values()
+            for f in overloads
+            if id(f) in self.reachable and f is not self.entry and len(overloads) == 1
+        }
+        candidates = {
+            (key, index): param
+            for key, function in functions.items()
+            for index, param in enumerate(function.parameters)
+            if isinstance(self.parameter_types[key][index], _Pointer)
+            and not isinstance(param.param_type, ReferenceType)
+        }
+        calls = [n for n in self.ast.walk() if isinstance(n, FunctionCallNode)]
+        owners = {
+            id(node): function
+            for overloads in self.functions.values()
+            for function in overloads
+            if function.body is not None
+            for node in function.body.walk()
+            if isinstance(node, FunctionCallNode)
+        }
+        targets = {}
+        seeds = set()
+        unresolved = set()
+        for call in calls:
+            overloads = self.functions.get(_name(call.function), [])
+            if len(overloads) != 1 or id(overloads[0]) not in functions:
+                continue
+            callee = overloads[0]
+            if call.generic_args or len(call.arguments) != len(callee.parameters):
+                unresolved.add(id(callee))
+                continue
+            targets[id(call)] = id(callee)
+            for index, argument in enumerate(call.arguments):
+                if isinstance(argument, IdentifierNode) and argument.name == "nullptr":
+                    seeds.add((id(callee), index))
+        call_names = {id(call.function) for call in calls}
+        escaped_names = {
+            node.name
+            for node in self.ast.walk()
+            if isinstance(node, IdentifierNode) and id(node) not in call_names
+        }
+        unresolved.update(
+            key for key, function in functions.items() if function.name in escaped_names
+        )
+        candidates = {
+            key: param for key, param in candidates.items() if key[0] not in unresolved
+        }
+        seeds.intersection_update(candidates)
+        if not seeds:
+            return
+
+        # Materialization may retain a literal branch around an unused resource.
+        # Fold only literal conditions, with the selected branch's scope intact.
+        memo = {}
+
+        def fold(value):
+            if isinstance(value, list):
+                return [fold(child) for child in value]
+            if not isinstance(value, ASTNode):
+                return value
+            if id(value) in memo:
+                return memo[id(value)]
+            if isinstance(value, IfNode) and isinstance(value.condition, LiteralNode):
+                condition = evaluate_literal_int_expression(value.condition)
+                if condition is not None and (
+                    condition or not value.else_if_conditions
+                ):
+                    selected = value.then_branch if condition else value.else_branch
+                    result = fold(selected) or BlockNode([])
+                    if not isinstance(result, BlockNode):
+                        result = BlockNode([result])
+                    memo[id(value)] = result
+                    return result
+            memo[id(value)] = value
+            for field, child in vars(value).items():
+                if field not in AST_CHILD_FIELD_EXCLUSIONS:
+                    setattr(value, field, fold(child))
+            return value
+
+        for function in functions.values():
+            function.body = fold(function.body)
+
+        def can_omit_argument(call, index):
+            argument = call.arguments[index]
+            if not isinstance(argument, IdentifierNode):
+                return False
+            if argument.name == "nullptr":
+                return True
+            owner = owners.get(id(call))
+            if owner is None or any(
+                isinstance(node, VariableNode) and node.name == argument.name
+                for node in owner.body.walk()
+            ):
+                return False
+            actual = next(
+                (
+                    type_
+                    for param, type_ in zip(
+                        owner.parameters, self.parameter_types[id(owner)]
+                    )
+                    if param.name == argument.name
+                ),
+                None,
+            )
+            try:
+                self.compatible(
+                    self.parameter_types[targets[id(call)]][index], actual, argument
+                )
+            except ResourceAggregateError:
+                return False
+            return True
+
+        dependencies = {}
+        for key, parameter in candidates.items():
+            function = functions[key[0]]
+            # Without declaration binding, a lexical shadow is not a proof.
+            if any(
+                isinstance(node, VariableNode) and node.name == parameter.name
+                for node in function.body.walk()
+            ):
+                continue
+            if any(
+                targets.get(id(call)) == key[0] and not can_omit_argument(call, key[1])
+                for call in calls
+            ):
+                continue
+            forwarded = set()
+
+            def used(value):
+                if isinstance(value, str):
+                    return value == parameter.name
+                if isinstance(value, (list, tuple)):
+                    return any(used(child) for child in value)
+                if isinstance(value, dict):
+                    return any(used(child) for child in value.values())
+                if not isinstance(value, ASTNode):
+                    return False
+                if isinstance(value, FunctionCallNode):
+                    callee = targets.get(id(value))
+                    if used(value.function) or used(value.generic_args):
+                        return True
+                    for index, argument in enumerate(value.arguments):
+                        if (
+                            isinstance(argument, IdentifierNode)
+                            and argument.name == parameter.name
+                            and (callee, index) in candidates
+                        ):
+                            forwarded.add((callee, index))
+                        elif used(argument):
+                            return True
+                    return False
+                return any(
+                    used(child)
+                    for field, child in vars(value).items()
+                    if field not in AST_CHILD_FIELD_EXCLUSIONS
+                )
+
+            if not used(function.body):
+                dependencies[key] = forwarded
+
+        # Only acyclic forwarding chains terminating in unused formals qualify.
+        proven = set()
+        while True:
+            ready = {
+                key for key, deps in dependencies.items() if deps <= proven
+            } - proven
+            if not ready:
+                break
+            proven.update(ready)
+        selected = set()
+        pending = list(seeds & proven)
+        while pending:
+            key = pending.pop()
+            if key not in selected:
+                selected.add(key)
+                pending.extend(dependencies[key])
+        for call in calls:
+            callee = targets.get(id(call))
+            if callee is not None:
+                call.arguments = call.args = [
+                    arg
+                    for index, arg in enumerate(call.arguments)
+                    if (callee, index) not in selected
+                ]
+        for key, function in functions.items():
+            function.parameters = [
+                param
+                for index, param in enumerate(function.parameters)
+                if (key, index) not in selected
+            ]
+            self.parameter_types[key] = [
+                type_
+                for index, type_ in enumerate(self.parameter_types[key])
+                if (key, index) not in selected
+            ]
+
     def infer(self, node, env):
         if isinstance(node, IdentifierNode):
             return env.get(node.name)
@@ -931,6 +1131,7 @@ class _Lowering:
 
     def run(self):
         self.discover(self.entry)
+        self.elide_unused_null_parameters()
         # A changed resource-aggregate type cannot retain an unlowered helper ABI.
         # Prune only unreachable resource helpers; unrelated global initializers
         # may still refer to ordinary value functions outside the entry closure.
