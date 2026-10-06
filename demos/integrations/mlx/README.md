@@ -566,8 +566,9 @@ The current harness verifies:
   The subsequent complete review also accounts for byte conversions and typed
   vector initializers in 736 changed bodies, with 1,760 bodies unchanged. These
   reference updates do not establish coverage of a newer MLX revision;
-- selected-entry translation of all 2,496 discovered current-pinned
-  `copy.metal` entries to OpenGL. The schema-v2
+- selected-entry translation of all 2,496 discovered historical
+  `copy.metal` entries to OpenGL at revision
+  `846d176227a0ac13d2667e58d2bb68b322109ab0`. The schema-v2
   `contracts/copy.opengl-translation.json` contract pins every standalone
   `main` artifact across all 30 shapes, 16 templates, 13 input/output types,
   169 conversion pairs, 6,566 materializations, and 8,684 reflected target
@@ -584,8 +585,12 @@ The current harness verifies:
   and reflected ABI, compile for OpenGL/SPIR-V 1.3 with
   `glslangValidator`, validate with `spirv-val`, and require 2,496 non-empty
   SPIR-V modules. Together with the Metal proof this closes complete copy
-  translation, reflection, and native compiler coverage for those two targets,
-  not numerical execution or MLX host runtime redirection;
+  translation, reflection, and native compiler coverage for those two targets.
+  A complete source review accounts for narrow-conversion helpers in 308
+  changed artifacts; 2,188 artifacts are byte-identical. All interfaces and
+  indexing remain unchanged, and 61 fresh translation checks cover every
+  changed conversion pair and shape. This is compiler and reference evidence,
+  not full numerical execution or MLX host runtime redirection;
 - selected-entry translation of all 2,496 discovered historical
   `copy.metal` entries to DirectX at revision
   `846d176227a0ac13d2667e58d2bb68b322109ab0`. The compact schema-v2
