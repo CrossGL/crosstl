@@ -5051,7 +5051,7 @@
       "status": "materialized",
       "specialization_count": 1,
       "unsupported_specialization_count": 0,
-      "reachable_specialization_count": 9,
+      "reachable_specialization_count": 8,
       "dependency_discovery_work_count": 0,
       "pruned_candidate_count": 25492,
       "selected_parameters": {
@@ -5064,8 +5064,8 @@
     "artifacts": {
       "directx": {
         "target_entry_point": "CSMain",
-        "sha256": "41852207113971342d1acbf07fe4066168601bb4db19479373a2a40c36347724",
-        "size_bytes": 9223,
+        "sha256": "c25bb1bb9d47cbec9d94c732caf88b8e6ae1e7501744ce87f5371e1e63f29eb7",
+        "size_bytes": 9183,
         "workgroup_size": [
           32,
           1,
@@ -5083,8 +5083,8 @@
       },
       "opengl": {
         "target_entry_point": "main",
-        "sha256": "aba7ea0ab5256e12d1ce0893c15b9522aa34c2dda075a794896e2f1bef051868",
-        "size_bytes": 10751,
+        "sha256": "dc23d056d38464ba0fa1a25ef712789e47063532dfd78a2be41433fb83218886",
+        "size_bytes": 10686,
         "workgroup_size": [
           32,
           1,
@@ -5168,8 +5168,8 @@
         "rejected_dxil_scale_bit_construction": "native-uint16-shift-23-truncated-to-shift-7-and-mask-0xffff"
       },
       "corrected_dxil_contract": {
-        "artifact_sha256": "41852207113971342d1acbf07fe4066168601bb4db19479373a2a40c36347724",
-        "artifact_size_bytes": 9223,
+        "artifact_sha256": "c25bb1bb9d47cbec9d94c732caf88b8e6ae1e7501744ce87f5371e1e63f29eb7",
+        "artifact_size_bytes": 9183,
         "source_bitcast": "integer-ieee754-binary16-to-float32",
         "subnormal_decode": "integer-ieee754-binary16-to-float32",
         "arithmetic": "fmul-float",

@@ -1951,8 +1951,8 @@ and
 
 Entry-scoped translation materializes only the selected specialization with
 `T=float`, `group_size=32`, `bits=4`, and `has_global_scale=false`. The
-9,223-byte HLSL has SHA-256
-`41852207113971342d1acbf07fe4066168601bb4db19479373a2a40c36347724`,
+9,183-byte HLSL has SHA-256
+`c25bb1bb9d47cbec9d94c732caf88b8e6ae1e7501744ce87f5371e1e63f29eb7`,
 retains `[numthreads(32, 1, 1)]` and `[WaveSize(32)]`, and passes DXC under
 `cs_6_6`, `-enable-16bit-types`, and warnings as errors. Its compiled DXIL is
 4,736 bytes. This artifact explicitly enables the DirectX-only
@@ -1991,8 +1991,8 @@ masked with `0xffff`. The corrected HLSL emits
 `int(uint16_t(bits)) << 23`; DXIL now shifts the 32-bit value by 23 before
 `asfloat`, while retaining zero native-half instructions.
 
-The 10,751-byte GLSL has SHA-256
-`aba7ea0ab5256e12d1ce0893c15b9522aa34c2dda075a794896e2f1bef051868`,
+The 10,686-byte GLSL has SHA-256
+`dc23d056d38464ba0fa1a25ef712789e47063532dfd78a2be41433fb83218886`,
 uses one explicit 32-lane software subgroup for `WaveActiveMax(float)`, and
 passes `glslangValidator` and `spirv-val`. Its 14,076-byte SPIR-V has three
 control barriers, no group-nonuniform instruction, and local size
@@ -2012,6 +2012,17 @@ conversion. Resource bindings, element widths, dispatch geometry, and template
 materializations are unchanged. The non-required HLSL `sign_bit` metadata
 retains the same 0/8 values with explicit byte conversion. Both historical
 references reproduce exactly, and all four old/new artifacts pass compilation.
+
+A subsequent template-scope correction removes only the unused
+`integral_constant_res_t_res` structure, reducing the reachable record count
+from nine to eight. The prior HLSL identity
+`41852207113971342d1acbf07fe4066168601bb4db19479373a2a40c36347724`
+and GLSL identity
+`aba7ea0ab5256e12d1ce0893c15b9522aa34c2dda075a794896e2f1bef051868`
+are retained here for comparison. Complete source comparisons and strict
+recompilation confirm unchanged reflected interfaces and byte-identical DXIL
+and SPIR-V. The selected specialization, workload, dispatch and numerical
+assertions are unchanged; native execution remains required in the existing jobs.
 
 The scale conversion invokes the source `fp8_e8m0(float)` constructor factory
 before the selected sibling float conversion operator; aggregate field

@@ -62,12 +62,12 @@ MLX_MXFP4_VARIANT_ID = (
 )
 MLX_MXFP4_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "41852207113971342d1acbf07fe4066168601bb4db19479373a2a40c36347724",
-        "sizeBytes": 9223,
+        "sha256": "c25bb1bb9d47cbec9d94c732caf88b8e6ae1e7501744ce87f5371e1e63f29eb7",
+        "sizeBytes": 9183,
     },
     "opengl": {
-        "sha256": "aba7ea0ab5256e12d1ce0893c15b9522aa34c2dda075a794896e2f1bef051868",
-        "sizeBytes": 10751,
+        "sha256": "dc23d056d38464ba0fa1a25ef712789e47063532dfd78a2be41433fb83218886",
+        "sizeBytes": 10686,
     },
 }
 REQUIRE_DIRECTX_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_MXFP4_DIRECTX_NATIVE_LOADER"
@@ -411,7 +411,7 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
     assert materialization["specializationCount"] == 1
     assert materialization["unsupported"] == []
     assert materialization["accounting"] == {
-        "reachableSpecializationCount": 9,
+        "reachableSpecializationCount": 8,
         "dependencyDiscoveryWorkCount": 0,
         "prunedCandidateCount": 25492,
     }
@@ -440,6 +440,7 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
 
     generated_path = mlx_root / artifact["path"]
     generated = generated_path.read_text(encoding="utf-8")
+    assert "integral_constant_res_t_res" not in generated
     global_scale_lines = [
         line for line in generated.splitlines() if "global_scale" in line
     ]

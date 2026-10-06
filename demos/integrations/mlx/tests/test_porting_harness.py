@@ -14123,7 +14123,7 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "status": "materialized",
         "specialization_count": 1,
         "unsupported_specialization_count": 0,
-        "reachable_specialization_count": 9,
+        "reachable_specialization_count": 8,
         "dependency_discovery_work_count": 0,
         "pruned_candidate_count": 25492,
         "selected_parameters": {
@@ -14137,9 +14137,9 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "41852207113971342d1acbf07fe4066168601bb4db19479373a2a40c36347724"
+                "c25bb1bb9d47cbec9d94c732caf88b8e6ae1e7501744ce87f5371e1e63f29eb7"
             ),
-            "size_bytes": 9223,
+            "size_bytes": 9183,
             "workgroup_size": [32, 1, 1],
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
@@ -14151,9 +14151,9 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "opengl": {
             "target_entry_point": "main",
             "sha256": (
-                "aba7ea0ab5256e12d1ce0893c15b9522aa34c2dda075a794896e2f1bef051868"
+                "dc23d056d38464ba0fa1a25ef712789e47063532dfd78a2be41433fb83218886"
             ),
-            "size_bytes": 10751,
+            "size_bytes": 10686,
             "workgroup_size": [32, 1, 1],
             "subgroup_enforcement": "explicit-32-lane-software-subgroup",
             "compiler": "glslangValidator",
@@ -14263,9 +14263,9 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         },
         "corrected_dxil_contract": {
             "artifact_sha256": (
-                "41852207113971342d1acbf07fe4066168601bb4db19479373a2a40c36347724"
+                "c25bb1bb9d47cbec9d94c732caf88b8e6ae1e7501744ce87f5371e1e63f29eb7"
             ),
-            "artifact_size_bytes": 9223,
+            "artifact_size_bytes": 9183,
             "source_bitcast": "integer-ieee754-binary16-to-float32",
             "subnormal_decode": "integer-ieee754-binary16-to-float32",
             "arithmetic": "fmul-float",
