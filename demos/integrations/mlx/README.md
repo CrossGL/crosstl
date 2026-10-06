@@ -2911,6 +2911,28 @@ arithmetic, Boolean integral promotions, and typed vector list initialization
 for index helpers. These conversions preserve the source value types and
 evaluation order; they do not change the selected operators or buffer interfaces.
 
+The historical `846d1762` bfloat reference review compares all 4,122 complete
+sources against the previous contract: 4,050 are unchanged and 72 change across
+`ArcTan2`, `Power`, `Remainder` and `LogAddExp`, covering all 18 shapes. The changes
+make float argument conversions and bfloat result boundaries explicit.
+`LogAddExp` now selects the source's bfloat `log1p` overload, narrowing its argument
+before the call. Kernel bodies outside those conversions, indexing, resource interfaces
+and materialization contracts are unchanged. All 72 changed sources pass
+strict native Metal compilation and reproduce through the public project API.
+
+Local Metal 3.1 checks compare unchanged upstream kernels with those exact
+reviewed sources. Each operator's vector/vector entry covers all 65,536 bfloat
+encodings against 12 fixed partners: 786,432 pairs per operator, or 3,145,728
+returned values per path. The reviewed output matches every non-NaN word and
+NaN classification. The previous `LogAddExp` output differs in 35,900 cases;
+the reviewed output has no differences. An additional 216 shape controls
+exercise all 72 changed entries, including strided access, broadcast inputs
+and partial work-per-thread tails. They verify 4,176 values and 1,728 output
+guards per path, with readonly input and constant buffers unchanged. These
+checks use `-fno-fast-math`; generated sources also require `-Werror`.
+They do not establish every possible operand pair, other binary operators,
+another device's floating-point policy or complete host-runtime parity.
+
 Every entry identity, shape, template, operator, exact input/output pair,
 semantic family, SHA-256, byte count, materialization contract, and host ABI is
 pinned by
@@ -2926,10 +2948,10 @@ against the checked-in contract before invoking
 no source-warning exemption is used. Missing, duplicate or altered bundle entries
 fail before compilation. Compiler commands, diagnostics and output identities are
 retained even on failure. The local round-trip test still performs both phases.
-This closes
-selected-entry translation, reflection, and native compilation for every
-discovered binary instantiation. It is not Metal numerical execution, MLX
-host-runtime redirection, or an MLX test-suite claim.
+This validates selected-entry translation, reflection and native compilation
+for every discovered binary instantiation. The bfloat review above adds bounded
+numerical evidence, not whole-family numerical parity, MLX host-runtime
+redirection or an MLX test-suite claim.
 
 The same selected-entry pipeline translates all 4,122 binary entries to
 standalone OpenGL ``main`` artifacts. The schema-v2

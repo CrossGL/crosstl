@@ -155,7 +155,7 @@
       1,
       1
     ],
-    "generatedSizeBytesTotal": 210416,
+    "generatedSizeBytesTotal": 210537,
     "generatedSizeRange": {
       "minimum": {
         "entryPoint": "ss_Addfloat16",
@@ -293,8 +293,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "74d180ac57b43e2c6178485d38acf3e5f5bbe7a72d1d8c8680b57e2261e498dc",
-      "sizeBytes": 845
+      "sha256": "82601b001d4cdd16d0ad9eb9ec9e4481ce75ab8368570d4fe1510d7961d659cf",
+      "sizeBytes": 859
     },
     {
       "entryPoint": "ss_ArcTan2float16",
@@ -1337,8 +1337,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "f51ba1191c01ac8abf2ab81b63671e75134c97e156bedf3705a4ddff9a38931b",
-      "sizeBytes": 1462
+      "sha256": "e6bb6b16dd75801792206dad65b3cde5a473c3812fc0cfe74b9fd7cb0b26cc4c",
+      "sizeBytes": 1517
     },
     {
       "entryPoint": "ss_LogAddExpcomplex64",
@@ -1895,8 +1895,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "e9cff0d72fedf2ecd08de74691eddb3b8f6cb4e290824072ac6ddefd433d8dea",
-      "sizeBytes": 847
+      "sha256": "4680679121c881dfd516dab075437814e1914939690d4ccc632ef09b777a407a",
+      "sizeBytes": 861
     },
     {
       "entryPoint": "ss_Powerbool_",
@@ -2012,8 +2012,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "99131e77c4e520d9d7adc1105c7a6d18d1c21095dce6cebc00980744f5ad859d",
-      "sizeBytes": 952
+      "sha256": "3358da0097d6c3419323d7197d286162290f5be2b7b763ccf841ebb9161fe5b1",
+      "sizeBytes": 990
     },
     {
       "entryPoint": "ss_Remainderbool_",

@@ -1255,7 +1255,7 @@
       1,
       1
     ],
-    "generatedSizeBytesTotal": 5534240,
+    "generatedSizeBytesTotal": 5536418,
     "generatedSizeRange": {
       "minimum": {
         "entryPoint": "ss_Addfloat16",
@@ -1421,8 +1421,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "5e9ce47092b3aa58932eb57b94ffd3ce94d02c4d9195b75e7946f75a3fecc57a",
-      "sizeBytes": 1143
+      "sha256": "596cdaa53d36cc2c10918a8b17f33258205e4d1d9ca4ef02b1a1853f9cd982de",
+      "sizeBytes": 1157
     },
     {
       "entryPoint": "g1_ArcTan2float16",
@@ -2697,8 +2697,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "af125fbacd86ce32908cddc5470437ec6d0f65d5d2c78509f986d67196b98f3a",
-      "sizeBytes": 1760
+      "sha256": "95ab8838491e0a9d6e57a2a70ef5560c5966e1340b649de40cd1827b829e6d4c",
+      "sizeBytes": 1815
     },
     {
       "entryPoint": "g1_LogAddExpcomplex64",
@@ -3379,8 +3379,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "198b2a458abc3421a21ae4c39f2dcd8aa42116ad09501164cdb7a6f12bd44bd0",
-      "sizeBytes": 1145
+      "sha256": "b7153fc51397ee89a058bfa5eb3b2f681ab682d9ce5915a2a91ac6dfb0b6e98e",
+      "sizeBytes": 1159
     },
     {
       "entryPoint": "g1_Powerbool_",
@@ -3522,8 +3522,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "3309ba25d8f6c18bd32b3d10a2bc04040102d8c44ebc328751f1fa76d2e7c991",
-      "sizeBytes": 1250
+      "sha256": "8b4bf6add1d7a82fa536e71608823b2dc98111b31b7020818862dbdd1a26977c",
+      "sizeBytes": 1288
     },
     {
       "entryPoint": "g1_Remainderbool_",
@@ -4039,8 +4039,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "4875408361237f02e077124a47dda8b821f88c15393ef7326d84e6a1ff5233ea",
-      "sizeBytes": 1176
+      "sha256": "671210dc601bd28833c51f255b57c8f7b7ce680b14423be5d39eed903c7339b9",
+      "sizeBytes": 1190
     },
     {
       "entryPoint": "g1large_ArcTan2float16",
@@ -5315,8 +5315,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "4df1b7e9bb6785782f440dc6253c2f82338d7838546105b9301e2d2eb44cb5e7",
-      "sizeBytes": 1793
+      "sha256": "c9143a059fc60fe2751d3bd1797a4ab8842a7f96224346a6bf8dff657e6b9a05",
+      "sizeBytes": 1848
     },
     {
       "entryPoint": "g1large_LogAddExpcomplex64",
@@ -5997,8 +5997,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "ebabd385eb082cec8a47cc4c597beeebfd1266085d2ca415e25c5b0a23a19ad3",
-      "sizeBytes": 1178
+      "sha256": "db47100a3d0f874261987899114ebdcae4d83a7ae1bc9f8271269add4ea06207",
+      "sizeBytes": 1192
     },
     {
       "entryPoint": "g1large_Powerbool_",
@@ -6140,8 +6140,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "eda63041f1f740dd5f36e873ba115c9e7218dd5a024a89657e20d7d0ba931a2d",
-      "sizeBytes": 1283
+      "sha256": "3205df61666b0567702fa488ca99393154bd61307679c01cbdcdc053d5991884",
+      "sizeBytes": 1321
     },
     {
       "entryPoint": "g1large_Remainderbool_",
@@ -6657,8 +6657,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "3fd7c7943c16e4c2499dc972bc90f2ebc9879d2fccd890d9cd4e2b510af043fa",
-      "sizeBytes": 1279
+      "sha256": "76178e2b4e2705a4a5802929f2ce97a6e725f247cf5873190f9b875dce6f5e49",
+      "sizeBytes": 1293
     },
     {
       "entryPoint": "g2_ArcTan2float16",
@@ -7933,8 +7933,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "5162775cae597649844836df8ce4490749b90552cd7a70c4261e522da31cb8bf",
-      "sizeBytes": 1896
+      "sha256": "676b0fb4d2ef7a0a1d7a8c1f3ca6262af3b58411f54c5e95ea25acb724df6fd5",
+      "sizeBytes": 1951
     },
     {
       "entryPoint": "g2_LogAddExpcomplex64",
@@ -8615,8 +8615,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "59e20e3f538fd1aa60f03332051f48186467b7f33a35a8a3d4f20cf28fb7b50d",
-      "sizeBytes": 1281
+      "sha256": "49c35836dc2556d01e78b8762ea86a88becd18f4f587338726ff9a34386671d5",
+      "sizeBytes": 1295
     },
     {
       "entryPoint": "g2_Powerbool_",
@@ -8758,8 +8758,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "ae759b3be35fef27a270a4d1c5685165e615f2e8b8842580e51422514dd89e19",
-      "sizeBytes": 1386
+      "sha256": "3e5ab01df20895adec982bc06e7a5b04fee1a7ad73eb687d8a54ae95c1f4b181",
+      "sizeBytes": 1424
     },
     {
       "entryPoint": "g2_Remainderbool_",
@@ -9275,8 +9275,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "089fcc47074e2b636e4b2324e670e787d7ef81b12efe107a86c6162fff330eea",
-      "sizeBytes": 1324
+      "sha256": "972c5c02fd7cfee514fa8f56b96859913d6afdf3709ee49198f41c20bc5478d0",
+      "sizeBytes": 1338
     },
     {
       "entryPoint": "g2large_ArcTan2float16",
@@ -10551,8 +10551,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "12f74d8136382cd7d919056aaa5a42cbb5bb624ab5525bf1b3d734c9b9d50758",
-      "sizeBytes": 1941
+      "sha256": "38f7ed8fcc70b180e0ebcf92685c6be50d921a49a005a5491ba9f1709080c9b6",
+      "sizeBytes": 1996
     },
     {
       "entryPoint": "g2large_LogAddExpcomplex64",
@@ -11233,8 +11233,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "44dc5d38b5bcf68339ebdfe0955c5112730dcbf0bff9731f751bd47b827efe13",
-      "sizeBytes": 1326
+      "sha256": "cb5c36abcab69541d56439a66fe133afd4b677502ba2293e9c1c4d7228fa200e",
+      "sizeBytes": 1340
     },
     {
       "entryPoint": "g2large_Powerbool_",
@@ -11376,8 +11376,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "403aeaa651ab2f5e52eb51848fddaa3f3b357f5352a925e547a18b82e981e572",
-      "sizeBytes": 1431
+      "sha256": "2dd750bef1c29ca53f2296a0e0dc3afa896426664c79aa31eeba45f2c24d3516",
+      "sizeBytes": 1469
     },
     {
       "entryPoint": "g2large_Remainderbool_",
@@ -11893,8 +11893,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "2ecdadb532dbd1b0c7ddd10c148e5b84a121a1d0de6d7b279de14f97c0847fd4",
-      "sizeBytes": 1331
+      "sha256": "65f85dfa60187c8acd6bfc61a5b0bb4fe3c71647fbe72d797b81664c19899f43",
+      "sizeBytes": 1345
     },
     {
       "entryPoint": "g3_ArcTan2float16",
@@ -13169,8 +13169,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "9315495e88a7737325f9e4540777e6308f0cce35aca6dec7f8f51325632b49ed",
-      "sizeBytes": 1948
+      "sha256": "ce2cc4c96c91778405541563c5f7003a1fb36b0b15352efb9c175fb763cdab46",
+      "sizeBytes": 2003
     },
     {
       "entryPoint": "g3_LogAddExpcomplex64",
@@ -13851,8 +13851,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "245e2b3dd1d2abc5e177fc152f9c1b6cd571f2fae915efce1dd23896780c2dc3",
-      "sizeBytes": 1333
+      "sha256": "fb8c2245df28b4064b996e49e3ae37378d838c25c09c3dc3f72b0ce9cff1fecd",
+      "sizeBytes": 1347
     },
     {
       "entryPoint": "g3_Powerbool_",
@@ -13994,8 +13994,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "dedb41ffbab003e8e29888aca703ebd01ae02bb8a30b87cf6beb9eb906907d48",
-      "sizeBytes": 1438
+      "sha256": "10f0c695a1c85c1bc514785a76870ca43048e312c18b54cbe789ec93a9f68f39",
+      "sizeBytes": 1476
     },
     {
       "entryPoint": "g3_Remainderbool_",
@@ -14511,8 +14511,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "28abb976f4eac27bcd5a9f9984af490ca8c32f0228069d7036e9247d30d3bb67",
-      "sizeBytes": 1380
+      "sha256": "67688f8a3ebd29dd8305dfa996a05bceb31d9d287bbb2d58e105f7242a2ca5bc",
+      "sizeBytes": 1394
     },
     {
       "entryPoint": "g3large_ArcTan2float16",
@@ -15787,8 +15787,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "1e2da2ccf506fa883c2c69088f169be1c142bad5e06fd02cc28cf89940034875",
-      "sizeBytes": 1997
+      "sha256": "c7cb6708a12b174d45a09350ad92ae465ef711133ddb786b5beb69e3e2a5a2f7",
+      "sizeBytes": 2052
     },
     {
       "entryPoint": "g3large_LogAddExpcomplex64",
@@ -16469,8 +16469,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "dc730a160d933ade8a4b651485052b7671d7cb963ed1d4490c314dc5e1e03c0d",
-      "sizeBytes": 1382
+      "sha256": "61ee779b444b0417386a09a790dfbfc43e95f8ca6d19d0d16b1e9a9730b6517c",
+      "sizeBytes": 1396
     },
     {
       "entryPoint": "g3large_Powerbool_",
@@ -16612,8 +16612,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "396a72c5947da5fa4581a2256b1cde27755720d1fbdefd7afa941d5c6ed5d6fa",
-      "sizeBytes": 1487
+      "sha256": "a8ddcc2db8bba8467ba7c3ec537e34bfa952f0f0c51fa0c90fe66b5d15893e0f",
+      "sizeBytes": 1525
     },
     {
       "entryPoint": "g3large_Remainderbool_",
@@ -17129,8 +17129,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "c81fd399e998514b997c2d16b749f9eab5ec50a3953d52ea03693c7d4356d70c",
-      "sizeBytes": 2010
+      "sha256": "c1e9c393674ab11d2b5909797ffff701d0c2345b63ae350266b9a888f7ef9942",
+      "sizeBytes": 2024
     },
     {
       "entryPoint": "gn2_ArcTan2float16",
@@ -18405,8 +18405,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "c6cc736dcc8a6bb85038451f94aca4acd6b7d8d1eb5154c35babe3ddf94ebc38",
-      "sizeBytes": 2627
+      "sha256": "add03f53ca064af464326578ad2d7a830c4e1782bd601f0df4d372b054ff375f",
+      "sizeBytes": 2682
     },
     {
       "entryPoint": "gn2_LogAddExpcomplex64",
@@ -19087,8 +19087,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "67b5bfd05fcab5dec3246399ddf425033ea924364bf90801dfc85783f34ca3e1",
-      "sizeBytes": 2012
+      "sha256": "81720581672cc106dbb3f0ff4290bb6ba2b93ff4ab1273cec7385adf78c381e1",
+      "sizeBytes": 2026
     },
     {
       "entryPoint": "gn2_Powerbool_",
@@ -19230,8 +19230,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "09bc812846cb39671ee0bff0f53bc7043d3c7b39d646eb7e29df061c772b5088",
-      "sizeBytes": 2117
+      "sha256": "878b4b747657d5a7d7a41cf9e5d41ce90061a08f2f7070e12d4b1dcc609075ca",
+      "sizeBytes": 2155
     },
     {
       "entryPoint": "gn2_Remainderbool_",
@@ -19747,8 +19747,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "0a64007a4d3af48c6af772292a88bc844f59d0466c2c9b4408b622139b2cf096",
-      "sizeBytes": 2079
+      "sha256": "b4895dfaf2e5fa48541140b3cf3d39a88aadb1ed65fd3529ed55f362ce33db88",
+      "sizeBytes": 2093
     },
     {
       "entryPoint": "gn4large_ArcTan2float16",
@@ -21023,8 +21023,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "5808b053478a75c284742fa0ec41d88d0618c7215788788218ed24a0d563d173",
-      "sizeBytes": 2696
+      "sha256": "423f7a8601b92e6e1e04a1f3c88a29f2855fec3d708ac1998a0735cd6f34f4ad",
+      "sizeBytes": 2751
     },
     {
       "entryPoint": "gn4large_LogAddExpcomplex64",
@@ -21705,8 +21705,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "ec21721af215787a1988a9cd8283e7cf90a15d654a1b92ded65a8cb37f4b81a8",
-      "sizeBytes": 2081
+      "sha256": "4d1ae220784b6d5e1f0e5157589e6f1d2e368461b7b917565acbb84c5e8a15e6",
+      "sizeBytes": 2095
     },
     {
       "entryPoint": "gn4large_Powerbool_",
@@ -21848,8 +21848,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "892659e2e09a925566d158e8a9a204e064cc2ced63e661e808f0fda2b8c1d3a7",
-      "sizeBytes": 2186
+      "sha256": "7f418425e9ae13d0a2cc21081525fea72012743fdeb3ff726b58b475f1d416fc",
+      "sizeBytes": 2224
     },
     {
       "entryPoint": "gn4large_Remainderbool_",
@@ -22365,8 +22365,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "74d180ac57b43e2c6178485d38acf3e5f5bbe7a72d1d8c8680b57e2261e498dc",
-      "sizeBytes": 845
+      "sha256": "82601b001d4cdd16d0ad9eb9ec9e4481ce75ab8368570d4fe1510d7961d659cf",
+      "sizeBytes": 859
     },
     {
       "entryPoint": "ss_ArcTan2float16",
@@ -23641,8 +23641,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "f51ba1191c01ac8abf2ab81b63671e75134c97e156bedf3705a4ddff9a38931b",
-      "sizeBytes": 1462
+      "sha256": "e6bb6b16dd75801792206dad65b3cde5a473c3812fc0cfe74b9fd7cb0b26cc4c",
+      "sizeBytes": 1517
     },
     {
       "entryPoint": "ss_LogAddExpcomplex64",
@@ -24323,8 +24323,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "e9cff0d72fedf2ecd08de74691eddb3b8f6cb4e290824072ac6ddefd433d8dea",
-      "sizeBytes": 847
+      "sha256": "4680679121c881dfd516dab075437814e1914939690d4ccc632ef09b777a407a",
+      "sizeBytes": 861
     },
     {
       "entryPoint": "ss_Powerbool_",
@@ -24466,8 +24466,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "99131e77c4e520d9d7adc1105c7a6d18d1c21095dce6cebc00980744f5ad859d",
-      "sizeBytes": 952
+      "sha256": "3358da0097d6c3419323d7197d286162290f5be2b7b763ccf841ebb9161fe5b1",
+      "sizeBytes": 990
     },
     {
       "entryPoint": "ss_Remainderbool_",
@@ -24983,8 +24983,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "2ec1cb97f81e5def0c3556aae4accb645b3af30513610f9d706b6aeb55e0d510",
-      "sizeBytes": 1273
+      "sha256": "4eaf3bd10a4d6a58a8962869f041f31b7fa82f397fc656677d9f3fc8fbe79c7d",
+      "sizeBytes": 1287
     },
     {
       "entryPoint": "sv2_ArcTan2float16",
@@ -26259,8 +26259,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "2e1417d670d001e76b93fbbb60194c185864676c932a763e04231330f5d65a95",
-      "sizeBytes": 1892
+      "sha256": "3fb155bce28687e137780c298d9a5546dbf86a99b59b1b583deb67e14635a8a5",
+      "sizeBytes": 1947
     },
     {
       "entryPoint": "sv2_LogAddExpcomplex64",
@@ -26941,8 +26941,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "0e8f1b548f55581c61c18a6a6f36f69685ed17284ef861ff7537d532de952b8a",
-      "sizeBytes": 1273
+      "sha256": "f36512dd91a3b56e8526f24510a4222e103e33bccd1b9e667608f1c1dd6ec4a1",
+      "sizeBytes": 1287
     },
     {
       "entryPoint": "sv2_Powerbool_",
@@ -27084,8 +27084,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "e843211022c315fdb7e404d1d5a55a3c30e20b7fa9e394bf6af4840cd4a189f2",
-      "sizeBytes": 1382
+      "sha256": "88e76aa4b8aaac2cf6f9ae24575d62a62cf5fe3dbf6b2b1bd1ca0a6d2ce7f4d2",
+      "sizeBytes": 1420
     },
     {
       "entryPoint": "sv2_Remainderbool_",
@@ -27601,8 +27601,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "f0f60f439bd5becd45afefb35fa165a47bc40bc40061655aa0eb1140c8ae9fbb",
-      "sizeBytes": 1173
+      "sha256": "7aeb9cf1ab9b4bd180a76214cb7541137f629cd9bfa4cce6e9d0a0b1ae0bd0a3",
+      "sizeBytes": 1187
     },
     {
       "entryPoint": "sv_ArcTan2float16",
@@ -28877,8 +28877,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "a86645a53a307d22d06eb07e4f306155e8cd6c3d0ef1890dfacc33fefe12ffed",
-      "sizeBytes": 1792
+      "sha256": "95257f02ad5ba2ffd3fa24516817adb77c86947cd07152cf110764f560aca1a3",
+      "sizeBytes": 1847
     },
     {
       "entryPoint": "sv_LogAddExpcomplex64",
@@ -29559,8 +29559,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "d994485bdaccb4e194622e7051a930e53d1b63dffdc119be959e466bd124afa5",
-      "sizeBytes": 1173
+      "sha256": "720d4489746aa4d54eba5d526b6be215a5de3ca920d949a0e382c18d5e0978a3",
+      "sizeBytes": 1187
     },
     {
       "entryPoint": "sv_Powerbool_",
@@ -29702,8 +29702,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "25bc4bce10d26501ec9232569012ee2f9eafbffbb881462bb153a73c32f78a63",
-      "sizeBytes": 1282
+      "sha256": "64aed561fa288324389bf65f6d589afac99b1ee72bec9588e569e271dc71243b",
+      "sizeBytes": 1320
     },
     {
       "entryPoint": "sv_Remainderbool_",
@@ -30186,8 +30186,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "75d445596a0809fd1e5dd43cf2b1b53c334b4d3ac5f109f32741bd84c9a3aeb9",
-      "sizeBytes": 1174
+      "sha256": "c346302c241fee82a581a43f3a7b90b6c9590c5722e95cee207eec8c3241bd16",
+      "sizeBytes": 1188
     },
     {
       "entryPoint": "svn_ArcTan2float16",
@@ -31176,8 +31176,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "a49bc10c76264552a2bcab63b28a341d8480f94697dda28f2059126396ef0629",
-      "sizeBytes": 1793
+      "sha256": "6684173ddfcdd0db535b3d7f5b1cd3e48ec0763831bb6b31aa12456c06ded3a2",
+      "sizeBytes": 1848
     },
     {
       "entryPoint": "svn_LogAddExpfloat16",
@@ -31704,8 +31704,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "01806c6de4013d30b1eef36667f8ef0f3a9854e0a6e4a58cb8e3a99dd06a7005",
-      "sizeBytes": 1174
+      "sha256": "03d767a4bd049edfa7ad834a73c126266f01110f64aaf3a84b4668f43c91e16d",
+      "sizeBytes": 1188
     },
     {
       "entryPoint": "svn_Powerbool_",
@@ -31814,8 +31814,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "1980073a992601311ee34c2c91e9f1b07458c5c6d91b1ab527945e8a65d81b83",
-      "sizeBytes": 1283
+      "sha256": "869e3534a3f499831e9d6f66b98589b72b921b21192522aec544010d0c0d3867",
+      "sizeBytes": 1321
     },
     {
       "entryPoint": "svn_Remainderbool_",
@@ -32243,8 +32243,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "e573d8265a04ff38b18baf9975336a29d3649aed377d8f3a065ace0e27050d9a",
-      "sizeBytes": 1273
+      "sha256": "e312b0264fc685751c827dbb8ca05929a046e97d675c0a92d1bf2899c21a8fed",
+      "sizeBytes": 1287
     },
     {
       "entryPoint": "vs2_ArcTan2float16",
@@ -33519,8 +33519,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "3f243dcb8e6273a8c97b7c3fd5632bbf6f814bb2de798ebf0d0c7405b560f368",
-      "sizeBytes": 1892
+      "sha256": "9ec735ee0b6d97bfae006df03e395cf3ec243a380bb8d8ba2ea0bb30002156f9",
+      "sizeBytes": 1947
     },
     {
       "entryPoint": "vs2_LogAddExpcomplex64",
@@ -34201,8 +34201,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "028cc89f2ffa3d655ebfc0f4e7ed59608f4faa15a16e767f2f6a8c14c59e3b91",
-      "sizeBytes": 1273
+      "sha256": "ddd86f4c67081320a463bca9bfa3e68357731276546e164382285532938a57ac",
+      "sizeBytes": 1287
     },
     {
       "entryPoint": "vs2_Powerbool_",
@@ -34344,8 +34344,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "43d5cdbfb0fa1303fe9ca65c4ea6e75a906c9cee68fe064e4d8f041139da9a8f",
-      "sizeBytes": 1382
+      "sha256": "25cb890ee84fba43922f906fb76c1b2ab1917523650dda31b5242bb84a343fbf",
+      "sizeBytes": 1420
     },
     {
       "entryPoint": "vs2_Remainderbool_",
@@ -34861,8 +34861,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "ee735d9c05d2c2fa263bf4992d3981480e38e9e48090b4d3009bda9f4b87482a",
-      "sizeBytes": 1173
+      "sha256": "6b3a44fac16f2164d07f5fec5479739143d80b1700fa772007289b871606f0bf",
+      "sizeBytes": 1187
     },
     {
       "entryPoint": "vs_ArcTan2float16",
@@ -36137,8 +36137,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "ded2b5f3bde2d1fca7ba8a4f74678b3a53d64b12ceb9fc5df0158c68ea8de268",
-      "sizeBytes": 1792
+      "sha256": "3bf7b36486e82469a8272ba25eb2d74d702b030f6b63830637a4428ea1173548",
+      "sizeBytes": 1847
     },
     {
       "entryPoint": "vs_LogAddExpcomplex64",
@@ -36819,8 +36819,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "c3a24f6ac4b3c9199ed21c41e933f7872e98ef320d3c3707c4abe0e48d4ed70c",
-      "sizeBytes": 1173
+      "sha256": "11c290c6bb569a10815a71c910be59045bda2c2b87b0b20bb75062b57c12ada9",
+      "sizeBytes": 1187
     },
     {
       "entryPoint": "vs_Powerbool_",
@@ -36962,8 +36962,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "0e7752be803aafc868656139c5bd70f26c8a7995d34d6d2a5df68ffc1c1d6eae",
-      "sizeBytes": 1282
+      "sha256": "6348249f56cf1c5821713aea59f070bdcf841394356f44827cbd167e8acb03e8",
+      "sizeBytes": 1320
     },
     {
       "entryPoint": "vs_Remainderbool_",
@@ -37446,8 +37446,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "a6facf7e14957f475407360577ffd806f627e31bb771fe0b6e6890dca14cc9ac",
-      "sizeBytes": 1174
+      "sha256": "372b83c3c5ce1014ec81fc5ef9a96137a9857970d93a17cd1f6e3d9e85fa627e",
+      "sizeBytes": 1188
     },
     {
       "entryPoint": "vsn_ArcTan2float16",
@@ -38436,8 +38436,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "55ce7110bfbeee0135b0fa96bb53e3f12effcbd9bb1606a31153f80c9648cc6b",
-      "sizeBytes": 1793
+      "sha256": "12038a787089fcd60cf38871c07ac0cc7357a0fcb58afb639b93e19dbe434eb6",
+      "sizeBytes": 1848
     },
     {
       "entryPoint": "vsn_LogAddExpfloat16",
@@ -38964,8 +38964,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "5922f9dbd65fc35f2ef4f8cdcb053939ae32609d16cf1c80902138fc543f8082",
-      "sizeBytes": 1174
+      "sha256": "92d3e3731ead5454873ae663ab7280cee1c14b618dfbc3fe78ea1f8023447a64",
+      "sizeBytes": 1188
     },
     {
       "entryPoint": "vsn_Powerbool_",
@@ -39074,8 +39074,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "19cf7420b12126ede0fc7dbb302693968653d5bc468a921d90c75675df00bd94",
-      "sizeBytes": 1283
+      "sha256": "c3ed9265fef02dd665075e664fc12204eacf3e160dcf51c0b1c797925e57b95f",
+      "sizeBytes": 1321
     },
     {
       "entryPoint": "vsn_Remainderbool_",
@@ -39503,8 +39503,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "eea8d6cdfca1c20cdebe8eb0b2e5ad5d9475f5df2a5e724b0ffa6a0babe44ea2",
-      "sizeBytes": 1291
+      "sha256": "6a210d174b75159f374ccaad7e3abdefe0cb177db41232f0773f463e66eb456d",
+      "sizeBytes": 1305
     },
     {
       "entryPoint": "vv2_ArcTan2float16",
@@ -40779,8 +40779,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "377404f7f4a37edd06e115246ee3599c66ee287b4efdbaaf2701615e36c1a491",
-      "sizeBytes": 1910
+      "sha256": "b8611daf24c77cf5bc8911c2d2a412d8c0faf2ce5b05a8bf009ea8d7516c4bdc",
+      "sizeBytes": 1965
     },
     {
       "entryPoint": "vv2_LogAddExpcomplex64",
@@ -41461,8 +41461,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "b4a3f1a4840ec84b0cdadcde4d3caf5b076f6b753c7dab5cb2ffc2e17a85e42d",
-      "sizeBytes": 1291
+      "sha256": "7652b9a00d4b812d6120cb0e80117745ee12e886b3fa9355c09159930760de42",
+      "sizeBytes": 1305
     },
     {
       "entryPoint": "vv2_Powerbool_",
@@ -41604,8 +41604,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "ffac83aa0b24cad8077201f0e2e816bc3f2d36480b3c6c6ffd8404cddc21c77b",
-      "sizeBytes": 1400
+      "sha256": "dca5b7f5a9de541328bf7e10a29d200a02872108e315380fea02c3ff711308ed",
+      "sizeBytes": 1438
     },
     {
       "entryPoint": "vv2_Remainderbool_",
@@ -42121,8 +42121,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "b229d9efd0efd4b443330f79af818e282e82d55260ac5fc6d71cc6522ac6874e",
-      "sizeBytes": 1189
+      "sha256": "4e0f03b326564046e7fa018c183bbb7e3346062cdb1ecbe87197194248ea8ee8",
+      "sizeBytes": 1203
     },
     {
       "entryPoint": "vv_ArcTan2float16",
@@ -43397,8 +43397,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "588ae4e5646ae210b239db5df1a7e07215f322d94a1699dee6ae86497d301f47",
-      "sizeBytes": 1808
+      "sha256": "365d5e77df36a6436aa5c3c8e240f35734c2abae6f161090e773b1b887022e40",
+      "sizeBytes": 1863
     },
     {
       "entryPoint": "vv_LogAddExpcomplex64",
@@ -44079,8 +44079,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "ce862092ac7f1d535f3a30ff42b3ecb3fb306b185f11fbbbdcc8c7312c7555b1",
-      "sizeBytes": 1189
+      "sha256": "6845f5941fa8162bd258a7b3f0efd47542c1305cd7002a9050eb0fd3db7a9b88",
+      "sizeBytes": 1203
     },
     {
       "entryPoint": "vv_Powerbool_",
@@ -44222,8 +44222,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "6d34149aabd94fc9b2555d0998a5197a24dbbb0d1c449dd81c67c087e4921220",
-      "sizeBytes": 1298
+      "sha256": "5c76cc2c116b328ee84d5ce192c1d21cb828d4f78f28f20a8f49be24c048af23",
+      "sizeBytes": 1336
     },
     {
       "entryPoint": "vv_Remainderbool_",
@@ -44706,8 +44706,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "f0484834fdca6c9c30247143102e85d60a1ce3b98eecc413acd2137c6fb6e800",
-      "sizeBytes": 1190
+      "sha256": "de3f3f43b605fe6d52537770d7c402c3848d1ccef03a56d318606ba6de994ef3",
+      "sizeBytes": 1204
     },
     {
       "entryPoint": "vvn_ArcTan2float16",
@@ -45696,8 +45696,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "b6116db37c49205374023b8f56040f62046224eccc85c9b365a679dd5b7272b1",
-      "sizeBytes": 1809
+      "sha256": "32ffe96d96f9aa3d49ba16c74b4f5bb17b557c803582a8cec4099161d322f53e",
+      "sizeBytes": 1864
     },
     {
       "entryPoint": "vvn_LogAddExpfloat16",
@@ -46224,8 +46224,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "a620cb5fa2fc9793e2869b548901b0aa11cb83b5e45879e8e2f6e6ec6ba7b2da",
-      "sizeBytes": 1190
+      "sha256": "0ef047a114aa24b51af96b9b5af7e9c0b6187f74742c0842af21ed2939bddb3e",
+      "sizeBytes": 1204
     },
     {
       "entryPoint": "vvn_Powerbool_",
@@ -46334,8 +46334,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "1d5885e75a09d231532c0338d521e338bf07638b3dffc83a592a34b6d14fdb89",
-      "sizeBytes": 1299
+      "sha256": "1195e825766f04074b8aa9c35dc1543434e5c852aed734bfc4be97df28cf4041",
+      "sizeBytes": 1337
     },
     {
       "entryPoint": "vvn_Remainderbool_",
