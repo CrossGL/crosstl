@@ -3321,7 +3321,7 @@
       "path": "demos/integrations/mlx/contracts/copy.opengl-translation.json",
       "schema_version": 2,
       "sha256": "571a4b6a8c5b5e6a58a8dd91ac4987d83b6a5c57775b50b03496b78caf36c0c0",
-      "size_bytes": 874507,
+      "size_bytes": 874494,
       "entry_identity_fields": [
         "entryPoint",
         "shape",

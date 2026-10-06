@@ -16000,7 +16000,8 @@ def test_copy_opengl_translation_evidence_records_complete_family():
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
     assert (
-        "all 2,496 discovered current-pinned `copy.metal` entries to OpenGL" in readme
+        "all 2,496 discovered historical `copy.metal` entries to OpenGL at revision"
+        in readme
     )
     assert "6,566 materializations, and 8,684 reflected target resources" in readme
     assert "Eight explicit host/runtime index-range preconditions" in readme
@@ -16010,7 +16011,10 @@ def test_copy_opengl_translation_evidence_records_complete_family():
         .read_text(encoding="utf-8")
         .split()
     )
-    assert "translates all 2,496 copy entries to standalone OpenGL" in guide
+    assert (
+        "translates all 2,496 copy entries at historical revision "
+        f"``{CURRENT_MLX_COMMIT}`` to standalone OpenGL" in guide
+    )
     assert "6,566 exact materializations, and 8,684 reflected target resources" in guide
     assert "24 disjoint 104-entry shards" in guide
     assert "requires a non-empty SPIR-V module" in guide

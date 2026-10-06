@@ -95,6 +95,7 @@
         "tests/test_translator/test_codegen/test_GLSL_storage_pointer_codegen.py",
         "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
         "tests/test_translator/test_opengl_metal_math.py",
+        "tests/test_translator/test_floating_remainder_math.py",
         "tests/test_translator/test_opengl_half_conversion.py",
         "tests/test_translator/test_uniform_block_layouts.py",
         "demos/integrations/mlx/tests/kernels/test_attention_ds_opengl.py",

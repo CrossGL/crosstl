@@ -23969,6 +23969,7 @@ def _math_intrinsic_failure_details(
         "project.translate.directx-copysign-unrepresentable",
         "project.translate.directx-inverse-hyperbolic-unrepresentable",
         "project.translate.opengl-copysign-unrepresentable",
+        "project.translate.opengl-fmod-unrepresentable",
     }:
         return {}
 

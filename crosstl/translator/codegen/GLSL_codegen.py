@@ -672,6 +672,23 @@ class OpenGLCopySignError(ValueError):
         self.source_location = source_location
 
 
+class OpenGLFloatingRemainderError(ValueError):
+    """Raised when floating remainder has no exact GLSL representation."""
+
+    project_diagnostic_code = "project.translate.opengl-fmod-unrepresentable"
+    missing_capabilities = ("opengl.floating-remainder-lowering",)
+
+    def __init__(
+        self, message, *, operand_types, target_profile, reason, source_location=None
+    ):
+        super().__init__(message)
+        self.operation = "fmod"
+        self.operand_types = tuple(operand_types)
+        self.target_profile = target_profile
+        self.reason = reason
+        self.source_location = source_location
+
+
 class OpenGLMetalMathError(ValueError):
     """Raised when canonical Metal math cannot be preserved in GLSL."""
 
@@ -2509,6 +2526,7 @@ class GLSLCodeGen:
         self.glsl_bfloat_wide_integer_helper_required = False
         self.glsl_float_selection_helper_names = {}
         self.glsl_signed_remainder_helper_names = {}
+        self.glsl_floating_remainder_helper_names = {}
         self.glsl_generating_global_initializer = False
         self.required_glsl_trailing_zero_helpers = set()
         self.glsl_expected_compare_helpers = {}
@@ -3008,7 +3026,6 @@ class GLSLCodeGen:
             "floor": "floor",
             "ceil": "ceil",
             "round": "round",
-            "fmod": "mod",
             "trunc": "trunc",
             "min": "min",
             "max": "max",
@@ -7166,6 +7183,7 @@ class GLSLCodeGen:
         self.glsl_bfloat_wide_integer_helper_required = False
         self.glsl_float_selection_helper_names = {}
         self.glsl_signed_remainder_helper_names = {}
+        self.glsl_floating_remainder_helper_names = {}
         self.glsl_generating_global_initializer = False
         self.required_glsl_trailing_zero_helpers = set()
         self.glsl_expected_compare_helpers = {}
@@ -8366,6 +8384,7 @@ class GLSLCodeGen:
             + self.generate_glsl_bfloat_integer_helpers()
             + self.generate_glsl_float_selection_helpers()
             + self.generate_glsl_signed_remainder_helpers()
+            + self.generate_glsl_floating_remainder_helpers()
             + self.generate_glsl_complex64_helpers()
             + self.generate_glsl_expected_compare_helpers()
             + self.float_atomic_storage.helper_definitions()
@@ -31861,6 +31880,20 @@ complex64_t crossgl_complex64_mod_assign(
                     )
                 if args:
                     return self.expression_result_type(args[0])
+            if func_name in {"fmod", "metal::fmod", "metal_u3a_u3afmod"}:
+                resolved_remainder = self.resolve_glsl_function_overload(
+                    func_name, args, call_node=expr
+                )
+                if resolved_remainder is not None:
+                    return self.type_name_string(
+                        getattr(resolved_remainder, "return_type", None)
+                    )
+                if len(args) == 2 and self.is_vector_value_type(
+                    self.expression_result_type(args[1])
+                ):
+                    return self.expression_result_type(args[1])
+                if args:
+                    return self.expression_result_type(args[0])
             if func_name in self.GLSL_SIGNBIT_NAMES:
                 resolved_signbit = self.resolve_glsl_function_overload(
                     func_name,
@@ -34820,6 +34853,12 @@ complex64_t crossgl_complex64_mod_assign(
             if copysign_call is not None:
                 return copysign_call
 
+            remainder_call = self.generate_glsl_floating_remainder_call(
+                original_func_name, expr.args, call_node=expr
+            )
+            if remainder_call is not None:
+                return remainder_call
+
             bitcast_call = self.generate_bitcast_call(original_func_name, expr.args)
             if bitcast_call is not None:
                 return bitcast_call
@@ -35767,6 +35806,176 @@ complex64_t crossgl_complex64_mod_assign(
             (helper_name, func_name, value["mapped"], condition_type, value["width"])
         )
         return f"{helper_name}({', '.join(rendered)})"
+
+    def glsl_floating_remainder_helper(self, value_type):
+        existing = self.glsl_floating_remainder_helper_names.get(value_type)
+        if existing is not None:
+            return existing
+        name = self.glsl_unique_identifier(
+            f"crossgl_fmod_{value_type}",
+            self.glsl_module_used_identifier_names
+            | getattr(self, "glsl_numeric_helper_reserved_names", set()),
+        )
+        self.glsl_module_used_identifier_names.add(name)
+        self.glsl_floating_remainder_helper_names[value_type] = name
+        return name
+
+    def generate_glsl_floating_remainder_call(self, func_name, args, *, call_node=None):
+        if func_name not in {"fmod", "metal::fmod", "metal_u3a_u3afmod"}:
+            return None
+        if (
+            self.resolve_glsl_function_overload(func_name, args, call_node=call_node)
+            is not None
+        ):
+            return None
+        types = tuple(self.glsl_source_expression_type(arg) for arg in args)
+
+        def reject(reason):
+            raise OpenGLFloatingRemainderError(
+                f"OpenGL cannot preserve floating remainder for {types}: {reason}",
+                operand_types=tuple(self.type_name_string(value) for value in types),
+                target_profile=self.current_glsl_version_line,
+                reason=reason,
+                source_location=getattr(call_node, "source_location", None),
+            )
+
+        if len(args) != 2:
+            reject("invalid-arity")
+        if any(self.glsl_narrow_float_width(value) is not None for value in types):
+            reject("unsupported-narrow-remainder-profile")
+        infos = tuple(self.glsl_value_type_info(value) for value in types)
+        if any(info is None for info in infos):
+            reject("unresolved-operand-type")
+        if any(
+            info["family"] != "float"
+            or info["bits"] not in {32, 64}
+            or info["width"] not in {1, 2, 3, 4}
+            for info in infos
+        ):
+            reject("unsupported-operand-type")
+        if infos[0]["bits"] != infos[1]["bits"]:
+            reject("operand-type-mismatch")
+        if infos[0]["width"] != infos[1]["width"] and 1 not in {
+            info["width"] for info in infos
+        }:
+            reject("operand-shape-mismatch")
+        value = max(infos, key=lambda info: info["width"])
+        version = re.match(r"#version\s+(\d+)\b", self.current_glsl_version_line or "")
+        minimum = 400 if value["bits"] == 64 else 330
+        if self.GLSL_TARGET_DISPLAY_NAME != "OpenGL" or (
+            version and int(version.group(1)) < minimum
+        ):
+            reject("unsupported-profile")
+        builtins = (
+            {"floatBitsToUint", "uintBitsToFloat"}
+            if value["bits"] == 32
+            else {"packDouble2x32", "unpackDouble2x32"}
+        )
+        if any(
+            name in self.function_return_types
+            or name in self.global_variable_types
+            or name in self.local_variable_types
+            for name in builtins
+        ):
+            reject("target-builtin-shadowed")
+        scalar = "float" if value["bits"] == 32 else "double"
+        self.glsl_floating_remainder_helper(scalar)
+        helper = self.glsl_floating_remainder_helper(value["mapped"])
+        rendered = [
+            self.generate_expression_with_expected(arg, value["mapped"]) for arg in args
+        ]
+        rendered = [
+            (
+                f"{value['mapped']}({expression})"
+                if info["width"] == 1 and value["width"] != 1
+                else expression
+            )
+            for info, expression in zip(infos, rendered)
+        ]
+        return f"{helper}({', '.join(rendered)})"
+
+    def generate_glsl_floating_remainder_helpers(self):
+        helpers = []
+        # Integer significand division avoids overflowing the floating quotient
+        # and retains exact zero signs and representable subnormal remainders.
+        for scalar, bits, fraction_bits, exponent_bits in (
+            ("float", 32, 23, 8),
+            ("double", 64, 52, 11),
+        ):
+            name = self.glsl_floating_remainder_helper_names.get(scalar)
+            if name is None:
+                continue
+            word = "uint" if bits == 32 else "uint64_t"
+            zero, one = f"{word}(0)", f"{word}(1)"
+
+            def unpack(value):
+                if bits == 32:
+                    return f"floatBitsToUint({value})"
+                return f"(uint64_t(unpackDouble2x32({value}).x) | (uint64_t(unpackDouble2x32({value}).y) << 32u))"
+
+            def pack(value):
+                if bits == 32:
+                    return f"uintBitsToFloat({value})"
+                return f"packDouble2x32(uvec2(uint({value}), uint(({value}) >> 32u)))"
+
+            helpers.append(
+                f"{scalar} {name}({scalar} left, {scalar} right) {{\n"
+                f"    {word} left_bits = {unpack('left')};\n"
+                f"    {word} right_bits = {unpack('right')};\n"
+                f"    {word} sign_mask = {one} << {bits - 1}u;\n"
+                f"    {word} sign = left_bits & sign_mask;\n"
+                f"    {word} x = left_bits & ~sign_mask;\n"
+                f"    {word} y = right_bits & ~sign_mask;\n"
+                f"    {word} hidden_bit = {one} << {fraction_bits}u;\n"
+                f"    {word} fraction_mask = hidden_bit - {one};\n"
+                f"    {word} infinity = (({one} << {exponent_bits}u) - {one}) << {fraction_bits}u;\n"
+                f"    if (x >= infinity || y > infinity || y == {zero}) {{\n"
+                f"        {word} invalid = infinity | (hidden_bit >> 1u);\n"
+                f"        return {pack('invalid')};\n"
+                "    }\n"
+                "    if (x < y) { return left; }\n"
+                f"    if (x == y) {{ return {pack('sign')}; }}\n"
+                f"    int x_exponent = int(x >> {fraction_bits}u);\n"
+                f"    int y_exponent = int(y >> {fraction_bits}u);\n"
+                f"    {word} remainder = x & fraction_mask;\n"
+                f"    {word} divisor = y & fraction_mask;\n"
+                "    if (x_exponent == 0) {\n"
+                "        x_exponent = 1;\n"
+                "        while (remainder < hidden_bit) { remainder <<= 1u; x_exponent -= 1; }\n"
+                "    } else { remainder |= hidden_bit; }\n"
+                "    if (y_exponent == 0) {\n"
+                "        y_exponent = 1;\n"
+                "        while (divisor < hidden_bit) { divisor <<= 1u; y_exponent -= 1; }\n"
+                "    } else { divisor |= hidden_bit; }\n"
+                "    for (int shift = x_exponent - y_exponent; shift >= 0; shift -= 1) {\n"
+                "        if (remainder >= divisor) { remainder -= divisor; }\n"
+                f"        if (remainder == {zero}) {{ return {pack('sign')}; }}\n"
+                "        if (shift > 0) { remainder <<= 1u; }\n"
+                "    }\n"
+                "    while (remainder < hidden_bit) { remainder <<= 1u; y_exponent -= 1; }\n"
+                "    if (y_exponent > 0) {\n"
+                f"        remainder = ({word}(y_exponent) << {fraction_bits}u) | (remainder & fraction_mask);\n"
+                "    } else { remainder >>= uint(1 - y_exponent); }\n"
+                "    remainder |= sign;\n"
+                f"    return {pack('remainder')};\n"
+                "}\n\n"
+            )
+        for value_type, name in sorted(
+            self.glsl_floating_remainder_helper_names.items()
+        ):
+            match = re.fullmatch(r"(d?)vec([234])", value_type)
+            if match is None:
+                continue
+            scalar = "double" if match.group(1) else "float"
+            scalar_name = self.glsl_floating_remainder_helper_names[scalar]
+            components = [
+                f"{scalar_name}(left.{lane}, right.{lane})"
+                for lane in "xyzw"[: int(match.group(2))]
+            ]
+            helpers.append(
+                f"{value_type} {name}({value_type} left, {value_type} right) {{\n    return {value_type}({', '.join(components)});\n}}\n\n"
+            )
+        return "".join(helpers)
 
     def generate_glsl_log10_call(self, func_name, args):
         if (

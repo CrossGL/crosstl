@@ -58797,6 +58797,42 @@ def test_translate_project_reports_unrepresentable_copysign_types(tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    "left,right,reason",
+    [
+        ("vec2", "vec3", "operand-shape-mismatch"),
+        ("half", "half", "unsupported-narrow-remainder-profile"),
+    ],
+)
+def test_translate_project_reports_unrepresentable_floating_remainder(
+    tmp_path, left, right, reason
+):
+    source = tmp_path / "remainder.cgl"
+    source.write_text(
+        f"shader InvalidRemainder {{ float apply({left} a, {right} b) {{ return fmod(a, b); }} }}",
+        encoding="utf-8",
+    )
+    config = project_api.ProjectConfig(root=tmp_path, targets=("opengl",))
+    report = translate_project(config, format_output=False)
+    payload = report.to_json()
+    assert payload["summary"]["failedCount"] == 1
+    (diagnostic,) = payload["diagnostics"]
+    assert diagnostic["code"] == "project.translate.opengl-fmod-unrepresentable"
+    assert diagnostic["missingCapabilities"] == ["opengl.floating-remainder-lowering"]
+    assert diagnostic["details"]["mathIntrinsic"] == {
+        "operation": "fmod",
+        "operandTypes": [left, right],
+        "reason": reason,
+        "targetProfile": "#version 450 core",
+    }
+    report_path = tmp_path / "report.json"
+    report.write_json(report_path)
+    assert not any(
+        item["code"] == "project.validate.invalid-report"
+        for item in validate_project_report(report_path)["diagnostics"]
+    )
+
+
 def test_translate_project_reports_unrepresentable_inverse_hyperbolic_type(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"

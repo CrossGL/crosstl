@@ -811,6 +811,22 @@ OpenGL runtime, retaining readbacks for finite values, NaNs, infinities, signed
 zeros, mixed vector masks, and argument side effects. This is a focused operation
 contract, not evidence that every MLX kernel or its host integration works.
 
+Floating ``fmod`` is distinct from floor-based ``mod``. OpenGL uses integer
+significand division for binary32 and binary64 scalar and vector operands,
+including scalar broadcasting. This avoids floating quotient overflow and
+preserves representable remainders and signed zero. Zero divisors, infinite
+dividends and NaN operands produce NaN; payload identity is not promised.
+Binary64 requires target 64-bit integer support as well as double precision.
+Unsupported operand shapes and profiles produce structured diagnostics.
+Direct half and bfloat calls remain unsupported until their source-specific
+exceptional-value rules can be represented; they are not silently widened.
+Required Linux execution compares raw output words with an independent rational
+oracle, including subnormals, extreme ratios, exceptional values and guards.
+This does not establish parity with every source compiler's fast-math profile:
+the MLX controls expose half signed-zero and infinite-divisor differences and
+bfloat subnormal-policy differences tracked in
+`issue #2097 <https://github.com/CrossGL/crosstl/issues/2097>`_.
+
 Metal normalization retains qualified math builtin ownership when source helpers
 share the same name. Source overloads receive deterministic, collision-safe
 internal names before namespace qualification is removed. Explicit global calls,
@@ -1113,8 +1129,9 @@ This is reference and compiler evidence, not an additional numerical-runtime
 claim. Other families remain under
 `issue #1966 <https://github.com/CrossGL/crosstl/issues/1966>`_.
 
-The same selected-entry pipeline translates all 2,496 copy entries to
-standalone OpenGL ``main`` artifacts. The schema-v2
+The same selected-entry pipeline translates all 2,496 copy entries at historical
+revision ``846d176227a0ac13d2667e58d2bb68b322109ab0`` to standalone OpenGL
+``main`` artifacts. The schema-v2
 ``copy.opengl-translation.json`` contract preserves all 30 shapes, 16 concrete
 kernel templates, 13 input/output types, all 169 conversion pairs, 6,566 exact
 materializations, and 8,684 reflected target resources. Scalar and vector forms
@@ -1122,6 +1139,13 @@ expose source and destination storage buffers plus an entry-scoped size block;
 fixed generalized forms add scalar stride blocks or stride storage buffers;
 rank-generic forms expose shape and stride buffers plus an entry-scoped rank
 block; dynamic forms add exact source and destination offset blocks.
+
+The reference review covers all 2,496 complete sources and target interfaces.
+Narrow-conversion helpers account for 308 changed artifacts; 2,188 remain
+byte-identical. All indexing and interfaces are preserved. Sixty-one fresh
+translation checks cover every changed conversion pair and shape, in addition
+to complete compiler validation. This does not extend the historical revision
+coverage or establish full numerical parity.
 
 The generic registered-structure contract recognizes both canonical
 ``complex64_t`` and its emitted ``complex_t_float`` representation. The 150

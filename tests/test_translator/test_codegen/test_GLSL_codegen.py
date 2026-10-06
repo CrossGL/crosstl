@@ -52,6 +52,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLCopySignError,
     OpenGLEntryPointSelectionError,
     OpenGLFixedArrayResourceError,
+    OpenGLFloatingRemainderError,
     OpenGLForInIterableError,
     OpenGLGlobalInitializerError,
     OpenGLIndexTypeError,
@@ -729,6 +730,208 @@ def test_glsl_user_defined_qualified_copysign_name_remains_an_ordinary_call():
     assert "return metal_u3a_u3acopysign(value, (-1.0));" in generated
     assert "0x7fffffffu" not in generated
     assert "0x80000000u" not in generated
+
+
+@pytest.mark.parametrize(
+    "value_type",
+    [
+        "float",
+        "vec2",
+        "vec3",
+        "vec4",
+        "double",
+        "dvec2",
+        "dvec3",
+        "dvec4",
+    ],
+)
+def test_glsl_floating_remainder_uses_integer_significands_and_validates(
+    tmp_path, value_type
+):
+    source = f"""
+    shader FloatingRemainder {{
+        RWStructuredBuffer<{value_type}> result @ binding(0);
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                {value_type} left = {value_type}(-5.5);
+                {value_type} right = {value_type}(2.0);
+                result[0] = fmod(left, right);
+            }}
+        }}
+    }}
+    """
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(source), "compute"
+    )
+    assert "crossgl_fmod_" in generated
+    assert "int shift = x_exponent - y_exponent" in generated
+    assert "remainder >>= uint(1 - y_exponent)" in generated
+    assert " mod(" not in generated
+    assert "floor(" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "floating_remainder_" + value_type
+    )
+
+
+@pytest.mark.parametrize(
+    "left,right,result",
+    [
+        ("float", "vec3", "vec3"),
+        ("vec2", "float", "vec2"),
+        ("double", "dvec4", "dvec4"),
+    ],
+)
+def test_glsl_floating_remainder_broadcasts_scalar_operands(
+    tmp_path, left, right, result
+):
+    source = f"""
+    shader RemainderBroadcast {{
+        RWStructuredBuffer<{result}> output_value @ binding(0);
+        compute {{
+            layout(local_size_x = 1) in;
+            void main() {{
+                {left} a = {left}(-5.5);
+                {right} b = {right}(2.0);
+                output_value[0] = fmod(a, b);
+            }}
+        }}
+    }}
+    """
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(source), "compute"
+    )
+    assert f"crossgl_fmod_{result}(" in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "remainder_broadcast"
+    )
+
+
+@pytest.mark.parametrize("function", ["fmod", "metal_u3a_u3afmod"])
+def test_glsl_floating_remainder_preserves_user_overloads(function):
+    source = f"""
+    shader CustomRemainder {{
+        float {function}(float a, float b) {{ return a + b; }}
+        float apply(float a, float b) {{ return {function}(a, b); }}
+    }}
+    """
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(source))
+    assert f"return {function}(a, b);" in generated
+    assert "crossgl_fmod_" not in generated
+
+
+def test_glsl_floating_remainder_keeps_floor_mod_distinct_and_resets_helpers():
+    generator = GLSLCodeGen()
+    source = "shader Remainder { float apply(float a, float b) { return fmod(a, b); } }"
+    assert "crossgl_fmod_float" in generator.generate(crosstl.translator.parse(source))
+    generated = generator.generate(
+        crosstl.translator.parse(source.replace("fmod(", "mod("))
+    )
+    assert "return mod(a, b);" in generated
+    assert "crossgl_fmod_" not in generated
+
+
+def test_glsl_floating_remainder_helper_names_do_not_capture_user_functions():
+    source = """
+    shader Collision {
+        float crossgl_fmod_float(float a, float b) { return a + b; }
+        float apply(float a, float b) { return fmod(a, b) + crossgl_fmod_float(a, b); }
+    }
+    """
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(source))
+    assert "float crossgl_fmod_float(float a, float b)" in generated
+    assert re.search(
+        r"float crossgl_fmod_float_\d+\(float left, float right\)", generated
+    )
+
+
+@pytest.mark.parametrize(
+    "left,right,reason",
+    [
+        ("int", "int", "unsupported-operand-type"),
+        ("vec2", "vec3", "operand-shape-mismatch"),
+        ("float", "double", "operand-type-mismatch"),
+    ],
+)
+def test_glsl_floating_remainder_rejects_unrepresentable_operands(left, right, reason):
+    source = f"shader InvalidRemainder {{ float apply({left} a, {right} b) {{ return fmod(a, b); }} }}"
+    with pytest.raises(OpenGLFloatingRemainderError) as caught:
+        GLSLCodeGen().generate(crosstl.translator.parse(source))
+    assert (
+        caught.value.project_diagnostic_code
+        == "project.translate.opengl-fmod-unrepresentable"
+    )
+    assert caught.value.reason == reason
+    assert caught.value.operation == "fmod"
+    assert caught.value.operand_types == (left, right)
+
+
+@pytest.mark.parametrize(
+    "value_type", ["half", "float16_t", "half2", "bfloat", "bfloat3"]
+)
+def test_glsl_floating_remainder_rejects_unproven_narrow_profiles(value_type):
+    source = f"shader NarrowRemainder {{ {value_type} apply({value_type} a, {value_type} b) {{ return fmod(a, b); }} }}"
+    with pytest.raises(OpenGLFloatingRemainderError) as caught:
+        GLSLCodeGen().generate(crosstl.translator.parse(source))
+    assert caught.value.reason == "unsupported-narrow-remainder-profile"
+    assert caught.value.operand_types == (value_type, value_type)
+
+
+def test_glsl_floating_remainder_nested_calls_evaluate_operands_once(tmp_path):
+    source = """
+    shader NestedRemainder {
+        RWStructuredBuffer<float> result @ binding(0);
+        compute {
+            layout(local_size_x = 1) in;
+            float next_value(inout float value) {
+                value += 1.0;
+                return value;
+            }
+            void main() {
+                float a = -8.5;
+                float b = 1.0;
+                vec3 values = fmod(fmod(vec3(a), next_value(b)), next_value(a));
+                result[0] = values.y;
+            }
+        }
+    }
+    """
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(source), "compute"
+    )
+    assert generated.count("next_value(a)") == 1
+    assert generated.count("next_value(b)") == 1
+    assert generated.count("float crossgl_fmod_float(") == 1
+    assert generated.count("vec3 crossgl_fmod_vec3(") == 1
+    assert "crossgl_fmod_vec3(crossgl_fmod_vec3(" in generated
+    assert_glsl_compute_validates_if_available(generated, tmp_path, "nested_remainder")
+
+
+@pytest.mark.parametrize("name", ["floatBitsToUint", "uintBitsToFloat"])
+def test_glsl_floating_remainder_rejects_shadowed_bitcast_builtins(name):
+    source = f"""shader ShadowedRemainder {{
+        float {name}(float value) {{ return value; }}
+        float apply(float a, float b) {{ return fmod(a, b); }}
+    }}"""
+    with pytest.raises(OpenGLFloatingRemainderError) as caught:
+        GLSLCodeGen().generate(crosstl.translator.parse(source))
+    assert caught.value.reason == "target-builtin-shadowed"
+
+
+@pytest.mark.parametrize(
+    "version,value_type", [("#version 120", "float"), ("#version 330 core", "double")]
+)
+def test_glsl_floating_remainder_rejects_unsupported_profile(version, value_type):
+    from crosstl.translator.ast import VariableNode
+
+    generator = GLSLCodeGen()
+    generator.current_glsl_version_line = version
+    generator.local_variable_types = {name: value_type for name in ("a", "b")}
+    operands = [VariableNode(name, value_type) for name in ("a", "b")]
+    with pytest.raises(OpenGLFloatingRemainderError) as caught:
+        generator.generate_glsl_floating_remainder_call("fmod", operands)
+    assert caught.value.reason == "unsupported-profile"
+    assert caught.value.target_profile == version
 
 
 def test_glsl_signbit_preserves_negative_zero_and_nan_sign_and_validates(tmp_path):

@@ -3278,6 +3278,7 @@ jobs:
         if: runner.os == 'Linux'
         env:
           CROSTL_REQUIRE_OPENGL_METAL_MATH: "1"
+          CROSTL_REQUIRE_FLOATING_REMAINDER: "1"
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER: llvmpipe
           EGL_PLATFORM: surfaceless
@@ -3289,7 +3290,8 @@ jobs:
             python -m pytest -q -n auto \
               --basetemp="opengl-math-results/pytest" \
               --junitxml="opengl-math-results/results.xml" \
-              tests/test_translator/test_opengl_metal_math.py
+              tests/test_translator/test_opengl_metal_math.py \
+              tests/test_translator/test_floating_remainder_math.py
 
       - name: Upload OpenGL Metal math evidence
         if: always() && runner.os == 'Linux'
