@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 509,
+        "unsupported_marker_count": 510,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -154,7 +154,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1837
+        "test_count": 1840
       },
       "translator_codegen": {
         "exists": true,
@@ -310,7 +310,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 2070
+        "test_count": 2073
       },
       "translator_codegen": {
         "exists": true,
@@ -710,7 +710,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2245
+        "test_count": 2248
       },
       "translator_codegen": {
         "exists": true,

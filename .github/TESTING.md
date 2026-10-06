@@ -92,6 +92,18 @@ writeback, narrow intermediates and guards. The project's Sigmoid boundary
 regression stays under `demos/integrations/mlx/tests` and runs in the existing
 pinned unary step. Neither adds a runner or duplicates the compiler-only corpus.
 The Sigmoid check covers all 65,282 non-NaN bfloat inputs and eight output guards.
+The byte-conversion step also covers writable scalar/vector arguments, nested
+calls, aliases, indexed locations and lazy conditional calls. Signed and unsigned
+overflow checks retain output guards and original Metal comparisons. Separate
+field-reference cases compile on DirectX/OpenGL and execute on their native
+platforms; Metal field binding remains tracked in #2102. The vector-reference
+control uses an explicit arithmetic conversion: it does not claim coverage of
+the unsigned byte-vector compound-assignment failure tracked in #2023. These
+cases reuse the existing three native jobs and their evidence uploads.
+Distinct writable byte parameters have a native control. Potentially overlapping
+byte arguments, including read-only aliases, must produce a structured
+diagnostic rather than validating value-result code with different semantics.
+Broader source-reference identity remains tracked in #2103.
 The explicit division profile and precise-exponential lowering resolve the
 previous OpenGL midpoint and underflow differences without relaxing comparisons.
 The saved configuration and reviewed target identities are checked before

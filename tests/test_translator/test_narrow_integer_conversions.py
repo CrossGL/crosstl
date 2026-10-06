@@ -7,10 +7,15 @@ from pathlib import Path
 import pytest
 
 from crosstl._crosstl import translate
-from crosstl.translator.codegen.directx_codegen import DirectXContextualConversionError
+from crosstl.translator import parse
+from crosstl.translator.codegen.directx_codegen import (
+    DirectXContextualConversionError,
+    HLSLCodeGen,
+)
 from crosstl.translator.codegen.metal_codegen import UnsupportedMetalFeatureError
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values, _request
 from tests.test_translator.test_loop_updates import _execute
+from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_software_subgroup_product import _package
 
 REQUIRE_ENV = "CROSTL_REQUIRE_NARROW_INTEGER_CONVERSIONS"
@@ -40,6 +45,15 @@ FORMS = (
     "member_prefix",
     "member_postfix",
     "nested_member_compound",
+    "reference",
+    "reference_nested",
+    "reference_pair",
+    "reference_alias",
+    "reference_vector",
+    "reference_array",
+    "reference_index_effect",
+    "reference_conditional",
+    "reference_loop",
 )
 
 
@@ -123,6 +137,63 @@ def _case(root, target, signed, form):
     elif form == "postfix":
         body += " int old = int(value++);"
         expression = "old + int(value) * 1024"
+    elif form.startswith("reference"):
+        declarations = (
+            f"int increment(thread {byte}& value) {{ value += 3; return int(value); }}"
+        )
+        body += " increment(value);"
+        if form == "reference_nested":
+            declarations += f" void twice(thread {byte}& value) {{ increment(value); increment(value); }}"
+            body = f"{byte} value = input_value; twice(value);"
+        elif form == "reference_pair":
+            declarations += f" void pair(thread {byte}& value, thread {byte}& other) {{ increment(value); increment(other); }}"
+            body = f"{byte} value = input_value; {byte} other = 13; pair(value, other);"
+            expression = "int(value) + (int(other) - 16) * 1024"
+        elif form == "reference_alias":
+            declarations = f"using Byte = {byte};\n" + declarations.replace(
+                f"thread {byte}&", "thread Byte&"
+            )
+            body = "Byte value = input_value; increment(value);"
+        elif form == "reference_member":
+            declarations += f" struct Cell {{ {byte} value; }};"
+            body = "Cell cell; cell.value = input_value; increment(cell.value);"
+            expression = "int(cell.value)"
+        elif form == "reference_vector":
+            declarations = f"void increment(thread {byte}2& value) {{ value = {byte}2(int2(value) + 3); }}"
+            body = f"{byte}2 value = {byte}2(input_value, input_value + 2); increment(value);"
+            expression = "int(value.x) + int(value.y) * 1024"
+        elif form in {
+            "reference_array",
+            "reference_index_effect",
+            "reference_conditional",
+            "reference_loop",
+        }:
+            body = f"{byte} values[2] = {{{byte}(input_value), {byte}(91)}}; int index = 0;"
+            if form == "reference_array":
+                body += " increment(values[index]);"
+            elif form == "reference_index_effect":
+                body += " increment(values[index++]);"
+            elif form == "reference_conditional":
+                body += (
+                    " int result = input_value < 0 ? increment(values[index++]) : 17;"
+                )
+            else:
+                body += " for (int pass = 0; pass < 2; ++pass) { index = 0; increment(values[index++]); }"
+            expression = "int(values[0]) + (int(values[1]) - 91) * 1024"
+            expected_index = (
+                "0"
+                if form == "reference_array"
+                else (
+                    "(input_value < 0 ? 1 : 0)"
+                    if form == "reference_conditional"
+                    else "1"
+                )
+            )
+            expression += f" + (index - {expected_index}) * 65536"
+            if form == "reference_conditional":
+                expression += (
+                    " + (result - (input_value < 0 ? int(values[0]) : 17)) * 4096"
+                )
     output_type = byte if form in {"buffer_store", "buffer_offset"} else "int"
     result_index = "tid" if form == "buffer_offset" else "tid + 1u"
     source = f"""#include <metal_stdlib>
@@ -152,6 +223,13 @@ kernel void byte_conversions(const device int* inputs [[buffer(0)]],
             narrowed = _narrow(narrowed + 1, signed)
         elif form in {"postfix", "member_postfix"}:
             narrowed += _narrow(narrowed + 1, signed) * 1024
+        elif form.startswith("reference"):
+            steps = 2 if form in {"reference_nested", "reference_loop"} else 1
+            if form == "reference_conditional" and value >= 0:
+                steps = 0
+            narrowed = _narrow(narrowed + 3 * steps, signed)
+            if form == "reference_vector":
+                narrowed += _narrow(value + 5, signed) * 1024
         values.append(narrowed)
     count = len(VALUES) + 2
     dtype = "int32"
@@ -182,6 +260,8 @@ kernel void byte_conversions(const device int* inputs [[buffer(0)]],
 @pytest.mark.parametrize("form", FORMS)
 def test_narrow_integer_conversion_packages(tmp_path, target, signed, form):
     _, request, _ = _case(tmp_path, target, signed, form)
+    if form.startswith("reference"):
+        _compile(request.artifact_path.read_text(), target, tmp_path)
     if target == "directx" and form in {"buffer_store", "buffer_offset"}:
         stores = [
             line
@@ -254,3 +334,66 @@ def test_byte_conversions_and_directx_random_are_required_in_ci():
     assert "--target directx --output-dir .mlx-gather-directx/random" in step
     assert "set -euo pipefail" in step and "--timeout-seconds 300" in step
     assert "continue-on-error" not in step
+
+
+@pytest.mark.parametrize("signed", (True, False), ids=("signed", "unsigned"))
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_writable_byte_fields_compile(tmp_path, signed, target):
+    _, request, expected = _case(tmp_path, target, signed, "reference_member")
+    _compile(request.artifact_path.read_text(), target, tmp_path)
+    if os.environ.get(REQUIRE_ENV) == "1" and target == {
+        "win32": "directx",
+        "linux": "opengl",
+    }.get(sys.platform):
+        _execute(request, expected, tmp_path)
+
+
+@pytest.mark.parametrize("direction", ("out", "inout"))
+@pytest.mark.parametrize("width", (1, 2, 4))
+@pytest.mark.parametrize("signed", (True, False), ids=("signed", "unsigned"))
+def test_hlsl_writable_overloads_keep_lvalues(tmp_path, direction, width, signed):
+    byte = ("char" if signed else "uchar") + (str(width) if width > 1 else "")
+    wide = ("int" if signed else "uint") + (str(width) if width > 1 else "")
+    source = f"""shader References {{
+        RWStructuredBuffer<int> outputs @register(u0);
+        void update({direction} {byte} value) {{ value = {byte}(255); }}
+        int update({wide} value) {{ return int(value{'.x' if width > 1 else ''}); }}
+        int consume({byte} value) {{ return int(value{'.x' if width > 1 else ''}); }}
+        compute {{
+            @numthreads(1, 1, 1)
+            void main() {{
+                {byte} value = {byte}(127);
+                update(value);
+                outputs[0] = update({wide}(257)) + consume({wide}(257)) + int(value{'.x' if width > 1 else ''});
+            }}
+        }}
+    }}"""
+    generated = HLSLCodeGen().generate(parse(source))
+    assert f"update_{byte}(value);" in generated
+    assert f"{direction} {wide} value" in generated
+    assert "consume((int" in generated if signed else "consume((uint" in generated
+    _compile(generated, "directx", tmp_path)
+
+
+@pytest.mark.parametrize("kind", ("char", "uchar"))
+@pytest.mark.parametrize("readonly", (False, True))
+@pytest.mark.parametrize("indexed", (False, True))
+def test_hlsl_rejects_byte_reference_aliases(tmp_path, kind, readonly, indexed):
+    second = "const thread" if readonly else "thread"
+    declaration = f"{kind} value = {kind}(1);"
+    arguments = "value, value"
+    result = "value"
+    if indexed:
+        declaration = f"{kind} values[2] = {{{kind}(1), {kind}(2)}}; uint index = 0;"
+        arguments = "values[index], values[0]"
+        result = "values[0]"
+    source = tmp_path / "aliases.metal"
+    source.write_text(
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        f"void change(thread {kind}& first, {second} {kind}& other) {{ first += 1; first += other; }}\n"
+        "kernel void aliases(device uint* outputs [[buffer(0)]]) {\n"
+        f"{declaration} change({arguments}); outputs[0] = uint({result});\n}}\n"
+    )
+    with pytest.raises(DirectXContextualConversionError) as error:
+        translate(str(source), backend="directx", format_output=False)
+    assert error.value.reason == "byte-reference-alias-unsupported"

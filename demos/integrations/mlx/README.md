@@ -60,10 +60,30 @@ row artifacts differ only in the predicate; those and four current-pin artifacts
 strictly compile with input-dependent votes retained in DXIL. Generic native
 controls cover all 65,536 half payloads on Metal and OpenGL; Windows execution
 remains a separate required check. No complete reduction reference set is
-accepted from these results. Eight byte-valued small-row artifacts still fail
-strict compilation because writable arguments are narrowed into temporaries
-([#2101](https://github.com/CrossGL/crosstl/issues/2101)); upstream kernels are
+accepted from these results.
+
+Eight byte-valued small-row artifacts exposed a writable-argument regression
+([#2101](https://github.com/CrossGL/crosstl/issues/2101)). The HLSL correction
+preserves the accumulator's storage location instead of narrowing it into a
+temporary. All eight historical artifacts now pass strict DXC compilation;
+their interfaces are unchanged and each body differs only at the writable
+`total_val` arguments. The same eight entries at the current `9c3d3557` pin
+also pass strict DXC compilation. This does not accept the full reduction
+reference set or establish whole-kernel numerical parity. Upstream kernels are
 unchanged.
+Generic reference controls cover signed/unsigned overflow, aliases, nested
+calls, scalar/vector values and indexed calls under conditionals and loops.
+
+Cross-backend controls also found a separate Metal narrow-field reference
+failure ([#2102](https://github.com/CrossGL/crosstl/issues/2102)): the field
+retains byte storage but its writable helper parameter is widened. Unsigned
+byte-vector compound assignment remains a distinct arithmetic limitation under
+[#2023](https://github.com/CrossGL/crosstl/issues/2023). Passing DirectX/OpenGL
+reference tests does not establish Metal round-trip support for those cases.
+Shared source references also require alias-aware lowering
+([#2103](https://github.com/CrossGL/crosstl/issues/2103)). The byte-argument fix
+rejects potentially overlapping reference arguments rather than relying on
+HLSL copy-in/copy-out; wider reference aliasing remains unresolved.
 
 ## Corpus Revisions
 
@@ -1993,6 +2013,11 @@ and uint64 size resources exactly: nine DirectX bindings include the generated
 `CrossGLDispatchInfo`, while OpenGL has eight bindings. Linux arm64 llvmpipe
 executed deterministic rows with repeated extrema and read back argmin indices
 `[5, 7]` and argmax indices `[3, 2]`, proving lowest-index tie behavior.
+The retained [Windows execution results](https://github.com/CrossGL/crosstl/actions/runs/37403863131/job/112076922079)
+confirm the same indices. Independent inspection verifies the uploaded rows,
+lowest-index ties, generated source and executed DXIL identities. The enclosing
+job later failed at the separate GEMV reference check; it is not a passing
+project-wide result.
 Windows CI requires the same two workloads through Direct3D 12 WARP and Linux
 CI requires them through surfaceless Mesa EGL. Other axes, dtypes, and the
 remaining 22 host-named entries, MLX host redirection, and the full MLX test
@@ -2062,7 +2087,12 @@ relative tolerance. The current local Mesa run has maximum absolute error
 `4.082320426146424e-08` and maximum relative error
 `4.2163276126605175e-06`. An independent 100-digit reference using the uploaded
 binary32 inputs gives maximum absolute error `4.688126085821141e-08` across
-all 64 outputs. Windows execution of the updated artifact remains required.
+all 64 outputs. The retained [Windows execution results](https://github.com/CrossGL/crosstl/actions/runs/37403863131/job/112076922079)
+also pass. Independent calculation from the uploaded binary32 inputs gives
+maximum absolute error `4.700266193284516e-08` across all 64 values, with the
+generated source, compiler output and executed DXIL identities verified.
+This does not establish normalization execution: those later steps were skipped
+after the GEMV reference failure in the same job.
 Existing native jobs retain translation reports before identity checks,
 packages, compiler records, inputs, results and JUnit reports on failure.
 This is bounded evidence for one float32 one-pass

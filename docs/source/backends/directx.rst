@@ -77,6 +77,29 @@ generated Metal, with midpoint neighbors, both signs and boundary values, plus
 conversion sites and side-effect counts. Compiler checks alone do not establish
 numerical correctness.
 
+Writable Byte Arguments
+-----------------------
+
+Source byte values use explicit signed extension or unsigned masking when
+passed by value. Writable ``out`` and ``inout`` arguments instead retain their
+storage location; applying a value conversion would create a temporary and
+lose writeback. Parameter direction follows the selected source overload,
+including overloads renamed after their types map to the same HLSL signature.
+
+Indexed byte arguments capture their indices once at the call's evaluation
+site, including calls inside conditional arms and loops. Callee assignments
+and updates still apply source-width conversion. Required native controls
+cover signed and unsigned overflow, nested calls, aliases, scalar/vector locals,
+arrays, index effects and output guards. Field arguments have separate DirectX
+and OpenGL checks; Metal narrow-field reference binding remains a documented
+round-trip limitation.
+
+Byte-reference arguments sharing a storage owner are rejected when either can
+write. HLSL parameter copies cannot preserve arbitrary source aliasing, even
+when the resulting shader compiles. This guard is conservative for fields and
+array elements; it does not prove their disjointness or provide alias-aware
+lowering. Wider source-reference aliasing remains outside this byte contract.
+
 Software Subgroup Reductions
 ----------------------------
 

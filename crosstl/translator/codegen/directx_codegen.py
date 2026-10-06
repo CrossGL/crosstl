@@ -22119,6 +22119,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 callee = specialized_func_name
                 func_name = specialized_func_name
 
+            resolved_overload = None
             if func_name in self.hlsl_mapped_overload_names:
                 resolved_overload = self.resolve_hlsl_function_overload(
                     func_name,
@@ -22369,15 +22370,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if workgroup_callee is not None:
                 callee = workgroup_callee
             argument_type_func_name = self.hlsl_materialized_function_name(func_name)
-            args_str = ", ".join(
-                self.generate_call_arguments(
-                    call_argument_func_name,
-                    args,
-                    argument_type_func_name,
-                    call_node=expr,
-                )
+            rendered_args, argument_assignments = self.generate_call_arguments(
+                call_argument_func_name,
+                args,
+                argument_type_func_name,
+                call_node=expr,
+                resolved_overload=resolved_overload,
             )
-            return f"{callee}({args_str})"
+            call = f"{callee}({', '.join(rendered_args)})"
+            return (
+                f"({', '.join([*argument_assignments, call])})"
+                if argument_assignments
+                else call
+            )
         elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
             union_member_read = self.generate_hlsl_union_member_read(expr)
             if union_member_read is not None:
@@ -39355,12 +39360,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         type_func_name=None,
         *,
         call_node=None,
+        resolved_overload=None,
     ):
         parameter_lookup_name = type_func_name or func_name
         parameter_types = self.function_parameter_types.get(parameter_lookup_name)
         if not parameter_types and type_func_name != func_name:
             parameter_types = self.function_parameter_types.get(func_name)
-        if not parameter_types:
+        if resolved_overload is None:
 
             def resolved_parameter_overload(function_name):
                 try:
@@ -39380,15 +39386,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             resolved_overload = resolved_parameter_overload(parameter_lookup_name)
             if resolved_overload is None and parameter_lookup_name != func_name:
                 resolved_overload = resolved_parameter_overload(func_name)
-            if resolved_overload is not None:
-                parameter_types = [
-                    self.function_parameter_type_name(parameter)
-                    for parameter in getattr(
-                        resolved_overload,
-                        "parameters",
-                        getattr(resolved_overload, "params", []),
-                    )
-                ]
+        parameters = (
+            getattr(
+                resolved_overload,
+                "parameters",
+                getattr(resolved_overload, "params", []),
+            )
+            or []
+        )
+        if resolved_overload is not None:
+            parameter_types = [
+                self.function_parameter_type_name(parameter) for parameter in parameters
+            ]
+        self.validate_hlsl_byte_reference_arguments(args, parameters, call_node)
         parameter_types = parameter_types or []
         workgroup_pointer_func_name = type_func_name or func_name
         workgroup_pointer_indices = (
@@ -39420,6 +39430,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if candidate is not None
             ]
         rendered_args = []
+        argument_assignments = []
         for index, arg in enumerate(args):
             expected_type = (
                 parameter_types[index] if index < len(parameter_types) else None
@@ -39453,17 +39464,78 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 or index in private_pointer_indices
             ):
                 rendered_args.append("")
+            elif index < len(parameters) and set(
+                self.hlsl_parameter_qualifiers(parameters[index])
+            ).intersection({"out", "inout"}):
+                # Value conversion would turn a writable argument into a temporary.
+                # Capture indexed byte locations before HLSL's copy-in/copy-out.
+                if self.hlsl_byte_integer_shape(expected_type) is not None:
+                    assignments, arg = self.hlsl_stabilize_inout_lvalue(
+                        call_node or arg,
+                        arg,
+                        self.map_type(expected_type),
+                        operation="byte-reference argument",
+                        reason="byte-reference-unstable-lvalue",
+                    )
+                    argument_assignments.extend(assignments)
+                rendered_args.append(self.generate_expression_with_expected(arg, None))
             else:
                 rendered_args.append(
                     self.generate_expression_with_expected(arg, expected_type)
                 )
-        return self.generate_call_arguments_from_rendered(
-            func_name,
-            args,
-            rendered_args,
-            private_pointer_func_name=type_func_name or func_name,
-            workgroup_pointer_func_name=workgroup_pointer_func_name,
+        return (
+            self.generate_call_arguments_from_rendered(
+                func_name,
+                args,
+                rendered_args,
+                private_pointer_func_name=type_func_name or func_name,
+                workgroup_pointer_func_name=workgroup_pointer_func_name,
+            ),
+            argument_assignments,
         )
+
+    def validate_hlsl_byte_reference_arguments(self, args, parameters, call_node):
+        references = []
+        for arg, parameter in zip(args, parameters):
+            qualifiers = set(self.hlsl_parameter_qualifiers(parameter))
+            writable = bool(qualifiers.intersection({"out", "inout"}))
+            source_qualifiers = set(getattr(parameter, "qualifiers", []) or [])
+            raw_type = self.hlsl_parameter_raw_type(parameter)
+            if not (
+                writable
+                or isinstance(raw_type, ReferenceType)
+                or "thread" in source_qualifiers
+            ):
+                continue
+            value_type = self.function_parameter_type_name(parameter)
+            byte = self.hlsl_byte_integer_shape(value_type) is not None
+            owner = arg
+            while isinstance(owner, (ArrayAccessNode, MemberAccessNode, SwizzleNode)):
+                if isinstance(owner, ArrayAccessNode):
+                    owner = owner.array
+                elif isinstance(owner, MemberAccessNode):
+                    owner = owner.object_expr
+                else:
+                    owner = owner.vector_expr
+            name = self.expression_name(owner)
+            if not name:
+                continue
+            for previous_name, previous_byte, previous_writable in references:
+                if (
+                    name == previous_name
+                    and (byte or previous_byte)
+                    and (writable or previous_writable)
+                ):
+                    raise DirectXContextualConversionError(
+                        "DirectX cannot preserve potentially overlapping byte "
+                        "references through HLSL parameter copy-in/copy-out; "
+                        "shared storage requires alias-aware call lowering",
+                        source_type=value_type,
+                        target_type=self.map_type(value_type),
+                        reason="byte-reference-alias-unsupported",
+                        source_location=getattr(call_node, "source_location", None),
+                    )
+            references.append((name, byte, writable))
 
     def generate_call_arguments_from_rendered(
         self,
