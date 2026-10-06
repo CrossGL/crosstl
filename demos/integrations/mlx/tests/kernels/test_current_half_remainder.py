@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 from crosstl.project import (
-    build_native_loader_dispatch_request,
     load_project_config,
     translate_project,
 )
@@ -28,11 +27,16 @@ from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
 )
 from demos.integrations.mlx.tests.kernels.test_current_complex_power import MLX_COMMIT
 from demos.integrations.mlx.tests.kernels.test_current_copy import _half_payload
-from demos.integrations.mlx.tests.kernels.test_current_gather import _bound_inputs
 from tests.runtime_helpers import _prepare_native_package, _validate
-from tests.test_translator.test_boolean_buffer_runtime import _bound_values
+from tests.test_translator.test_boolean_buffer_runtime import (
+    _bound_values,
+)
+from tests.test_translator.test_boolean_buffer_runtime import (
+    _request as _dispatch_request,
+)
 from tests.test_translator.test_metal_half_remainder import _oracle, _pairs
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
+from tests.test_translator.test_software_subgroup_product import _package
 from tools import ci_coverage
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -88,6 +92,65 @@ def test_remainder_comparison_rejects_finite_and_zero_sign_errors():
             _check_words([positive + 1], [positive], width)
         with pytest.raises(AssertionError):
             _check_words([1 << width], [positive], width)
+
+
+def _request(descriptor, package, target, pairs, expected):
+    assert descriptor["target"] == target
+    inputs = {
+        "a": _half_payload(target, [a for a, _ in pairs]),
+        "b": _half_payload(target, [b for _, b in pairs]),
+        "c": _half_payload(target, [GUARD] * len(expected)),
+    }
+    size_name = ENTRY + "_size" if target == "directx" else "size"
+    inputs[size_name] = {"dtype": "uint32", "shape": [1], "values": [len(pairs)]}
+    outputs = {"c": _half_payload(target, expected)}
+    request = _dispatch_request(descriptor, package, inputs, outputs, len(pairs))
+    return request, inputs, _bound_values(descriptor, outputs)
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+def test_half_payload_request_preserves_logical_encoding(tmp_path, target):
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+kernel void {ENTRY}(const device half* a [[buffer(0)]],
+                    const device half* b [[buffer(1)]],
+                    device half* c [[buffer(2)]],
+                    constant uint& size [[buffer(3)]],
+                    uint i [[thread_position_in_grid]]) {{
+    if (i < size) c[i] = a[i] + b[i];
+}}
+"""
+    _, descriptor, package = _package(
+        tmp_path, target, "half", (1, 1, 1), source=source, software_subgroups=False
+    )
+    pairs = [(0x3C00, 0x4000)]
+    expected = [0x4200] + [GUARD] * 8
+    request, _, outputs = _request(descriptor, package, target, pairs, expected)
+    assert not request.execution_plan.diagnostics
+    by_name = {value.name: value for value in request.fixture.inputs}
+    payloads = {
+        "a": _half_payload(target, [pairs[0][0]]),
+        "b": _half_payload(target, [pairs[0][1]]),
+        "c": _half_payload(target, [GUARD] * len(expected)),
+    }
+    for binding in descriptor["bindings"]:
+        if binding["kind"] != "buffer":
+            continue
+        value = by_name[binding["name"]]
+        layout = binding["scalarLayout"]
+        payload = payloads[layout.get("memberName", binding["name"])]
+        assert value.dtype == payload["dtype"]
+        assert value.encoding == payload["encoding"]
+        assert list(value.values) == payload["values"]
+        if target == "directx":
+            assert layout["elementType"] == "uint16"
+            assert layout["elementSizeBytes"] == layout["elementStrideBytes"] == 2
+            assert layout["storageEncoding"] == {
+                "encoding": "ieee754-binary16",
+                "logicalElementType": "float16",
+            }
+    (output,) = outputs.values()
+    assert output == _half_payload(target, expected)
 
 
 def test_current_half_remainder_native_parity(tmp_path):
@@ -151,20 +214,8 @@ def test_current_half_remainder_native_parity(tmp_path):
             descriptor, package = _prepare_native_package(report, work)
             source = package / descriptor["artifact"]["packagePath"]
             _validate(source, work, target)
-            inputs = {
-                "a": _half_payload(target, [a for a, _ in pairs]),
-                "b": _half_payload(target, [b for _, b in pairs]),
-                "c": _half_payload(target, [GUARD] * len(expected)),
-                "size": {"dtype": "uint32", "shape": [1], "values": [len(pairs)]},
-            }
-            outputs = _bound_values(descriptor, {"c": _half_payload(target, expected)})
-            request = build_native_loader_dispatch_request(
-                descriptor,
-                package,
-                _bound_inputs(descriptor, ENTRY, inputs),
-                outputs,
-                {"workgroupCount": [len(pairs), 1, 1], "workgroupSize": [1, 1, 1]},
-                expected_target=target,
+            request, inputs, outputs = _request(
+                descriptor, package, target, pairs, expected
             )
             assert not request.execution_plan.diagnostics
             (work / "values.json").write_text(
