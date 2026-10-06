@@ -42873,6 +42873,105 @@ def test_opengl_bfloat16_as_type_alias_lowers_from_uint_payload():
     assert "as_type<" not in generated_code
 
 
+@pytest.mark.parametrize(
+    "function", sorted(GLSLCodeGen.GLSL_COMPONENTWISE_UNARY_FUNCTIONS)
+)
+@pytest.mark.parametrize(
+    "argument_type,result_type", [("float", "vec2"), ("vec2", "vec4")]
+)
+def test_opengl_builtin_result_width_in_vector_initializer(
+    tmp_path, function, argument_type, result_type
+):
+    shader = f"""
+    shader BuiltinAggregate {{
+        {result_type} build({argument_type} theta) {{
+            {result_type} value = {{{function}(theta), {function}(theta)}};
+            return value;
+        }}
+        compute {{ void main() {{}} }}
+    }}
+    """
+    generator = GLSLCodeGen()
+    generated = generator.generate(crosstl.translator.parse(shader))
+    mapped = generator.function_map.get(function, function)
+    assert (
+        f"{result_type} value = {result_type}({mapped}(theta), {mapped}(theta));"
+        in generated
+    )
+    assert_glsl_compute_validates_if_available(generated, tmp_path, "builtin_aggregate")
+
+
+def test_opengl_nested_builtin_result_width_in_vector_initializer(tmp_path):
+    shader = """
+    shader NestedBuiltinAggregate {
+        vec4 build(vec2 theta) {
+            vec4 value = {cos(sin(theta)), exp(sqrt(theta))};
+            return value;
+        }
+        compute { void main() {} }
+    }
+    """
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "vec4 value = vec4(cos(sin(theta)), exp(sqrt(theta)));" in generated
+    assert_glsl_compute_validates_if_available(generated, tmp_path, "nested_builtin")
+
+
+def test_opengl_user_overload_result_width_precedes_builtin(tmp_path):
+    shader = """
+    shader UserBuiltinAggregate {
+        vec2 sin(int value) { return vec2(float(value)); }
+        vec4 build(int value) {
+            vec4 result = {sin(value), sin(value)};
+            return result;
+        }
+        compute { void main() {} }
+    }
+    """
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "vec4 result = vec4(sin(value), sin(value));" in generated
+    assert_glsl_compute_validates_if_available(generated, tmp_path, "user_builtin")
+
+
+def test_metal_builtin_aggregate_translates_to_opengl(tmp_path):
+    from crosstl._crosstl import translate
+
+    source = tmp_path / "twiddle.metal"
+    source.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+        kernel void build(device float2* output [[buffer(0)]],
+                          constant float& theta [[buffer(1)]],
+                          uint index [[thread_position_in_grid]]) {
+            float2 twiddle = {metal::fast::cos(theta), metal::fast::sin(theta)};
+            output[index] = twiddle;
+        }
+        """,
+        encoding="utf-8",
+    )
+    generated = translate(str(source), backend="opengl", format_output=False)
+    assert "vec2 twiddle = vec2(cos(theta), sin(theta));" in generated
+    assert_glsl_compute_validates_if_available(generated, tmp_path, "metal_builtin")
+
+
+@pytest.mark.parametrize(
+    "argument_type,function", [("vec2", "sin"), ("float", "unknown_function")]
+)
+def test_opengl_builtin_inference_retains_invalid_aggregate_diagnostics(
+    argument_type, function
+):
+    shader = f"""
+    shader InvalidBuiltinAggregate {{
+        vec2 build({argument_type} theta) {{
+            vec2 value = {{{function}(theta), {function}(theta)}};
+            return value;
+        }}
+    }}
+    """
+    with pytest.raises(OpenGLAggregateInitializerError):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 def test_opengl_lowers_contextual_aggregate_initializers(tmp_path):
     shader = """
     shader ContextualAggregates {

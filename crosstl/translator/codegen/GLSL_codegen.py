@@ -31950,6 +31950,11 @@ complex64_t crossgl_complex64_mod_assign(
                 )
             if func_name in self.function_return_types:
                 return self.function_return_types[func_name]
+            componentwise_type = self.glsl_componentwise_unary_result_type(
+                func_name, args
+            )
+            if componentwise_type is not None:
+                return componentwise_type
             if func_name == "atomicCompareExchangeWeak":
                 return "bool"
             if func_name == "imageLoad" and args:
