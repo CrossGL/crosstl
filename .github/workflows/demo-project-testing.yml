@@ -2055,7 +2055,7 @@ jobs:
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
-          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging \
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist "PyYAML>=6,<7" setuptools wheel cmake ninja nanobind numpy packaging \
             2>&1 | tee .mlx-portable-half/dependencies.log
       - name: Validate half host contracts
         run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_half.py demos/integrations/mlx/tests/host/test_portable_half_arithmetic.py

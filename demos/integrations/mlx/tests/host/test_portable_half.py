@@ -470,6 +470,9 @@ def test_half_ci_requires_every_target_and_retained_evidence():
     assert "--family half" in steps["Translate half host packages"]["run"]
     assert "portable_host.verify_half" in steps["Execute half host operations"]["run"]
     assert "-n auto" in steps["Validate half host contracts"]["run"]
+    assert (
+        '"PyYAML>=6,<7"' in steps["Install CrossTL and MLX build dependencies"]["run"]
+    )
     assert steps["Retain half execution evidence"]["if"] == "always()"
     assert (
         steps["Retain half execution evidence"]["with"]["if-no-files-found"] == "error"
