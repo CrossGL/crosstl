@@ -16706,7 +16706,7 @@ def test_quantized_metal_roundtrip_evidence_records_complete_family():
         "generated_size_bytes_total": artifact["generatedSizeBytesTotal"],
         "generated_size_range": artifact["generatedSizeRange"],
     }
-    assert artifact["generatedSizeBytesTotal"] == 39638916
+    assert artifact["generatedSizeBytesTotal"] == 40559670
 
     assert status["terminal_proof"] == {
         "candidate_base_commit": contract["proof"]["candidateBaseCommit"],
@@ -17046,7 +17046,8 @@ def test_reduce_opengl_translation_evidence_records_complete_family():
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
     assert (
-        "all 2,396 discovered current-pinned `reduce.metal` entries to OpenGL" in readme
+        "all 2,396 discovered `reduce.metal` entries at historical revision "
+        "`846d176227a0ac13d2667e58d2bb68b322109ab0` to OpenGL" in readme
     )
     assert "Six explicit host/runtime index-range preconditions" in readme
     assert "one exact iteration at a time" in readme

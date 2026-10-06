@@ -659,7 +659,8 @@ The current harness verifies:
   translation, reflection, and native compiler coverage, not numerical
   execution or MLX host runtime redirection;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 2,396
-  discovered current-pinned reduction entries from `reduce.metal`. The compact
+  discovered reduction entries from `reduce.metal` at historical revision
+  `846d176227a0ac13d2667e58d2bb68b322109ab0`. The compact
   schema-v2 `contracts/reduce.metal-roundtrip.json` contract spans 39 exact ABI
   shapes, nine kernel templates, six operator families, 44 concrete operator
   types, and 13 input/output types. It pins every artifact identity plus exact
@@ -668,7 +669,11 @@ The current harness verifies:
   resources in aggregate and retain a host-owned `[1, 1, 1]` workgroup
   contract. Twenty-four required Ubuntu shards cover 20 groups of 100 entries
   and four groups of 99. One macOS consumer compiles every exported artifact
-  with warnings fatal and requires 2,396 non-empty AIR objects. This is complete reduce translation, reflection,
+  with warnings fatal and requires 2,396 non-empty AIR objects. Complete source
+  and interface comparisons account for 558 updated references: source product
+  grouping and half-precision infinity initializers. Native checks of the two
+  half initializer kernels match unchanged upstream Metal and independent
+  expected words, including output guards. This is complete reduce translation, reflection,
   and native compiler coverage, not numerical execution or MLX host runtime
   redirection;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 2,052 host-named
@@ -676,13 +681,18 @@ The current harness verifies:
   `contracts/quantized.metal-roundtrip.json` contract covers 38 normalized
   variants over 17 source templates for three data types, group sizes 32/64/128,
   and bit widths 2/3/4/5/6/8. It pins 14,904 exact materializations and
-  39,638,916 generated Metal bytes without checking transient proof rows into
+  40,559,670 generated Metal bytes without checking transient proof rows into
   git. Thirty deduplicated exact ABI contracts span four- through
   twenty-two-resource interfaces and contain 31,374 reflected resources in
-  aggregate, all with host-owned `[1, 1, 1]` workgroups. The terminal external
+  aggregate, all with host-owned `[1, 1, 1]` workgroups. The original terminal external
   proof compiled every entry twice with Metal 3.1 and warnings fatal, required
   byte-identical non-empty AIR, and is bound by the checked-in terminal,
-  independent-audit, and adversarial identities. Twenty-four required Ubuntu CI
+  independent-audit, and adversarial identities. The `proof` section retains
+  that original audit provenance; `entries` and `artifactContract` describe the
+  reconciled output. Complete body and interface comparisons account for source
+  grouping, explicit narrow conversions and infinity initializers. All 2,052
+  current sources pass strict compilation and a separate native bundle rebuild.
+  Twenty-four required Ubuntu CI
   shards rediscover the exact source entries, retranslate and reflect each one;
   twelve shards contain 86 entries and twelve contain 85. One dependent macOS
   job verifies every source identity and compiles all entries with Metal 3.1,
@@ -697,16 +707,22 @@ The current harness verifies:
   zero ranges. Original upstream Metal and generated Metal must independently
   match expected packed bytes, scales and biases, with readonly inputs and
   output guards preserved. `prove_quantized_metal.py` retains native commands,
-  modules, inputs, expected outputs and readbacks. This bounded numerical check
+  modules, inputs, expected outputs and readbacks. The refreshed-source check
+  covers all 108 variants and 40,320 scalar values per original/generated path.
+  This bounded numerical check
   adds no macOS runner or repeated translation and does not establish numerical
   coverage of the remaining quantized families or MLX host runtime redirection;
-- selected-entry translation of all 2,396 discovered current-pinned
-  `reduce.metal` entries to OpenGL. The compact schema-v2
+- selected-entry translation of all 2,396 discovered `reduce.metal` entries at
+  historical revision `846d176227a0ac13d2667e58d2bb68b322109ab0` to OpenGL. The compact schema-v2
   `contracts/reduce.opengl-translation.json` contract spans the same 39 exact
   ABI shapes, nine kernel templates, six operator families, 44 concrete
   operator types, and 13 input/output types. It pins 9,216 exact
-  materializations, 31,155,122 generated GLSL bytes, and 25,088
+  materializations, 32,115,641 generated GLSL bytes, and 25,088
   resources across scalar-layout-aware one- through twelve-resource target ABIs.
+  Complete source comparisons and strict compiler checks cover every entry;
+  85 fresh pipeline checks cover all reviewed edit patterns and ABI shapes.
+  Resource declarations are unchanged. The 156 complex-buffer reference updates
+  add explicit scalar-layout metadata rather than changing buffer storage.
   Six explicit host/runtime index-range preconditions bound the source pointer
   and output expressions required by wide-index shapes to signed 32-bit OpenGL
   index space; they are deployment promises rather than inferred or generated
