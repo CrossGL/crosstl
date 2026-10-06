@@ -485,8 +485,11 @@ The current harness verifies:
   at the same legacy reference revision to OpenGL. The schema-v2
   `contracts/unary.opengl-translation.json` contract pins every standalone
   `main` artifact across the same five shapes, 37 operators, 20 type pairs,
-  1,243 materializations, and 3,363 reflected resources, totaling 4,119,841
-  generated GLSL bytes. Translation requires three explicit host/runtime
+  1,243 materializations, and 3,363 reflected resources, totaling 4,771,646
+  generated GLSL bytes. The references incorporate reviewed scalar/vector
+  conversions and numeric helpers; every complete shader body and host
+  interface is compared before accepting an identity change. Translation
+  requires three explicit host/runtime
   index-range preconditions for `offset + i`, `out_idx++`, and `idx`; these are
   portability promises rather than inferred or runtime-enforced bounds. The
   lowering maps Metal `log10` through one-evaluation GLSL `log2`, preserves user
@@ -767,7 +770,9 @@ The current harness verifies:
   materialization, workgroup metadata, and reflected ABI, and compile with
   checksum-pinned DXC using `-enable-16bit-types -WX -T cs_6_2 -E CSMain`,
   requiring 2,396 non-empty DXIL modules. The reviewed references total
-  36,938,786 HLSL bytes and 24,289,872 DXIL bytes. This records complete
+  36,938,786 HLSL bytes and 24,289,872 DXIL bytes. Source references preserve
+  the original integer-product grouping; an independent rebuild of all
+  2,396 modules confirms unchanged DXIL identities. This records complete
   translation, reflection and compiler coverage for this historical HLSL corpus,
   not numerical execution or MLX host runtime redirection. Other target reference
   updates remain separate;

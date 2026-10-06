@@ -11940,8 +11940,8 @@ def test_unary_opengl_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.opengl-translation.json",
         "schema_version": 2,
-        "sha256": "b11c1400b7d6fbea41eb1b4d9a08c86822c5922a5bbd6e5153a576c798504d7f",
-        "size_bytes": 317614,
+        "sha256": "71ef7c7626c7670a0efb1cd3bf1907d5942bcfc6b1f751dd0f78625efd4060bb",
+        "size_bytes": 317654,
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12048,12 +12048,12 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 4119841,
+        "generated_size_bytes_total": 4771646,
         "generated_size_range": {
-            "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3568},
+            "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3566},
             "maximum": {
-                "entryPoint": "gn4large_ArcTancomplex64complex64",
-                "sizeBytes": 8746,
+                "entryPoint": "gn4large_Sinfloat16float16",
+                "sizeBytes": 12582,
             },
         },
     }
@@ -12099,7 +12099,7 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         "all 877 discovered `unary.metal` entries at the same legacy reference revision to OpenGL"
     ) in readme
     assert f"`{CURRENT_MLX_COMMIT}`" in readme
-    assert "4,119,841 generated GLSL bytes" in readme
+    assert "4,771,646 generated GLSL bytes" in readme
     assert "three explicit host/runtime index-range preconditions" in readme
     assert "requires 877 non-empty SPIR-V 1.3 modules" in readme
     guide = " ".join(
@@ -12107,8 +12107,8 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         .read_text(encoding="utf-8")
         .split()
     )
-    assert "all 877 current-pinned unary entries to standalone OpenGL" in guide
-    assert "4,119,841 generated GLSL bytes" in guide
+    assert "all 877 historical unary entries to standalone OpenGL" in guide
+    assert "4,771,646 generated GLSL bytes" in guide
     assert "five disjoint Linux shards" in guide
 
 
