@@ -1836,6 +1836,7 @@ REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(
         "dispatchRegion",
         "dispatchRegionProgram",
         "binary32DivisionProfile",
+        "binary16RemainderProfile",
     )
 )
 REPORT_ARTIFACT_ENTRY_POINT_FIELDS = frozenset(("source", "target", "stage"))
@@ -28420,6 +28421,15 @@ def _translate_project_impl(
                         artifact["provenance"][
                             "binary32DivisionProfile"
                         ] = division_profile
+                    remainder_profile = source_options.get("binary16_remainder_profile")
+                    if unit.source_backend == "metal" and remainder_profile is not None:
+                        if remainder_profile != "binary32-quotient":
+                            raise ValueError(
+                                "binary16_remainder_profile must be 'binary32-quotient' or None"
+                            )
+                        artifact["provenance"][
+                            "binary16RemainderProfile"
+                        ] = remainder_profile
                     dispatch_region = _project_dispatch_region(target, source_options)
                     if dispatch_region is not None:
                         artifact["provenance"][
@@ -46393,6 +46403,13 @@ def _provenance_contract_reasons(
             reasons.append(
                 f"{prefix}.binary32DivisionProfile must be rne-gradual or rne-flush"
             )
+    if "binary16RemainderProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(f"{prefix}.binary16RemainderProfile requires a Metal source")
+        if provenance["binary16RemainderProfile"] != "binary32-quotient":
+            reasons.append(
+                f"{prefix}.binary16RemainderProfile must be binary32-quotient"
+            )
     if "dispatchRegion" in provenance:
         try:
             region = DispatchRegion.from_json(provenance["dispatchRegion"])
@@ -46432,6 +46449,15 @@ def _provenance_contract_reasons(
         if provenance.get("binary32DivisionProfile") != expected_division_profile:
             reasons.append(
                 f"{prefix}.binary32DivisionProfile must match the resolved project source options"
+            )
+        expected_remainder_profile = (
+            options.get("binary16_remainder_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("binary16RemainderProfile") != expected_remainder_profile:
+            reasons.append(
+                f"{prefix}.binary16RemainderProfile must match the resolved project source options"
             )
         if provenance.get("dispatchRegion") != options.get(
             DISPATCH_REGION_SOURCE_OPTION

@@ -2902,7 +2902,7 @@ def _write_project_config(
     variant_specialization_constants: (
         Mapping[str, Mapping[str, bool | int | float]] | None
     ) = None,
-    metal_source_options: Mapping[str, int] | None = None,
+    metal_source_options: Mapping[str, int | str] | None = None,
     metal_target_options: Mapping[str, Mapping[str, int]] | None = None,
     entry_points: Mapping[str, str] | None = None,
     workgroup_size_rules: Mapping[str, Sequence[str | int]] | None = None,
@@ -2989,7 +2989,7 @@ def _write_project_config(
     if metal_source_options or metal_target_options:
         lines.append("[project.source_options.metal]")
         for key, value in (metal_source_options or {}).items():
-            lines.append(f"{key} = {value}")
+            lines.append(f"{key} = {json.dumps(value)}")
         lines.append("")
         for target, options in (metal_target_options or {}).items():
             lines.append(f"[project.source_options.metal.target_options.{target}]")
@@ -6575,6 +6575,7 @@ def _run_frontier_project(
     run_toolchains: bool = False,
     check: bool = True,
     specialization_constants: Mapping[str, bool | int | float] | None = None,
+    metal_source_options: Mapping[str, int | str] | None = None,
     index_range_assertions: Sequence[Mapping[str, str | int]] | None = None,
     dispatch_contracts: Sequence[str] | None = None,
 ) -> tuple[CommandResult, dict[str, Any], Path, Path]:
@@ -6589,6 +6590,7 @@ def _run_frontier_project(
         targets=(target,),
         output_dir=_relpath(output_dir, mlx_root),
         specialization_constants=specialization_constants,
+        metal_source_options=metal_source_options,
         index_range_assertions=index_range_assertions,
         dispatch_contracts=dispatch_contracts,
     )
@@ -7374,6 +7376,7 @@ def _check_opengl_frontier(
         sources=MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
         output_dir=clean_output_dir,
         index_range_assertions=MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
+        metal_source_options={"binary16_remainder_profile": "binary32-quotient"},
     )
     artifacts_by_source = _require_clean_frontier_report(
         mlx_root,

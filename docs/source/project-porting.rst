@@ -818,7 +818,7 @@ preserves representable remainders and signed zero. Zero divisors, infinite
 dividends and NaN operands produce NaN; payload identity is not promised.
 Binary64 requires target 64-bit integer support as well as double precision.
 Unsupported operand shapes and profiles produce structured diagnostics.
-Direct half and bfloat calls remain unsupported until their source-specific
+Unprofiled half and bfloat calls remain unsupported until their source-specific
 exceptional-value rules can be represented; they are not silently widened.
 Required Linux execution compares raw output words with an independent rational
 oracle, including subnormals, extreme ratios, exceptional values and guards.
@@ -826,6 +826,31 @@ This does not establish parity with every source compiler's fast-math profile:
 the MLX controls expose half signed-zero and infinite-divisor differences and
 bfloat subnormal-policy differences tracked in
 `issue #2097 <https://github.com/CrossGL/crosstl/issues/2097>`_.
+
+Metal sources can explicitly select
+``binary16_remainder_profile = "binary32-quotient"`` in their source options.
+This profile widens half operands exactly, rounds division to binary32 with
+ties to even, truncates the quotient toward zero, separately rounds its
+product and the subtraction to binary32, and narrows the result to half.
+It is not exact mathematical remainder: quotient cancellation can change
+finite results, negative zero becomes positive zero for a finite nonzero divisor,
+and an infinite divisor produces NaN. Integer arithmetic helpers enforce the
+selected rounding steps without target contraction or reciprocal approximation.
+Scalar and two-, three- and four-component forms support scalar broadcasting
+and single argument evaluation. Other floating types and source-owned overloads
+retain their own behavior.
+
+If source helpers capture the required ``asfloat`` or ``asuint`` conversions,
+the selected profile produces a diagnostic instead of emitting an unsafe helper.
+
+The option is explicit, not inferred from the target OS or selected for every
+Metal source. Project reports retain ``binary16RemainderProfile`` and reject
+provenance that disagrees with the resolved options. Native controls compare
+5,176 input pairs, ten result forms per pair, side-effect counters and exact
+guards against a separately evaluated rounding model. Unchanged-original
+Metal is a required macOS control; this does not promise that all Metal devices
+or compiler modes implement the same profile. Half-vector component bitcasts
+use their logical 16-bit width rather than the widened GLSL representation.
 
 Metal normalization retains qualified math builtin ownership when source helpers
 share the same name. Source overloads receive deterministic, collision-safe

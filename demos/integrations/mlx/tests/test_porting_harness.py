@@ -5944,6 +5944,10 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
     from crosstl.project import load_project_config
 
     parsed_config = load_project_config(paths[0], paths[2] / "opengl-frontier.toml")
+    assert (
+        parsed_config.source_options["metal"]["binary16_remainder_profile"]
+        == "binary32-quotient"
+    )
     assert [
         assertion.to_json() for assertion in parsed_config.index_range_assertions
     ] == list(module.MLX_OPENGL_INDEX_RANGE_ASSERTIONS)

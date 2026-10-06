@@ -156,6 +156,25 @@ class MetalDivisionProfileError(ValueError):
         )
 
 
+class MetalHalfRemainderProfileError(ValueError):
+    """Raised when an explicit half remainder profile cannot be represented."""
+
+    project_diagnostic_code = (
+        "project.translate.metal-half-remainder-profile-unsupported"
+    )
+    missing_capabilities = ("metal.half-remainder-profile-lowering",)
+
+    def __init__(self, profile, operand_type, reason, source_location=None):
+        self.profile = profile
+        self.operand_type = operand_type
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(
+            f"Cannot apply Metal binary16 remainder profile '{profile}' to "
+            f"'{operand_type or '<unknown>'}': {reason}"
+        )
+
+
 class MetalStandardLibraryWrapperLoweringError(ValueError):
     """Raised when a materialized Metal standard-library wrapper has no target op."""
 
@@ -1231,6 +1250,7 @@ class MetalToCrossGLConverter:
         resolve_standard_remove_cv_aliases=True,
         binary32_fma_profile=None,
         binary32_division_profile=None,
+        binary16_remainder_profile=None,
     ):
         if binary32_fma_profile not in (None, "rne-gradual", "rne-flush"):
             raise ValueError(
@@ -1242,6 +1262,11 @@ class MetalToCrossGLConverter:
                 "binary32_division_profile must be 'rne-gradual', 'rne-flush', or None"
             )
         self.binary32_division_profile = binary32_division_profile
+        if binary16_remainder_profile not in (None, "binary32-quotient"):
+            raise ValueError(
+                "binary16_remainder_profile must be 'binary32-quotient' or None"
+            )
+        self.binary16_remainder_profile = binary16_remainder_profile
         if not isinstance(preserve_pointer_pointee_const, bool):
             raise ValueError("preserve_pointer_pointee_const must be a boolean")
         self.preserve_pointer_pointee_const = preserve_pointer_pointee_const
@@ -1647,6 +1672,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
         self.required_metal_division_widths = set()
+        self.required_metal_half_remainder_widths = set()
         self.metal_division_assignments = {}
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
@@ -2809,6 +2835,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
         self.required_metal_division_widths = set()
+        self.required_metal_half_remainder_widths = set()
         self.metal_division_assignments = {}
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
@@ -3250,6 +3277,7 @@ class MetalToCrossGLConverter:
             precise_math_support_marker,
             self.generate_metal_division_support_code(indent=1)
             + self.generate_metal_fma_support_code(indent=1)
+            + self.generate_metal_half_remainder_support_code(indent=1)
             + self.generate_metal_precise_math_support_code(indent=1),
             1,
         )
@@ -11130,6 +11158,9 @@ class MetalToCrossGLConverter:
             fused_call = self.generate_metal_fma_call(expr, is_main)
             if fused_call is not None:
                 return fused_call
+            remainder_call = self.generate_metal_half_remainder_call(expr, is_main)
+            if remainder_call is not None:
+                return remainder_call
             if self.resolve_metal_math_builtin_name(expr.name, expr.args) == "divide":
                 result_type = self.metal_math_builtin_result_type(expr)
                 left, right = (
@@ -14256,7 +14287,10 @@ class MetalToCrossGLConverter:
         return f"{self.metal_division_assignments[key][0]}({', '.join(arguments)})"
 
     def generate_metal_division_support_code(self, indent=0):
-        if not self.required_metal_division_widths:
+        if not (
+            self.required_metal_division_widths
+            or self.required_metal_half_remainder_widths
+        ):
             return ""
         bits = self.metal_precise_math_unique_helper_name(
             "division-bits", "__crossgl_divide_bits"
@@ -14264,11 +14298,12 @@ class MetalToCrossGLConverter:
         scalar = self.metal_division_helper_name(1)
         flush = "true" if self.binary32_division_profile == "rne-flush" else "false"
         code = binary32_division_support(bits)
-        code += (
-            f"@metal_static\nfloat {scalar}(float a, float b) {{\n"
-            f"    return asfloat({bits}(asuint(a), asuint(b), {flush}));\n"
-            "}\n"
-        )
+        if self.required_metal_division_widths:
+            code += (
+                f"@metal_static\nfloat {scalar}(float a, float b) {{\n"
+                f"    return asfloat({bits}(asuint(a), asuint(b), {flush}));\n"
+                "}\n"
+            )
         for width in sorted(self.required_metal_division_widths - {1}):
             arguments = ", ".join(
                 f"{scalar}(a.{lane}, b.{lane})" for lane in "xyzw"[:width]
@@ -14317,7 +14352,9 @@ class MetalToCrossGLConverter:
         )
 
     def generate_metal_fma_support_code(self, indent=0):
-        if not self.required_metal_fma_widths:
+        if not (
+            self.required_metal_fma_widths or self.required_metal_half_remainder_widths
+        ):
             return ""
         names = {
             key: self.metal_precise_math_unique_helper_name(
@@ -14328,11 +14365,12 @@ class MetalToCrossGLConverter:
         scalar = self.metal_fma_helper_name(1)
         flush = "true" if self.binary32_fma_profile == "rne-flush" else "false"
         code = binary32_fma_support(names)
-        code += (
-            f"@metal_static\nfloat {scalar}(float a, float b, float c) {{\n"
-            f"    return asfloat({names['bits']}(asuint(a), asuint(b), asuint(c), {flush}));\n"
-            "}\n"
-        )
+        if self.required_metal_fma_widths:
+            code += (
+                f"@metal_static\nfloat {scalar}(float a, float b, float c) {{\n"
+                f"    return asfloat({names['bits']}(asuint(a), asuint(b), asuint(c), {flush}));\n"
+                "}\n"
+            )
         for width in sorted(self.required_metal_fma_widths - {1}):
             vector = self.metal_fma_helper_name(width)
             arguments = ", ".join(
@@ -14341,6 +14379,95 @@ class MetalToCrossGLConverter:
             code += (
                 f"@metal_static\nvec{width} {vector}(vec{width} a, vec{width} b, vec{width} c) {{\n"
                 f"    return vec{width}({arguments});\n"
+                "}\n"
+            )
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
+
+    def generate_metal_half_remainder_call(self, expression, is_main=False):
+        if (
+            self.binary16_remainder_profile is None
+            or self.resolve_metal_math_builtin_name(expression.name, expression.args)
+            != "fmod"
+        ):
+            return None
+        result_type = self.metal_math_builtin_result_type(expression)
+        info = self.metal_math_builtin_type_info(result_type)
+        if (
+            info is None
+            or self.normalized_metal_type(self.resolve_type_alias(info["element_type"]))
+            != "half"
+        ):
+            return None
+        width = info["width"]
+        if width not in {1, 2, 3, 4} or self.current_function is None:
+            raise MetalHalfRemainderProfileError(
+                self.binary16_remainder_profile,
+                result_type,
+                "profiled half remainder requires a function and one to four lanes",
+                getattr(expression, "source_location", None),
+            )
+        for builtin in ("asfloat", "asuint"):
+            if any(
+                self.sanitize_identifier(self.function_output_name(function)) == builtin
+                for function in self.user_function_overloads_by_name.get(builtin, ())
+            ):
+                raise MetalHalfRemainderProfileError(
+                    self.binary16_remainder_profile,
+                    result_type,
+                    f"source helper '{builtin}' captures a required arithmetic bitcast",
+                    getattr(expression, "source_location", None),
+                )
+        self.required_metal_half_remainder_widths.add(width)
+        mapped = "float16" if width == 1 else f"half{width}"
+        arguments = ", ".join(
+            f"{mapped}({self.generate_expression(argument, is_main)})"
+            for argument in expression.args
+        )
+        return f"{self.metal_half_remainder_helper_name(width)}({arguments})"
+
+    def metal_half_remainder_helper_name(self, width):
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            f"remainder-half{suffix}", f"__crossgl_metal_remainder_half{suffix}"
+        )
+
+    def generate_metal_half_remainder_support_code(self, indent=0):
+        if not self.required_metal_half_remainder_widths:
+            return ""
+        divide = self.metal_precise_math_unique_helper_name(
+            "division-bits", "__crossgl_divide_bits"
+        )
+        fma = self.metal_precise_math_unique_helper_name(
+            "fma-bits", "__crossgl_fma_bits"
+        )
+        scalar = self.metal_half_remainder_helper_name(1)
+        # The selected profile rounds division, multiplication and subtraction
+        # separately in binary32, then narrows once. Integer helpers prevent
+        # target contraction or reciprocal approximations from changing it.
+        code = (
+            f"@metal_static\nfloat16 {scalar}(float16 a, float16 b) {{\n"
+            "    uint x = asuint(float(a));\n"
+            "    uint y = asuint(float(b));\n"
+            f"    uint quotient = {divide}(x, y, false);\n"
+            "    uint exponent = (quotient >> 23u) & 255u;\n"
+            "    if (exponent < 127u) { quotient &= 0x80000000u; }\n"
+            "    else if (exponent < 150u) {\n"
+            "        quotient &= ~((1u << (150u - exponent)) - 1u);\n"
+            "    }\n"
+            f"    uint product = {fma}(quotient, y, (quotient ^ y) & 0x80000000u, false);\n"
+            f"    uint difference = {fma}(product ^ 0x80000000u, 0x3f800000u, x, false);\n"
+            "    return float16(asfloat(difference));\n"
+            "}\n"
+        )
+        for width in sorted(self.required_metal_half_remainder_widths - {1}):
+            arguments = ", ".join(
+                f"{scalar}(a.{lane}, b.{lane})" for lane in "xyzw"[:width]
+            )
+            code += (
+                f"@metal_static\nhalf{width} {self.metal_half_remainder_helper_name(width)}"
+                f"(half{width} a, half{width} b) {{\n"
+                f"    return half{width}({arguments});\n"
                 "}\n"
             )
         pad = "    " * indent

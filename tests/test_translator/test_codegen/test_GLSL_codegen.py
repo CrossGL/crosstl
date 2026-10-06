@@ -43011,6 +43011,32 @@ def test_opengl_widened_float16_as_type_preserves_binary16_payloads(tmp_path):
     assert output_path.is_file()
 
 
+@pytest.mark.parametrize("vector", ["half2", "half3", "half4", "f16vec2"])
+@pytest.mark.parametrize("expression", ["value.x", "value.y", "(-value.x)"])
+def test_opengl_half_component_bitcast_preserves_source_width(
+    tmp_path, vector, expression
+):
+    source = f"""shader HalfComponentBits {{
+        uint16_t encode({vector} value) {{ return as_type<uint16_t>({expression}); }}
+        compute {{ void main() {{}} }}
+    }}"""
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(source))
+    assert "packHalf2x16(vec2(" in generated
+    assert "floatBitsToUint(value." not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "half_component_bits"
+    )
+
+
+@pytest.mark.parametrize("vector", ["half2", "half3", "half4"])
+def test_opengl_half_component_bitcast_rejects_widened_destination(vector):
+    source = f"shader InvalidBits {{ uint encode({vector} value) {{ return as_type<uint>(value.x); }} }}"
+    with pytest.raises(
+        ValueError, match="binary16 requires one exact 16-bit integer result"
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(source))
+
+
 def test_opengl_widened_float16_as_type_rejects_non_16_bit_scalar_payload():
     shader = """
     shader InvalidWidenedFloat16Bitcast {

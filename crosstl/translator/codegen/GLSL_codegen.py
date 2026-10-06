@@ -36535,7 +36535,7 @@ complex64_t crossgl_complex64_mod_assign(
             raise ValueError(f"OpenGL as_type<{target_type}> alias requires 1 argument")
 
         value_expr = args[0]
-        source_type = self.expression_result_type(value_expr)
+        source_type = self.glsl_source_expression_type(value_expr)
         if source_type is None:
             raise ValueError(
                 f"OpenGL as_type<{target_type}> cannot infer its source type"

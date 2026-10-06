@@ -117,6 +117,14 @@ Each native job keeps its source pin, numerical comparisons, guards, bounded exe
 and retained evidence. Moving a compiler-only job must not disable an execution
 gate or be presented as proof of runtime parity.
 
+The half-remainder profile runs in the existing arithmetic step on each native
+target, with no additional runner. It checks 5,176 input pairs in scalar/vector
+forms, exact guards and single-evaluation counters. The macOS job also executes
+the unchanged Metal source. Source, compiled modules, inputs, expected values,
+readbacks and device details use the existing arithmetic evidence upload.
+The profile is opt-in and does not replace the unsupported-profile diagnostic
+for unconfigured half remainder or imply full corpus parity.
+
 The native host job runs its full set of 17 portable contract-test modules on
 Ubuntu only. Windows and macOS retain focused C callback, launch geometry,
 library registration and memory-layout checks before their native workloads.

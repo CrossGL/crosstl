@@ -2256,6 +2256,17 @@ compiles for OpenGL/SPIR-V 1.3, and the resulting SPIR-V passes `spirv-val`. Thi
 resolves [#1661](https://github.com/CrossGL/crosstl/issues/1661) for the pinned
 frontier. It is artifact and toolchain evidence only; it does not establish
 numerical or runtime parity.
+The current clean OpenGL check explicitly selects
+`binary16_remainder_profile = "binary32-quotient"` for the source half `fmod`
+operations in `binary_two.metal`. This is a configuration adaptation; upstream
+files are unchanged. The profile rounds the quotient, product and subtraction
+separately in binary32 before converting to half. Native controls retain the
+source's finite cancellation, signed-zero and exceptional-value behavior rather
+than substituting exact mathematical remainder. The choice is recorded in the
+project report and is not a universal Metal-device assumption. Unconfigured
+half calls remain diagnostic, and bfloat comparison limits under #2000 remain
+separate. These operation controls do not establish complete DivMod execution
+or full MLX-suite parity.
 The clean OpenGL frontier supplies 24 configured index-range assertions, all with
 inclusive bounds `[0, 2147483647]`. The expressions are `offset + i`, `a_idx`,
 `b_idx`, `out_idx`, `out_idx++`, `idx.x`, and `idx.y` for `binary_two.metal`;
