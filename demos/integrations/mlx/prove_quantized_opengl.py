@@ -36,7 +36,7 @@ PINNED_FILE_SHA256 = {
 TARGET = "opengl"
 TEMPLATE_SPECIALIZATION_LIMIT = 128
 MATERIALIZATION_WORK_LIMIT = 4096
-REACHABLE_SPECIALIZATION_COUNT = 6
+REACHABLE_SPECIALIZATION_COUNT = 5
 CONCRETE_SPECIALIZATION_COUNT = 3
 PRUNED_CANDIDATE_COUNT = 110861
 INDEX_RANGE_MINIMUM = 0
@@ -83,7 +83,7 @@ ENTRY_CONTRACTS = {
     MLX_QUANTIZED_GATHER_ENTRY_POINT: {
         "specializationName": "affine_gather_qmv_fast",
         "parameters": {"T": "float", "bits": "2", "group_size": "32"},
-        "reachableSpecializationCount": 11,
+        "reachableSpecializationCount": 10,
         "concreteSpecializationCount": 8,
         "prunedCandidateCount": PRUNED_CANDIDATE_COUNT,
         "generatedContract": "gather-qmv-fast",
@@ -110,7 +110,7 @@ _GENERATED_SEMANTIC_SENTINELS = {
         "uint val = bitfieldExtract(uint(min(round(((w_thread[i] - bias) / "
         "scale)), n_bins)), 0, 8);"
     ),
-    "subgroupPacking": "uint sval = subgroupShuffleDown(val, j);",
+    "subgroupPacking": "uint sval = subgroupShuffleDown(val, (uint(j) & 65535u));",
 }
 _GENERATED_INDEX_SENTINELS = {
     "in_index + i": "w[uint((in_index + uint64_t(i)))]",

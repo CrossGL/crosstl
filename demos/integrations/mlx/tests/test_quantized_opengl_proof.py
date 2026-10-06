@@ -61,7 +61,7 @@ void main() {
     scales[uint(gindex)] = float(scale);
     biases[uint(gindex)] = float(bias);
     uint val = bitfieldExtract(uint(min(round(((w_thread[i] - bias) / scale)), n_bins)), 0, 8);
-    uint sval = subgroupShuffleDown(val, j);
+    uint sval = subgroupShuffleDown(val, (uint(j) & 65535u));
     out_[uint((out_index / uint64_t(writes_per_reduce)))] = output_;
 }
 """
@@ -202,7 +202,7 @@ def _translated_payload(module, mlx_root, work_dir, generated=None):
                     ],
                     "unsupported": [],
                     "accounting": {
-                        "reachableSpecializationCount": 6,
+                        "reachableSpecializationCount": 5,
                         "prunedCandidateCount": 110861,
                     },
                 },
@@ -294,7 +294,7 @@ def _translated_gather_payload(module, mlx_root, work_dir, generated=None):
                     "specializations": specializations,
                     "unsupported": [],
                     "accounting": {
-                        "reachableSpecializationCount": 11,
+                        "reachableSpecializationCount": 10,
                         "prunedCandidateCount": 110861,
                     },
                 },
@@ -527,6 +527,17 @@ def test_quantized_opengl_artifact_and_index_contract_reject_report_drift(tmp_pa
     assert artifact["requiredCapabilities"] == []
     assert resolved == artifact_path
     assert module._validate_generated_glsl(artifact_path)["status"] == "passed"
+
+    wrong_accounting = copy.deepcopy(payload)
+    wrong_accounting["artifacts"][0]["templateMaterialization"]["accounting"][
+        "reachableSpecializationCount"
+    ] = 6
+    with pytest.raises(module.MlxQuantizedOpenGLProofError, match="accounting"):
+        module._translated_artifact(
+            wrong_accounting,
+            mlx_root=mlx_root,
+            work_dir=work_dir,
+        )
 
     wrong_ranges = copy.deepcopy(payload)
     wrong_ranges["project"]["indexRangeAssertions"][0]["maximum"] = 2**32 - 1

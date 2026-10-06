@@ -44,7 +44,7 @@ DIRECTX_TARGET_PROFILE = "directx-12"
 DIRECTX_BASE_SHADER_PROFILE = "cs_6_0"
 TEMPLATE_SPECIALIZATION_LIMIT = 128
 MATERIALIZATION_WORK_LIMIT = 4096
-REACHABLE_SPECIALIZATION_COUNT = 6
+REACHABLE_SPECIALIZATION_COUNT = 5
 CONCRETE_SPECIALIZATION_COUNT = 3
 PRUNED_CANDIDATE_COUNT = 110861
 ENTRY_CONTRACTS = {
@@ -59,7 +59,7 @@ ENTRY_CONTRACTS = {
     MLX_QUANTIZED_GATHER_ENTRY_POINT: {
         "specializationName": "affine_gather_qmv_fast",
         "parameters": {"T": "float", "bits": "2", "group_size": "32"},
-        "reachableSpecializationCount": 11,
+        "reachableSpecializationCount": 10,
         "concreteSpecializationCount": 8,
         "prunedCandidateCount": PRUNED_CANDIDATE_COUNT,
         "generatedContract": "gather-qmv-fast",
@@ -69,18 +69,20 @@ ENTRY_CONTRACTS = {
 }
 GENERATED_ARTIFACTS = {
     MLX_QUANTIZED_ENTRY_POINT: {
-        "sha256": "a0f1a10def581f30dc34ed870b9ce36f70fb12abfd447e9b1b369524efde7438",
-        "sizeBytes": 4357,
+        "sha256": "9e7e4af1ceb66b2fa93e1029d370b67e91c2972c27c70bc8892c0866fb6b76b9",
+        "sizeBytes": 4557,
     },
     MLX_QUANTIZED_GATHER_ENTRY_POINT: {
-        "sha256": "654e2788b4b1cf202ddfad3b4d90f6d933853e9e857e0e5fffd6cd41fae8a3b6",
-        "sizeBytes": 16359,
+        "sha256": "c3a0b1b98cd7bfe3619f5be64c0b041028c2dcf61836e4b7c2de831be61bc9d9",
+        "sizeBytes": 16461,
     },
 }
 DEFAULT_WORK_DIR = ".crosstl-mlx-porting/quantized-directx"
 SUMMARY_FILENAME = "summary.json"
 NATIVE_16_BIT_CAPABILITY = "directx.native-16bit-types"
-PACKED_OUTPUT_STORE = "out_[uint((out_index / writes_per_reduce))] = output;"
+PACKED_OUTPUT_STORE = (
+    "out_[uint((out_index / uint64_t(writes_per_reduce)))] = (uint(output) & 255u);"
+)
 
 NON_RUNTIME_CLAIMS = {
     "runtimeExecution": False,
@@ -90,8 +92,9 @@ NON_RUNTIME_CLAIMS = {
 }
 
 _PACKED_OUTPUT_STORE_RE = re.compile(
-    r"\bout_\s*\[\s*uint\s*\(\s*\(\s*out_index\s*/\s*writes_per_reduce\s*\)"
-    r"\s*\)\s*\]\s*=\s*output\s*;"
+    r"\bout_\s*\[\s*uint\s*\(\s*\(\s*out_index\s*/\s*"
+    r"uint64_t\s*\(\s*writes_per_reduce\s*\)\s*\)\s*\)\s*\]\s*=\s*"
+    r"\(\s*uint\s*\(\s*output\s*\)\s*&\s*255u\s*\)\s*;"
 )
 _PACKED_OUTPUT_DECLARATION_RE = re.compile(
     r"\buint\s+output\s*=\s*0\s*;",
@@ -604,7 +607,7 @@ def _validate_quantize_generated_hlsl(generated: str) -> dict[str, Any]:
     )
     _require(
         len(_PACKED_OUTPUT_STORE_RE.findall(generated)) == 1,
-        "the bits=2 packed output must be stored without a width-changing conversion",
+        "the bits=2 packed output must retain its source uint8 storage conversion",
     )
     return {
         "typedResourceStore": {
@@ -612,8 +615,9 @@ def _validate_quantize_generated_hlsl(generated: str) -> dict[str, Any]:
             "resource": "out_",
             "resourceElementType": "uint",
             "sourceSpecializedType": "uint32_t",
+            "sourceStorageType": "uint8_t",
             "generatedValueType": "uint",
-            "conversion": "not-required",
+            "conversion": "uint8-mask",
             "generatedStore": PACKED_OUTPUT_STORE,
         }
     }

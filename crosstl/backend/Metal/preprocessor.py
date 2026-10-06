@@ -53,6 +53,10 @@ MSL_SOURCE_START_RE = re.compile(
     r")"
 )
 IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+METAL_ANGLE_OPERATOR_RE = re.compile(
+    r"\boperator(?:\s|/\*[\s\S]*?\*/|//[^\n]*(?:\n|$))*"
+    r"(?:<<=|>>=|<=>|<<|>>|<=|>=|<|>)"
+)
 METAL_STRING_LITERAL_PATTERN = r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'"
 METAL_STRING_EXPRESSION_PATTERN = (
     rf"(?:{METAL_STRING_LITERAL_PATTERN})"
@@ -27609,6 +27613,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 and (not track_angles or angle_depth == 0)
             ):
                 return i
+            if track_angles and ch == "o":
+                operator_name = METAL_ANGLE_OPERATOR_RE.match(code, i)
+                if operator_name is not None:
+                    # An overloaded operator name does not open a template-id.
+                    i = operator_name.end()
+                    continue
             if ch == "(":
                 paren_depth += 1
             elif ch == ")":

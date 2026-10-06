@@ -1135,11 +1135,11 @@ MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
     "translation_diagnostic_count": 0,
     "required_capabilities": [],
     "generated_hlsl": {
-        "sha256": "a0f1a10def581f30dc34ed870b9ce36f70fb12abfd447e9b1b369524efde7438",
-        "size_bytes": 4357,
+        "sha256": "9e7e4af1ceb66b2fa93e1029d370b67e91c2972c27c70bc8892c0866fb6b76b9",
+        "size_bytes": 4557,
     },
     "materialization": {
-        "reachable_specialization_count": 6,
+        "reachable_specialization_count": 5,
         "concrete_specialization_count": 3,
         "pruned_candidate_count": 110861,
     },
@@ -1162,14 +1162,18 @@ MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
         "status": "passed",
         "observed_failure_count": 0,
         "contextual_narrowing": {
-            "status": "not-required-for-selected-entry",
+            "status": "explicit-source-storage-narrowing",
             "issue": "https://github.com/CrossGL/crosstl/issues/1801",
             "resource": "out_",
             "resource_element_type": "uint",
             "source_specialized_type": "uint32_t",
+            "source_storage_type": "uint8_t",
             "generated_value_type": "uint",
-            "conversion": "not-required",
-            "generated_store": "out_[uint((out_index / writes_per_reduce))] = output;",
+            "conversion": "uint8-mask",
+            "generated_store": (
+                "out_[uint((out_index / uint64_t(writes_per_reduce)))] = "
+                "(uint(output) & 255u);"
+            ),
         },
     },
     "runtime_execution_attempted": False,
@@ -1190,7 +1194,7 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
         "project_diagnostic_count": 0,
     },
     "materialization": {
-        "reachable_specialization_count": 11,
+        "reachable_specialization_count": 10,
         "concrete_specialization_count": 8,
         "pruned_candidate_count": 110861,
     },
@@ -1255,8 +1259,8 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
         },
     },
     "generated_hlsl": {
-        "sha256": "654e2788b4b1cf202ddfad3b4d90f6d933853e9e857e0e5fffd6cd41fae8a3b6",
-        "size_bytes": 16359,
+        "sha256": "c3a0b1b98cd7bfe3619f5be64c0b041028c2dcf61836e4b7c2de831be61bc9d9",
+        "size_bytes": 16461,
     },
     "compiler_validation": {
         "compiler": "dxc",

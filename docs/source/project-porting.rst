@@ -1242,6 +1242,11 @@ and scalar Boolean relational expressions receive explicit C++ integral
 promotion. Focused tests retain conservative rejection boundaries for each
 contextual operation.
 
+Template declaration scanning distinguishes comparison and shift operator names
+from template argument delimiters. Dependent struct references inside those
+operator bodies remain in their enclosing template scope until specialization;
+they are not emitted as concrete types with unresolved local constants.
+
 A schema-v2 hash-pinned contract records every identity, shape, template,
 classification, byte count, materialization, and resource ABI. Required Ubuntu
 CI verifies translation, bodies and reflection across 24 disjoint shards and

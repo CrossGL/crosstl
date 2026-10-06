@@ -1487,9 +1487,9 @@ separate.
 
 A selected DirectX replay of `quantized.metal` now emits one artifact with zero
 translation diagnostics for `affine_quantize_float_gs_32_b_2`. It materializes
-six reachable specializations and three concrete records while pruning 110,861
-unreachable candidates. The generated HLSL is 4,357 bytes with SHA-256
-`a0f1a10def581f30dc34ed870b9ce36f70fb12abfd447e9b1b369524efde7438`.
+five reachable specializations and three concrete records while pruning 110,861
+unreachable candidates. The generated HLSL is 4,557 bytes with SHA-256
+`9e7e4af1ceb66b2fa93e1029d370b67e91c2972c27c70bc8892c0866fb6b76b9`.
 This path verifies the completed template-member and owner-dependent `constexpr`
 work tracked by CrossGL/crosstl#1476 and CrossGL/crosstl#1672. After unreachable
 materializations are pruned, this selected float specialization contains no live
@@ -1502,9 +1502,11 @@ by this selected specialization. Concrete `static_assert` evaluation under
 selected entry. Contextual narrowing under
 [#1801](https://github.com/CrossGL/crosstl/issues/1801) remains recorded in the
 broader DirectX toolchain evidence, but this selected `bits = 2` entry resolves
-`OutType` to source `uint32_t` and generated HLSL `uint`. Its final typed
-resource store therefore needs no width conversion and is emitted as
-`out_[uint((out_index / writes_per_reduce))] = output;`. The artifact contains
+`OutType` to source `uint32_t` and generated HLSL `uint`. The output buffer's
+source `uint8_t` element type is narrower than that accumulator. Its final
+store retains this conversion before writing the expanded `uint` resource:
+`out_[uint((out_index / uint64_t(writes_per_reduce)))] = (uint(output) & 255u);`.
+The artifact contains
 no remaining `static_assert`. Its ordinary type contract needs no native-16-bit
 profile uplift, while the generated wave intrinsics keep the configured project
 and compiler target scoped to `directx-12`. Official DXC validation with profile
@@ -1514,7 +1516,7 @@ cross-version compiler invariant. This evidence covers translation and compiler
 acceptance only; it does not claim runtime execution or numerical parity.
 
 The adjacent DirectX entry `affine_gather_qmv_fast_float_gs_32_b_2` also emits
-one artifact with zero translation diagnostics. It materializes 11 reachable
+one artifact with zero translation diagnostics. It materializes 10 reachable
 specializations and eight concrete records while pruning 110,861 unreachable
 candidates. The specialized `load_vector_float_float_16_2` helper retains the
 caller's `thread U x_thread[values_per_thread]` storage with
@@ -1541,8 +1543,8 @@ The pinned `gather_qmv` host dispatch in `mlx/backend/metal/quantized.cpp` sets
 `bk = 32` and `MTL::Size group_dims(bk, 2, 1)`. The project rule therefore
 emits `[numthreads(32, 2, 1)]`. The kernel's simdgroup indices require a
 32-lane subgroup, so the generated HLSL also emits `[WaveSize(32)]` and requires
-Shader Model 6.6. The resulting artifact is 16,359 bytes with SHA-256
-`654e2788b4b1cf202ddfad3b4d90f6d933853e9e857e0e5fffd6cd41fae8a3b6`.
+Shader Model 6.6. The resulting artifact is 16,461 bytes with SHA-256
+`c3a0b1b98cd7bfe3619f5be64c0b041028c2dcf61836e4b7c2de831be61bc9d9`.
 Windows CI compiles it with DXC profile `cs_6_6` and `-WX`. This is selected-entry
 evidence for the fixed-array alias work tracked by
 [#1497](https://github.com/CrossGL/crosstl/issues/1497) and the read-only storage
@@ -1603,10 +1605,11 @@ the completed index-width normalization contract, while
 [#1894](https://github.com/CrossGL/crosstl/issues/1894) continues to track
 broader subgroup fallback coverage.
 
-The adjacent `affine_gather_qmv_fast_float_gs_32_b_2` entry now has the same
-selected-entry OpenGL gate. It emits a 16,132-byte GLSL artifact with SHA-256
-`d765c7694d32be8a0cd31c0250a7ff7839e9fb2e11da9cb470344d16669ec8a6`, zero
-project diagnostics, 11 reachable specializations, and eight concrete
+The historical `4367c73b60541ddd5a266ce4644fd93d20223b6e` corpus retains a
+separate compile-only OpenGL gate for `affine_gather_qmv_fast_float_gs_32_b_2`.
+It emits a 16,042-byte GLSL artifact with SHA-256
+`652a1b94628622537d565ff5da0174bfb096b77653971f89a0614e2425548cff`, zero
+project diagnostics, 10 reachable specializations, and eight concrete
 materializations. The project report retains the pinned `32 x 2 x 1`
 workgroup rule and four explicit index-range preconditions for the gather
 resource lookups. The generated `load_vector` and `qdot` helpers preserve the

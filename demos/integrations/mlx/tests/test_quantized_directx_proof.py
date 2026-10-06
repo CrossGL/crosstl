@@ -54,7 +54,7 @@ void CSMain(uint3 index_dispatchThreadID : SV_DispatchThreadID) {
     uint64_t out_index = index_dispatchThreadID.x;
     int writes_per_reduce = 4;
     uint output = 0;
-    out_[uint((out_index / writes_per_reduce))] = output;
+    out_[uint((out_index / uint64_t(writes_per_reduce)))] = (uint(output) & 255u);
 }
 """
 
@@ -287,7 +287,7 @@ def _translated_payload(module, mlx_root, work_dir, generated=None):
                     ],
                     "unsupported": [],
                     "accounting": {
-                        "reachableSpecializationCount": 6,
+                        "reachableSpecializationCount": 5,
                         "prunedCandidateCount": 110861,
                     },
                 },
@@ -320,15 +320,15 @@ def test_quantized_directx_proof_pins_revision_source_header_and_entry():
     assert module.GENERATED_ARTIFACTS == {
         module.MLX_QUANTIZED_ENTRY_POINT: {
             "sha256": (
-                "a0f1a10def581f30dc34ed870b9ce36f70fb12abfd447e9b1b369524efde7438"
+                "9e7e4af1ceb66b2fa93e1029d370b67e91c2972c27c70bc8892c0866fb6b76b9"
             ),
-            "sizeBytes": 4357,
+            "sizeBytes": 4557,
         },
         module.MLX_QUANTIZED_GATHER_ENTRY_POINT: {
             "sha256": (
-                "654e2788b4b1cf202ddfad3b4d90f6d933853e9e857e0e5fffd6cd41fae8a3b6"
+                "c3a0b1b98cd7bfe3619f5be64c0b041028c2dcf61836e4b7c2de831be61bc9d9"
             ),
-            "sizeBytes": 16359,
+            "sizeBytes": 16461,
         },
     }
     assert module.DIRECTX_TARGET_PROFILE == "directx-12"
@@ -516,7 +516,7 @@ def test_quantized_directx_translation_uses_public_project_api(
         ),
         lambda payload: payload["artifacts"][0]["templateMaterialization"][
             "accounting"
-        ].update(reachableSpecializationCount=5),
+        ].update(reachableSpecializationCount=6),
         lambda payload: payload["artifacts"][0]["templateMaterialization"][
             "accounting"
         ].update(prunedCandidateCount=110860),
@@ -571,8 +571,9 @@ def test_quantized_directx_generated_contract_is_exact(tmp_path):
             "resource": "out_",
             "resourceElementType": "uint",
             "sourceSpecializedType": "uint32_t",
+            "sourceStorageType": "uint8_t",
             "generatedValueType": "uint",
-            "conversion": "not-required",
+            "conversion": "uint8-mask",
             "generatedStore": module.PACKED_OUTPUT_STORE,
         },
     }
@@ -726,8 +727,14 @@ def test_quantized_gather_directx_generated_contract_rejects_semantic_drift(
             "uint32 type",
         ),
         (
-            _generated_hlsl().replace("= output;", "= uint64_t(output);"),
-            "width-changing conversion",
+            _generated_hlsl().replace("(uint(output) & 255u)", "output"),
+            "source uint8 storage conversion",
+        ),
+        (
+            _generated_hlsl().replace(
+                "(uint(output) & 255u)", "(uint(output) & 65535u)"
+            ),
+            "source uint8 storage conversion",
         ),
         (_generated_hlsl().replace("CSMain", "OtherMain"), "CSMain"),
         (_generated_hlsl() + "\nuint16_t native_width_marker;\n", "native 16-bit"),

@@ -20,6 +20,8 @@ CASES = (
     "explicit-default",
     "default-deduced",
     "nondefault-deduced",
+    "comparison-template",
+    "shift-template",
 )
 
 
@@ -35,9 +37,22 @@ def source(case="integer"):
         call_arguments = "<float, 1>"
     elif case == "explicit-default":
         call_arguments = "<float, 0>"
+    operator = {"comparison-template": "<", "shift-template": "<<"}.get(case)
+    dependent_operator = ""
+    if operator is not None:
+        dependent_operator = f"""
+template <typename T, T Value>
+struct StaticValue {{ static constexpr constant T value = Value; }};
+template <typename T, T Left, typename U, U Right>
+constexpr auto operator{operator}(StaticValue<T, Left>, StaticValue<U, Right>) {{
+    constexpr auto result = Left {operator} Right;
+    return StaticValue<decltype(result), result>{{}};
+}}
+"""
     return f"""#include <metal_stdlib>
 using namespace metal;
 using Scalar = float;
+{dependent_operator}
 template <typename T{default},
           enable_if_t<is_same_v<T, int> || is_same_v<T, float>, bool> = true>
 T update_value(device T* values, T value, uint index) {{

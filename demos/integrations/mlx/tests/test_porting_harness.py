@@ -9728,7 +9728,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "cross-version compiler invariant" in normalized_readme
     assert "does not claim runtime execution or numerical parity" in normalized_readme
     assert (
-        "`out_[uint((out_index / writes_per_reduce))] = output;`"
+        "`out_[uint((out_index / uint64_t(writes_per_reduce)))] = "
+        "(uint(output) & 255u);`"
     ) in normalized_readme
     assert "also emits one artifact with zero translation diagnostics" in (
         normalized_readme
@@ -9742,7 +9743,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "`MTL::Size group_dims(bk, 2, 1)`" in normalized_readme
     assert "`[numthreads(32, 2, 1)]`" in normalized_readme
     assert "`[WaveSize(32)]`" in normalized_readme
-    assert "16,359 bytes" in normalized_readme
+    assert "16,461 bytes" in normalized_readme
     assert "materializes the overloaded `elem_to_loc` helper" in normalized_readme
     assert "independent shape and stride resource offsets" in normalized_readme
     assert "passes its logical offset as `inout int64_t`" in normalized_readme
@@ -9775,11 +9776,11 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert directx["compiler_target_profiles"] == ["directx-12"]
     assert directx["required_capabilities"] == []
     assert directx["generated_hlsl"] == {
-        "sha256": "a0f1a10def581f30dc34ed870b9ce36f70fb12abfd447e9b1b369524efde7438",
-        "size_bytes": 4357,
+        "sha256": "9e7e4af1ceb66b2fa93e1029d370b67e91c2972c27c70bc8892c0866fb6b76b9",
+        "size_bytes": 4557,
     }
     assert directx["materialization"] == {
-        "reachable_specialization_count": 6,
+        "reachable_specialization_count": 5,
         "concrete_specialization_count": 3,
         "pruned_candidate_count": 110861,
     }
@@ -9802,14 +9803,18 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         "status": "passed",
         "observed_failure_count": 0,
         "contextual_narrowing": {
-            "status": "not-required-for-selected-entry",
+            "status": "explicit-source-storage-narrowing",
             "issue": "https://github.com/CrossGL/crosstl/issues/1801",
             "resource": "out_",
             "resource_element_type": "uint",
             "source_specialized_type": "uint32_t",
+            "source_storage_type": "uint8_t",
             "generated_value_type": "uint",
-            "conversion": "not-required",
-            "generated_store": "out_[uint((out_index / writes_per_reduce))] = output;",
+            "conversion": "uint8-mask",
+            "generated_store": (
+                "out_[uint((out_index / uint64_t(writes_per_reduce)))] = "
+                "(uint(output) & 255u);"
+            ),
         },
     }
     assert directx["runtime_execution_attempted"] is False
@@ -9890,7 +9895,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         "project_diagnostic_count": 0,
     }
     assert adjacent["materialization"] == {
-        "reachable_specialization_count": 11,
+        "reachable_specialization_count": 10,
         "concrete_specialization_count": 8,
         "pruned_candidate_count": 110861,
     }
@@ -9955,8 +9960,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         },
     }
     assert adjacent["generated_hlsl"] == {
-        "sha256": "654e2788b4b1cf202ddfad3b4d90f6d933853e9e857e0e5fffd6cd41fae8a3b6",
-        "size_bytes": 16359,
+        "sha256": "c3a0b1b98cd7bfe3619f5be64c0b041028c2dcf61836e4b7c2de831be61bc9d9",
+        "size_bytes": 16461,
     }
     assert adjacent["compiler_validation"] == {
         "compiler": "dxc",
