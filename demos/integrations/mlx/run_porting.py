@@ -2304,9 +2304,9 @@ MLX_RMS_NORM_NATIVE_RUNTIME_EVIDENCE = {
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "f03d8c3c1df2256e5c867bfd235e57b66d68a1c6e3c3c04701a581d8ef7b3e67"
+                "f1910bc37d2fabd46213add21ed22fd35691794ece36d0917cde6b7f209403ea"
             ),
-            "size_bytes": 3486,
+            "size_bytes": 3526,
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
             "compiler_profile": "cs_6_6",
@@ -2324,9 +2324,9 @@ MLX_RMS_NORM_NATIVE_RUNTIME_EVIDENCE = {
         "opengl": {
             "target_entry_point": "main",
             "sha256": (
-                "3180aba83b64add0ae3c2d471b9297eb5bada4c4ff2bd5c91a3db3698cf0df78"
+                "c878dfac029400c584c909b722168189b08abd4206f525c2c3bee6bbe60e2b58"
             ),
-            "size_bytes": 4393,
+            "size_bytes": 4478,
             "subgroup_enforcement": "explicit-32-lane-software-subgroup",
             "compiler": "glslangValidator",
             "validator": "spirv-val",

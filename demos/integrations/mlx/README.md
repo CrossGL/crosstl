@@ -2276,13 +2276,25 @@ Materialization emits the forward entry plus `initialize_buffer<1>` and
 `threadgroup_sum<1>` from six reachable specializations while pruning 194
 candidates.
 
-The generated HLSL artifact is 5,216 bytes with SHA-256
-`7e790d4e665c72025e46c7c038aba2bec57ba6f65e209178eae5160c0c7ea8e9`.
+The generated HLSL artifact is 5,256 bytes with SHA-256
+`7b0698cb49d6131e1e22313b00c9cf38602e6b8f68698c711deb20166c7977ae`.
 It retains `[WaveSize(32)]`, two `WaveActiveSum` calls, and compiles as
 `cs_6_6` with `-enable-16bit-types`; Windows CI requires Direct3D 12 WARP
-execution. The generated GLSL artifact is 5,914 bytes with SHA-256
-`f86f83b6835b7d4b07ece9f153df883300f7a131bbcec5d084bf29084c1bf51a`.
-Its explicit target-scoped software path admits a subgroup helper only when the
+execution. The generated GLSL artifact is 5,999 bytes with SHA-256
+`fb1f8ee898f4093157d12e70a2c6bfe545aa4fb1376278ebfff003f940641a8d`.
+The four selected normalization loaders (LayerNorm and RMSNorm, forward and
+VJP) at `846d1762` have complete old/current body comparisons and unchanged
+resource interfaces. HLSL differences make source-width index conversions
+explicit; GLSL differences add shared-memory ordering to the existing subgroup
+sum helper. All eight artifacts pass strict compiler checks. Linux OpenGL
+execution passes all four cases, and an independent 100-digit calculation from
+the uploaded binary32 inputs checks all 256 returned values within the unchanged
+tolerances. Maximum absolute error is below `1.36e-7`. Windows execution remains
+required separately. The existing CI steps retain reports, requests, compiler
+records, returned values and JUnit results on success or failure; these selected
+cases do not establish whole-family or upstream-suite parity.
+
+The LayerNorm GLSL software path admits a subgroup helper only when the
 helper has one stable non-overloaded source identity and every call is direct,
 unconditional, top-level, and made from the sole compute entry. Conditional,
 nested, indirect, ambiguous, or potentially divergent helper use rejects
@@ -2323,13 +2335,13 @@ shape and weighted-gradient provenance. Materialization selects
 `threadgroup_sum<3>`, and `threadgroup_sum<1>` from seven reachable
 specializations while pruning 194 candidates.
 
-The generated HLSL is 7,504 bytes with SHA-256
-`6d4a3281d038309c8c294952411acfeb773f6ee8ddd8d73935cb3f3c4ce93a61`.
+The generated HLSL is 7,584 bytes with SHA-256
+`9ea6cc8346a8847fbfc416a64583ac5736f5f7528ad78f613f0de0d72c4c7c4e`.
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, compiles as `cs_6_6` with `-enable-16bit-types`, and
 must execute numerically through Direct3D 12 WARP on Windows CI. The generated
-software-subgroup GLSL is 8,291 bytes with SHA-256
-`9e6c4e6201e1c78e981a346275b849c37e6c8d834e7509d662f7aec5782980fa`.
+software-subgroup GLSL is 8,376 bytes with SHA-256
+`21df3c6a5676d70ea1a737d1219a299d812a24261513d78e8d383ea496f18f77`.
 It retains deferred OpenGL specialization constant `20`, emits eight control
 barriers with no hardware-subgroup extension or SPIR-V group-nonuniform
 instruction, and passes `glslangValidator` plus `spirv-val`.
@@ -2928,12 +2940,12 @@ preserving reachable constants, resolving
 materializes one `rms_single_row<float, RMS_N_READS>` specialization from four
 reachable specializations while pruning 168 unrelated candidates.
 
-The generated HLSL artifact is 3,486 bytes with SHA-256
-`f03d8c3c1df2256e5c867bfd235e57b66d68a1c6e3c3c04701a581d8ef7b3e67`;
+The generated HLSL artifact is 3,526 bytes with SHA-256
+`f1910bc37d2fabd46213add21ed22fd35691794ece36d0917cde6b7f209403ea`;
 it retains `[WaveSize(32)]` and compiles as `cs_6_6` with
 `-enable-16bit-types`. The generated GLSL
-artifact is 4,393 bytes with SHA-256
-`3180aba83b64add0ae3c2d471b9297eb5bada4c4ff2bd5c91a3db3698cf0df78`.
+artifact is 4,478 bytes with SHA-256
+`c878dfac029400c584c909b722168189b08abd4206f525c2c3bee6bbe60e2b58`.
 Its explicit target-scoped 32-lane software subgroup lowers scalar
 `WaveActiveSum`, emits six `OpControlBarrier` instructions and no
 `OpGroupNonUniform` instruction, and passes `glslangValidator` plus
@@ -2960,13 +2972,13 @@ input and cotangent views. Materialization selects
 `vjp_rms_single_row<float, RMS_N_READS>` from four reachable specializations
 while pruning 168 unrelated candidates.
 
-The generated HLSL is 6,795 bytes with SHA-256
-`7c1fe2a3c5f6d883b11b3fb17511663ebb3ead2a0931611229930c3f07035c9f`.
+The generated HLSL is 6,845 bytes with SHA-256
+`803e11dafc7906880a8f631780cdec4248de591dfd19daa1d16dd34e6163ac9c`.
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, and compiles as `cs_6_6` with
-`-enable-16bit-types`. The generated software-subgroup GLSL is 7,768 bytes
+`-enable-16bit-types`. The generated software-subgroup GLSL is 7,853 bytes
 with SHA-256
-`c26decbd3ce3fca934a9f07967728d4aeaf990c9df633a81d96a7936d484cf06`.
+`8a295133430e3398d8f9b7dcb1b1e2a8a10b2739d4febdd4092737161223e234`.
 It retains deferred OpenGL specialization constant `20`, emits six control
 barriers with no hardware-subgroup extension or SPIR-V group-nonuniform
 instruction, and passes `glslangValidator` plus `spirv-val`.

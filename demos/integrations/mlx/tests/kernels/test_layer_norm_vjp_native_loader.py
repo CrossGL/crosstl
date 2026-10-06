@@ -6,7 +6,6 @@ import math
 import os
 import shutil
 import subprocess
-import tempfile
 import textwrap
 from pathlib import Path
 
@@ -37,6 +36,12 @@ from crosstl.project import (
     validate_project_report,
 )
 from crosstl.project.directx_toolchain import dxc_compiler_arguments_for_source
+from demos.integrations.mlx.tests.corpus_evidence import (
+    corpus_workspace,
+    native_compiler_runner,
+    record_native_request,
+    record_native_result,
+)
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -64,12 +69,12 @@ MLX_LAYER_NORM_VJP_DISPATCH_CONTRACT = (
 )
 MLX_LAYER_NORM_VJP_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "6d4a3281d038309c8c294952411acfeb773f6ee8ddd8d73935cb3f3c4ce93a61",
-        "sizeBytes": 7504,
+        "sha256": "9ea6cc8346a8847fbfc416a64583ac5736f5f7528ad78f613f0de0d72c4c7c4e",
+        "sizeBytes": 7584,
     },
     "opengl": {
-        "sha256": "9e6c4e6201e1c78e981a346275b849c37e6c8d834e7509d662f7aec5782980fa",
-        "sizeBytes": 8291,
+        "sha256": "21df3c6a5676d70ea1a737d1219a299d812a24261513d78e8d383ea496f18f77",
+        "sizeBytes": 8376,
     },
 }
 REQUIRE_DIRECTX_PROOF_ENV = "CROSTL_REQUIRE_MLX_LAYER_NORM_VJP_DIRECTX_NATIVE_LOADER"
@@ -397,6 +402,8 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         validate=True,
         run_toolchains=True,
     )
+    report_path = work_dir / f"{target}-portability-report.json"
+    report.write_json(report_path)
     payload = report.to_json()
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
@@ -515,8 +522,6 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert len(toolchain_runs) == 1
         assert toolchain_runs[0]["status"] == "ok"
 
-    report_path = work_dir / f"{target}-portability-report.json"
-    report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
     return report_path
 
@@ -738,18 +743,22 @@ def test_layer_norm_vjp_native_loader_dispatch_contract_is_exact():
 
 def test_pinned_mlx_layer_norm_vjp_translates_to_directx_native_loader_artifact():
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-layer-norm-vjp-directx-translation-",
-        dir=mlx_root,
+    with corpus_workspace(
+        mlx_root,
+        family="layer-vjp",
+        target="directx",
+        entry_point=MLX_LAYER_NORM_VJP_ENTRY,
     ) as temporary_directory:
         _translate_artifact(mlx_root, Path(temporary_directory), "directx")
 
 
 def test_pinned_mlx_layer_norm_vjp_translates_to_deferred_software_opengl():
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-layer-norm-vjp-opengl-translation-",
-        dir=mlx_root,
+    with corpus_workspace(
+        mlx_root,
+        family="layer-vjp",
+        target="opengl",
+        entry_point=MLX_LAYER_NORM_VJP_ENTRY,
     ) as temporary_directory:
         _descriptor, _package_dir, deferred = _build_runtime_package(
             mlx_root,
@@ -761,9 +770,11 @@ def test_pinned_mlx_layer_norm_vjp_translates_to_deferred_software_opengl():
 
 def test_pinned_mlx_layer_norm_vjp_executes_through_directx_native_loader():
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-layer-norm-vjp-directx-native-loader-",
-        dir=mlx_root,
+    with corpus_workspace(
+        mlx_root,
+        family="layer-vjp",
+        target="directx",
+        entry_point=MLX_LAYER_NORM_VJP_ENTRY,
     ) as temporary_directory:
         descriptor, package_dir, deferred = _build_runtime_package(
             mlx_root,
@@ -783,8 +794,15 @@ def test_pinned_mlx_layer_norm_vjp_executes_through_directx_native_loader():
                 adapter_kind="directx-native-runtime",
             ),
             runtime_adapter=DirectXRuntimeParityAdapter(
-                runtime=DirectXComputeRuntime()
+                runtime=DirectXComputeRuntime(),
+                command_runner=native_compiler_runner(Path(temporary_directory)),
             ),
+        )
+        record_native_request(
+            Path(temporary_directory),
+            request,
+            commit=MLX_COMMIT,
+            workload_id=MLX_LAYER_NORM_VJP_ENTRY,
         )
         availability = executor.is_available(request)
         if not availability.available:
@@ -793,6 +811,7 @@ def test_pinned_mlx_layer_norm_vjp_executes_through_directx_native_loader():
                 require_env=REQUIRE_DIRECTX_PROOF_ENV,
             )
         result = executor.run(request)
+        record_native_result(Path(temporary_directory), result)
 
     assert result.status == "ok"
     names = _expected_binding_names("directx")
@@ -814,9 +833,11 @@ def test_pinned_mlx_layer_norm_vjp_executes_through_directx_native_loader():
 
 def test_pinned_mlx_layer_norm_vjp_executes_through_opengl_native_loader():
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-layer-norm-vjp-opengl-native-loader-",
-        dir=mlx_root,
+    with corpus_workspace(
+        mlx_root,
+        family="layer-vjp",
+        target="opengl",
+        entry_point=MLX_LAYER_NORM_VJP_ENTRY,
     ) as temporary_directory:
         work_dir = Path(temporary_directory)
         _descriptor, _package_dir, deferred = _build_runtime_package(
@@ -827,6 +848,19 @@ def test_pinned_mlx_layer_norm_vjp_executes_through_opengl_native_loader():
         assert deferred is not None
         abi_root, compilation_request = deferred
         inputs, outputs, expected_gx, expected_gw = _runtime_values("opengl")
+        _write_json(
+            work_dir / "request.json",
+            {
+                "commit": MLX_COMMIT,
+                "workload": MLX_LAYER_NORM_VJP_ENTRY,
+                "compilationRequest": compilation_request,
+                "inputs": inputs,
+                "outputs": outputs,
+                "expectedGx": expected_gx,
+                "expectedGw": expected_gw,
+                "workgroups": [1, 1, 1],
+            },
+        )
         try:
             result = execute_native_deferred_compilation_request(
                 compilation_request,
@@ -836,7 +870,8 @@ def test_pinned_mlx_layer_norm_vjp_executes_through_opengl_native_loader():
                 outputs,
                 (ROW_COUNT, 1, 1),
                 runtime_adapter=OpenGLRuntimeParityAdapter(
-                    runtime=OpenGLComputeRuntime(context_backends=("egl",))
+                    runtime=OpenGLComputeRuntime(context_backends=("egl",)),
+                    command_runner=native_compiler_runner(Path(temporary_directory)),
                 ),
             )
         except NativeDeferredCompilationRuntimeError as exc:
@@ -846,6 +881,7 @@ def test_pinned_mlx_layer_norm_vjp_executes_through_opengl_native_loader():
                     require_env=REQUIRE_OPENGL_PROOF_ENV,
                 )
             raise
+        record_native_result(work_dir, result)
 
     assert result.status == "ok"
     names = _expected_binding_names("opengl")

@@ -176,6 +176,14 @@ def test_directx_corpus_retains_failure_evidence_without_additional_jobs(family)
         ("softmax", "Softmax", "mlx-softmax-results"),
         ("arg_reduce", "arg-reduce", "demo-results/arg-reduce"),
         ("attention", "scaled-attention", "demo-results/attention"),
+        ("rms_norm", "RMSNorm", "demo-results/normalization/rms_norm"),
+        ("rms_norm_vjp", "RMSNorm VJP", "demo-results/normalization/rms_norm_vjp"),
+        ("layer_norm", "LayerNorm", "demo-results/normalization/layer_norm"),
+        (
+            "layer_norm_vjp",
+            "LayerNorm VJP",
+            "demo-results/normalization/layer_norm_vjp",
+        ),
     ),
 )
 def test_native_loader_evidence_is_retained_in_existing_project_job(

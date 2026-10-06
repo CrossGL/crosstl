@@ -295,6 +295,143 @@ def test_arg_reduce_retains_failed_translation_before_artifact_checks(
     assert (reports[0].parent / "crosstl.toml").is_file()
 
 
+@pytest.mark.parametrize(
+    "family", ("rms_norm", "rms_norm_vjp", "layer_norm", "layer_norm_vjp")
+)
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_normalization_retains_failed_translation_before_artifact_checks(
+    family, target, tmp_path, monkeypatch
+):
+    proof = importlib.import_module(
+        f"demos.integrations.mlx.tests.kernels.test_{family}_native_loader"
+    )
+    payload = {"summary": {"unitCount": 0}, "diagnostics": [{"message": "failed"}]}
+
+    class Report:
+        def to_json(self):
+            return payload
+
+        def write_json(self, path):
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setenv(KEEP_EVIDENCE_ENV, "1")
+    monkeypatch.setattr(proof, "_pinned_mlx_root", lambda: tmp_path)
+    monkeypatch.setattr(proof, "load_project_config", lambda *args: None)
+    monkeypatch.setattr(proof, "translate_project", lambda *args, **kwargs: Report())
+    suffix = (
+        "directx_native_loader_artifact"
+        if target == "directx"
+        else (
+            "deferred_software_opengl"
+            if family.endswith("_vjp")
+            else "software_subgroup_opengl"
+        )
+    )
+    with pytest.raises(AssertionError):
+        getattr(proof, f"test_pinned_mlx_{family}_translates_to_{suffix}")()
+    (report,) = tmp_path.rglob(f"{target}-portability-report.json")
+    assert json.loads(report.read_text()) == payload
+    assert (report.parent / "crosstl.toml").is_file()
+    assert report.parent.parent == tmp_path / EVIDENCE_DIRECTORY
+
+
+@pytest.mark.parametrize(
+    "family", ("rms_norm", "rms_norm_vjp", "layer_norm", "layer_norm_vjp")
+)
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize("failure", (None, "status", "readback"))
+def test_normalization_retains_native_results_without_suppressing_failures(
+    family, target, failure, tmp_path, monkeypatch
+):
+    proof = importlib.import_module(
+        f"demos.integrations.mlx.tests.kernels.test_{family}_native_loader"
+    )
+    vjp = family.endswith("_vjp")
+    compilation = {"case": "unit-test-only"}
+    deferred = (tmp_path, compilation) if target == "opengl" else None
+    package = ({}, tmp_path, deferred) if vjp else ({}, tmp_path)
+    monkeypatch.setenv(KEEP_EVIDENCE_ENV, "1")
+    monkeypatch.setattr(proof, "_pinned_mlx_root", lambda: tmp_path)
+    monkeypatch.setattr(proof, "_build_runtime_package", lambda *a: package)
+    names = proof._expected_binding_names(target)
+    if vjp:
+        inputs, outputs, expected_gx, expected_gw = proof._runtime_values(target)
+        expected = {names[3]: expected_gx, names[4]: expected_gw}
+    else:
+        inputs, outputs = {"case": "unit-test-only"}, {}
+        output_binding = 2 if family == "rms_norm" else 3
+        expected = {names[output_binding]: proof._workload()[-1]}
+    fixture = {"inputs": inputs, "expectedOutputs": outputs}
+    plan = {"dispatch": {"workgroupSize": [32, 1, 1]}}
+    request = SimpleNamespace(
+        fixture=SimpleNamespace(to_json=lambda: fixture),
+        execution_plan=SimpleNamespace(to_json=lambda: plan),
+    )
+    if vjp:
+        monkeypatch.setattr(
+            proof,
+            "_directx_dispatch_request",
+            lambda *a: (request, expected_gx, expected_gw),
+        )
+    else:
+        monkeypatch.setattr(
+            proof,
+            "_dispatch_request",
+            lambda *a: (request, next(iter(expected.values()))),
+        )
+    result = SimpleNamespace(
+        status="failed" if failure == "status" else "ok",
+        outputs={
+            name: {
+                "dtype": "float32",
+                "shape": [len(values)],
+                "values": [1000.0] * len(values) if failure == "readback" else values,
+            }
+            for name, values in expected.items()
+        },
+        details={
+            "nativeDeferredCompilation": {
+                "success": True,
+                "target": {"backend": target},
+                "variant": {
+                    "specializationValues": [{"id": 20, "name": "has_w", "value": True}]
+                },
+                "interface": {"status": "verified"},
+                "cache": {"status": "published"},
+            }
+        },
+        message=None,
+    )
+    executor = SimpleNamespace(
+        is_available=lambda request: SimpleNamespace(available=True),
+        run=lambda request: result,
+    )
+    monkeypatch.setattr(proof, "RuntimeParityExecutor", lambda *a, **kw: executor)
+    if vjp:
+        monkeypatch.setattr(
+            proof,
+            "execute_native_deferred_compilation_request",
+            lambda *a, **kw: result,
+        )
+    with pytest.raises(AssertionError) if failure else nullcontext():
+        getattr(
+            proof, f"test_pinned_mlx_{family}_executes_through_{target}_native_loader"
+        )()
+    (work_dir,) = (tmp_path / EVIDENCE_DIRECTORY).iterdir()
+    saved = json.loads((work_dir / "request.json").read_text())
+    assert saved["commit"] == proof.MLX_COMMIT
+    assert saved["workload"] == getattr(proof, "MLX_" + family.upper() + "_ENTRY")
+    if vjp and target == "opengl":
+        assert saved["compilationRequest"] == compilation
+        assert saved["inputs"] == inputs and saved["outputs"] == outputs
+        assert saved["expectedGx"] == expected_gx and saved["expectedGw"] == expected_gw
+        assert saved["workgroups"] == [1, 1, 1]
+    else:
+        assert saved["fixture"] == fixture
+        assert saved["executionPlan"] == plan
+    assert json.loads((work_dir / "result.json").read_text()) == vars(result)
+
+
 @pytest.mark.parametrize("target", ("directx", "opengl"))
 @pytest.mark.parametrize("failure", ("translation", "identity"))
 def test_attention_retains_failed_translation_before_artifact_checks(

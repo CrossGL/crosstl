@@ -6,7 +6,6 @@ import math
 import os
 import shutil
 import subprocess
-import tempfile
 import textwrap
 from pathlib import Path
 
@@ -30,6 +29,12 @@ from crosstl.project import (
     validate_project_report,
 )
 from crosstl.project.directx_toolchain import dxc_compiler_arguments_for_source
+from demos.integrations.mlx.tests.corpus_evidence import (
+    corpus_workspace,
+    native_compiler_runner,
+    record_native_request,
+    record_native_result,
+)
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -54,12 +59,12 @@ MLX_LAYER_NORM_DISPATCH_CONTRACT = (
 )
 MLX_LAYER_NORM_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "7e790d4e665c72025e46c7c038aba2bec57ba6f65e209178eae5160c0c7ea8e9",
-        "sizeBytes": 5216,
+        "sha256": "7b0698cb49d6131e1e22313b00c9cf38602e6b8f68698c711deb20166c7977ae",
+        "sizeBytes": 5256,
     },
     "opengl": {
-        "sha256": "f86f83b6835b7d4b07ece9f153df883300f7a131bbcec5d084bf29084c1bf51a",
-        "sizeBytes": 5914,
+        "sha256": "fb1f8ee898f4093157d12e70a2c6bfe545aa4fb1376278ebfff003f940641a8d",
+        "sizeBytes": 5999,
     },
 }
 REQUIRE_DIRECTX_PROOF_ENV = "CROSTL_REQUIRE_MLX_LAYER_NORM_DIRECTX_NATIVE_LOADER"
@@ -373,6 +378,8 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         validate=True,
         run_toolchains=True,
     )
+    report_path = work_dir / f"{target}-portability-report.json"
+    report.write_json(report_path)
     payload = report.to_json()
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
@@ -471,8 +478,6 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert len(toolchain_runs) == 1
         assert toolchain_runs[0]["status"] == "ok"
 
-    report_path = work_dir / f"{target}-portability-report.json"
-    report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
     return report_path
 
@@ -608,27 +613,33 @@ def test_layer_norm_native_loader_dispatch_contract_is_exact():
 
 def test_pinned_mlx_layer_norm_translates_to_directx_native_loader_artifact():
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-layer-norm-directx-translation-",
-        dir=mlx_root,
+    with corpus_workspace(
+        mlx_root,
+        family="layer",
+        target="directx",
+        entry_point=MLX_LAYER_NORM_ENTRY,
     ) as temporary_directory:
         _translate_artifact(mlx_root, Path(temporary_directory), "directx")
 
 
 def test_pinned_mlx_layer_norm_translates_to_software_subgroup_opengl():
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-layer-norm-opengl-translation-",
-        dir=mlx_root,
+    with corpus_workspace(
+        mlx_root,
+        family="layer",
+        target="opengl",
+        entry_point=MLX_LAYER_NORM_ENTRY,
     ) as temporary_directory:
         _translate_artifact(mlx_root, Path(temporary_directory), "opengl")
 
 
 def test_pinned_mlx_layer_norm_executes_through_directx_native_loader():
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-layer-norm-directx-native-loader-",
-        dir=mlx_root,
+    with corpus_workspace(
+        mlx_root,
+        family="layer",
+        target="directx",
+        entry_point=MLX_LAYER_NORM_ENTRY,
     ) as temporary_directory:
         descriptor, package_dir = _build_runtime_package(
             mlx_root,
@@ -644,8 +655,15 @@ def test_pinned_mlx_layer_norm_executes_through_directx_native_loader():
                 adapter_kind="directx-native-runtime",
             ),
             runtime_adapter=DirectXRuntimeParityAdapter(
-                runtime=DirectXComputeRuntime()
+                runtime=DirectXComputeRuntime(),
+                command_runner=native_compiler_runner(Path(temporary_directory)),
             ),
+        )
+        record_native_request(
+            Path(temporary_directory),
+            request,
+            commit=MLX_COMMIT,
+            workload_id=MLX_LAYER_NORM_ENTRY,
         )
         availability = executor.is_available(request)
         if not availability.available:
@@ -654,6 +672,7 @@ def test_pinned_mlx_layer_norm_executes_through_directx_native_loader():
                 require_env=REQUIRE_DIRECTX_PROOF_ENV,
             )
         result = executor.run(request)
+        record_native_result(Path(temporary_directory), result)
 
     assert result.status == "ok"
     output_name = _expected_binding_names("directx")[3]
@@ -668,9 +687,11 @@ def test_pinned_mlx_layer_norm_executes_through_directx_native_loader():
 
 def test_pinned_mlx_layer_norm_executes_through_opengl_native_loader():
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-layer-norm-opengl-native-loader-",
-        dir=mlx_root,
+    with corpus_workspace(
+        mlx_root,
+        family="layer",
+        target="opengl",
+        entry_point=MLX_LAYER_NORM_ENTRY,
     ) as temporary_directory:
         descriptor, package_dir = _build_runtime_package(
             mlx_root,
@@ -686,8 +707,15 @@ def test_pinned_mlx_layer_norm_executes_through_opengl_native_loader():
                 adapter_kind="opengl-native-runtime",
             ),
             runtime_adapter=OpenGLRuntimeParityAdapter(
-                runtime=OpenGLComputeRuntime(context_backends=("egl",))
+                runtime=OpenGLComputeRuntime(context_backends=("egl",)),
+                command_runner=native_compiler_runner(Path(temporary_directory)),
             ),
+        )
+        record_native_request(
+            Path(temporary_directory),
+            request,
+            commit=MLX_COMMIT,
+            workload_id=MLX_LAYER_NORM_ENTRY,
         )
         availability = executor.is_available(request)
         if not availability.available:
@@ -696,6 +724,7 @@ def test_pinned_mlx_layer_norm_executes_through_opengl_native_loader():
                 require_env=REQUIRE_OPENGL_PROOF_ENV,
             )
         result = executor.run(request)
+        record_native_result(Path(temporary_directory), result)
 
     assert result.status == "ok"
     output_name = _expected_binding_names("opengl")[3]

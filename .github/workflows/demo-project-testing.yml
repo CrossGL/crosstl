@@ -3850,8 +3850,10 @@ jobs:
         env:
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_RMS_NORM_DIRECTX_NATIVE_LOADER: "1"
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
         run: >-
           python -m pytest -q -n auto
+          --junitxml=demo-results/normalization/rms_norm/directx.xml
           demos/integrations/mlx/tests/kernels/test_rms_norm_native_loader.py::test_pinned_mlx_rms_norm_executes_through_directx_native_loader
 
       - name: Prove pinned MLX RMSNorm VJP Direct3D native-loader execution
@@ -3859,8 +3861,10 @@ jobs:
         env:
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_RMS_NORM_VJP_DIRECTX_NATIVE_LOADER: "1"
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
         run: >-
           python -m pytest -q -n auto
+          --junitxml=demo-results/normalization/rms_norm_vjp/directx.xml
           demos/integrations/mlx/tests/kernels/test_rms_norm_vjp_native_loader.py::test_pinned_mlx_rms_norm_vjp_executes_through_directx_native_loader
 
       - name: Prove pinned MLX LayerNorm Direct3D native-loader execution
@@ -3868,8 +3872,10 @@ jobs:
         env:
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_LAYER_NORM_DIRECTX_NATIVE_LOADER: "1"
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
         run: >-
           python -m pytest -q -n auto
+          --junitxml=demo-results/normalization/layer_norm/directx.xml
           demos/integrations/mlx/tests/kernels/test_layer_norm_native_loader.py::test_pinned_mlx_layer_norm_executes_through_directx_native_loader
 
       - name: Prove pinned MLX LayerNorm VJP Direct3D native-loader execution
@@ -3877,8 +3883,10 @@ jobs:
         env:
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_LAYER_NORM_VJP_DIRECTX_NATIVE_LOADER: "1"
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
         run: >-
           python -m pytest -q -n auto
+          --junitxml=demo-results/normalization/layer_norm_vjp/directx.xml
           demos/integrations/mlx/tests/kernels/test_layer_norm_vjp_native_loader.py::test_pinned_mlx_layer_norm_vjp_executes_through_directx_native_loader
 
       - name: Prove pinned MLX dot Direct3D native-loader execution
@@ -4418,11 +4426,13 @@ jobs:
         env:
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_RMS_NORM_OPENGL_NATIVE_LOADER: "1"
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
         run: >-
           python -m pytest -q -n auto
+          --junitxml=demo-results/normalization/rms_norm/opengl.xml
           demos/integrations/mlx/tests/kernels/test_rms_norm_native_loader.py::test_pinned_mlx_rms_norm_executes_through_opengl_native_loader
 
       - name: Prove pinned MLX RMSNorm VJP OpenGL native-loader execution
@@ -4430,11 +4440,13 @@ jobs:
         env:
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_RMS_NORM_VJP_OPENGL_NATIVE_LOADER: "1"
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
         run: >-
           python -m pytest -q -n auto
+          --junitxml=demo-results/normalization/rms_norm_vjp/opengl.xml
           demos/integrations/mlx/tests/kernels/test_rms_norm_vjp_native_loader.py::test_pinned_mlx_rms_norm_vjp_executes_through_opengl_native_loader
 
       - name: Prove pinned MLX LayerNorm OpenGL native-loader execution
@@ -4442,11 +4454,13 @@ jobs:
         env:
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_LAYER_NORM_OPENGL_NATIVE_LOADER: "1"
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
         run: >-
           python -m pytest -q -n auto
+          --junitxml=demo-results/normalization/layer_norm/opengl.xml
           demos/integrations/mlx/tests/kernels/test_layer_norm_native_loader.py::test_pinned_mlx_layer_norm_executes_through_opengl_native_loader
 
       - name: Prove pinned MLX LayerNorm VJP OpenGL native-loader execution
@@ -4454,11 +4468,13 @@ jobs:
         env:
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_LAYER_NORM_VJP_OPENGL_NATIVE_LOADER: "1"
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
         run: >-
           python -m pytest -q -n auto
+          --junitxml=demo-results/normalization/layer_norm_vjp/opengl.xml
           demos/integrations/mlx/tests/kernels/test_layer_norm_vjp_native_loader.py::test_pinned_mlx_layer_norm_vjp_executes_through_opengl_native_loader
 
       - name: Validate pinned MLX LogSumExp OpenGL dispatch artifacts
@@ -5311,6 +5327,10 @@ jobs:
             mlx-softmax-results
             demo-results/arg-reduce
             demo-results/attention
+            demo-results/normalization/rms_norm
+            demo-results/normalization/rms_norm_vjp
+            demo-results/normalization/layer_norm
+            demo-results/normalization/layer_norm_vjp
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 14

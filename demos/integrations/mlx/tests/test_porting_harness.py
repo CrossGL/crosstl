@@ -10656,16 +10656,16 @@ def test_rms_norm_native_runtime_evidence_records_bounded_cross_target_proof():
         "selected_parameters": {"N_READS": "RMS_N_READS", "T": "float"},
     }
     assert status["artifacts"]["directx"]["sha256"] == (
-        "f03d8c3c1df2256e5c867bfd235e57b66d68a1c6e3c3c04701a581d8ef7b3e67"
+        "f1910bc37d2fabd46213add21ed22fd35691794ece36d0917cde6b7f209403ea"
     )
-    assert status["artifacts"]["directx"]["size_bytes"] == 3486
+    assert status["artifacts"]["directx"]["size_bytes"] == 3526
     assert status["artifacts"]["directx"]["native_runtime"]["status"] == (
         "required-on-ci"
     )
     assert status["artifacts"]["opengl"]["sha256"] == (
-        "3180aba83b64add0ae3c2d471b9297eb5bada4c4ff2bd5c91a3db3698cf0df78"
+        "c878dfac029400c584c909b722168189b08abd4206f525c2c3bee6bbe60e2b58"
     )
-    assert status["artifacts"]["opengl"]["size_bytes"] == 4393
+    assert status["artifacts"]["opengl"]["size_bytes"] == 4478
     assert status["artifacts"]["opengl"]["control_barrier_instruction_count"] == 6
     assert status["artifacts"]["opengl"]["group_non_uniform_instruction_count"] == 0
     assert status["artifacts"]["opengl"]["native_runtime"]["status"] == (
@@ -10816,16 +10816,16 @@ def test_rms_norm_vjp_native_runtime_evidence_records_deferred_cross_target_proo
 
     directx = status["artifacts"]["directx"]
     assert directx["sha256"] == (
-        "7c1fe2a3c5f6d883b11b3fb17511663ebb3ead2a0931611229930c3f07035c9f"
+        "803e11dafc7906880a8f631780cdec4248de591dfd19daa1d16dd34e6163ac9c"
     )
-    assert directx["size_bytes"] == 6795
+    assert directx["size_bytes"] == 6845
     assert directx["wave_active_sum_call_count"] == 4
     assert directx["native_runtime"]["status"] == "required-on-ci"
     opengl = status["artifacts"]["opengl"]
     assert opengl["sha256"] == (
-        "c26decbd3ce3fca934a9f07967728d4aeaf990c9df633a81d96a7936d484cf06"
+        "8a295133430e3398d8f9b7dcb1b1e2a8a10b2739d4febdd4092737161223e234"
     )
-    assert opengl["size_bytes"] == 7768
+    assert opengl["size_bytes"] == 7853
     assert opengl["specialization_enforcement"] == (
         "deferred-opengl-spirv-specialization"
     )
@@ -10960,17 +10960,17 @@ def test_layer_norm_native_runtime_evidence_records_bounded_cross_target_proof()
         },
     }
     assert status["artifacts"]["directx"]["sha256"] == (
-        "7e790d4e665c72025e46c7c038aba2bec57ba6f65e209178eae5160c0c7ea8e9"
+        "7b0698cb49d6131e1e22313b00c9cf38602e6b8f68698c711deb20166c7977ae"
     )
-    assert status["artifacts"]["directx"]["size_bytes"] == 5216
+    assert status["artifacts"]["directx"]["size_bytes"] == 5256
     assert status["artifacts"]["directx"]["wave_active_sum_call_count"] == 2
     assert status["artifacts"]["directx"]["native_runtime"]["status"] == (
         "required-on-ci"
     )
     assert status["artifacts"]["opengl"]["sha256"] == (
-        "f86f83b6835b7d4b07ece9f153df883300f7a131bbcec5d084bf29084c1bf51a"
+        "fb1f8ee898f4093157d12e70a2c6bfe545aa4fb1376278ebfff003f940641a8d"
     )
-    assert status["artifacts"]["opengl"]["size_bytes"] == 5914
+    assert status["artifacts"]["opengl"]["size_bytes"] == 5999
     assert status["artifacts"]["opengl"]["control_barrier_instruction_count"] == 6
     assert status["artifacts"]["opengl"]["group_non_uniform_instruction_count"] == 0
     assert status["artifacts"]["opengl"]["local_validation"] == {
@@ -11154,16 +11154,16 @@ def test_layer_norm_vjp_native_runtime_evidence_records_deferred_cross_target_pr
 
     directx = status["artifacts"]["directx"]
     assert directx["sha256"] == (
-        "6d4a3281d038309c8c294952411acfeb773f6ee8ddd8d73935cb3f3c4ce93a61"
+        "9ea6cc8346a8847fbfc416a64583ac5736f5f7528ad78f613f0de0d72c4c7c4e"
     )
-    assert directx["size_bytes"] == 7504
+    assert directx["size_bytes"] == 7584
     assert directx["wave_active_sum_call_count"] == 4
     assert directx["native_runtime"]["status"] == "required-on-ci"
     opengl = status["artifacts"]["opengl"]
     assert opengl["sha256"] == (
-        "9e6c4e6201e1c78e981a346275b849c37e6c8d834e7509d662f7aec5782980fa"
+        "21df3c6a5676d70ea1a737d1219a299d812a24261513d78e8d383ea496f18f77"
     )
-    assert opengl["size_bytes"] == 8291
+    assert opengl["size_bytes"] == 8376
     assert opengl["specialization_enforcement"] == (
         "deferred-opengl-spirv-specialization"
     )
