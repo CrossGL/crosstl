@@ -237,17 +237,17 @@ def test_half_remainder_profile_rejects_global_initializer(tmp_path):
 
 
 @pytest.mark.parametrize("builtin", ["asfloat", "asuint"])
-def test_half_remainder_profile_rejects_captured_arithmetic_bitcasts(tmp_path, builtin):
+def test_half_remainder_profile_preserves_source_bitcast_names(tmp_path, builtin):
     declaration = (
         "float asfloat(uint x) { return float(x) + 100.0f; }"
         if builtin == "asfloat"
         else "uint asuint(float x) { return uint(x) + 200u; }"
     )
     source = declaration + "\nhalf apply(half a, half b) { return fmod(a, b); }"
-    with pytest.raises(MetalHalfRemainderProfileError) as error:
-        _translate(tmp_path, source)
-    assert error.value.profile == PROFILE
-    assert f"source helper '{builtin}' captures" in error.value.reason
+    generated = _translate(tmp_path, source)
+    assert f"{builtin}__metal_overload_1(" in generated
+    assert "uint x = asuint(float(a));" in generated
+    assert "return float16(asfloat(difference));" in generated
 
 
 def test_project_retains_half_remainder_profile(tmp_path):

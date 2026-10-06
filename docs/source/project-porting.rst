@@ -840,8 +840,9 @@ Scalar and two-, three- and four-component forms support scalar broadcasting
 and single argument evaluation. Other floating types and source-owned overloads
 retain their own behavior.
 
-If source helpers capture the required ``asfloat`` or ``asuint`` conversions,
-the selected profile produces a diagnostic instead of emitting an unsafe helper.
+Source-defined ``asfloat``, ``asint`` and ``asuint`` overloads receive distinct
+internal names before target generation. Their source calls retain namespace
+and overload identity while generated arithmetic helpers retain builtin bitcasts.
 
 The option is explicit, not inferred from the target OS or selected for every
 Metal source. Project reports retain ``binary16RemainderProfile`` and reject

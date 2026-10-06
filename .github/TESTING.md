@@ -125,6 +125,12 @@ readbacks and device details use the existing arithmetic evidence upload.
 The profile is opt-in and does not replace the unsupported-profile diagnostic
 for unconfigured half remainder or imply full corpus parity.
 
+The same arithmetic step verifies source-defined bitcast-name overloads beside
+generated FMA, division and half-remainder helpers. Exact output words cover
+scalar/vector overloads, aliases, namespace-qualified calls and both binary32
+profiles. Original Metal is an independent control, and guards and side-effect
+counters remain required. These checks add no platform jobs.
+
 The native host job runs its full set of 17 portable contract-test modules on
 Ubuntu only. Windows and macOS retain focused C callback, launch geometry,
 library registration and memory-layout checks before their native workloads.

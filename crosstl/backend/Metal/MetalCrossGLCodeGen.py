@@ -13135,6 +13135,9 @@ class MetalToCrossGLConverter:
         self.metal_source_overload_output_names = {}
         self.metal_builtin_name_collision_groups = set()
         qualified_math_calls = self.metal_qualified_math_call_names(ast)
+        # These portable names are emitted by as_type and arithmetic helpers,
+        # even without a qualified builtin call in the source AST.
+        builtin_names = qualified_math_calls | {"asfloat", "asint", "asuint"}
         used_names = set(self.wide_vector_reserved_names)
         used_names.update(
             self.sanitize_identifier(name)
@@ -13142,7 +13145,7 @@ class MetalToCrossGLConverter:
         )
 
         for function_name, overloads in self.user_function_overloads_by_name.items():
-            builtin_collision = function_name in qualified_math_calls and any(
+            builtin_collision = function_name in builtin_names and any(
                 not self.is_materialized_metal_stdlib_wrapper(function)
                 for function in overloads
             )
@@ -14407,17 +14410,6 @@ class MetalToCrossGLConverter:
                 "profiled half remainder requires a function and one to four lanes",
                 getattr(expression, "source_location", None),
             )
-        for builtin in ("asfloat", "asuint"):
-            if any(
-                self.sanitize_identifier(self.function_output_name(function)) == builtin
-                for function in self.user_function_overloads_by_name.get(builtin, ())
-            ):
-                raise MetalHalfRemainderProfileError(
-                    self.binary16_remainder_profile,
-                    result_type,
-                    f"source helper '{builtin}' captures a required arithmetic bitcast",
-                    getattr(expression, "source_location", None),
-                )
         self.required_metal_half_remainder_widths.add(width)
         mapped = "float16" if width == 1 else f"half{width}"
         arguments = ", ".join(

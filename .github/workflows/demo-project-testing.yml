@@ -3469,7 +3469,8 @@ jobs:
               --junitxml="fused-math-results/results.xml" \
               tests/test_translator/test_fused_math.py \
               tests/test_translator/test_metal_fma.py \
-              tests/test_translator/test_metal_half_remainder.py::test_half_remainder_profile_executes
+              tests/test_translator/test_metal_half_remainder.py::test_half_remainder_profile_executes \
+              tests/test_translator/test_metal_arithmetic_ownership.py::test_arithmetic_builtin_ownership_executes
 
       - name: Upload binary32 arithmetic evidence
         if: always()
