@@ -128,11 +128,14 @@ every invocation in the logical subgroup. Operands are evaluated once; shared
 scratch is synchronized before reuse, including consecutive all/any calls.
 Boolean payloads do not enable numeric reductions or shuffles on Boolean values.
 
-Equality or inequality of a private binary32 scalar/vector variable with itself
+Equality or inequality of a private binary16/binary32 scalar/vector variable with itself
 uses integer-payload NaN classification. This preserves ``value == value`` and
 ``value != value`` under optimized DXC compilation, which can otherwise fold
 these predicates even for ``precise`` locals. Repeated calls, memory accesses,
-reference views and non-binary32 comparisons are not collapsed by this lowering.
+reference views and other operand types are not collapsed by this lowering.
+Native controls cover every binary16 payload, including both NaN signs and
+payloads, signed zeros, subnormals and infinities. Optimized compiler checks
+require an input-dependent integer predicate for each vector lane.
 This does not define general subnormal comparison or arithmetic profiles.
 
 Arithmetic payloads are limited to 32-bit ``float``, ``int`` and ``uint`` scalars. Floating

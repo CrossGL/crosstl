@@ -52,6 +52,19 @@ values and 64 guard values. Windows execution remains separate. This bounded
 check does not accept the complete reduction family's artifact references or
 establish its numerical coverage.
 
+The same review exposed a remaining half-precision NaN predicate in HLSL
+([#2008](https://github.com/CrossGL/crosstl/issues/2008)). Optimized DXC folded
+`value != value` to false inside min/max reduction helpers. Binary16 payload
+classification now preserves that predicate. Eight historical whole-array and
+row artifacts differ only in the predicate; those and four current-pin artifacts
+strictly compile with input-dependent votes retained in DXIL. Generic native
+controls cover all 65,536 half payloads on Metal and OpenGL; Windows execution
+remains a separate required check. No complete reduction reference set is
+accepted from these results. Eight byte-valued small-row artifacts still fail
+strict compilation because writable arguments are narrowed into temporaries
+([#2101](https://github.com/CrossGL/crosstl/issues/2101)); upstream kernels are
+unchanged.
+
 ## Corpus Revisions
 
 This directory contains the project-level MLX porting checks used by CrossTL.

@@ -25,16 +25,23 @@ from tests.test_translator.test_software_subgroup_product import _package
 REQUIRE_ENV = "CROSTL_REQUIRE_FLOAT_SELF_COMPARISONS"
 
 
-def _source(width, operator):
-    kind = "float" + (str(width) if width > 1 else "")
+def _source(width, operator, precision="float"):
+    kind = precision + (str(width) if width > 1 else "")
     boolean = "bool" + (str(width) if width > 1 else "")
-    values = ", ".join(f"asfloat(inputs[id.x * {width}u + {i}u])" for i in range(width))
+    values = ", ".join(
+        (
+            f"inputs[id.x * {width}u + {i}u]"
+            if precision == "half"
+            else f"asfloat(inputs[id.x * {width}u + {i}u])"
+        )
+        for i in range(width)
+    )
     writes = "\n".join(
         f"outputs[id.x * {width}u + {i}u] = uint(result{'.' + 'xyzw'[i] if width > 1 else ''});"
         for i in range(width)
     )
     return f"""shader Classification {{
-        StructuredBuffer<uint> inputs @register(t0);
+        StructuredBuffer<{"half" if precision == "half" else "uint"}> inputs @register(t0);
         RWStructuredBuffer<uint> outputs @register(u0);
         {boolean} classify({kind} value) {{ return value {operator} value; }}
         compute {{
@@ -50,11 +57,23 @@ def _source(width, operator):
 
 @pytest.mark.parametrize("width", [1, 2, 3, 4])
 @pytest.mark.parametrize("operator", ["==", "!="])
-def test_self_comparisons_retain_dynamic_nan_classification(tmp_path, width, operator):
-    generated = HLSLCodeGen().generate_stage(parse(_source(width, operator)), "compute")
+@pytest.mark.parametrize("precision", ["float", "half"])
+def test_self_comparisons_retain_dynamic_nan_classification(
+    tmp_path, width, operator, precision
+):
+    generated = HLSLCodeGen().generate_stage(
+        parse(_source(width, operator, precision)), "compute"
+    )
     comparison = ">" if operator == "!=" else "<="
-    assert f"((asuint(value) & 0x7fffffffu) {comparison} 0x7f800000u)" in generated
-    artifact, _module = _compile(generated, "directx", tmp_path)
+    bits, mask, infinity = (
+        ("asuint16", "0x7fffu", "0x7c00u")
+        if precision == "half"
+        else ("asuint", "0x7fffffffu", "0x7f800000u")
+    )
+    assert f"(({bits}(value) & {mask}) {comparison} {infinity})" in generated
+    artifact, _module = _compile(
+        generated, "directx", tmp_path, directx_compile_flags=("-enable-16bit-types",)
+    )
     if not shutil.which("dxc"):
         pytest.skip("DXC is required to inspect optimized self-comparisons")
     assembly = tmp_path / "optimized.ll"
@@ -66,6 +85,7 @@ def test_self_comparisons_retain_dynamic_nan_classification(tmp_path, width, ope
             "-E",
             "CSMain",
             "-O3",
+            "-enable-16bit-types",
             "-WX",
             str(artifact),
             "-Fc",
@@ -79,12 +99,12 @@ def test_self_comparisons_retain_dynamic_nan_classification(tmp_path, width, ope
     )
     assert result.returncode == 0, result.stdout + result.stderr
     ir = assembly.read_text()
-    assert len(re.findall(r"icmp u(?:gt|lt) i32", ir)) == width
+    assert len(re.findall(r"icmp u(?:gt|lt) i(?:16|32)", ir)) == width
     assert "fcmp fast" not in ir
 
 
 @pytest.mark.parametrize("kind", ["int", "uint", "bool", "double"])
-def test_non_binary32_comparisons_remain_unchanged(kind):
+def test_other_operand_types_remain_unchanged(kind):
     source = (
         f"shader Other {{ bool classify({kind} value) {{ return value != value; }} }}"
     )
@@ -93,28 +113,42 @@ def test_non_binary32_comparisons_remain_unchanged(kind):
 
 
 @pytest.mark.parametrize("expression", ["values[0]", "next_value()", "value++"])
-def test_self_comparison_does_not_collapse_repeated_evaluations(expression):
+@pytest.mark.parametrize("precision", ["float", "half"])
+def test_self_comparison_does_not_collapse_repeated_evaluations(expression, precision):
     source = f"""shader Reads {{
-        RWStructuredBuffer<float> values @register(u0);
-        float next_value() {{ return values[0]; }}
-        bool classify(float value) {{ return {expression} != {expression}; }}
+        RWStructuredBuffer<{precision}> values @register(u0);
+        {precision} next_value() {{ return values[0]; }}
+        bool classify({precision} value) {{ return {expression} != {expression}; }}
     }}"""
     generated = HLSLCodeGen().generate(parse(source))
-    assert generated.count(expression) >= 2
+    rendered = (
+        "asfloat16(values[uint(0)])"
+        if precision == "half" and expression == "values[0]"
+        else expression
+    )
+    assert generated.count(rendered) >= 2
     assert "0x7fffffffu" not in generated
+    assert "0x7fffu" not in generated
 
 
-def test_global_storage_is_not_collapsed_to_one_read():
-    source = "shader Shared { groupshared float value; bool classify() { return value != value; } }"
+@pytest.mark.parametrize("precision", ["float", "half"])
+def test_global_storage_is_not_collapsed_to_one_read(precision):
+    source = f"shader Shared {{ groupshared {precision} value; bool classify() {{ return value != value; }} }}"
     generated = HLSLCodeGen().generate(parse(source))
     assert "(value != value)" in generated and "0x7fffffffu" not in generated
+    assert "0x7fffu" not in generated
 
 
-def _native_source(width, aggregate=False):
-    kind = "float" + (str(width) if width > 1 else "")
+def _native_source(width, aggregate=False, precision="float"):
+    kind = precision + (str(width) if width > 1 else "")
     boolean = "bool" + (str(width) if width > 1 and not aggregate else "")
     values = ", ".join(
-        f"as_type<float>(inputWords[tid * {width}u + {i}u])" for i in range(width)
+        (
+            f"as_type<half>(ushort(inputWords[tid * {width}u + {i}u]))"
+            if precision == "half"
+            else f"as_type<float>(inputWords[tid * {width}u + {i}u])"
+        )
+        for i in range(width)
     )
     writes = "\n".join(
         f"outputWords[(tid * {width}u + {i}u) * 2u] = uint(equal{'.' + 'xyzw'[i] if width > 1 and not aggregate else ''}); "
@@ -140,16 +174,20 @@ kernel void products(device uint* inputWords [[buffer(0)]],
     "width,aggregate",
     [(1, False), (2, False), (3, False), (4, False), (2, True), (3, True), (4, True)],
 )
-def test_self_comparisons_execute_with_raw_float_payloads(tmp_path, width, aggregate):
+@pytest.mark.parametrize("precision", ["float", "half"])
+def test_self_comparisons_execute_with_raw_float_payloads(
+    tmp_path, width, aggregate, precision
+):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required native floating classification")
     target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    group_size = 2 if precision == "half" else 1
     source, descriptor, package = _package(
         tmp_path,
         target,
         "uint",
-        (1, 1, 1),
-        source=_native_source(width, aggregate),
+        (group_size, 1, 1),
+        source=_native_source(width, aggregate, precision),
         software_subgroups=False,
     )
     words = [
@@ -170,17 +208,19 @@ def test_self_comparisons_execute_with_raw_float_payloads(tmp_path, width, aggre
         0x7F7FFFFF,
         0xFF7FFFFF,
     ] * 3
+    mask, infinity = 0x7FFFFFFF, 0x7F800000
+    if precision == "half":
+        words = list(range(65536))
+        words.extend(range(-len(words) % (width * group_size)))
+        mask, infinity = 0x7FFF, 0x7C00
     wanted = []
     for word in words:
-        nan = (word & 0x7FFFFFFF) > 0x7F800000
+        nan = (word & mask) > infinity
         wanted.extend((int(not nan), int(nan)))
     if aggregate:
         wanted = []
         for start in range(0, len(words), width):
-            nan = any(
-                (word & 0x7FFFFFFF) > 0x7F800000
-                for word in words[start : start + width]
-            )
+            nan = any((word & mask) > infinity for word in words[start : start + width])
             wanted.extend([int(not nan), int(nan)] * width)
     guards = [0xBAD00000 + i for i in range(17)]
 
@@ -203,7 +243,10 @@ def test_self_comparisons_execute_with_raw_float_payloads(tmp_path, width, aggre
             name: {key: value for key, value in data.items() if key != "values"}
             for name, data in expected.items()
         },
-        {"workgroupCount": [len(words) // width, 1, 1], "workgroupSize": [1, 1, 1]},
+        {
+            "workgroupCount": [len(words) // (width * group_size), 1, 1],
+            "workgroupSize": [group_size, 1, 1],
+        },
         expected_target=target,
     )
     compiled = tmp_path / "compiled"
@@ -213,6 +256,7 @@ def test_self_comparisons_execute_with_raw_float_payloads(tmp_path, width, aggre
         target,
         compiled,
         metal_compile_flags=("-fno-fast-math",),
+        directx_compile_flags=("-enable-16bit-types",),
     )
     executor = _executor(target)
     records = {}
@@ -246,6 +290,7 @@ def test_self_comparisons_execute_with_raw_float_payloads(tmp_path, width, aggre
                 {
                     "target": target,
                     "width": width,
+                    "precision": precision,
                     "aggregate": aggregate,
                     "inputs": inputs,
                     "expected": expected,

@@ -121,6 +121,12 @@ Original Metal and generated output must match an independent integer reference;
 the corresponding DirectX execution is required on Windows. Compiler-only
 checks remain distinct from these numerical results. No platform job is added.
 
+The existing self-comparison step checks both binary16 and binary32 private
+scalar/vector predicates under optimized DXC. Native controls cover every
+binary16 payload, lane-wise and aggregated results, unchanged input words and
+output guards on each applicable target. These cases share the existing job
+and deadline; no runner is added and repeated memory reads are not collapsed.
+
 The existing Metal bfloat-vector job also checks nested constructor bitcasts.
 It preserves all 65,536 payloads in scalar and two-, three- and four-lane values,
 including aliases and single evaluation. Only defined lanes are inspected for

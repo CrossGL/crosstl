@@ -12332,11 +12332,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             return None
         info = self.hlsl_floating_arithmetic_type_info(source_type)
-        if info is None or info["base_type"] != "float":
+        if info is None or info["base_type"] not in {"float", "float16_t"}:
             return None
         # Optimized DXC folds floating self-comparisons even on precise locals.
         # Private scalar/vector payload classification preserves the NaN branch.
         comparison = ">" if operator == "!=" else "<="
+        if info["native_16_bit"]:
+            return f"((asuint16({rendered}) & 0x7fffu) {comparison} 0x7c00u)"
         return f"((asuint({rendered}) & 0x7fffffffu) {comparison} 0x7f800000u)"
 
     def hlsl_wide_integer_floating_binary_contract(
