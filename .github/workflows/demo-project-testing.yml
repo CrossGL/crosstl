@@ -1465,6 +1465,7 @@ jobs:
         env:
           CROSTL_REQUIRE_FUSED_MATH: "1"
           CROSTL_REQUIRE_DIVISION_MATH: "1"
+          CROSTL_REQUIRE_COMPARISON_PROFILE: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
@@ -1479,6 +1480,7 @@ jobs:
               tests/test_translator/test_metal_fma.py \
               tests/test_translator/test_division_math.py \
               tests/test_translator/test_metal_division.py \
+              tests/test_translator/test_metal_comparison_profile.py \
               2>&1 | tee .mlx-portable-host/fused-math.log
       - name: Checkout and prepare pinned upstream MLX
         run: |

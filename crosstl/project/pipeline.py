@@ -1837,6 +1837,7 @@ REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(
         "dispatchRegionProgram",
         "binary32DivisionProfile",
         "binary16RemainderProfile",
+        "binary32ComparisonProfile",
     )
 )
 REPORT_ARTIFACT_ENTRY_POINT_FIELDS = frozenset(("source", "target", "stage"))
@@ -28410,6 +28411,24 @@ def _translate_project_impl(
                 dispatch_region = None
                 try:
                     division_profile = source_options.get("binary32_division_profile")
+                    comparison_profile = source_options.get(
+                        "binary32_comparison_profile"
+                    )
+                    if (
+                        unit.source_backend == "metal"
+                        and comparison_profile is not None
+                    ):
+                        if comparison_profile not in (
+                            "preserve-subnormals",
+                            "flush-subnormals",
+                        ):
+                            raise ValueError(
+                                "binary32_comparison_profile must be 'preserve-subnormals', "
+                                "'flush-subnormals', or None"
+                            )
+                        artifact["provenance"][
+                            "binary32ComparisonProfile"
+                        ] = comparison_profile
                     if unit.source_backend == "metal" and division_profile is not None:
                         if division_profile not in ("rne-gradual", "rne-flush"):
                             raise ValueError(
@@ -46406,6 +46425,18 @@ def _provenance_contract_reasons(
             reasons.append(
                 f"{prefix}.binary16RemainderProfile must be binary32-quotient"
             )
+    if "binary32ComparisonProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(
+                f"{prefix}.binary32ComparisonProfile requires a Metal source"
+            )
+        if provenance["binary32ComparisonProfile"] not in (
+            "preserve-subnormals",
+            "flush-subnormals",
+        ):
+            reasons.append(
+                f"{prefix}.binary32ComparisonProfile must be preserve-subnormals or flush-subnormals"
+            )
     if "dispatchRegion" in provenance:
         try:
             region = DispatchRegion.from_json(provenance["dispatchRegion"])
@@ -46454,6 +46485,15 @@ def _provenance_contract_reasons(
         if provenance.get("binary16RemainderProfile") != expected_remainder_profile:
             reasons.append(
                 f"{prefix}.binary16RemainderProfile must match the resolved project source options"
+            )
+        expected_comparison_profile = (
+            options.get("binary32_comparison_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("binary32ComparisonProfile") != expected_comparison_profile:
+            reasons.append(
+                f"{prefix}.binary32ComparisonProfile must match the resolved project source options"
             )
         if provenance.get("dispatchRegion") != options.get(
             DISPATCH_REGION_SOURCE_OPTION

@@ -1113,6 +1113,33 @@ exponential midpoint difference tracked in
 Sigmoid or upstream-suite parity. The remaining source-profile work is tracked
 in `issue #2086 <https://github.com/CrossGL/crosstl/issues/2086>`_.
 
+Metal sources can also select an explicit binary32 comparison policy:
+
+.. code-block:: toml
+
+   [project.source_options.metal]
+   binary32_comparison_profile = "flush-subnormals"
+
+``preserve-subnormals`` compares the represented binary32 values;
+``flush-subnormals`` treats subnormal operands as signed zero for the comparison.
+The default is unset. The six relational and equality operators use integer-word
+ordering to preserve the selected behavior on every target, including signed
+zero, infinities and unordered NaNs. Scalar and two-, three- and four-lane
+operations evaluate each operand once. Existing source conversions are retained,
+including bfloat narrowing before its binary32 comparison.
+
+This policy does not modify stored operands, Boolean conversions, arithmetic,
+half-only or binary64 comparisons. Source-defined operators retain their own
+bodies. Unresolved operands and global constant comparisons that would require
+a runtime helper produce ``project.translate.metal-comparison-profile-unsupported``.
+Reports and packages retain ``binary32ComparisonProfile``; validation requires
+it to match the resolved source, target and path-specific configuration. Saved
+CrossGL retains the helper implementation without requiring the option again.
+Native source controls establish behavior for their tested compiler and device,
+not a universal Metal policy. Remainder and conversion subnormal behavior remain
+separate contracts; selecting a comparison profile does not establish full
+project numerical parity.
+
 The legacy MLX copy reference at
 ``846d176227a0ac13d2667e58d2bb68b322109ab0`` proves all 2,496 discovered entries
 from ``copy.metal`` through Metal-to-CrossGL-to-Metal translation. The family

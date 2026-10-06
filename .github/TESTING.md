@@ -148,6 +148,13 @@ and unchanged upstream-test steps remain required on their respective systems;
 the focused ABI checks do not replace them. Their JUnit report is retained in
 the same native host evidence artifact. No additional runner is introduced.
 
+Binary32 comparison profiles run once per native target in the existing
+arithmetic step. They retain exact Boolean results, raw operand words, guards
+and single-evaluation controls, including source functions named like bitcast
+builtins. macOS additionally executes the unchanged source control. The two
+explicit subnormal policies are tested independently of native Boolean casts
+and other arithmetic profiles, without adding a runner or extending the bound.
+
 Binary32 division source profiles run once per native target inside the existing
 arithmetic step. Exact checks cover source operators, precise builtins, compound
 writeback, narrow intermediates and guards. The project's Sigmoid boundary

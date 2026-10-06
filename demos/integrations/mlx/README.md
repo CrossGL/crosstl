@@ -3020,6 +3020,14 @@ Windows requires DXC/WARP and Linux requires GLSL/SPIR-V validation and Mesa
 execution. Eight guards and bit-preserving input encodings are required. These
 checks do not establish MLX host-runtime redirection or upstream test-suite parity.
 
+The [Windows checkpoint run](https://github.com/CrossGL/crosstl/actions/runs/37541475685/job/112535784677)
+at `35f5412f` passed all 101 binary-shape checks without skips. Independent replay
+of artifact `11449688692` confirms the pinned half kernel's 5,176 results and
+eight guards, using the saved encoded inputs and separately rounded reference.
+Its HLSL SHA-256 is `f453f410146b187e758888ef83d0822a80d3f870d843ecee6dcaa2f3b9543f9b`;
+the executed DXIL SHA-256 is `1ed6f3afeed8f074b3c30079acfa88699828c3db9f35a2b15b6ee693ff568206`.
+Saved host inputs are verified; physical driver-upload bytes are not claimed.
+
 All 60 signed and unsigned 64-bit shift references also have complete source and
 interface review. Their source changes only convert shift counts to the width
 required by the GLSL target; operand widths and buffer layouts are unchanged.

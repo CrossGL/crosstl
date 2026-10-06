@@ -156,6 +156,23 @@ class MetalDivisionProfileError(ValueError):
         )
 
 
+class MetalComparisonProfileError(ValueError):
+    """Raised when a selected comparison profile cannot be represented."""
+
+    project_diagnostic_code = "project.translate.metal-comparison-profile-unsupported"
+    missing_capabilities = ("metal.comparison-profile-lowering",)
+
+    def __init__(self, profile, operand_type, reason, source_location=None):
+        self.profile = profile
+        self.operand_type = operand_type
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(
+            f"Cannot apply Metal binary32 comparison profile '{profile}' to "
+            f"'{operand_type or '<unknown>'}': {reason}"
+        )
+
+
 class MetalHalfRemainderProfileError(ValueError):
     """Raised when an explicit half remainder profile cannot be represented."""
 
@@ -1251,6 +1268,7 @@ class MetalToCrossGLConverter:
         binary32_fma_profile=None,
         binary32_division_profile=None,
         binary16_remainder_profile=None,
+        binary32_comparison_profile=None,
     ):
         if binary32_fma_profile not in (None, "rne-gradual", "rne-flush"):
             raise ValueError(
@@ -1267,6 +1285,16 @@ class MetalToCrossGLConverter:
                 "binary16_remainder_profile must be 'binary32-quotient' or None"
             )
         self.binary16_remainder_profile = binary16_remainder_profile
+        if binary32_comparison_profile not in (
+            None,
+            "preserve-subnormals",
+            "flush-subnormals",
+        ):
+            raise ValueError(
+                "binary32_comparison_profile must be 'preserve-subnormals', "
+                "'flush-subnormals', or None"
+            )
+        self.binary32_comparison_profile = binary32_comparison_profile
         if not isinstance(preserve_pointer_pointee_const, bool):
             raise ValueError("preserve_pointer_pointee_const must be a boolean")
         self.preserve_pointer_pointee_const = preserve_pointer_pointee_const
@@ -1673,6 +1701,7 @@ class MetalToCrossGLConverter:
         self.required_metal_fma_widths = set()
         self.required_metal_division_widths = set()
         self.required_metal_half_remainder_widths = set()
+        self.required_metal_comparisons = set()
         self.metal_division_assignments = {}
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
@@ -1938,7 +1967,7 @@ class MetalToCrossGLConverter:
         self.propagate_struct_static_constexpr_dependency(key)
         return self.render_resolved_static_constant(key)
 
-    def render_static_struct_member_identifier(self, name, require_constant=False):
+    def static_struct_member_owner(self, name):
         if not isinstance(name, str) or "::" not in name:
             return None
         struct_name, member_name = name.rsplit("::", 1)
@@ -1959,6 +1988,33 @@ class MetalToCrossGLConverter:
             unqualified_struct = resolved_struct.rsplit("::", 1)[-1]
             if unqualified_struct in self.struct_name_map:
                 resolved_struct = unqualified_struct
+        return resolved_struct, member_name
+
+    def static_struct_member_type(self, name):
+        owner = self.static_struct_member_owner(name)
+        if owner is None:
+            return None
+        struct_name, member_name = owner
+        if struct_name in self.ambiguous_struct_names:
+            # Reuse the value resolver's ambiguity checks before choosing a type.
+            self.render_equivalent_struct_static_constant(struct_name, member_name)
+            struct_name = self.struct_static_constant_owner_candidates[struct_name][
+                0
+            ].name
+        if struct_name not in self.struct_name_map:
+            return None
+        member = self.struct_static_constant_members.get(
+            (self.map_struct_name(struct_name), member_name)
+        )
+        if member is None:
+            return None
+        return self.normalized_metal_type(self.resolve_type_alias(member.vtype))
+
+    def render_static_struct_member_identifier(self, name, require_constant=False):
+        owner = self.static_struct_member_owner(name)
+        if owner is None:
+            return None
+        resolved_struct, member_name = owner
         if resolved_struct in self.ambiguous_struct_names:
             return self.render_equivalent_struct_static_constant(
                 resolved_struct,
@@ -2836,6 +2892,7 @@ class MetalToCrossGLConverter:
         self.required_metal_fma_widths = set()
         self.required_metal_division_widths = set()
         self.required_metal_half_remainder_widths = set()
+        self.required_metal_comparisons = set()
         self.metal_division_assignments = {}
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
@@ -3278,6 +3335,7 @@ class MetalToCrossGLConverter:
             self.generate_metal_division_support_code(indent=1)
             + self.generate_metal_fma_support_code(indent=1)
             + self.generate_metal_half_remainder_support_code(indent=1)
+            + self.generate_metal_comparison_support_code(indent=1)
             + self.generate_metal_precise_math_support_code(indent=1),
             1,
         )
@@ -10956,6 +11014,17 @@ class MetalToCrossGLConverter:
             )
             if free_operator_call is not None:
                 return free_operator_call
+            if self.binary32_comparison_profile is not None and expr.op in {
+                "==",
+                "!=",
+                "<",
+                "<=",
+                ">",
+                ">=",
+            }:
+                profiled = self.generate_profiled_metal_comparison(expr, is_main)
+                if profiled is not None:
+                    return profiled
             cooperative_matrix_operation = {
                 "*": "cooperative_matrix_multiply",
                 "+": "cooperative_matrix_add",
@@ -14122,6 +14191,146 @@ class MetalToCrossGLConverter:
             return self.metal_precise_acosh_helper_name(width)
         self.required_metal_precise_acos_widths.add(width)
         return self.metal_precise_acos_helper_name(width)
+
+    def generate_profiled_metal_comparison(self, expression, is_main=False):
+        operands = (expression.left, expression.right)
+        types = [self.expression_metal_type(operand) for operand in operands]
+        if any(
+            self.metal_pointer_pointee_type_once(vtype) is not None for vtype in types
+        ):
+            return None
+        conversion = self.metal_builtin_lowered_conversion_plan(expression.op, operands)
+        if conversion is not None:
+            types = conversion[1]
+        narrow = self.metal_bfloat_arithmetic_plan(expression.op, *types)
+        vectors = [self.metal_small_vector_type_parts(vtype) for vtype in types]
+        elements = [
+            vector[0] if vector is not None else vtype
+            for vector, vtype in zip(vectors, types)
+        ]
+        infos = [
+            self.metal_scalar_arithmetic_type_info(element) for element in elements
+        ]
+
+        def unsupported(reason):
+            raise MetalComparisonProfileError(
+                self.binary32_comparison_profile,
+                ", ".join(str(vtype) for vtype in types),
+                reason,
+                getattr(expression, "source_location", None),
+            )
+
+        if any(info is None for info in infos):
+            unsupported(
+                "comparison operand types must be resolved before selecting a profile"
+            )
+        if all(info[0] == "integer" for info in infos):
+            return None
+        if narrow is not None:
+            computation = narrow[0]
+            vector = self.metal_small_vector_type_parts(computation)
+            element, width = vector or (computation, 1)
+        elif any(vectors):
+            element, width = vectors[0] or vectors[1]
+            if all(vectors) and vectors[0] != vectors[1]:
+                unsupported(
+                    "implicit conversion between distinct vector types is unsupported"
+                )
+        else:
+            element = self.metal_scalar_binary_result_type("+", *types)
+            width = 1
+        element = self.normalized_metal_type(self.resolve_type_alias(element))
+        if element != "float" and element not in self.metal_source_bfloat_types:
+            return None
+        if width not in {1, 2, 3, 4} or self.current_function is None:
+            unsupported("profiled comparisons require a function and one to four lanes")
+        mapped = "float" if width == 1 else f"vec{width}"
+        arguments = []
+        for index, operand in enumerate(operands):
+            value = self.generate_expression(operand, is_main)
+            if conversion is not None and conversion[0][index] is not None:
+                function = conversion[0][index]
+                name = self.sanitize_identifier(self.function_output_name(function))
+                value = f"{name}({value})"
+            if narrow is not None and narrow[1][index] is not None:
+                value = f"{self.map_type(narrow[1][index])}({value})"
+            arguments.append(f"{mapped}({value})")
+        self.required_metal_comparisons.add((expression.op, width))
+        name = self.metal_comparison_helper_name(expression.op, width)
+        return f"{name}({', '.join(arguments)})"
+
+    def metal_comparison_helper_name(self, operator, width):
+        operation = {
+            "==": "equal",
+            "!=": "not_equal",
+            "<": "less",
+            "<=": "less_equal",
+            ">": "greater",
+            ">=": "greater_equal",
+        }[operator]
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            ("comparison", operator, width),
+            f"__crossgl_metal_compare_{operation}_float{suffix}",
+        )
+
+    def generate_metal_comparison_support_code(self, indent=0):
+        if not self.required_metal_comparisons:
+            return ""
+        bits = self.metal_precise_math_unique_helper_name(
+            "comparison-bits", "__crossgl_compare_bits"
+        )
+        # Integer ordering keeps the selected comparison policy independent of
+        # target floating-point flush modes, without modifying the operands.
+        code = (
+            f"@metal_static\nuint {bits}(uint a, uint b) {{\n"
+            "    uint ax = a & 0x7fffffffu;\n"
+            "    uint bx = b & 0x7fffffffu;\n"
+            "    if (ax > 0x7f800000u || bx > 0x7f800000u) { return 3u; }\n"
+        )
+        if self.binary32_comparison_profile == "flush-subnormals":
+            code += (
+                "    if (ax < 0x00800000u) { a &= 0x80000000u; }\n"
+                "    if (bx < 0x00800000u) { b &= 0x80000000u; }\n"
+            )
+        code += (
+            "    if (a == b || ((a | b) & 0x7fffffffu) == 0u) { return 0u; }\n"
+            "    uint ak = (a & 0x80000000u) != 0u ? ~a : a | 0x80000000u;\n"
+            "    uint bk = (b & 0x80000000u) != 0u ? ~b : b | 0x80000000u;\n"
+            "    return ak < bk ? 1u : 2u;\n"
+            "}\n"
+        )
+        conditions = {
+            "==": "c == 0u",
+            "!=": "c != 0u",
+            "<": "c == 1u",
+            "<=": "c <= 1u",
+            ">": "c == 2u",
+            ">=": "c == 0u || c == 2u",
+        }
+        for operator in sorted(
+            {operator for operator, _ in self.required_metal_comparisons}
+        ):
+            name = self.metal_comparison_helper_name(operator, 1)
+            code += (
+                f"@metal_static\nbool {name}(float a, float b) {{\n"
+                f"    uint c = {bits}(asuint(a), asuint(b));\n"
+                f"    return {conditions[operator]};\n}}\n"
+            )
+        for operator, width in sorted(self.required_metal_comparisons):
+            if width == 1:
+                continue
+            scalar = self.metal_comparison_helper_name(operator, 1)
+            name = self.metal_comparison_helper_name(operator, width)
+            lanes = ", ".join(
+                f"{scalar}(a.{lane}, b.{lane})" for lane in "xyzw"[:width]
+            )
+            code += (
+                f"@metal_static\nbvec{width} {name}(vec{width} a, vec{width} b) {{\n"
+                f"    return bvec{width}({lanes});\n}}\n"
+            )
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
 
     def metal_profiled_division_type(self, result_type, source_location=None):
         info = self.metal_math_builtin_type_info(result_type)
@@ -19155,7 +19364,11 @@ float {scalar}(float value) {{
                     expr, self.metal_enum_member_types.get(expr)
                 ),
             )
-            return tracked_type or self.metal_standard_math_constant_type(expr)
+            return (
+                tracked_type
+                or self.metal_standard_math_constant_type(expr)
+                or self.static_struct_member_type(expr)
+            )
         if isinstance(expr, VariableNode):
             name = getattr(expr, "name", None)
             if not name:
@@ -19177,7 +19390,11 @@ float {scalar}(float value) {{
                     name, self.metal_enum_member_types.get(name)
                 ),
             )
-            return tracked_type or self.metal_standard_math_constant_type(name)
+            return (
+                tracked_type
+                or self.metal_standard_math_constant_type(name)
+                or self.static_struct_member_type(name)
+            )
         if isinstance(expr, ArrayAccessNode):
             selection = self.metal_indexed_type_selection(expr)
             if selection["kind"] == "aggregate":
