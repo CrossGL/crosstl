@@ -212,8 +212,7 @@ def test_project_workgroup_rules_emit_directx_library_and_opengl_entries(tmp_pat
         "CSMain",
     ]
     assert all(
-        entry["parameters"]
-        == {
+        entry["parameters"] == {
             "BM": "2" if entry["sourceEntryPoint"] == "tile_large" else "1",
             "BN": "4" if entry["sourceEntryPoint"] == "tile_large" else "2",
             "T": "float",
@@ -241,8 +240,7 @@ def test_project_workgroup_rules_emit_directx_library_and_opengl_entries(tmp_pat
         "tile_small",
     }
     assert all(
-        artifact["entryPoint"]
-        == {
+        artifact["entryPoint"] == {
             "source": artifact["execution"]["sourceEntryPoints"][0],
             "target": "main",
             "stage": "compute",
@@ -667,8 +665,7 @@ def test_project_workgroup_size_keeps_ordinary_multi_entry_aggregate_closed(tmp_
         "opengl",
     }
     assert all(
-        diagnostic["details"]["executionSpecialization"]
-        == {
+        diagnostic["details"]["executionSpecialization"] == {
             "reason": "aggregate-entry-size-unproven",
             "sourceEntryPoints": ["first", "second"],
             "workgroupSize": [8, 4, 2],

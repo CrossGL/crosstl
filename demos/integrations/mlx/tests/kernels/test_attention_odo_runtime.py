@@ -481,8 +481,9 @@ def test_pinned_attention_executes(compiled_attention, request):
     )
     if native_request is not None:
         assert (
-            sys.platform
-            == {"directx": "win32", "opengl": "linux"}[native_request.target]
+            sys.platform == {"directx": "win32", "opengl": "linux"}[
+                native_request.target
+            ]
         )
         state = SimpleNamespace(details={})
         runtime = (

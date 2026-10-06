@@ -319,8 +319,9 @@ def test_current_mlx_binary_scalar_metal_ci_shards_are_complete_and_disjoint():
     assert [len(shard) for shard in shards] == [80, 79, 79]
     for shard_index, shard in enumerate(shards):
         assert (
-            shard
-            == BINARY_SCALAR_METAL_WORKLOADS[shard_index::BINARY_METAL_CI_SHARD_COUNT]
+            shard == BINARY_SCALAR_METAL_WORKLOADS[
+                shard_index::BINARY_METAL_CI_SHARD_COUNT
+            ]
         )
     entry_points = [workload.entry_point for shard in shards for workload in shard]
     assert len(entry_points) == 238

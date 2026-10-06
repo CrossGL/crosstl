@@ -2747,8 +2747,10 @@ def test_directx_compute_runtime_reports_phase_failure_and_releases_resources(
     )
     error_type = (
         RuntimeAdapterSetupError
-        if reason_kind
-        in {"resource-creation-failed", "compute-pipeline-creation-failed"}
+        if reason_kind in {
+            "resource-creation-failed",
+            "compute-pipeline-creation-failed",
+        }
         else RuntimeAdapterDispatchError
     )
 

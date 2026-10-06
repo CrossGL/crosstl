@@ -7771,8 +7771,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     if (
                         other is member
                         or other.default is None
-                        or member.name
-                        not in self._static_initializer_dependencies(
+                        or member.name not in self._static_initializer_dependencies(
                             other.default,
                             [member.name],
                         )
@@ -8651,8 +8650,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         candidates = [
             template
             for template in template_structs
-            if requested_name
-            in {
+            if requested_name in {
                 template.name,
                 (
                     f"{template.namespace}::{template.name}"
@@ -10978,8 +10976,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         candidates = [
             template
             for template in template_structs
-            if requested_name
-            in {
+            if requested_name in {
                 template.name,
                 (
                     f"{template.namespace}::{template.name}"
@@ -11144,8 +11141,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         candidates = [
             struct
             for struct in structs
-            if normalized
-            in {
+            if normalized in {
                 struct.name,
                 struct.qualified_name.lstrip(":"),
             }

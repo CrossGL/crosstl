@@ -610,8 +610,9 @@ def test_current_mlx_quantized_metal_ci_shards_are_complete_and_disjoint():
     assert [len(shard) for shard in shards] == [86] * 12 + [85] * 12
     for shard_index, shard in enumerate(shards):
         assert (
-            shard
-            == QUANTIZED_METAL_WORKLOADS[shard_index::QUANTIZED_METAL_CI_SHARD_COUNT]
+            shard == QUANTIZED_METAL_WORKLOADS[
+                shard_index::QUANTIZED_METAL_CI_SHARD_COUNT
+            ]
         )
     entry_points = [workload.entry_point for shard in shards for workload in shard]
     assert len(entry_points) == 2052

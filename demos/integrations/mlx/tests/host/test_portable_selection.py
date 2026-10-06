@@ -599,8 +599,9 @@ def test_ci_requires_selection_and_absolute_execution_on_every_target():
             "demos/integrations/mlx/tests/host/test_portable_selection.py",
         )
     assert any(
-        "demos/integrations/mlx/tests/host/test_portable_selection.py"
-        in step.get("run", "")
+        "demos/integrations/mlx/tests/host/test_portable_selection.py" in step.get(
+            "run", ""
+        )
         for step in workflow["jobs"]["portable-host"]["steps"]
     )
 

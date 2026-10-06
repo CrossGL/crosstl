@@ -743,8 +743,7 @@ def _expected_source_map() -> dict[str, str]:
         ),
     }
     _require(
-        profile_counts
-        == {
+        profile_counts == {
             METAL_STANDARD_PROFILE: EXPECTED_STANDARD_SOURCE_COUNT,
             METAL_NAX_PROFILE: EXPECTED_NAX_SOURCE_COUNT,
         },

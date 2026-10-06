@@ -463,8 +463,9 @@ def test_ci_requires_shards_and_complete_native_gates():
             and "continue-on-error" not in native[name]
         )
     assert (
-        "run_id: context.runId"
-        in native["Select same-run row shards"]["with"]["script"]
+        "run_id: context.runId" in native["Select same-run row shards"]["with"][
+            "script"
+        ]
     )
     assert "shard < 8" in native["Select same-run row shards"]["with"]["script"]
     assert native["Download row shards"]["with"]["merge-multiple"] is False

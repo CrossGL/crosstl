@@ -173,8 +173,7 @@ def evidence():
             ]
         )
         records.append(
-            case
-            | {
+            case | {
                 "rows": rows.tolist(),
                 "final": final.item(),
                 "seed": seed.item() if seed is not None else None,

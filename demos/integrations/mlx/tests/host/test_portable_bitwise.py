@@ -679,7 +679,8 @@ def test_ci_requires_bitwise_execution_on_every_target():
             "demos/integrations/mlx/tests/host/test_portable_bitwise.py",
         )
     assert any(
-        "demos/integrations/mlx/tests/host/test_portable_bitwise.py"
-        in step.get("run", "")
+        "demos/integrations/mlx/tests/host/test_portable_bitwise.py" in step.get(
+            "run", ""
+        )
         for step in workflow["jobs"]["portable-host"]["steps"]
     )

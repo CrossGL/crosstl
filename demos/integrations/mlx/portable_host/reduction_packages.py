@@ -48,8 +48,9 @@ ROW_ENTRIES = {
     for entry, dtype in ENTRIES.items()
 }
 COLUMN_ENTRIES = {
-    f"col_reduce_{mode}_{dimension}_32_32_reduce_"
-    + entry.removeprefix("all_reduce_"): dtype
+    f"col_reduce_{mode}_{dimension}_32_32_reduce_" + entry.removeprefix(
+        "all_reduce_"
+    ): dtype
     for mode in ("looped", "2pass")
     for dimension in (1, 2, 5)
     for entry, dtype in ENTRIES.items()

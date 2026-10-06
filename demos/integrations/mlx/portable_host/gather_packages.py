@@ -238,8 +238,7 @@ class GatherPackageCache:
             != {"opengl": "main", "directx": "CSMain"}.get(
                 self.target, identity["entry"]
             )
-            or descriptor["source"]["hash"]
-            != {
+            or descriptor["source"]["hash"] != {
                 "algorithm": "sha256",
                 "value": (
                     hashlib.sha256(

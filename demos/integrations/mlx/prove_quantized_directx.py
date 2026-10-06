@@ -432,11 +432,13 @@ def _validate_execution_report(
     _require(
         isinstance(project, Mapping)
         and project.get("workgroupSize") is None
-        and project.get("workgroupSizeRules")
-        == {MLX_QUANTIZED_SOURCE: [str(value) for value in workgroup_size]}
+        and project.get("workgroupSizeRules") == {
+            MLX_QUANTIZED_SOURCE: [str(value) for value in workgroup_size]
+        }
         and project.get("workgroupSizeRuleCount") == 1
-        and project.get("subgroupWidthRules")
-        == {MLX_QUANTIZED_SOURCE: str(subgroup_width)}
+        and project.get("subgroupWidthRules") == {
+            MLX_QUANTIZED_SOURCE: str(subgroup_width)
+        }
         and project.get("subgroupWidthRuleCount") == 1,
         "quantized project report did not retain the pinned execution rules",
     )
@@ -446,12 +448,15 @@ def _validate_execution_report(
     _require(
         isinstance(execution, Mapping)
         and execution.get("sourceEntryPoints") == [entry_point]
-        and execution.get("provenance")
-        == {"kind": "materialized-template-rule", "path": workgroup_rule_path}
-        and execution.get("subgroupWidthProvenance")
-        == {"kind": "materialized-template-rule", "path": subgroup_rule_path}
-        and execution.get("subgroupWidthEnforcement")
-        == {
+        and execution.get("provenance") == {
+            "kind": "materialized-template-rule",
+            "path": workgroup_rule_path,
+        }
+        and execution.get("subgroupWidthProvenance") == {
+            "kind": "materialized-template-rule",
+            "path": subgroup_rule_path,
+        }
+        and execution.get("subgroupWidthEnforcement") == {
             "mechanism": "hlsl-wave-size-attribute",
             "minimumShaderModel": "6.6",
             "entryProfiles": [{"entryPoint": "CSMain", "profile": "cs_6_6"}],
@@ -471,8 +476,7 @@ def _validate_execution_report(
         and execution_entry.get("rule") == expected_workgroup_rule
         and execution_entry.get("subgroupWidth") == subgroup_width
         and execution_entry.get("subgroupWidthRule") == expected_subgroup_rule
-        and execution_entry.get("materialization")
-        == {
+        and execution_entry.get("materialization") == {
             "name": entry_contract["specializationName"],
             "hostName": entry_point,
             "materializedName": entry_point,
@@ -510,18 +514,18 @@ def _translated_artifact(
         and artifact.get("sourceBackend") == "metal"
         and artifact.get("target") == "directx"
         and artifact.get("status") == "translated"
-        and artifact.get("sourceHash")
-        == {
+        and artifact.get("sourceHash") == {
             "algorithm": "sha256",
             "value": PINNED_FILE_SHA256[MLX_QUANTIZED_SOURCE],
         }
-        and artifact.get("provenance")
-        == {"pipeline": "entry-scoped-translate", "intermediate": "crossgl"},
+        and artifact.get("provenance") == {
+            "pipeline": "entry-scoped-translate",
+            "intermediate": "crossgl",
+        },
         "DirectX artifact provenance does not match pinned quantized.metal",
     )
     _require(
-        artifact.get("entryPoint")
-        == {
+        artifact.get("entryPoint") == {
             "source": entry_point,
             "target": "CSMain",
             "stage": "compute",
@@ -582,8 +586,10 @@ def _translated_artifact(
     )
     _require(
         artifact_path.suffix == ".hlsl"
-        and artifact.get("generatedHash")
-        == {"algorithm": "sha256", "value": _sha256(artifact_path)}
+        and artifact.get("generatedHash") == {
+            "algorithm": "sha256",
+            "value": _sha256(artifact_path),
+        }
         and artifact.get("generatedSizeBytes") == artifact_path.stat().st_size,
         "generated HLSL identity does not match the project report",
     )
@@ -919,8 +925,10 @@ def run_proof(
     )
     expected_artifact = GENERATED_ARTIFACTS[entry_point]
     _require(
-        artifact["generatedHash"]
-        == {"algorithm": "sha256", "value": expected_artifact["sha256"]}
+        artifact["generatedHash"] == {
+            "algorithm": "sha256",
+            "value": expected_artifact["sha256"],
+        }
         and artifact["generatedSizeBytes"] == expected_artifact["sizeBytes"],
         f"generated DirectX artifact identity changed for {entry_point}",
     )

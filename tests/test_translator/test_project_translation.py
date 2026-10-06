@@ -5469,8 +5469,9 @@ def test_scan_project_reports_configured_define_shadowing(tmp_path):
         "project.scan.define-shadowed",
     ]
     assert (
-        "redefines configured define 'MODE' (project define)"
-        in diagnostics[0]["message"]
+        "redefines configured define 'MODE' (project define)" in diagnostics[0][
+            "message"
+        ]
     )
     assert "undefines configured define 'DEBUG_MODE' (variant define: debug)" in (
         diagnostics[1]["message"]
@@ -7011,8 +7012,9 @@ def test_validate_project_report_rejects_malformed_include_dependency_records(
         diagnostic["message"]
     )
     assert (
-        "units[0].includeDependencies[0].resolvedPath must be repository-relative"
-        in (diagnostic["message"])
+        "units[0].includeDependencies[0].resolvedPath must be repository-relative" in (
+            diagnostic["message"]
+        )
     )
     assert "units[0].includeDependencies[0].resolvedHash.algorithm must be sha256" in (
         diagnostic["message"]
@@ -7299,8 +7301,9 @@ def test_validate_project_report_rejects_stale_include_dependency_hashes(
     actual_hash = project_pipeline._source_hash(shader_dir / "local.inc")
     assert (
         f"(expected {expected_hash['algorithm']}:{expected_hash['value']}, "
-        f"actual {actual_hash['algorithm']}:{actual_hash['value']})"
-        in diagnostic["message"]
+        f"actual {actual_hash['algorithm']}:{actual_hash['value']})" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -7368,8 +7371,9 @@ def test_validate_project_report_rejects_stale_include_dependency_sizes(
     expected_size = payload["units"][0]["includeDependencies"][0]["resolvedSizeBytes"]
     actual_size = include_path.stat().st_size
     assert (
-        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
-        in diagnostic["message"]
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -7415,8 +7419,9 @@ def test_validate_project_report_rejects_include_dependency_resolution_mismatche
         "include resolution"
     ) in diagnostic["message"]
     assert (
-        "(expected includes/shared.inc, actual shaders/local.inc)"
-        in diagnostic["message"]
+        "(expected includes/shared.inc, actual shaders/local.inc)" in diagnostic[
+            "message"
+        ]
     )
     assert (
         "units[0].includeDependencies[0].resolvedFrom must match current "
@@ -19713,8 +19718,9 @@ def test_translate_project_opengl_rejects_unresolved_metal_template_type_before_
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert (
-        f"{expected_name} missing {', '.join(expected_missing)}"
-        in diagnostic["message"]
+        f"{expected_name} missing {', '.join(expected_missing)}" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -20129,8 +20135,9 @@ def test_translate_project_forwards_metal_template_specialization_limit(tmp_path
     assert payload["project"]["sourceOptionCount"] == 1
     assert artifacts["shaders/bad.metal"]["status"] == "failed"
     assert (
-        "template specialization limit exceeded"
-        in artifacts["shaders/bad.metal"]["error"]
+        "template specialization limit exceeded" in artifacts["shaders/bad.metal"][
+            "error"
+        ]
     )
     assert not (repo / "translated" / "cgl" / "shaders" / "bad.cgl").exists()
     assert artifacts["shaders/ok.metal"]["status"] == "translated"
@@ -21631,8 +21638,9 @@ def test_validate_project_report_rejects_artifact_matrix_count_mismatches(tmp_pa
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifactMatrix.expectedArtifactCount must match expected artifact matrix"
-        in (diagnostic["message"])
+        "artifactMatrix.expectedArtifactCount must match expected artifact matrix" in (
+            diagnostic["message"]
+        )
     )
 
 
@@ -21666,8 +21674,9 @@ def test_validate_project_report_rejects_artifact_matrix_variant_mode_mismatches
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifactMatrix.variantMode must match project.variants"
-        in diagnostic["message"]
+        "artifactMatrix.variantMode must match project.variants" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -22050,12 +22059,14 @@ def test_validate_project_report_rejects_unexpected_generated_processing_fields(
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifacts[0].defineProcessing.unexpected is not allowed"
-        in diagnostic["message"]
+        "artifacts[0].defineProcessing.unexpected is not allowed" in diagnostic[
+            "message"
+        ]
     )
     assert (
-        "artifacts[0].includePathProcessing.unexpected is not allowed"
-        in diagnostic["message"]
+        "artifacts[0].includePathProcessing.unexpected is not allowed" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -22221,8 +22232,9 @@ def test_validate_project_report_rejects_artifacts_with_mismatched_source_backen
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifacts[0].sourceBackend must match units[0].sourceBackend"
-        in diagnostic["message"]
+        "artifacts[0].sourceBackend must match units[0].sourceBackend" in diagnostic[
+            "message"
+        ]
     )
     assert "(expected cgl, actual directx)" in diagnostic["message"]
 
@@ -22402,8 +22414,9 @@ def test_validate_project_report_rejects_noncanonical_full_report_targets(tmp_pa
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifacts[0].target must use normalized backend name opengl"
-        in diagnostic["message"]
+        "artifacts[0].target must use normalized backend name opengl" in diagnostic[
+            "message"
+        ]
     )
     assert (
         "artifacts[0].sourceMap.target must use normalized backend name opengl"
@@ -22443,8 +22456,9 @@ def test_validate_project_report_rejects_noncanonical_source_remap_targets(tmp_p
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifacts[0].target must use normalized backend name cgl"
-        in diagnostic["message"]
+        "artifacts[0].target must use normalized backend name cgl" in diagnostic[
+            "message"
+        ]
     )
     assert (
         "artifacts[0].sourceMap.target must use normalized backend name cgl"
@@ -24021,8 +24035,9 @@ def test_translate_project_skips_invalid_external_corpus_targets(tmp_path):
     assert diagnostic["code"] == "project.config.external-corpus-entry-invalid"
     assert "entry 1" in diagnostic["message"]
     assert (
-        "targets must be a non-empty string or list of non-empty strings"
-        in diagnostic["message"]
+        "targets must be a non-empty string or list of non-empty strings" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -26452,8 +26467,9 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert "project.config must be a string or null" in diagnostic["message"]
     assert (
-        "project.configHash must be an object when project.config is set"
-        in diagnostic["message"]
+        "project.configHash must be an object when project.config is set" in diagnostic[
+            "message"
+        ]
     )
     assert "project.sourceRoots must be a list of strings" in diagnostic["message"]
     assert "project.includePatterns must be a list of strings" in (
@@ -26479,8 +26495,9 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     assert "project.defineCount must match project.defines" in diagnostic["message"]
     assert "project.sourceOverrides values must be strings" in (diagnostic["message"])
     assert (
-        "project.sourceOverrideCount must match project.sourceOverrides"
-        in diagnostic["message"]
+        "project.sourceOverrideCount must match project.sourceOverrides" in diagnostic[
+            "message"
+        ]
     )
     assert "project.variants keys must be non-empty strings" in diagnostic["message"]
     assert "project.variants.debug must be an object" in diagnostic["message"]
@@ -27464,8 +27481,9 @@ def test_validate_project_report_rejects_unexpected_generated_unit_and_skipped_f
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert "units[0].unexpected is not allowed" in diagnostic["message"]
     assert (
-        "units[0].includeDependencies[0].unexpected is not allowed"
-        in diagnostic["message"]
+        "units[0].includeDependencies[0].unexpected is not allowed" in diagnostic[
+            "message"
+        ]
     )
     assert (
         "units[0].includeDependencies[0].resolvedHash.unexpected is not allowed"
@@ -27549,13 +27567,15 @@ def test_validate_project_report_rejects_artifact_source_hash_mismatches_unit_so
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifacts[0].sourceHash must match units[0].sourceHash"
-        in diagnostic["message"]
+        "artifacts[0].sourceHash must match units[0].sourceHash" in diagnostic[
+            "message"
+        ]
     )
     assert (
         f"(expected {expected_hash['algorithm']}:{expected_hash['value']}, "
-        f"actual {actual_hash['algorithm']}:{actual_hash['value']})"
-        in diagnostic["message"]
+        f"actual {actual_hash['algorithm']}:{actual_hash['value']})" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -27601,8 +27621,9 @@ def test_validate_project_report_rejects_artifact_source_size_mismatches_unit_so
         in diagnostic["message"]
     )
     assert (
-        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
-        in diagnostic["message"]
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -27655,8 +27676,9 @@ def test_validate_project_report_rejects_artifact_generated_size_mismatches_curr
     expected_size = payload["artifacts"][0]["generatedSizeBytes"]
     actual_size = (repo / payload["artifacts"][0]["path"]).stat().st_size
     assert (
-        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
-        in diagnostic["message"]
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -27704,8 +27726,9 @@ def test_validate_project_report_detects_modified_unit_sources(tmp_path):
     )
     assert (
         f"(expected {expected_hash['algorithm']}:{expected_hash['value']}, "
-        f"actual {actual_hash['algorithm']}:{actual_hash['value']})"
-        in diagnostic["message"]
+        f"actual {actual_hash['algorithm']}:{actual_hash['value']})" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -27731,8 +27754,9 @@ def test_validate_project_report_detects_modified_unit_source_sizes(tmp_path):
         diagnostic["message"]
     )
     assert (
-        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
-        in diagnostic["message"]
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -28604,8 +28628,9 @@ def test_validate_project_report_rejects_inconsistent_toolchain_status(tmp_path)
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "validation.toolchains[0].status must match tools availability"
-        in diagnostic["message"]
+        "validation.toolchains[0].status must match tools availability" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -29450,8 +29475,9 @@ def test_validate_project_report_rejects_toolchain_runs_without_check_kind_in_fu
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "validation.toolchainRuns[0].checkKind must be recorded"
-        in diagnostic["message"]
+        "validation.toolchainRuns[0].checkKind must be recorded" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -30282,8 +30308,9 @@ def test_validate_project_report_rejects_malformed_external_corpus_provenance(
         "40-character hex digest"
     ) in diagnostic["message"]
     assert (
-        "externalCorpus.entries[0].sourceUrl must start with repository"
-        in diagnostic["message"]
+        "externalCorpus.entries[0].sourceUrl must start with repository" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -30908,8 +30935,9 @@ def test_validate_project_report_rejects_translated_artifacts_with_error_metadat
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifacts[0].error must be omitted for translated artifacts"
-        in diagnostic["message"]
+        "artifacts[0].error must be omitted for translated artifacts" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -30979,20 +31007,23 @@ def test_validate_project_report_rejects_failed_artifacts_with_generated_metadat
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifacts[0].generatedHash must be omitted for failed artifacts"
-        in diagnostic["message"]
+        "artifacts[0].generatedHash must be omitted for failed artifacts" in diagnostic[
+            "message"
+        ]
     )
     assert (
         "artifacts[0].generatedSizeBytes must be omitted for failed artifacts"
         in diagnostic["message"]
     )
     assert (
-        "artifacts[0].sourceMap must be omitted for failed artifacts"
-        in diagnostic["message"]
+        "artifacts[0].sourceMap must be omitted for failed artifacts" in diagnostic[
+            "message"
+        ]
     )
     assert (
-        "artifacts[0].sourceRemap must be omitted for failed artifacts"
-        in diagnostic["message"]
+        "artifacts[0].sourceRemap must be omitted for failed artifacts" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -31318,8 +31349,9 @@ def test_validate_project_report_rejects_backslash_report_identity_paths(tmp_pat
     assert "artifacts[0].source must be repository-relative" in diagnostic["message"]
     assert "artifacts[0].path must be repository-relative" in diagnostic["message"]
     assert (
-        "diagnostics[0].location.file must be repository-relative"
-        in diagnostic["message"]
+        "diagnostics[0].location.file must be repository-relative" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -31575,8 +31607,9 @@ def test_validate_project_report_rejects_fine_grained_source_map_file_mismatches
         "artifacts[0].sourceMap.generated.file"
     ) in diagnostic["message"]
     assert (
-        "(expected out/cgl/other.cgl, actual out/cgl/simple.cgl)"
-        in diagnostic["message"]
+        "(expected out/cgl/other.cgl, actual out/cgl/simple.cgl)" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -31792,8 +31825,9 @@ def test_validate_project_report_rejects_inconsistent_source_map_anchors(tmp_pat
         diagnostic["message"]
     )
     assert (
-        "(expected out/opengl/other.glsl, actual out/opengl/simple.glsl)"
-        in diagnostic["message"]
+        "(expected out/opengl/other.glsl, actual out/opengl/simple.glsl)" in diagnostic[
+            "message"
+        ]
     )
     assert (
         "artifacts[0].sourceMap.mappings[0].source must match "
@@ -32038,8 +32072,9 @@ def test_validate_project_report_rejects_stale_derived_source_map_span(tmp_path)
     )
     assert diagnostic["missingCapabilities"] == ["source.provenance"]
     assert (
-        "sourceMap.mappings[0] must match current derived line span"
-        in diagnostic["message"]
+        "sourceMap.mappings[0] must match current derived line span" in diagnostic[
+            "message"
+        ]
     )
     assert f"expected {original_mapping}" in diagnostic["message"]
     assert f"actual {stale_mapping}" in diagnostic["message"]
@@ -32368,8 +32403,9 @@ def test_validate_project_report_rejects_source_remap_size_mismatches(tmp_path):
     expected_size = artifact["sourceRemap"]["sizeBytes"]
     actual_size = (repo / artifact["sourceRemap"]["path"]).stat().st_size
     assert (
-        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
-        in diagnostic["message"]
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -32391,8 +32427,9 @@ def test_validate_project_report_rejects_backslash_source_remap_metadata(tmp_pat
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifacts[0].sourceRemap.path must be repository-relative"
-        in diagnostic["message"]
+        "artifacts[0].sourceRemap.path must be repository-relative" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -33024,8 +33061,9 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
         diagnostic["message"]
     )
     assert (
-        "summary.sourceRemapMappingCount must match artifact source remap mappings"
-        in (diagnostic["message"])
+        "summary.sourceRemapMappingCount must match artifact source remap mappings" in (
+            diagnostic["message"]
+        )
     )
     assert "summary.sourceRemapsByGranularity must match artifact source remaps" in (
         diagnostic["message"]
@@ -33145,8 +33183,9 @@ def test_validate_project_report_rejects_malformed_runtime_references(tmp_path):
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "migration.actions[0].runtimeReferences[0].extra is not allowed"
-        in diagnostic["message"]
+        "migration.actions[0].runtimeReferences[0].extra is not allowed" in diagnostic[
+            "message"
+        ]
     )
     assert (
         "migration.actions[0].runtimeReferences[0].path must be repository-relative"
@@ -50620,8 +50659,9 @@ def test_metal_materialization_resolves_late_member_nested_constexpr_helpers(
     assert "decode_float_4_2_thread_float(" in materialized.text
     assert (
         "inline void decode_float_4_2_thread_float("
-        "const device uchar* source, thread float* destination)"
-        in " ".join(materialized.text.split())
+        "const device uchar* source, thread float* destination)" in " ".join(
+            materialized.text.split()
+        )
     )
     specialization_names = {
         record["name"] for record in materialized.metadata["specializations"]
@@ -52094,8 +52134,9 @@ def test_translate_project_metal_implicit_type_environment_budget_diagnostic(
     assert "implicit-template-materialization/type-environment" in artifact["error"]
     assert (
         "limit 3 from "
-        "project.source_options.metal.max_template_materialization_work"
-        in artifact["error"]
+        "project.source_options.metal.max_template_materialization_work" in artifact[
+            "error"
+        ]
     )
     assert not (repo / artifact["path"]).exists()
 
@@ -57035,8 +57076,9 @@ def test_metal_simd_shuffle_down_to_directx_lowers_to_wave_read(tmp_path):
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
     assert (
-        "project.translate.metal-unresolved-construct"
-        not in payload["summary"]["diagnosticsByCode"]
+        "project.translate.metal-unresolved-construct" not in payload["summary"][
+            "diagnosticsByCode"
+        ]
     )
     assert (
         "metal.construct-lowering" not in payload["summary"]["missingCapabilityCounts"]
@@ -57109,8 +57151,9 @@ def test_metal_elementwise_copy_to_directx_is_not_flagged(tmp_path):
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
     assert (
-        "project.translate.metal-unresolved-construct"
-        not in payload["summary"]["diagnosticsByCode"]
+        "project.translate.metal-unresolved-construct" not in payload["summary"][
+            "diagnosticsByCode"
+        ]
     )
 
     artifact = payload["artifacts"][0]
@@ -58132,12 +58175,14 @@ def test_validate_project_report_rejects_stale_workgroup_execution_identity(tmp_
         "execution.identity must match the execution contract" in diagnostic["message"]
     )
     assert (
-        "execution.provenance.path must be project.workgroup_size"
-        in diagnostic["message"]
+        "execution.provenance.path must be project.workgroup_size" in diagnostic[
+            "message"
+        ]
     )
     assert (
-        "execution.workgroupSize must match project.workgroupSize"
-        in diagnostic["message"]
+        "execution.workgroupSize must match project.workgroupSize" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -58590,8 +58635,7 @@ def test_translate_project_accepts_shared_source_workgroup_size_for_multi_entry(
             tuple(artifact["execution"]["sourceEntryPoints"]) for artifact in artifacts
         } == {("first",), ("second",)}
         assert all(
-            artifact["entryPoint"]
-            == {
+            artifact["entryPoint"] == {
                 "source": artifact["execution"]["sourceEntryPoints"][0],
                 "target": "main",
                 "stage": "compute",

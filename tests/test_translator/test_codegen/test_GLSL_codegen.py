@@ -24014,8 +24014,9 @@ def test_glsl_ray_query_trace_ray_inline_raydesc_lowers_to_initialize_fields():
         "ray.Origin, ray.TMin, ray.Direction, ray.TMax);" in generated_code
     )
     assert (
-        "rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsNoneEXT, 255u, ray);"
-        not in (generated_code)
+        "rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsNoneEXT, 255u, ray);" not in (
+            generated_code
+        )
     )
     assert "bool active_ = rayQueryProceedEXT(rq);" in generated_code
     assert ".TraceRayInline(" not in generated_code
@@ -26100,8 +26101,9 @@ def test_generic_function_call_without_inferred_type_raises_diagnostic():
         GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert (
-        "cannot infer concrete template arguments for generic function 'zero'"
-        in str(exc_info.value)
+        "cannot infer concrete template arguments for generic function 'zero'" in str(
+            exc_info.value
+        )
     )
     assert (
         getattr(exc_info.value, "project_diagnostic_code", None)
@@ -43734,8 +43736,7 @@ def test_opengl_static_struct_members_are_excluded_from_instance_layout(tmp_path
     ast = crosstl.translator.parse(shader)
     static_members = ast.structs[0].members[:2]
     assert all(
-        "static"
-        in {
+        "static" in {
             str(getattr(attribute, "name", attribute)).lower()
             for attribute in member.attributes
         }

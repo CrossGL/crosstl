@@ -340,8 +340,9 @@ def test_half_rounding_native(tmp_path, mode, *, compile_only=False):
         assert target == "directx"
     else:
         assert (
-            sys.platform
-            == {"metal": "darwin", "opengl": "linux", "directx": "win32"}[target]
+            sys.platform == {"metal": "darwin", "opengl": "linux", "directx": "win32"}[
+                target
+            ]
         )
     words = _rounding_words()
     expected = [_half(_float(word)) for word in words]

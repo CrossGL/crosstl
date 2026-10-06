@@ -483,13 +483,17 @@ def _validate_common_artifact(
         f"{target} artifact identity or status is incorrect",
     )
     _require(
-        artifact.get("sourceHash")
-        == {"algorithm": "sha256", "value": MLX_RMS_NORM_SHA256},
+        artifact.get("sourceHash") == {
+            "algorithm": "sha256",
+            "value": MLX_RMS_NORM_SHA256,
+        },
         f"{target} report did not retain the pinned source hash",
     )
     _require(
-        artifact.get("provenance")
-        == {"pipeline": expected_pipeline, "intermediate": "crossgl"},
+        artifact.get("provenance") == {
+            "pipeline": expected_pipeline,
+            "intermediate": "crossgl",
+        },
         f"{target} report did not retain Metal-to-CrossGL project provenance",
     )
     path = _artifact_path(artifact, mlx_root)
@@ -617,8 +621,7 @@ def _execution_entries(
     _require(
         isinstance(execution, Mapping)
         and set(execution) == expected_execution_keys
-        and execution.get("provenance")
-        == {
+        and execution.get("provenance") == {
             "kind": "project-variant",
             "path": f"project.variants.{variant_name}.workgroup_size",
             "variant": variant_name,
@@ -864,8 +867,9 @@ def _representative_directx_entry_point(
     )
     if workgroup_size is not None:
         _require(
-            compute_entries[0].get("executionConfig")
-            == {"numthreads": list(workgroup_size)},
+            compute_entries[0].get("executionConfig") == {
+                "numthreads": list(workgroup_size)
+            },
             "DirectX RMSNorm representative reflection workgroup size changed",
         )
     return str(compute_entries[0]["name"])
@@ -1172,8 +1176,7 @@ def _opengl_evidence(
         artifact.get("variant") == variant_name
         and isinstance(source_entry, str)
         and source_entry in RMS_NORM_HOST_ENTRY_POINTS
-        and entry_point
-        == {
+        and entry_point == {
             "source": source_entry,
             "target": "main",
             "stage": "compute",

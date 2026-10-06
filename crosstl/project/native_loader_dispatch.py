@@ -1384,8 +1384,14 @@ def _validated_scalar_layout(
         expected_physical_type = f"{expected_physical_type}{vector_width}"
     expected_element_size = _DTYPE_SIZES[runtime_value.dtype] * vector_width
     if (
-        runtime_value.dtype
-        in {"int8", "uint8", "float16", "bfloat16", "int16", "uint16"}
+        runtime_value.dtype in {
+            "int8",
+            "uint8",
+            "float16",
+            "bfloat16",
+            "int16",
+            "uint16",
+        }
         and target == "metal"
         and (vector_width not in {1, 2, 4} or alignment != expected_element_size)
     ):

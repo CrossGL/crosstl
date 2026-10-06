@@ -3978,8 +3978,7 @@ def _variant_defines(variants: Mapping[str, Any]) -> dict[str, dict[str, str]]:
             {
                 key: item
                 for key, item in value.items()
-                if key
-                not in {
+                if key not in {
                     SPECIALIZATION_CONSTANTS_CONFIG_KEY,
                     WORKGROUP_SIZE_CONFIG_KEY,
                 }
@@ -6243,8 +6242,7 @@ def _frontend_source_options(source_options: Mapping[str, Any]) -> dict[str, Any
     return {
         name: value
         for name, value in source_options.items()
-        if name
-        not in {
+        if name not in {
             TEMPLATE_VARIANTS_SOURCE_OPTION,
             TARGET_SOURCE_OPTIONS_KEY,
             SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION,
@@ -7902,8 +7900,7 @@ class ProjectConfig:
                 {
                     key: value
                     for key, value in defines.items()
-                    if key
-                    not in {
+                    if key not in {
                         SPECIALIZATION_CONSTANTS_CONFIG_KEY,
                         WORKGROUP_SIZE_CONFIG_KEY,
                     }
@@ -28585,10 +28582,10 @@ def _translate_project_impl(
                         if translation_source_backend == "metal":
                             translation_source_options[
                                 METAL_PRESERVE_POINTER_POINTEE_CONST_SOURCE_OPTION
-                            ] = (target == "opengl")
+                            ] = target == "opengl"
                             translation_source_options[
                                 METAL_RESOLVE_STANDARD_REMOVE_CV_ALIASES_SOURCE_OPTION
-                            ] = (target != "metal")
+                            ] = target != "metal"
                     (
                         specialization_constants,
                         specialization_materialization,
@@ -38365,8 +38362,7 @@ def _runtime_variant_arguments(
         for specialization in specializations
         if specialization.get("name") == source_entry
         and (
-            target_entry
-            in {
+            target_entry in {
                 specialization.get("hostName"),
                 specialization.get("materializedName"),
                 specialization.get("name"),

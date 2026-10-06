@@ -137,8 +137,9 @@ def test_directx_native_loader_adapter_encodes_native_execution_lifecycle():
         command_submission,
     )
     assert (
-        "return crosstl_directx_native_loader_succeed(context);"
-        not in header[dispatch_function:native_dispatch]
+        "return crosstl_directx_native_loader_succeed(context);" not in header[
+            dispatch_function:native_dispatch
+        ]
     )
     assert dispatch_function < native_dispatch < command_submission < success
 

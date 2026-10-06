@@ -3444,8 +3444,7 @@ def _check_metal_roundtrip(
         "Metal round-trip artifact path does not match the bounded project output",
     )
     _require(
-        artifact.get("provenance")
-        == {
+        artifact.get("provenance") == {
             "pipeline": "single-file-translate",
             "intermediate": "crossgl",
         },
@@ -3629,8 +3628,11 @@ def _validate_atomic_fence_contract_report(
             "fence contract translation must report one failed artifact per target",
         )
         _require(
-            summary.get("diagnosticCounts")
-            == {"error": len(selected_targets), "note": 0, "warning": 0},
+            summary.get("diagnosticCounts") == {
+                "error": len(selected_targets),
+                "note": 0,
+                "warning": 0,
+            },
             "fence contract translation reported unexpected diagnostic severities",
         )
         _require(
@@ -5341,8 +5343,10 @@ def _require_layer_norm_dispatch_frontier_report(
         and len(units) == 1
         and units[0].get("path") == MLX_LAYER_NORM_SOURCE
         and units[0].get("sourceBackend") == "metal"
-        and units[0].get("sourceHash")
-        == {"algorithm": "sha256", "value": MLX_LAYER_NORM_SHA256},
+        and units[0].get("sourceHash") == {
+            "algorithm": "sha256",
+            "value": MLX_LAYER_NORM_SHA256,
+        },
         "LayerNorm dispatch frontier source identity changed",
     )
 
@@ -5394,8 +5398,10 @@ def _require_layer_norm_dispatch_frontier_report(
         _require(
             artifact.get("source") == MLX_LAYER_NORM_SOURCE
             and artifact.get("sourceBackend") == "metal"
-            and artifact.get("sourceHash")
-            == {"algorithm": "sha256", "value": MLX_LAYER_NORM_SHA256}
+            and artifact.get("sourceHash") == {
+                "algorithm": "sha256",
+                "value": MLX_LAYER_NORM_SHA256,
+            }
             and artifact.get("target") == "directx"
             and artifact.get("status") == "translated"
             and artifact.get("variant") == variant_name
@@ -5426,8 +5432,7 @@ def _require_layer_norm_dispatch_frontier_report(
             == expected["artifactId"]
             and execution.get("subgroupWidthProvenance", {}).get("kind")
             == "host-dispatch-contract"
-            and execution.get("subgroupWidthEnforcement")
-            == {
+            and execution.get("subgroupWidthEnforcement") == {
                 "mechanism": "hlsl-wave-size-attribute",
                 "minimumShaderModel": "6.6",
                 "entryProfiles": [{"entryPoint": "CSMain", "profile": "cs_6_6"}],
@@ -5500,8 +5505,10 @@ def _require_layer_norm_dispatch_frontier_report(
         generated = artifact_path.read_text(encoding="utf-8")
         generated_hash = _sha256(artifact_path)
         _require(
-            artifact.get("generatedHash")
-            == {"algorithm": "sha256", "value": generated_hash}
+            artifact.get("generatedHash") == {
+                "algorithm": "sha256",
+                "value": generated_hash,
+            }
             and artifact.get("generatedSizeBytes") == artifact_path.stat().st_size
             and len(re.findall(r"\bvoid\s+CSMain\s*\(", generated)) == 1
             and re.search(r"\[\s*WaveSize\s*\(\s*32\s*\)\s*\]", generated) is not None
@@ -5669,8 +5676,10 @@ def _require_logsumexp_dispatch_frontier_report(
         and len(units) == 1
         and units[0].get("path") == MLX_LOGSUMEXP_SOURCE
         and units[0].get("sourceBackend") == "metal"
-        and units[0].get("sourceHash")
-        == {"algorithm": "sha256", "value": MLX_LOGSUMEXP_SHA256},
+        and units[0].get("sourceHash") == {
+            "algorithm": "sha256",
+            "value": MLX_LOGSUMEXP_SHA256,
+        },
         "LogSumExp dispatch frontier source identity changed",
     )
 
@@ -5745,8 +5754,10 @@ def _require_logsumexp_dispatch_frontier_report(
         _require(
             artifact.get("source") == MLX_LOGSUMEXP_SOURCE
             and artifact.get("sourceBackend") == "metal"
-            and artifact.get("sourceHash")
-            == {"algorithm": "sha256", "value": MLX_LOGSUMEXP_SHA256}
+            and artifact.get("sourceHash") == {
+                "algorithm": "sha256",
+                "value": MLX_LOGSUMEXP_SHA256,
+            }
             and artifact.get("target") == "directx"
             and artifact.get("status") == "translated"
             and artifact.get("variant") == variant_name
@@ -5777,8 +5788,7 @@ def _require_logsumexp_dispatch_frontier_report(
             and execution.get("provenance", {}).get("artifactId") == artifact_id
             and execution.get("subgroupWidthProvenance", {}).get("kind")
             == "host-dispatch-contract"
-            and execution.get("subgroupWidthEnforcement")
-            == {
+            and execution.get("subgroupWidthEnforcement") == {
                 "mechanism": "hlsl-wave-size-attribute",
                 "minimumShaderModel": "6.6",
                 "entryProfiles": [{"entryPoint": "CSMain", "profile": "cs_6_6"}],
@@ -5830,8 +5840,10 @@ def _require_logsumexp_dispatch_frontier_report(
         generated_hash = _sha256(artifact_path)
         normalized_hash = _normalized_text_sha256(artifact_path)
         _require(
-            artifact.get("generatedHash")
-            == {"algorithm": "sha256", "value": generated_hash}
+            artifact.get("generatedHash") == {
+                "algorithm": "sha256",
+                "value": generated_hash,
+            }
             and artifact.get("generatedSizeBytes") == artifact_path.stat().st_size
             and len(re.findall(r"\bvoid\s+CSMain\s*\(", generated)) == 1
             and re.search(r"\[\s*WaveSize\s*\(\s*32\s*\)\s*\]", generated) is not None
@@ -6010,8 +6022,10 @@ def _require_rms_norm_dispatch_frontier_report(
         and len(units) == 1
         and units[0].get("path") == MLX_RMS_NORM_SOURCE
         and units[0].get("sourceBackend") == "metal"
-        and units[0].get("sourceHash")
-        == {"algorithm": "sha256", "value": MLX_RMS_NORM_SHA256},
+        and units[0].get("sourceHash") == {
+            "algorithm": "sha256",
+            "value": MLX_RMS_NORM_SHA256,
+        },
         "RMSNorm dispatch frontier source identity changed",
     )
 
@@ -6086,8 +6100,10 @@ def _require_rms_norm_dispatch_frontier_report(
         _require(
             artifact.get("source") == MLX_RMS_NORM_SOURCE
             and artifact.get("sourceBackend") == "metal"
-            and artifact.get("sourceHash")
-            == {"algorithm": "sha256", "value": MLX_RMS_NORM_SHA256}
+            and artifact.get("sourceHash") == {
+                "algorithm": "sha256",
+                "value": MLX_RMS_NORM_SHA256,
+            }
             and artifact.get("target") == "directx"
             and artifact.get("status") == "translated"
             and artifact.get("variant") == variant_name
@@ -6119,8 +6135,7 @@ def _require_rms_norm_dispatch_frontier_report(
             and execution.get("provenance", {}).get("artifactId") == artifact_id
             and execution.get("subgroupWidthProvenance", {}).get("kind")
             == "host-dispatch-contract"
-            and execution.get("subgroupWidthEnforcement")
-            == {
+            and execution.get("subgroupWidthEnforcement") == {
                 "mechanism": "hlsl-wave-size-attribute",
                 "minimumShaderModel": "6.6",
                 "entryProfiles": [{"entryPoint": "CSMain", "profile": "cs_6_6"}],
@@ -6188,8 +6203,10 @@ def _require_rms_norm_dispatch_frontier_report(
         generated_hash = _sha256(artifact_path)
         normalized_hash = _normalized_text_sha256(artifact_path)
         _require(
-            artifact.get("generatedHash")
-            == {"algorithm": "sha256", "value": generated_hash}
+            artifact.get("generatedHash") == {
+                "algorithm": "sha256",
+                "value": generated_hash,
+            }
             and artifact.get("generatedSizeBytes") == artifact_path.stat().st_size
             and len(re.findall(r"\bvoid\s+CSMain\s*\(", generated)) == 1
             and re.search(r"\[\s*WaveSize\s*\(\s*32\s*\)\s*\]", generated) is not None
@@ -6385,15 +6402,13 @@ def _require_dynamic_workgroup_blocker_report(
         and summary.get("artifactCount") == len(sources)
         and summary.get("translatedCount") == 0
         and summary.get("failedCount") == len(sources)
-        and summary.get("diagnosticCounts")
-        == {
+        and summary.get("diagnosticCounts") == {
             "error": expected_error_count,
             "note": 0,
             "warning": expected_warning_count,
         }
         and summary.get("diagnosticsByCode") == expected_diagnostics
-        and summary.get("artifactsByTarget")
-        == {
+        and summary.get("artifactsByTarget") == {
             target: {
                 "artifactCount": len(sources),
                 "translatedCount": 0,
@@ -7244,8 +7259,11 @@ def _check_arange_opengl(
         "OpenGL arange artifact retained a Metal system preprocessor line",
     )
     _require(
-        artifact.get("entryPoint")
-        == {"source": "arangeuint32", "target": "main", "stage": "compute"},
+        artifact.get("entryPoint") == {
+            "source": "arangeuint32",
+            "target": "main",
+            "stage": "compute",
+        },
         "OpenGL arange artifact did not record the selected compute entry",
     )
     _require(
@@ -7721,8 +7739,10 @@ def _check_fft_directx_toolchain(
         and units[0].get("id") == MLX_FFT_SOURCE
         and units[0].get("path") == MLX_FFT_SOURCE
         and units[0].get("sourceBackend") == "metal"
-        and units[0].get("sourceHash")
-        == {"algorithm": "sha256", "value": MLX_FFT_SHA256}
+        and units[0].get("sourceHash") == {
+            "algorithm": "sha256",
+            "value": MLX_FFT_SHA256,
+        }
         and units[0].get("sourceSizeBytes") == MLX_FFT_SOURCE_SIZE_BYTES,
         "DirectX FFT source-unit identity changed at the pinned MLX commit",
     )
@@ -7749,14 +7769,17 @@ def _check_fft_directx_toolchain(
         and artifact.get("sourceBackend") == "metal"
         and artifact.get("target") == "directx"
         and artifact.get("status") == "translated"
-        and artifact.get("provenance")
-        == {"intermediate": "crossgl", "pipeline": "entry-scoped-translate"}
-        and artifact.get("sourceHash")
-        == {"algorithm": "sha256", "value": MLX_FFT_SHA256}
+        and artifact.get("provenance") == {
+            "intermediate": "crossgl",
+            "pipeline": "entry-scoped-translate",
+        }
+        and artifact.get("sourceHash") == {
+            "algorithm": "sha256",
+            "value": MLX_FFT_SHA256,
+        }
         and artifact.get("sourceSizeBytes") == MLX_FFT_SOURCE_SIZE_BYTES
         and isinstance(artifact_path, str)
-        and entry
-        == {
+        and entry == {
             "source": FFT_DIRECTX_ENTRY_POINT,
             "stage": "compute",
             "target": "CSMain",
@@ -7766,8 +7789,7 @@ def _check_fft_directx_toolchain(
     _require(
         isinstance(execution, Mapping)
         and execution.get("sourceEntryPoints") == [FFT_DIRECTX_ENTRY_POINT]
-        and execution.get("provenance")
-        == {
+        and execution.get("provenance") == {
             "kind": "materialized-template-entry-rules",
             "path": f'project.entry_workgroup_size_rules["{MLX_FFT_SOURCE}"]',
         }
@@ -7779,8 +7801,7 @@ def _check_fft_directx_toolchain(
         and execution_entries[0].get("targetEntryPoint") == "CSMain"
         and execution_entries[0].get("workgroupSize")
         == list(FFT_DIRECTX_WORKGROUP_SIZE)
-        and execution_entries[0].get("rule")
-        == {
+        and execution_entries[0].get("rule") == {
             "components": [str(value) for value in FFT_DIRECTX_WORKGROUP_SIZE],
             "entryPattern": FFT_DIRECTX_ENTRY_POINT,
             "path": expected_rule_path,
@@ -7829,8 +7850,10 @@ def _check_fft_directx_toolchain(
     generated_hash = _sha256(generated_path)
     generated_size = generated_path.stat().st_size
     _require(
-        artifact.get("generatedHash")
-        == {"algorithm": "sha256", "value": generated_hash}
+        artifact.get("generatedHash") == {
+            "algorithm": "sha256",
+            "value": generated_hash,
+        }
         and artifact.get("generatedSizeBytes") == generated_size
         and generated_hash == FFT_DIRECTX_GENERATED_SHA256
         and generated_size == FFT_DIRECTX_GENERATED_SIZE_BYTES,
@@ -8047,8 +8070,10 @@ def _check_fft_opengl_toolchain(
         and units[0].get("id") == MLX_FFT_SOURCE
         and units[0].get("path") == MLX_FFT_SOURCE
         and units[0].get("sourceBackend") == "metal"
-        and units[0].get("sourceHash")
-        == {"algorithm": "sha256", "value": MLX_FFT_SHA256}
+        and units[0].get("sourceHash") == {
+            "algorithm": "sha256",
+            "value": MLX_FFT_SHA256,
+        }
         and units[0].get("sourceSizeBytes") == MLX_FFT_SOURCE_SIZE_BYTES,
         "OpenGL FFT source-unit identity changed at the pinned MLX commit",
     )
@@ -8066,8 +8091,10 @@ def _check_fft_opengl_toolchain(
         and artifact.get("sourceBackend") == "metal"
         and artifact.get("target") == "opengl"
         and artifact.get("status") == "translated"
-        and artifact.get("provenance")
-        == {"intermediate": "crossgl", "pipeline": "single-file-translate"}
+        and artifact.get("provenance") == {
+            "intermediate": "crossgl",
+            "pipeline": "single-file-translate",
+        }
         and isinstance(artifact_path, str),
         "OpenGL FFT translated artifact contract changed",
     )
@@ -8105,8 +8132,10 @@ def _check_fft_opengl_toolchain(
     generated_hash = _sha256(generated_path)
     generated_size = generated_path.stat().st_size
     _require(
-        artifact.get("generatedHash")
-        == {"algorithm": "sha256", "value": generated_hash}
+        artifact.get("generatedHash") == {
+            "algorithm": "sha256",
+            "value": generated_hash,
+        }
         and artifact.get("generatedSizeBytes") == generated_size,
         "OpenGL FFT artifact hash or size does not match the emitted file",
     )
@@ -8354,8 +8383,7 @@ def _gemv_directx_execution_evidence(
     )
     rule_path = f"project.workgroup_size_rules[{json.dumps(MLX_GEMV_SOURCE)}]"
     _require(
-        execution.get("provenance")
-        == {
+        execution.get("provenance") == {
             "kind": "materialized-template-rule",
             "path": rule_path,
         }
@@ -8623,8 +8651,10 @@ def _check_gemv_directx_compiler_frontier(
     _require(
         artifact.get("sourceHash") == expected_source_hash
         and artifact.get("sourceSizeBytes") == MLX_GEMV_SOURCE_SIZE_BYTES
-        and artifact.get("provenance")
-        == {"intermediate": "crossgl", "pipeline": "single-file-translate"},
+        and artifact.get("provenance") == {
+            "intermediate": "crossgl",
+            "pipeline": "single-file-translate",
+        },
         "DirectX GEMV artifact provenance changed",
     )
 
@@ -8640,8 +8670,10 @@ def _check_gemv_directx_compiler_frontier(
     generated_hash = _sha256(generated_path)
     generated_size = generated_path.stat().st_size
     _require(
-        artifact.get("generatedHash")
-        == {"algorithm": "sha256", "value": generated_hash}
+        artifact.get("generatedHash") == {
+            "algorithm": "sha256",
+            "value": generated_hash,
+        }
         and artifact.get("generatedSizeBytes") == generated_size
         and generated_size > 0,
         "DirectX GEMV artifact hash or size does not match the emitted file",
@@ -9049,10 +9081,12 @@ def _check_gemv_opengl_toolchain(
         "OpenGL GEMV translation reported diagnostics",
     )
     _require(
-        summary.get("artifactProvenanceByPipeline")
-        == {"entry-scoped-translate": GEMV_EXPECTED_ENTRY_POINT_COUNT}
-        and summary.get("artifactProvenanceByIntermediate")
-        == {"crossgl": GEMV_EXPECTED_ENTRY_POINT_COUNT},
+        summary.get("artifactProvenanceByPipeline") == {
+            "entry-scoped-translate": GEMV_EXPECTED_ENTRY_POINT_COUNT
+        }
+        and summary.get("artifactProvenanceByIntermediate") == {
+            "crossgl": GEMV_EXPECTED_ENTRY_POINT_COUNT
+        },
         "OpenGL GEMV report provenance summary changed",
     )
     _require(
@@ -9121,8 +9155,10 @@ def _check_gemv_opengl_toolchain(
         _require(
             artifact.get("sourceHash") == expected_source_hash
             and artifact.get("sourceSizeBytes") == MLX_GEMV_SOURCE_SIZE_BYTES
-            and artifact.get("provenance")
-            == {"intermediate": "crossgl", "pipeline": "entry-scoped-translate"},
+            and artifact.get("provenance") == {
+                "intermediate": "crossgl",
+                "pipeline": "entry-scoped-translate",
+            },
             "OpenGL GEMV artifact provenance changed",
         )
 
@@ -9136,8 +9172,10 @@ def _check_gemv_opengl_toolchain(
             f"OpenGL GEMV artifact is missing: {artifact_path}",
         )
         _require(
-            artifact.get("generatedHash")
-            == {"algorithm": "sha256", "value": _sha256(generated_path)}
+            artifact.get("generatedHash") == {
+                "algorithm": "sha256",
+                "value": _sha256(generated_path),
+            }
             and artifact.get("generatedSizeBytes") == generated_path.stat().st_size,
             "OpenGL GEMV artifact hash or size does not match the emitted file",
         )
@@ -9164,10 +9202,14 @@ def _check_gemv_opengl_toolchain(
             isinstance(execution_entries, list)
             and len(execution_entries) == 1
             and execution.get("sourceEntryPoints") == [source_entry]
-            and execution.get("provenance")
-            == {"kind": "materialized-template-rule", "path": workgroup_rule_path}
-            and execution.get("subgroupWidthProvenance")
-            == {"kind": "materialized-template-rule", "path": subgroup_rule_path}
+            and execution.get("provenance") == {
+                "kind": "materialized-template-rule",
+                "path": workgroup_rule_path,
+            }
+            and execution.get("subgroupWidthProvenance") == {
+                "kind": "materialized-template-rule",
+                "path": subgroup_rule_path,
+            }
             and execution.get("subgroupWidthEnforcement")
             == GEMV_OPENGL_SUBGROUP_WIDTH_ENFORCEMENT
             and _is_sha256_contract_identity(execution.get("identity")),

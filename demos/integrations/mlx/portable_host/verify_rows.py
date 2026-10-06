@@ -189,8 +189,9 @@ def verify(args):
             selected = [
                 event
                 for event in events
-                if f'w{event["workgroupSize"][0]}/{event["entry"]}'
-                in shard["descriptors"]
+                if f'w{event["workgroupSize"][0]}/{event["entry"]}' in shard[
+                    "descriptors"
+                ]
             ]
             verify_artifacts(selected, directory, shard)
             checked += len(selected)

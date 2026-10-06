@@ -100,8 +100,7 @@ def infer_category(test_file: str, nodeid: str, message: str) -> str:
     haystack = " ".join((test_file, nodeid, message)).lower()
     if (
         test_file.startswith("tests/test_support")
-        or test_file
-        in {
+        or test_file in {
             "tests/test_ci_workflows.py",
             "tests/test_tool_cli.py",
             "tests/test_pr_issue_links.py",

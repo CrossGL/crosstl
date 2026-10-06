@@ -3744,8 +3744,7 @@ class MetalToCrossGLConverter:
             == receiver_address_space
             and (
                 allow_explicit
-                or "explicit"
-                not in {
+                or "explicit" not in {
                     str(qualifier).lower()
                     for qualifier in getattr(constructor, "qualifiers", []) or []
                 }
@@ -4314,8 +4313,7 @@ class MetalToCrossGLConverter:
             member
             for member in getattr(struct_node, "members", []) or []
             if isinstance(member, VariableNode)
-            and "static"
-            not in {
+            and "static" not in {
                 str(qualifier).lower()
                 for qualifier in getattr(member, "qualifiers", []) or []
             }
@@ -6217,8 +6215,7 @@ class MetalToCrossGLConverter:
         qualifiers = tuple(
             qualifier
             for qualifier in self.metal_source_overload_type_qualifiers
-            if qualifier
-            in {
+            if qualifier in {
                 *(str(value).lower() for value in nested_qualifiers),
                 *(
                     str(value).lower()
@@ -6666,8 +6663,9 @@ class MetalToCrossGLConverter:
             value_candidates = [
                 function
                 for function in value_candidates
-                if explicit_count
-                <= len(getattr(function, "template_parameters", None) or [])
+                if explicit_count <= len(
+                    getattr(function, "template_parameters", None) or []
+                )
             ]
             overloads = value_candidates
         else:
@@ -18059,8 +18057,7 @@ float {scalar}(float value) {{
         base_name, generic_args = self.access_qualified_texture_parts(metal_type)
         return bool(
             generic_args
-            and base_name
-            in {
+            and base_name in {
                 "texture1d",
                 "texture1d_array",
                 "texture2d",

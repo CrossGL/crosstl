@@ -306,8 +306,9 @@ def test_project_workgroup_size_specialization_support_is_target_scoped():
             assert support["status"] == "validated_rejection"
             assert rejection_evidence in support["evidence"]
             assert (
-                "project.translate.workgroup-size-rule-unsupported-target"
-                in support["notes"]
+                "project.translate.workgroup-size-rule-unsupported-target" in support[
+                    "notes"
+                ]
             )
 
 
@@ -428,8 +429,9 @@ def test_project_subgroup_width_specialization_support_is_target_scoped():
             assert support["status"] == "validated_rejection"
             assert rejection_evidence in support["evidence"]
             assert (
-                "project.translate.subgroup-width-enforcement-unsupported"
-                in support["notes"]
+                "project.translate.subgroup-width-enforcement-unsupported" in support[
+                    "notes"
+                ]
             )
             assert "execution.subgroup-width-specialization" in support["notes"]
 
@@ -814,8 +816,9 @@ def test_project_migration_actions_are_first_class_support_feature():
             in (backend_support["notes"])
         )
         assert (
-            "bounded inspection samples with target lists and truncation metadata"
-            in (backend_support["notes"])
+            "bounded inspection samples with target lists and truncation metadata" in (
+                backend_support["notes"]
+            )
         )
         assert "runtime-reference count, backend, kind, and path rollups" in (
             backend_support["notes"]
@@ -1721,8 +1724,9 @@ def test_project_runtime_host_integration_handoff_inspection_is_first_class_supp
     for backend_support in feature["support"].values():
         assert backend_support["status"] == "supported"
         assert (
-            "crosstl-runtime-host-integration-handoff-inspection"
-            in backend_support["notes"]
+            "crosstl-runtime-host-integration-handoff-inspection" in backend_support[
+                "notes"
+            ]
         )
         assert "inspect-host-integration-handoff" in backend_support["notes"]
         assert "host-integration.json" in backend_support["notes"]
@@ -1927,12 +1931,14 @@ def test_project_include_resolution_documents_status_reporting():
             "are reported as rejected"
         ) in backend_support["notes"]
         assert (
-            "source frontends without include-path support are explicitly reported"
-            in (backend_support["notes"])
+            "source frontends without include-path support are explicitly reported" in (
+                backend_support["notes"]
+            )
         )
         assert (
-            "HLSL-style preprocessing preserves unresolved angle system includes"
-            in (backend_support["notes"])
+            "HLSL-style preprocessing preserves unresolved angle system includes" in (
+                backend_support["notes"]
+            )
         )
         assert (
             "OpenGL/GLSL translation with a resolved angle include and "
@@ -1961,8 +1967,9 @@ def test_project_include_resolution_documents_status_reporting():
             backend_support["notes"]
         )
         assert (
-            "missing, dynamic, and cyclic include diagnostics"
-            in backend_support["notes"]
+            "missing, dynamic, and cyclic include diagnostics" in backend_support[
+                "notes"
+            ]
         )
         assert "sampled include-path processing artifact metadata" in (
             backend_support["notes"]
@@ -2270,12 +2277,14 @@ def test_project_macro_variants_document_artifact_define_maps():
             in backend_support["notes"]
         )
         assert (
-            "Slang native preprocessing during project translation"
-            in backend_support["notes"]
+            "Slang native preprocessing during project translation" in backend_support[
+                "notes"
+            ]
         )
         assert (
-            "Vulkan native preprocessing during project translation"
-            in backend_support["notes"]
+            "Vulkan native preprocessing during project translation" in backend_support[
+                "notes"
+            ]
         )
         if backend_id in source_backend_ids:
             assert (
@@ -2621,8 +2630,9 @@ def test_project_artifact_manifest_documents_source_map_requirement():
             backend_support["notes"]
         )
         assert (
-            "expected/actual boolean rollup mismatch context"
-            in backend_support["notes"]
+            "expected/actual boolean rollup mismatch context" in backend_support[
+                "notes"
+            ]
         )
         assert "applied define map" in backend_support["notes"]
         assert "missing or mismatched artifact define maps" in (
@@ -2752,8 +2762,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             backend_support["notes"]
         )
         assert (
-            "expected/actual artifact source hash and byte-size mismatch context"
-            in (backend_support["notes"])
+            "expected/actual artifact source hash and byte-size mismatch context" in (
+                backend_support["notes"]
+            )
         )
         assert "line-preserving source-map mappings" in (backend_support["notes"])
         assert "line-preserving source-map validation" in backend_support["notes"]
@@ -3048,8 +3059,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
             backend_support["notes"]
         )
         assert (
-            "expected/actual project status record mismatch context"
-            in backend_support["notes"]
+            "expected/actual project status record mismatch context" in backend_support[
+                "notes"
+            ]
         )
         assert "source-relative layout" in backend_support["notes"]
         assert "artifact target suffix consistency" in backend_support["notes"]
@@ -3060,12 +3072,14 @@ def test_project_validation_hooks_document_migration_contract_checks():
             backend_support["notes"]
         )
         assert (
-            "expected/actual hash and byte-size mismatch context"
-            in backend_support["notes"]
+            "expected/actual hash and byte-size mismatch context" in backend_support[
+                "notes"
+            ]
         )
         assert (
-            "expected/actual validation status mismatch context"
-            in backend_support["notes"]
+            "expected/actual validation status mismatch context" in backend_support[
+                "notes"
+            ]
         )
         assert "failed artifact error metadata" in backend_support["notes"]
         assert "translated artifact error metadata rejection" in (
@@ -3223,8 +3237,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
             backend_support["notes"]
         )
         assert (
-            "validate-project JSON, text, and SARIF summaries"
-            in backend_support["notes"]
+            "validate-project JSON, text, and SARIF summaries" in backend_support[
+                "notes"
+            ]
         )
         assert (
             "validation report schema/kind/generated-at and source-report-hash "

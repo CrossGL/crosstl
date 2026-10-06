@@ -92,8 +92,10 @@ def _check_artifact(root: Path, contract: dict, expected: dict, artifact: dict) 
     _require(artifact.get("source") == contract["source"], "Artifact source differs")
     _require(artifact.get("target") == contract["target"], "Artifact target differs")
     _require(
-        artifact.get("sourceHash")
-        == {"algorithm": "sha256", "value": contract["sourceSha256"]},
+        artifact.get("sourceHash") == {
+            "algorithm": "sha256",
+            "value": contract["sourceSha256"],
+        },
         "Artifact source hash differs",
     )
     _require(

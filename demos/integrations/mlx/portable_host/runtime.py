@@ -434,8 +434,7 @@ class HostRuntime:
         selection = entry in SELECTION_ENTRIES
         cast = entry in ALL_CAST_ENTRIES
         if (
-            count
-            != (
+            count != (
                 1
                 if initialization
                 else (
@@ -618,8 +617,7 @@ class HostRuntime:
                 reduction
                 and not shaped_reduction
                 and not initialization
-                and dtype
-                != (
+                and dtype != (
                     "uint64"
                     if name in {"in_size", "row_size"}
                     else REDUCTION_ENTRIES[entry]

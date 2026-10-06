@@ -144,8 +144,10 @@ def load_index(directory, target):
             or descriptor["source"]["backend"] != "metal"
             or descriptor["entryPoint"]["name"]
             != {"opengl": "main", "directx": "CSMain"}.get(target, name)
-            or descriptor["source"]["hash"]
-            != {"algorithm": "sha256", "value": SOURCE_SHA256}
+            or descriptor["source"]["hash"] != {
+                "algorithm": "sha256",
+                "value": SOURCE_SHA256,
+            }
         ):
             raise ValueError("Random descriptor source or entry identity differs")
         observed[name] = descriptor

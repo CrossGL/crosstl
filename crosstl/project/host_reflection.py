@@ -1993,8 +1993,7 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
                 "value": _literal_value(tokens[4]),
             }
         elif (
-            opcode
-            in {
+            opcode in {
                 "OpSpecConstantTrue",
                 "OpSpecConstantFalse",
                 "OpConstantTrue",

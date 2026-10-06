@@ -112,8 +112,7 @@ def _pointer_type(value, owner=None):
 
     if (
         isinstance(value, NamedType)
-        and value.name
-        in {
+        and value.name in {
             "StructuredBuffer",
             "RWStructuredBuffer",
         }
@@ -759,8 +758,7 @@ class _Lowering:
             element = self.fields.get(_name(element), {}).get(member)
         if _name(element) not in {"int", "uint"} and not (
             _name(element) == "float"
-            and operation
-            in {
+            and operation in {
                 "atomicLoad",
                 "atomicStore",
                 "atomicAdd",

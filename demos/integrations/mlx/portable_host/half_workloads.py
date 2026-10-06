@@ -200,8 +200,7 @@ def validate(records, trace, *, native):
             physical_guard = [widen_reference(word) for word in guard]
         storage = "float32" if not half or event["target"] == "opengl" else "float16"
         if (
-            event.get("halfStorage")
-            != {
+            event.get("halfStorage") != {
                 "logicalType": expected.dtype.name,
                 "physicalType": storage,
                 "encoding": (

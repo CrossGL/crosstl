@@ -3224,8 +3224,7 @@ class MetalParser:
                 continue
             if self.is_qualifier_token_at(idx) or (
                 token_type == "IDENTIFIER"
-                and token_value
-                in {
+                and token_value in {
                     "explicit",
                     "inline",
                     "constexpr",

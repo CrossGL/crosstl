@@ -11735,8 +11735,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return rendered
         resource_name = self.hlsl_resource_type_name(binding.get("resource_type"))
         if (
-            resource_name
-            not in {
+            resource_name not in {
                 "RWBuffer",
                 "RWStructuredBuffer",
                 "RasterizerOrderedBuffer",
@@ -14589,8 +14588,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     self.expression_result_type(args[0])
                 )
             if (
-                func_name
-                in {"frac", "fract", "inverseSqrt", "inversesqrt", "rsqrt", "mod"}
+                func_name in {
+                    "frac",
+                    "fract",
+                    "inverseSqrt",
+                    "inversesqrt",
+                    "rsqrt",
+                    "mod",
+                }
                 and args
                 and func_name not in getattr(self, "function_return_types", {})
             ):
@@ -14602,8 +14607,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             } and func_name not in getattr(self, "function_return_types", {}):
                 return "float"
             if (
-                func_name
-                in {
+                func_name in {
                     "clamp",
                     "lerp",
                     "max",
@@ -15809,8 +15813,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 source_location=getattr(argument, "source_location", None),
             )
         binding["scalar"] = (
-            parameter_name
-            in (
+            parameter_name in (
                 self.function_private_pointer_scalar_parameters.get(
                     function_name, set()
                 )
@@ -16036,8 +16039,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
         if (
             address_space == "constant"
-            or access_mode
-            in {
+            or access_mode in {
                 "read",
                 "readonly",
             }
@@ -36923,8 +36925,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             function_name = self.function_call_name(expression)
             arguments = list(getattr(expression, "arguments", []) or [])
             if (
-                function_name
-                in {
+                function_name in {
                     "int",
                     "uint",
                     "short",

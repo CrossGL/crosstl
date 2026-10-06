@@ -2930,8 +2930,9 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         for contract in module.MLX_FENCE_TARGET_CONTRACTS.values()
     }
     assert (
-        "https://github.com/CrossGL/crosstl/issues/1537"
-        in full_corpus["semantic_blocked_by"]
+        "https://github.com/CrossGL/crosstl/issues/1537" in full_corpus[
+            "semantic_blocked_by"
+        ]
     )
     assert full_corpus["runtime_integration_included"] is False
     assert full_corpus["runtime_parity_claimed"] is False
@@ -3907,8 +3908,9 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert "scalar `expression_type` `float`" in " ".join(readme.split())
     assert "intentionally has no matrix `result_type`" in " ".join(readme.split())
     assert (
-        "complete cooperative-matrix `result_type` and `expression_type`"
-        in " ".join(readme.split())
+        "complete cooperative-matrix `result_type` and `expression_type`" in " ".join(
+            readme.split()
+        )
     )
     assert "explicit opt-in lane-local cooperative-matrix" in " ".join(readme.split())
     assert "Reduced target tests compile and validate type representation" in " ".join(
@@ -8411,8 +8413,9 @@ def test_runtime_readiness_reports_tracked_plan_resource_blockers(
         == 1
     )
     assert (
-        "https://github.com/CrossGL/crosstl/issues/1392"
-        not in result["trackedRuntimeIssues"]
+        "https://github.com/CrossGL/crosstl/issues/1392" not in result[
+            "trackedRuntimeIssues"
+        ]
     )
     assert result["runtimeFixtureExecution"]["status"] == "blocked-by-tracked-issues"
     assert result["nativeRuntimeExecution"]["status"] in {
@@ -10137,8 +10140,9 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert native_profile_issue not in gaps["full_corpus_scout"]["semantic_blocked_by"]
     assert narrowing_issue not in gaps["full_corpus_scout"]["semantic_blocked_by"]
     assert (
-        arithmetic_conversion_issue
-        not in gaps["full_corpus_scout"]["semantic_blocked_by"]
+        arithmetic_conversion_issue not in gaps["full_corpus_scout"][
+            "semantic_blocked_by"
+        ]
     )
     assert gaps["full_corpus_scout"]["validation_blocked_by"] == [
         profile_issue,
@@ -15256,8 +15260,7 @@ def test_rms_norm_directx_variants_translate_through_project_api(tmp_path, monke
         }
         assert all(
             entry["subgroupWidth"] == 32
-            and entry["subgroupWidthRule"]
-            == {
+            and entry["subgroupWidthRule"] == {
                 "expression": "32",
                 "sourcePattern": module.MLX_RMS_NORM_SOURCE,
                 "path": subgroup_rule_path,
@@ -17173,8 +17176,9 @@ def test_reduce_opengl_translation_evidence_records_complete_family():
         "reference aliases" in readme
     )
     assert (
-        "lexically shadowed arrays and condition-only reads are not misattributed"
-        in (readme)
+        "lexically shadowed arrays and condition-only reads are not misattributed" in (
+            readme
+        )
     )
     assert "residual private pointer or reference syntax remains fail-closed" in readme
     assert "scalar-layout-aware one- through twelve-resource target ABIs" in readme
@@ -17238,8 +17242,9 @@ def test_reduce_opengl_translation_evidence_records_complete_family():
         "reference aliases" in guide
     )
     assert (
-        "lexically shadowed arrays and condition-only reads are not misattributed"
-        in (guide)
+        "lexically shadowed arrays and condition-only reads are not misattributed" in (
+            guide
+        )
     )
     assert "residual private pointer or reference syntax remains fail-closed" in guide
     assert "scalar-layout-aware one- through twelve-resource target ABIs" in guide

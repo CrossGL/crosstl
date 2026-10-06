@@ -76,10 +76,11 @@ def audit_input_bindings(event):
             and buffer.get("encoding") is None
             and binding["kind"] == "constant-buffer"
             and binding["access"] == "read"
-            and metadata.get("provenance")
-            == {"kind": "generated-execution-input", "executionInput": execution_input}
-            and buffer.get("metadata")
-            == {
+            and metadata.get("provenance") == {
+                "kind": "generated-execution-input",
+                "executionInput": execution_input,
+            }
+            and buffer.get("metadata") == {
                 "source": "dispatch.workgroupCount",
                 "executionInput": execution_input,
                 "runtimeValueName": name,

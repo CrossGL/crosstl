@@ -785,8 +785,7 @@ class HLSLToCrossGLConverter:
             elif (
                 member == "SampleGrad"
                 and cube_family_resource
-                and arg_count
-                in {
+                and arg_count in {
                     5,
                     6,
                 }
@@ -805,8 +804,7 @@ class HLSLToCrossGLConverter:
             elif (
                 member == "SampleBias"
                 and cube_family_resource
-                and arg_count
-                in {
+                and arg_count in {
                     4,
                     5,
                 }
@@ -825,8 +823,7 @@ class HLSLToCrossGLConverter:
             elif (
                 member == "SampleCmp"
                 and cube_family_resource
-                and arg_count
-                in {
+                and arg_count in {
                     4,
                     5,
                 }
@@ -852,8 +849,7 @@ class HLSLToCrossGLConverter:
             elif (
                 member == "SampleCmpGrad"
                 and cube_family_resource
-                and arg_count
-                in {
+                and arg_count in {
                     6,
                     7,
                 }
@@ -872,8 +868,7 @@ class HLSLToCrossGLConverter:
             elif (
                 member == "SampleCmpBias"
                 and cube_family_resource
-                and arg_count
-                in {
+                and arg_count in {
                     4,
                     5,
                     6,
@@ -929,8 +924,7 @@ class HLSLToCrossGLConverter:
                     dropped_parameters.append("status output")
             usage = (
                 "comparison"
-                if member
-                in {
+                if member in {
                     "SampleCmp",
                     "SampleCmpLevel",
                     "SampleCmpGrad",
@@ -3819,8 +3813,7 @@ class HLSLToCrossGLConverter:
             or self.is_buffer_resource_type(type_name)
             or self.is_crossgl_resource_type(mapped_base_type)
             or base_type.startswith(("Texture", "FeedbackTexture"))
-            or base_type
-            in {
+            or base_type in {
                 "Sampler",
                 "SamplerState",
                 "SamplerComparisonState",

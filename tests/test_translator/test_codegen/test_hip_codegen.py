@@ -1385,8 +1385,9 @@ class TestHipCodeGen:
 
         assert "__device__ inline uint3 cgl_uint3_bitCount(uint3 value)" in hip_code
         assert (
-            "return make_uint3(__popc(value.x), __popc(value.y), __popc(value.z));"
-            in (hip_code)
+            "return make_uint3(__popc(value.x), __popc(value.y), __popc(value.z));" in (
+                hip_code
+            )
         )
         assert "__device__ inline uint3 cgl_int3_bitCount(int3 value)" in hip_code
         assert "__popc(static_cast<unsigned int>(value.x))" in hip_code

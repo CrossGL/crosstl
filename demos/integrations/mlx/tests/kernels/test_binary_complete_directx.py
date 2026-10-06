@@ -337,8 +337,9 @@ def test_current_mlx_binary_directx_ci_shards_are_complete_and_disjoint() -> Non
     assert [len(shard) for shard in shards] == [172] * 18 + [171] * 6
     for shard_index, shard in enumerate(shards):
         assert (
-            shard
-            == BINARY_DIRECTX_WORKLOADS[shard_index::BINARY_DIRECTX_CI_SHARD_COUNT]
+            shard == BINARY_DIRECTX_WORKLOADS[
+                shard_index::BINARY_DIRECTX_CI_SHARD_COUNT
+            ]
         )
     entry_points = [workload.entry_point for shard in shards for workload in shard]
     assert len(entry_points) == 4122

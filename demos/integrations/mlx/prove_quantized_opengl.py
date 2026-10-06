@@ -436,8 +436,9 @@ def _validate_execution_report(
     _require(
         isinstance(project, Mapping)
         and project.get("workgroupSize") is None
-        and project.get("workgroupSizeRules")
-        == {MLX_QUANTIZED_SOURCE: [str(value) for value in workgroup_size]}
+        and project.get("workgroupSizeRules") == {
+            MLX_QUANTIZED_SOURCE: [str(value) for value in workgroup_size]
+        }
         and project.get("workgroupSizeRuleCount") == 1
         and project.get("subgroupWidthRules") == {}
         and project.get("subgroupWidthRuleCount") == 0,
@@ -449,8 +450,10 @@ def _validate_execution_report(
     _require(
         isinstance(execution, Mapping)
         and execution.get("sourceEntryPoints") == [entry_point]
-        and execution.get("provenance")
-        == {"kind": "materialized-template-rule", "path": rule_path}
+        and execution.get("provenance") == {
+            "kind": "materialized-template-rule",
+            "path": rule_path,
+        }
         and _is_sha256_identity(execution.get("identity"))
         and isinstance(entries, list)
         and len(entries) == 1
@@ -464,8 +467,7 @@ def _validate_execution_report(
         and execution_entry.get("targetEntryPoint") == "main"
         and execution_entry.get("workgroupSize") == workgroup_size
         and execution_entry.get("rule") == expected_rule
-        and execution_entry.get("materialization")
-        == {
+        and execution_entry.get("materialization") == {
             "name": entry_contract["specializationName"],
             "hostName": entry_point,
             "materializedName": entry_point,
@@ -503,19 +505,19 @@ def _translated_artifact(
         and artifact.get("sourceBackend") == "metal"
         and artifact.get("target") == TARGET
         and artifact.get("status") == "translated"
-        and artifact.get("sourceHash")
-        == {
+        and artifact.get("sourceHash") == {
             "algorithm": "sha256",
             "value": PINNED_FILE_SHA256[MLX_QUANTIZED_SOURCE],
         }
-        and artifact.get("provenance")
-        == {"pipeline": "entry-scoped-translate", "intermediate": "crossgl"}
+        and artifact.get("provenance") == {
+            "pipeline": "entry-scoped-translate",
+            "intermediate": "crossgl",
+        }
         and artifact.get("requiredCapabilities") == [],
         "OpenGL artifact provenance does not match pinned quantized.metal",
     )
     _require(
-        artifact.get("entryPoint")
-        == {
+        artifact.get("entryPoint") == {
             "source": entry_point,
             "target": "main",
             "stage": "compute",
@@ -576,8 +578,10 @@ def _translated_artifact(
     )
     _require(
         artifact_path.suffix == ".glsl"
-        and artifact.get("generatedHash")
-        == {"algorithm": "sha256", "value": _sha256(artifact_path)}
+        and artifact.get("generatedHash") == {
+            "algorithm": "sha256",
+            "value": _sha256(artifact_path),
+        }
         and artifact.get("generatedSizeBytes") == artifact_path.stat().st_size,
         "generated GLSL identity does not match the project report",
     )

@@ -2850,8 +2850,9 @@ def test_preprocessor_distinguishes_explicit_free_specialization_overloads():
         ("choose", ("int",), ("device int*",)),
     ]
     assert (
-        "return value + 10;"
-        in specializations[("choose", ("int",), ("int",))]["source"]
+        "return value + 10;" in specializations[("choose", ("int",), ("int",))][
+            "source"
+        ]
     )
     assert (
         "return value[0] + 20;"

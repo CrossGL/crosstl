@@ -270,8 +270,7 @@ def test_builds_preflighted_native_runtime_request(
 
     assert isinstance(request, RuntimeExecutionRequest)
     assert (
-        request.artifact_path
-        == (
+        request.artifact_path == (
             tmp_path
             / f"artifacts/{target}/copy.{'hlsl' if target == 'directx' else 'comp'}"
         ).resolve()
@@ -282,8 +281,9 @@ def test_builds_preflighted_native_runtime_request(
     assert request.artifact_identity is not None
     assert request.artifact_identity.size_bytes == len(artifact_bytes)
     assert (
-        request.artifact_identity.hash_value
-        == hashlib.sha256(artifact_bytes).hexdigest()
+        request.artifact_identity.hash_value == hashlib.sha256(
+            artifact_bytes
+        ).hexdigest()
     )
     assert request.artifact_identity.hash_algorithm == "sha256"
     assert request.artifact_identity.artifact_id == f"copy:{target}"
@@ -679,8 +679,9 @@ def test_builds_preflighted_compiled_native_runtime_request(
 
     digest = hashlib.sha256(artifact_bytes).hexdigest()
     assert (
-        request.artifact_path
-        == (tmp_path / f"artifacts/{target}/copy.{extension}").resolve()
+        request.artifact_path == (
+            tmp_path / f"artifacts/{target}/copy.{extension}"
+        ).resolve()
     )
     assert request.artifact["artifactFormat"] == artifact_format
     assert request.artifact["sizeBytes"] == len(artifact_bytes)

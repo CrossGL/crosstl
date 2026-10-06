@@ -279,8 +279,9 @@ uint index [[thread_position_in_grid]]) { if (index < size) c[index] = U(a[index
     assert set(index["descriptors"]) == set(packages.ENTRIES)
     assert (output / "translation/report.json").is_file()
     assert (
-        'binary32_fma_profile = "rne-flush"'
-        in (output / "translation/crosstl.toml").read_text()
+        'binary32_fma_profile = "rne-flush"' in (
+            output / "translation/crosstl.toml"
+        ).read_text()
     )
     return output
 
@@ -1003,7 +1004,7 @@ def test_unary_verifier_requires_complete_independent_results(fault):
             record
             for record in translated
             if record["operation"] == "Negative" and record["count"] == 7
-        )["values"][3] = (0.0 if fault == "zero-sign" else -1e-8)
+        )["values"][3] = 0.0 if fault == "zero-sign" else -1e-8
     elif fault == "nonfinite":
         next(record for record in translated if record.get("case") == "nonfinite")[
             "values"
@@ -2057,8 +2058,9 @@ def test_boolean_host_physical_dispatch(
             value for value in request.fixture.inputs if value.name == name
         )
         assert (
-            input_value.values
-            == ([False] * count if physical == "bool" else [0] * count) + guard
+            input_value.values == (
+                [False] * count if physical == "bool" else [0] * count
+            ) + guard
         )
         return SimpleNamespace(
             status="ok",

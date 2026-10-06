@@ -4891,8 +4891,9 @@ class GLSLCodeGen:
         return (
             mapped_semantic == "gl_SubgroupID"
             or current.name == "gl_SubgroupID"
-            or current.name
-            in getattr(self, "glsl_software_subgroup_id_parameter_names", set())
+            or current.name in getattr(
+                self, "glsl_software_subgroup_id_parameter_names", set()
+            )
         )
 
     def glsl_software_subgroup_strided_for_plan(
@@ -9070,8 +9071,7 @@ class GLSLCodeGen:
                     mutated.update(target_interval_keys(target))
                 elif isinstance(node, UnaryOpNode) and (
                     self.map_operator(node.op) in {"++", "--"}
-                    or node.op
-                    in {
+                    or node.op in {
                         "PRE_INCREMENT",
                         "PRE_DECREMENT",
                         "POST_INCREMENT",
@@ -9308,8 +9308,7 @@ class GLSLCodeGen:
                 return
             if isinstance(value, UnaryOpNode) and (
                 self.map_operator(value.op) in {"++", "--"}
-                or value.op
-                in {
+                or value.op in {
                     "PRE_INCREMENT",
                     "PRE_DECREMENT",
                     "POST_INCREMENT",
@@ -11898,8 +11897,7 @@ class GLSLCodeGen:
                         continue
                     if isinstance(node, UnaryOpNode) and (
                         self.map_operator(node.op) in {"++", "--"}
-                        or node.op
-                        in {
+                        or node.op in {
                             "PRE_INCREMENT",
                             "PRE_DECREMENT",
                             "POST_INCREMENT",
@@ -12021,8 +12019,7 @@ class GLSLCodeGen:
                 continue
             if isinstance(node, UnaryOpNode) and (
                 self.map_operator(node.op) in {"++", "--"}
-                or node.op
-                in {
+                or node.op in {
                     "PRE_INCREMENT",
                     "PRE_DECREMENT",
                     "POST_INCREMENT",
@@ -12537,8 +12534,7 @@ class GLSLCodeGen:
                 return
             if isinstance(value, UnaryOpNode) and (
                 self.map_operator(value.op) in {"++", "--"}
-                or value.op
-                in {
+                or value.op in {
                     "PRE_INCREMENT",
                     "PRE_DECREMENT",
                     "POST_INCREMENT",
@@ -28014,8 +28010,7 @@ class GLSLCodeGen:
             or normalized in self.GLSL_BARE_LAYOUT_ATTRIBUTE_NAMES
             or normalized in self.GLSL_VARIABLE_QUALIFIER_ATTRIBUTE_NAMES
             or normalized in self.GLSL_STORAGE_QUALIFIER_ATTRIBUTE_NAMES
-            or normalized
-            in {
+            or normalized in {
                 "input",
                 "output",
                 "interface_block",
@@ -28338,8 +28333,9 @@ class GLSLCodeGen:
             or version_number < 400
             or (
                 required_width == 64
-                and self.GLSL_INT64_EXTENSION
-                in getattr(self, "current_glsl_disabled_extensions", set())
+                and self.GLSL_INT64_EXTENSION in getattr(
+                    self, "current_glsl_disabled_extensions", set()
+                )
             )
         )
         if unsupported:
@@ -31993,8 +31989,7 @@ complex64_t crossgl_complex64_mod_assign(
             if func_name == "imageLoad" and args:
                 return self.image_load_result_type(args[0])
             if (
-                func_name
-                in {
+                func_name in {
                     "texture",
                     "textureLod",
                     "textureGrad",
@@ -41323,8 +41318,7 @@ complex64_t crossgl_complex64_mod_assign(
             return None
         constructor = (
             "vec4"
-            if texture_type
-            in {
+            if texture_type in {
                 "sampler2DArrayShadow",
                 "samplerCubeShadow",
             }
@@ -44406,8 +44400,7 @@ complex64_t crossgl_complex64_mod_assign(
                     candidates.append(fallback)
                 for argument_index, argument in enumerate(arguments):
                     if not any(
-                        argument_index
-                        < len(
+                        argument_index < len(
                             parameters := list(
                                 getattr(
                                     candidate,
@@ -44695,8 +44688,7 @@ complex64_t crossgl_complex64_mod_assign(
                 getattr(expression, "arguments", getattr(expression, "args", [])) or []
             )
             if (
-                function_name
-                in {
+                function_name in {
                     "int",
                     "uint",
                     "short",
@@ -44791,8 +44783,7 @@ complex64_t crossgl_complex64_mod_assign(
                 getattr(expression, "arguments", getattr(expression, "args", [])) or []
             )
             if (
-                function_name
-                in {
+                function_name in {
                     "int",
                     "uint",
                     "short",

@@ -556,8 +556,15 @@ def test_unary_complex_atan2_dependencies_preserve_corpus_scope():
         workload
         for workload in UNARY_DIRECTX_WORKLOADS
         if workload.input_type == "complex64_t"
-        and workload.operator_type
-        in {"Log", "Log2", "Log10", "Log1p", "ArcSin", "ArcCos", "ArcTan"}
+        and workload.operator_type in {
+            "Log",
+            "Log2",
+            "Log10",
+            "Log1p",
+            "ArcSin",
+            "ArcCos",
+            "ArcTan",
+        }
     ]
     assert len(affected) == 28
 

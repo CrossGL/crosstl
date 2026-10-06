@@ -3028,8 +3028,11 @@ def _prepare_directx_constants(
         constant_kind = str(binding.constant.kind or "").strip().lower()
         if mechanism in {"compiled", "compiled-literal", "static"} or (
             not mechanism
-            and constant_kind
-            in {"scalar-constant", "compile-time-constant", "static-constant"}
+            and constant_kind in {
+                "scalar-constant",
+                "compile-time-constant",
+                "static-constant",
+            }
         ):
             _validate_directx_compiled_constant(name, binding)
             continue

@@ -12024,14 +12024,12 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         primitive_name = self.normalize_primitive_name(function_name)
         if (
-            primitive_name
-            not in {
+            primitive_name not in {
                 "bool",
                 "float",
                 "double",
                 self.BFLOAT16_TYPE_NAME,
-            }
-            | self.INTEGER_TYPE_NAMES
+            } | self.INTEGER_TYPE_NAMES
         ):
             return None
 
@@ -12149,14 +12147,12 @@ class VulkanSPIRVCodeGen:
         component_type = self.scalar_or_vector_component_type(source_type.type)
         primitive_type = self.normalize_primitive_name(component_type)
         if (
-            primitive_type
-            in {
+            primitive_type in {
                 "float",
                 "double",
                 "bool",
                 self.BFLOAT16_TYPE_NAME,
-            }
-            | self.INTEGER_TYPE_NAMES
+            } | self.INTEGER_TYPE_NAMES
         ):
             return source_type
 
@@ -29144,8 +29140,11 @@ class VulkanSPIRVCodeGen:
                 return
         if (
             self.include_resource_interface_variables
-            and variable.type.storage_class
-            in {"StorageBuffer", "Uniform", "UniformConstant"}
+            and variable.type.storage_class in {
+                "StorageBuffer",
+                "Uniform",
+                "UniformConstant",
+            }
             and any(
                 global_variable.id == variable.id
                 for global_variable in self.global_variables.values()

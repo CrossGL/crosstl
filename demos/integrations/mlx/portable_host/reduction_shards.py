@@ -138,8 +138,10 @@ def inspect_shards(directory, target, revision):
             if (
                 source.get("path") != SOURCE
                 or source.get("backend") != "metal"
-                or source.get("hash")
-                != {"algorithm": "sha256", "value": record["sourceSha256"]}
+                or source.get("hash") != {
+                    "algorithm": "sha256",
+                    "value": record["sourceSha256"],
+                }
             ):
                 raise ValueError("Row descriptor does not identify the pinned source")
         source_hashes.add(record["sourceSha256"])
@@ -216,8 +218,9 @@ def load_row_packages(directory, target, *, require_all_widths=False):
 
 def compile_packages(directory, output, target):
     if (
-        sys.platform
-        != {"metal": "darwin", "directx": "win32", "opengl": "linux"}[target]
+        sys.platform != {"metal": "darwin", "directx": "win32", "opengl": "linux"}[
+            target
+        ]
     ):
         raise ValueError("Row compilation requires the target's native CI platform")
     index, directories = load_row_packages(directory, target, require_all_widths=True)

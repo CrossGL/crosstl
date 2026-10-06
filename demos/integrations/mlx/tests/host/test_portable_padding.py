@@ -232,8 +232,9 @@ def test_padding_ci_requires_native_execution_and_retained_evidence():
             "demos/integrations/mlx/tests/host/test_portable_padding.py",
         )
     assert any(
-        "demos/integrations/mlx/tests/host/test_portable_padding.py"
-        in step.get("run", "")
+        "demos/integrations/mlx/tests/host/test_portable_padding.py" in step.get(
+            "run", ""
+        )
         for step in workflow["jobs"]["portable-host"]["steps"]
     )
 

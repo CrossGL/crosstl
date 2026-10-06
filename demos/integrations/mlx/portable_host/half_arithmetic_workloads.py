@@ -210,8 +210,7 @@ def validate(records, trace, *, native):
             physical = list(map(widen_reference, bits))
             physical_guard = list(map(widen_reference, guard))
         if (
-            event.get("halfStorage")
-            != {
+            event.get("halfStorage") != {
                 "logicalType": "bool_" if boolean else "float16",
                 "physicalType": storage,
                 "encoding": encoding,

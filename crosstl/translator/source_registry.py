@@ -61,8 +61,10 @@ def _accepts_keyword(callable_obj, keyword: str) -> bool:
     parameter = signature.parameters.get(keyword)
     return (
         parameter is not None
-        and parameter.kind
-        in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+        and parameter.kind in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }
     ) or any(
         parameter.kind == inspect.Parameter.VAR_KEYWORD
         for parameter in signature.parameters.values()

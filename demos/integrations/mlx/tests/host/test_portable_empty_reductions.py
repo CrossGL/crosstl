@@ -62,8 +62,9 @@ instantiate_init_reduce(or, bool_, bool, Or)
         output / "translation/init_reduce.metal"
     ).read_text() == reduction_packages.INIT_SOURCE
     assert (
-        "software_subgroup_width"
-        not in (output / "translation/crosstl.toml").read_text()
+        "software_subgroup_width" not in (
+            output / "translation/crosstl.toml"
+        ).read_text()
     )
     return output, index
 
