@@ -1553,6 +1553,7 @@ def test_full_references_require_exact_storage_and_broadcasts(fault):
     [
         None,
         "command",
+        "native-timeout",
         "values",
         "trace",
         "target",
@@ -1633,7 +1634,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
             cast_test_source.write_bytes(b"changed tests")
         mode = command[command.index("--worker") + 1]
         assert command[command.index("--timeout-seconds") + 1] == (
-            "300" if mode == "native" else "180"
+            "900" if mode == "native" else "180"
         )
         output = Path(command[-1])
         output.mkdir(parents=True)
@@ -1765,7 +1766,10 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 }
             ),
         )
-        return SimpleNamespace(returncode=124 if fault == "command" else 0)
+        timed_out = fault == "command" or (
+            fault == "native-timeout" and mode == "native"
+        )
+        return SimpleNamespace(returncode=124 if timed_out else 0)
 
     monkeypatch.setattr(verify.subprocess, "run", run)
     args = SimpleNamespace(
@@ -1787,6 +1791,13 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 ]
                 == 124
             )
+        if fault == "native-timeout":
+            assert len(calls) == 20
+            for mode in ("cpu", "native", *verify.NEGATIVE_CHECKS):
+                command_result = json.loads(
+                    (args.output_dir / f"{mode}.command.json").read_text()
+                )
+                assert command_result["returncode"] == (124 if mode == "native" else 0)
     else:
         evidence = verify.verify(args)
         assert len(calls) == 20 and evidence["dispatchCount"] == 493 + len(

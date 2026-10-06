@@ -1263,9 +1263,12 @@ Binary inputs with unsupported dtype or excessive size are also rejected, as
 are casts with unsupported types, excessive size or an invalid source span.
 Full also rejects unsupported int16 storage, excessive output size and a source
 view extending before its allocation.
-The native worker has a hard 300-second process-tree deadline; the CPU reference
+The native worker has a hard 900-second process-tree deadline; the CPU reference
 and eighteen negative processes each retain a 180-second deadline. All are
-attempted so a failure does not discard the other diagnostic results. CI allows
+attempted so a failure does not discard the other diagnostic results. The former
+300-second native limit expired on hosted macOS after 801 completed dispatches,
+before all workloads and upstream tests finished. A timed-out worker remains a
+failure even if it has already written result files. CI allows
 2,400 seconds for package translation and 4,000 seconds for verification within
 a bounded 330-minute platform job. Small-row host workloads run in separate
 300-minute platform jobs after the base host proof. These jobs also require

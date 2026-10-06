@@ -164,8 +164,16 @@ guards on each platform, instead of adding a separate runner. It retains 19
 explicit original-Metal boundary results, including the exponential midpoint
 and division underflow neighbors. Required primitive exponential tests also
 exercise 16,132 binary32 inputs, scalar/vector calls and exact narrowing of
-the computed float result against a 100-digit reference. Windows execution
-of these new checks remains pending. This is not full MLX-suite parity, a
+the computed float result against a 100-digit reference. The
+[Windows native job at `c7579e41`](https://github.com/CrossGL/crosstl/actions/runs/37384697268/job/112014981317)
+passes all 48 unary checks without skips. Independent retained-artifact review
+verifies all 65,282 Sigmoid results against original Metal, eight output guards,
+the saved division profile, and generated-source/DXIL identities. The repaired
+half/bfloat exponential alias cases also pass: 90 result words and 64 guards
+match an independent 120-digit reference within the existing two-ULP bound,
+with single evaluation preserved. The same job passes the 34 selected upstream
+host tests and 1,208 translated dispatches; independent review verifies 40,872
+values on each CPU and DirectX path. This is not full MLX-suite parity, a
 universal device-equivalence claim or a NaN payload policy. No upstream kernel
 is changed.
 
@@ -221,7 +229,14 @@ special-value differences, including 512 zero-to-infinity results. A reduced
 float kernel confirms that translating `fmod` to GLSL `mod` loses source
 semantics ([crosstl#2097](https://github.com/CrossGL/crosstl/issues/2097)).
 LogAddExp also loses some nonzero results; its accuracy investigation remains
-under [crosstl#2068](https://github.com/CrossGL/crosstl/issues/2068). All four
+under [crosstl#2068](https://github.com/CrossGL/crosstl/issues/2068). A reduced
+compensated-logarithm expression isolates lost binary32 rounding dependencies
+in GLSL ([crosstl#2098](https://github.com/CrossGL/crosstl/issues/2098)).
+Separately, nested half arithmetic can omit intermediate narrowing even when
+explicitly stored half intermediates match original Metal
+([crosstl#1992](https://github.com/CrossGL/crosstl/issues/1992#issuecomment-6006266688)).
+The historical half Sigmoid denominator uses that pattern; its GLSL reference
+has not been accepted. All four
 HLSL artifacts compile with strict DXC options and all four GLSL artifacts pass
 glslangValidator and SPIR-V validation. These compiler results do not resolve
 the numerical differences. This local review adds no required CI case, changes

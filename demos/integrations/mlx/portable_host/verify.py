@@ -364,7 +364,7 @@ def verify(args):
             (
                 "1800"
                 if reductions is not None and mode == "native"
-                else "300" if mode == "native" else "180"
+                else "900" if mode == "native" else "180"
             ),
             "--label",
             f"MLX host {mode}",
