@@ -176,6 +176,7 @@ def test_directx_corpus_retains_failure_evidence_without_additional_jobs(family)
         ("softmax", "Softmax", "mlx-softmax-results"),
         ("arg_reduce", "arg-reduce", "demo-results/arg-reduce"),
         ("attention", "scaled-attention", "demo-results/attention"),
+        ("gemv", "GEMV", "demo-results/gemv"),
         ("rms_norm", "RMSNorm", "demo-results/normalization/rms_norm"),
         ("rms_norm_vjp", "RMSNorm VJP", "demo-results/normalization/rms_norm_vjp"),
         ("layer_norm", "LayerNorm", "demo-results/normalization/layer_norm"),
@@ -193,8 +194,9 @@ def test_native_loader_evidence_is_retained_in_existing_project_job(
         _workflow_texts()["demo-project-testing.yml"], "mlx-metal-porting"
     )
     coverage = _load_ci_coverage_module()
+    revision = "current" if family == "gemv" else "pinned"
     step = coverage.workflow_step_section(
-        job, f"Prove pinned MLX {title} {platform} native-loader execution"
+        job, f"Prove {revision} MLX {title} {platform} native-loader execution"
     )
     assert 'CROSTL_KEEP_CORPUS_EVIDENCE: "1"' in step
     assert (

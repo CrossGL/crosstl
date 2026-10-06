@@ -1748,9 +1748,9 @@ integration, or numerical parity.
 
 The checked
 [`contracts/gemv.native-loader.dispatch.json`](contracts/gemv.native-loader.dispatch.json)
-contract selects current-pinned
-`gemv_t_float32_bm1_bn2_sm8_sn4_tm4_tn4_nc0_axpby0` from the newer 6,981-byte
-`gemv.metal` source with SHA-256
+contract selects `gemv_t_float32_bm1_bn2_sm8_sn4_tm4_tn4_nc0_axpby0` at the
+historical `846d176227a0ac13d2667e58d2bb68b322109ab0` revision. Its 6,981-byte
+`gemv.metal` source has SHA-256
 `0bd8bde0c867a17c345a3651f9f0a6c2909e0c74e76ea2a08f373fe4dcafaeda`.
 The host-derived `gemv_axbpy` branch covers one contiguous float32 vector-matrix
 product with `M=1`, `N=32`, `K=32`, no gathered or non-contiguous batch, and no
@@ -1767,8 +1767,8 @@ and
 
 Entry-scoped translation materializes only the selected GEMV and
 `elem_to_loc_uint`, with no unsupported record or project diagnostic. The
-8,188-byte HLSL has SHA-256
-`f300bbea75b2ed9e47c29313a56f882ed848cbb93858f1347fbc97a60e167223`,
+8,382-byte HLSL has SHA-256
+`6c9a9cff75874925dda1562ab18b512bb452ac1bdd5b45275b9590bd692f55af`,
 retains `[numthreads(32, 2, 1)]` and `[WaveSize(32)]`, and passes official DXC
 1.9.2602.24 under `cs_6_6`, `-enable-16bit-types`, and warnings as errors.
 Direct3D does not guarantee that a multidimensional workgroup's flattened
@@ -1792,10 +1792,19 @@ a tolerance adjustment or merely guarding invalid high-lane reads.
 
 The OpenGL target needs only the selected matrix-index assertion
 `uint64(bm + tm) * marix_ld + out_col + tn` in the unsigned 32-bit range. Its
-7,705-byte GLSL has SHA-256
-`f5ef8900ee65d63a6df2818ef111f56b4f269c6366c82d82a9d97c967042f562`
+7,754-byte GLSL has SHA-256
+`2a295b13be5c7bed11f01b86025dd7e0509c9003e515958fb1b24bc0b5ed07f1`
 and partitions the 64-thread workgroup into two logical 32-lane subgroups with
 a 64-float shared shuffle scratch array.
+
+The reference update compares complete historical/current bodies and all 15
+reflected resources per target. HLSL changes retain source-width matrix/stride
+arithmetic and carry the logical invocation index through helper calls. Both
+targets preserve the source's 16-bit shuffle offset conversion; OpenGL also
+adds explicit shared-memory ordering and checks the source lane before addition.
+Bindings, entry geometry, template materializations and upstream source hashes
+are unchanged. Both historical references are reproduced exactly and compiled
+before comparison; all four historical/current artifacts pass their validators.
 
 Both target-specific software-subgroup analyses recognize either `value > 0`
 or the integral-equivalent `value >= 1` as a canonical positive-to-zero
@@ -1819,10 +1828,16 @@ workload uses `vector[row] = (row + 1) / 32` and
 relative tolerance. Linux arm64 Mesa llvmpipe executes and reads back this
 software-subgroup workload in required mode, and Windows CI requires the same
 request through Direct3D 12 WARP.
+The current local OpenGL readbacks match an independent exact-rational
+calculation from the uploaded binary32 inputs for all 32 columns. This does not
+establish Windows execution of the updated artifact. Existing Windows/Linux
+jobs retain the project report before identity checks, generated sources,
+runtime package, compiler records, dispatch inputs, results and JUnit output,
+including on failure. No extra runner or relaxed tolerance is required.
 
 This bounded proof does not replace the historical 224-entry aggregate gates:
-it adds numerical execution for one host-valid entry from the materially newer
-current corpus. Gather, wide, batched, axpby, and the remaining host-named GEMV
+it adds numerical execution for one host-valid entry at `846d1762`, not the
+current `9c3d3557` corpus. Gather, wide, batched, axpby, and the remaining host-named GEMV
 entries, MLX host redirection, the full MLX test suite, and selected-entry Metal
 compiler validation remain outside the claim. The separate native Metal
 aggregate baseline continues to cover the existing round-trip boundary.

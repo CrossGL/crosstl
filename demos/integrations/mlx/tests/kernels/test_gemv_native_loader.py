@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import textwrap
 from pathlib import Path
 
@@ -27,6 +26,12 @@ from crosstl.project import (
     load_project_config,
     translate_project,
     validate_project_report,
+)
+from demos.integrations.mlx.tests.corpus_evidence import (
+    corpus_workspace,
+    native_compiler_runner,
+    record_native_request,
+    record_native_result,
 )
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -53,12 +58,12 @@ MLX_GEMV_VARIANT_ID = (
 )
 MLX_GEMV_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "f300bbea75b2ed9e47c29313a56f882ed848cbb93858f1347fbc97a60e167223",
-        "sizeBytes": 8188,
+        "sha256": "6c9a9cff75874925dda1562ab18b512bb452ac1bdd5b45275b9590bd692f55af",
+        "sizeBytes": 8382,
     },
     "opengl": {
-        "sha256": "158f653cccd16d6f17c4f7bd3988f249029436417d0ec797bdeaf580ff4ceb40",
-        "sizeBytes": 7665,
+        "sha256": "2a295b13be5c7bed11f01b86025dd7e0509c9003e515958fb1b24bc0b5ed07f1",
+        "sizeBytes": 7754,
     },
 }
 REQUIRE_DIRECTX_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_GEMV_DIRECTX_NATIVE_LOADER"
@@ -337,6 +342,8 @@ def _build_runtime_package(
         validate=True,
         run_toolchains=True,
     )
+    report_path = work_dir / "r.json"
+    report.write_json(report_path)
     payload = report.to_json()
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
@@ -418,9 +425,11 @@ def _build_runtime_package(
         assert generated.count("GroupMemoryBarrierWithGroupSync();") == 3
         assert (
             "__crossgl_software_subgroup_shuffle_down_float("
-            "result[tn], uint((4 * int(sm)))" in generated
+            "result[tn], uint((uint((4 * int(sm))) & 65535u))" in generated
         )
-        assert "uint(lid.x) + 32u * (uint(lid.y) + 2u * uint(lid.z))" in generated
+        assert "static uint __crossgl_software_subgroup_invocation;" in generated
+        assert "__crossgl_software_subgroup_invocation = uint(groupIndex);" in generated
+        assert "uint(__crossgl_software_subgroup_invocation)" in generated
         assert "uint simd_gid = (groupIndex / 32u);" in generated
         assert "uint simd_lid = (groupIndex % 32u);" in generated
         assert "WaveReadLaneAt" not in generated
@@ -438,8 +447,6 @@ def _build_runtime_package(
         assert "subgroupShuffle" not in generated
         _assert_opengl_spirv(generated_path, work_dir)
 
-    report_path = work_dir / "r.json"
-    report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
     runtime_artifacts = build_runtime_artifact_manifest(report_path)
     assert runtime_artifacts["success"] is True, json.dumps(
@@ -609,8 +616,9 @@ def _dispatch_request(target: str, descriptor: dict, package_dir: Path):
 
 def _execute_current_mlx_gemv(target: str) -> None:
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(prefix=".gv-", dir=mlx_root) as temporary:
-        work_dir = Path(temporary)
+    with corpus_workspace(
+        mlx_root, family="gemv", target=target, entry_point=MLX_GEMV_ENTRY
+    ) as work_dir:
         descriptor, package_dir = _build_runtime_package(
             mlx_root,
             work_dir,
@@ -621,10 +629,21 @@ def _execute_current_mlx_gemv(target: str) -> None:
             descriptor,
             package_dir,
         )
+        record_native_request(
+            work_dir,
+            request,
+            commit=MLX_COMMIT,
+            workload_id=_dispatch_variant().workload_id,
+        )
+        compiler_runner = native_compiler_runner(work_dir)
         runtime_adapter = (
-            DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime())
+            DirectXRuntimeParityAdapter(
+                runtime=DirectXComputeRuntime(), command_runner=compiler_runner
+            )
             if target == "directx"
-            else OpenGLRuntimeParityAdapter(runtime=OpenGLComputeRuntime())
+            else OpenGLRuntimeParityAdapter(
+                runtime=OpenGLComputeRuntime(), command_runner=compiler_runner
+            )
         )
         executor = RuntimeParityExecutor(
             RuntimeTestAdapterSpec(
@@ -646,6 +665,7 @@ def _execute_current_mlx_gemv(target: str) -> None:
                 ),
             )
         result = executor.run(request)
+        record_native_result(work_dir, result)
 
     assert result.status == "ok"
     assert result.outputs[output_name]["dtype"] == "float32"

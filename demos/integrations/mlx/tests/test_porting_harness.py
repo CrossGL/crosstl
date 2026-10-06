@@ -13845,9 +13845,9 @@ def test_gemv_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "f300bbea75b2ed9e47c29313a56f882ed848cbb93858f1347fbc97a60e167223"
+                "6c9a9cff75874925dda1562ab18b512bb452ac1bdd5b45275b9590bd692f55af"
             ),
-            "size_bytes": 8188,
+            "size_bytes": 8382,
             "subgroup_id_lowering": "flattened-logical-software-subgroups",
             "relative_shuffle_out_of_range": "calling-invocation-value",
             "software_subgroup_width": 32,
@@ -13865,9 +13865,9 @@ def test_gemv_current_native_runtime_evidence_is_exact_and_bounded():
         "opengl": {
             "target_entry_point": "main",
             "sha256": (
-                "f5ef8900ee65d63a6df2818ef111f56b4f269c6366c82d82a9d97c967042f562"
+                "2a295b13be5c7bed11f01b86025dd7e0509c9003e515958fb1b24bc0b5ed07f1"
             ),
-            "size_bytes": 7705,
+            "size_bytes": 7754,
             "workgroup_size": [32, 2, 1],
             "subgroup_enforcement": "explicit-32-lane-software-subgroup",
             "compiler": "glslangValidator",
@@ -13878,6 +13878,13 @@ def test_gemv_current_native_runtime_evidence_is_exact_and_bounded():
             "compiler_validation_status": "passed",
         },
     }
+    from demos.integrations.mlx.tests.kernels.test_gemv_native_loader import (
+        MLX_GEMV_GENERATED_ARTIFACTS,
+    )
+
+    for target, reference in MLX_GEMV_GENERATED_ARTIFACTS.items():
+        assert status["artifacts"][target]["sha256"] == reference["sha256"]
+        assert status["artifacts"][target]["size_bytes"] == reference["sizeBytes"]
     assert status["directx_software_subgroup"] == {
         "configuration": (
             "project.source_options.metal.target_options.directx."

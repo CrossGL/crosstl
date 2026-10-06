@@ -250,6 +250,111 @@ def test_selected_corpus_retains_native_inputs_and_results_without_suppressing_f
 
 @pytest.mark.parametrize("target", ("directx", "opengl"))
 @pytest.mark.parametrize("failure", ("translation", "identity"))
+def test_gemv_retains_failed_translation_before_artifact_checks(
+    target, failure, tmp_path, monkeypatch
+):
+    from demos.integrations.mlx.tests.kernels import test_gemv_native_loader as proof
+
+    payload = {"summary": {"unitCount": 0}, "diagnostics": [{"message": "failed"}]}
+    if failure == "identity":
+        payload = {
+            "summary": {"unitCount": 1, "translatedCount": 1, "failedCount": 0},
+            "diagnostics": [],
+            "project": {
+                "sourceOptions": {
+                    "metal": {
+                        "target_options": {
+                            "directx": {
+                                "relative_wave_shuffle_out_of_range": "self",
+                                "software_subgroup_width": 32,
+                            }
+                        }
+                    }
+                },
+                "indexRangeAssertions": [proof.INDEX_ASSERTION],
+                "indexRangeAssertionCount": 1,
+            },
+            "artifacts": [
+                {
+                    "source": proof.MLX_GEMV_SOURCE,
+                    "sourceHash": {
+                        "algorithm": "sha256",
+                        "value": proof.MLX_GEMV_SHA256,
+                    },
+                    "generatedHash": {"algorithm": "sha256", "value": "0" * 64},
+                }
+            ],
+        }
+
+    class Report:
+        def to_json(self):
+            return payload
+
+        def write_json(self, path):
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setenv(KEEP_EVIDENCE_ENV, "1")
+    monkeypatch.setattr(proof, "_pinned_mlx_root", lambda: tmp_path)
+    monkeypatch.setattr(proof, "load_project_config", lambda *args: None)
+    monkeypatch.setattr(proof, "translate_project", lambda *args, **kwargs: Report())
+    with pytest.raises(AssertionError):
+        proof._execute_current_mlx_gemv(target)
+    (report,) = tmp_path.rglob("r.json")
+    assert json.loads(report.read_text()) == payload
+    assert (report.parent / "c.toml").is_file()
+    assert report.parent.parent == tmp_path / EVIDENCE_DIRECTORY
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize("failure", (None, "status", "readback"))
+def test_gemv_retains_native_results_without_suppressing_failures(
+    target, failure, tmp_path, monkeypatch
+):
+    from demos.integrations.mlx.tests.kernels import test_gemv_native_loader as proof
+
+    monkeypatch.setenv(KEEP_EVIDENCE_ENV, "1")
+    monkeypatch.setattr(proof, "_pinned_mlx_root", lambda: tmp_path)
+    monkeypatch.setattr(proof, "_build_runtime_package", lambda *a: ({}, tmp_path))
+    fixture = {"inputs": [{"values": [2.0]}]}
+    plan = {"dispatch": {"workgroupSize": [32, 2, 1]}}
+    request = SimpleNamespace(
+        fixture=SimpleNamespace(to_json=lambda: fixture),
+        execution_plan=SimpleNamespace(to_json=lambda: plan),
+    )
+    values = proof._gemv_workload()[-1]
+    monkeypatch.setattr(proof, "_dispatch_request", lambda *a: (request, "out", values))
+    result = SimpleNamespace(
+        status="failed" if failure == "status" else "ok",
+        outputs={
+            "out": {
+                "dtype": "float32",
+                "shape": [len(values)],
+                "values": [0.0] * len(values) if failure == "readback" else values,
+            }
+        },
+        details={"device": "unit-test-only"},
+        message=None,
+    )
+    executor = SimpleNamespace(
+        is_available=lambda request: SimpleNamespace(available=True),
+        run=lambda request: result,
+    )
+    monkeypatch.setattr(proof, "RuntimeParityExecutor", lambda *a, **kw: executor)
+    with pytest.raises(AssertionError) if failure else nullcontext():
+        proof._execute_current_mlx_gemv(target)
+    (work_dir,) = (tmp_path / EVIDENCE_DIRECTORY).iterdir()
+    saved_request = json.loads((work_dir / "request.json").read_text())
+    assert saved_request == {
+        "commit": proof.MLX_COMMIT,
+        "workload": proof._dispatch_variant().workload_id,
+        "fixture": fixture,
+        "executionPlan": plan,
+    }
+    assert json.loads((work_dir / "result.json").read_text()) == vars(result)
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize("failure", ("translation", "identity"))
 def test_arg_reduce_retains_failed_translation_before_artifact_checks(
     target, failure, tmp_path, monkeypatch
 ):
