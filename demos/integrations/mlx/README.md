@@ -627,7 +627,7 @@ The current harness verifies:
   `contracts/binary.opengl-translation.json` contract pins every standalone
   `main` artifact across all 18 shapes, 11 templates, 24 operators, 25 type
   pairs, 6,026 materializations, and 19,106 reflected resources, totaling
-  16,534,282 generated GLSL bytes. Seven explicit
+  16,534,612 generated GLSL bytes. Seven explicit
   host/runtime index-range preconditions bound `offset + i`, `a_idx`, `b_idx`,
   `out_idx`, `out_idx++`, `idx.x`, and `idx.y` to signed 32-bit OpenGL index
   space; they are portability promises, not inferred or runtime-enforced
@@ -2971,7 +2971,7 @@ standalone OpenGL ``main`` artifacts. The schema-v2
 [`contracts/binary.opengl-translation.json`](contracts/binary.opengl-translation.json)
 contract preserves all 18 shapes, 11 templates, 24 operators, 25 type pairs,
 and 6,026 exact materializations while pinning
-16,534,282 generated GLSL bytes and 19,106 reflected
+16,534,612 generated GLSL bytes and 19,106 reflected
 resources. Scalar artifacts expose three storage buffers; size-bounded vector
 forms add an entry-scoped uniform block. One-dimensional generalized forms add
 entry-scoped stride blocks, fixed two- and three-dimensional forms expose stride
@@ -3019,6 +3019,19 @@ each native target. The existing macOS job also runs unchanged upstream Metal;
 Windows requires DXC/WARP and Linux requires GLSL/SPIR-V validation and Mesa
 execution. Eight guards and bit-preserving input encodings are required. These
 checks do not establish MLX host-runtime redirection or upstream test-suite parity.
+
+All 60 signed and unsigned 64-bit shift references also have complete source and
+interface review. Their source changes only convert shift counts to the width
+required by the GLSL target; operand widths and buffer layouts are unchanged.
+Fresh translations reproduce the reviewed artifacts, and both historical and
+updated sources pass strict compilation and module validation.
+
+At the historical `846d1762` pin, untouched Metal and generated OpenGL agree with
+an independent integer model across all 15 layouts: 184 cases, 7,332 values and
+1,472 guards per path. Vector controls cover every shift count from 0 through 63.
+Signed left-shift inputs stay within representable bounds; signed right-shift
+cases include negative values. Results are compared as exact 64-bit words. This
+does not claim behavior for invalid shift counts or full MLX runtime parity.
 
 The DirectX sibling contract translates all 4,122 discovered entries to
 standalone ``CSMain`` artifacts and pins their exact HLSL identities in
