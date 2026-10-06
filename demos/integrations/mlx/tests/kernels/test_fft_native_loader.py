@@ -10,7 +10,6 @@ import re
 import shutil
 import struct
 import subprocess
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -36,6 +35,12 @@ from crosstl.project import (
     load_project_config,
     translate_project,
     validate_project_report,
+)
+from demos.integrations.mlx.tests.corpus_evidence import (
+    corpus_workspace,
+    native_compiler_runner,
+    record_native_request,
+    record_native_result,
 )
 
 MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
@@ -276,7 +281,7 @@ def _current_mlx_root() -> Path:
 def test_current_mlx_fft_executes_through_directx_native_loader():
     _execute_mlx_fft_through_directx_native_loader(
         _current_mlx_root(),
-        temporary_prefix=".crosstl-fft-current-directx-native-loader-",
+        commit=CURRENT_MLX_COMMIT,
         source_sha256=CURRENT_MLX_FFT_SHA256,
         source_size_bytes=CURRENT_MLX_FFT_SOURCE_SIZE_BYTES,
         generated_sha256=CURRENT_MLX_FFT_GENERATED_SHA256,
@@ -655,10 +660,110 @@ def test_fft_guard_corruption_fails_even_within_numerical_tolerance():
         _assert_fft_result(result, "out_", expected, "corrupted")
 
 
+def _record_fft_case(work_dir, case, inputs, outputs, expected_values, *, commit):
+    case_dir = work_dir / "cases" / case
+    case_dir.mkdir(parents=True)
+    _write_json(
+        case_dir / "fixture.json",
+        {
+            "commit": commit,
+            "entryPoint": MLX_FFT_ENTRY,
+            "inputs": inputs,
+            "outputs": outputs,
+            "expectedValues": expected_values,
+            "outputGuards": FFT_OUTPUT_GUARDS,
+            "workgroupCount": [1, 1, 1],
+            "workgroupSize": [1, 1, 64],
+        },
+    )
+    return case_dir
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_fft_case_evidence_preserves_fixture_and_rejects_overwrite(tmp_path, target):
+    case, values, expected = next(iter(_fft_cases()))
+    inputs, outputs = _fft_buffers(values, expected, target=target)
+    case_dir = _record_fft_case(
+        tmp_path, case, inputs, outputs, expected, commit=MLX_COMMIT
+    )
+    payload = json.loads((case_dir / "fixture.json").read_text(encoding="utf-8"))
+    assert payload["commit"] == MLX_COMMIT
+    assert payload["entryPoint"] == MLX_FFT_ENTRY
+    assert payload["inputs"] == inputs
+    assert payload["outputs"] == outputs
+    assert payload["expectedValues"] == expected
+    assert payload["outputGuards"] == FFT_OUTPUT_GUARDS
+    assert payload["workgroupCount"] == [1, 1, 1]
+    assert payload["workgroupSize"] == [1, 1, 64]
+    with pytest.raises(FileExistsError):
+        _record_fft_case(tmp_path, case, inputs, outputs, expected, commit=MLX_COMMIT)
+
+
+@pytest.mark.parametrize("corrupt", (False, True))
+def test_fft_opengl_retains_results_before_numerical_assertions(
+    tmp_path, monkeypatch, corrupt
+):
+    monkeypatch.setenv("CROSTL_KEEP_CORPUS_EVIDENCE", "1")
+    monkeypatch.setattr(__name__ + "._current_mlx_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        __name__ + "._build_current_opengl_runtime_package",
+        lambda root, work: (work, {"request": "fixture"}),
+    )
+    calls = []
+
+    def execute(request, package, cache, inputs, outputs, geometry, **kwargs):
+        case_dir = next(
+            path
+            for path in (package / "cases").iterdir()
+            if not (path / "result.json").exists()
+        )
+        fixture = json.loads((case_dir / "fixture.json").read_text(encoding="utf-8"))
+        assert fixture["inputs"] == inputs
+        assert callable(kwargs["command_runner"])
+        values = fixture["expectedValues"] + FFT_OUTPUT_GUARDS
+        if corrupt:
+            values[-1] += 1.0
+        calls.append(case_dir)
+        return SimpleNamespace(
+            status="ok",
+            outputs={"out_Buffer": dict(outputs["out_Buffer"], values=values)},
+            message=None,
+            details={
+                "nativeDeferredCompilation": {
+                    "success": True,
+                    "target": {"backend": "opengl"},
+                    "variant": {
+                        "specializationValues": (
+                            CURRENT_FFT_DEFERRED_SPECIALIZATION_VALUES
+                        )
+                    },
+                    "interface": {"status": "verified"},
+                    "cache": {"status": "published" if len(calls) == 1 else "hit"},
+                }
+            },
+        )
+
+    monkeypatch.setattr(
+        __name__ + ".execute_native_deferred_compilation_request", execute
+    )
+    if corrupt:
+        with pytest.raises(AssertionError):
+            test_current_mlx_fft_executes_through_opengl_native_loader()
+    else:
+        test_current_mlx_fft_executes_through_opengl_native_loader()
+    assert len(calls) == (1 if corrupt else 5)
+    for case_dir in calls:
+        result = json.loads((case_dir / "result.json").read_text(encoding="utf-8"))
+        assert result["status"] == "ok"
+        assert result["outputs"]["out_Buffer"]["values"][-1] == (
+            FFT_OUTPUT_GUARDS[-1] + int(corrupt)
+        )
+
+
 def _execute_mlx_fft_through_directx_native_loader(
     mlx_root: Path,
     *,
-    temporary_prefix: str,
+    commit: str,
     source_sha256: str,
     source_size_bytes: int,
     generated_sha256: str,
@@ -667,13 +772,12 @@ def _execute_mlx_fft_through_directx_native_loader(
     template_specialization_count: int,
     template_accounting: dict[str, int] | None = None,
 ) -> None:
-    with tempfile.TemporaryDirectory(
-        prefix=temporary_prefix,
-        dir=mlx_root,
-    ) as temporary_directory:
+    with corpus_workspace(
+        mlx_root, family="fft", target="directx", entry_point=MLX_FFT_ENTRY
+    ) as work_dir:
         descriptor, package_dir = _build_runtime_package(
             mlx_root,
-            Path(temporary_directory),
+            work_dir,
             source_sha256=source_sha256,
             source_size_bytes=source_size_bytes,
             generated_sha256=generated_sha256,
@@ -682,20 +786,24 @@ def _execute_mlx_fft_through_directx_native_loader(
             template_specialization_count=template_specialization_count,
             template_accounting=template_accounting,
         )
-        executor = RuntimeParityExecutor(
-            RuntimeTestAdapterSpec(
-                adapter_id="mlx-fft-directx-native-loader",
-                target="directx",
-                executor="directx",
-                adapter_kind="directx-native-runtime",
-            ),
-            runtime_adapter=DirectXRuntimeParityAdapter(
-                runtime=DirectXComputeRuntime()
-            ),
-        )
         for case, input_values, expected_values in _fft_cases():
             inputs, outputs = _fft_buffers(
                 input_values, expected_values, target="directx"
+            )
+            case_dir = _record_fft_case(
+                work_dir, case, inputs, outputs, expected_values, commit=commit
+            )
+            executor = RuntimeParityExecutor(
+                RuntimeTestAdapterSpec(
+                    adapter_id="mlx-fft-directx-native-loader",
+                    target="directx",
+                    executor="directx",
+                    adapter_kind="directx-native-runtime",
+                ),
+                runtime_adapter=DirectXRuntimeParityAdapter(
+                    runtime=DirectXComputeRuntime(),
+                    command_runner=native_compiler_runner(case_dir),
+                ),
             )
             request = build_native_loader_dispatch_request(
                 descriptor,
@@ -726,6 +834,9 @@ def _execute_mlx_fft_through_directx_native_loader(
             assert fixture_inputs["CrossGLDispatchInfo"].metadata["source"] == (
                 "dispatch.workgroupCount"
             )
+            record_native_request(
+                case_dir, request, commit=commit, workload_id=MLX_FFT_ENTRY
+            )
             availability = executor.is_available(request)
             if not availability.available:
                 message = (
@@ -736,13 +847,14 @@ def _execute_mlx_fft_through_directx_native_loader(
                 pytest.skip(message)
 
             result = executor.run(request)
+            record_native_result(case_dir, result)
             _assert_fft_result(result, "out_", expected_values, case)
 
 
 def test_pinned_mlx_fft_executes_through_directx_native_loader():
     _execute_mlx_fft_through_directx_native_loader(
         _pinned_mlx_root(),
-        temporary_prefix=".crosstl-fft-directx-native-loader-",
+        commit=MLX_COMMIT,
         source_sha256=MLX_FFT_SHA256,
         source_size_bytes=MLX_FFT_SOURCE_SIZE_BYTES,
         generated_sha256=MLX_FFT_GENERATED_SHA256,
@@ -1010,14 +1122,13 @@ def _build_current_opengl_runtime_package(
 
 def test_current_mlx_fft_executes_through_opengl_native_loader():
     mlx_root = _current_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-fft-current-opengl-native-loader-",
-        dir=mlx_root,
-    ) as temporary_directory:
-        work_dir = Path(temporary_directory)
+    with corpus_workspace(
+        mlx_root, family="fft", target="opengl", entry_point=MLX_FFT_ENTRY
+    ) as work_dir:
         abi_root, compilation_request = _build_current_opengl_runtime_package(
             mlx_root, work_dir
         )
+        _write_json(work_dir / "compilation-request.json", compilation_request)
         runtime_adapter = OpenGLRuntimeParityAdapter(
             runtime=OpenGLComputeRuntime(context_backends=("egl",))
         )
@@ -1026,6 +1137,14 @@ def test_current_mlx_fft_executes_through_opengl_native_loader():
         ):
             inputs, outputs = _fft_buffers(
                 input_values, expected_values, target="opengl"
+            )
+            case_dir = _record_fft_case(
+                work_dir,
+                case,
+                inputs,
+                outputs,
+                expected_values,
+                commit=CURRENT_MLX_COMMIT,
             )
             try:
                 result = execute_native_deferred_compilation_request(
@@ -1036,6 +1155,7 @@ def test_current_mlx_fft_executes_through_opengl_native_loader():
                     outputs,
                     (1, 1, 1),
                     runtime_adapter=runtime_adapter,
+                    command_runner=native_compiler_runner(case_dir),
                 )
             except NativeDeferredCompilationRuntimeError as exc:
                 if exc.code.endswith(".runtime-unavailable"):
@@ -1044,6 +1164,7 @@ def test_current_mlx_fft_executes_through_opengl_native_loader():
                     pytest.skip(str(exc))
                 raise
 
+            record_native_result(case_dir, result)
             _assert_fft_result(result, "out_Buffer", expected_values, case)
             deferred_report = result.details["nativeDeferredCompilation"]
             assert deferred_report["success"] is True

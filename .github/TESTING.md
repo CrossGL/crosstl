@@ -104,6 +104,14 @@ job's final upload includes these files and each step's JUnit results even
 when a check fails. Missing native results indicate that dispatch was not
 completed; retained expected values alone are not execution evidence.
 
+FFT execution uses the same retained workspace mechanism. Each of its five
+controls records inputs, expected outputs, guards and returned values separately;
+DirectX also retains each dispatch plan and compiler invocation. OpenGL keeps
+the deferred request and compiled cache, including the first publication and
+subsequent cache hits. The existing native jobs upload these records immediately
+after the FFT steps, including on failure, without adding runners or weakening
+the numerical checks.
+
 `demo-project-testing.yml` is the entry point for project integration checks.
 Each native job keeps its source pin, numerical comparisons, guards, bounded execution
 and retained evidence. Moving a compiler-only job must not disable an execution

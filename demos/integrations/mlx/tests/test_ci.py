@@ -2620,6 +2620,35 @@ def test_mlx_project_porting_workflow_runs_current_fft_runtime_proofs():
     )
 
 
+@pytest.mark.parametrize(
+    "revision,target,platform,runner,root",
+    (
+        ("pinned", "directx", "Direct3D", "Windows", "mlx-upstream"),
+        ("current", "directx", "Direct3D", "Windows", "mlx-current-upstream"),
+        ("current", "opengl", "OpenGL", "Linux", "mlx-current-upstream"),
+    ),
+)
+def test_fft_native_evidence_upload_follows_required_execution(
+    revision, target, platform, runner, root
+):
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    coverage = _load_ci_coverage_module()
+    name = f"Prove {revision} MLX FFT {platform} native-loader execution"
+    proof = coverage.workflow_step_section(workflow, name)
+    assert 'CROSTL_KEEP_CORPUS_EVIDENCE: "1"' in proof
+    assert f"--junitxml=demo-results/fft/{revision}-{target}.xml" in proof
+    assert "continue-on-error" not in proof
+    upload_name = f"Upload FFT {platform} evidence"
+    upload = coverage.workflow_step_section(workflow, upload_name)
+    assert f"if: always() && runner.os == '{runner}'" in upload
+    assert f"{root}/.crosstl-corpus-evidence/fft-{target}-*/**" in upload
+    assert "demo-results/fft/" in upload
+    assert "include-hidden-files: true" in upload
+    assert "if-no-files-found: error" in upload
+    assert "retention-days: 14" in upload
+    assert coverage.workflow_step_after(workflow, upload_name, name)
+
+
 def test_mlx_project_porting_workflow_runs_current_gemv_runtime_proofs():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
     ci_coverage = _load_ci_coverage_module()
