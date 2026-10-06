@@ -590,7 +590,7 @@
     }
   },
   "directx_fft_translation_status": {
-    "status": "translated-dxc-validated-direct3d-executed",
+    "status": "translated-dxc-validated-native-execution-required",
     "source": "mlx/backend/metal/kernels/fft.metal",
     "source_sha256": "3a1fbb38ed64f50a49a20d0c5adb1748d9d06ea20e5931e99aa26be543cb7825",
     "source_size_bytes": 3278,
@@ -668,8 +668,8 @@
       ]
     },
     "artifact": {
-      "sha256": "d5fa5d6e088743cc00a4a3f4b604c0704d33a8697a570f11a61cf99cb8d8d6fb",
-      "size_bytes": 116260,
+      "sha256": "d5fa1ae408154eae551c1ad20f02a81c47f95fe4be7df16714b4ff7bf4e8048b",
+      "size_bytes": 145277,
       "promoted_native_16_shift_count": 20,
       "first_class_workgroup_pointer_residue": false
     },
@@ -684,7 +684,7 @@
     },
     "native_runtime": {
       "runtime": "direct3d-12-warp",
-      "status": "passed",
+      "status": "required-on-ci",
       "test": "demos/integrations/mlx/tests/kernels/test_fft_native_loader.py::test_pinned_mlx_fft_executes_through_directx_native_loader",
       "workgroup_count": [
         1,
@@ -697,19 +697,31 @@
         64
       ],
       "input": {
-        "kind": "complex-unit-impulse",
-        "index": 1,
+        "kind": "complex-float32-controls",
+        "cases": [
+          "impulse",
+          "dense",
+          "dc",
+          "alternating",
+          "boundary-impulse"
+        ],
         "shape": [
           256,
           2
         ]
       },
       "expected_output": {
-        "kind": "forward-dft-unit-circle",
+        "kind": "forward-dft-with-tail-guards",
         "shape": [
+          260,
+          2
+        ],
+        "result_shape": [
           256,
           2
         ],
+        "guard_scalar_count": 8,
+        "guard_comparison": "exact",
         "absolute_tolerance": 0.0002,
         "relative_tolerance": 0.0002
       },
@@ -730,9 +742,14 @@
     "tracked_issues": [],
     "mlx_host_runtime_included": false,
     "runtime_integration_included": true,
-    "selected_workload_numerical_parity_verified": true,
+    "selected_workload_numerical_parity_verified": false,
     "numerical_parity_claimed": false,
-    "runtime_parity_claimed": false
+    "runtime_parity_claimed": false,
+    "previous_artifact": {
+      "sha256": "d5fa5d6e088743cc00a4a3f4b604c0704d33a8697a570f11a61cf99cb8d8d6fb",
+      "size_bytes": 116260,
+      "selected_workload": "index-1-complex-unit-impulse"
+    }
   },
   "dot_native_runtime_status": {
     "status": "translated-packaged-and-cross-target-executed",
@@ -3750,7 +3767,7 @@
     "runtime_parity_claimed": false
   },
   "directx_fft_current_corpus_status": {
-    "status": "translated-dxc-validated-direct3d-executed",
+    "status": "translated-dxc-validated-native-execution-required",
     "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
     "source": "mlx/backend/metal/kernels/fft.metal",
     "source_sha256": "c478eb84283bbdf585c0cb34b2bfde5b0fc32d1740c6ad76e8559698a57b8d2e",
@@ -3797,8 +3814,8 @@
       "pruned_candidate_count": 2120
     },
     "artifact": {
-      "sha256": "3bc42b2dd3bf128bcbe1fd202763f3434d64df6e60b53da4b6e754ceff0f6e7a",
-      "size_bytes": 146763,
+      "sha256": "f8c8c4b18cabaa7f2997dcdb68b8a9f32645f274c271e454e44dfe463cd4a1ff",
+      "size_bytes": 176506,
       "promoted_native_16_shift_count": 20,
       "first_class_workgroup_pointer_residue": false,
       "workgroup_pointer_transport": "concrete-groupshared-root-plus-integer-offset",
@@ -3830,19 +3847,31 @@
         64
       ],
       "input": {
-        "kind": "complex-unit-impulse",
-        "index": 1,
+        "kind": "complex-float32-controls",
+        "cases": [
+          "impulse",
+          "dense",
+          "dc",
+          "alternating",
+          "boundary-impulse"
+        ],
         "shape": [
           256,
           2
         ]
       },
       "expected_output": {
-        "kind": "forward-dft-unit-circle",
+        "kind": "forward-dft-with-tail-guards",
         "shape": [
+          260,
+          2
+        ],
+        "result_shape": [
           256,
           2
         ],
+        "guard_scalar_count": 8,
+        "guard_comparison": "exact",
         "absolute_tolerance": 0.0002,
         "relative_tolerance": 0.0002
       },
@@ -3871,9 +3900,14 @@
     },
     "mlx_host_runtime_included": false,
     "runtime_integration_included": true,
-    "selected_workload_numerical_parity_verified": true,
+    "selected_workload_numerical_parity_verified": false,
     "numerical_parity_claimed": false,
-    "runtime_parity_claimed": false
+    "runtime_parity_claimed": false,
+    "previous_artifact": {
+      "sha256": "3bc42b2dd3bf128bcbe1fd202763f3434d64df6e60b53da4b6e754ceff0f6e7a",
+      "size_bytes": 146763,
+      "selected_workload": "index-1-complex-unit-impulse"
+    }
   },
   "opengl_fft_current_corpus_status": {
     "status": "translated-glslang-spirv-val-mesa-executed",
@@ -3895,7 +3929,7 @@
       "translated_count": 1,
       "failed_count": 0,
       "project_diagnostic_count": 0,
-      "index_range_assertion_count": 5,
+      "index_range_assertion_count": 6,
       "workgroup_access_assertion_count": 1,
       "source_remap_mapping_count": 84,
       "max_template_specializations": 4096,
@@ -3942,8 +3976,8 @@
       "pruned_candidate_count": 2120
     },
     "artifact": {
-      "sha256": "cfc959ed6e2ede827516d8076c4adf4a5d87813c9de905cf3c75013b1e1c1608",
-      "size_bytes": 82089,
+      "sha256": "5c6fefea7315d7d091641d024aea27bbdcecf1f2f4b7a63a2db5af401e036512",
+      "size_bytes": 109547,
       "source_remap_mapping_count": 84,
       "pointer_transport": "concrete-workgroup-and-storage-resource-offsets",
       "default_null_resource_pointer_transport": "statically-unobserved-chain-pruned",
@@ -3957,8 +3991,8 @@
       "control_barrier_count": 19,
       "group_non_uniform_instruction_count": 0,
       "canonical_probe_spirv": {
-        "sha256": "4b35be378cbcb7910ae6826fb7e6518a437afeeb2839760f3505f6ec8c1015d5",
-        "size_bytes": 167428,
+        "sha256": "2593d8ec9d9038c1e7caf586f4db373fa2744076d032a11ae12f4d1f598ea364",
+        "size_bytes": 192784,
         "identity_scope": "probe-glslang-version-only"
       }
     },
@@ -3997,25 +4031,43 @@
         1
       ],
       "input": {
-        "kind": "complex-unit-impulse",
-        "index": 1,
+        "kind": "complex-float32-controls",
+        "cases": [
+          "impulse",
+          "dense",
+          "dc",
+          "alternating",
+          "boundary-impulse"
+        ],
         "shape": [
           256,
           2
         ]
       },
       "expected_output": {
-        "kind": "forward-dft-unit-circle",
+        "kind": "forward-dft-with-tail-guards",
         "shape": [
+          260,
+          2
+        ],
+        "result_shape": [
           256,
           2
         ],
+        "guard_scalar_count": 8,
+        "guard_comparison": "exact",
         "absolute_tolerance": 0.0002,
         "relative_tolerance": 0.0002
       },
-      "observed_max_absolute_error": 9.264554161336758e-08,
       "interface_status": "verified",
-      "cache_status": "published"
+      "cache_status": [
+        "published",
+        "hit",
+        "hit",
+        "hit",
+        "hit"
+      ],
+      "observed_impulse_max_absolute_error": 9.264554161336758e-08
     },
     "resolved_blockers": [
       "transitive-statically-dead-null-storage-pointer-specialization",
@@ -4026,10 +4078,15 @@
     "mlx_host_runtime_included": false,
     "runtime_integration_included": true,
     "selected_workload_numerical_parity_verified": true,
-    "cross_target_selected_workload_numerical_parity_verified": true,
+    "cross_target_selected_workload_numerical_parity_verified": false,
     "full_mlx_test_suite_included": false,
     "numerical_parity_claimed": false,
-    "runtime_parity_claimed": false
+    "runtime_parity_claimed": false,
+    "previous_artifact": {
+      "sha256": "cfc959ed6e2ede827516d8076c4adf4a5d87813c9de905cf3c75013b1e1c1608",
+      "size_bytes": 82089,
+      "selected_workload": "index-1-complex-unit-impulse"
+    }
   },
   "opengl_fft_translation_status": {
     "status": "translated-glslang-spirv-val-validated",

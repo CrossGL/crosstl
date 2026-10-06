@@ -3082,23 +3082,31 @@ integration, or MLX test-suite parity.
 At current pinned MLX commit
 ``846d176227a0ac13d2667e58d2bb68b322109ab0``, the selected
 ``fft_mem_256_float2_float2`` entry also passes an entry-scoped OpenGL proof.
-Five unsigned index assertions and one 256-element workgroup-access assertion
-bound its host contract. Translation materializes 37 specializations from 42
+Six index assertions and one 256-element workgroup-access assertion
+bound its host contract. The resource-helper bound applies only to one
+unrebased 256-point transform with batch size one and grid ``[1,1,64]``;
+it must not be reused for arbitrary tensors. Translation materializes 37 specializations from 42
 reachable records, prunes 2,120 candidates, and preserves 21 reachable
 function constants for deferred specialization. The deterministic GLSL is
-82,089 bytes with SHA-256
-``cfc959ed6e2ede827516d8076c4adf4a5d87813c9de905cf3c75013b1e1c1608``;
+109,547 bytes with SHA-256
+``5c6fefea7315d7d091641d024aea27bbdcecf1f2f4b7a63a2db5af401e036512``;
 ``glslangValidator`` and ``spirv-val`` accept it, and its SPIR-V has 19 control
 barriers with no group-nonuniform instruction.
 
 The reflected ABI has two ``std430`` float32 ``vec2`` arrays at 8-byte size,
 stride, and alignment plus two 16-byte ``std140`` integer blocks. The runtime
 variant registry has no blocked keys and produces a verified deferred SPIR-V
-request for workgroup size ``[1, 1, 64]``. Linux Mesa llvmpipe executes one
-workgroup for an index-1 complex unit impulse and compares all 256 complex
-outputs with the analytical forward DFT at ``2e-4`` absolute and relative
-tolerance. The measured maximum absolute error is
-``9.264554161336758e-08``. This is one selected current-pinned workload; it does
+request for workgroup size ``[1, 1, 64]``. Linux Mesa llvmpipe executes five
+inputs: an index-1 unit impulse, seeded float32 complex data, a complex
+constant, alternating real values, and a final-element complex impulse.
+Across these dispatches, 2,560 scalar outputs must match analytical references
+or a double-precision direct DFT at ``2e-4`` absolute and relative tolerance;
+40 trailing scalar guards must remain exactly unchanged. Translation and
+packaging run once; the first dispatch publishes the verified compilation cache
+and the remaining four must hit it. The same controls are required in the
+existing Windows native-loader jobs, without adding runners. Changed HLSL
+references still require Windows numerical execution before merge.
+This is one selected current-pinned plan; it does
 not redirect the MLX host runtime, cover other FFT plans or dtypes, prove a
 Metal round trip, or establish full backend parity.
 

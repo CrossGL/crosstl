@@ -13133,7 +13133,7 @@ def test_fft_directx_evidence_records_selected_native_runtime_proof():
     )
 
     status = gaps["directx_fft_translation_status"]
-    assert status["status"] == "translated-dxc-validated-direct3d-executed"
+    assert status["status"] == "translated-dxc-validated-native-execution-required"
     assert status["source"] == module.MLX_FFT_SOURCE
     assert status["source_sha256"] == module.MLX_FFT_SHA256
     assert status["source_size_bytes"] == module.MLX_FFT_SOURCE_SIZE_BYTES
@@ -13187,7 +13187,7 @@ def test_fft_directx_evidence_records_selected_native_runtime_proof():
     }
     assert status["native_runtime"] == {
         "runtime": "direct3d-12-warp",
-        "status": "passed",
+        "status": "required-on-ci",
         "test": (
             "demos/integrations/mlx/tests/kernels/test_fft_native_loader.py::"
             "test_pinned_mlx_fft_executes_through_directx_native_loader"
@@ -13195,13 +13195,16 @@ def test_fft_directx_evidence_records_selected_native_runtime_proof():
         "workgroup_count": [1, 1, 1],
         "global_size": [1, 1, 64],
         "input": {
-            "kind": "complex-unit-impulse",
-            "index": 1,
+            "kind": "complex-float32-controls",
+            "cases": ["impulse", "dense", "dc", "alternating", "boundary-impulse"],
             "shape": [256, 2],
         },
         "expected_output": {
-            "kind": "forward-dft-unit-circle",
-            "shape": [256, 2],
+            "kind": "forward-dft-with-tail-guards",
+            "shape": [260, 2],
+            "result_shape": [256, 2],
+            "guard_scalar_count": 8,
+            "guard_comparison": "exact",
             "absolute_tolerance": 0.0002,
             "relative_tolerance": 0.0002,
         },
@@ -13222,7 +13225,7 @@ def test_fft_directx_evidence_records_selected_native_runtime_proof():
     assert status["tracked_issues"] == []
     assert status["mlx_host_runtime_included"] is False
     assert status["runtime_integration_included"] is True
-    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["selected_workload_numerical_parity_verified"] is False
     assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
 
@@ -13233,7 +13236,7 @@ def test_fft_directx_evidence_records_selected_native_runtime_proof():
     assert "21 of the 22 configured function constants" in readme
     assert "contains no first-class workgroup pointer residue" in readme
     assert "Direct3D 12 WARP" in readme
-    assert "index-1 complex unit impulse" in readme
+    assert "index-1 unit impulse" in readme
     assert "`2e-4` absolute and relative tolerance" in readme
     assert "does not redirect the MLX host runtime" in readme
 
@@ -13246,7 +13249,7 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
     )
 
     status = gaps["directx_fft_current_corpus_status"]
-    assert status["status"] == "translated-dxc-validated-direct3d-executed"
+    assert status["status"] == "translated-dxc-validated-native-execution-required"
     assert status["commit"] == CURRENT_MLX_COMMIT
     assert status["source"] == "mlx/backend/metal/kernels/fft.metal"
     assert status["source_sha256"] == (
@@ -13288,8 +13291,8 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
         "pruned_candidate_count": 2120,
     }
     assert status["artifact"] == {
-        "sha256": "3bc42b2dd3bf128bcbe1fd202763f3434d64df6e60b53da4b6e754ceff0f6e7a",
-        "size_bytes": 146763,
+        "sha256": "f8c8c4b18cabaa7f2997dcdb68b8a9f32645f274c271e454e44dfe463cd4a1ff",
+        "size_bytes": 176506,
         "promoted_native_16_shift_count": 20,
         "first_class_workgroup_pointer_residue": False,
         "workgroup_pointer_transport": "concrete-groupshared-root-plus-integer-offset",
@@ -13314,13 +13317,16 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
         "workgroup_count": [1, 1, 1],
         "global_size": [1, 1, 64],
         "input": {
-            "kind": "complex-unit-impulse",
-            "index": 1,
+            "kind": "complex-float32-controls",
+            "cases": ["impulse", "dense", "dc", "alternating", "boundary-impulse"],
             "shape": [256, 2],
         },
         "expected_output": {
-            "kind": "forward-dft-unit-circle",
-            "shape": [256, 2],
+            "kind": "forward-dft-with-tail-guards",
+            "shape": [260, 2],
+            "result_shape": [256, 2],
+            "guard_scalar_count": 8,
+            "guard_comparison": "exact",
             "absolute_tolerance": 0.0002,
             "relative_tolerance": 0.0002,
         },
@@ -13351,12 +13357,12 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
     }
     assert status["mlx_host_runtime_included"] is False
     assert status["runtime_integration_included"] is True
-    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["selected_workload_numerical_parity_verified"] is False
     assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "bounded runtime proof now also covers current corpus commit" in readme
+    assert "current-corpus fixture selects commit" in readme
     assert "adds function constant 22" in readme
     assert "materializes 37 specializations" in readme
     assert "records 42 reachable specializations before pruning" in readme
@@ -13367,7 +13373,8 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
     assert (
         "null pointer that can be observed or dereferenced still fails closed" in readme
     )
-    assert "146,763-byte HLSL artifact" in readme
+    assert "176,506-byte HLSL artifact" in readme
+    assert "before merging a reference update" in readme
     assert "All 20 native-16 ``power`` shift counts" in readme
     assert "explicitly promoted to ``int``" in readme
     assert "zero project diagnostics" in readme
@@ -13404,7 +13411,7 @@ def test_fft_current_opengl_evidence_records_native_runtime_proof():
         "translated_count": 1,
         "failed_count": 0,
         "project_diagnostic_count": 0,
-        "index_range_assertion_count": 5,
+        "index_range_assertion_count": 6,
         "workgroup_access_assertion_count": 1,
         "source_remap_mapping_count": 84,
         "max_template_specializations": 4096,
@@ -13422,8 +13429,8 @@ def test_fft_current_opengl_evidence_records_native_runtime_proof():
         "pruned_candidate_count": 2120,
     }
     assert status["artifact"] == {
-        "sha256": "cfc959ed6e2ede827516d8076c4adf4a5d87813c9de905cf3c75013b1e1c1608",
-        "size_bytes": 82089,
+        "sha256": "5c6fefea7315d7d091641d024aea27bbdcecf1f2f4b7a63a2db5af401e036512",
+        "size_bytes": 109547,
         "source_remap_mapping_count": 84,
         "pointer_transport": "concrete-workgroup-and-storage-resource-offsets",
         "default_null_resource_pointer_transport": "statically-unobserved-chain-pruned",
@@ -13465,9 +13472,19 @@ def test_fft_current_opengl_evidence_records_native_runtime_proof():
     assert runtime["test"].endswith(
         "::test_current_mlx_fft_executes_through_opengl_native_loader"
     )
-    assert runtime["observed_max_absolute_error"] < 1e-7
+    assert runtime["observed_impulse_max_absolute_error"] < 1e-7
     assert runtime["interface_status"] == "verified"
-    assert runtime["cache_status"] == "published"
+    assert runtime["cache_status"] == ["published", "hit", "hit", "hit", "hit"]
+    assert runtime["input"]["cases"] == [
+        "impulse",
+        "dense",
+        "dc",
+        "alternating",
+        "boundary-impulse",
+    ]
+    assert runtime["expected_output"]["shape"] == [260, 2]
+    assert runtime["expected_output"]["guard_scalar_count"] == 8
+    assert runtime["expected_output"]["guard_comparison"] == "exact"
     assert status["resolved_blockers"] == [
         "transitive-statically-dead-null-storage-pointer-specialization",
         "encoded-metal-generic-vector-constructor",
@@ -13477,18 +13494,18 @@ def test_fft_current_opengl_evidence_records_native_runtime_proof():
     assert status["mlx_host_runtime_included"] is False
     assert status["runtime_integration_included"] is True
     assert status["selected_workload_numerical_parity_verified"] is True
-    assert status["cross_target_selected_workload_numerical_parity_verified"] is True
+    assert status["cross_target_selected_workload_numerical_parity_verified"] is False
     assert status["full_mlx_test_suite_included"] is False
     assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "current FFT source now also emits an 82,089-byte GLSL artifact" in readme
+    assert "current FFT source now also emits a 109,547-byte GLSL artifact" in readme
     assert "21 deferred specialization constants" in readme
     assert "8-byte size, stride, and alignment" in readme
     assert "19 control barriers and no group-nonuniform instructions" in readme
     assert "Mesa llvmpipe" in readme
-    assert "`9.264554161336758e-08`" in readme
+    assert "remaining four must use it" in readme
     assert "does not establish full FFT, MLX host-runtime, or backend parity" in readme
 
 

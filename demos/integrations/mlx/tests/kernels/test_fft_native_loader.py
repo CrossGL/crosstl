@@ -5,11 +5,14 @@ import hashlib
 import json
 import math
 import os
+import random
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -46,18 +49,19 @@ CURRENT_MLX_FFT_SHA256 = (
 CURRENT_MLX_FFT_SOURCE_SIZE_BYTES = 3436
 MLX_FFT_ENTRY = "fft_mem_256_float2_float2"
 MLX_FFT_GENERATED_SHA256 = (
-    "d5fa5d6e088743cc00a4a3f4b604c0704d33a8697a570f11a61cf99cb8d8d6fb"
+    "d5fa1ae408154eae551c1ad20f02a81c47f95fe4be7df16714b4ff7bf4e8048b"
 )
-MLX_FFT_GENERATED_SIZE_BYTES = 116260
+MLX_FFT_GENERATED_SIZE_BYTES = 145277
 CURRENT_MLX_FFT_GENERATED_SHA256 = (
-    "3bc42b2dd3bf128bcbe1fd202763f3434d64df6e60b53da4b6e754ceff0f6e7a"
+    "f8c8c4b18cabaa7f2997dcdb68b8a9f32645f274c271e454e44dfe463cd4a1ff"
 )
-CURRENT_MLX_FFT_GENERATED_SIZE_BYTES = 146763
+CURRENT_MLX_FFT_GENERATED_SIZE_BYTES = 176506
 CURRENT_MLX_FFT_OPENGL_GENERATED_SHA256 = (
-    "cfc959ed6e2ede827516d8076c4adf4a5d87813c9de905cf3c75013b1e1c1608"
+    "5c6fefea7315d7d091641d024aea27bbdcecf1f2f4b7a63a2db5af401e036512"
 )
-CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES = 82089
+CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES = 109547
 MLX_FFT_SIZE = 256
+FFT_OUTPUT_GUARDS = [777.25 + index for index in range(8)]
 REQUIRE_PROOF_ENV = "CROSTL_REQUIRE_MLX_FFT_DIRECTX_NATIVE_LOADER"
 REQUIRE_OPENGL_PROOF_ENV = "CROSTL_REQUIRE_MLX_FFT_OPENGL_NATIVE_LOADER"
 CURRENT_MLX_ROOT_ENV = "CROSTL_MLX_CURRENT_ROOT"
@@ -147,6 +151,14 @@ source = "{MLX_FFT_SOURCE}"
 expression = "batch_idx + index + r"
 minimum = 0
 maximum = 4294967295
+
+# One unrebased 256-point transform, batch_size=1, grid=(1,1,64):
+# min(2*lane + 128*e, 254) + r is in [0,255].
+[[project.index_range_assertions]]
+source = "{MLX_FFT_SOURCE}"
+expression = "reference.offset + index"
+minimum = 0
+maximum = 255
 """
     return f"""
 [project]
@@ -495,6 +507,154 @@ def _complex_impulse() -> tuple[list[float], list[float]]:
     return input_values, expected_values
 
 
+def _direct_dft(values: list[float]) -> list[float]:
+    """Compute a double-precision reference without reusing the FFT algorithm."""
+    size = len(values) // 2
+    result = []
+    for frequency in range(size):
+        terms = [
+            complex(values[2 * index], values[2 * index + 1])
+            * cmath.exp(-2j * math.pi * frequency * index / size)
+            for index in range(size)
+        ]
+        result.extend(
+            (
+                math.fsum(term.real for term in terms),
+                math.fsum(term.imag for term in terms),
+            )
+        )
+    return result
+
+
+def _fft_cases() -> list[tuple[str, list[float], list[float]]]:
+    impulse, expected_impulse = _complex_impulse()
+    generator = random.Random(256)
+    dense = [
+        struct.unpack("<f", struct.pack("<f", generator.uniform(-1.0, 1.0)))[0]
+        for _ in range(MLX_FFT_SIZE * 2)
+    ]
+    dc = [1.0, -0.5] * MLX_FFT_SIZE
+    alternating = [1.0, 0.0, -1.0, 0.0] * (MLX_FFT_SIZE // 2)
+    boundary_impulse = [0.0] * (MLX_FFT_SIZE * 2 - 2) + [0.75, -0.25]
+    return [("impulse", impulse, expected_impulse)] + [
+        (name, values, _direct_dft(values))
+        for name, values in (
+            ("dense", dense),
+            ("dc", dc),
+            ("alternating", alternating),
+            ("boundary-impulse", boundary_impulse),
+        )
+    ]
+
+
+def _fft_buffers(input_values, expected_values, *, target):
+    if target == "directx":
+        input_name, output_name = "in_", "out_"
+        size_name = "fft_mem_256_float2_float2_n_Constants"
+        batch_name = "fft_mem_256_float2_float2_batch_size_Constants"
+    else:
+        assert target == "opengl"
+        input_name, output_name = "in_Buffer", "out_Buffer"
+        size_name = "fft_mem_256_float2_float2_n_Args"
+        batch_name = "fft_mem_256_float2_float2_batch_size_Args"
+    shape = [MLX_FFT_SIZE + len(FFT_OUTPUT_GUARDS) // 2, 2]
+    inputs = {
+        input_name: {
+            "dtype": "float32",
+            "shape": [MLX_FFT_SIZE, 2],
+            "values": input_values,
+        },
+        output_name: {
+            "dtype": "float32",
+            "shape": shape,
+            "values": [-999.0] * (MLX_FFT_SIZE * 2) + FFT_OUTPUT_GUARDS,
+        },
+        size_name: {"dtype": "int32", "shape": [1], "values": [MLX_FFT_SIZE]},
+        batch_name: {"dtype": "int32", "shape": [1], "values": [1]},
+    }
+    outputs = {
+        output_name: {
+            "dtype": "float32",
+            "shape": shape,
+            "values": expected_values + FFT_OUTPUT_GUARDS,
+            "tolerance": {"absolute": 2e-4, "relative": 2e-4},
+        }
+    }
+    return inputs, outputs
+
+
+def _assert_fft_result(result, output_name, expected_values, case):
+    assert result.status == "ok", (case, result)
+    output = result.outputs[output_name]
+    assert output["dtype"] == "float32", case
+    assert output["shape"] == [MLX_FFT_SIZE + len(FFT_OUTPUT_GUARDS) // 2, 2], case
+    assert output["values"][: MLX_FFT_SIZE * 2] == pytest.approx(
+        expected_values, abs=2e-4, rel=2e-4
+    ), case
+    assert output["values"][MLX_FFT_SIZE * 2 :] == FFT_OUTPUT_GUARDS, case
+
+
+def test_fft_reference_controls():
+    cases = {name: (values, expected) for name, values, expected in _fft_cases()}
+    assert set(cases) == {"impulse", "dense", "dc", "alternating", "boundary-impulse"}
+    for values, expected in cases.values():
+        assert len(values) == len(expected) == MLX_FFT_SIZE * 2
+        assert all(math.isfinite(value) for value in values + expected)
+        assert all(
+            struct.unpack("<f", struct.pack("<f", value))[0] == value
+            for value in values
+        )
+    assert _direct_dft(cases["impulse"][0]) == pytest.approx(
+        cases["impulse"][1], abs=1e-12
+    )
+    assert cases["dc"][1] == pytest.approx([256.0, -128.0] + [0.0] * 510, abs=1e-10)
+    alternating = [0.0] * 512
+    alternating[256] = 256.0
+    assert cases["alternating"][1] == pytest.approx(alternating, abs=1e-10)
+    expected_boundary = []
+    for index in range(MLX_FFT_SIZE):
+        value = complex(0.75, -0.25) * cmath.exp(2j * math.pi * index / MLX_FFT_SIZE)
+        expected_boundary.extend((value.real, value.imag))
+    assert cases["boundary-impulse"][1] == pytest.approx(expected_boundary, abs=1e-10)
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_fft_fixture_keeps_output_guards_separate(target):
+    values, expected = _complex_impulse()
+    inputs, outputs = _fft_buffers(values, expected, target=target)
+    output_name = "out_" if target == "directx" else "out_Buffer"
+    assert inputs[output_name]["shape"] == outputs[output_name]["shape"] == [260, 2]
+    assert inputs[output_name]["values"][:512] == [-999.0] * 512
+    assert inputs[output_name]["values"][512:] == FFT_OUTPUT_GUARDS
+    assert outputs[output_name]["values"] == expected + FFT_OUTPUT_GUARDS
+
+
+def test_fft_resource_index_bound_matches_single_transform():
+    indices = [
+        min(2 * lane + 128 * e, 254) + r
+        for lane in range(64)
+        for e in range(2)
+        for r in range(2)
+    ]
+    assert sorted(indices) == list(range(MLX_FFT_SIZE))
+    config = _project_config(
+        "out", target="opengl", include_current_opengl_index_assertion=True
+    )
+    assert (
+        'expression = "reference.offset + index"\nminimum = 0\nmaximum = 255' in config
+    )
+
+
+def test_fft_guard_corruption_fails_even_within_numerical_tolerance():
+    values, expected = _complex_impulse()
+    _, outputs = _fft_buffers(values, expected, target="directx")
+    result = SimpleNamespace(status="ok", outputs=outputs)
+    _assert_fft_result(result, "out_", expected, "intact")
+    outputs["out_"]["values"][-1] += 0.0001
+    with pytest.raises(AssertionError):
+        _assert_fft_result(result, "out_", expected, "corrupted")
+
+
 def _execute_mlx_fft_through_directx_native_loader(
     mlx_root: Path,
     *,
@@ -522,59 +682,6 @@ def _execute_mlx_fft_through_directx_native_loader(
             template_specialization_count=template_specialization_count,
             template_accounting=template_accounting,
         )
-        input_values, expected_values = _complex_impulse()
-        request = build_native_loader_dispatch_request(
-            descriptor,
-            package_dir,
-            {
-                "fft_mem_256_float2_float2_n_Constants": {
-                    "dtype": "int32",
-                    "shape": [1],
-                    "values": [MLX_FFT_SIZE],
-                },
-                "fft_mem_256_float2_float2_batch_size_Constants": {
-                    "dtype": "int32",
-                    "shape": [1],
-                    "values": [1],
-                },
-                "in_": {
-                    "dtype": "float32",
-                    "shape": [MLX_FFT_SIZE, 2],
-                    "values": input_values,
-                },
-            },
-            {
-                "out_": {
-                    "dtype": "float32",
-                    "shape": [MLX_FFT_SIZE, 2],
-                    "values": expected_values,
-                    "tolerance": {"absolute": 2e-4, "relative": 2e-4},
-                }
-            },
-            (1, 1, 1),
-            expected_target="directx",
-        )
-        assert request.execution_plan is not None
-        assert request.execution_plan.diagnostics == ()
-        assert request.execution_plan.dispatch.workgroup_size == (1, 1, 64)
-        assert request.execution_plan.dispatch.workgroup_count == (1, 1, 1)
-        assert request.execution_plan.dispatch.global_size == (1, 1, 64)
-        allocations = {
-            item.binding.name: item.allocation
-            for item in request.execution_plan.resource_bindings
-        }
-        assert allocations["in_"].byte_length == MLX_FFT_SIZE * 8
-        assert allocations["in_"].allocation_byte_length == MLX_FFT_SIZE * 8
-        assert allocations["out_"].byte_length == MLX_FFT_SIZE * 8
-        assert allocations["out_"].allocation_byte_length == MLX_FFT_SIZE * 8
-        assert allocations["CrossGLDispatchInfo"].byte_length == 16
-        assert allocations["CrossGLDispatchInfo"].allocation_byte_length == 16
-        fixture_inputs = {value.name: value for value in request.fixture.inputs}
-        assert fixture_inputs["CrossGLDispatchInfo"].values == [1, 1, 1]
-        assert fixture_inputs["CrossGLDispatchInfo"].metadata["source"] == (
-            "dispatch.workgroupCount"
-        )
-
         executor = RuntimeParityExecutor(
             RuntimeTestAdapterSpec(
                 adapter_id="mlx-fft-directx-native-loader",
@@ -586,23 +693,50 @@ def _execute_mlx_fft_through_directx_native_loader(
                 runtime=DirectXComputeRuntime()
             ),
         )
-        availability = executor.is_available(request)
-        if not availability.available:
-            message = availability.reason or "The native DirectX runtime is unavailable"
-            if os.environ.get(REQUIRE_PROOF_ENV) == "1":
-                pytest.fail(message)
-            pytest.skip(message)
+        for case, input_values, expected_values in _fft_cases():
+            inputs, outputs = _fft_buffers(
+                input_values, expected_values, target="directx"
+            )
+            request = build_native_loader_dispatch_request(
+                descriptor,
+                package_dir,
+                inputs,
+                outputs,
+                (1, 1, 1),
+                expected_target="directx",
+            )
+            assert request.execution_plan is not None
+            assert request.execution_plan.diagnostics == ()
+            assert request.execution_plan.dispatch.workgroup_size == (1, 1, 64)
+            assert request.execution_plan.dispatch.workgroup_count == (1, 1, 1)
+            assert request.execution_plan.dispatch.global_size == (1, 1, 64)
+            allocations = {
+                item.binding.name: item.allocation
+                for item in request.execution_plan.resource_bindings
+            }
+            assert allocations["in_"].byte_length == MLX_FFT_SIZE * 8
+            assert allocations["in_"].allocation_byte_length == MLX_FFT_SIZE * 8
+            output_bytes = MLX_FFT_SIZE * 8 + len(FFT_OUTPUT_GUARDS) * 4
+            assert allocations["out_"].byte_length == output_bytes
+            assert allocations["out_"].allocation_byte_length == output_bytes
+            assert allocations["CrossGLDispatchInfo"].byte_length == 16
+            assert allocations["CrossGLDispatchInfo"].allocation_byte_length == 16
+            fixture_inputs = {value.name: value for value in request.fixture.inputs}
+            assert fixture_inputs["CrossGLDispatchInfo"].values == [1, 1, 1]
+            assert fixture_inputs["CrossGLDispatchInfo"].metadata["source"] == (
+                "dispatch.workgroupCount"
+            )
+            availability = executor.is_available(request)
+            if not availability.available:
+                message = (
+                    availability.reason or "The native DirectX runtime is unavailable"
+                )
+                if os.environ.get(REQUIRE_PROOF_ENV) == "1":
+                    pytest.fail(message)
+                pytest.skip(message)
 
-        result = executor.run(request)
-
-    assert result.status == "ok"
-    assert result.outputs["out_"]["dtype"] == "float32"
-    assert result.outputs["out_"]["shape"] == [MLX_FFT_SIZE, 2]
-    assert result.outputs["out_"]["values"] == pytest.approx(
-        expected_values,
-        abs=2e-4,
-        rel=2e-4,
-    )
+            result = executor.run(request)
+            _assert_fft_result(result, "out_", expected_values, case)
 
 
 def test_pinned_mlx_fft_executes_through_directx_native_loader():
@@ -746,7 +880,7 @@ def _build_current_opengl_runtime_package(
         "note": 0,
         "warning": 0,
     }, json.dumps(payload["diagnostics"], indent=2)
-    assert payload["project"]["indexRangeAssertionCount"] == 5
+    assert payload["project"]["indexRangeAssertionCount"] == 6
     assert payload["project"]["workgroupAccessAssertionCount"] == 1
     assert payload["summary"]["sourceRemapMappingCount"] == 84
 
@@ -884,62 +1018,40 @@ def test_current_mlx_fft_executes_through_opengl_native_loader():
         abi_root, compilation_request = _build_current_opengl_runtime_package(
             mlx_root, work_dir
         )
-        input_values, expected_values = _complex_impulse()
-        try:
-            result = execute_native_deferred_compilation_request(
-                compilation_request,
-                abi_root,
-                work_dir / "deferred-cache",
-                {
-                    "in_Buffer": {
-                        "dtype": "float32",
-                        "shape": [MLX_FFT_SIZE, 2],
-                        "values": input_values,
-                    },
-                    "fft_mem_256_float2_float2_n_Args": {
-                        "dtype": "int32",
-                        "shape": [1],
-                        "values": [MLX_FFT_SIZE],
-                    },
-                    "fft_mem_256_float2_float2_batch_size_Args": {
-                        "dtype": "int32",
-                        "shape": [1],
-                        "values": [1],
-                    },
-                },
-                {
-                    "out_Buffer": {
-                        "dtype": "float32",
-                        "shape": [MLX_FFT_SIZE, 2],
-                        "values": expected_values,
-                        "tolerance": {"absolute": 2e-4, "relative": 2e-4},
-                    }
-                },
-                (1, 1, 1),
-                runtime_adapter=OpenGLRuntimeParityAdapter(
-                    runtime=OpenGLComputeRuntime(context_backends=("egl",))
-                ),
+        runtime_adapter = OpenGLRuntimeParityAdapter(
+            runtime=OpenGLComputeRuntime(context_backends=("egl",))
+        )
+        for case_index, (case, input_values, expected_values) in enumerate(
+            _fft_cases()
+        ):
+            inputs, outputs = _fft_buffers(
+                input_values, expected_values, target="opengl"
             )
-        except NativeDeferredCompilationRuntimeError as exc:
-            if exc.code.endswith(".runtime-unavailable"):
-                if os.environ.get(REQUIRE_OPENGL_PROOF_ENV) == "1":
-                    pytest.fail(str(exc))
-                pytest.skip(str(exc))
-            raise
+            try:
+                result = execute_native_deferred_compilation_request(
+                    compilation_request,
+                    abi_root,
+                    work_dir / "deferred-cache",
+                    inputs,
+                    outputs,
+                    (1, 1, 1),
+                    runtime_adapter=runtime_adapter,
+                )
+            except NativeDeferredCompilationRuntimeError as exc:
+                if exc.code.endswith(".runtime-unavailable"):
+                    if os.environ.get(REQUIRE_OPENGL_PROOF_ENV) == "1":
+                        pytest.fail(str(exc))
+                    pytest.skip(str(exc))
+                raise
 
-    assert result.status == "ok"
-    assert result.outputs["out_Buffer"]["dtype"] == "float32"
-    assert result.outputs["out_Buffer"]["shape"] == [MLX_FFT_SIZE, 2]
-    assert result.outputs["out_Buffer"]["values"] == pytest.approx(
-        expected_values,
-        abs=2e-4,
-        rel=2e-4,
-    )
-    deferred_report = result.details["nativeDeferredCompilation"]
-    assert deferred_report["success"] is True
-    assert deferred_report["target"]["backend"] == "opengl"
-    assert deferred_report["variant"]["specializationValues"] == (
-        CURRENT_FFT_DEFERRED_SPECIALIZATION_VALUES
-    )
-    assert deferred_report["interface"]["status"] == "verified"
-    assert deferred_report["cache"]["status"] == "published"
+            _assert_fft_result(result, "out_Buffer", expected_values, case)
+            deferred_report = result.details["nativeDeferredCompilation"]
+            assert deferred_report["success"] is True
+            assert deferred_report["target"]["backend"] == "opengl"
+            assert deferred_report["variant"]["specializationValues"] == (
+                CURRENT_FFT_DEFERRED_SPECIALIZATION_VALUES
+            )
+            assert deferred_report["interface"]["status"] == "verified"
+            assert deferred_report["cache"]["status"] == (
+                "published" if case_index == 0 else "hit"
+            )

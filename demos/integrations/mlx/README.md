@@ -1668,10 +1668,15 @@ output resources and a 16-byte constant-buffer allocation for the generated
 `uint3` dispatch input. The native-loader request derives that input from the
 physical workgroup count before Direct3D 12 WARP dispatch and readback.
 
-The runtime check supplies an index-1 complex unit impulse and compares all 256
-complex outputs with the analytical forward DFT unit circle at `2e-4` absolute
-and relative tolerance. This verifies one bounded workload through translation,
-packaging, native execution, and numerical comparison. It does not redirect the
+The runtime check supplies five inputs for this 256-point plan: an index-1
+unit impulse, seeded float32 complex data, a complex constant, alternating real
+values, and a complex impulse at the final element. It compares all outputs
+with analytical references or a double-precision direct DFT, using `2e-4`
+absolute and relative tolerance. Eight trailing scalar guards must remain
+exactly unchanged after each dispatch. Each native test translates and packages
+the source once, then executes all five inputs in the existing CI job. This
+checks 2,560 result values and 40 guards for one bounded transform plan, not
+general FFT coverage. It does not redirect the
 MLX host runtime, run the MLX test suite, or establish broad FFT or backend
 parity. The aggregate DirectX source materialization limit remains tracked by
 [#1916](https://github.com/CrossGL/crosstl/issues/1916); broader runtime grid and
@@ -1679,8 +1684,8 @@ resource-layout contracts remain tracked by
 [#1542](https://github.com/CrossGL/crosstl/issues/1542) and
 [#1543](https://github.com/CrossGL/crosstl/issues/1543).
 
-That bounded runtime proof now also covers current corpus commit
-`846d176227a0ac13d266ce4644fd93d20223b6e`, where MLX generalizes FFT
+The current-corpus fixture selects commit
+`846d176227a0ac13d2667e58d2bb68b322109ab0`, where MLX generalizes FFT
 workgroup storage through `FFTIOTypeTraits` and adds function constant 22 for
 the Bluestein twiddle-table path. Replaying the same 256-point entry with that
 constant set to `false` materializes 37 specializations, records 42 reachable
@@ -1697,14 +1702,14 @@ every twiddle dereference unreachable, DirectX removes that unobserved resource
 parameter through the forwarding chain rather than inventing a backing buffer.
 A null pointer that can be observed or dereferenced still fails closed.
 
-The current source emits a 146,763-byte HLSL artifact with SHA-256
-`3bc42b2dd3bf128bcbe1fd202763f3434d64df6e60b53da4b6e754ceff0f6e7a`
+The current source emits a 176,506-byte HLSL artifact with SHA-256
+`f8c8c4b18cabaa7f2997dcdb68b8a9f32645f274c271e454e44dfe463cd4a1ff`
 and zero project diagnostics. All 20 native-16 ``power`` shift counts are
 explicitly promoted to ``int`` before HLSL shifting, matching Metal/C++ integer
 promotion rather than retaining minimum-precision count semantics. Windows CI
 compiles it with DXC using `cs_6_2`,
 `-enable-16bit-types`, and warnings as errors, then packages and dispatches it
-through Direct3D 12 WARP. The same index-1 complex impulse workload, reflected
+through Direct3D 12 WARP. The same five-input workload, reflected
 resource layouts, physical workgroup count, and `2e-4` output tolerances are
 required for this exact current checkout. This lowering does not permit
 arbitrary first-class workgroup pointers: roots without a concrete shared-array
@@ -1712,15 +1717,24 @@ identity or extent still fail closed, and
 [#1518](https://github.com/CrossGL/crosstl/issues/1518) continues to track the
 broader pointer-offset contract. The historical proof remains separately
 recorded under its own commit provenance; it is no longer being used as a
-substitute for current-corpus evidence.
+substitute for current-corpus evidence. Its reviewed artifact is 145,277 bytes,
+SHA-256 `d5fa1ae408154eae551c1ad20f02a81c47f95fe4be7df16714b4ff7bf4e8048b`.
+Both artifact revisions preserve reflected bindings and dispatch dimensions;
+native Windows numerical execution remains required before merging a reference
+update. Successful DXC compilation alone does not satisfy that requirement.
 
-The current FFT source now also emits an 82,089-byte GLSL artifact with
+The current FFT source now also emits a 109,547-byte GLSL artifact with
 SHA-256
-`cfc959ed6e2ede827516d8076c4adf4a5d87813c9de905cf3c75013b1e1c1608`
+`5c6fefea7315d7d091641d024aea27bbdcecf1f2f4b7a63a2db5af401e036512`
 and 84 source-remap mappings. OpenGL keeps the 21 reachable function constants
 as 21 deferred specialization constants and uses the same `[1, 1, 64]`
 workgroup contract. A fifth current-source index assertion bounds
-`batch_idx + index + r`. Generic specialization lowering now follows a
+`batch_idx + index + r`. A sixth assertion bounds the resource helper's
+`reference.offset + index` to `[0,255]` for this exact fixture: buffers are
+unrebased, `batch_size=1`, and `min(2*lane + 128*e,254)+r` covers `[0,255]`
+for `lane` in `[0,63]`, `e` in `[0,1]`, and `r` in `[0,1]`. This assertion
+must not be reused for other batch sizes, dispatches, or rebased resources.
+Generic specialization lowering now follows a
 statically null storage pointer through direct forwarding calls and omits it
 only when every reachable use is dead; observable null uses still fail closed.
 The GLSL generator also decodes materialized Metal `vec<T,N>` constructor
@@ -1733,11 +1747,10 @@ with 8-byte size, stride, and alignment under `std430`; the two scalar argument
 blocks retain their 16-byte `std140` block identities. The resulting four-
 resource native ABI has no blocked variants and publishes a ready deferred
 SPIR-V request. Linux CI specializes and dispatches that request through a
-surfaceless Mesa llvmpipe OpenGL context. For the same index-1 complex impulse,
-all 256 complex outputs match the analytical forward DFT within the required
-`2e-4` tolerances; the container probe observed maximum absolute error
-`9.264554161336758e-08`, verified the interface, and published the compilation
-cache. This is one exact current-pinned workload and does not establish full
+surfaceless Mesa llvmpipe OpenGL context. All five inputs must match the
+independent references within the required `2e-4` tolerances, with exact guard
+preservation. The first execution must publish the verified compilation cache;
+the remaining four must use it. This is one exact current-pinned plan and does not establish full
 FFT, MLX host-runtime, or backend parity.
 
 A dedicated project replay now translates the complete pinned `fft.metal`
