@@ -10,7 +10,7 @@
     {
       "id": "metal|mlx/backend/metal/kernels/binary.metal|reduced-add",
       "source": "mlx/backend/metal/kernels/binary.metal",
-      "path": "tests/fixtures/runtime_verification/mlx/reduced_binary_add.metal",
+      "path": "demos/integrations/mlx/fixtures/runtime_verification/reduced_binary_add.metal",
       "target": "metal",
       "sourceBackend": "metal",
       "stage": "compute",

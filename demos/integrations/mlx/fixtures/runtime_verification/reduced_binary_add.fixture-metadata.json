@@ -10,7 +10,7 @@
       "selector": {
         "source": "mlx/backend/metal/kernels/binary.metal",
         "target": "metal",
-        "path": "tests/fixtures/runtime_verification/mlx/reduced_binary_add.metal",
+        "path": "demos/integrations/mlx/fixtures/runtime_verification/reduced_binary_add.metal",
         "variant": "reduced-add"
       },
       "inputs": [

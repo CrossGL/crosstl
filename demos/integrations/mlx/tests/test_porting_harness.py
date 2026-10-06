@@ -17,7 +17,7 @@ RMS_NORM_HARNESS_PATH = (
 )
 MLX_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "demo-project-testing.yml"
 MLX_README_PATH = ROOT / "demos" / "integrations" / "mlx" / "README.md"
-RMS_NORM_FIXTURE_ROOT = ROOT / "tests" / "fixtures" / "project_porting" / "mlx"
+RMS_NORM_FIXTURE_ROOT = ROOT / "demos/integrations/mlx/fixtures/project_porting"
 
 
 def _load_harness():

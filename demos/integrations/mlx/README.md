@@ -17,6 +17,13 @@ belong to this demo; the translator does not depend on MLX.
 | `tests/host/` | Portable host adapter tests |
 | `tests/kernels/` | Pinned kernel translation and native execution tests |
 | `tests/fixtures/` | MLX-specific reference programs |
+| `fixtures/project_porting/` | Reduced source-specialization contracts |
+| `fixtures/runtime_verification/` | Runtime inputs, expected values and artifact selectors |
+
+Generic project and runtime tests also consume these reduced fixtures. Keeping
+the inputs here preserves their MLX provenance without making the core fixture
+tree project-specific. Moving a fixture does not change its shader or expected
+numerical results.
 
 Run the demo's local tests from the repository root:
 

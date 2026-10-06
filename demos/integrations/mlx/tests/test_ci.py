@@ -33,9 +33,12 @@ def test_project_demo_has_one_workflow_and_local_test_ownership():
     assert not list(WORKFLOW_DIR.glob("mlx-*.yml"))
     assert not list((ROOT / "tests").rglob("test_mlx_*.py"))
     assert not list((ROOT / "tests/fixtures").rglob("mlx_*"))
+    assert not list((ROOT / "tests/fixtures").rglob("mlx"))
     assert (WORKFLOW_DIR / "demo-project-testing.yml").is_file()
     assert (ROOT / "demos/integrations/mlx/tests/host").is_dir()
     assert (ROOT / "demos/integrations/mlx/tests/kernels").is_dir()
+    for directory in ("runtime_verification", "project_porting"):
+        assert (ROOT / "demos/integrations/mlx/fixtures" / directory).is_dir()
 
 
 def test_project_demo_triggers_cover_code_without_root_documentation():

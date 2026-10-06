@@ -8,7 +8,7 @@
     {
       "id": "mlx-file-scope-immutable-lookup-u32",
       "selector": {
-        "source": "tests/fixtures/runtime_verification/mlx/file_scope_immutable_lookup.metal",
+        "source": "demos/integrations/mlx/fixtures/runtime_verification/file_scope_immutable_lookup.metal",
         "target": "directx",
         "variant": "native-lookup"
       },

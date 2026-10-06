@@ -2219,7 +2219,7 @@ def test_directx_compute_runtime_executes_mlx_file_scope_lookup_on_device(tmp_pa
     except ImportError as exc:
         pytest.fail(f"Direct3D lookup runtime dependency is unavailable: {exc}")
 
-    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    fixture_dir = ROOT / "demos/integrations/mlx/fixtures/runtime_verification"
     source_path = fixture_dir / "file_scope_immutable_lookup.metal"
     artifact_report = json.loads(
         (fixture_dir / "file_scope_immutable_lookup.artifacts.json").read_text(
@@ -2559,7 +2559,7 @@ def test_directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device
     ).stdout.strip()
     assert checkout_commit == pinned_commit
 
-    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    fixture_dir = ROOT / "demos/integrations/mlx/fixtures/runtime_verification"
     with tempfile.TemporaryDirectory(
         prefix=".crosstl-arange-directx-", dir=mlx_root
     ) as temporary_directory:

@@ -2013,7 +2013,7 @@ def test_plan_runtime_test_manifest_rejects_invalid_artifact_contract_mode(tmp_p
 
 
 def test_mlx_arange_directx_generated_manifest_plans_curated_interface(tmp_path):
-    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    fixture_dir = ROOT / "demos/integrations/mlx/fixtures/runtime_verification"
     artifact_path = tmp_path / "out" / "directx" / "arange" / "arangeuint32.hlsl"
     artifact_path.parent.mkdir(parents=True)
     artifact_path.write_text("// generated standalone entry", encoding="utf-8")
@@ -2548,7 +2548,7 @@ def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements():
 
 
 def test_build_runtime_test_manifest_from_mlx_fixture_metadata():
-    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    fixture_dir = ROOT / "demos/integrations/mlx/fixtures/runtime_verification"
     artifact_report = fixture_dir / "reduced_binary_add.artifacts.json"
     fixture_metadata = fixture_dir / "reduced_binary_add.fixture-metadata.json"
 
@@ -2598,7 +2598,9 @@ def test_build_runtime_test_manifest_from_mlx_fixture_metadata():
         "source": "mlx/backend/metal/kernels/binary.metal",
         "target": "metal",
         "variant": "reduced-add",
-        "path": "tests/fixtures/runtime_verification/mlx/reduced_binary_add.metal",
+        "path": (
+            "demos/integrations/mlx/fixtures/runtime_verification/reduced_binary_add.metal"
+        ),
     }
     assert test_case["runtimeAdapter"]["entryPoints"][0]["name"] == (
         "mlx_binary_add_f32"
@@ -2636,7 +2638,7 @@ def test_build_runtime_test_manifest_from_mlx_fixture_metadata():
 
 
 def test_mlx_file_scope_immutable_lookup_fixture_is_value_sensitive():
-    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    fixture_dir = ROOT / "demos/integrations/mlx/fixtures/runtime_verification"
     source_path = fixture_dir / "file_scope_immutable_lookup.metal"
     artifact_report = fixture_dir / "file_scope_immutable_lookup.artifacts.json"
     fixture_metadata = fixture_dir / "file_scope_immutable_lookup.fixture-metadata.json"
@@ -2846,7 +2848,7 @@ def test_build_runtime_test_manifest_records_runtime_metadata_readiness(tmp_path
 
 
 def test_project_cli_runtime_test_manifest_text_outputs_generated_tests():
-    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    fixture_dir = ROOT / "demos/integrations/mlx/fixtures/runtime_verification"
     artifact_report = fixture_dir / "reduced_binary_add.artifacts.json"
     fixture_metadata = fixture_dir / "reduced_binary_add.fixture-metadata.json"
 
