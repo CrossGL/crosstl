@@ -44,12 +44,12 @@ BINARY_DIRECTX_CONTRACT_PATH = (
     / "binary.directx-translation.json"
 )
 BINARY_DIRECTX_CONTRACT_SHA256 = (
-    "7f8faa377f44812c6964bfdf6d578bb47b226372a69f9116dff9b1a744750cfa"
+    "afcab26a32aab9abce3533f14ec535f6ab8ef42da3510810b3beab5de8d3a5b8"
 )
-BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1469717
-BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 11623848
-BINARY_DIRECTX_GENERATED_SIZE_MINIMUM = ("ss_Addint8", 1842)
-BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_LogAddExpcomplex64", 11168)
+BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1470376
+BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 11969895
+BINARY_DIRECTX_GENERATED_SIZE_MINIMUM = ("ss_Addint32", 1848)
+BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_LogAddExpcomplex64", 11279)
 INDEX_RANGE_ASSERTIONS = (
     ("offset + i", 0, 2147483647),
     ("a_idx", 0, 2147483647),
@@ -426,6 +426,26 @@ def test_binary_atan2_artifact_refresh_preserves_corpus_scope():
         "unchangedSourceAndInterfaceContracts": True,
         "numericalExecution": False,
         "fullUpstreamSuite": False,
+        "followupReviews": [
+            {
+                "reason": (
+                    "Preserve source-width arithmetic, half storage and binary math in HLSL."
+                ),
+                "previousContractSha256": (
+                    "7f8faa377f44812c6964bfdf6d578bb47b226372a69f9116dff9b1a744750cfa"
+                ),
+                "changedEntryCount": 2435,
+                "unaffectedEntryCount": 1687,
+                "nativeCompiledChangedEntryCount": 2435,
+                "reviewedBodyCount": 4122,
+                "nativeCompiledEntryCount": 4122,
+                "reviewedResourceCount": 21248,
+                "unchangedSourceAndDispatchContracts": True,
+                "halfStorageEncoding": "ieee754-binary16",
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            }
+        ],
     }
     affected = [
         workload

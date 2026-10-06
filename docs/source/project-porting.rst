@@ -1282,6 +1282,14 @@ module. This closes complete discovered-binary DirectX translation, reflection,
 and native compiler coverage; it does not claim numerical execution, MLX
 host-runtime redirection, or MLX test-suite parity.
 
+The binary HLSL identity review compares every historical/current body and all
+21,248 reflected resources, with 8,244 strict compiler checks across both sets.
+It accounts for source-width arithmetic and two-byte integer storage carrying
+IEEE binary16 values without changing bindings, dispatch contracts, loop bounds,
+source pins or specialization counts. The 2,435 changed artifacts and 1,687
+byte-identical artifacts remain compiler evidence, not full-family numerical
+execution evidence.
+
 The current-pinned MLX reduction integration independently proves all 2,396
 host-named entries from ``reduce.metal`` through Metal-to-CrossGL-to-Metal
 translation. Three base forms plus six multidimensional families across two

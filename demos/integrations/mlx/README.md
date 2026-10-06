@@ -2794,6 +2794,16 @@ These compiler-only shards do not require a Windows runner. Direct3D 12
 execution and readback checks remain on Windows; compiling DXIL on Linux is
 not a substitute for those runtime tests.
 
+The current HLSL references include a complete comparison of all 4,122
+historical and generated bodies, all 21,248 reflected resources, and strict
+compilation of both sets. The review accounts for source-width indexing,
+binary math and two-byte integer storage carrying IEEE binary16 values.
+Bindings, dispatch contracts, loop bounds, source pins and specialization
+counts remain unchanged. Of the generated artifacts, 2,435 change and 1,687
+remain byte-identical. The contract retains the previous identity and review
+scope; these compiler checks do not establish numerical execution of the
+complete binary family.
+
 The complete current-pinned reduction gate covers all 2,396 host-named entries
 from `reduce.metal` at commit
 `846d176227a0ac13d2667e58d2bb68b322109ab0`. Three base forms cover
