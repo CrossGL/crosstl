@@ -154,7 +154,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1835
+        "test_count": 1837
       },
       "translator_codegen": {
         "exists": true,
@@ -310,7 +310,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 2068
+        "test_count": 2070
       },
       "translator_codegen": {
         "exists": true,
@@ -710,7 +710,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2243
+        "test_count": 2245
       },
       "translator_codegen": {
         "exists": true,

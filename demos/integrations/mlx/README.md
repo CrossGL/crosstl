@@ -41,6 +41,17 @@ The host adaptation documentation records upstream changes explicitly. A passing
 kernel or bounded host check is not a claim that the entire upstream MLX suite
 passes on a translated backend.
 
+Reduction reference review found an alias-specialization error
+([#2100](https://github.com/CrossGL/crosstl/issues/2100)): `float16_t` selected
+the primary `Limits` template instead of the explicit `half` specialization.
+The generic translator correction restores the positive/negative infinity
+initializers for `init_reduce_minfloat16` and `init_reduce_maxfloat16` at both
+the historical `846d1762` and current `9c3d3557` pins. All twelve regenerated
+Metal/HLSL/GLSL artifacts compile; Metal and OpenGL each pass 68 exact output
+values and 64 guard values. Windows execution remains separate. This bounded
+check does not accept the complete reduction family's artifact references or
+establish its numerical coverage.
+
 ## Corpus Revisions
 
 This directory contains the project-level MLX porting checks used by CrossTL.

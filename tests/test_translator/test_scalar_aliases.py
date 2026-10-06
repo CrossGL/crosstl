@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import struct
 import sys
 from pathlib import Path
@@ -326,6 +327,86 @@ def test_scalar_alias_resource_elements_translate_and_compile(tmp_path, target, 
 
 def _bits(value):
     return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def _specialized_alias_source(syntax, specialization):
+    return f"""#include <metal_stdlib>
+using namespace metal;
+{_alias('Element', 'half', syntax)}
+{_alias('Alias', 'Element', syntax)}
+namespace Types {{ {_alias('Value', 'half', syntax)} }}
+template <typename T>
+struct Identity {{ static constexpr constant uint value = 7u; }};
+template <> struct Identity<{specialization}>;
+template <>
+struct Identity<{specialization}> {{
+    static constexpr constant uint value = 42u;
+}};
+kernel void aliases(device const uint* values [[buffer(0)]],
+                    device uint* results [[buffer(1)]],
+                    uint i [[thread_position_in_grid]]) {{
+    if (i != 0u) return;
+    results[0] = Identity<Element>::value + values[0];
+    results[1] = Identity<half>::value + values[0];
+    results[2] = Identity<Alias>::value + values[0];
+    results[3] = Identity<float>::value + values[0];
+    {{
+        {_alias('Element', 'float', syntax)}
+        results[4] = Identity<Element>::value + values[0];
+        results[5] = Identity<Alias>::value + values[0];
+    }}
+    results[6] = Identity<const half>::value + values[0];
+    results[7] = Identity<thread half*>::value + values[0];
+    results[8] = Identity<Types::Value>::value + values[0];
+}}
+"""
+
+
+@pytest.mark.parametrize("syntax", ["using", "typedef"])
+@pytest.mark.parametrize("specialization", ["half", "Element"])
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
+def test_explicit_struct_specialization_uses_canonical_aliases(
+    tmp_path, syntax, specialization, target
+):
+    source = _specialized_alias_source(syntax, specialization)
+    generated = _translate(tmp_path, source, target)
+    for index, expected in enumerate((42, 42, 42, 7, 7, 42, 7, 7, 42)):
+        assert re.search(
+            rf"results\[{index}\]\s*=\s*\(?{expected}u?\s*\+", generated
+        ), generated
+    _compile(
+        generated, target, tmp_path, directx_compile_flags=("-enable-16bit-types",)
+    )
+
+
+@pytest.mark.parametrize("syntax", ["using", "typedef"])
+@pytest.mark.parametrize("specialization", ["half", "Element"])
+def test_explicit_struct_specialization_aliases_execute(
+    tmp_path, syntax, specialization
+):
+    if os.environ.get("CROSTL_REQUIRE_SCALAR_ALIASES") != "1":
+        pytest.skip("set CROSTL_REQUIRE_SCALAR_ALIASES=1 for native alias checks")
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    source = _specialized_alias_source(syntax, specialization)
+    generated = _translate(tmp_path, source, target)
+    expected = [42, 42, 42, 7, 7, 42, 7, 7, 42, *GUARD]
+    records = {}
+    for name, code in (("generated", generated), ("original", source)):
+        if name == "original" and target != "metal":
+            continue
+        records[name] = _execute(
+            tmp_path / name,
+            target,
+            code,
+            [0],
+            expected,
+            metal_entry="aliases",
+            check_outputs=_check,
+            directx_compile_flags=("-enable-16bit-types",),
+        )
+    (tmp_path / "evidence.json").write_text(
+        json.dumps({"target": target, "records": records}, indent=2), encoding="utf-8"
+    )
 
 
 def _expected(dtype, values):

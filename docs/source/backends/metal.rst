@@ -47,6 +47,14 @@ aliases are also diagnosed because their value qualification is not yet
 represented in the shared source. Pointer, aggregate and template aliases
 continue to use their existing resolution paths.
 
+Explicit struct specializations compare primitive alias arguments by their
+resolved type before materializing the primary template. Static member lookup
+uses the same owner, including specialization declarations written through an
+alias. Declaration context is retained when a local alias shadows an outer
+name; const and pointer arguments remain distinct. Regression checks cover
+forward declarations, direct translation and saved CrossGL intermediates, with
+native value and output-guard checks in the existing platform jobs.
+
 Materialized bfloat math wrappers retain their float computation and explicit
 narrow return at each call. Nested calls, widening expressions and inferred
 locals therefore observe the source rounding boundary. This applies to a

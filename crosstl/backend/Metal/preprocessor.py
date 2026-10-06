@@ -23254,13 +23254,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                     )
                     or template_arguments
                 )
-                key = self._struct_specialization_comparison_key(
-                    ident,
-                    resolved_arguments,
-                )
-                if key in explicit_specialization_keys:
-                    i = angle_end + 1
-                    continue
                 partial_match_arguments = [
                     self._canonicalize_metal_standard_type_aliases(
                         self._canonicalize_qualified_struct_type_aliases(
@@ -23275,6 +23268,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                     )
                     for argument in resolved_arguments
                 ]
+                key = self._struct_specialization_comparison_key(
+                    ident,
+                    partial_match_arguments,
+                )
+                if key in explicit_specialization_keys:
+                    i = angle_end + 1
+                    continue
                 matching_partials: List[Tuple[_MetalTemplateStruct, Dict[str, str]]] = (
                     []
                 )
@@ -24039,6 +24039,11 @@ class MetalPreprocessor(HLSLPreprocessor):
         # unrelated instances such as `BlockMMA<float, ...>` when the source also
         # defines a `BlockMMA<complex64_t, ...>` specialization.
         keys: Set[Tuple[str, Tuple[str, ...]]] = set()
+        type_aliases = self._collect_local_type_alias_bindings(
+            code,
+            [(0, len(code))],
+            skip_spans=self._find_template_declaration_spans(code),
+        )
         for match in re.finditer(
             r"\btemplate\s*<\s*>\s*(?:struct|class)\s+"
             r"(?P<name>[A-Za-z_][A-Za-z0-9_:]*)\s*<",
@@ -24059,7 +24064,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                     )
                     or arguments
                 )
-            keys.add(self._struct_specialization_comparison_key(name, arguments))
+            canonical_arguments = [
+                self._resolve_type_aliases_at(argument, type_aliases, match.start())
+                for argument in arguments
+            ]
+            keys.add(
+                self._struct_specialization_comparison_key(name, canonical_arguments)
+            )
         return keys
 
     def _struct_specialization_comparison_key(

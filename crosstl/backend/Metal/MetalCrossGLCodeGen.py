@@ -1918,6 +1918,17 @@ class MetalToCrossGLConverter:
         struct_name, member_name = name.rsplit("::", 1)
         alias_target = self.local_struct_type_aliases.get(struct_name)
         resolved_struct = self.resolve_local_type_aliases(alias_target or struct_name)
+        if resolved_struct not in self.struct_name_map:
+            match = self.struct_templates_for_dependent_owner(resolved_struct)
+            if match is not None and match[2]:
+                candidates = match[0]
+                if len(candidates) != 1:
+                    raise MetalStaticConstantResolutionError(
+                        resolved_struct,
+                        member_name,
+                        "multiple visible explicit specializations match the owner",
+                    )
+                resolved_struct = candidates[0].name
         if resolved_struct not in self.struct_name_map and "::" in resolved_struct:
             unqualified_struct = resolved_struct.rsplit("::", 1)[-1]
             if unqualified_struct in self.struct_name_map:
@@ -5942,11 +5953,31 @@ class MetalToCrossGLConverter:
         )
         return f"{name}<{', '.join(arguments)}>"
 
+    def canonical_struct_template_argument(self, argument, *, context=None):
+        text = str(argument).strip()
+        instance = self.alias_template_instance_parts(text)
+        if instance is not None:
+            name, arguments = instance
+            return (
+                f"{name}<"
+                + ",".join(
+                    self.canonical_struct_template_argument(arg, context=context)
+                    for arg in arguments
+                )
+                + ">"
+            )
+        binding = self.scalar_alias_binding(text, context=context)
+        if binding is not None:
+            text = " ".join([*binding[1], binding[0]])
+        elif context is None:
+            text = self.resolve_local_type_aliases(text)
+        return self.canonical_alias_argument(text)
+
     def struct_templates_for_dependent_owner(self, owner):
         instance = self.alias_template_instance_parts(owner)
         owner_name, arguments = instance if instance is not None else (owner, [])
         canonical_arguments = tuple(
-            self.canonical_alias_argument(argument) for argument in arguments
+            self.canonical_struct_template_argument(argument) for argument in arguments
         )
         for tier in self.alias_lookup_name_tiers(owner_name):
             exact = []
@@ -5961,19 +5992,25 @@ class MetalToCrossGLConverter:
                     )
                     if candidate_instance is not None:
                         specialized_name, specialized_arguments = candidate_instance
-                        if (
-                            specialized_name == candidate_name
-                            and tuple(
-                                self.canonical_alias_argument(argument)
-                                for argument in specialized_arguments
-                            )
-                            == canonical_arguments
-                        ):
-                            exact.extend(
-                                node
-                                for node in nodes
-                                if self.declaration_visible_at_current_offset(node)
-                            )
+                        if specialized_name == candidate_name:
+                            for node in nodes:
+                                if not self.declaration_visible_at_current_offset(node):
+                                    continue
+                                previous_context = self.current_type_resolution_context
+                                self.current_type_resolution_context = node
+                                try:
+                                    identity = tuple(
+                                        self.canonical_struct_template_argument(
+                                            argument, context=node
+                                        )
+                                        for argument in specialized_arguments
+                                    )
+                                finally:
+                                    self.current_type_resolution_context = (
+                                        previous_context
+                                    )
+                                if identity == canonical_arguments:
+                                    exact.append(node)
                         continue
                     if qualified_name == candidate_name:
                         primary.extend(
