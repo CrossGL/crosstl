@@ -1838,6 +1838,7 @@ REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(
         "binary32DivisionProfile",
         "binary16RemainderProfile",
         "binary32ComparisonProfile",
+        "binary32RemainderProfile",
     )
 )
 REPORT_ARTIFACT_ENTRY_POINT_FIELDS = frozenset(("source", "target", "stage"))
@@ -28411,6 +28412,19 @@ def _translate_project_impl(
                 dispatch_region = None
                 try:
                     division_profile = source_options.get("binary32_division_profile")
+                    remainder_profile = source_options.get("binary32_remainder_profile")
+                    if unit.source_backend == "metal" and remainder_profile is not None:
+                        if remainder_profile not in (
+                            "preserve-subnormals",
+                            "flush-arithmetic-subnormals",
+                        ):
+                            raise ValueError(
+                                "binary32_remainder_profile must be 'preserve-subnormals', "
+                                "'flush-arithmetic-subnormals', or None"
+                            )
+                        artifact["provenance"][
+                            "binary32RemainderProfile"
+                        ] = remainder_profile
                     comparison_profile = source_options.get(
                         "binary32_comparison_profile"
                     )
@@ -46425,6 +46439,16 @@ def _provenance_contract_reasons(
             reasons.append(
                 f"{prefix}.binary16RemainderProfile must be binary32-quotient"
             )
+    if "binary32RemainderProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(f"{prefix}.binary32RemainderProfile requires a Metal source")
+        if provenance["binary32RemainderProfile"] not in (
+            "preserve-subnormals",
+            "flush-arithmetic-subnormals",
+        ):
+            reasons.append(
+                f"{prefix}.binary32RemainderProfile must be preserve-subnormals or flush-arithmetic-subnormals"
+            )
     if "binary32ComparisonProfile" in provenance:
         if artifact.get("sourceBackend") != "metal":
             reasons.append(
@@ -46485,6 +46509,15 @@ def _provenance_contract_reasons(
         if provenance.get("binary16RemainderProfile") != expected_remainder_profile:
             reasons.append(
                 f"{prefix}.binary16RemainderProfile must match the resolved project source options"
+            )
+        expected_remainder_profile = (
+            options.get("binary32_remainder_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("binary32RemainderProfile") != expected_remainder_profile:
+            reasons.append(
+                f"{prefix}.binary32RemainderProfile must match the resolved project source options"
             )
         expected_comparison_profile = (
             options.get("binary32_comparison_profile")

@@ -1140,6 +1140,36 @@ not a universal Metal policy. Remainder and conversion subnormal behavior remain
 separate contracts; selecting a comparison profile does not establish full
 project numerical parity.
 
+Binary32 ``fmod`` has a separate, opt-in operation policy:
+
+.. code-block:: toml
+
+   [project.source_options.metal]
+   binary32_remainder_profile = "flush-arithmetic-subnormals"
+
+``preserve-subnormals`` computes exact truncating remainder for the represented
+operands, including subnormal results. ``flush-arithmetic-subnormals`` treats a
+subnormal divisor as zero and flushes a computed subnormal remainder to signed
+zero. Its no-division path still preserves the numerator when its magnitude is
+less than a valid divisor. This distinction rules out blanket input or output
+flushing. Both policies preserve zero signs and canonicalize arithmetic NaNs.
+Stored operands and surrounding comparisons are unchanged.
+
+The default is unset. The integer-significand implementation supports scalar
+and two-, three- and four-lane binary32 calls, evaluating each operand once.
+Materialized Metal standard-library bfloat wrappers keep their float computation
+and narrow return. User-defined overloads, explicit fast calls, half-only and
+binary64 calls retain their existing behavior. Global constant calls that would
+require a runtime helper produce
+``project.translate.metal-remainder-profile-unsupported``. Reports, runtime
+manifests and packages retain ``binary32RemainderProfile`` and validate it against
+the resolved configuration; saved CrossGL retains the implementation.
+
+Native controls characterize the tested source compiler and device only. This
+option does not select a universal Metal policy, change Boolean conversions or
+establish whole-project numerical parity. Half remainder and binary32 comparisons
+remain independently configured contracts.
+
 The legacy MLX copy reference at
 ``846d176227a0ac13d2667e58d2bb68b322109ab0`` proves all 2,496 discovered entries
 from ``copy.metal`` through Metal-to-CrossGL-to-Metal translation. The family

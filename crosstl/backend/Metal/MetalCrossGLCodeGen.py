@@ -11,6 +11,7 @@ from ...translator.division_math import binary32_division_support
 from ...translator.fused_math import FMA_HELPER_KEYS, binary32_fma_support
 from ...translator.precise_exp import binary32_exp_support
 from ...translator.precise_trig import TRIG_HELPER_KEYS, binary32_trig_support
+from ...translator.remainder_math import binary32_remainder_support
 from ...translator.standard_constants import standard_math_constant
 from .MetalAst import *
 from .MetalLexer import *
@@ -169,6 +170,23 @@ class MetalComparisonProfileError(ValueError):
         self.source_location = source_location
         super().__init__(
             f"Cannot apply Metal binary32 comparison profile '{profile}' to "
+            f"'{operand_type or '<unknown>'}': {reason}"
+        )
+
+
+class MetalRemainderProfileError(ValueError):
+    """Raised when a selected binary32 remainder profile cannot be represented."""
+
+    project_diagnostic_code = "project.translate.metal-remainder-profile-unsupported"
+    missing_capabilities = ("metal.remainder-profile-lowering",)
+
+    def __init__(self, profile, operand_type, reason, source_location=None):
+        self.profile = profile
+        self.operand_type = operand_type
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(
+            f"Cannot apply Metal binary32 remainder profile '{profile}' to "
             f"'{operand_type or '<unknown>'}': {reason}"
         )
 
@@ -1269,6 +1287,7 @@ class MetalToCrossGLConverter:
         binary32_division_profile=None,
         binary16_remainder_profile=None,
         binary32_comparison_profile=None,
+        binary32_remainder_profile=None,
     ):
         if binary32_fma_profile not in (None, "rne-gradual", "rne-flush"):
             raise ValueError(
@@ -1295,6 +1314,16 @@ class MetalToCrossGLConverter:
                 "'flush-subnormals', or None"
             )
         self.binary32_comparison_profile = binary32_comparison_profile
+        if binary32_remainder_profile not in (
+            None,
+            "preserve-subnormals",
+            "flush-arithmetic-subnormals",
+        ):
+            raise ValueError(
+                "binary32_remainder_profile must be 'preserve-subnormals', "
+                "'flush-arithmetic-subnormals', or None"
+            )
+        self.binary32_remainder_profile = binary32_remainder_profile
         if not isinstance(preserve_pointer_pointee_const, bool):
             raise ValueError("preserve_pointer_pointee_const must be a boolean")
         self.preserve_pointer_pointee_const = preserve_pointer_pointee_const
@@ -1702,6 +1731,7 @@ class MetalToCrossGLConverter:
         self.required_metal_division_widths = set()
         self.required_metal_half_remainder_widths = set()
         self.required_metal_comparisons = set()
+        self.required_metal_remainder_widths = set()
         self.metal_division_assignments = {}
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
@@ -2893,6 +2923,7 @@ class MetalToCrossGLConverter:
         self.required_metal_division_widths = set()
         self.required_metal_half_remainder_widths = set()
         self.required_metal_comparisons = set()
+        self.required_metal_remainder_widths = set()
         self.metal_division_assignments = {}
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
@@ -3336,6 +3367,7 @@ class MetalToCrossGLConverter:
             + self.generate_metal_fma_support_code(indent=1)
             + self.generate_metal_half_remainder_support_code(indent=1)
             + self.generate_metal_comparison_support_code(indent=1)
+            + self.generate_metal_remainder_support_code(indent=1)
             + self.generate_metal_precise_math_support_code(indent=1),
             1,
         )
@@ -11228,6 +11260,9 @@ class MetalToCrossGLConverter:
             remainder_call = self.generate_metal_half_remainder_call(expr, is_main)
             if remainder_call is not None:
                 return remainder_call
+            remainder_call = self.generate_metal_remainder_call(expr, is_main)
+            if remainder_call is not None:
+                return remainder_call
             if self.resolve_metal_math_builtin_name(expr.name, expr.args) == "divide":
                 result_type = self.metal_math_builtin_result_type(expr)
                 left, right = (
@@ -14594,6 +14629,91 @@ class MetalToCrossGLConverter:
         pad = "    " * indent
         return "".join(pad + line + "\n" for line in code.strip().splitlines())
 
+    def generate_metal_remainder_call(self, expression, is_main=False):
+        if (
+            self.binary32_remainder_profile is None
+            or self.metal_math_builtin_namespace_mode(expression.name) == "fast"
+            or str(expression.name).rsplit("::", 1)[-1] != "fmod"
+        ):
+            return None
+        selected = self.selected_metal_callable(expression)
+        bfloat_wrapper = self.is_materialized_metal_stdlib_wrapper(selected) and (
+            self.normalized_metal_type(
+                self.resolve_type_alias(
+                    self.selected_metal_callable_return_type(selected)
+                )
+            )
+            in self.metal_source_bfloat_types
+        )
+        if bfloat_wrapper:
+            result_type = "float"
+        elif (
+            self.resolve_metal_math_builtin_name(expression.name, expression.args)
+            == "fmod"
+        ):
+            result_type = self.metal_math_builtin_result_type(expression)
+        else:
+            return None
+        info = self.metal_math_builtin_type_info(result_type)
+        if (
+            info is None
+            or self.normalized_metal_type(self.resolve_type_alias(info["element_type"]))
+            != "float"
+        ):
+            return None
+        width = info["width"]
+        if width not in {1, 2, 3, 4} or self.current_function is None:
+            raise MetalRemainderProfileError(
+                self.binary32_remainder_profile,
+                result_type,
+                "profiled binary32 remainder requires a function and one to four lanes",
+                getattr(expression, "source_location", None),
+            )
+        self.required_metal_remainder_widths.add(width)
+        mapped = "float" if width == 1 else f"vec{width}"
+        arguments = ", ".join(
+            f"{mapped}({self.generate_expression(argument, is_main)})"
+            for argument in expression.args
+        )
+        return f"{self.metal_remainder_helper_name(width)}({arguments})"
+
+    def metal_remainder_helper_name(self, width):
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            f"remainder-float{suffix}", f"__crossgl_metal_remainder_float{suffix}"
+        )
+
+    def generate_metal_remainder_support_code(self, indent=0):
+        if not self.required_metal_remainder_widths:
+            return ""
+        bits = self.metal_precise_math_unique_helper_name(
+            "remainder-bits", "__crossgl_remainder_bits"
+        )
+        scalar = self.metal_remainder_helper_name(1)
+        flush = (
+            "true"
+            if self.binary32_remainder_profile == "flush-arithmetic-subnormals"
+            else "false"
+        )
+        code = binary32_remainder_support(bits)
+        code += (
+            f"@metal_static\nfloat {scalar}(float a, float b) {{\n"
+            f"    return asfloat({bits}(asuint(a), asuint(b), {flush}));\n"
+            "}\n"
+        )
+        for width in sorted(self.required_metal_remainder_widths - {1}):
+            arguments = ", ".join(
+                f"{scalar}(a.{lane}, b.{lane})" for lane in "xyzw"[:width]
+            )
+            code += (
+                f"@metal_static\nvec{width} {self.metal_remainder_helper_name(width)}"
+                f"(vec{width} a, vec{width} b) {{\n"
+                f"    return vec{width}({arguments});\n"
+                "}\n"
+            )
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
+
     def generate_metal_half_remainder_call(self, expression, is_main=False):
         if (
             self.binary16_remainder_profile is None
@@ -15216,6 +15336,8 @@ float {scalar}(float value) {{
         if normalized not in self.metal_source_bfloat_types:
             return None
         rendered = self.generate_metal_fma_call(expression, is_main)
+        if rendered is None:
+            rendered = self.generate_metal_remainder_call(expression, is_main)
         if rendered is None:
             function_name = self.map_function_call_name(
                 expression.name,

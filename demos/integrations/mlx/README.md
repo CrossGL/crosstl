@@ -3028,6 +3028,22 @@ Its HLSL SHA-256 is `f453f410146b187e758888ef83d0822a80d3f870d843ecee6dcaa2f3b95
 the executed DXIL SHA-256 is `1ed6f3afeed8f074b3c30079acfa88699828c3db9f35a2b15b6ee693ff568206`.
 Saved host inputs are verified; physical driver-upload bytes are not claimed.
 
+Floating remainder has a separate numerical review at `9c3d3557`. Selecting
+`binary32_remainder_profile = "flush-arithmetic-subnormals"` together with
+`binary32_comparison_profile = "flush-subnormals"` preserves the characterized
+source operation and its sign-adjustment comparisons. The bfloat standard-library
+wrapper retains its float computation and narrow return. These are explicit
+source execution policies, not a universal Metal-device guarantee.
+
+Original/generated Metal agree across 790,904 vector-vector results and 200
+guards. OpenGL matches all 786,432 bfloat pairs, covering every input word against
+12 fixed partners. Three of 4,472 float32 pairs still differ in the subsequent
+addition; a repository-independent reproduction is tracked in
+[#2113](https://github.com/CrossGL/crosstl/issues/2113). Raw inputs, readbacks and
+guards are retained without normalization. Twelve selected project artifacts
+compile for Metal, OpenGL and DirectX, but this is not new Windows numerical
+evidence or acceptance of the pending float32/bfloat remainder references.
+
 All 60 signed and unsigned 64-bit shift references also have complete source and
 interface review. Their source changes only convert shift counts to the width
 required by the GLSL target; operand widths and buffer layouts are unchanged.
