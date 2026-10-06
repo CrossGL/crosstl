@@ -198,6 +198,11 @@ Metal toolchain component is missing. A bounded lookup or probe timeout is
 inconclusive and leaves tool discovery unchanged. Required native tests still
 perform their own compiler and execution checks; a timeout is not a native pass.
 The existing three-platform deferred-compilation jobs test this distinction.
+The native Metal host job installs the missing component when needed, then
+compiles and links the shared vector-add fixture before running native tests.
+Compiler versions and the probe modules are retained with the host evidence;
+an installation, compilation or linking failure stops the job without skipping
+the required numerical checks.
 
 The existing builtin-ownership jobs also execute scalar and vector truncation
 with standard, fast and precise Metal namespace calls. They cover every half

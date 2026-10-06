@@ -298,6 +298,48 @@ def test_ci_requires_pinned_native_host_execution():
     assert "continue-on-error" not in workflow
 
 
+def test_ci_prepares_metal_before_required_native_tests():
+    import yaml
+
+    from tools import ci_coverage
+
+    root = Path(__file__).resolve().parents[4]
+    workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
+    step = ci_coverage.workflow_job_step_section(
+        workflow, "metal-host", "Prepare Metal host toolchain"
+    )
+    assert "if:" not in step and "continue-on-error" not in step
+    assert "timeout-minutes: 10" in step
+    assert "set -euo pipefail" in step
+    assert "if ! xcrun --sdk macosx metal --version; then" in step
+    assert "xcodebuild -downloadComponent MetalToolchain" in step
+    assert "metal --version | tee .mlx-metal-host/toolchain/metal-version.txt" in step
+    assert "swiftc --version | tee .mlx-metal-host/toolchain/swift-version.txt" in step
+    assert "metal -std=metal3.1 -Werror -c" in step
+    assert "tests/fixtures/runtime_verification/vector_add.metal" in step
+    assert "metallib .mlx-metal-host/toolchain/probe.air" in step
+    for suffix in ("air", "metallib"):
+        assert f"test -s .mlx-metal-host/toolchain/probe.{suffix}" in step
+    assert ci_coverage.workflow_job_step_after(
+        workflow,
+        "metal-host",
+        "Validate Metal argument inference",
+        "Prepare Metal host toolchain",
+    )
+    upload = ci_coverage.workflow_job_step_section(
+        workflow, "metal-host", "Retain native host execution evidence"
+    )
+    assert "if: always()" in upload
+    upload_step = yaml.safe_load(upload)[0]
+    assert ".mlx-metal-host" in upload_step["with"]["path"].splitlines()
+    assert upload_step["with"]["include-hidden-files"] is True
+    for event in ("pull_request", "push"):
+        assert_paths_covered(
+            ci_coverage.workflow_event_path_filters(workflow, event),
+            "tests/fixtures/runtime_verification/vector_add.metal",
+        )
+
+
 def test_ci_requires_pinned_attention_numerical_execution():
     from tools import ci_coverage
 

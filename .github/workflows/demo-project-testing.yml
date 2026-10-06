@@ -556,6 +556,23 @@ jobs:
           python-version: "3.13"
       - name: Install CrossTL and test dependencies
         run: python -m pip install -e . pytest pytest-xdist numpy
+      - name: Prepare Metal host toolchain
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/toolchain
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk macosx metal --version | tee .mlx-metal-host/toolchain/metal-version.txt
+          xcrun --sdk macosx swiftc --version | tee .mlx-metal-host/toolchain/swift-version.txt
+          xcrun --sdk macosx metal -std=metal3.1 -Werror -c \
+            tests/fixtures/runtime_verification/vector_add.metal \
+            -o .mlx-metal-host/toolchain/probe.air
+          test -s .mlx-metal-host/toolchain/probe.air
+          xcrun --sdk macosx metallib .mlx-metal-host/toolchain/probe.air \
+            -o .mlx-metal-host/toolchain/probe.metallib
+          test -s .mlx-metal-host/toolchain/probe.metallib
       - name: Validate host harness contracts
         env:
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
