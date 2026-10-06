@@ -1726,6 +1726,18 @@ Both artifact revisions preserve reflected bindings and dispatch dimensions;
 native Windows numerical execution remains required before merging a reference
 update. Successful DXC compilation alone does not satisfy that requirement.
 
+[Windows run 37525218285](https://github.com/CrossGL/crosstl/actions/runs/37525218285/job/112481552970)
+verifies both revised artifacts at `a688ad15`. The `mlx-fft-directx` artifact
+(11443897833) retains all ten input fixtures, dispatch plans, compiler commands,
+HLSL/DXIL snapshots and returned values. Independent DFT recomputation from the
+saved inputs verifies 5,120 values and 80 exact guards across the two source
+pins. Maximum absolute error is below `6.63e-5`, within the unchanged tolerances.
+Outputs start at `-999.0`, not the expected answers. Source identities match
+their contracts, and both compiled modules have SHA-256
+`59c265eecbfff3b88b2746f535e055e1cf976fa0d76755d4eb7157a79c87f81b`.
+This verifies these five controls for each historical pin; it does not establish
+the `9c3d3557` corpus, arbitrary FFT plans or physical driver-upload bytes.
+
 The current FFT source now also emits a 109,547-byte GLSL artifact with
 SHA-256
 `5c6fefea7315d7d091641d024aea27bbdcecf1f2f4b7a63a2db5af401e036512`

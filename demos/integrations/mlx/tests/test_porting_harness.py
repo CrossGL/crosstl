@@ -13133,6 +13133,48 @@ def test_binary_directx_translation_evidence_records_complete_family():
     assert "does not claim numerical execution" in guide
 
 
+@pytest.mark.parametrize(
+    "status_key,source_commit",
+    [
+        ("directx_fft_translation_status", PINNED_MLX_COMMIT),
+        ("directx_fft_current_corpus_status", CURRENT_MLX_COMMIT),
+    ],
+)
+def test_fft_windows_evidence_matches_artifact_and_bounded_controls(
+    status_key, source_commit
+):
+    gaps = json.loads(
+        (ROOT / "demos/integrations/mlx/expected-gaps.json").read_text(encoding="utf-8")
+    )
+    status = gaps[status_key]
+    assert status["verified_native_execution"] == {
+        "source_commit": source_commit,
+        "source_artifact_sha256": status["artifact"]["sha256"],
+        "workflow_commit": "a688ad155e168c22171ac274f04edb8b39db9947",
+        "job_url": (
+            "https://github.com/CrossGL/crosstl/actions/runs/37525218285"
+            "/job/112481552970"
+        ),
+        "artifact_name": "mlx-fft-directx",
+        "artifact_id": 11443897833,
+        "case_count": 5,
+        "result_value_count": 2560,
+        "guard_value_count": 40,
+        "initial_output_value": -999.0,
+        "reference": "independent-direct-dft-from-retained-inputs",
+        "maximum_absolute_error": 0.00006627921400514936,
+        "compiled_module_sha256": (
+            "59c265eecbfff3b88b2746f535e055e1cf976fa0d76755d4eb7157a79c87f81b"
+        ),
+        "physical_upload_bytes_verified": False,
+    }
+    assert status["native_runtime"]["status"] == "required-on-ci"
+    assert len(status["native_runtime"]["input"]["cases"]) == 5
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+
 def test_fft_directx_evidence_records_selected_native_runtime_proof():
     module = _load_harness()
     gaps = json.loads(
@@ -13142,7 +13184,7 @@ def test_fft_directx_evidence_records_selected_native_runtime_proof():
     )
 
     status = gaps["directx_fft_translation_status"]
-    assert status["status"] == "translated-dxc-validated-native-execution-required"
+    assert status["status"] == "translated-toolchain-validated-native-loader-executed"
     assert status["source"] == module.MLX_FFT_SOURCE
     assert status["source_sha256"] == module.MLX_FFT_SHA256
     assert status["source_size_bytes"] == module.MLX_FFT_SOURCE_SIZE_BYTES
@@ -13234,7 +13276,7 @@ def test_fft_directx_evidence_records_selected_native_runtime_proof():
     assert status["tracked_issues"] == []
     assert status["mlx_host_runtime_included"] is False
     assert status["runtime_integration_included"] is True
-    assert status["selected_workload_numerical_parity_verified"] is False
+    assert status["selected_workload_numerical_parity_verified"] is True
     assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
 
@@ -13258,7 +13300,7 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
     )
 
     status = gaps["directx_fft_current_corpus_status"]
-    assert status["status"] == "translated-dxc-validated-native-execution-required"
+    assert status["status"] == "translated-toolchain-validated-native-loader-executed"
     assert status["commit"] == CURRENT_MLX_COMMIT
     assert status["source"] == "mlx/backend/metal/kernels/fft.metal"
     assert status["source_sha256"] == (
@@ -13366,7 +13408,7 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
     }
     assert status["mlx_host_runtime_included"] is False
     assert status["runtime_integration_included"] is True
-    assert status["selected_workload_numerical_parity_verified"] is False
+    assert status["selected_workload_numerical_parity_verified"] is True
     assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
 

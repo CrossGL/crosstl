@@ -590,7 +590,23 @@
     }
   },
   "directx_fft_translation_status": {
-    "status": "translated-dxc-validated-native-execution-required",
+    "status": "translated-toolchain-validated-native-loader-executed",
+    "verified_native_execution": {
+      "source_commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
+      "source_artifact_sha256": "d5fa1ae408154eae551c1ad20f02a81c47f95fe4be7df16714b4ff7bf4e8048b",
+      "workflow_commit": "a688ad155e168c22171ac274f04edb8b39db9947",
+      "job_url": "https://github.com/CrossGL/crosstl/actions/runs/37525218285/job/112481552970",
+      "artifact_name": "mlx-fft-directx",
+      "artifact_id": 11443897833,
+      "case_count": 5,
+      "result_value_count": 2560,
+      "guard_value_count": 40,
+      "initial_output_value": -999.0,
+      "reference": "independent-direct-dft-from-retained-inputs",
+      "maximum_absolute_error": 0.00006627921400514936,
+      "compiled_module_sha256": "59c265eecbfff3b88b2746f535e055e1cf976fa0d76755d4eb7157a79c87f81b",
+      "physical_upload_bytes_verified": false
+    },
     "source": "mlx/backend/metal/kernels/fft.metal",
     "source_sha256": "3a1fbb38ed64f50a49a20d0c5adb1748d9d06ea20e5931e99aa26be543cb7825",
     "source_size_bytes": 3278,
@@ -742,7 +758,7 @@
     "tracked_issues": [],
     "mlx_host_runtime_included": false,
     "runtime_integration_included": true,
-    "selected_workload_numerical_parity_verified": false,
+    "selected_workload_numerical_parity_verified": true,
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false,
     "previous_artifact": {
@@ -3767,7 +3783,23 @@
     "runtime_parity_claimed": false
   },
   "directx_fft_current_corpus_status": {
-    "status": "translated-dxc-validated-native-execution-required",
+    "status": "translated-toolchain-validated-native-loader-executed",
+    "verified_native_execution": {
+      "source_commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+      "source_artifact_sha256": "f8c8c4b18cabaa7f2997dcdb68b8a9f32645f274c271e454e44dfe463cd4a1ff",
+      "workflow_commit": "a688ad155e168c22171ac274f04edb8b39db9947",
+      "job_url": "https://github.com/CrossGL/crosstl/actions/runs/37525218285/job/112481552970",
+      "artifact_name": "mlx-fft-directx",
+      "artifact_id": 11443897833,
+      "case_count": 5,
+      "result_value_count": 2560,
+      "guard_value_count": 40,
+      "initial_output_value": -999.0,
+      "reference": "independent-direct-dft-from-retained-inputs",
+      "maximum_absolute_error": 0.00006627921400514936,
+      "compiled_module_sha256": "59c265eecbfff3b88b2746f535e055e1cf976fa0d76755d4eb7157a79c87f81b",
+      "physical_upload_bytes_verified": false
+    },
     "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
     "source": "mlx/backend/metal/kernels/fft.metal",
     "source_sha256": "c478eb84283bbdf585c0cb34b2bfde5b0fc32d1740c6ad76e8559698a57b8d2e",
@@ -3900,7 +3932,7 @@
     },
     "mlx_host_runtime_included": false,
     "runtime_integration_included": true,
-    "selected_workload_numerical_parity_verified": false,
+    "selected_workload_numerical_parity_verified": true,
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false,
     "previous_artifact": {
