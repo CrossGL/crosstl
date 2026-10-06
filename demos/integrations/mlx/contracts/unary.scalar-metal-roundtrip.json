@@ -742,8 +742,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "72f27ea0dc1f082f81337f3fe7c2b9fc4de44c256f831954d03f8df0ee48806b",
-      "sizeBytes": 1123
+      "sha256": "db9e09a9b4bec45d9619d11c8494bb001234ed989bc26ddcc903405f63f9412a",
+      "sizeBytes": 3712
     },
     {
       "entryPoint": "v_Expcomplex64complex64",
@@ -760,8 +760,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "f9ab0c665f1f4534fa0d7f83b113dabfc29ec9531a459846a47355648257e28b",
-      "sizeBytes": 1052
+      "sha256": "856dac824287237b4ac4954f1976abe5d5a91540a5d2e74ae2dc1aff8c33f2cf",
+      "sizeBytes": 3641
     },
     {
       "entryPoint": "v_Expfloat32float32",
@@ -769,8 +769,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "e8e9135422c61af239e87e6f6bad0dde8e6f6eb857bf199490f58a609691adca",
-      "sizeBytes": 1065
+      "sha256": "83c6fbe26c1d7325c6335fbfb77545cfa651616a700356223df1a8e116ae763e",
+      "sizeBytes": 3654
     },
     {
       "entryPoint": "v_Expm1bfloat16bfloat16",

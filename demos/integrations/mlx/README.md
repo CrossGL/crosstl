@@ -277,6 +277,13 @@ materializations are unchanged. The separate scalar contract and ArcCos loader
 identity match the same reviewed artifacts; no source selection or tolerance
 was changed.
 
+A subsequent complete review recompiles all 877 retained outputs with warnings
+fatal. Fifteen exponential entries now use the already reviewed precise-exp
+helper with source expression grouping preserved; the other 862 are byte-for-byte
+unchanged. All host interfaces and materialization counts remain unchanged.
+The three affected scalar-subset identities match the complete family. This
+reference update does not expand numerical tolerances or claim full-suite parity.
+
 A local original/generated Metal comparison covers 69 changed operator/type
 selections and 1,863,009 values per path. Fifty-three selections match exactly;
 sixteen have floating-point bit differences. Sampled scalar float32 results
