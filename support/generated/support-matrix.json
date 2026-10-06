@@ -155,7 +155,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1851
+        "test_count": 1860
       },
       "translator_codegen": {
         "exists": true,
