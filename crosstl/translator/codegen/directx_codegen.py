@@ -1591,6 +1591,35 @@ class HLSLCodeGen:
     HLSL_SIGNBIT_NAMES = frozenset(
         {"signbit", "metal::signbit", "metal_u3a_u3asignbit"}
     )
+    HLSL_COMPONENTWISE_FLOAT_UNARY_FUNCTIONS = frozenset(
+        {
+            "abs",
+            "acos",
+            "asin",
+            "atan",
+            "ceil",
+            "cos",
+            "cosh",
+            "degrees",
+            "exp",
+            "exp2",
+            "floor",
+            "frac",
+            "log",
+            "log2",
+            "radians",
+            "round",
+            "rsqrt",
+            "saturate",
+            "sign",
+            "sin",
+            "sinh",
+            "sqrt",
+            "tan",
+            "tanh",
+            "trunc",
+        }
+    )
     HLSL_INVERSE_HYPERBOLIC_NAMES = frozenset({"acosh", "asinh", "atanh"})
     HLSL_INVERSE_HYPERBOLIC_ALIASES = {
         "acosh": "acosh",
@@ -14644,6 +14673,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return overloaded_return_type
             if func_name in getattr(self, "function_return_types", {}):
                 return self.function_return_types[func_name]
+            if (
+                len(args) == 1
+                and self.function_map.get(func_name, func_name)
+                in self.HLSL_COMPONENTWISE_FLOAT_UNARY_FUNCTIONS
+            ):
+                argument_type = self.expression_result_type(args[0])
+                if argument_type is not None:
+                    mapped_argument = self.map_type(argument_type)
+                    if mapped_argument in {"float", "float2", "float3", "float4"}:
+                        return mapped_argument
             unsupported_functions = getattr(
                 self, "unsupported_glsl_buffer_block_functions", {}
             )

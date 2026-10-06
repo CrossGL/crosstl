@@ -27,10 +27,12 @@ from crosstl.translator.ast import (
     ReferenceType,
     UnaryOpNode,
     VariableNode,
+    VectorType,
 )
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.resource_aggregates import (
     ResourceAggregateError,
+    _pointer_type,
     lower_resource_aggregates,
 )
 from tests.ci_helpers import assert_paths_covered
@@ -43,6 +45,9 @@ from tests.test_translator.test_metal_member_pointer_provenance import (
 from tests.test_translator.test_software_subgroup_product import _package
 
 REQUIRE_ENV = "CROSTL_REQUIRE_RESOURCE_AGGREGATES"
+VECTOR_CASES = tuple(
+    f"vector-{kind}-{lanes}" for kind in ("float", "int", "uint") for lanes in (2, 4)
+)
 CASES = (
     "cursor",
     "copy",
@@ -63,7 +68,7 @@ CASES = (
     "entry-rebase",
     "alias-writeback",
     "typedef",
-)
+) + VECTOR_CASES
 
 
 def _source(case):
@@ -152,7 +157,7 @@ def _source(case):
     if case == "shadow":
         body = f"if (tid < 4) {{ {body} }}"
     right_space = "constant" if case == "constant" else "device"
-    return f"""#include <metal_stdlib>
+    source = f"""#include <metal_stdlib>
 using namespace metal;
 {declarations}
 kernel void aggregate_resources(const device int* left [[buffer(0)]],
@@ -163,9 +168,46 @@ kernel void aggregate_resources(const device int* left [[buffer(0)]],
     {body}
 }}
 """
+    if case in VECTOR_CASES:
+        _, kind, lanes = case.split("-")
+        source = source.replace("int*", f"{kind}{lanes}*")
+    return source
 
 
 def _workload(case):
+    if case in VECTOR_CASES:
+        _, kind, width = case.split("-")
+        lanes = int(width)
+        offset = 0.25 if kind == "float" else 0
+        sign = 1 if kind == "uint" else -1
+        left = [
+            sign * (11 * index + lane + 1) + offset
+            for index in range(10)
+            for lane in range(lanes)
+        ]
+        right = [
+            53 * index + lane + offset for index in range(10) for lane in range(lanes)
+        ]
+        guard = 999 if kind == "uint" else -999
+        first = [guard] * (12 * lanes)
+        first[2 * lanes : 6 * lanes] = left[lanes : 5 * lanes]
+
+        def typed(values):
+            return {
+                "dtype": {"float": "float32", "int": "int32", "uint": "uint32"}[kind],
+                "shape": [len(values) // lanes, lanes],
+                "values": values,
+            }
+
+        return (
+            {
+                "left": typed(left),
+                "right": typed(right),
+                "first": typed([guard] * (12 * lanes)),
+                "second": typed([guard] * (12 * lanes)),
+            },
+            {"first": typed(first), "second": typed([guard] * (12 * lanes))},
+        )
     left = [11, -3, 47, -91, 5, 107, -23, 53, 29, 71]
     right = [-113, 17, 61, 79, -31, 13, -43, 97, 109, -127]
     first, second = [-999] * 12, [-999] * 12
@@ -214,6 +256,37 @@ def _workload(case):
         },
         {"first": typed(first), "second": typed(second)},
     )
+
+
+@pytest.mark.parametrize(
+    "kind,prefix", [("float", "vec"), ("int", "ivec"), ("uint", "uvec")]
+)
+@pytest.mark.parametrize("lanes", [2, 4])
+def test_resource_vector_pointee_retains_component_type_and_width(kind, prefix, lanes):
+    value = VectorType(PrimitiveType(kind), lanes)
+    pointer = _pointer_type(PointerType(value, address_space="device"))
+    resource = _pointer_type(NamedType("RWStructuredBuffer", generic_args=[value]))
+    assert pointer == resource
+    assert pointer.element == f"{prefix}{lanes}"
+
+
+@pytest.mark.parametrize(
+    "kind,lanes,bits",
+    [
+        ("float", 3, None),
+        ("half", 2, None),
+        ("bfloat", 4, None),
+        ("bool", 2, None),
+        ("float", 2, 16),
+        ("double", 2, None),
+        ("int64_t", 4, None),
+    ],
+)
+def test_resource_vector_pointee_rejects_unproven_storage(kind, lanes, bits):
+    value = VectorType(PrimitiveType(kind, size_bits=bits), lanes)
+    with pytest.raises(ResourceAggregateError) as error:
+        _pointer_type(PointerType(value, address_space="device"))
+    assert error.value.reason == "unsupported-vector-pointee"
 
 
 @pytest.mark.parametrize("case", CASES)

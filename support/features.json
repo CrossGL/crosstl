@@ -3892,12 +3892,17 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "Selected compute entries lower private constant/device pointer-bearing aggregates to resource identity and signed element offsets, including nested owners, fixed pointer arrays, copies, rebasing and helper calls. Native Windows controls are required. External aggregate buffer layouts, thread/workgroup pointer fields, pointer identity operations and unproven escapes remain unsupported; this is not full MLX host integration.",
+          "notes": "Selected compute entries lower private constant/device pointer-bearing aggregates to resource identity and signed element offsets, including nested owners, fixed pointer arrays, copies, rebasing and helper calls. Typed vector pointees retain two or four 32-bit float/int/uint components and vector-element offsets; unproven vector layouts remain diagnostic. Native Windows controls are required. External aggregate buffer layouts, thread/workgroup pointer fields, pointer identity operations and unproven escapes remain unsupported; this is not full MLX host integration.",
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_struct",
+            "tests/test_translator/test_codegen/test_directx_builtin_inference.py::def test_builtin_width_in_vector_initializer",
+            "tests/test_translator/test_codegen/test_directx_builtin_inference.py::def test_user_overload_return_type_precedes_builtin",
+            "tests/test_translator/test_codegen/test_directx_builtin_inference.py::def test_unproven_initializer_retains_diagnostic",
             "tests/test_translator/test_resource_aggregates.py::def test_resource_aggregate_compiles",
             "tests/test_translator/test_resource_aggregates.py::def test_resource_aggregate_executes_natively",
             "tests/test_translator/test_resource_aggregates.py::def test_resource_aggregate_rejects_unproven_operations",
+            "tests/test_translator/test_resource_aggregates.py::def test_resource_vector_pointee_retains_component_type_and_width",
+            "tests/test_translator/test_resource_aggregates.py::def test_resource_vector_pointee_rejects_unproven_storage",
             "tests/test_translator/test_pointer_offset_address_spaces.py::def test_project_preserves_pointer_offset_calls",
             "tests/test_translator/test_pointer_offset_address_spaces.py::def test_pointer_offsets_execute_natively",
             "demos/integrations/mlx/tests/kernels/test_general_gather_directx.py::def test_indexed_general_gather_executes_natively"
@@ -3905,7 +3910,7 @@
         },
         "opengl": {
           "status": "supported",
-          "notes": "OpenGL lowers struct declarations, member access, initialization, and return values. Contextual braced initializers preserve trailing value initialization recursively through nested structs, fixed arrays, and vectors; Metal-materialized partial vector constructors count supplied scalar and vector components and append type-correct zeros without repeating expression evaluation. Selected compute entries lower private storage-pointer aggregates through resource identities and signed offsets, specializing helpers against concrete buffer bindings. Final subscripts require proven ranges or explicit index-range assertions; external aggregate layouts and unproven escapes remain unsupported. Generated-code validation and required native compute controls exercise this bounded contract, not full MLX host integration.",
+          "notes": "OpenGL lowers struct declarations, member access, initialization, and return values. Contextual braced initializers preserve trailing value initialization recursively through nested structs, fixed arrays, and vectors; Metal-materialized partial vector constructors count supplied scalar and vector components and append type-correct zeros without repeating expression evaluation. Selected compute entries lower private storage-pointer aggregates through resource identities and signed offsets, specializing helpers against concrete buffer bindings. Typed vector pointees retain two or four 32-bit float/int/uint components and vector-element offsets; unproven vector layouts remain diagnostic. Final subscripts require proven ranges or explicit index-range assertions; external aggregate layouts and unproven escapes remain unsupported. Generated-code validation and required native compute controls exercise this bounded contract, not full MLX host integration.",
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_generic_struct_concrete_constructor_and_member_access",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_aggregate_initializers",

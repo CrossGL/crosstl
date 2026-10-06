@@ -1358,8 +1358,13 @@ standalone OpenGL ``main`` artifacts. The compact schema-v2
 ``reduce.opengl-translation.json`` contract preserves the 39 shapes, nine
 kernel templates, six operator families, 44 concrete operator types, and 13
 input/output types while pinning 9,216 exact materializations,
-31,155,122 generated GLSL bytes, and 25,088 resources across
+32,115,641 generated GLSL bytes, and 25,088 resources across
 scalar-layout-aware one- through twelve-resource target ABIs.
+All source bodies and resource interfaces have complete reference comparisons;
+85 fresh pipeline checks cover every reviewed edit pattern and ABI shape.
+The 156 complex-buffer metadata updates describe existing storage layouts,
+not new resource declarations. These checks establish deterministic translation
+and strict compilation, not whole-family numerical execution.
 
 OpenGL's signed 32-bit logical buffer offsets require six explicit
 source-expression portability preconditions: the one-, two-, and
@@ -4508,6 +4513,19 @@ does not change the source buffer ABI to store these private handles.
 OpenGL specializes the same private handles against concrete storage buffers;
 final subscripts require proven bounds or explicit allocation-derived range
 assertions. Unsupported aggregate escapes remain diagnostic on both targets.
+Two- and four-component vectors of 32-bit floating-point, signed integer and
+unsigned integer elements retain their component types and widths in these
+private references. Offsets count complete vectors, not scalar components;
+guarded native controls exercise rebasing, buffer selection and untouched output
+ranges. Three-component, narrow, boolean and 64-bit typed vector pointees remain
+diagnostic because this path does not establish their storage layouts.
+
+DirectX contextual vector initializers retain the result width of supported
+componentwise unary builtins on 32-bit float scalars and vectors, including
+nested calls. Declared function return types take precedence over builtin
+inference. Unknown calls, wrong argument counts and overfilled vectors retain
+their aggregate diagnostics; inferred types do not duplicate expression
+evaluation or establish numerical parity for the enclosing kernel.
 
 Concrete Metal ``vec<T, N>`` constructors preserve scalar splats, copied vectors
 and mixed component arguments for float, half and integer widths two through

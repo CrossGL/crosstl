@@ -8,6 +8,7 @@ instead of constructing target resource-object arrays. The source AST is retaine
 from copy import copy, deepcopy
 from dataclasses import dataclass
 
+from ..arithmetic_conversions import arithmetic_type_name, target_arithmetic_type
 from ..ast import (
     AST_CHILD_FIELD_EXCLUSIONS,
     ArrayAccessNode,
@@ -38,6 +39,7 @@ from ..ast import (
     TypeNode,
     UnaryOpNode,
     VariableNode,
+    VectorType,
 )
 from .array_utils import evaluate_literal_int_expression
 
@@ -93,6 +95,17 @@ def _pointer_type(value, owner=None):
     qualifiers.update(_name(item) for item in getattr(owner, "attributes", ()) or ())
 
     def element_name(value):
+        if isinstance(value, VectorType):
+            component = target_arithmetic_type(_name(value.element_type))
+            if (
+                component is None
+                or component.lanes != 1
+                or component.bits != 32
+                or getattr(value.element_type, "size_bits", None) not in {None, 32}
+                or value.size not in {2, 4}
+            ):
+                raise ResourceAggregateError("unsupported-vector-pointee", owner)
+            return arithmetic_type_name(component.kind, component.bits, value.size)
         return {"int64": "int64_t", "uint64": "uint64_t"}.get(
             _name(value), _name(value)
         )
