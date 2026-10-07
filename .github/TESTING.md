@@ -183,10 +183,13 @@ unchanged upstream source. Windows execution remains mandatory.
 The binary step selects native test functions explicitly. Portable reflection,
 configuration and mocked-dispatch tests remain in the Ubuntu complete suite.
 Remainder types and floating source-profile batches are separate pytest cases,
-scheduled with work stealing across the existing two workers. Minimum/maximum,
-addition/subtraction and division each use one half batch and one float32/bfloat
-batch. The 15 entries share six translation and package builds instead of
-15, while retaining all 93,456 values and 120 guards. Every entry keeps its own
+scheduled across the existing two workers with one-test load-scheduling chunks.
+The 16 floating entries share four translation and package builds: six half
+kernels, four float32/bfloat comparison kernels, four float32/bfloat additive
+kernels and two float32/bfloat division kernels. Half multiplication contributes
+5,632 pairs and eight guards; the combined inventory retains all 99,088 values
+and 128 guards. Comparison policy remains operation-specific, including exact
+NaN payloads for selection inside the mixed half batch. Every entry keeps its own
 artifact, exact load-unit selection, native compilation and readback; incompatible
 profiles, duplicate entries and missing or blocked load units are rejected.
 Each batch selects explicit entry names and one shared `[1, 1, 1]` workgroup rule;

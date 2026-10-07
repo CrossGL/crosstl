@@ -54,13 +54,13 @@ REDUCE_DIRECTX_CONTRACT_PATH = (
     / "reduce.directx-translation.json"
 )
 REDUCE_DIRECTX_CONTRACT_SHA256 = (
-    "0551bf03bd3d0a5e4f330bd789ee4c6f85dce54efa20dfd96f8c28f692e87c7a"
+    "2c6f5e54324458abcaf03308f13366e7a0c87815daabd3fb83dd2b7155096517"
 )
-REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1795459
+REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1795461
 REDUCE_DIRECTX_SPECIALIZATION_COUNT = 9216
 REDUCE_DIRECTX_REFLECTED_RESOURCE_COUNT = 27382
-REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 36938786
-REDUCE_DIRECTX_DXIL_SIZE_BYTES_TOTAL = 24289872
+REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 36957938
+REDUCE_DIRECTX_DXIL_SIZE_BYTES_TOTAL = 24292688
 REDUCE_DIRECTX_GENERATED_SIZE_MINIMUM = ("init_reduce_minbool_", 1616)
 REDUCE_DIRECTX_GENERATED_SIZE_MAXIMUM = (
     "row_reduce_looped_large_5_reduce_mincomplex64",
@@ -502,6 +502,18 @@ def _translate_and_validate(
     generated = generated_path.read_text(encoding="utf-8")
     assert "[numthreads(1, 1, 1)]" in generated
     assert generated.count("void CSMain(") == 1
+    if (
+        workload.input_type == "float16_t"
+        and workload.operator in {"Min<float16_t>", "Max<float16_t>"}
+        and workload.shape != "init"
+    ):
+        comparison = "<" if workload.operator == "Min<float16_t>" else ">"
+        assert generated.count("float16_t __crossgl_select_half_bits1(") == 1
+        assert "if (isnan(a) || isnan(b))" in generated
+        assert (
+            f"return __crossgl_select_half_bits1((a {comparison} b), a, b);"
+            in generated
+        )
     for residue in (
         "template <",
         "decltype(",

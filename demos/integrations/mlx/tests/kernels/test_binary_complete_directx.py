@@ -44,10 +44,10 @@ BINARY_DIRECTX_CONTRACT_PATH = (
     / "binary.directx-translation.json"
 )
 BINARY_DIRECTX_CONTRACT_SHA256 = (
-    "afcab26a32aab9abce3533f14ec535f6ab8ef42da3510810b3beab5de8d3a5b8"
+    "5cb04163ba03a26d4b2560cffbd4c6718ea67a685101a29a480259d5c6cc2d71"
 )
-BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1470376
-BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 11969895
+BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1470862
+BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 11978895
 BINARY_DIRECTX_GENERATED_SIZE_MINIMUM = ("ss_Addint32", 1848)
 BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_LogAddExpcomplex64", 11279)
 INDEX_RANGE_ASSERTIONS = (
@@ -445,7 +445,22 @@ def test_binary_atan2_artifact_refresh_preserves_corpus_scope():
                 "halfStorageEncoding": "ieee754-binary16",
                 "numericalExecution": False,
                 "fullUpstreamSuite": False,
-            }
+            },
+            {
+                "reason": (
+                    "Preserve selected binary16 operand bits in HLSL minimum and maximum."
+                ),
+                "previousContractSha256": (
+                    "afcab26a32aab9abce3533f14ec535f6ab8ef42da3510810b3beab5de8d3a5b8"
+                ),
+                "changedEntryCount": 36,
+                "unaffectedEntryCount": 4086,
+                "reviewedBodyCount": 36,
+                "nativeCompiledChangedEntryCount": 36,
+                "unchangedSourceAndInterfaceContracts": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            },
         ],
     }
     affected = [
@@ -552,6 +567,16 @@ def _translate_and_validate(
     generated = generated_path.read_text(encoding="utf-8")
     assert "[numthreads(1, 1, 1)]" in generated
     assert generated.count("void CSMain(") == 1
+    if workload.input_type == "half" and workload.operator_type in {
+        "Minimum",
+        "Maximum",
+    }:
+        comparison = "<" if workload.operator_type == "Minimum" else ">"
+        assert generated.count("float16_t __crossgl_select_half_bits1(") == 1
+        assert (
+            "return __crossgl_select_half_bits1(isnan(x), x, "
+            f"__crossgl_select_half_bits1((x {comparison} y), x, y));" in generated
+        )
     selected_implementation = re.compile(
         rf"(?m)^[A-Za-z_][A-Za-z0-9_]*\s+"
         rf"{re.escape(workload.operator_type)}__operator_call"

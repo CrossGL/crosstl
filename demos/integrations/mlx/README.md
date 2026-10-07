@@ -639,8 +639,9 @@ The current harness verifies:
   remains open in [#2073](https://github.com/CrossGL/crosstl/issues/2073).
   Reviewed half-remainder entries have bounded numerical evidence described
   below, not whole-family parity or MLX host runtime redirection;
-- selected-entry translation of all 4,122 discovered current-pinned
-  `binary.metal` entries to DirectX. The schema-v2
+- selected-entry translation of all 4,122 discovered historical
+  `binary.metal` entries to DirectX at revision
+  `846d176227a0ac13d2667e58d2bb68b322109ab0`. The schema-v2
   `contracts/binary.directx-translation.json` contract pins every standalone
   `CSMain` artifact across all 18 shapes, 11 templates, 24 operators, 25 type
   pairs, and 6,026 materializations. Nine source shapes that consume
@@ -656,9 +657,15 @@ The current harness verifies:
   deterministic identity, materialization, `CSMain` workgroup metadata, and
   reflected ABI, then compile with checksum-pinned DXC using native 16-bit
   types and warnings fatal. The gate requires 4,122 non-empty DXIL modules.
-  Together with the OpenGL and Metal contracts this closes complete binary
-  translation, reflection, and native compiler coverage, not numerical
-  execution or MLX host runtime redirection;
+  The half minimum/maximum review updates 36 references across all 18 shapes.
+  Complete before/after bodies, interfaces and materializations were checked;
+  the only changes are a bit-preserving half-selection helper and its calls.
+  Both versions compile with strict DXC, and independent rebuilds reproduce
+  the current DXIL exactly. Two vector-vector artifacts match the shaders
+  executed in Windows CI: 9,344 results and 16 guards agree bit for bit,
+  including NaN payloads and signed zero. These samples do not establish
+  whole-family numerical execution. Remaining binary reference reconciliation
+  is tracked in [#2071](https://github.com/CrossGL/crosstl/issues/2071);
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 2,396
   discovered reduction entries from `reduce.metal` at historical revision
   `846d176227a0ac13d2667e58d2bb68b322109ab0`. The compact
@@ -792,9 +799,17 @@ The current harness verifies:
   materialization, workgroup metadata, and reflected ABI, and compile with
   checksum-pinned DXC using `-enable-16bit-types -WX -T cs_6_2 -E CSMain`,
   requiring 2,396 non-empty DXIL modules. The reviewed references total
-  36,938,786 HLSL bytes and 24,289,872 DXIL bytes. Source references preserve
-  the original integer-product grouping; an independent rebuild of all
-  2,396 modules confirms unchanged DXIL identities. This records complete
+  36,957,938 HLSL bytes and 24,292,688 DXIL bytes. Source references preserve
+  the original integer-product grouping. The subsequent half-selection review
+  reproduces all 78 previous half minimum/maximum sources and DXIL identities,
+  compares complete bodies and interfaces, and updates 76 changed references;
+  the two initializer entries remain byte-identical. Only the bit-preserving
+  selection helper and its calls change. Strict independent recompilation
+  reproduces all 78 current modules. Shared Windows selection checks cover
+  every binary16 encoding in both operand positions, with 853,840 exact values
+  and 64 guards; they do not execute these complete reduction kernels.
+  The remaining 2,318 reduction references retain their earlier independent
+  compiler proof. This records complete
   translation, reflection and compiler coverage for this historical HLSL corpus,
   not numerical execution or MLX host runtime redirection. Other target reference
   updates remain separate;
@@ -3194,17 +3209,20 @@ verifies each batch's settings against single-entry configuration. Comparison
 policy is selected per operation: selection preserves exact NaN payloads even
 when sharing a batch with arithmetic operations that permit payload differences.
 
-After these reviewed updates, 126 changed binary references remain under review
-in #2073: 36 each for arctangent, log-add-exp and power, and 18 for multiplication.
-Float32/bfloat multiplication's source subnormal policy remains tracked in #2114.
-Fresh native probes also expose arctangent zero/NaN boundary failures (#2118)
-and floating-power domain failures (#2119). Reduced binary32 kernels reproduce
-both without MLX headers; successful compilation does not justify accepting
-those references. The Windows native run at `6f325314` exposed signaling-NaN
-differences in half minimum selection, recorded in #2081. The later run at
-`cf6a8194` passes all six extrema cases with exact operand words, but times out
-before completing float32/bfloat division. A completed native step remains
-required; neither successful compilation nor partial execution is a passing gate.
+Binary reference reconciliation remains open in #2073. The precise arctangent
+fix (#2118) changes all 54 variants, including float32; the earlier remaining
+reference count no longer describes current output. Local original/generated
+Metal and OpenGL checks pass with an explicit subnormal policy, but each corpus
+reference still needs review. Floating-power domain failures (#2119), narrow
+log-add-exp accuracy (#2068), and float32/bfloat multiplication's source subnormal
+policy (#2114) remain separate numerical work. Successful compilation alone
+does not justify accepting those references.
+
+The Windows run at `6f325314` exposed signaling-NaN differences in half minimum
+selection (#2116). Later retained readbacks preserve all 9,344 half minimum/maximum
+results and 16 guards exactly. At `90b6f596`, the complete required binary-math
+step passes in 594 seconds under the unchanged 900-second limit. That step result
+does not establish complete host-runtime redirection or full upstream-suite parity.
 
 The native arithmetic step runs device execution, original-source controls and
 Metal linkage checks only. Platform-independent configuration and generation
