@@ -6334,13 +6334,25 @@ def _runtime_value_physical_byte_length(
     layout = _runtime_scalar_layout_signature(value.metadata)
     if not layout:
         layout = _runtime_scalar_layout_signature(binding.metadata)
-    vector_width = layout.get("vectorWidth", 1)
+    struct_members = layout.get("structMembers")
+    is_struct = "structMembers" in layout or "componentCount" in layout
+    vector_width = (
+        layout.get("componentCount") if is_struct else layout.get("vectorWidth", 1)
+    )
     if (
         not isinstance(vector_width, int)
         or isinstance(vector_width, bool)
         or vector_width < 1
-        or vector_width > 4
+        or vector_width > (64 if is_struct else 4)
         or element_count % vector_width
+        or (
+            is_struct
+            and (
+                not isinstance(struct_members, list)
+                or len(struct_members) != vector_width
+                or "vectorWidth" in layout
+            )
+        )
     ):
         return None
     stride = layout.get("elementStrideBytes")
@@ -6691,6 +6703,8 @@ def _runtime_scalar_layout_signature(metadata: Mapping[str, Any]) -> dict[str, A
         "elementSizeBytes",
         "elementStrideBytes",
         "vectorWidth",
+        "componentCount",
+        "structMembers",
         "alignmentBytes",
         "memberOffsetBytes",
         "storageLayout",
