@@ -44,12 +44,12 @@ BINARY_DIRECTX_CONTRACT_PATH = (
     / "binary.directx-translation.json"
 )
 BINARY_DIRECTX_CONTRACT_SHA256 = (
-    "5cb04163ba03a26d4b2560cffbd4c6718ea67a685101a29a480259d5c6cc2d71"
+    "ad54240fe89ec264b38e0e2e43dd91a866e5b886081a8fbb208f2ac775580864"
 )
-BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1470862
-BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 11978895
+BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1471374
+BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 12151371
 BINARY_DIRECTX_GENERATED_SIZE_MINIMUM = ("ss_Addint32", 1848)
-BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_LogAddExpcomplex64", 11279)
+BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_ArcTan2float16", 12935)
 INDEX_RANGE_ASSERTIONS = (
     ("offset + i", 0, 2147483647),
     ("a_idx", 0, 2147483647),
@@ -350,6 +350,11 @@ def test_current_mlx_binary_directx_ci_shards_are_complete_and_disjoint() -> Non
 
 
 def _project_config(workload: BinaryMetalWorkload) -> str:
+    profile = (
+        'binary32_atan2_profile = "flush-subnormals"'
+        if workload.operator_type == "ArcTan2"
+        else ""
+    )
     assertions = "\n\n".join(textwrap.dedent(f"""
             [[project.index_range_assertions]]
             source = "{MLX_BINARY_SOURCE}"
@@ -377,6 +382,7 @@ def _project_config(workload: BinaryMetalWorkload) -> str:
         [project.source_options.metal]
         max_template_specializations = 64
         max_template_materialization_work = 4096
+        {profile}
 
         {assertions}
         """).strip()
@@ -457,6 +463,21 @@ def test_binary_atan2_artifact_refresh_preserves_corpus_scope():
                 "unaffectedEntryCount": 4086,
                 "reviewedBodyCount": 36,
                 "nativeCompiledChangedEntryCount": 36,
+                "unchangedSourceAndInterfaceContracts": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            },
+            {
+                "reason": (
+                    "Preserve source arctangent precision and explicit binary32 underflow in HLSL."
+                ),
+                "previousContractSha256": (
+                    "5cb04163ba03a26d4b2560cffbd4c6718ea67a685101a29a480259d5c6cc2d71"
+                ),
+                "changedEntryCount": 54,
+                "unaffectedEntryCount": 4068,
+                "reviewedBodyCount": 54,
+                "nativeCompiledChangedEntryCount": 54,
                 "unchangedSourceAndInterfaceContracts": True,
                 "numericalExecution": False,
                 "fullUpstreamSuite": False,
@@ -545,10 +566,17 @@ def _translate_and_validate(
         "target": "CSMain",
         "stage": "compute",
     }
-    assert artifact["provenance"] == {
+    expected_provenance = {
         "pipeline": "entry-scoped-translate",
         "intermediate": "crossgl",
     }
+    if workload.operator_type == "ArcTan2":
+        expected_provenance["binary32Atan2Profile"] = "flush-subnormals"
+        assert (
+            payload["project"]["sourceOptions"]["metal"]["binary32_atan2_profile"]
+            == "flush-subnormals"
+        )
+    assert artifact["provenance"] == expected_provenance
     execution_entries = artifact["execution"]["entryPoints"]
     assert len(execution_entries) == 1
     assert execution_entries[0]["sourceEntryPoint"] == workload.entry_point

@@ -3220,17 +3220,34 @@ and source-control read-only inputs remain exact. Widened OpenGL narrow results
 must still be representable in their original storage type.
 
 The existing 180-second arctangent step requires this test on each native target,
-without another runner. Local original/generated Metal and OpenGL checks pass;
-Windows execution remains required CI evidence. The generic source tests also
-cover 127 scaled copies of the normal/subnormal rounding midpoint and adjacent
+without another runner. Local original/generated Metal and OpenGL checks pass.
+The [Windows arctangent step at `f5bd9c68`](https://github.com/CrossGL/crosstl/actions/runs/37659104143/job/112922487897)
+passes in 124 seconds under the same limit. The generic source tests also cover
+127 scaled copies of the normal/subnormal rounding midpoint and adjacent
 operands. This is three-entry numerical evidence, not execution of every binary
 layout or the full MLX suite.
 
 Binary reference reconciliation remains open in #2073. The precise arctangent
-fix (#2118) changes all 54 variants, including float32; the earlier remaining
-reference count no longer describes current output. Local original/generated
-Metal and OpenGL checks pass with an explicit subnormal policy, but each corpus
-reference still needs review. Floating-power domain failures (#2119), narrow
+fix (#2118) is reconciled across all 54 OpenGL and 54 DirectX variants, including
+float32. Both corpus configurations explicitly select the characterized
+`flush-subnormals` profile for arctangent only. Complete source and interface
+review preserves indexing, bindings, dispatch geometry and materialization.
+All recorded baseline identities are verified before accepting changed output:
+the older OpenGL narrow-type baselines also account for the intervening
+source-width rounding helpers. Both old and new artifacts pass strict native
+compilation, and an independent build reproduces all 54 current DXIL modules.
+Other binary entries retain their previous identities.
+
+Additional local execution covers all 54 reviewed OpenGL arctangent entries
+across 162 broadcast, strided and tail cases: 3,132 results and 1,296 guards per
+path. Generated OpenGL and unchanged current-pin Metal pass the independent
+precision-specific comparisons, with every read-only buffer unchanged.
+Dispatch sizing follows the source's `WorkPerThread<T>` rule, including two
+float32 values or four narrow values per thread where applicable. These layout
+checks complement the larger vector-vector domain checks above; they do not
+claim DirectX execution of every layout or full MLX-suite parity.
+
+Floating-power domain failures (#2119), narrow
 log-add-exp accuracy (#2068), and float32/bfloat multiplication's source subnormal
 policy (#2114) remain separate numerical work. Successful compilation alone
 does not justify accepting those references.

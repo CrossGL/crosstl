@@ -187,25 +187,40 @@ def test_atan2_comparison_enforces_precision_boundary(dtype, target):
             _compare(case, actual, expected, dtype, target)
 
 
-def test_atan2_profiles_are_scoped_to_every_binary_shape(tmp_path):
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_atan2_profiles_are_scoped_to_every_binary_shape(tmp_path, target):
     from crosstl.project import load_project_config
-    from demos.integrations.mlx.tests.kernels.test_binary_complete_opengl import (
-        BINARY_OPENGL_WORKLOADS,
-        _project_config,
+    from demos.integrations.mlx.tests.kernels import (
+        test_binary_complete_directx,
+        test_binary_complete_opengl,
     )
 
+    corpus, workloads = {
+        "directx": (
+            test_binary_complete_directx,
+            test_binary_complete_directx.BINARY_DIRECTX_WORKLOADS,
+        ),
+        "opengl": (
+            test_binary_complete_opengl,
+            test_binary_complete_opengl.BINARY_OPENGL_WORKLOADS,
+        ),
+    }[target]
+
     selected = []
-    for workload in BINARY_OPENGL_WORKLOADS:
-        text = _project_config(workload)
+    for workload in workloads:
+        text = corpus._project_config(workload)
         enabled = workload.operator_type == "ArcTan2"
         assert (f'binary32_atan2_profile = "{PROFILE}"' in text) == enabled
         if enabled:
             selected.append(workload)
     assert len(selected) == 54 and len({workload.shape for workload in selected}) == 18
     path = tmp_path / "crosstl.toml"
-    path.write_text(
-        _project_config(selected[0], entry_points=[w.entry_point for w in selected])
+    options = (
+        {"entry_points": [w.entry_point for w in selected]}
+        if target == "opengl"
+        else {}
     )
+    path.write_text(corpus._project_config(selected[0], **options))
     assert (
         load_project_config(tmp_path, path).source_options["metal"][
             "binary32_atan2_profile"
