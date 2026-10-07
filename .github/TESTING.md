@@ -175,6 +175,10 @@ checking 168,730 exact results and 56 guards per target. Zero divisors and signe
 32-/64-bit quotient overflow are excluded explicitly. macOS runs unchanged
 upstream controls; Windows requires DXC/WARP and Linux requires Mesa execution.
 The existing runners, 900-second bound and failure-artifact upload are reused.
+The seven integer entries share one translation and package build. Each entry
+still has a separate compiler invocation, reflected descriptor, native dispatch
+and readback. The entire package and completed case evidence are retained if a
+later case fails.
 
 Pinned minimum/maximum packages run in that same step: six half, bfloat and
 float32 kernels check 28,032 exact selected-operand words and 48 guards per
@@ -200,7 +204,8 @@ unchanged upstream source. Windows execution remains mandatory.
 
 The binary step selects native test functions explicitly. Portable reflection,
 configuration and mocked-dispatch tests remain in the Ubuntu complete suite.
-Remainder types and floating source-profile batches are separate pytest cases,
+Floating remainder types, the integer remainder batch and floating source-profile
+batches are separate pytest cases,
 scheduled across the existing two workers with one-test load-scheduling chunks.
 The 16 floating entries share four translation and package builds: six half
 kernels, four float32/bfloat comparison kernels, four float32/bfloat additive

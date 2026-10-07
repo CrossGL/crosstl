@@ -3101,6 +3101,10 @@ divisor-sign remainder convention, without tolerances or readback normalization.
 macOS also executes unchanged upstream Metal and checks its input buffers.
 The package fixture uses reflected physical storage; this is not a claim of
 whole-family parity or physical driver-upload capture.
+All seven integer entries share one translation and package build, avoiding six
+repeated frontend passes per target. Each kernel retains its own compiled module,
+descriptor, inputs, readback and original-source comparison. Failed batches retain
+the package and per-kernel evidence; batching does not relax the 900-second limit.
 
 The 123 affected integer remainder OpenGL references have complete historical
 and updated source review, with unchanged resource interfaces. All 246 versions
@@ -3155,7 +3159,7 @@ with strict DXC. Windows execution is a separate required check. Bit-observable
 numeric NaN conversions remain tracked in #2081. This does not establish
 bitwise NaN or whole-family parity.
 
-The binary step schedules remainder types and compatible translation batches
+The binary step schedules floating remainder types and compatible translation batches
 across its existing two workers. Original Metal library builds are shared per
 source root and worker, but source dispatches and their input checks remain per
 case. Explicit native-test selection avoids repeating portable tests already
