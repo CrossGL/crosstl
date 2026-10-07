@@ -13109,10 +13109,7 @@ def test_binary_directx_translation_evidence_records_complete_family():
     assert status["runtime_parity_claimed"] is False
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert (
-        "all 4,122 discovered current-pinned `binary.metal` entries to DirectX"
-        in readme
-    )
+    assert "all 4,122 discovered historical `binary.metal` entries to DirectX" in readme
     assert "21,248 reflected DirectX resources" in readme
     assert (
         "Computed-result bfloat ``ArcTan2``, ``LogAddExp``, and ``Power`` paths"

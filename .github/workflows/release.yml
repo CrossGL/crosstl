@@ -4,6 +4,25 @@ on:
   push:
     tags:
       - "v*.*.*"
+  pull_request:
+    branches: [main]
+    paths:
+      - "crosstl/**"
+      - "examples/**"
+      - "support/**"
+      - "docs/**"
+      - "setup.py"
+      - "pyproject.toml"
+      - "MANIFEST.in"
+      - "README.md"
+      - "LICENSE"
+      - "CITATION.cff"
+      - ".zenodo.json"
+      - "CHANGELOG.md"
+      - "tools/check_release.py"
+      - "tests/test_release.py"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,9 +37,12 @@ jobs:
     name: Build and validate distributions
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
 
     steps:
-      - name: Checkout tagged source
+      - name: Checkout source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
@@ -31,6 +53,7 @@ jobs:
           python-version: "3.12"
 
       - name: Verify tag belongs to main and matches package version
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -54,6 +77,7 @@ jobs:
           test "v${package_version}" = "${GITHUB_REF_NAME}"
 
       - name: Verify required main CI succeeded
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -92,13 +116,31 @@ jobs:
           done
 
       - name: Install release tooling
-        run: python -m pip install build==1.2.2.post1 twine==6.1.0
+        run: python -m pip install setuptools==75.3.2 build==1.2.2.post1 twine==6.1.0
 
       - name: Build wheel and source distribution
         run: python -m build
 
       - name: Validate distribution metadata
         run: python -m twine check --strict dist/*
+
+      - name: Verify release metadata and package contents
+        run: python tools/check_release.py distributions dist
+
+      - name: Test isolated wheel and source installations
+        shell: bash
+        run: |
+          version="$(python setup.py --version)"
+          for package in dist/*.whl dist/*.tar.gz; do
+            environment="$RUNNER_TEMP/install-$(basename "$package")"
+            python -m venv "$environment"
+            "$environment/bin/python" -m pip install "$GITHUB_WORKSPACE/$package"
+            (
+              cd "$RUNNER_TEMP"
+              env -u PYTHONPATH "$environment/bin/python" \
+                "$GITHUB_WORKSPACE/tools/check_release.py" installed --version "$version"
+            )
+          done
 
       - name: Upload distributions
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -111,6 +153,7 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -134,6 +177,7 @@ jobs:
   github-release:
     name: Create GitHub Release
     needs: publish-pypi
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

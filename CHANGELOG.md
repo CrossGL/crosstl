@@ -6,6 +6,32 @@ All notable changes to CrossTL are documented in this file.
 
 ---
 
+## [3.4.0] - 2026-10-07
+
+### Added
+
+- Explicit source arithmetic profiles for binary32 addition, subtraction, division, remainder and precise arctangent, with native DirectX, OpenGL and Metal controls for rounding, subnormals, signed zeros and non-finite values.
+- Exact thread-grid dispatch regions, fixed partial workgroups, Boolean subgroup votes and source-ordered software subgroup products. Unsupported collective control flow remains a diagnostic failure.
+- Native runtime support for Boolean, binary16, bfloat16, byte and 64-bit integer storage, shared allocation views, immutable DirectX constants and validated resource ranges.
+- Project integration demos for selected array operations, copies, casts, reductions, indexing, scatter and random generation through translated runtime packages. The MLX demo records pinned sources, host adaptations, native dispatches and unchanged upstream test selections; it does not provide a complete replacement backend or pass the complete upstream suite.
+- Release package checks on Ubuntu, including isolated installation of both the wheel and source distribution, CLI translation and packaged native runtime resources before publication.
+
+### Improved
+
+- Project-specific manifests, test fixtures, adapters and reports now live under `demos/integrations/mlx`, with project validation consolidated in `demo-project-testing.yml`.
+- Python compatibility matrices run on Ubuntu, with grouped Windows and macOS suites retaining platform coverage. Compiler-only DirectX checks run on Ubuntu; Metal artifact generation is separated from native compilation. Required numerical execution remains on the corresponding native platforms.
+- Native demo checks reuse compatible translation and source-library setup, retain per-test progress and preserve numerical cases, guards and evidence when a check fails.
+- Runtime manifest construction reuses source reflection, and project report operations reuse completed validation without reinterpreting its result.
+
+### Fixed
+
+- Metal template lookup, constrained specialization, alias ownership, operator scopes and helper linkage preserve source identities through materialization.
+- HLSL, GLSL and Metal lowering preserve integer promotions, vector initialization, byte narrowing, binary16 selection payloads, bfloat rounding, atomic destinations and writable argument evaluation.
+- DirectX compilation resolves relative includes through long Windows paths without changing the compiler's working-directory semantics.
+- Demo artifact references are reconciled only after source, interface and compiler review. Compiler acceptance is reported separately from numerical and host-runtime coverage.
+
+---
+
 ## [3.3.0] - 2026-10-01
 
 ### Added
