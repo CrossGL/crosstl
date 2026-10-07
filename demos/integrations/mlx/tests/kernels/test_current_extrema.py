@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from demos.integrations.mlx.tests.kernels.floating_binary_runtime import (
+    NATIVE_DTYPE_BATCHES,
     BinaryCase,
     run_binary_cases,
 )
@@ -214,8 +215,8 @@ def test_extrema_comparison_rejects_payload_value_and_guard_changes(actual, expe
         _check_words(actual, expected)
 
 
-def _cases():
-    for dtype, operation in itertools.product(TYPES, OPERATIONS):
+def _cases(dtypes=TYPES):
+    for dtype, operation in itertools.product(dtypes, OPERATIONS):
         pairs = _pairs(dtype)
         expected = [_expected(a, b, dtype, operation) for a, b in pairs] + [
             _guard(dtype)
@@ -238,12 +239,14 @@ def _compare_native(actual, expected, _dtype, _target):
     _check_words(actual, expected)
 
 
-@pytest.mark.parametrize("case", list(_cases()), ids=lambda case: case.entry)
-def test_current_extrema_native_parity(tmp_path, case, binary_metal_reference):
+@pytest.mark.parametrize(
+    "dtypes", NATIVE_DTYPE_BATCHES, ids=lambda types: "-".join(types)
+)
+def test_current_extrema_native_parity(tmp_path, dtypes, binary_metal_reference):
     run_binary_cases(
         tmp_path,
         REQUIRE_ENV,
-        [case],
+        _cases(dtypes),
         request_for=_request,
         guard_for=_guard,
         source_control=binary_metal_reference,

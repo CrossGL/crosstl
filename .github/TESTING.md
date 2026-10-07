@@ -179,8 +179,16 @@ unchanged upstream source. Windows execution remains mandatory.
 
 The binary step selects native test functions explicitly. Portable reflection,
 configuration and mocked-dispatch tests remain in the Ubuntu complete suite.
-Remainder types and floating operator/type pairs are separate pytest cases,
-scheduled with work stealing across the existing two workers. The unchanged
+Remainder types and floating source-profile batches are separate pytest cases,
+scheduled with work stealing across the existing two workers. Minimum/maximum,
+addition/subtraction and division each use one half batch and one float32/bfloat
+batch. The 15 entries share six translation and package builds instead of
+15, while retaining all 93,456 values and 120 guards. Every entry keeps its own
+artifact, exact load-unit selection, native compilation and readback; incompatible
+profiles, duplicate entries and missing or blocked load units are rejected.
+Each batch selects explicit entry names and one shared `[1, 1, 1]` workgroup rule;
+separate per-entry rule validation remains tracked in #1970.
+The unchanged
 Metal reference library is built once per source root and worker, while every
 case still runs its own original-source dispatch and checks its inputs. The
 900-second bound, required native cases and evidence uploads are unchanged.

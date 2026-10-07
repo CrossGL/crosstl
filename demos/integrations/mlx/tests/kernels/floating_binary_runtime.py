@@ -13,7 +13,14 @@ from typing import Mapping, Sequence, Tuple
 
 import pytest
 
-from crosstl.project import load_project_config, translate_project
+from crosstl.project import (
+    build_native_loader_abi_descriptor,
+    build_runtime_artifact_manifest,
+    build_runtime_loader_manifest,
+    build_runtime_package,
+    load_project_config,
+    translate_project,
+)
 from demos.integrations.mlx.tests.kernels.test_binary_complete_opengl import (
     BINARY_OPENGL_WORKLOADS,
     MLX_BINARY_SHA256,
@@ -24,8 +31,10 @@ from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
     _run,
 )
 from demos.integrations.mlx.tests.kernels.test_current_complex_power import MLX_COMMIT
-from tests.runtime_helpers import _prepare_native_package, _validate
+from tests.runtime_helpers import _validate
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
+
+NATIVE_DTYPE_BATCHES = (("float16",), ("bfloat16", "float32"))
 
 
 @dataclass(frozen=True)
@@ -40,6 +49,32 @@ class BinaryCase:
     @property
     def entry(self):
         return f"vv_{self.operation}{self.dtype}"
+
+
+def _batch_workloads(cases):
+    assert cases, "Native binary checks must execute at least one case"
+    entries = [case.entry for case in cases]
+    assert len(set(entries)) == len(entries), "Duplicate binary entry"
+    assert all(
+        case.provenance == cases[0].provenance for case in cases
+    ), "A binary batch must use one source profile"
+    workloads = {workload.entry_point: workload for workload in BINARY_OPENGL_WORKLOADS}
+    return [workloads[entry] for entry in entries]
+
+
+def _binary_load_units(loader, entries, target):
+    assert loader["success"], loader
+    units = loader["loadUnits"]
+    assert len(units) == len(entries)
+    assert len({unit["id"] for unit in units}) == len(entries)
+    assert all(
+        unit["target"] == target and unit["source"] == MLX_BINARY_SOURCE
+        for unit in units
+    )
+    by_entry = {unit["entryPoint"]["source"]: unit for unit in units}
+    assert set(by_entry) == set(entries)
+    assert all(unit["validation"]["loadReady"] for unit in units)
+    return by_entry
 
 
 def _original_metal(work, runner, library, case, guard, compare):
@@ -118,37 +153,56 @@ def run_binary_cases(
         == MLX_BINARY_SHA256
     )
     runner, library = source_control(root, target)
-    seen = set()
+    cases = tuple(cases)
+    workloads = _batch_workloads(cases)
+    entries = [case.entry for case in cases]
     for case in cases:
-        assert case.entry not in seen
-        seen.add(case.entry)
         assert len(case.expected) == len(case.pairs) + 8
-        guard = guard_for(case.dtype)
-        assert list(case.expected[-8:]) == [guard] * 8
-        workload = next(
-            w for w in BINARY_OPENGL_WORKLOADS if w.entry_point == case.entry
-        )
-        with tempfile.TemporaryDirectory(
-            prefix=".current-binary-", dir=root
-        ) as directory:
-            work = Path(directory)
-            try:
-                config_path = work / "crosstl.toml"
-                config_path.write_text(_project_config(workload), encoding="utf-8")
-                report = translate_project(
-                    load_project_config(root, config_path),
-                    targets=(target,),
-                    output_dir=work.name + "/out",
-                    format_output=False,
-                )
-                report.write_json(work / "report.json")
-                data = report.to_json()
-                assert (
-                    data["summary"]["translatedCount"] == 1
-                    and data["summary"]["failedCount"] == 0
-                ), data["diagnostics"]
-                assert not data["diagnostics"]
-                (artifact,) = data["artifacts"]
+        assert list(case.expected[-8:]) == [guard_for(case.dtype)] * 8
+    with tempfile.TemporaryDirectory(prefix=".current-binary-", dir=root) as directory:
+        batch_work = Path(directory)
+        try:
+            config_path = batch_work / "crosstl.toml"
+            config_path.write_text(
+                _project_config(workloads[0], entry_points=entries), encoding="utf-8"
+            )
+            report = translate_project(
+                load_project_config(root, config_path),
+                targets=(target,),
+                output_dir=batch_work.name + "/out",
+                format_output=False,
+            )
+            report.write_json(batch_work / "report.json")
+            data = report.to_json()
+            assert (
+                data["summary"]["translatedCount"] == len(cases)
+                and data["summary"]["failedCount"] == 0
+            ), data["diagnostics"]
+            assert not data["diagnostics"]
+            assert len(data["artifacts"]) == len(cases)
+            artifacts = {
+                artifact["entryPoint"]["source"]: artifact
+                for artifact in data["artifacts"]
+            }
+            assert set(artifacts) == set(entries)
+            manifest = build_runtime_artifact_manifest(batch_work / "report.json")
+            assert manifest["success"], manifest
+            (batch_work / "artifacts.json").write_text(
+                json.dumps(manifest, indent=2), encoding="utf-8"
+            )
+            package = batch_work / "package"
+            assert build_runtime_package(batch_work / "artifacts.json", package)[
+                "success"
+            ]
+            loader = build_runtime_loader_manifest(package / "runtime-package.json")
+            (batch_work / "loader.json").write_text(
+                json.dumps(loader, indent=2), encoding="utf-8"
+            )
+            units = _binary_load_units(loader, entries, target)
+            for case in cases:
+                work = batch_work / case.entry
+                work.mkdir()
+                artifact = artifacts[case.entry]
                 for name in (
                     "binary32ComparisonProfile",
                     "binary32AdditiveProfile",
@@ -157,7 +211,12 @@ def run_binary_cases(
                     "binary16RemainderProfile",
                 ):
                     assert artifact["provenance"].get(name) == case.provenance.get(name)
-                descriptor, package = _prepare_native_package(report, work)
+                descriptor = build_native_loader_abi_descriptor(
+                    loader, load_unit_id=units[case.entry]["id"]
+                )
+                (work / "descriptor.json").write_text(
+                    json.dumps(descriptor, indent=2), encoding="utf-8"
+                )
                 source = package / descriptor["artifact"]["packagePath"]
                 assert (
                     hashlib.sha256(source.read_bytes()).hexdigest()
@@ -206,7 +265,7 @@ def run_binary_cases(
                 source_comparison = None
                 if target == "metal":
                     source_comparison = _original_metal(
-                        work, runner, library, case, guard, compare
+                        work, runner, library, case, guard_for(case.dtype), compare
                     )
                 (work / "evidence.json").write_text(
                     json.dumps(
@@ -245,6 +304,5 @@ def run_binary_cases(
                     ),
                     encoding="utf-8",
                 )
-            finally:
-                shutil.copytree(work, tmp_path / case.entry, dirs_exist_ok=True)
-    assert seen, "Native binary checks must execute at least one case"
+        finally:
+            shutil.copytree(batch_work, tmp_path / "evidence", dirs_exist_ok=True)

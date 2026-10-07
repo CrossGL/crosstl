@@ -296,7 +296,12 @@ def test_current_mlx_binary_opengl_ci_shards_are_complete_and_disjoint() -> None
     }
 
 
-def _project_config(workload: BinaryMetalWorkload) -> str:
+def _project_config(workload: BinaryMetalWorkload, *, entry_points=None) -> str:
+    entries = workload.entry_point if entry_points is None else list(entry_points)
+    workgroup_entries = [workload.entry_point] if entry_points is None else ["*"]
+    workgroup_rules = "\n        ".join(
+        f"{json.dumps(entry)} = [1, 1, 1]" for entry in workgroup_entries
+    )
     profiles = (
         ['binary16_remainder_profile = "binary32-quotient"']
         if workload.operator_type == "Remainder" and workload.input_type == "half"
@@ -333,10 +338,10 @@ def _project_config(workload: BinaryMetalWorkload) -> str:
         "**/*.metal" = "metal"
 
         [project.entry_points]
-        "{MLX_BINARY_SOURCE}" = "{workload.entry_point}"
+        "{MLX_BINARY_SOURCE}" = {json.dumps(entries)}
 
         [project.entry_workgroup_size_rules."{MLX_BINARY_SOURCE}"]
-        "{workload.entry_point}" = [1, 1, 1]
+        {workgroup_rules}
 
         [project.source_options.metal]
         max_template_specializations = 64

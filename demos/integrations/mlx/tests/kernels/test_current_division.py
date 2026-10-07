@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from demos.integrations.mlx.tests.kernels.floating_binary_runtime import (
+    NATIVE_DTYPE_BATCHES,
     BinaryCase,
     run_binary_cases,
 )
@@ -120,12 +121,14 @@ def test_division_inputs_cover_exponents_and_both_signs():
         assert any(a == b == 0 for a, b in pairs)
 
 
-@pytest.mark.parametrize("dtype", TYPES)
-def test_current_division_native_parity(tmp_path, dtype, binary_metal_reference):
+@pytest.mark.parametrize(
+    "dtypes", NATIVE_DTYPE_BATCHES, ids=lambda types: "-".join(types)
+)
+def test_current_division_native_parity(tmp_path, dtypes, binary_metal_reference):
     run_binary_cases(
         tmp_path,
         REQUIRE_ENV,
-        _cases((dtype,)),
+        _cases(dtypes),
         request_for=_request,
         guard_for=_guard,
         source_control=binary_metal_reference,
