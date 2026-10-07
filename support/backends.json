@@ -302,8 +302,8 @@
       ],
       "docs": [
         {
-          "name": "CUDA C++ programming guide",
-          "url": "https://docs.nvidia.com/cuda/cuda-c-programming-guide/"
+          "name": "CUDA programming guide",
+          "url": "https://docs.nvidia.com/cuda/cuda-programming-guide/index.html"
         }
       ]
     },
