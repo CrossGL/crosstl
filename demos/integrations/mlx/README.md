@@ -3158,11 +3158,35 @@ execution remains a separate requirement. Finite values, infinities, signed
 zeros and guards use exact words; NaN payload differences are recorded rather
 than normalized. This does not establish bitwise NaN or full runtime parity.
 
-After these reviewed updates, 144 changed binary references remain under review
-in #2073: 36 each for arctangent, log-add-exp, multiplication and power.
-Multiplication's source subnormal policy remains tracked in #2114. The Windows
-native run at `6f325314` also exposed 217 signaling-NaN word differences in the
-half minimum selection case, recorded in #2081. Its exact comparison remains
+Half multiplication retains gradual subnormals and explicit nearest-even
+binary16 rounding, without enabling a binary32 source profile. The 18 affected
+OpenGL references have complete source review and 36 strict compiler/validator
+checks. The only changes are the half-rounding helper and its use at the product
+return boundary; all other source bytes and resource interfaces are unchanged.
+At both `846d1762` and `9c3d3557`, unchanged Metal matches an independent integer
+significand reference across 61 layout/domain cases, 203,284 results and 488
+guards. Generated OpenGL matches the same cases. These include all 65,536 input
+words against zero in both positions and against a deterministic permutation;
+they do not cover every possible operand pair. Arithmetic NaNs are compared by
+classification, while finite values, infinities, zero signs and guards are exact.
+
+`tests/kernels/test_current_multiplication.py` requires the current-pin
+vector-vector half kernel through generated packages on each native target.
+It covers 5,632 boundary, exponent and deterministic pairs plus eight guards.
+Metal and OpenGL pass locally, and the HLSL package compiles with strict DXC;
+native Windows execution remains a required CI check. This shares the existing
+binary-math job and its 900-second bound, without adding a runner or relaxing
+comparison rules. It does not establish float32/bfloat multiplication parity.
+
+After these reviewed updates, 126 changed binary references remain under review
+in #2073: 36 each for arctangent, log-add-exp and power, and 18 for multiplication.
+Float32/bfloat multiplication's source subnormal policy remains tracked in #2114.
+Fresh native probes also expose arctangent zero/NaN boundary failures (#2118)
+and floating-power domain failures (#2119). Reduced binary32 kernels reproduce
+both without MLX headers; successful compilation does not justify accepting
+those references. The Windows native run at `6f325314` also exposed 217
+signaling-NaN word differences in the half minimum selection case, recorded in
+#2081. Its exact comparison remains
 required; neither successful compilation nor a timeout excuses that failure.
 
 The native arithmetic step runs device execution, original-source controls and
