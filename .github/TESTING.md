@@ -147,6 +147,14 @@ checking 168,730 exact results and 56 guards per target. Zero divisors and signe
 upstream controls; Windows requires DXC/WARP and Linux requires Mesa execution.
 The existing runners, 900-second bound and failure-artifact upload are reused.
 
+Pinned minimum/maximum packages run in that same step: six half, bfloat and
+float32 kernels check 28,032 exact selected-operand words and 48 guards per
+target. Signed zeros, subnormals, infinities and signaling/quiet NaN payloads
+are retained. Only float32/bfloat comparisons enable the characterized
+flush-subnormals policy; half comparisons remain gradual. macOS also executes
+unchanged source controls. There are no NaN comparison exceptions, new native
+jobs or relaxed deadlines.
+
 The same arithmetic step verifies source-defined bitcast-name overloads beside
 generated FMA, division and half-remainder helpers. Exact output words cover
 scalar/vector overloads, aliases, namespace-qualified calls and both binary32

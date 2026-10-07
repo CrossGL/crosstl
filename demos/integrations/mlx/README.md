@@ -3084,8 +3084,34 @@ pass strict compilation and module validation. At `846d1762`, original Metal
 and generated OpenGL agree with an independent integer model across 376 cases,
 175,867 results and 3,008 guards covering every affected access shape. The
 change replaces signed `%` with explicit truncating division; source sign
-adjustment and narrowing remain intact. Only this reviewed group is accepted;
-360 other changed binary references remain pending in #2073.
+adjustment and narrowing remain intact.
+
+Minimum and maximum select `binary32_comparison_profile = "flush-subnormals"`
+only for float32 and bfloat operands. This matches the characterized source
+comparison while retaining the selected operand's original bits. Half comparisons
+retain gradual subnormals. No remainder or additive policy is enabled for these
+operators. Signed-zero ties select the second operand; NaNs preserve the selected
+operand's sign and payload, including signaling NaNs.
+
+All 108 affected extrema references have complete historical and updated source
+review, unchanged resource interfaces and 216 strict compiler/validator checks.
+At `846d1762`, original Metal and generated OpenGL match an independent reference
+across 354 cases, 820,728 results and 2,832 guards. Every affected access shape is
+covered. The vector sweeps include every half and bfloat storage word against
+zero in both operand positions and against a permuted word; float32 uses boundary
+and deterministic samples. Comparisons require exact words without NaN exceptions
+or readback normalization. Saved input encodings, output bytes and unchanged input
+buffers are independently replayed. This is not exhaustive pair coverage.
+
+`tests/kernels/test_current_extrema.py` translates six vector-vector kernels at
+`9c3d3557` and checks 28,032 results and 48 guards through generated packages per
+native target. Metal and OpenGL pass locally, with unchanged upstream Metal as
+an additional control. All six HLSL packages pass strict DXC compilation;
+Windows execution remains a required CI check, not an inferred result. The
+fixture shares the existing native runners, evidence upload and 900-second
+binary-math bound. Physical driver-upload bytes and full MLX runtime parity are
+not claimed. After this scoped update, 252 changed binary references remain
+under review in #2073.
 
 The native arithmetic step runs device execution, original-source controls and
 Metal linkage checks only. Platform-independent configuration and generation

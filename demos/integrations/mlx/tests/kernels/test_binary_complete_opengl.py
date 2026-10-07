@@ -46,10 +46,10 @@ BINARY_OPENGL_CONTRACT_PATH = (
     / "binary.opengl-translation.json"
 )
 BINARY_OPENGL_CONTRACT_SHA256 = (
-    "3f2844ad1d14da438d1ae139fb6fd802ad5106431fda13157b353ca57fe2ec4c"
+    "a1437e058093596858fbb51c6176a73771e4c2c850941c37fcccd615b9710bc3"
 )
 BINARY_OPENGL_CONTRACT_SIZE_BYTES = 1467764
-BINARY_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 17031886
+BINARY_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 17103274
 BINARY_OPENGL_GENERATED_SIZE_MINIMUM = ("ss_Addint32", 2875)
 BINARY_OPENGL_GENERATED_SIZE_MAXIMUM = ("gn4large_Remainderfloat16", 19553)
 INDEX_RANGE_ASSERTIONS = (
@@ -297,22 +297,22 @@ def test_current_mlx_binary_opengl_ci_shards_are_complete_and_disjoint() -> None
 
 
 def _project_config(workload: BinaryMetalWorkload) -> str:
-    remainder_profile = (
-        'binary16_remainder_profile = "binary32-quotient"'
+    profiles = (
+        ['binary16_remainder_profile = "binary32-quotient"']
         if workload.operator_type == "Remainder" and workload.input_type == "half"
-        else ""
+        else []
     )
-    if workload.operator_type == "Remainder" and workload.input_type in {
-        "float",
-        "bfloat16_t",
-    }:
-        remainder_profile = "\n        ".join(
-            (
-                'binary32_comparison_profile = "flush-subnormals"',
-                'binary32_remainder_profile = "flush-arithmetic-subnormals"',
-                'binary32_additive_profile = "rne-flush"',
+    if workload.input_type in {"float", "bfloat16_t"}:
+        if workload.operator_type in {"Remainder", "Minimum", "Maximum"}:
+            profiles.append('binary32_comparison_profile = "flush-subnormals"')
+        if workload.operator_type == "Remainder":
+            profiles.extend(
+                (
+                    'binary32_remainder_profile = "flush-arithmetic-subnormals"',
+                    'binary32_additive_profile = "rne-flush"',
+                )
             )
-        )
+    profile_options = "\n        ".join(profiles)
     assertions = "\n\n".join(textwrap.dedent(f"""
             [[project.index_range_assertions]]
             source = "{MLX_BINARY_SOURCE}"
@@ -340,7 +340,7 @@ def _project_config(workload: BinaryMetalWorkload) -> str:
         [project.source_options.metal]
         max_template_specializations = 64
         max_template_materialization_work = 4096
-        {remainder_profile}
+        {profile_options}
 
         {assertions}
         """).strip()
@@ -383,21 +383,63 @@ def test_binary_float_remainder_profiles_are_scoped_to_all_shapes(tmp_path):
         enabled = workload.entry_point.endswith(
             ("_Remainderfloat32", "_Remainderbfloat16")
         )
+        comparison_enabled = enabled or (
+            workload.operator_type in {"Minimum", "Maximum"}
+            and workload.input_type in {"float", "bfloat16_t"}
+        )
         for option, value in profiles.items():
-            assert (f'{option} = "{value}"' in text) == enabled
+            selected_profile = (
+                comparison_enabled
+                if option == "binary32_comparison_profile"
+                else enabled
+            )
+            assert (f'{option} = "{value}"' in text) == selected_profile
         option_key = (workload.operator_type, workload.input_type)
         if enabled or option_key not in checked_options:
             path = tmp_path / "crosstl.toml"
             path.write_text(text, encoding="utf-8")
             options = load_project_config(tmp_path, path).source_options["metal"]
             for option, value in profiles.items():
-                assert options.get(option) == (value if enabled else None)
+                selected_profile = (
+                    comparison_enabled
+                    if option == "binary32_comparison_profile"
+                    else enabled
+                )
+                assert options.get(option) == (value if selected_profile else None)
             checked_options.add(option_key)
         if enabled:
             selected.append((workload.shape, workload.input_type))
     assert len(selected) == 36
     assert set(selected) == {
         (shape, dtype)
+        for shape in BINARY_OPENGL_CONTRACT["shapeContracts"]
+        for dtype in ("float", "bfloat16_t")
+    }
+
+
+def test_binary_extrema_comparison_profile_is_scoped_to_all_shapes(tmp_path):
+    selected = []
+    for workload in BINARY_OPENGL_WORKLOADS:
+        if workload.operator_type not in {"Minimum", "Maximum"}:
+            continue
+        path = tmp_path / "crosstl.toml"
+        path.write_text(_project_config(workload), encoding="utf-8")
+        options = load_project_config(tmp_path, path).source_options["metal"]
+        enabled = workload.input_type in {"float", "bfloat16_t"}
+        assert options.get("binary32_comparison_profile") == (
+            "flush-subnormals" if enabled else None
+        )
+        assert "binary32_remainder_profile" not in options
+        assert "binary16_remainder_profile" not in options
+        assert "binary32_additive_profile" not in options
+        if enabled:
+            selected.append(
+                (workload.operator_type, workload.shape, workload.input_type)
+            )
+    assert len(selected) == 72
+    assert set(selected) == {
+        (operation, shape, dtype)
+        for operation in ("Minimum", "Maximum")
         for shape in BINARY_OPENGL_CONTRACT["shapeContracts"]
         for dtype in ("float", "bfloat16_t")
     }
@@ -507,6 +549,15 @@ def _translate_and_validate(
         assert (
             payload["project"]["sourceOptions"]["metal"]["binary16_remainder_profile"]
             == "binary32-quotient"
+        )
+    if workload.operator_type in {"Minimum", "Maximum"} and workload.input_type in {
+        "float",
+        "bfloat16_t",
+    }:
+        expected_provenance["binary32ComparisonProfile"] = "flush-subnormals"
+        assert (
+            payload["project"]["sourceOptions"]["metal"]["binary32_comparison_profile"]
+            == "flush-subnormals"
         )
     if workload.operator_type == "Remainder" and workload.input_type in {
         "float",
