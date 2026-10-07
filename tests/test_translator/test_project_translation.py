@@ -22746,6 +22746,7 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
             "binary32AdditiveProfile",
             "binary32Atan2Profile",
             "binary32LogProfile",
+            "binary32SqrtProfile",
         }
     )
     assert set(artifact["sourceRemap"]) == (

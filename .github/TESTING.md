@@ -261,6 +261,10 @@ evaluation counts and guards. Its 28,024 binary32 inputs cover every exponent
 and dense neighborhoods around one and the range-reduction boundaries. Ordinary
 translation, metadata and compiler tests stay in the general suites rather than
 being repeated in this native step; the existing 300-second bound is unchanged.
+The same step requires correctly rounded precise square roots with preserved
+and flushed subnormal inputs, vector and composed results, exhaustive non-NaN
+half/bfloat scalar promotion, single evaluation and guards. Finite outputs are
+bit-exact against an independent decimal reference, not an approximate tolerance.
 The byte-conversion step also covers writable scalar/vector arguments, nested
 calls, aliases, indexed locations and lazy conditional calls. Signed and unsigned
 overflow checks retain output guards and original Metal comparisons. Separate

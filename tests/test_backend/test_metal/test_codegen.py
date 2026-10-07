@@ -11478,7 +11478,10 @@ def test_codegen_composes_precise_bfloat_extension_with_standard_float_builtin()
 
     assert "bfloat16 result = sqrt__metal_overload_1(value);" in normalized
     assert "complex64_t crosstl_ctor_complex64_t_1_float(float value)" in normalized
-    assert "return crosstl_ctor_complex64_t_1_float(sqrt(value));" in normalized
+    assert (
+        "return crosstl_ctor_complex64_t_1_float(__crossgl_metal_precise_sqrt_float(value));"
+        in normalized
+    )
     assert "<unknown>" not in normalized
 
 

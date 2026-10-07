@@ -1234,6 +1234,41 @@ CrossGL retains the implementation without requiring the option again. Native
 DirectX, OpenGL and Metal checks are part of the existing project-demo jobs.
 This is a logarithm contract, not proof of complete project numerical parity.
 
+Precise square roots
+~~~~~~~~~~~~~~~~~~~~
+
+Metal ``precise::sqrt`` uses a correctly rounded binary32 helper for scalar and
+two- to four-lane calls. Scalar half and bfloat arguments promote to binary32;
+default/fast calls and source-owned functions keep their existing behavior.
+Unsupported operands and global runtime initializers produce
+``project.translate.metal-precise-math-unsupported``.
+
+The helper normalizes the operand using integer bits and computes a 24-bit
+square root with a remainder for nearest rounding. It does not depend on native
+approximate square roots, subnormal arithmetic, double precision or 64-bit
+integers. Signed zeros and infinities are exact; negative nonzero operands and
+NaNs produce NaN. Native tests compare against an independent 120-digit decimal
+reference without a finite ULP tolerance, including squared rounding midpoints,
+all binary32 exponents and composed square roots.
+
+The default preserves subnormal operands. A characterized source can select:
+
+.. code-block:: toml
+
+   [project.source_options.metal]
+   binary32_sqrt_profile = "flush-subnormals"
+
+``flush-subnormals`` treats a subnormal operand as a zero with the same sign.
+``preserve-subnormals`` returns a nonzero result for positive subnormals and NaN
+for negative subnormals. Neither option changes stored inputs, other arithmetic
+or readbacks. The unchanged Metal control characterizes the explicit flush
+policy for its tested compiler and device, not every Metal implementation.
+
+Reports, runtime manifests and packages retain ``binary32SqrtProfile`` and
+validate it against resolved target/path options. Saved CrossGL retains the
+implementation. Required native checks share the existing project-demo runners;
+the contract does not establish complete project numerical parity.
+
 Power-function domains
 ~~~~~~~~~~~~~~~~~~~~~~
 

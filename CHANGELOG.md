@@ -26,6 +26,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Fixed
 
+- Precise Metal square roots use correctly rounded integer arithmetic with explicit operand-underflow profiles, preserving signed zeros and recording the selected policy in reports and runtime packages.
 - Precise Metal logarithms use range-reduced binary32 arithmetic with explicit operand-underflow profiles, preserving accuracy near one and retaining the selected policy in reports and runtime packages.
 - Precise Metal helpers keep contraction directives inside their function bodies, preserving the enclosing compiler setting and rounding across unrelated helper returns.
 - Metal default and precise power calls preserve signed-zero, negative-base, integral-exponent, infinity and NaN domains through source-specific helpers. Native regression checks retain exact domain results and explicit finite controls; complete finite-domain accuracy and subnormal parity remain separate work.
