@@ -162,6 +162,13 @@ separately. Float32/bfloat arithmetic uses the explicit round-to-nearest,
 flush-subnormals source profile. Numeric NaN conversion policy remains tracked
 in #2081; these tests do not establish bitwise NaN parity.
 
+Pinned division adds three half, bfloat and float32 packages: 31,232 values and
+24 guards per target, including all finite exponent ranges, rounding boundaries,
+signed zeros and exceptional inputs. Float32/bfloat use the explicit division
+profile; half retains gradual underflow. Finite words and guards are exact, and
+NaN payload differences are reported separately. macOS also executes the
+unchanged upstream source. Windows execution remains mandatory.
+
 The binary step selects native test functions explicitly. Portable reflection,
 configuration and mocked-dispatch tests remain in the Ubuntu complete suite.
 Remainder types and floating operator/type pairs are separate pytest cases,
@@ -169,6 +176,11 @@ scheduled with work stealing across the existing two workers. The unchanged
 Metal reference library is built once per source root and worker, while every
 case still runs its own original-source dispatch and checks its inputs. The
 900-second bound, required native cases and evidence uploads are unchanged.
+The 15 complex-power layouts are translated and packaged in three batches of
+five. Each layout still has its own descriptor, native compilation, three
+datasets and saved readbacks. Loader selection requires the exact source entry,
+target and complete set of ready load units; it never defaults to the first
+artifact in the batch. No additional native runners are used.
 
 The same arithmetic step verifies source-defined bitcast-name overloads beside
 generated FMA, division and half-remainder helpers. Exact output words cover

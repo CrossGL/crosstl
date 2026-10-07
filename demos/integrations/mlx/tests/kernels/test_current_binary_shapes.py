@@ -16,7 +16,11 @@ import pytest
 
 from crosstl.project import (
     NativeLoaderDispatchError,
+    build_native_loader_abi_descriptor,
     build_native_loader_dispatch_request,
+    build_runtime_artifact_manifest,
+    build_runtime_loader_manifest,
+    build_runtime_package,
     load_project_config,
     translate_project,
 )
@@ -32,7 +36,7 @@ from demos.integrations.mlx.tests.kernels.test_current_complex_power import (
     _check_values,
     _reference,
 )
-from tests.runtime_helpers import _prepare_native_package, _validate_generated_artifact
+from tests.runtime_helpers import _validate_generated_artifact
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_BINARY_SHAPES"
@@ -54,6 +58,54 @@ SHAPES = (
     "gn2",
     "gn4large",
 )
+SHAPE_BATCHES = tuple(SHAPES[i : i + 5] for i in range(0, len(SHAPES), 5))
+
+
+def _shape_load_units(loader, entries, target):
+    assert loader["success"], loader
+    units = loader["loadUnits"]
+    assert len(units) == len(entries)
+    assert all(unit["target"] == target and unit["source"] == SOURCE for unit in units)
+    by_entry = {unit["entryPoint"]["source"]: unit for unit in units}
+    assert set(by_entry) == set(entries)
+    assert all(unit["validation"]["loadReady"] for unit in units)
+    return by_entry
+
+
+def test_binary_shape_batches_cover_every_shape_once():
+    assert tuple(shape for batch in SHAPE_BATCHES for shape in batch) == SHAPES
+    assert all(1 <= len(batch) <= 5 for batch in SHAPE_BATCHES)
+
+
+@pytest.mark.parametrize(
+    "failure", (None, "missing", "duplicate", "wrong-source", "blocked")
+)
+def test_binary_shape_batch_selects_exact_load_units(failure):
+    entries = ["ss_Powercomplex64", "vv_Powercomplex64"]
+    units = [
+        {
+            "entryPoint": {"source": entry},
+            "target": "opengl",
+            "source": SOURCE,
+            "validation": {"loadReady": True},
+        }
+        for entry in reversed(entries)
+    ]
+    if failure == "missing":
+        units.pop()
+    elif failure == "duplicate":
+        units[0] = units[1]
+    elif failure == "wrong-source":
+        units[0]["source"] = "other.metal"
+    elif failure == "blocked":
+        units[0]["validation"]["loadReady"] = False
+    loader = {"success": True, "loadUnits": units}
+    if failure:
+        with pytest.raises(AssertionError):
+            _shape_load_units(loader, entries, "opengl")
+    else:
+        selected = _shape_load_units(loader, entries, "opengl")
+        assert [selected[entry]["entryPoint"]["source"] for entry in entries] == entries
 
 
 def _configuration(work, target, entry):
@@ -446,18 +498,25 @@ def _metal_parity(work, artifact, entry, workload, reference, generated):
     return evidence
 
 
-@pytest.mark.parametrize("shape", SHAPES)
+@pytest.mark.parametrize("shapes", SHAPE_BATCHES, ids=lambda shapes: "-".join(shapes))
 def test_current_mlx_complex_power_shape_native_parity(
-    current_binary_source, metal_reference, metal_package_executor, tmp_path, shape
+    current_binary_source, metal_reference, metal_package_executor, tmp_path, shapes
 ):
     root, target = current_binary_source
-    entry = f"{shape}_Powercomplex64"
+    entries = [f"{shape}_Powercomplex64" for shape in shapes]
     with tempfile.TemporaryDirectory(
         prefix=".current-binary-shapes-", dir=root
     ) as directory:
         work = Path(directory)
         config = work / "crosstl.toml"
-        config.write_text(_configuration(work, target, entry), encoding="utf-8")
+        config.write_text(
+            _configuration(work, target, entries[0])
+            .replace(
+                f'"{SOURCE}" = "{entries[0]}"', f'"{SOURCE}" = {json.dumps(entries)}'
+            )
+            .replace(f'"{entries[0]}" = [1, 1, 1]', '"*" = [1, 1, 1]'),
+            encoding="utf-8",
+        )
         try:
             report = translate_project(
                 load_project_config(root, config),
@@ -468,56 +527,102 @@ def test_current_mlx_complex_power_shape_native_parity(
             report.write_json(work / "report.json")
             payload = report.to_json()
             assert payload["summary"]["failedCount"] == 0, payload["diagnostics"]
-            (artifact,) = payload["artifacts"]
-            assert artifact["entryPoint"]["source"] == entry
-            native_package = _prepare_native_package(report, work)
-            if target != "metal":
-                _validate_generated_artifact(root / artifact["path"], work, target)
-            else:
-                generated = _metal_library(
-                    root / artifact["path"], work / "translated.metallib", root
-                )
-            evidence = {}
-            for dataset in DATASETS:
-                workload = _workload(shape, dataset)
-                case_work = work / dataset
+            assert payload["summary"]["translatedCount"] == len(entries)
+            artifacts = {
+                artifact["entryPoint"]["source"]: artifact
+                for artifact in payload["artifacts"]
+            }
+            assert set(artifacts) == set(entries)
+            manifest = build_runtime_artifact_manifest(work / "report.json")
+            assert manifest["success"], manifest
+            (work / "artifacts.json").write_text(
+                json.dumps(manifest, indent=2), encoding="utf-8"
+            )
+            package = work / "package"
+            assert build_runtime_package(work / "artifacts.json", package)["success"]
+            loader = build_runtime_loader_manifest(package / "runtime-package.json")
+            (work / "loader.json").write_text(
+                json.dumps(loader, indent=2), encoding="utf-8"
+            )
+            units = _shape_load_units(loader, entries, target)
+            for shape, entry in zip(shapes, entries):
+                case_work = work / entry
                 case_work.mkdir()
-                evidence[dataset] = (
-                    _metal_parity(
-                        case_work, artifact, entry, workload, metal_reference, generated
-                    )
-                    if target == "metal"
-                    else _native_request(
-                        native_package, case_work, target, entry, workload
-                    )
+                descriptor = build_native_loader_abi_descriptor(
+                    loader, load_unit_id=units[entry]["id"]
                 )
-                if target == "metal":
-                    evidence[dataset]["nativePackage"] = _native_request(
-                        native_package,
-                        case_work,
-                        target,
-                        entry,
-                        workload,
-                        executor=metal_package_executor,
-                    )["translated"]
-                (work / "parity.json").write_text(
-                    json.dumps(
-                        {
-                            "commit": MLX_COMMIT,
-                            "entry": entry,
-                            "target": target,
-                            "results": evidence,
-                        },
-                        indent=2,
-                    ),
-                    encoding="utf-8",
+                (case_work / "descriptor.json").write_text(
+                    json.dumps(descriptor, indent=2), encoding="utf-8"
                 )
-            for dataset, results in evidence.items():
-                for label, cases in results.items():
-                    assert all(case["matched"] for case in cases), (
-                        dataset,
-                        label,
-                        [case for case in cases if not case["matched"]],
-                    )
+                _execute_shape(
+                    root,
+                    target,
+                    shape,
+                    entry,
+                    artifacts[entry],
+                    (descriptor, package),
+                    case_work,
+                    metal_reference,
+                    metal_package_executor,
+                )
         finally:
             shutil.copytree(work, tmp_path / "evidence", dirs_exist_ok=True)
+
+
+def _execute_shape(
+    root,
+    target,
+    shape,
+    entry,
+    artifact,
+    native_package,
+    work,
+    metal_reference,
+    metal_package_executor,
+):
+    if target != "metal":
+        _validate_generated_artifact(root / artifact["path"], work, target)
+    else:
+        generated = _metal_library(
+            root / artifact["path"], work / "translated.metallib", root
+        )
+    evidence = {}
+    for dataset in DATASETS:
+        workload = _workload(shape, dataset)
+        case_work = work / dataset
+        case_work.mkdir()
+        evidence[dataset] = (
+            _metal_parity(
+                case_work, artifact, entry, workload, metal_reference, generated
+            )
+            if target == "metal"
+            else _native_request(native_package, case_work, target, entry, workload)
+        )
+        if target == "metal":
+            evidence[dataset]["nativePackage"] = _native_request(
+                native_package,
+                case_work,
+                target,
+                entry,
+                workload,
+                executor=metal_package_executor,
+            )["translated"]
+        (work / "parity.json").write_text(
+            json.dumps(
+                {
+                    "commit": MLX_COMMIT,
+                    "entry": entry,
+                    "target": target,
+                    "results": evidence,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    for dataset, results in evidence.items():
+        for label, cases in results.items():
+            assert all(case["matched"] for case in cases), (
+                dataset,
+                label,
+                [case for case in cases if not case["matched"]],
+            )

@@ -3136,9 +3136,34 @@ pair independently across its existing two workers. Original Metal library
 builds are shared per source root and worker, but source dispatches and their
 input checks remain per case. Explicit native-test selection avoids repeating
 portable tests already covered on Ubuntu. Neither the native runner count nor
-the 900-second deadline increases. After these reviewed updates, 180 changed
-binary references remain under review in #2073: 36 each for arctangent,
-division, log-add-exp, multiplication and power.
+the 900-second deadline increases. The 15 complex-power layouts share setup in
+three translation/package batches of five. Every layout retains its own native
+compiler check, descriptor and all three datasets. Exact source-entry matching
+prevents selecting another artifact from the same package.
+
+Division selects `binary32_division_profile = "rne-flush"` for float32/bfloat
+operands; half division retains gradual subnormals and binary16 rounding. All
+54 affected references have complete source-body/declaration review, unchanged
+resource interfaces and 108 strict historical/generated compiler-validator
+pairs. At `846d1762`, 177 layout/domain cases compare 427,580 values and 1,416
+guards with untouched Metal and generated OpenGL. An independent decoded-value
+audit checks physical inputs, readonly buffers and readbacks without rewriting
+their values. The integer `sizeof` inference correction tracked in #2115 keeps
+work-per-thread constants outside the floating arithmetic profile.
+
+`tests/kernels/test_current_division.py` requires three vector-vector kernels at
+`9c3d3557`, covering 31,232 values and 24 guards per target. Metal and OpenGL
+pass locally; all three HLSL packages compile with strict DXC. Native Windows
+execution remains a separate requirement. Finite values, infinities, signed
+zeros and guards use exact words; NaN payload differences are recorded rather
+than normalized. This does not establish bitwise NaN or full runtime parity.
+
+After these reviewed updates, 144 changed binary references remain under review
+in #2073: 36 each for arctangent, log-add-exp, multiplication and power.
+Multiplication's source subnormal policy remains tracked in #2114. The Windows
+native run at `6f325314` also exposed 217 signaling-NaN word differences in the
+half minimum selection case, recorded in #2081. Its exact comparison remains
+required; neither successful compilation nor a timeout excuses that failure.
 
 The native arithmetic step runs device execution, original-source controls and
 Metal linkage checks only. Platform-independent configuration and generation

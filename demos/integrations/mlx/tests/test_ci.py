@@ -54,7 +54,7 @@ def test_pinned_binary_step_selects_every_native_case_without_portable_duplicate
     assert "-n auto" in command and "if" not in step
     tokens = shlex.split(command.replace("\\\n", " "))
     selected = [token for token in tokens if ".py::test_" in token]
-    assert len(selected) == len(set(selected)) == 11
+    assert len(selected) == len(set(selected)) == 12
     modules = {token.split("::")[0] for token in selected}
     expected_modules = {
         "tests/test_translator/test_struct_buffer_layouts.py",
@@ -71,6 +71,7 @@ def test_pinned_binary_step_selects_every_native_case_without_portable_duplicate
             "integer_remainder",
             "extrema",
             "additive",
+            "division",
         )
     )
     assert modules == expected_modules

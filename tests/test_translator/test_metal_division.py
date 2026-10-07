@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from crosstl import translate
-from crosstl.backend.Metal.MetalAst import BinaryOpNode
+from crosstl.backend.Metal.MetalAst import BinaryOpNode, FunctionCallNode
 from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalDivisionProfileError,
     MetalToCrossGLConverter,
@@ -185,6 +185,38 @@ def test_division_profile_diagnoses_unresolved_type():
     converter = MetalToCrossGLConverter(binary32_division_profile="rne-flush")
     with pytest.raises(MetalDivisionProfileError, match="unresolved"):
         converter.generate_expression(BinaryOpNode("unresolved", "/", "1.0f"))
+
+
+@pytest.mark.parametrize("profile", ["rne-gradual", "rne-flush"])
+def test_division_profile_keeps_sizeof_arithmetic_integral(tmp_path, profile):
+    converter = MetalToCrossGLConverter(binary32_division_profile=profile)
+    size = FunctionCallNode("sizeof", ["float"])
+    assert converter.expression_metal_type(size) == "size_t"
+    assert (
+        converter.metal_binary_expression_type(BinaryOpNode("8", "/", size))
+        == "uint64_t"
+    )
+    generated = _translate(
+        tmp_path,
+        "static constant int count = 8 / sizeof(float);\n"
+        "float ratio(float a, float b) { return a / b; }",
+        profile=profile,
+    )
+    assert "count = 8 / 4" in generated
+    assert "return __crossgl_metal_divide_float(float(a), float(b));" in generated
+
+
+def test_sizeof_type_does_not_match_qualified_calls():
+    converter = MetalToCrossGLConverter()
+    converter.generate(
+        MetalParser(
+            MetalLexer("float identity(float x) { return x; }").tokenize()
+        ).parse()
+    )
+    assert (
+        converter.expression_metal_type(FunctionCallNode("other::sizeof", ["float"]))
+        is None
+    )
 
 
 COMPOUND_SOURCE = """#include <metal_stdlib>

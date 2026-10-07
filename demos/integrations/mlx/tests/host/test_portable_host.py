@@ -2274,7 +2274,6 @@ def test_ci_requires_native_math_before_building_mlx():
             (
                 "tests/test_translator/test_struct_buffer_layouts.py",
                 "tests/test_translator/test_buffer_requirements.py",
-                "tests/test_translator/test_native_dispatch_limits.py",
                 "tests/test_translator/test_native_loader_dispatch_integration.py",
                 "demos/integrations/mlx/tests/kernels/test_current_complex_power.py",
                 "demos/integrations/mlx/tests/kernels/test_current_binary_shapes.py",

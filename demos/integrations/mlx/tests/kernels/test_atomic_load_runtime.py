@@ -14,13 +14,11 @@ from crosstl.project import (
     translate_project,
 )
 from demos.integrations.mlx.portable_host.prepare import COMMIT
-from demos.integrations.mlx.tests.kernels.test_current_binary_shapes import (
-    _prepare_native_package,
-)
 from demos.integrations.mlx.tests.kernels.test_current_gather import _validate
 from demos.integrations.mlx.tests.kernels.test_general_scatter_runtime import (
     _verify_source,
 )
+from tests.runtime_helpers import _prepare_native_package
 from tests.test_translator.test_atomic_load_runtime import REQUIRE_ENV
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_loop_updates import _execute

@@ -152,6 +152,7 @@ def run_binary_cases(
                 for name in (
                     "binary32ComparisonProfile",
                     "binary32AdditiveProfile",
+                    "binary32DivisionProfile",
                     "binary32RemainderProfile",
                     "binary16RemainderProfile",
                 ):
@@ -222,6 +223,9 @@ def run_binary_cases(
                             ),
                             "additiveProfile": case.provenance.get(
                                 "binary32AdditiveProfile"
+                            ),
+                            "divisionProfile": case.provenance.get(
+                                "binary32DivisionProfile"
                             ),
                             "pairCount": len(case.pairs),
                             "guardCount": 8,

@@ -16,11 +16,8 @@ from crosstl.project import (
 )
 from crosstl.project.runtime_value_encoding import FLOAT32_BITS
 from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
-from demos.integrations.mlx.tests.kernels.test_current_binary_shapes import (
-    _prepare_native_package,
-)
 from tests.ci_helpers import assert_paths_covered
-from tests.runtime_helpers import _validate
+from tests.runtime_helpers import _prepare_native_package, _validate
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_float_storage_encoding import WORDS
 from tests.test_translator.test_loop_updates import _execute

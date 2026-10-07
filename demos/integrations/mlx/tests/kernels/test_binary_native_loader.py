@@ -91,7 +91,7 @@ def _pinned_mlx_root() -> Path:
 
 
 def _expected_scalar_layouts(target: str) -> dict[str, dict]:
-    def runtime_array(*, member_name: str | None = None) -> dict:
+    def runtime_array(*, member_name: str | None = None, scalar_input=False) -> dict:
         layout = {
             "physicalType": "float",
             "elementType": "float32",
@@ -106,17 +106,19 @@ def _expected_scalar_layouts(target: str) -> dict[str, dict]:
         }
         if member_name is not None:
             layout["memberName"] = member_name
+        if scalar_input:
+            layout["minimumBindingSizeBytes"] = 4
         return layout
 
     if target == "directx":
         return {
-            "a": runtime_array(),
-            "b": runtime_array(),
+            "a": runtime_array(scalar_input=True),
+            "b": runtime_array(scalar_input=True),
             "c": runtime_array(),
         }
     return {
-        "aBuffer": runtime_array(member_name="a"),
-        "bBuffer": runtime_array(member_name="b"),
+        "aBuffer": runtime_array(member_name="a", scalar_input=True),
+        "bBuffer": runtime_array(member_name="b", scalar_input=True),
         "cBuffer": runtime_array(member_name="c"),
     }
 

@@ -17,10 +17,8 @@ from crosstl.project import (
     translate_project,
 )
 from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
-from demos.integrations.mlx.tests.kernels.test_current_binary_shapes import (
-    _prepare_native_package,
-)
 from demos.integrations.mlx.tests.kernels.test_current_gather import _validate
+from tests.runtime_helpers import _prepare_native_package
 from tests.test_translator.test_loop_updates import _execute
 
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_GENERAL_SCATTER"

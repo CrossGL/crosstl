@@ -19732,6 +19732,8 @@ float {scalar}(float value) {{
         if isinstance(expr, VectorConstructorNode):
             return self.resolve_type_alias(expr.type_name)
         if isinstance(expr, FunctionCallNode):
+            if str(expr.name) == "sizeof" and len(expr.args) == 1:
+                return "size_t"
             if str(expr.name) in {"decltype", "metal::decltype"}:
                 if len(expr.args) != 1:
                     return None

@@ -46,10 +46,10 @@ BINARY_OPENGL_CONTRACT_PATH = (
     / "binary.opengl-translation.json"
 )
 BINARY_OPENGL_CONTRACT_SHA256 = (
-    "7ad7ab25ecdbc2abc576f93658474b2b6f605d3270c33629aa59035e72fb506a"
+    "5e964bb82aae5c59d0a21c71eab72f3e1a6ff4d53fe3491d09ae47f77b6e1100"
 )
 BINARY_OPENGL_CONTRACT_SIZE_BYTES = 1467836
-BINARY_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 17869858
+BINARY_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 18004588
 BINARY_OPENGL_GENERATED_SIZE_MINIMUM = ("ss_Addint32", 2875)
 BINARY_OPENGL_GENERATED_SIZE_MAXIMUM = ("gn4large_Remainderfloat16", 19553)
 INDEX_RANGE_ASSERTIONS = (
@@ -311,6 +311,8 @@ def _project_config(workload: BinaryMetalWorkload) -> str:
             )
         if workload.operator_type in {"Remainder", "Add", "Subtract"}:
             profiles.append('binary32_additive_profile = "rne-flush"')
+        if workload.operator_type == "Divide":
+            profiles.append('binary32_division_profile = "rne-flush"')
     profile_options = "\n        ".join(profiles)
     assertions = "\n\n".join(textwrap.dedent(f"""
             [[project.index_range_assertions]]
@@ -471,6 +473,45 @@ def test_binary_additive_profile_is_scoped_to_all_shapes(tmp_path):
     }
 
 
+def test_binary_division_profile_is_scoped_to_all_shapes(tmp_path):
+    selected = []
+    checked_options = set()
+    for workload in BINARY_OPENGL_WORKLOADS:
+        enabled = workload.operator_type == "Divide" and workload.input_type in {
+            "float",
+            "bfloat16_t",
+        }
+        text = _project_config(workload)
+        assert ('binary32_division_profile = "rne-flush"' in text) == enabled
+        key = (workload.operator_type, workload.input_type)
+        if enabled or key not in checked_options:
+            path = tmp_path / "crosstl.toml"
+            path.write_text(text, encoding="utf-8")
+            options = load_project_config(tmp_path, path).source_options["metal"]
+            assert options.get("binary32_division_profile") == (
+                "rne-flush" if enabled else None
+            )
+            if enabled:
+                assert not any(
+                    name in options
+                    for name in (
+                        "binary32_additive_profile",
+                        "binary32_comparison_profile",
+                        "binary32_remainder_profile",
+                        "binary16_remainder_profile",
+                    )
+                )
+            checked_options.add(key)
+        if enabled:
+            selected.append((workload.shape, workload.input_type))
+    assert len(selected) == 36
+    assert set(selected) == {
+        (shape, dtype)
+        for shape in BINARY_OPENGL_CONTRACT["shapeContracts"]
+        for dtype in ("float", "bfloat16_t")
+    }
+
+
 def _pinned_mlx_root() -> Path:
     root_value = os.environ.get("CROSTL_MLX_ROOT")
     if not root_value:
@@ -593,6 +634,15 @@ def _translate_and_validate(
         assert (
             payload["project"]["sourceOptions"]["metal"]["binary32_comparison_profile"]
             == "flush-subnormals"
+        )
+    if workload.operator_type == "Divide" and workload.input_type in {
+        "float",
+        "bfloat16_t",
+    }:
+        expected_provenance["binary32DivisionProfile"] = "rne-flush"
+        assert (
+            payload["project"]["sourceOptions"]["metal"]["binary32_division_profile"]
+            == "rne-flush"
         )
     if workload.operator_type == "Remainder" and workload.input_type in {
         "float",

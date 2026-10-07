@@ -16,13 +16,11 @@ from crosstl.project import (
 from crosstl.project.runtime_value_encoding import FLOAT32_BITS
 from demos.integrations.mlx.portable_host.prepare import COMMIT
 from demos.integrations.mlx.tests.kernels.test_atomic_load_runtime import HEADER
-from demos.integrations.mlx.tests.kernels.test_current_binary_shapes import (
-    _prepare_native_package,
-)
 from demos.integrations.mlx.tests.kernels.test_current_gather import _validate
 from demos.integrations.mlx.tests.kernels.test_general_scatter_runtime import (
     _verify_source,
 )
+from tests.runtime_helpers import _prepare_native_package
 from tests.test_translator.test_atomic_load_runtime import GUARD
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_float_atomic_memory import REQUIRE_ENV
