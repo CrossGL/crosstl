@@ -162,7 +162,14 @@ def run_binary_cases(
         try:
             config_path = batch_work / "crosstl.toml"
             config_path.write_text(
-                _project_config(workloads[0], entry_points=entries), encoding="utf-8"
+                _project_config(
+                    workloads[0],
+                    entry_points=entries,
+                    binary32_multiplication_profile=cases[0].provenance.get(
+                        "binary32MultiplicationProfile"
+                    ),
+                ),
+                encoding="utf-8",
             )
             report = translate_project(
                 load_project_config(root, config_path),
@@ -206,6 +213,7 @@ def run_binary_cases(
                     "binary32ComparisonProfile",
                     "binary32AdditiveProfile",
                     "binary32DivisionProfile",
+                    "binary32MultiplicationProfile",
                     "binary32Atan2Profile",
                     "binary32RemainderProfile",
                     "binary16RemainderProfile",
@@ -285,6 +293,15 @@ def run_binary_cases(
                             ),
                             "divisionProfile": case.provenance.get(
                                 "binary32DivisionProfile"
+                            ),
+                            **(
+                                {
+                                    "multiplicationProfile": case.provenance[
+                                        "binary32MultiplicationProfile"
+                                    ]
+                                }
+                                if "binary32MultiplicationProfile" in case.provenance
+                                else {}
                             ),
                             **(
                                 {

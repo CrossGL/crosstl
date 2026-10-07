@@ -296,7 +296,12 @@ def test_current_mlx_binary_opengl_ci_shards_are_complete_and_disjoint() -> None
     }
 
 
-def _project_config(workload: BinaryMetalWorkload, *, entry_points=None) -> str:
+def _project_config(
+    workload: BinaryMetalWorkload,
+    *,
+    entry_points=None,
+    binary32_multiplication_profile=None,
+) -> str:
     entries = workload.entry_point if entry_points is None else list(entry_points)
     workgroup_entries = [workload.entry_point] if entry_points is None else ["*"]
     workgroup_rules = "\n        ".join(
@@ -309,6 +314,19 @@ def _project_config(workload: BinaryMetalWorkload, *, entry_points=None) -> str:
     )
     if workload.operator_type == "ArcTan2":
         profiles.append('binary32_atan2_profile = "flush-subnormals"')
+    if binary32_multiplication_profile is not None:
+        assert binary32_multiplication_profile == "rne-flush"
+        assert workload.operator_type == "Multiply"
+        assert workload.input_type in {"float", "bfloat16_t"}
+        selected = {workload.entry_point} if entry_points is None else set(entry_points)
+        eligible = {
+            item.entry_point
+            for item in BINARY_OPENGL_WORKLOADS
+            if item.operator_type == "Multiply"
+            and item.input_type in {"float", "bfloat16_t"}
+        }
+        assert selected and selected <= eligible
+        profiles.append('binary32_multiplication_profile = "rne-flush"')
     if workload.input_type in {"float", "bfloat16_t"}:
         if workload.operator_type in {"Remainder", "Minimum", "Maximum"}:
             profiles.append('binary32_comparison_profile = "flush-subnormals"')

@@ -17,18 +17,20 @@ from tools import ci_coverage
 
 ROOT = Path(__file__).resolve().parents[5]
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_FLOATING_BINARY"
-SOURCE_PROFILES = ("division", "half", "comparison", "additive")
+SOURCE_PROFILES = ("division", "multiplication", "half", "comparison", "additive")
 
 
 def _cases(profile):
     if profile == "half":
-        for fixture in (extrema, additive, division):
+        for fixture in (extrema, additive, division, multiplication):
             yield from fixture._cases(("float16",))
-        yield from multiplication._cases()
     else:
-        fixture = {"comparison": extrema, "additive": additive, "division": division}[
-            profile
-        ]
+        fixture = {
+            "comparison": extrema,
+            "additive": additive,
+            "division": division,
+            "multiplication": multiplication,
+        }[profile]
         yield from fixture._cases(("bfloat16", "float32"))
 
 

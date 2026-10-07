@@ -3209,21 +3209,34 @@ they do not cover every possible operand pair. Arithmetic NaNs are compared by
 classification, while finite values, infinities, zero signs and guards are exact.
 
 `tests/kernels/test_current_multiplication.py` supplies the current-pin
-vector-vector half kernel through generated packages on each native target.
-It covers 5,632 boundary, exponent and deterministic pairs plus eight guards.
-Metal and OpenGL pass locally, and the HLSL package compiles with strict DXC;
-native Windows execution remains a required CI check. This shares the existing
-binary-math job and its 900-second bound, without adding a runner or relaxing
-comparison rules. It does not establish float32/bfloat multiplication parity.
+vector-vector half, float32 and bfloat kernels through generated packages on
+each native target. Half retains its 5,632 input pairs and gradual underflow.
+Float32 and bfloat each add 12,800 boundary, exponent and deterministic pairs,
+with eight guards per kernel. Their native batch explicitly selects
+`binary32_multiplication_profile = "rne-flush"`, flushing subnormal operands and
+exact subnormal products before rounding, while retaining zero signs. The
+independent integer reference applies binary32 rounding before bfloat narrowing.
+Finite values, infinities, zero signs and guards must match exactly; arithmetic
+NaNs compare by classification.
+
+The profile is recorded in project reports, packages and per-kernel evidence.
+It is selected only for this float32/bfloat multiplication batch, not half,
+complex expressions or the complete corpus configuration. Existing artifact
+fingerprints are unchanged. All three targets require strict compilation and
+native readbacks; macOS also runs unchanged upstream controls. These cases share
+the existing binary-math job and its 900-second bound, without adding a runner
+or relaxing comparison rules. Selected vector kernels do not establish
+whole-family, composed-expression or full runtime parity.
 
 `tests/kernels/test_current_floating_binary.py` owns native execution for these
-four fixture modules. The 16 kernels share four translation/package batches:
+four fixture modules. The 18 kernels share five translation/package batches:
 six half kernels without a binary32 profile, four comparison kernels, four
-additive kernels and two division kernels. Compared with separate per-family
-batches, this avoids three repeated frontend and package setup passes per target.
+additive kernels, two division kernels and two multiplication kernels. Compared
+with separate per-family batches, this avoids three repeated frontend and package
+setup passes per target.
 Every kernel retains its compiler check, descriptor, dispatch, readonly input
 checks, result evidence and applicable unchanged Metal control. The inventory
-test checks all 99,088 values and 128 guards against the original fixtures and
+test checks all 124,688 values and 144 guards against the original fixtures and
 verifies each batch's settings against single-entry configuration. Comparison
 policy is selected per operation: selection preserves exact NaN payloads even
 when sharing a batch with arithmetic operations that permit payload differences.

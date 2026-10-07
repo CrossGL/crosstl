@@ -181,6 +181,13 @@ kernels cover all defined 8-bit operand pairs and boundary/seeded wider inputs,
 checking 168,730 exact results and 56 guards per target. Zero divisors and signed
 32-/64-bit quotient overflow are excluded explicitly. macOS runs unchanged
 upstream controls; Windows requires DXC/WARP and Linux requires Mesa execution.
+
+Floating binary cases include half, float32 and bfloat multiplication. The latter
+two use an explicitly profiled batch with 25,600 results and 16 guards, independent
+integer references and retained package provenance. Half keeps its gradual
+underflow and existing cases. All 18 floating kernels execute in five compatible
+batches under the same binary-math deadline, with no additional runner. The
+profile does not change complete-corpus configurations or accepted fingerprints.
 The existing runners, 900-second bound and failure-artifact upload are reused.
 The seven integer entries share one translation and package build. Each entry
 still has a separate compiler invocation, reflected descriptor, native dispatch

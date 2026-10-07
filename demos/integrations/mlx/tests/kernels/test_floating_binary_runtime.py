@@ -13,6 +13,7 @@ from demos.integrations.mlx.tests.kernels import (
     test_current_multiplication,
 )
 from demos.integrations.mlx.tests.kernels.floating_binary_runtime import (
+    BINARY_OPENGL_WORKLOADS,
     MLX_BINARY_SOURCE,
     _batch_workloads,
     _binary_load_units,
@@ -29,7 +30,13 @@ def test_batches_preserve_every_case_and_source_profile(tmp_path):
         for mark in native_test.pytestmark
         if mark.name == "parametrize" and mark.args[0] == "profile"
     )
-    assert parameters == ("division", "half", "comparison", "additive")
+    assert parameters == (
+        "division",
+        "multiplication",
+        "half",
+        "comparison",
+        "additive",
+    )
     all_cases = [
         case
         for fixture in (
@@ -43,28 +50,97 @@ def test_batches_preserve_every_case_and_source_profile(tmp_path):
         list(test_current_floating_binary._cases(profile)) for profile in parameters
     ]
     flattened = [case for batch in batches for case in batch]
-    assert [len(batch) for batch in batches] == [2, 6, 4, 4]
+    assert [len(batch) for batch in batches] == [2, 2, 6, 4, 4]
     assert sorted(flattened, key=lambda c: c.entry) == sorted(
         all_cases, key=lambda c: c.entry
     )
-    assert len(flattened) == len({case.entry for case in flattened}) == 16
-    assert sum(len(case.pairs) for case in flattened) == 99088
-    assert sum(len(case.expected) - len(case.pairs) for case in flattened) == 128
+    assert len(flattened) == len({case.entry for case in flattened}) == 18
+    assert sum(len(case.pairs) for case in flattened) == 124688
+    assert sum(len(case.expected) - len(case.pairs) for case in flattened) == 144
     for cases in batches:
         workloads = _batch_workloads(cases)
         entries = [case.entry for case in cases]
         path = tmp_path / "crosstl.toml"
-        path.write_text(_project_config(workloads[0], entry_points=entries))
+        profile = cases[0].provenance.get("binary32MultiplicationProfile")
+        path.write_text(
+            _project_config(
+                workloads[0],
+                entry_points=entries,
+                binary32_multiplication_profile=profile,
+            )
+        )
         batch = load_project_config(tmp_path, path)
         assert tuple(batch.entry_points[MLX_BINARY_SOURCE]) == tuple(entries)
         assert dict(batch.entry_workgroup_size_rules[MLX_BINARY_SOURCE]) == {
             "*": ("1", "1", "1")
         }
         for workload in workloads:
-            path.write_text(_project_config(workload))
+            path.write_text(
+                _project_config(workload, binary32_multiplication_profile=profile)
+            )
             single = load_project_config(tmp_path, path)
             assert single.source_options == batch.source_options
             assert single.index_range_assertions == batch.index_range_assertions
+
+
+def test_multiplication_profile_is_explicit_and_limited_to_real_float_products(
+    tmp_path,
+):
+    selected = []
+    for workload in BINARY_OPENGL_WORKLOADS:
+        assert "binary32_multiplication_profile" not in _project_config(workload)
+        enabled = workload.operator_type == "Multiply" and workload.input_type in {
+            "float",
+            "bfloat16_t",
+        }
+        if not enabled:
+            with pytest.raises(AssertionError):
+                _project_config(workload, binary32_multiplication_profile="rne-flush")
+            continue
+        path = tmp_path / "crosstl.toml"
+        path.write_text(
+            _project_config(workload, binary32_multiplication_profile="rne-flush")
+        )
+        config = load_project_config(tmp_path, path)
+        assert dict(config.source_options["metal"]) == {
+            "max_template_specializations": 64,
+            "max_template_materialization_work": 4096,
+            "binary32_multiplication_profile": "rne-flush",
+        }
+        selected.append((workload.shape, workload.input_type))
+    assert len(selected) == len(set(selected)) == 36
+    assert len({shape for shape, _ in selected}) == 18
+
+
+@pytest.mark.parametrize("profile", ("rne-gradual", "flush", "", False))
+def test_multiplication_batch_rejects_uncharacterized_profile(profile):
+    workload = _batch_workloads(list(test_current_multiplication._cases(("float32",))))[
+        0
+    ]
+    with pytest.raises(AssertionError):
+        _project_config(workload, binary32_multiplication_profile=profile)
+
+
+@pytest.mark.parametrize(
+    "entries",
+    (
+        [],
+        ["vv_Multiplyfloat32", "vv_Addfloat32"],
+        ["vv_Multiplyfloat32", "vv_Multiplyfloat16"],
+        ["vv_Multiplycomplex64"],
+        ["unknown"],
+    ),
+)
+def test_multiplication_batch_rejects_unrelated_or_missing_entries(entries):
+    workload = _batch_workloads(list(test_current_multiplication._cases(("float32",))))[
+        0
+    ]
+    with pytest.raises(AssertionError):
+        _project_config(
+            workload,
+            entry_points=entries,
+            binary32_multiplication_profile="rne-flush",
+        )
 
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
