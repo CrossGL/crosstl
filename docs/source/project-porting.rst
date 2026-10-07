@@ -2137,6 +2137,15 @@ produce diagnostic-only failed manifests. The manifest is a handoff contract;
 it does not generate runtime framework code, execute device code, or rewrite
 host application code.
 
+Validation, runtime planning and manifest construction each read the report once.
+Within a call, the unit inventory and configuration-diagnostic checks share one
+current project scan, and the manifest reuses that validation for its runtime
+plan. The reported hash identifies the exact report bytes that were validated.
+No scan or validation result is retained across calls; subsequent calls recheck
+sources, includes, configuration and generated artifacts. Keep project files
+unchanged during validation and packaging: this is not an atomic filesystem
+snapshot.
+
 Within one artifact-manifest build, variants of the same source/backend/target
 reuse source-wide reflection, including unavailable results. Generated artifacts
 are still validated and reflected individually, and entry-specific execution

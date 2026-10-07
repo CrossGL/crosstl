@@ -30846,24 +30846,62 @@ def _validate_artifacts(
     }
 
 
+@dataclass(frozen=True)
+class _ValidatedProjectReport:
+    report: Any
+    validation: dict[str, Any]
+
+
 def validate_project_report(
     report_path: str | os.PathLike[str], *, run_toolchains: bool = False
 ) -> dict[str, Any]:
     """Validate artifact existence and optional toolchain availability for a report."""
     run_toolchains = _bool_arg(run_toolchains, field_name="run_toolchains")
     path = _filesystem_path_arg(report_path, field_name="Project report path")
+    return _read_validated_project_report(
+        path, run_toolchains=run_toolchains
+    ).validation
+
+
+def _read_validated_project_report(
+    path: Path, *, run_toolchains: bool = False
+) -> _ValidatedProjectReport:
+    source_hash = None
     try:
-        report = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        contents = path.read_bytes()
+        source_hash = {
+            "algorithm": "sha256",
+            "value": hashlib.sha256(contents).hexdigest(),
+        }
+        report = json.loads(contents.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         diagnostic = _invalid_report_diagnostic(
             path, [f"could not read JSON report: {exc}"]
         )
-        return _validation_report_payload(
-            path,
-            [diagnostic.to_json()],
-            {"toolchains": [], "artifacts": []},
+        return _ValidatedProjectReport(
+            report=None,
+            validation=_validation_report_payload(
+                path,
+                [diagnostic.to_json()],
+                {"toolchains": [], "artifacts": []},
+                source_report_hash=source_hash,
+            ),
         )
+    return _ValidatedProjectReport(
+        report=report,
+        validation=_validate_project_report_contents(
+            path, report, source_hash=source_hash, run_toolchains=run_toolchains
+        ),
+    )
 
+
+def _validate_project_report_contents(
+    path: Path,
+    report: Any,
+    *,
+    source_hash: Mapping[str, str],
+    run_toolchains: bool,
+) -> dict[str, Any]:
     contract_diagnostics = _report_contract_diagnostics(path, report)
     if contract_diagnostics:
         diagnostics = [diagnostic.to_json() for diagnostic in contract_diagnostics]
@@ -30871,6 +30909,7 @@ def validate_project_report(
             path,
             diagnostics,
             {"toolchains": [], "artifacts": []},
+            source_report_hash=source_hash,
             project=report.get("project") if isinstance(report, Mapping) else None,
         )
 
@@ -30902,7 +30941,11 @@ def validate_project_report(
         [diagnostic.to_json() for diagnostic in diagnostic_objects],
     )
     return _validation_report_payload(
-        path, diagnostics, validation, project=report.get("project")
+        path,
+        diagnostics,
+        validation,
+        source_report_hash=source_hash,
+        project=report.get("project"),
     )
 
 
@@ -31703,13 +31746,18 @@ def plan_runtime_integration(
         max_runtime_references, field_name="max_runtime_references"
     )
     path = _filesystem_path_arg(report_path, field_name="Project report path")
-    validation_report = validate_project_report(path)
-    validation_success = bool(validation_report.get("success"))
-    try:
-        report = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        report = {}
+    snapshot = _read_validated_project_report(path)
+    return _build_runtime_integration_plan(path, snapshot, runtime_reference_limit)
 
+
+def _build_runtime_integration_plan(
+    path: Path,
+    snapshot: _ValidatedProjectReport,
+    runtime_reference_limit: int,
+) -> dict[str, Any]:
+    validation_report = snapshot.validation
+    validation_success = bool(validation_report.get("success"))
+    report = snapshot.report
     report_mapping = (
         report if validation_success and isinstance(report, Mapping) else {}
     )
@@ -31757,7 +31805,7 @@ def plan_runtime_integration(
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": RUNTIME_INTEGRATION_PLAN_KIND,
         "sourceReport": str(path),
-        "sourceReportHash": _optional_source_hash(path),
+        "sourceReportHash": validation_report["sourceReportHash"],
         "generatedAt": int(time.time()),
         "success": validation_success,
         "scope": RUNTIME_INTEGRATION_PLAN_SCOPE,
@@ -32947,13 +32995,10 @@ def build_runtime_artifact_manifest(
     """Build a runtime artifact manifest from a validated project report."""
 
     path = _filesystem_path_arg(report_path, field_name="Project report path")
-    validation_report = validate_project_report(path)
+    snapshot = _read_validated_project_report(path)
+    validation_report = snapshot.validation
     validation_success = bool(validation_report.get("success"))
-    try:
-        report = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        report = {}
-
+    report = snapshot.report
     report_mapping = (
         report if validation_success and isinstance(report, Mapping) else {}
     )
@@ -32970,7 +33015,9 @@ def build_runtime_artifact_manifest(
     failed_artifact_count = sum(
         1 for artifact in artifacts if artifact.get("status") == "failed"
     )
-    runtime_plan = plan_runtime_integration(path)
+    runtime_plan = _build_runtime_integration_plan(
+        path, snapshot, RUNTIME_REFERENCE_INSPECTION_SAMPLE_LIMIT
+    )
     runtime_plan_payload = _runtime_manifest_runtime_plan(runtime_plan)
     runtime_reference_count = runtime_plan_payload["runtimeReferenceCount"]
     source_map_rollups = _source_map_rollups(translated_artifacts)
@@ -32997,7 +33044,7 @@ def build_runtime_artifact_manifest(
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": RUNTIME_ARTIFACT_MANIFEST_KIND,
         "sourceReport": str(path),
-        "sourceReportHash": _optional_source_hash(path),
+        "sourceReportHash": validation_report["sourceReportHash"],
         "generatedAt": int(time.time()),
         "success": validation_success,
         "scope": RUNTIME_ARTIFACT_MANIFEST_SCOPE,
@@ -46109,6 +46156,7 @@ def _validation_report_payload(
     diagnostics: Sequence[Mapping[str, Any]],
     validation: Mapping[str, Any],
     *,
+    source_report_hash: Mapping[str, str] | None,
     project: Any = None,
 ) -> dict[str, Any]:
     validation_artifacts = _record_sequence(validation.get("artifacts"))
@@ -46128,7 +46176,7 @@ def _validation_report_payload(
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": VALIDATION_REPORT_KIND,
         "sourceReport": str(path),
-        "sourceReportHash": _optional_source_hash(path),
+        "sourceReportHash": source_report_hash,
         "generatedAt": int(time.time()),
         "success": not any(
             diagnostic.get("severity") == "error" for diagnostic in diagnostics
@@ -47223,21 +47271,28 @@ def _scan_skipped_label(identity: ProjectScanSkippedIdentity) -> str:
     return label
 
 
-def _current_project_scan_contract_reasons(
+def _current_project_scan_for_report_validation(
     project: Mapping[str, Any] | None,
+    root_path: Path | None,
+) -> ProjectScan | None:
+    config = _project_config_for_scan_validation(project, root_path)
+    if config is None:
+        return None
+    try:
+        return scan_project(config)
+    except (OSError, ValueError):
+        return None
+
+
+def _current_project_scan_contract_reasons(
+    current_scan: ProjectScan | None,
     units: Sequence[Any],
     skipped: Sequence[Any],
     *,
     root_path: Path | None,
     report_path: Path,
 ) -> list[str]:
-    config = _project_config_for_scan_validation(project, root_path)
-    if config is None:
-        return []
-
-    try:
-        current_scan = scan_project(config)
-    except (OSError, ValueError):
+    if current_scan is None:
         return []
 
     ignored_report_path = None
@@ -50709,16 +50764,9 @@ def _current_include_scan_diagnostic_contract_reasons(
 def _current_project_config_diagnostic_contract_reasons(
     diagnostics: Sequence[Any],
     *,
-    root_path: Path | None,
-    project: Mapping[str, Any] | None,
+    current_scan: ProjectScan | None,
 ) -> list[str]:
-    config = _project_config_for_scan_validation(project, root_path)
-    if config is None:
-        return []
-
-    try:
-        current_scan = scan_project(config)
-    except (OSError, ValueError):
+    if current_scan is None:
         return []
 
     reported_diagnostic_counts = Counter(
@@ -56017,10 +56065,28 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     )
                 )
 
+    needs_current_scan = (
+        has_summary
+        and isinstance(units, list)
+        and (
+            isinstance(skipped, list)
+            or (
+                isinstance(project, Mapping)
+                and isinstance(report.get("diagnostics", []), list)
+            )
+        )
+    )
+    current_scan = (
+        _current_project_scan_for_report_validation(
+            project if isinstance(project, Mapping) else None, root_path
+        )
+        if needs_current_scan
+        else None
+    )
     if has_summary and isinstance(units, list) and isinstance(skipped, list):
         reasons.extend(
             _current_project_scan_contract_reasons(
-                project if isinstance(project, Mapping) else None,
+                current_scan,
                 units,
                 skipped,
                 root_path=root_path,
@@ -56564,8 +56630,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             reasons.extend(
                 _current_project_config_diagnostic_contract_reasons(
                     diagnostics,
-                    root_path=root_path,
-                    project=project,
+                    current_scan=current_scan,
                 )
             )
             reasons.extend(
