@@ -125,7 +125,6 @@ def test_project_demo_triggers_cover_code_without_root_documentation():
         "conftest.py",
         "pyproject.toml",
         "requirements.txt",
-        "setup.py",
         "setup.cfg",
     ):
         assert any(fnmatchcase(path, pattern) for pattern in paths), path

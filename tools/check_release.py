@@ -16,22 +16,24 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+
 
 def _require(condition, message):
     if not condition:
         raise ValueError(message)
 
 
+def package_metadata(root):
+    with (root / "pyproject.toml").open("rb") as handle:
+        return tomllib.load(handle)["project"]
+
+
 def package_version(root):
-    tree = ast.parse((root / "setup.py").read_text(encoding="utf-8"))
-    setup = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "setup"
-    )
-    return ast.literal_eval(next(k.value for k in setup.keywords if k.arg == "version"))
+    return package_metadata(root)["version"]
 
 
 def release_notes(root, version):
@@ -86,6 +88,8 @@ def _metadata(data, version):
         ("Name", "crosstl"),
         ("Version", version),
         ("Requires-Python", ">=3.8"),
+        ("License-Expression", "Apache-2.0"),
+        ("License-File", "LICENSE"),
     ):
         _require(metadata.get_all(key) == [expected], f"Incorrect {key} metadata")
 
@@ -133,6 +137,10 @@ def check_distributions(root, directory):
         "Unexpected wheel payload",
     )
     _metadata(files[info + "METADATA"], version)
+    _require(
+        files.get(info + "licenses/LICENSE") == (root / "LICENSE").read_bytes(),
+        "Packaged license differs",
+    )
     entrypoints = configparser.ConfigParser()
     entrypoints.read_string(files[info + "entry_points.txt"].decode("utf-8"))
     _require(
@@ -161,7 +169,6 @@ def check_distributions(root, directory):
     _check_payload(files, expected)
     _metadata(files["PKG-INFO"], version)
     for name in (
-        "setup.py",
         "pyproject.toml",
         "README.md",
         "LICENSE",
@@ -243,6 +250,10 @@ def check_installation(version):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    version = commands.add_parser("version")
+    version.add_argument(
+        "--root", type=Path, default=Path(__file__).resolve().parents[1]
+    )
     distributions = commands.add_parser("distributions")
     distributions.add_argument("directory", type=Path)
     distributions.add_argument(
@@ -251,6 +262,9 @@ def main():
     installed = commands.add_parser("installed")
     installed.add_argument("--version", required=True)
     args = parser.parse_args()
+    if args.command == "version":
+        print(package_version(args.root))
+        return
     result = (
         check_installation(args.version)
         if args.command == "installed"

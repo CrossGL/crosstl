@@ -17,7 +17,6 @@ on:
       - "conftest.py"
       - "pyproject.toml"
       - "requirements*.txt"
-      - "setup.py"
       - "setup.cfg"
   push:
     branches: [main]
@@ -34,7 +33,6 @@ on:
       - "conftest.py"
       - "pyproject.toml"
       - "requirements*.txt"
-      - "setup.py"
       - "setup.cfg"
   schedule:
     - cron: "31 4 * * 1"

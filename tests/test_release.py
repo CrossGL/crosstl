@@ -11,7 +11,13 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tools.check_release import check_distributions, check_versions, release_notes
+from tools.check_release import (
+    check_distributions,
+    check_versions,
+    package_metadata,
+    release_notes,
+    tomllib,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/release.yml"
@@ -32,6 +38,77 @@ def test_release_versions_and_notes_match():
     version = check_versions(ROOT)
     notes = release_notes(ROOT, version)
     assert "### " in notes and "## [" not in notes and "[Unreleased]" not in notes
+
+
+def test_package_build_contract_retains_supported_python_and_resources():
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert config["build-system"] == {
+        "requires": ["flit_core==4.1.0"],
+        "build-backend": "flit_core.buildapi",
+    }
+    metadata = package_metadata(ROOT)
+    assert metadata["name"] == "crosstl"
+    assert metadata["requires-python"] == ">=3.8"
+    assert metadata["dependencies"] == ["gast", "tomli; python_version<'3.11'"]
+    assert metadata["scripts"] == {"crosstl": "crosstl._crosstl:main"}
+    assert metadata["license"] == "Apache-2.0"
+    assert metadata["license-files"] == ["LICENSE"]
+    assert set(config["tool"]["flit"]) == {"sdist"}
+    assert not (ROOT / "setup.py").exists()
+    assert not (ROOT / "MANIFEST.in").exists()
+    source = config["tool"]["flit"]["sdist"]
+    assert set(source["include"]) == {
+        "CHANGELOG.md",
+        "CITATION.cff",
+        ".zenodo.json",
+        "examples/",
+        "support/",
+        "docs/",
+    }
+    assert set(source["exclude"]) == {
+        "docs/_build/",
+        "docs/doxygen/build/",
+        "examples/output/",
+        "support/generated/",
+        "**/__pycache__/",
+        "**/*.py[cod]",
+    }
+
+
+def test_release_build_and_publisher_support_current_metadata():
+    assert _step("Install release tooling")["run"] == (
+        "python -m pip install build==1.2.2.post1 twine==7.0.0"
+    )
+    publisher = _workflow()["jobs"]["publish-pypi"]["steps"][-1]
+    assert publisher["uses"] == (
+        "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33"
+    )
+    assert _step("Set up minimum supported Python")["with"]["python-version"] == "3.8"
+    smoke = _step("Test isolated wheel and source installations")["run"]
+    assert "${{ steps.python-minimum.outputs.python-path }}" in smoke
+    assert '"$(command -v python)"' in smoke
+    assert '"$interpreter" -m venv "$environment"' in smoke
+    assert "setup.py" not in WORKFLOW.read_text(encoding="utf-8")
+    assert "setuptools" not in WORKFLOW.read_text(encoding="utf-8")
+
+
+def test_release_version_command_reads_only_declarative_metadata(release_tree):
+    (release_tree / "setup.py").write_text('raise RuntimeError("must not execute")\n')
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools/check_release.py"),
+            "version",
+            "--root",
+            str(release_tree),
+        ],
+        cwd=release_tree,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    assert result.stdout == "1.2.3\n" and not result.stderr
 
 
 def test_release_validates_pull_requests_without_publishing():
@@ -63,8 +140,6 @@ def test_release_validates_pull_requests_without_publishing():
     paths = workflow["on"]["pull_request"]["paths"]
     for path in (
         "crosstl/**",
-        "setup.py",
-        "MANIFEST.in",
         "pyproject.toml",
         "tools/check_release.py",
         "tests/test_release.py",
@@ -106,6 +181,7 @@ def test_release_checks_and_publishes_the_same_distributions():
     )
     assert publish["with"]["password"] == "${{ secrets.PYPI_TOKEN }}"
     assert publish["with"]["packages-dir"] == "dist/"
+    assert publish["with"]["attestations"] == "false"
     release = jobs["github-release"]["steps"][-1]["run"]
     assert "--verify-tag" in release and "dist/*" in release
 
@@ -114,13 +190,12 @@ def test_release_checks_and_publishes_the_same_distributions():
 def release_tree(tmp_path):
     root = tmp_path / "source"
     files = {
-        "setup.py": 'setup(version="1.2.3")\n',
         "CITATION.cff": 'version: "1.2.3"\ndate-released: "2026-10-07"\n',
         "docs/source/conf.py": 'release = "1.2.3"\n',
         "CHANGELOG.md": (
             "## [Unreleased]\n\n---\n\n## [1.2.3] - 2026-10-07\n\n### Fixed\n\n- A change.\n\n---\n## [1.2.2] - 2026-10-01\n- Older.\n"
         ),
-        "pyproject.toml": '[build-system]\nrequires = ["setuptools"]\n',
+        "pyproject.toml": '[project]\nname = "crosstl"\nversion = "1.2.3"\n',
         "README.md": "Package readme\n",
         "LICENSE": "License\n",
         "crosstl/__init__.py": "",
@@ -139,10 +214,14 @@ def _archives(root, directory, mutation=None):
         for p in root.rglob("*")
         if p.is_file()
     }
-    metadata = b"Name: crosstl\nVersion: 1.2.3\nRequires-Python: >=3.8\n\n"
+    metadata = (
+        b"Name: crosstl\nVersion: 1.2.3\nRequires-Python: >=3.8\n"
+        b"License-Expression: Apache-2.0\nLicense-File: LICENSE\n\n"
+    )
     wheel = {name: data for name, data in files.items() if name.startswith("crosstl/")}
     info = "crosstl-1.2.3.dist-info/"
     wheel[info + "METADATA"] = metadata
+    wheel[info + "licenses/LICENSE"] = files["LICENSE"]
     wheel[info + "entry_points.txt"] = (
         b"[console_scripts]\ncrosstl = crosstl._crosstl:main\n"
     )
@@ -174,6 +253,8 @@ def test_release_archive_checks_accept_complete_payload(release_tree, tmp_path):
         ("wheel", "crosstl/project/directx_runtime_worker.cpp", None),
         ("wheel", "crosstl/__init__.py", b"stale source"),
         ("wheel", "demos/private.py", b"unexpected"),
+        ("wheel", "crosstl-1.2.3.dist-info/licenses/LICENSE", None),
+        ("wheel", "crosstl-1.2.3.dist-info/licenses/LICENSE", b"wrong license"),
         (
             "wheel",
             "crosstl-1.2.3.dist-info/METADATA",
@@ -335,8 +416,8 @@ def test_release_tag_must_match_version_and_belong_to_main(
     python = tmp_path / "python"
     python.write_text(
         f"#!{sys.executable}\nimport sys\n"
-        "if sys.argv[1:] == ['setup.py', '--version']: print('1.2.3')\n"
-        "else: assert sys.argv[1:] == ['-m', 'pip', 'install', 'setuptools==75.3.2']\n",
+        "assert sys.argv[1:] == ['tools/check_release.py', 'version']\n"
+        "print('1.2.3')\n",
         encoding="utf-8",
     )
     for path in (gh, python):

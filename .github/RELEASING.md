@@ -6,9 +6,24 @@ install each in a separate environment. These runs never publish packages or
 create a GitHub Release. Native runtime execution remains in the platform test
 workflows; the package check does not add Windows or macOS runners.
 
+## Build Contract
+
+`pyproject.toml` is the single source of package metadata and distribution
+contents. The pinned Flit backend supports source builds, wheels and editable
+installs on Python 3.8 and later without setuptools or wheel as build
+dependencies. Use `python -m pip install .` or `python -m pip install -e .`;
+there is no separate `setup.py` build path.
+
+Release automation runs on Python 3.12 and checks isolated wheel and source
+installs on both Python 3.8 and 3.12 within the same Ubuntu job. Ordinary test
+matrices also exercise editable installs. Keep the metadata validator and PyPI
+upload action compatible with the backend's metadata format; an older upload
+tool can reject an otherwise valid archive. The current backend produces
+metadata version 2.5, supported by the pinned Twine 7 tooling in both places.
+
 ## Prepare
 
-1. Set the same version in `setup.py`, `CITATION.cff` and `docs/source/conf.py`.
+1. Set the same version in `pyproject.toml`, `CITATION.cff` and `docs/source/conf.py`.
 2. Add a dated section to `CHANGELOG.md` and update the citation release date.
    Keep compiler coverage, numerical execution and project integration claims
    separate. Do not describe incomplete external-project ports as supported

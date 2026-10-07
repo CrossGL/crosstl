@@ -730,7 +730,7 @@ def test_deferred_native_compilation_workflow_proves_contracts_and_device_dispat
         "crosstl/project/runtime_variant_dispatch.py",
         "crosstl/project/runtime_verification.py",
         "crosstl/project/__init__.py",
-        "setup.py",
+        "pyproject.toml",
         "conftest.py",
         "tests/test_toolchain_discovery.py",
         "tests/test_translator/test_native_deferred_compilation*.py",

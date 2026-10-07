@@ -15,6 +15,7 @@ All notable changes to CrossTL are documented in this file.
 - Native runtime support for Boolean, binary16, bfloat16, byte and 64-bit integer storage, shared allocation views, immutable DirectX constants and validated resource ranges.
 - Project integration demos for selected array operations, copies, casts, reductions, indexing, scatter and random generation through translated runtime packages. The MLX demo records pinned sources, host adaptations, native dispatches and unchanged upstream test selections; it does not provide a complete replacement backend or pass the complete upstream suite.
 - Release package checks on Ubuntu, including isolated installation of both the wheel and source distribution, CLI translation and packaged native runtime resources before publication.
+- Declarative package metadata with a pinned Flit build backend, preserving Python 3.8 source, wheel and editable installs without the affected setuptools and wheel build dependencies. Release validation and publication tooling support the same metadata format.
 
 ### Improved
 
