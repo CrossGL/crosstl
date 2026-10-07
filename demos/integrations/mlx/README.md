@@ -107,7 +107,13 @@ For the current pinned, profiled bfloat Sigmoid case, only the Metal helper's
 result parentheses change. Its reviewed artifact still matches original Metal
 over all 65,282 non-NaN inputs, with eight output guards. The HLSL and GLSL
 artifacts are byte-identical to their previous references; the OpenGL full-domain
-execution also remains exact.
+execution also remains exact. The later precision-scope correction moves
+`contract(off)` into the precise exponential body and removes the file-level
+`contract(fast)` reset. Complete shader comparison leaves all other bytes and
+the interface unchanged. Before accepting the new Metal fingerprint, the old
+artifact, new artifact and unchanged upstream source each returned the same
+65,282 results and eight guards, with read-only buffers unchanged. This review
+does not accept the remaining exponential or complex-unary family references.
 
 Cross-backend controls also found a separate Metal narrow-field reference
 failure ([#2102](https://github.com/CrossGL/crosstl/issues/2102)): the field

@@ -45,8 +45,8 @@ SOURCE_SHA256 = "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368
 PROFILE = "rne-flush"
 ARTIFACTS = {
     "metal": {
-        "sha256": "43d4e019d58a96c87f8128cb8742f6dd7c1de3e9f513997ae3e156ba421fe81a",
-        "sizeBytes": 6530,
+        "sha256": "058518d8f88cf954951e1eb3ec95cc12f6e3faac9d0ccfcd2fb2b47cf104b7dc",
+        "sizeBytes": 6502,
     },
     "opengl": {
         "sha256": "c875953cd46217256c9228247220ebec524bb8b938b03b6733799e53bddfeeaa",
