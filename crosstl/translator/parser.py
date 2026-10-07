@@ -1708,16 +1708,29 @@ class Parser:
         finally:
             self.restore_generic_parameter_scope(previous_scope)
 
+        function_attributes = []
+        linkage_qualifiers = set()
+        for attribute in attributes + post_attributes:
+            if attribute.name in {"metal_static", "metal_inline"}:
+                if attribute.arguments:
+                    raise SyntaxError(f"@{attribute.name} does not accept arguments")
+                qualifier = attribute.name[len("metal_") :]
+                linkage_qualifiers.add(qualifier)
+            else:
+                function_attributes.append(attribute)
+
         return FunctionNode(
             name=name,
             return_type=return_type,
             parameters=parameters,
             body=body,
             generic_params=generic_params,
-            attributes=attributes + post_attributes,
+            attributes=function_attributes,
             qualifiers=qualifiers,
             is_async="async" in qualifiers,
             is_unsafe="unsafe" in qualifiers,
+            linkage="internal" if "static" in linkage_qualifiers else "external",
+            is_inline="inline" in linkage_qualifiers,
         )
 
     def parse_return_type_attributes(self):
