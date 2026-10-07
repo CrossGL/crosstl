@@ -155,6 +155,21 @@ flush-subnormals policy; half comparisons remain gradual. macOS also executes
 unchanged source controls. There are no NaN comparison exceptions, new native
 jobs or relaxed deadlines.
 
+Pinned addition/subtraction adds six half, bfloat and float32 packages to the
+same step: 34,192 results and 48 guards per target. Finite values, infinities,
+signed zeros and guards require exact words; NaN payload differences are counted
+separately. Float32/bfloat arithmetic uses the explicit round-to-nearest,
+flush-subnormals source profile. Numeric NaN conversion policy remains tracked
+in #2081; these tests do not establish bitwise NaN parity.
+
+The binary step selects native test functions explicitly. Portable reflection,
+configuration and mocked-dispatch tests remain in the Ubuntu complete suite.
+Remainder types and floating operator/type pairs are separate pytest cases,
+scheduled with work stealing across the existing two workers. The unchanged
+Metal reference library is built once per source root and worker, while every
+case still runs its own original-source dispatch and checks its inputs. The
+900-second bound, required native cases and evidence uploads are unchanged.
+
 The same arithmetic step verifies source-defined bitcast-name overloads beside
 generated FMA, division and half-remainder helpers. Exact output words cover
 scalar/vector overloads, aliases, namespace-qualified calls and both binary32

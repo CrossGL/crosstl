@@ -3110,8 +3110,35 @@ an additional control. All six HLSL packages pass strict DXC compilation;
 Windows execution remains a required CI check, not an inferred result. The
 fixture shares the existing native runners, evidence upload and 900-second
 binary-math bound. Physical driver-upload bytes and full MLX runtime parity are
-not claimed. After this scoped update, 252 changed binary references remain
-under review in #2073.
+not claimed.
+
+Addition/subtraction selects `binary32_additive_profile = "rne-flush"` for
+float32 and bfloat operands only. Half results retain their explicit binary16
+rounding. All 108 affected references have complete historical and updated
+source review, unchanged resource interfaces and 216 strict compiler/validator
+checks. At `846d1762`, 354 layout/domain cases compare 826,888 results and 2,832
+guards with untouched Metal and generated OpenGL. The independent audit uses
+decoded arithmetic and explicit rounding, checks unchanged input buffers, and
+retains raw NaN payload differences.
+
+`tests/kernels/test_current_additive.py` covers six vector-vector kernels at
+`9c3d3557`: 34,192 results and 48 guards per target, including cancellation,
+rounding midpoints, subnormal boundaries and seeded inputs. Finite results,
+infinities, signed zeros and guards require exact words. NaNs are compared by
+classification, with differing payload counts in the report; no readback is
+normalized. Metal and OpenGL pass locally, and all six HLSL packages compile
+with strict DXC. Windows execution is a separate required check. Bit-observable
+numeric NaN conversions remain tracked in #2081. This does not establish
+bitwise NaN or whole-family parity.
+
+The binary step now schedules each remainder type and floating operator/type
+pair independently across its existing two workers. Original Metal library
+builds are shared per source root and worker, but source dispatches and their
+input checks remain per case. Explicit native-test selection avoids repeating
+portable tests already covered on Ubuntu. Neither the native runner count nor
+the 900-second deadline increases. After these reviewed updates, 180 changed
+binary references remain under review in #2073: 36 each for arctangent,
+division, log-add-exp, multiplication and power.
 
 The native arithmetic step runs device execution, original-source controls and
 Metal linkage checks only. Platform-independent configuration and generation

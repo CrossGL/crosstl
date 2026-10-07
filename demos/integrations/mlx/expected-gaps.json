@@ -2104,8 +2104,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "a1437e058093596858fbb51c6176a73771e4c2c850941c37fcccd615b9710bc3",
-      "size_bytes": 1467764,
+      "sha256": "7ad7ab25ecdbc2abc576f93658474b2b6f605d3270c33629aa59035e72fb506a",
+      "size_bytes": 1467836,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -2228,7 +2228,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 17103274,
+      "generated_size_bytes_total": 17869858,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "ss_Addint32",

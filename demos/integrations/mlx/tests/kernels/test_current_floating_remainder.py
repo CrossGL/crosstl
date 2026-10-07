@@ -19,7 +19,6 @@ from demos.integrations.mlx.tests.kernels.test_binary_complete_opengl import (
     _project_config,
 )
 from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
-    _metal_library,
     _run,
 )
 from demos.integrations.mlx.tests.kernels.test_current_complex_power import MLX_COMMIT
@@ -236,7 +235,10 @@ def _original_metal(work, runner, library, dtype, pairs, expected):
         ).read_bytes()
 
 
-def test_current_floating_remainder_native_parity(tmp_path):
+@pytest.mark.parametrize("dtype", ENTRIES)
+def test_current_floating_remainder_native_parity(
+    tmp_path, dtype, binary_metal_reference
+):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for pinned native floating remainder")
     root = Path(os.environ["CROSTL_MLX_CURRENT_ROOT"]).resolve()
@@ -267,127 +269,106 @@ def test_current_floating_remainder_native_parity(tmp_path):
         hashlib.sha256((root / MLX_BINARY_SOURCE).read_bytes()).hexdigest()
         == MLX_BINARY_SHA256
     )
-    runner = library = None
-    if target == "metal":
-        original = tmp_path / "source-control"
-        original.mkdir()
-        runner = original / "readback"
-        _run(
-            [
-                "xcrun",
-                "swiftc",
-                ROOT / "tests/fixtures/runtime_verification/metal_raw_buffers.swift",
-                "-o",
-                runner,
-            ],
-            original,
-            "build-runner",
-        )
-        library = _metal_library(
-            root / MLX_BINARY_SOURCE,
-            original / "original.metallib",
-            root,
-            upstream=True,
-        )
-    for dtype, entry in ENTRIES.items():
-        pairs = _pairs(dtype)
-        expected = [_expected(a, b, dtype) for a, b in pairs] + [_guard(dtype)] * 8
-        workload = next(w for w in BINARY_OPENGL_WORKLOADS if w.entry_point == entry)
-        with tempfile.TemporaryDirectory(
-            prefix=".current-floating-remainder-", dir=root
-        ) as directory:
-            work = Path(directory)
+    runner, library = binary_metal_reference(root, target)
+    entry = ENTRIES[dtype]
+    pairs = _pairs(dtype)
+    expected = [_expected(a, b, dtype) for a, b in pairs] + [_guard(dtype)] * 8
+    workload = next(w for w in BINARY_OPENGL_WORKLOADS if w.entry_point == entry)
+    with tempfile.TemporaryDirectory(
+        prefix=".current-floating-remainder-", dir=root
+    ) as directory:
+        work = Path(directory)
+        try:
+            config_path = work / "crosstl.toml"
+            config_path.write_text(_project_config(workload), encoding="utf-8")
+            report = translate_project(
+                load_project_config(root, config_path),
+                targets=(target,),
+                output_dir=work.name + "/out",
+                format_output=False,
+            )
+            report.write_json(work / "report.json")
+            data = report.to_json()
+            assert (
+                data["summary"]["translatedCount"] == 1
+                and data["summary"]["failedCount"] == 0
+            ), data["diagnostics"]
+            assert not data["diagnostics"]
+            (artifact,) = data["artifacts"]
+            for field, value in PROVENANCE.items():
+                assert artifact["provenance"][field] == value
+            descriptor, package = _prepare_native_package(report, work)
+            source = package / descriptor["artifact"]["packagePath"]
+            assert (
+                hashlib.sha256(source.read_bytes()).hexdigest()
+                == artifact["generatedHash"]["value"]
+            )
+            _validate(source, work, target)
+            request, inputs, outputs = _request(
+                descriptor, package, dtype, target, pairs, expected
+            )
+            assert not request.execution_plan.diagnostics
+            (work / "values.json").write_text(
+                json.dumps(
+                    {"pairs": pairs, "inputs": inputs, "outputs": outputs}, indent=2
+                ),
+                encoding="utf-8",
+            )
+            executor = _executor(target)
             try:
-                config_path = work / "crosstl.toml"
-                config_path.write_text(_project_config(workload), encoding="utf-8")
-                report = translate_project(
-                    load_project_config(root, config_path),
-                    targets=(target,),
-                    output_dir=work.name + "/out",
-                    format_output=False,
-                )
-                report.write_json(work / "report.json")
-                data = report.to_json()
-                assert (
-                    data["summary"]["translatedCount"] == 1
-                    and data["summary"]["failedCount"] == 0
-                ), data["diagnostics"]
-                assert not data["diagnostics"]
-                (artifact,) = data["artifacts"]
-                for field, value in PROVENANCE.items():
-                    assert artifact["provenance"][field] == value
-                descriptor, package = _prepare_native_package(report, work)
-                source = package / descriptor["artifact"]["packagePath"]
-                assert (
-                    hashlib.sha256(source.read_bytes()).hexdigest()
-                    == artifact["generatedHash"]["value"]
-                )
-                _validate(source, work, target)
-                request, inputs, outputs = _request(
-                    descriptor, package, dtype, target, pairs, expected
-                )
-                assert not request.execution_plan.diagnostics
-                (work / "values.json").write_text(
-                    json.dumps(
-                        {"pairs": pairs, "inputs": inputs, "outputs": outputs}, indent=2
-                    ),
-                    encoding="utf-8",
-                )
-                executor = _executor(target)
-                try:
-                    availability = executor.is_available(request)
-                    assert availability.available, availability.reason
-                    result = executor.run(request)
-                finally:
-                    close = getattr(executor.runtime_adapter.runtime, "close", None)
-                    if close:
-                        close()
-                (work / "result.json").write_text(
-                    json.dumps(
-                        {
-                            "status": result.status,
-                            "outputs": result.outputs,
-                            "details": result.details,
-                        },
-                        indent=2,
-                    ),
-                    encoding="utf-8",
-                )
-                assert result.status == "ok"
-                (actual,), (wanted,) = result.outputs.values(), outputs.values()
-                assert {k: v for k, v in actual.items() if k != "values"} == {
-                    k: v for k, v in wanted.items() if k != "values"
-                }
-                _check_words(actual["values"], wanted["values"], dtype, target)
-                if target == "metal":
-                    _original_metal(work, runner, library, dtype, pairs, expected)
-                (work / "evidence.json").write_text(
-                    json.dumps(
-                        {
-                            "commit": MLX_COMMIT,
-                            "sourceSha256": MLX_BINARY_SHA256,
-                            "entryPoint": entry,
-                            "target": target,
-                            "dtype": dtype,
-                            "artifactSha256": artifact["generatedHash"]["value"],
-                            "profiles": PROVENANCE,
-                            "pairCount": len(pairs),
-                            "guardCount": 8,
-                            "comparison": "exact words; NaN classification",
-                            "wholeFamilyParity": False,
-                            "physicalDriverUploadBytes": False,
-                            "originalLibrarySha256": (
-                                hashlib.sha256(library.read_bytes()).hexdigest()
-                                if library
-                                else None
-                            ),
-                        },
-                        indent=2,
-                    ),
-                    encoding="utf-8",
-                )
+                availability = executor.is_available(request)
+                assert availability.available, availability.reason
+                result = executor.run(request)
             finally:
-                shutil.copytree(work, tmp_path / dtype, dirs_exist_ok=True)
+                close = getattr(executor.runtime_adapter.runtime, "close", None)
+                if close:
+                    close()
+            (work / "result.json").write_text(
+                json.dumps(
+                    {
+                        "status": result.status,
+                        "outputs": result.outputs,
+                        "details": result.details,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            assert result.status == "ok"
+            (actual,), (wanted,) = result.outputs.values(), outputs.values()
+            assert {k: v for k, v in actual.items() if k != "values"} == {
+                k: v for k, v in wanted.items() if k != "values"
+            }
+            _check_words(actual["values"], wanted["values"], dtype, target)
+            if target == "metal":
+                _original_metal(work, runner, library, dtype, pairs, expected)
+            (work / "evidence.json").write_text(
+                json.dumps(
+                    {
+                        "commit": MLX_COMMIT,
+                        "sourceSha256": MLX_BINARY_SHA256,
+                        "entryPoint": entry,
+                        "target": target,
+                        "dtype": dtype,
+                        "artifactSha256": artifact["generatedHash"]["value"],
+                        "profiles": PROVENANCE,
+                        "pairCount": len(pairs),
+                        "guardCount": 8,
+                        "comparison": "exact words; NaN classification",
+                        "wholeFamilyParity": False,
+                        "physicalDriverUploadBytes": False,
+                        "originalLibrarySha256": (
+                            hashlib.sha256(library.read_bytes()).hexdigest()
+                            if library
+                            else None
+                        ),
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        finally:
+            shutil.copytree(work, tmp_path / dtype, dirs_exist_ok=True)
 
 
 def test_ci_requires_floating_remainder_once_per_native_target():

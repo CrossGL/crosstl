@@ -1705,6 +1705,7 @@ jobs:
           CROSTL_REQUIRE_MLX_CURRENT_FLOATING_REMAINDER: "1"
           CROSTL_REQUIRE_MLX_CURRENT_INTEGER_REMAINDER: "1"
           CROSTL_REQUIRE_MLX_CURRENT_EXTREMA: "1"
+          CROSTL_REQUIRE_MLX_CURRENT_ADDITIVE: "1"
           CROSTL_REQUIRE_STRUCT_BUFFER_RUNTIME: "1"
           CROSTL_RUN_NATIVE_LOADER_DIRECTX_DEVICE_TEST: ${{ runner.os == 'Windows' && '1' || '0' }}
           CROSTL_RUN_NATIVE_LOADER_OPENGL_DEVICE_TEST: ${{ runner.os == 'Linux' && '1' || '0' }}
@@ -1715,19 +1716,20 @@ jobs:
           set -euo pipefail
           mkdir -p .mlx-portable-host/binary-math
           python tools/run_bounded_command.py --timeout-seconds 900 --label "Pinned native binary math" -- \
-            python -m pytest -q -n auto \
+            python -m pytest -q -n auto --dist worksteal \
               --basetemp=.mlx-portable-host/binary-math/pytest \
               --junitxml=.mlx-portable-host/binary-math/results.xml \
-              tests/test_translator/test_struct_buffer_layouts.py \
-              tests/test_translator/test_buffer_requirements.py \
-              tests/test_translator/test_native_dispatch_limits.py \
-              tests/test_translator/test_native_loader_dispatch_integration.py \
-              demos/integrations/mlx/tests/kernels/test_current_complex_power.py \
-              demos/integrations/mlx/tests/kernels/test_current_binary_shapes.py \
-              demos/integrations/mlx/tests/kernels/test_current_half_remainder.py \
-              demos/integrations/mlx/tests/kernels/test_current_floating_remainder.py \
-              demos/integrations/mlx/tests/kernels/test_current_integer_remainder.py \
-              demos/integrations/mlx/tests/kernels/test_current_extrema.py \
+              tests/test_translator/test_struct_buffer_layouts.py::test_struct_buffer_native_readback \
+              tests/test_translator/test_buffer_requirements.py::test_minimum_footprint_native_readback \
+              tests/test_translator/test_native_loader_dispatch_integration.py::test_native_loader_descriptor_executes_directx_on_device \
+              tests/test_translator/test_native_loader_dispatch_integration.py::test_native_loader_descriptor_executes_opengl_on_device \
+              demos/integrations/mlx/tests/kernels/test_current_complex_power.py::test_current_mlx_complex_power_native_loader \
+              demos/integrations/mlx/tests/kernels/test_current_binary_shapes.py::test_current_mlx_complex_power_shape_native_parity \
+              demos/integrations/mlx/tests/kernels/test_current_half_remainder.py::test_current_half_remainder_native_parity \
+              demos/integrations/mlx/tests/kernels/test_current_floating_remainder.py::test_current_floating_remainder_native_parity \
+              demos/integrations/mlx/tests/kernels/test_current_integer_remainder.py::test_current_integer_remainder_native_parity \
+              demos/integrations/mlx/tests/kernels/test_current_extrema.py::test_current_extrema_native_parity \
+              demos/integrations/mlx/tests/kernels/test_current_additive.py::test_current_additive_native_parity \
               2>&1 | tee .mlx-portable-host/binary-math.log
       - name: Execute pinned resident attention reductions
         env:

@@ -1,6 +1,7 @@
 import ast
 import json
 import re
+import shlex
 import textwrap
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -39,6 +40,51 @@ def test_project_demo_has_one_workflow_and_local_test_ownership():
     assert (ROOT / "demos/integrations/mlx/tests/kernels").is_dir()
     for directory in ("runtime_verification", "project_porting"):
         assert (ROOT / "demos/integrations/mlx/fixtures" / directory).is_dir()
+
+
+def test_pinned_binary_step_selects_every_native_case_without_portable_duplicates():
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    job = yaml.safe_load(workflow)["jobs"]["portable-host"]
+    step = next(
+        s for s in job["steps"] if s.get("name") == "Validate pinned native binary math"
+    )
+    command = step["run"]
+    assert "--dist worksteal" in command
+    assert "--timeout-seconds 900" in command
+    assert "-n auto" in command and "if" not in step
+    tokens = shlex.split(command.replace("\\\n", " "))
+    selected = [token for token in tokens if ".py::test_" in token]
+    assert len(selected) == len(set(selected)) == 11
+    modules = {token.split("::")[0] for token in selected}
+    expected_modules = {
+        "tests/test_translator/test_struct_buffer_layouts.py",
+        "tests/test_translator/test_buffer_requirements.py",
+        "tests/test_translator/test_native_loader_dispatch_integration.py",
+    }
+    expected_modules.update(
+        f"demos/integrations/mlx/tests/kernels/test_current_{name}.py"
+        for name in (
+            "complex_power",
+            "binary_shapes",
+            "half_remainder",
+            "floating_remainder",
+            "integer_remainder",
+            "extrema",
+            "additive",
+        )
+    )
+    assert modules == expected_modules
+    discovered = set()
+    for module in modules:
+        for node in ast.parse((ROOT / module).read_text()).body:
+            if isinstance(node, ast.FunctionDef) and node.name.endswith(
+                ("_native_parity", "_native_loader", "_native_readback", "_on_device")
+            ):
+                discovered.add(f"{module}::{node.name}")
+    assert set(selected) == discovered
+    assert not any(
+        token.endswith(".py") for token in tokens if token.startswith("tests/")
+    )
 
 
 def test_project_demo_triggers_cover_code_without_root_documentation():
