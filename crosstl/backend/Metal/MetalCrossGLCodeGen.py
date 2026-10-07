@@ -1307,6 +1307,7 @@ class MetalToCrossGLConverter:
         binary32_remainder_profile=None,
         binary32_additive_profile=None,
         binary32_atan2_profile=None,
+        binary32_log_profile=None,
     ):
         if binary32_fma_profile not in (None, "rne-gradual", "rne-flush"):
             raise ValueError(
@@ -1343,6 +1344,16 @@ class MetalToCrossGLConverter:
                 "'flush-subnormals', or None"
             )
         self.binary32_atan2_profile = binary32_atan2_profile
+        if binary32_log_profile not in (
+            None,
+            "preserve-subnormals",
+            "flush-subnormals",
+        ):
+            raise ValueError(
+                "binary32_log_profile must be 'preserve-subnormals', "
+                "'flush-subnormals', or None"
+            )
+        self.binary32_log_profile = binary32_log_profile
         if binary32_remainder_profile not in (
             None,
             "preserve-subnormals",
@@ -1762,6 +1773,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_atan2_widths = set()
         self.required_metal_power_widths = set()
         self.required_metal_precise_exp_widths = set()
+        self.required_metal_precise_log_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
         self.required_metal_division_widths = set()
@@ -2958,6 +2970,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_atan2_widths = set()
         self.required_metal_power_widths = set()
         self.required_metal_precise_exp_widths = set()
+        self.required_metal_precise_log_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
         self.required_metal_division_widths = set()
@@ -14191,7 +14204,16 @@ class MetalToCrossGLConverter:
         operation = text.rsplit("::", 1)[-1]
         if operation == "atan2":
             return self.map_metal_precise_atan2_function_name(args)
-        if operation not in {"acos", "asin", "acosh", "atan", "sin", "cos", "exp"}:
+        if operation not in {
+            "acos",
+            "asin",
+            "acosh",
+            "atan",
+            "sin",
+            "cos",
+            "exp",
+            "log",
+        }:
             return None
         arguments = list(args or [])
         source_location = (
@@ -14271,6 +14293,23 @@ class MetalToCrossGLConverter:
                 )
             self.required_metal_precise_exp_widths.add(width)
             return self.metal_precise_exp_helper_name(width)
+        if operation == "log":
+            if not binary32_operand:
+                raise MetalPreciseMathLoweringError(
+                    operation,
+                    operand_type,
+                    "precise logarithm lowering requires binary32 operands",
+                    source_location,
+                )
+            if self.current_function is None:
+                raise MetalPreciseMathLoweringError(
+                    operation,
+                    operand_type,
+                    "global initializers cannot call the runtime logarithm helper",
+                    source_location,
+                )
+            self.required_metal_precise_log_widths.add(width)
+            return self.metal_precise_log_helper_name(width)
         if operation == "acosh":
             if not binary32_operand:
                 raise MetalPreciseMathLoweringError(
@@ -15238,6 +15277,7 @@ float {scalar}(float base, float exponent) {{
         independent_code += self.generate_metal_precise_atan2_support_code(indent)
         independent_code += self.generate_metal_power_support_code(indent)
         independent_code += self.generate_metal_precise_exp_support_code(indent)
+        independent_code += self.generate_metal_precise_log_support_code(indent)
         widths = sorted(self.required_metal_precise_acos_widths)
         if not widths and not self.required_metal_precise_asin_widths:
             return independent_code
@@ -15362,6 +15402,69 @@ float {scalar}(float base, float exponent) {{
         code = binary32_exp_support(scalar)
         for width in sorted(self.required_metal_precise_exp_widths - {1}):
             vector = self.metal_precise_exp_helper_name(width)
+            arguments = ", ".join(f"{scalar}(value.{lane})" for lane in "xyzw"[:width])
+            code += (
+                f"@precise\n@metal_static\nvec{width} {vector}(vec{width} value) {{\n"
+                f"    return vec{width}({arguments});\n}}\n"
+            )
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
+
+    def metal_precise_log_helper_name(self, width):
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            f"log-float{suffix}", f"__crossgl_metal_precise_log_float{suffix}"
+        )
+
+    def generate_metal_precise_log_support_code(self, indent=0):
+        if not self.required_metal_precise_log_widths:
+            return ""
+        scalar = self.metal_precise_log_helper_name(1)
+        flush = "true" if self.binary32_log_profile == "flush-subnormals" else "false"
+        # Integer normalization avoids target subnormal arithmetic. Reducing
+        # around one bounds |r| by (sqrt(2)-1)/(sqrt(2)+1); use the odd series
+        # log(m) = 2*(r + r^3/3 + ...), and a split ln(2) for reconstruction.
+        code = f"""@precise
+@metal_static
+float {scalar}(float value) {{
+    uint bits = asuint(value);
+    uint magnitude = bits & 0x7fffffffu;
+    if ({flush} && magnitude < 0x00800000u) {{ magnitude = 0u; }}
+    if (magnitude == 0u) {{ return asfloat(0xff800000u); }}
+    if (magnitude > 0x7f800000u || (bits & 0x80000000u) != 0u) {{
+        return asfloat(0x7fc00000u);
+    }}
+    if (magnitude == 0x7f800000u) {{ return asfloat(magnitude); }}
+    int exponent = int(magnitude >> 23u) - 127;
+    uint fraction = magnitude & 0x007fffffu;
+    if (exponent == -127) {{
+        exponent = -126;
+        while ((fraction & 0x00800000u) == 0u) {{
+            fraction <<= 1u;
+            exponent -= 1;
+        }}
+        fraction &= 0x007fffffu;
+    }}
+    float reduced @precise = asfloat(0x3f800000u | fraction);
+    if (reduced > 1.4142135623730950488) {{
+        reduced *= 0.5;
+        exponent += 1;
+    }}
+    float ratio @precise = (reduced - 1.0) / (reduced + 1.0);
+    float squared @precise = ratio * ratio;
+    float polynomial @precise = 1.0 / 13.0;
+    polynomial = 1.0 / 11.0 + squared * polynomial;
+    polynomial = 1.0 / 9.0 + squared * polynomial;
+    polynomial = 1.0 / 7.0 + squared * polynomial;
+    polynomial = 1.0 / 5.0 + squared * polynomial;
+    polynomial = 1.0 / 3.0 + squared * polynomial;
+    float correction @precise = (2.0 * ratio * squared) * polynomial;
+    float tail @precise = float(exponent) * 0.000001428606765330187 + correction;
+    return float(exponent) * 0.693145751953125 + (2.0 * ratio + tail);
+}}
+"""
+        for width in sorted(self.required_metal_precise_log_widths - {1}):
+            vector = self.metal_precise_log_helper_name(width)
             arguments = ", ".join(f"{scalar}(value.{lane})" for lane in "xyzw"[:width])
             code += (
                 f"@precise\n@metal_static\nvec{width} {vector}(vec{width} value) {{\n"

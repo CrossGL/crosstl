@@ -1841,6 +1841,7 @@ REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(
         "binary32RemainderProfile",
         "binary32AdditiveProfile",
         "binary32Atan2Profile",
+        "binary32LogProfile",
     )
 )
 REPORT_ARTIFACT_ENTRY_POINT_FIELDS = frozenset(("source", "target", "stage"))
@@ -28450,6 +28451,17 @@ def _translate_project_impl(
                                 "'flush-subnormals', or None"
                             )
                         artifact["provenance"]["binary32Atan2Profile"] = atan2_profile
+                    log_profile = source_options.get("binary32_log_profile")
+                    if unit.source_backend == "metal" and log_profile is not None:
+                        if log_profile not in (
+                            "preserve-subnormals",
+                            "flush-subnormals",
+                        ):
+                            raise ValueError(
+                                "binary32_log_profile must be 'preserve-subnormals', "
+                                "'flush-subnormals', or None"
+                            )
+                        artifact["provenance"]["binary32LogProfile"] = log_profile
                     if (
                         unit.source_backend == "metal"
                         and comparison_profile is not None
@@ -46548,6 +46560,16 @@ def _provenance_contract_reasons(
             reasons.append(
                 f"{prefix}.binary32Atan2Profile must be preserve-subnormals or flush-subnormals"
             )
+    if "binary32LogProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(f"{prefix}.binary32LogProfile requires a Metal source")
+        if provenance["binary32LogProfile"] not in (
+            "preserve-subnormals",
+            "flush-subnormals",
+        ):
+            reasons.append(
+                f"{prefix}.binary32LogProfile must be preserve-subnormals or flush-subnormals"
+            )
     if "dispatchRegion" in provenance:
         try:
             region = DispatchRegion.from_json(provenance["dispatchRegion"])
@@ -46632,6 +46654,15 @@ def _provenance_contract_reasons(
         if provenance.get("binary32Atan2Profile") != expected_atan2_profile:
             reasons.append(
                 f"{prefix}.binary32Atan2Profile must match the resolved project source options"
+            )
+        expected_log_profile = (
+            options.get("binary32_log_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("binary32LogProfile") != expected_log_profile:
+            reasons.append(
+                f"{prefix}.binary32LogProfile must match the resolved project source options"
             )
         if provenance.get("dispatchRegion") != options.get(
             DISPATCH_REGION_SOURCE_OPTION

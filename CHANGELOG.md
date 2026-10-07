@@ -10,7 +10,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Added
 
-- Explicit source arithmetic profiles for binary32 addition, subtraction, division, remainder and precise arctangent, with native DirectX, OpenGL and Metal controls for rounding, subnormals, signed zeros and non-finite values.
+- Explicit source arithmetic profiles for binary32 addition, subtraction, division, remainder, precise arctangent and precise logarithms, with native DirectX, OpenGL and Metal controls for rounding, subnormals, signed zeros and non-finite values.
 - Exact thread-grid dispatch regions, fixed partial workgroups, Boolean subgroup votes and source-ordered software subgroup products. Unsupported collective control flow remains a diagnostic failure.
 - Native runtime support for Boolean, binary16, bfloat16, byte and 64-bit integer storage, shared allocation views, immutable DirectX constants and validated resource ranges.
 - Project integration demos for selected array operations, copies, casts, reductions, indexing, scatter and random generation through translated runtime packages. The MLX demo records pinned sources, host adaptations, native dispatches and unchanged upstream test selections; it does not provide a complete replacement backend or pass the complete upstream suite.
@@ -26,6 +26,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Fixed
 
+- Precise Metal logarithms use range-reduced binary32 arithmetic with explicit operand-underflow profiles, preserving accuracy near one and retaining the selected policy in reports and runtime packages.
 - Precise Metal helpers keep contraction directives inside their function bodies, preserving the enclosing compiler setting and rounding across unrelated helper returns.
 - Metal default and precise power calls preserve signed-zero, negative-base, integral-exponent, infinity and NaN domains through source-specific helpers. Native regression checks retain exact domain results and explicit finite controls; complete finite-domain accuracy and subnormal parity remain separate work.
 - Precise Metal `atan2` retains finite underflow at the normal/subnormal rounding midpoint instead of rounding the division upward first. Native controls include every applicable exponent scaling, neighboring operands and signed-zero checks.

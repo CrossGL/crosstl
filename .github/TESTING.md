@@ -255,6 +255,12 @@ writeback, narrow intermediates and guards. The project's Sigmoid boundary
 regression stays under `demos/integrations/mlx/tests` and runs in the existing
 pinned unary step. Neither adds a runner or duplicates the compiler-only corpus.
 The Sigmoid check covers all 65,282 non-NaN bfloat inputs and eight output guards.
+The same unary step requires native precise-logarithm checks for both explicit
+subnormal profiles, scalar/vector results, narrow scalar promotion, operand
+evaluation counts and guards. Its 28,024 binary32 inputs cover every exponent
+and dense neighborhoods around one and the range-reduction boundaries. Ordinary
+translation, metadata and compiler tests stay in the general suites rather than
+being repeated in this native step; the existing 300-second bound is unchanged.
 The byte-conversion step also covers writable scalar/vector arguments, nested
 calls, aliases, indexed locations and lazy conditional calls. Signed and unsigned
 overflow checks retain output guards and original Metal comparisons. Separate

@@ -1193,6 +1193,47 @@ helpers or entry points. Native source/roundtrip checks exercise arithmetic
 across function-return boundaries with contraction disabled, expression-local,
 and unrestricted, while retaining the precise helper's numerical checks.
 
+Precise logarithms
+~~~~~~~~~~~~~~~~~~
+
+Metal ``precise::log`` uses a portable binary32 implementation for scalars and
+two- to four-lane vectors. Scalar half and bfloat arguments promote to binary32;
+arguments are evaluated once. Default and fast calls, and source-defined
+functions, keep their existing paths. Unsupported operand types and global
+runtime initializers produce ``project.translate.metal-precise-math-unsupported``.
+
+Integer normalization avoids arithmetic on subnormal operands. Range reduction
+around one and an odd-series expansion preserve accuracy near one without
+depending on the target's native logarithm. Native regression checks use a
+120-digit decimal reference and the four-ULP binary32 limit in Table 8.1 of the
+`Metal Shading Language Specification
+<https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf>`_.
+The tests cover every binary32 exponent, dense neighborhoods around one and
+the reduction boundaries, signed inputs, infinities, NaNs and narrow promotion.
+Classifications, zero signs, input copies, evaluation counts and guards are
+checked separately from finite numerical accuracy.
+
+The default preserves represented subnormal operands. A characterized source
+can select an explicit policy:
+
+.. code-block:: toml
+
+   [project.source_options.metal]
+   binary32_log_profile = "flush-subnormals"
+
+``preserve-subnormals`` computes a finite logarithm for positive subnormals and
+NaN for negative subnormals. ``flush-subnormals`` treats either sign of a
+subnormal operand as signed zero, yielding negative infinity. Both policies
+leave stored inputs unchanged. The unchanged Metal source control checks the
+flush policy for its tested compiler and device, not a universal Metal rule.
+Neither policy changes other arithmetic, default/fast logarithms or readbacks.
+
+Reports and runtime manifests retain an explicit ``binary32LogProfile``;
+validation requires it to match resolved target/path source options. Saved
+CrossGL retains the implementation without requiring the option again. Native
+DirectX, OpenGL and Metal checks are part of the existing project-demo jobs.
+This is a logarithm contract, not proof of complete project numerical parity.
+
 Power-function domains
 ~~~~~~~~~~~~~~~~~~~~~~
 
