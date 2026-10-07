@@ -22625,6 +22625,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             half_selection = self.generate_hlsl_half_selection(expr)
             if half_selection is not None:
                 return half_selection
+            source_type = self.expression_result_type(expr)
+            source_info = self.hlsl_floating_arithmetic_type_info(source_type)
+            if source_info is not None and source_info["base_type"] == "float16_t":
+                # Preserve the selected type; the enclosing context widens once.
+                expected_type = source_type
             condition = self.generate_expression_with_expected(
                 getattr(expr, "condition", ""), "bool"
             )

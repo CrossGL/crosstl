@@ -124,6 +124,9 @@ NaN early returns and two-, three- and four-component selections must preserve
 the selected storage words exactly. Original Metal controls and output guards
 remain required; no NaN normalization is permitted. The step keeps its two
 workers and 180-second limit, with no additional runner.
+Compiler regressions also check effectful half-valued conditional branches,
+including nested scalar/vector results widened to float or double. Conversion
+must happen once after selection without eagerly evaluating either branch.
 
 The native host's binary32 arithmetic step selects device execution, original
 source controls and Metal module-linkage tests. Configuration, reference-model

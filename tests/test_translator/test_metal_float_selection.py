@@ -292,6 +292,38 @@ def test_half_selection_keeps_lazy_evaluation_and_constant_initializers(tmp_path
     )
     assert "__crossgl_select_half_bits" not in generated
     assert generated.count("record(i,") == 2
+    assert "asuint16(((i == 0) ? record(i, a) : record(i, b)))" in generated
+    _compile(
+        generated, "directx", tmp_path, directx_compile_flags=("-enable-16bit-types",)
+    )
+
+
+@pytest.mark.parametrize("width", (1, 2, 3, 4))
+@pytest.mark.parametrize("target_base", ("float", "double"))
+@pytest.mark.parametrize("nested", (False, True))
+def test_lazy_half_selection_widens_once_after_selecting(
+    tmp_path, width, target_base, nested
+):
+    suffix = str(width) if width > 1 else ""
+    dtype = f"float16_t{suffix}"
+    components = ", ".join(["output[0]"] * width)
+    selection = "i == 0 ? record(i, a) : record(i, b)"
+    if nested:
+        selection = f"i < 2 ? ({selection}) : record(i, a)"
+    generated = HLSLCodeGen().generate(
+        _shader(
+            f"int i = 0; {dtype} a = {dtype}({components}); {dtype} b = a; "
+            f"{target_base}{suffix} selected = {selection}; "
+            f"output[0] = float(selected{'.x' if width > 1 else ''});",
+            f"{dtype} record(inout int i, {dtype} value) {{ i++; return value; }}",
+        )
+    )
+    (assignment,) = (line for line in generated.splitlines() if " selected = " in line)
+    assert "__crossgl_select_half_bits" not in generated
+    assert assignment.count("__crossgl_binary16_to_float(") == 1
+    assert assignment.count("asuint16(") == 1
+    assert assignment.count("record(i,") == (3 if nested else 2)
+    assert "((i == 0) ? record(i, a) : record(i, b))" in assignment
     _compile(
         generated, "directx", tmp_path, directx_compile_flags=("-enable-16bit-types",)
     )
