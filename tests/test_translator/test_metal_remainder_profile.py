@@ -118,6 +118,7 @@ def test_remainder_profiles_compile(tmp_path, profile, target):
         generated,
         target,
         tmp_path,
+        directx_compile_flags=("-enable-16bit-types",),
         metal_compile_flags=("-std=metal3.1", "-fno-fast-math"),
     )
 
@@ -206,6 +207,7 @@ def test_remainder_profile_survives_saved_intermediate(tmp_path, target):
         generated,
         target,
         tmp_path,
+        directx_compile_flags=("-enable-16bit-types",),
         metal_compile_flags=("-std=metal3.1", "-fno-fast-math"),
     )
 
@@ -265,7 +267,11 @@ def test_remainder_profile_executes(tmp_path, profile, monkeypatch):
     monkeypatch.setattr(
         native,
         "_compile",
-        partial(_compile, metal_compile_flags=("-std=metal3.1", "-fno-fast-math")),
+        partial(
+            _compile,
+            directx_compile_flags=("-enable-16bit-types",),
+            metal_compile_flags=("-std=metal3.1", "-fno-fast-math"),
+        ),
     )
     pairs = _pairs(32)
     expected = [GUARD] * 4

@@ -3035,14 +3035,19 @@ source operation and its sign-adjustment comparisons. The bfloat standard-librar
 wrapper retains its float computation and narrow return. These are explicit
 source execution policies, not a universal Metal-device guarantee.
 
-Original/generated Metal agree across 790,904 vector-vector results and 200
-guards. OpenGL matches all 786,432 bfloat pairs, covering every input word against
-12 fixed partners. Three of 4,472 float32 pairs still differ in the subsequent
-addition; a repository-independent reproduction is tracked in
-[#2113](https://github.com/CrossGL/crosstl/issues/2113). Raw inputs, readbacks and
-guards are retained without normalization. Twelve selected project artifacts
-compile for Metal, OpenGL and DirectX, but this is not new Windows numerical
-evidence or acceptance of the pending float32/bfloat remainder references.
+Comparison and remainder policies alone are insufficient. Although the original
+bfloat sweep matched all 786,432 pairs against 12 fixed partners, six of eight
+additional cancellation pairs differed during the subsequent addition. Three
+of 4,472 float32 pairs exposed the same independent operation defect, tracked in
+[#2113](https://github.com/CrossGL/crosstl/issues/2113).
+
+Adding `binary32_additive_profile = "rne-flush"` gives matching original Metal,
+generated Metal and OpenGL results for 791,416 vector-vector values and 208
+guards. This includes the original sweeps and 512 adjacent, opposite-signed
+bfloat cancellation pairs. Raw inputs, readbacks and guards are retained without
+normalization. Twelve selected project artifacts compile for Metal, OpenGL and
+DirectX. This is bounded numerical coverage, not Windows execution evidence,
+all-layout parity or acceptance of the pending float32/bfloat references.
 
 All 60 signed and unsigned 64-bit shift references also have complete source and
 interface review. Their source changes only convert shift counts to the width

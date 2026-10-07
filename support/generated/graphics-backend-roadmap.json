@@ -71,6 +71,8 @@
             "tests/test_translator/test_metal_comparison_profile.py::def test_comparison_profile_report_and_package_provenance",
             "tests/test_translator/test_metal_remainder_profile.py::def test_remainder_profile_executes",
             "tests/test_translator/test_metal_remainder_profile.py::def test_remainder_profile_report_provenance",
+            "tests/test_translator/test_metal_additive_profile.py::def test_additive_profiles_execute",
+            "tests/test_translator/test_metal_additive_profile.py::def test_additive_profile_report_provenance",
             "tests/test_translator/test_directx_metal_math.py::def test_directx_metal_math_rejects_shadowed_target",
             "tests/test_translator/test_directx_metal_math.py::def test_hlsl_select_roundtrip_retains_hlsl_argument_order",
             "tests/test_translator/test_directx_atan2.py::def test_directx_atan2_executes",
@@ -114,7 +116,9 @@
             "tests/test_translator/test_metal_comparison_profile.py::def test_comparison_profile_executes",
             "tests/test_translator/test_metal_comparison_profile.py::def test_comparison_profile_report_and_package_provenance",
             "tests/test_translator/test_metal_remainder_profile.py::def test_remainder_profile_executes",
-            "tests/test_translator/test_metal_remainder_profile.py::def test_remainder_profile_report_provenance"
+            "tests/test_translator/test_metal_remainder_profile.py::def test_remainder_profile_report_provenance",
+            "tests/test_translator/test_metal_additive_profile.py::def test_additive_profiles_execute",
+            "tests/test_translator/test_metal_additive_profile.py::def test_additive_profile_report_provenance"
           ],
           "notes": "",
           "status": "supported"
@@ -138,6 +142,8 @@
             "tests/test_translator/test_metal_comparison_profile.py::def test_comparison_profile_report_and_package_provenance",
             "tests/test_translator/test_metal_remainder_profile.py::def test_remainder_profile_executes",
             "tests/test_translator/test_metal_remainder_profile.py::def test_remainder_profile_report_provenance",
+            "tests/test_translator/test_metal_additive_profile.py::def test_additive_profiles_execute",
+            "tests/test_translator/test_metal_additive_profile.py::def test_additive_profile_report_provenance",
             "tests/test_translator/test_metal_half_remainder.py::def test_project_retains_half_remainder_profile",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_half_component_bitcast_preserves_source_width",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_floating_remainder_nested_calls_evaluate_operands_once",

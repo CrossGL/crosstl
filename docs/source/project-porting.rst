@@ -1170,6 +1170,36 @@ option does not select a universal Metal policy, change Boolean conversions or
 establish whole-project numerical parity. Half remainder and binary32 comparisons
 remain independently configured contracts.
 
+Binary32 addition and subtraction can also select an explicit policy:
+
+.. code-block:: toml
+
+   [project.source_options.metal]
+   binary32_additive_profile = "rne-flush"
+
+``rne-gradual`` preserves subnormal operands and results; ``rne-flush`` treats
+subnormal operands as signed zero and flushes subnormal results to signed zero.
+Both round once to nearest, ties to even, and canonicalize arithmetic NaNs. The
+default is unset. The implementation shares the integer-word exact-rounding
+support with fused arithmetic, but the two policies remain independent. It does
+not replace separate source operations with a fused expression.
+
+Scalar and vector ``+`` and ``-`` evaluate operands once, retain source
+conversions and preserve bfloat result narrowing. Proven side-effect-free
+``+=`` and ``-=`` support writable thread storage, direct buffer elements and
+indexed vector components. Wide vectors use per-lane lowering. Unresolved
+types, runtime helpers in global constants and unproven compound assignments
+produce ``project.translate.metal-additive-profile-unsupported``. Source-defined
+operators keep their dispatch; arithmetic inside their bodies follows the
+selected policy. Integer, half-only, binary64 and pointer arithmetic, increment,
+decrement, unary negation and stored operand words are unchanged.
+
+Reports, runtime manifests and packages retain ``binary32AdditiveProfile`` and
+validate it against resolved source, target and path-specific options. Saved
+CrossGL retains the implementation. Native controls characterize only the
+tested source compiler and device; selecting this profile alone does not prove
+whole-project numerical parity or select comparison and remainder policies.
+
 The legacy MLX copy reference at
 ``846d176227a0ac13d2667e58d2bb68b322109ab0`` proves all 2,496 discovered entries
 from ``copy.metal`` through Metal-to-CrossGL-to-Metal translation. The family

@@ -1839,6 +1839,7 @@ REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(
         "binary16RemainderProfile",
         "binary32ComparisonProfile",
         "binary32RemainderProfile",
+        "binary32AdditiveProfile",
     )
 )
 REPORT_ARTIFACT_ENTRY_POINT_FIELDS = frozenset(("source", "target", "stage"))
@@ -28412,6 +28413,15 @@ def _translate_project_impl(
                 dispatch_region = None
                 try:
                     division_profile = source_options.get("binary32_division_profile")
+                    additive_profile = source_options.get("binary32_additive_profile")
+                    if unit.source_backend == "metal" and additive_profile is not None:
+                        if additive_profile not in ("rne-gradual", "rne-flush"):
+                            raise ValueError(
+                                "binary32_additive_profile must be 'rne-gradual', 'rne-flush', or None"
+                            )
+                        artifact["provenance"][
+                            "binary32AdditiveProfile"
+                        ] = additive_profile
                     remainder_profile = source_options.get("binary32_remainder_profile")
                     if unit.source_backend == "metal" and remainder_profile is not None:
                         if remainder_profile not in (
@@ -46439,6 +46449,13 @@ def _provenance_contract_reasons(
             reasons.append(
                 f"{prefix}.binary16RemainderProfile must be binary32-quotient"
             )
+    if "binary32AdditiveProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(f"{prefix}.binary32AdditiveProfile requires a Metal source")
+        if provenance["binary32AdditiveProfile"] not in ("rne-gradual", "rne-flush"):
+            reasons.append(
+                f"{prefix}.binary32AdditiveProfile must be rne-gradual or rne-flush"
+            )
     if "binary32RemainderProfile" in provenance:
         if artifact.get("sourceBackend") != "metal":
             reasons.append(f"{prefix}.binary32RemainderProfile requires a Metal source")
@@ -46518,6 +46535,15 @@ def _provenance_contract_reasons(
         if provenance.get("binary32RemainderProfile") != expected_remainder_profile:
             reasons.append(
                 f"{prefix}.binary32RemainderProfile must match the resolved project source options"
+            )
+        expected_additive_profile = (
+            options.get("binary32_additive_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("binary32AdditiveProfile") != expected_additive_profile:
+            reasons.append(
+                f"{prefix}.binary32AdditiveProfile must match the resolved project source options"
             )
         expected_comparison_profile = (
             options.get("binary32_comparison_profile")
