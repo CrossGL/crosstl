@@ -1,7 +1,9 @@
 """Concrete functors preserve member writes through specialized helper calls."""
 
+import json
 import os
 import shutil
+import struct
 import sys
 from pathlib import Path
 
@@ -14,12 +16,112 @@ from crosstl.project import (
 )
 from tests.ci_helpers import assert_paths_covered
 from tests.test_backend.test_metal.test_functor_member_forwarding import CASES, source
+from tests.test_backend.test_metal.test_unused_call_operators import SOURCE as OUTLINED
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
+from tests.test_translator.test_fused_math import _dispatch
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_software_subgroup_product import _package
 
 REQUIRE_ENV = "CROSTL_REQUIRE_FUNCTOR_MEMBER_RUNTIME"
+
+
+def _outlined_source(selected):
+    owner = "Offset" if selected else "Root"
+    return (
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        + OUTLINED.split("kernel void", 1)[0]
+        + f"""kernel void calculate(
+        const device uint* values [[buffer(0)]],
+        device uint* results [[buffer(1)]],
+        uint i [[thread_position_in_grid]]) {{
+    float input = as_type<float>(values[i]);
+    results[4u + 2u * i] = as_type<uint>({owner}{{}}(input));
+    results[5u + 2u * i] = values[i];
+}}
+"""
+    )
+
+
+def _outlined_project(root, target, selected, profile):
+    original = _outlined_source(selected)
+    (root / "outlined.metal").write_text(original, encoding="utf-8")
+    report = translate_project(
+        ProjectConfig(
+            root=root,
+            include_patterns=("outlined.metal",),
+            targets=(target,),
+            entry_points={"outlined.metal": ("calculate",)},
+            source_options=(
+                {"metal": {"binary32_additive_profile": profile}} if profile else {}
+            ),
+            workgroup_size=(1, 1, 1),
+            output_dir="out",
+        ),
+        format_output=False,
+    ).to_json()
+    assert not report["diagnostics"]
+    (artifact,) = report["artifacts"]
+    assert artifact["status"] == "translated"
+    return original, (root / artifact["path"]).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+@pytest.mark.parametrize("selected", (False, True))
+@pytest.mark.parametrize("profile", (None, "rne-flush"))
+def test_outlined_functor_project_compiles(tmp_path, target, selected, profile):
+    original, generated = _outlined_project(tmp_path, target, selected, profile)
+    assert "float Offset::operator()" in original
+    assert ("Offset_operator_call" in generated.replace("__", "_")) == selected
+    if selected and profile:
+        assert "crossgl_metal_add_float" in generated
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("selected", (False, True))
+@pytest.mark.parametrize("profile", (None, "rne-flush"))
+def test_outlined_functor_executes_natively(tmp_path, selected, profile):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required functor-member execution")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    original, generated = _outlined_project(tmp_path, target, selected, profile)
+    values = [float(i) / 8.0 for i in range(-64, 65)]
+
+    def bits(value):
+        return struct.unpack("<I", struct.pack("<f", value))[0]
+
+    inputs = [(bits(value),) for value in values]
+    expected = [0x1937A5C3] * (8 + 2 * len(values))
+    factor = 3.0 if selected else 2.0
+    for i, value in enumerate(values):
+        expected[4 + 2 * i : 6 + 2 * i] = [bits(value * factor), bits(value)]
+    initial = [0x1937A5C3] * len(expected)
+    execution = tmp_path / "native"
+    execution.mkdir()
+    actual, evidence = _dispatch(
+        execution,
+        target,
+        generated,
+        inputs,
+        len(expected),
+        initial_output=initial,
+        entry="calculate" if target == "metal" else None,
+    )
+    assert actual == expected, evidence
+    (execution / "audit.json").write_text(json.dumps(evidence), encoding="utf-8")
+    if target == "metal":
+        control = tmp_path / "original"
+        control.mkdir()
+        baseline, evidence = _dispatch(
+            control,
+            target,
+            original,
+            inputs,
+            len(expected),
+            entry="calculate",
+            initial_output=initial,
+        )
+        assert baseline == expected, evidence
 
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))

@@ -26,6 +26,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Fixed
 
+- Unreferenced out-of-line Metal call operators no longer block kernel translation. Library definitions, referenced owners and uncertain bindings remain intact; selected qualified bodies retain their source behavior under explicit arithmetic profiles.
 - Precise Metal square roots use correctly rounded integer arithmetic with explicit operand-underflow profiles, preserving signed zeros and recording the selected policy in reports and runtime packages.
 - Precise Metal logarithms use range-reduced binary32 arithmetic with explicit operand-underflow profiles, preserving accuracy near one and retaining the selected policy in reports and runtime packages.
 - Precise Metal helpers keep contraction directives inside their function bodies, preserving the enclosing compiler setting and rounding across unrelated helper returns.

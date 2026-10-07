@@ -1864,6 +1864,57 @@ class MetalPreprocessor(HLSLPreprocessor):
             namespaces.add(self._struct_namespace(candidates[0]))
         return namespaces
 
+    def _prune_unreferenced_call_operator_definitions(self, code: str) -> str:
+        """Leave library definitions intact; discard only unused kernel helpers."""
+        masked = self._mask_comments_and_literals(code)
+        if re.search(r"::\s*operator\s*\(\s*\)", masked) is None:
+            return code
+        structs = self._find_concrete_struct_definitions(code)
+        excluded = sorted(
+            self._find_template_declaration_spans(code)
+            + [struct.span for struct in structs]
+        )
+        functions = self._find_non_template_function_definitions(code, excluded)
+        if not any(function.is_entry for function in functions):
+            return code
+        owners: Dict[str, List[_MetalStructDefinition]] = {}
+        for struct in structs:
+            owners.setdefault(struct.name, []).append(struct)
+        definitions: Dict[str, List[_MetalFunctionDefinition]] = {}
+        for function in functions:
+            header = code[function.span[0] : function.body_span[0] - 1]
+            if re.search(r"\boperator\s*\(\s*\)", header) is None:
+                continue
+            if re.search(r"\b(?:extern|visible)\b", header):
+                continue
+            owner = self._qualified_function_owner(header)
+            # A unique unqualified owner avoids guessing namespace or template
+            # bindings. Any remaining mention, even in a template, keeps it live.
+            if owner not in owners or len(owners[owner]) != 1:
+                continue
+            struct = owners[owner][0]
+            if struct.qualified_name != owner or not re.fullmatch(
+                r"\s*;", code[struct.body_span[1] + 1 : struct.span[1]]
+            ):
+                continue
+            definitions.setdefault(owner, []).append(function)
+        replacements = []
+        for owner, candidates in definitions.items():
+            own_spans = sorted(
+                [owners[owner][0].span] + [function.span for function in candidates]
+            )
+            if any(
+                self._containing_span(match.start(), own_spans) is None
+                for match in re.finditer(rf"\b{re.escape(owner)}\b", masked)
+            ):
+                continue
+            for function in candidates:
+                start, end = function.span
+                # Keep original offsets and lines for subsequent diagnostics.
+                blank = re.sub(r"[^\r\n]", " ", code[start:end])
+                replacements.append((start, end, blank))
+        return self._apply_text_replacements(code, replacements)
+
     def _prune_unreferenced_materialized_function_templates(self, code: str) -> str:
         """Drop an instantiated primary only after all raw references are gone.
 
@@ -3257,6 +3308,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             self._active_static_constexpr_functions = previous_constexpr_functions
 
     def _lower_struct_member_functions_impl(self, code: str) -> str:
+        code = self._prune_unreferenced_call_operator_definitions(code)
         template_declaration_spans = self._find_template_declaration_spans(code)
         self._source_type_alias_bindings = self._collect_local_type_alias_bindings(
             code,

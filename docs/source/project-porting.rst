@@ -569,6 +569,15 @@ outside this global selection path. Required Metal, DirectX and OpenGL execution
 tests distinguish primary addition from specialized subtraction and verify both
 default and non-default template arguments.
 
+Kernel translation omits an out-of-line call-operator definition only when its
+unique unqualified owner has no references outside its own declaration and
+call-operator definitions. This prevents unused, unmaterialized helper bodies
+from blocking arithmetic-profile validation. Library-only sources, aliases,
+template references, nested calls, exported definitions and uncertain owner
+bindings retain their bodies. Source offsets and line breaks are preserved.
+Required native checks distinguish the selected qualified implementation from
+its template fallback; no reachable computation is replaced by a placeholder.
+
 The two current-tree DirectX float32 entries explicitly select
 ``software_subgroup_width = 32``. Their shuffle helpers use shared storage and
 workgroup barriers instead of hardware wave instructions. A private

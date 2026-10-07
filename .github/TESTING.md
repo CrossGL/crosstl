@@ -375,6 +375,13 @@ reassociation does not hide a source-tree regression. Inputs, expected words,
 native readbacks and generated artifact identities are retained with the existing
 builtin-ownership evidence.
 
+The existing gather/resource jobs run the outlined-functor cases in
+`test_functor_member_runtime.py`. They verify selected and unused qualified
+definitions with default arithmetic and the explicit additive profile on each
+native target. Exact readbacks distinguish the qualified implementation from
+its template fallback, retain input copies and check eight output guards.
+macOS also executes the unchanged source. No runner or timeout is added.
+
 The base-to-head coverage comparison accepts explicitly reviewed workflow moves
 from `.github/ci-coverage-migrations.json`. Only workflow filenames are mapped;
 job identities and coverage requirements are not removed. Each old job must
