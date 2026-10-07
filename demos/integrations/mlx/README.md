@@ -3065,6 +3065,28 @@ validation plus Mesa execution on Linux. Reports, package source identities,
 encoded inputs and readbacks are retained. This does not claim physical driver
 upload-byte capture, exhaustive input pairs or upstream MLX test-suite parity.
 
+`tests/kernels/test_current_integer_remainder.py` checks seven pinned
+vector-vector kernels through generated packages. Boolean and signed/unsigned
+8-bit cases cover every defined operand pair; signed/unsigned 16-bit and signed
+32-/64-bit cases use boundaries and deterministic samples. Together they check
+168,730 results and 56 output guards per native target. Division by zero and
+signed 32-/64-bit minimum divided by minus one are outside the defined domain.
+The corresponding 8-/16-bit division uses promoted integer operands and remains
+covered. Expected results use an independent integer model with the source's
+divisor-sign remainder convention, without tolerances or readback normalization.
+macOS also executes unchanged upstream Metal and checks its input buffers.
+The package fixture uses reflected physical storage; this is not a claim of
+whole-family parity or physical driver-upload capture.
+
+The 123 affected integer remainder OpenGL references have complete historical
+and updated source review, with unchanged resource interfaces. All 246 versions
+pass strict compilation and module validation. At `846d1762`, original Metal
+and generated OpenGL agree with an independent integer model across 376 cases,
+175,867 results and 3,008 guards covering every affected access shape. The
+change replaces signed `%` with explicit truncating division; source sign
+adjustment and narrowing remain intact. Only this reviewed group is accepted;
+360 other changed binary references remain pending in #2073.
+
 The native arithmetic step runs device execution, original-source controls and
 Metal linkage checks only. Platform-independent configuration and generation
 tests remain in the complete Ubuntu suite. The native selection is checked

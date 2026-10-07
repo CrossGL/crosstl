@@ -140,6 +140,13 @@ comparisons permit only NaN payload differences. The cases share the existing
 900-second bounds, runners and failure-artifact uploads. This supplements the
 generic arithmetic controls; it does not replace them or claim whole-family parity.
 
+The same pinned step includes Boolean and integer remainder packages. Seven
+kernels cover all defined 8-bit operand pairs and boundary/seeded wider inputs,
+checking 168,730 exact results and 56 guards per target. Zero divisors and signed
+32-/64-bit quotient overflow are excluded explicitly. macOS runs unchanged
+upstream controls; Windows requires DXC/WARP and Linux requires Mesa execution.
+The existing runners, 900-second bound and failure-artifact upload are reused.
+
 The same arithmetic step verifies source-defined bitcast-name overloads beside
 generated FMA, division and half-remainder helpers. Exact output words cover
 scalar/vector overloads, aliases, namespace-qualified calls and both binary32

@@ -1703,6 +1703,7 @@ jobs:
           CROSTL_REQUIRE_MLX_CURRENT_BINARY_SHAPES: "1"
           CROSTL_REQUIRE_MLX_CURRENT_HALF_REMAINDER: "1"
           CROSTL_REQUIRE_MLX_CURRENT_FLOATING_REMAINDER: "1"
+          CROSTL_REQUIRE_MLX_CURRENT_INTEGER_REMAINDER: "1"
           CROSTL_REQUIRE_STRUCT_BUFFER_RUNTIME: "1"
           CROSTL_RUN_NATIVE_LOADER_DIRECTX_DEVICE_TEST: ${{ runner.os == 'Windows' && '1' || '0' }}
           CROSTL_RUN_NATIVE_LOADER_OPENGL_DEVICE_TEST: ${{ runner.os == 'Linux' && '1' || '0' }}
@@ -1724,6 +1725,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_current_binary_shapes.py \
               demos/integrations/mlx/tests/kernels/test_current_half_remainder.py \
               demos/integrations/mlx/tests/kernels/test_current_floating_remainder.py \
+              demos/integrations/mlx/tests/kernels/test_current_integer_remainder.py \
               2>&1 | tee .mlx-portable-host/binary-math.log
       - name: Execute pinned resident attention reductions
         env:
