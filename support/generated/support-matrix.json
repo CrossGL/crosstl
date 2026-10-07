@@ -136,6 +136,7 @@
           "tests/test_translator/test_metal_precise_trig.py",
           "tests/test_translator/test_metal_precise_atan.py",
           "tests/test_translator/test_metal_precise_atan2.py",
+          "tests/test_translator/test_metal_power.py",
           "tests/test_translator/test_metal_precise_exp.py",
           "demos/integrations/mlx/tests/kernels/test_current_unary_atan.py",
           "demos/integrations/mlx/tests/kernels/test_current_atan2.py",
@@ -162,7 +163,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1941
+        "test_count": 1950
       },
       "translator_codegen": {
         "exists": true,
@@ -304,6 +305,7 @@
           "tests/test_translator/test_metal_precise_trig.py",
           "tests/test_translator/test_metal_precise_atan.py",
           "tests/test_translator/test_metal_precise_atan2.py",
+          "tests/test_translator/test_metal_power.py",
           "tests/test_translator/test_metal_precise_exp.py",
           "demos/integrations/mlx/tests/kernels/test_current_unary_atan.py",
           "demos/integrations/mlx/tests/kernels/test_current_atan2.py",
@@ -327,7 +329,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 2181
+        "test_count": 2190
       },
       "translator_codegen": {
         "exists": true,
@@ -714,6 +716,7 @@
           "tests/test_translator/test_metal_precise_trig.py",
           "tests/test_translator/test_metal_precise_atan.py",
           "tests/test_translator/test_metal_precise_atan2.py",
+          "tests/test_translator/test_metal_power.py",
           "tests/test_translator/test_metal_precise_exp.py",
           "demos/integrations/mlx/tests/kernels/test_current_unary_atan.py",
           "demos/integrations/mlx/tests/kernels/test_current_atan2.py",
@@ -734,7 +737,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2335
+        "test_count": 2344
       },
       "translator_codegen": {
         "exists": true,

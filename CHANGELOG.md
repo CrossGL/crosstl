@@ -26,6 +26,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Fixed
 
+- Metal default and precise power calls preserve signed-zero, negative-base, integral-exponent, infinity and NaN domains through source-specific helpers. Native regression checks retain exact domain results and explicit finite controls; complete finite-domain accuracy and subnormal parity remain separate work.
 - Precise Metal `atan2` retains finite underflow at the normal/subnormal rounding midpoint instead of rounding the division upward first. Native controls include every applicable exponent scaling, neighboring operands and signed-zero checks.
 - Metal template lookup, constrained specialization, alias ownership, operator scopes and helper linkage preserve source identities through materialization.
 - HLSL, GLSL and Metal lowering preserve integer promotions, vector initialization, byte narrowing, binary16 selection payloads, bfloat rounding, atomic destinations and writable argument evaluation.

@@ -40,6 +40,14 @@ results plus 24 guards, with original-source execution on Metal. No runner,
 worker or deadline is added: the existing two-worker, 180-second step owns this
 coverage. Native Windows execution cannot be replaced by Linux DXC compilation.
 
+The existing 120-second arithmetic step also checks Metal power-function
+domains on all three native targets, with an unchanged Metal source control.
+Signed zeros, negative bases, integral-exponent parity, infinities, NaNs,
+single evaluation, vector broadcasts and half narrowing are covered. Domain
+classifications and guards are exact; finite controls use an independent decimal
+reference. This does not establish full finite-domain accuracy or a common
+subnormal policy. No additional runner or worker is required.
+
 Every backend and code generator remains covered on all three operating
 systems. Python-version compatibility is exercised fully on Ubuntu; repeating
 those versions on Windows and macOS is not required. Windows and macOS each

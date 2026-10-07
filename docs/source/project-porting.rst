@@ -1187,6 +1187,31 @@ tests cover both policies; the unchanged Metal control checks the characterized
 flush policy with the same numerical assertions. DirectX native execution is a
 separate required CI gate.
 
+Power-function domains
+~~~~~~~~~~~~~~~~~~~~~~
+
+Metal default and precise ``pow`` calls preserve signed-zero, negative-base,
+infinity and NaN domain behavior before invoking target-native power arithmetic
+on a positive finite base. Integral-exponent parity is determined from binary32
+bits, including the boundary above which all represented integers are even.
+This avoids target-dependent negative-base behavior and out-of-range integer
+conversions. Scalar and two- to four-lane calls evaluate each argument once;
+scalar broadcasts, half return narrowing and materialized standard-library
+bfloat wrappers retain their conversion boundaries. Calls with a subnormal
+operand keep their existing target-native path; the new domain handling does
+not impose a subnormal policy. Source-defined functions
+and explicit fast-mode calls keep their separate implementations.
+
+Saved CrossGL retains these helpers. Global initializers requiring the runtime
+helper produce ``project.translate.metal-precise-math-unsupported``. Native
+regressions compare domain results exactly and selected ordinary finite results
+against an independent decimal reference, including unchanged Metal source
+execution. Binary32 controls use the specification's 16-ULP power bound; selected
+half controls use a one-storage-ULP regression bound. NaN payload identity is not
+claimed. Positive finite arithmetic still uses the target's intrinsic: these
+checks do not establish full-domain accuracy, a shared subnormal policy, or
+complete project numerical parity.
+
 Binary32 remainder
 ~~~~~~~~~~~~~~~~~~
 

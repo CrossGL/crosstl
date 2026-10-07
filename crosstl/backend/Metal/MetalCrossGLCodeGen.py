@@ -1760,6 +1760,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_acosh_widths = set()
         self.required_metal_precise_atan_widths = set()
         self.required_metal_precise_atan2_widths = set()
+        self.required_metal_power_widths = set()
         self.required_metal_precise_exp_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
@@ -2955,6 +2956,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_acosh_widths = set()
         self.required_metal_precise_atan_widths = set()
         self.required_metal_precise_atan2_widths = set()
+        self.required_metal_power_widths = set()
         self.required_metal_precise_exp_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
@@ -11304,6 +11306,9 @@ class MetalToCrossGLConverter:
             atan2_call = self.generate_metal_precise_atan2_call(expr, is_main)
             if atan2_call is not None:
                 return atan2_call
+            power_call = self.generate_metal_power_call(expr, is_main)
+            if power_call is not None:
+                return power_call
             fused_call = self.generate_metal_fma_call(expr, is_main)
             if fused_call is not None:
                 return fused_call
@@ -14346,6 +14351,137 @@ class MetalToCrossGLConverter:
             arguments.append(value)
         return f"{name}({', '.join(arguments)})"
 
+    def generate_metal_power_call(self, expression, is_main=False):
+        if (
+            self.metal_math_builtin_namespace_mode(expression.name) == "fast"
+            or str(expression.name).rsplit("::", 1)[-1] != "pow"
+        ):
+            return None
+        selected = self.selected_metal_callable(expression)
+        bfloat_wrapper = self.is_materialized_metal_stdlib_wrapper(selected) and (
+            self.normalized_metal_type(
+                self.resolve_type_alias(
+                    self.selected_metal_callable_return_type(selected)
+                )
+            )
+            in self.metal_source_bfloat_types
+        )
+        if bfloat_wrapper:
+            result_type = "float"
+        elif (
+            self.resolve_metal_math_builtin_name(expression.name, expression.args)
+            == "pow"
+        ):
+            result_type = self.metal_math_builtin_result_type(expression)
+        else:
+            return None
+        info = self.metal_math_builtin_type_info(result_type)
+        if info is None:
+            return None
+        element = self.normalized_metal_type(
+            self.resolve_type_alias(info["element_type"])
+        )
+        if element not in {"float", "half"} | self.metal_source_bfloat_types:
+            return None
+        width = info["width"]
+        if width not in {1, 2, 3, 4}:
+            return None
+        if self.current_function is None:
+            raise MetalPreciseMathLoweringError(
+                "pow",
+                result_type,
+                "global initializers cannot call the runtime power helper",
+                getattr(expression, "source_location", None),
+            )
+        self.required_metal_power_widths.add(width)
+        mapped = "float" if width == 1 else f"vec{width}"
+        parameters = list(getattr(selected, "params", []) or [])
+        arguments = []
+        for index, argument in enumerate(expression.args):
+            value = self.generate_expression(argument, is_main)
+            parameter_type = (
+                self.metal_source_overload_parameter_type(parameters[index])
+                if bfloat_wrapper
+                else result_type
+            )
+            argument_type = self.expression_metal_type(argument)
+            if self.metal_source_overload_type_identity(
+                argument_type
+            ) != self.metal_source_overload_type_identity(parameter_type):
+                value = f"{self.map_type(parameter_type)}({value})"
+            arguments.append(f"{mapped}({value})")
+        result = f"{self.metal_power_helper_name(width)}({', '.join(arguments)})"
+        if element != "float":
+            result = f"{self.map_type(result_type)}({result})"
+        return result
+
+    def metal_power_helper_name(self, width):
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            f"power-float{suffix}", f"__crossgl_metal_power_float{suffix}"
+        )
+
+    def generate_metal_power_support_code(self, indent=0):
+        if not self.required_metal_power_widths:
+            return ""
+        scalar = self.metal_power_helper_name(1)
+        code = f"""@metal_static
+float {scalar}(float base, float exponent) {{
+    uint a = asuint(base);
+    uint b = asuint(exponent);
+    uint magnitude = a & 0x7fffffffu;
+    uint power = b & 0x7fffffffu;
+    // Keep existing subnormal behavior until a source policy is selected.
+    if ((magnitude != 0u && magnitude < 0x00800000u) ||
+        (power != 0u && power < 0x00800000u)) {{
+        return pow(base, exponent);
+    }}
+    if (power == 0u || a == 0x3f800000u) {{
+        return 1.0;
+    }}
+    if (magnitude > 0x7f800000u || power > 0x7f800000u) {{
+        return asfloat(0x7fc00000u);
+    }}
+    if (power == 0x7f800000u) {{
+        if (magnitude == 0x3f800000u) {{
+            return 1.0;
+        }}
+        bool overflow = (magnitude > 0x3f800000u) != ((b >> 31u) != 0u);
+        return asfloat(overflow ? 0x7f800000u : 0u);
+    }}
+    // At and above 2^24 every finite binary32 integer is even.
+    bool integral = power >= 0x4b800000u;
+    bool odd = false;
+    if (power >= 0x3f800000u && power < 0x4b800000u) {{
+        uint shift = 150u - (power >> 23u);
+        uint significand = 0x800000u | (power & 0x7fffffu);
+        integral = (significand & ((1u << shift) - 1u)) == 0u;
+        odd = integral && ((significand >> shift) & 1u) != 0u;
+    }}
+    uint sign = odd ? (a & 0x80000000u) : 0u;
+    if (magnitude == 0u || magnitude == 0x7f800000u) {{
+        bool overflow = (magnitude != 0u) != ((b >> 31u) != 0u);
+        return asfloat(sign | (overflow ? 0x7f800000u : 0u));
+    }}
+    if ((a >> 31u) != 0u && !integral) {{
+        return asfloat(0x7fc00000u);
+    }}
+    float result = pow(asfloat(magnitude), exponent);
+    return asfloat(asuint(result) | sign);
+}}
+"""
+        for width in sorted(self.required_metal_power_widths - {1}):
+            arguments = ", ".join(
+                f"{scalar}(base.{lane}, exponent.{lane})" for lane in "xyzw"[:width]
+            )
+            code += (
+                f"@metal_static\nvec{width} {self.metal_power_helper_name(width)}"
+                f"(vec{width} base, vec{width} exponent) {{\n"
+                f"    return vec{width}({arguments});\n}}\n"
+            )
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
+
     def generate_profiled_metal_comparison(self, expression, is_main=False):
         operands = (expression.left, expression.right)
         types = [self.expression_metal_type(operand) for operand in operands]
@@ -15100,6 +15236,7 @@ class MetalToCrossGLConverter:
         independent_code += self.generate_metal_precise_acosh_support_code(indent)
         independent_code += self.generate_metal_precise_atan_support_code(indent)
         independent_code += self.generate_metal_precise_atan2_support_code(indent)
+        independent_code += self.generate_metal_power_support_code(indent)
         independent_code += self.generate_metal_precise_exp_support_code(indent)
         widths = sorted(self.required_metal_precise_acos_widths)
         if not widths and not self.required_metal_precise_asin_widths:
@@ -15629,6 +15766,8 @@ float {scalar}(float value) {{
         rendered = self.generate_metal_fma_call(expression, is_main)
         if rendered is None:
             rendered = self.generate_metal_remainder_call(expression, is_main)
+        if rendered is None:
+            rendered = self.generate_metal_power_call(expression, is_main)
         if rendered is None:
             function_name = self.map_function_call_name(
                 expression.name,
