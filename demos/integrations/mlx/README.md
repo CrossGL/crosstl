@@ -3209,6 +3209,23 @@ verifies each batch's settings against single-entry configuration. Comparison
 policy is selected per operation: selection preserves exact NaN payloads even
 when sharing a batch with arithmetic operations that permit payload differences.
 
+`tests/kernels/test_current_atan2.py` executes the current-pin vector-vector
+half, bfloat and float arctangent entries in one package batch. Its 31,232 pairs
+and 24 guards include exponent boundaries, signed zeros, non-finite values and
+deterministic random inputs. The characterized `flush-subnormals` profile is
+explicit in the configuration and retained evidence. Results use an independent
+high-precision reference with the source's float/half precision bounds; bfloat
+checks apply float accuracy before narrowing. Axes, zero signs, output guards
+and source-control read-only inputs remain exact. Widened OpenGL narrow results
+must still be representable in their original storage type.
+
+The existing 180-second arctangent step requires this test on each native target,
+without another runner. Local original/generated Metal and OpenGL checks pass;
+Windows execution remains required CI evidence. The generic source tests also
+cover 127 scaled copies of the normal/subnormal rounding midpoint and adjacent
+operands. This is three-entry numerical evidence, not execution of every binary
+layout or the full MLX suite.
+
 Binary reference reconciliation remains open in #2073. The precise arctangent
 fix (#2118) changes all 54 variants, including float32; the earlier remaining
 reference count no longer describes current output. Local original/generated

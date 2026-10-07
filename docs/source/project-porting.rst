@@ -1159,6 +1159,11 @@ reference and the six-ULP binary32 limit in Table 8.1 of the
 <https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf>`_.
 Axis results, zero signs, operand copies, evaluation counts and guards are exact.
 This accuracy contract is not a claim of bit-identical transcendental results.
+At the normal/subnormal midpoint, the arctangent correction breaks a division
+rounding tie toward the smaller magnitude. Integer significand checks preserve
+that boundary before applying the underflow profile. Native regression inputs
+cover all 127 applicable exponent scalings, adjacent operands and both signs;
+neighboring normal results must not be flushed.
 
 The default preserves represented subnormals. A characterized source execution
 can select an explicit policy:

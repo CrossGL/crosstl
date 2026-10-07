@@ -30,6 +30,16 @@ stay in their original locations; reports retain both their logical paths and
 the actual compiler invocation. The bridge requires `dxcompiler.dll` and its
 dependencies beside the selected `dxc.exe`, as provided by the DXC release.
 
+The existing project-host arctangent step requires the generic two-argument
+precision checks and three pinned binary entries on each native target. The
+generic check retains 5,271 input pairs, including all 127 applicable scalings
+of the normal/subnormal midpoint, adjacent operands and both signs. Each profile
+checks 100,149 scalar/vector/broadcast angles, unchanged input/evaluation words
+and eight guards. The pinned package batch adds 31,232 half, bfloat and float
+results plus 24 guards, with original-source execution on Metal. No runner,
+worker or deadline is added: the existing two-worker, 180-second step owns this
+coverage. Native Windows execution cannot be replaced by Linux DXC compilation.
+
 Every backend and code generator remains covered on all three operating
 systems. Python-version compatibility is exercised fully on Ubuntu; repeating
 those versions on Windows and macOS is not required. Windows and macOS each

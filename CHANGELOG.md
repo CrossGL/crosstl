@@ -25,6 +25,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Fixed
 
+- Precise Metal `atan2` retains finite underflow at the normal/subnormal rounding midpoint instead of rounding the division upward first. Native controls include every applicable exponent scaling, neighboring operands and signed-zero checks.
 - Metal template lookup, constrained specialization, alias ownership, operator scopes and helper linkage preserve source identities through materialization.
 - HLSL, GLSL and Metal lowering preserve integer promotions, vector initialization, byte narrowing, binary16 selection payloads, bfloat rounding, atomic destinations and writable argument evaluation.
 - DirectX compilation resolves relative includes through long Windows paths without changing the compiler's working-directory semantics.

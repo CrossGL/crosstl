@@ -206,6 +206,7 @@ def run_binary_cases(
                     "binary32ComparisonProfile",
                     "binary32AdditiveProfile",
                     "binary32DivisionProfile",
+                    "binary32Atan2Profile",
                     "binary32RemainderProfile",
                     "binary16RemainderProfile",
                 ):
@@ -284,6 +285,15 @@ def run_binary_cases(
                             ),
                             "divisionProfile": case.provenance.get(
                                 "binary32DivisionProfile"
+                            ),
+                            **(
+                                {
+                                    "atan2Profile": case.provenance[
+                                        "binary32Atan2Profile"
+                                    ]
+                                }
+                                if "binary32Atan2Profile" in case.provenance
+                                else {}
                             ),
                             "pairCount": len(case.pairs),
                             "guardCount": 8,

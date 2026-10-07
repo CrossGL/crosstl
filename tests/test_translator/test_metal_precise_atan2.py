@@ -316,6 +316,16 @@ def _oracle(y, x, profile):
         return result
 
 
+def _underflow_boundary_pairs():
+    for exponent in range(1, 128):
+        y = exponent << 23 | 0x7FFFFF
+        x = (exponent + 127) << 23
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                for sign in (0, 0x80000000):
+                    yield (y + dy) | sign, x + dx
+
+
 def _pairs():
     edges = (
         0,
@@ -340,6 +350,7 @@ def _pairs():
     center = _bits(math.sqrt(2) - 1)
     pairs.extend((word, 0x3F800000) for word in range(center - 16, center + 17))
     pairs.extend((rng.getrandbits(32), rng.getrandbits(32)) for _ in range(512))
+    pairs.extend(_underflow_boundary_pairs())
     return pairs
 
 
@@ -407,7 +418,7 @@ def _check(actual, pairs, profile):
 
 def test_atan2_oracle_profiles_and_input_coverage():
     pairs = _pairs()
-    assert len(pairs) == 2985
+    assert len(pairs) == 5271
     assert {y >> 23 & 255 for y, _ in pairs} == set(range(256))
     assert _oracle(1, 1, PROFILES[0]) == 0x3F490FDB
     assert _oracle(1, 1, PROFILES[1]) == 0
@@ -419,6 +430,34 @@ def test_atan2_oracle_profiles_and_input_coverage():
     for a, b in pairs[:400]:
         if not math.isnan(_float(a)) and not math.isnan(_float(b)):
             assert _oracle(a, b, PROFILES[0]) == _bits(math.atan2(_float(a), _float(b)))
+
+
+def test_atan2_underflow_midpoints_and_adjacent_normal_values():
+    from fractions import Fraction
+
+    midpoint = Fraction(2**24 - 1, 2**150)
+    pairs = list(_underflow_boundary_pairs())
+    assert len(pairs) == len(set(pairs)) == 2286
+    for exponent in range(1, 128):
+        y = exponent << 23 | 0x7FFFFF
+        x = (exponent + 127) << 23
+        assert Fraction(_float(y)) / Fraction(_float(x)) == midpoint
+        for sign in (0, 0x80000000):
+            assert _oracle(y | sign, x, PROFILES[0]) == sign | 0x7FFFFF
+            assert _oracle(y | sign, x, PROFILES[1]) == 0
+            assert _oracle((y + 1) | sign, x, PROFILES[1]) == sign | 0x800000
+            assert _oracle(y | sign, x - 1, PROFILES[1]) == sign | 0x800000
+
+
+def test_atan2_verifier_rejects_rounding_the_underflow_midpoint_upward():
+    pairs = [(0x00FFFFFF, 0x40000000), (0x80FFFFFF, 0x40000000)]
+    expected = _expected(pairs, PROFILES[1])
+    assert _check(expected, pairs, PROFILES[1]) == 0
+    for index, word in ((6, 0x800000), (6 + FIELDS, 0x80800000)):
+        changed = list(expected)
+        changed[index] = word
+        with pytest.raises(AssertionError):
+            _check(changed, pairs, PROFILES[1])
 
 
 @pytest.mark.parametrize(

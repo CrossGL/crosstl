@@ -15334,7 +15334,16 @@ float {scalar}(float y, float x) {{
     bool invert = yMagnitude > xMagnitude;
     uint smaller = invert ? xMagnitude : yMagnitude;
     uint larger = invert ? yMagnitude : xMagnitude;
-    float ratio = asfloat({divide}(smaller, larger, false));
+    uint ratioBits = {divide}(smaller, larger, false);
+    // At the normal/subnormal midpoint, atan(r) < r breaks the
+    // division's upward tie. Only a maximal significand over a power
+    // of two can form this exact midpoint from binary32 operands.
+    if (ratioBits == 0x00800000u &&
+        (smaller & 0x007fffffu) == 0x007fffffu &&
+        (larger & 0x007fffffu) == 0u) {{
+        ratioBits = 0x007fffffu;
+    }}
+    float ratio = asfloat(ratioBits);
     float angle @precise = {atan}(ratio);
     if (invert) {{ angle = 1.5707963267948966192 - angle; }}
     if (negativeX) {{ angle = 3.1415926535897932385 - angle; }}

@@ -307,6 +307,8 @@ def _project_config(workload: BinaryMetalWorkload, *, entry_points=None) -> str:
         if workload.operator_type == "Remainder" and workload.input_type == "half"
         else []
     )
+    if workload.operator_type == "ArcTan2":
+        profiles.append('binary32_atan2_profile = "flush-subnormals"')
     if workload.input_type in {"float", "bfloat16_t"}:
         if workload.operator_type in {"Remainder", "Minimum", "Maximum"}:
             profiles.append('binary32_comparison_profile = "flush-subnormals"')
@@ -616,6 +618,12 @@ def _translate_and_validate(
         "pipeline": "entry-scoped-translate",
         "intermediate": "crossgl",
     }
+    if workload.operator_type == "ArcTan2":
+        expected_provenance["binary32Atan2Profile"] = "flush-subnormals"
+        assert (
+            payload["project"]["sourceOptions"]["metal"]["binary32_atan2_profile"]
+            == "flush-subnormals"
+        )
     if workload.operator_type == "Remainder" and workload.input_type == "half":
         expected_provenance["binary16RemainderProfile"] = "binary32-quotient"
         assert (
