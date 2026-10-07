@@ -1,3 +1,4 @@
+import ast
 import copy
 import importlib.util
 import json
@@ -3218,3 +3219,49 @@ def test_windows_validator_install_retries_and_uses_direct_lunarg_fallback():
     assert "Direct Vulkan SDK install failed" in full_suite
     assert 'throw "Vulkan SDK install directory was not found"' in full_suite
     assert "$global:LASTEXITCODE = 0" not in full_suite
+
+
+def test_native_arithmetic_selection_retains_every_device_test():
+    from tools import ci_coverage
+
+    workflow = (WORKFLOW_DIR / "demo-project-testing.yml").read_text()
+    step = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Validate binary32 arithmetic"
+    )
+    expression = "execute or original_metal or modules_link_together"
+    assert f'-k "{expression}"' in step
+    assert "--timeout-seconds 120" in step
+    modules = re.findall(r"tests/test_translator/test_[a-z_]+\.py", step)
+    assert len(modules) == len(set(modules)) == 7
+    selected = set()
+    required = set()
+    for module in modules:
+        tree = ast.parse((ROOT / module).read_text())
+        for function in tree.body:
+            if not isinstance(
+                function, ast.FunctionDef
+            ) or not function.name.startswith("test_"):
+                continue
+            identity = (module, function.name)
+            if any(term in function.name for term in expression.split(" or ")):
+                selected.add(identity)
+            if any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "environ"
+                and any(
+                    isinstance(argument, ast.Name) and argument.id == "REQUIRE_ENV"
+                    for argument in node.args
+                )
+                for node in ast.walk(function)
+            ):
+                required.add(identity)
+    assert len(required) == 10
+    assert selected == required
+    full_suite = (WORKFLOW_DIR / "full-tests.yml").read_text()
+    assert "runs-on: ubuntu-latest" in full_suite
+    assert (
+        "python -m pytest tests demos/integrations --durations=25 -n auto" in full_suite
+    )

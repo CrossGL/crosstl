@@ -117,6 +117,13 @@ Each native job keeps its source pin, numerical comparisons, guards, bounded exe
 and retained evidence. Moving a compiler-only job must not disable an execution
 gate or be presented as proof of runtime parity.
 
+The native host's binary32 arithmetic step selects device execution, original
+source controls and Metal module-linkage tests. Configuration, reference-model
+and generation-only checks remain in the complete Ubuntu suite. A workflow
+regression test verifies that the selection includes every opt-in device test
+in the seven arithmetic modules. All numerical inputs, profile variants and
+guards remain required under the same 120-second bound, without new runners.
+
 The half-remainder profile runs in the existing arithmetic step on each native
 target, with no additional runner. It checks 5,176 input pairs in scalar/vector
 forms, exact guards and single-evaluation counters. The macOS job also executes

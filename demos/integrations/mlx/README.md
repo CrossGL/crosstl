@@ -3046,8 +3046,30 @@ generated Metal and OpenGL results for 791,416 vector-vector values and 208
 guards. This includes the original sweeps and 512 adjacent, opposite-signed
 bfloat cancellation pairs. Raw inputs, readbacks and guards are retained without
 normalization. Twelve selected project artifacts compile for Metal, OpenGL and
-DirectX. This is bounded numerical coverage, not Windows execution evidence,
-all-layout parity or acceptance of the pending float32/bfloat references.
+DirectX. These controls do not establish Windows execution or whole-family parity.
+
+The 36 float32/bfloat remainder references select all three policies across the
+18 access shapes. Complete historical and updated sources pass strict GLSL
+compilation and module validation, with unchanged resource interfaces. At the
+historical `846d1762` pin, native replay covers 133 cases, 792,992 values and
+1,064 guards without differences. Only these reviewed references are updated;
+the other changed binary references remain under review in #2073.
+
+`tests/kernels/test_current_floating_remainder.py` makes 4,475 float32 and 4,984
+bfloat pairs repeatable through generated packages at `9c3d3557`. The cases
+include the cancellation regressions, signed zeros, subnormals and NaNs. Each
+dtype has eight exact guards; finite results and zero signs must match exactly,
+while NaNs compare by classification. The existing native jobs require Metal
+execution plus unchanged upstream controls, DXC/WARP on Windows, and GLSL
+validation plus Mesa execution on Linux. Reports, package source identities,
+encoded inputs and readbacks are retained. This does not claim physical driver
+upload-byte capture, exhaustive input pairs or upstream MLX test-suite parity.
+
+The native arithmetic step runs device execution, original-source controls and
+Metal linkage checks only. Platform-independent configuration and generation
+tests remain in the complete Ubuntu suite. The native selection is checked
+against every opt-in device test in its modules; the 120-second bound and all
+numerical cases remain unchanged. No additional native runners are introduced.
 
 All 60 signed and unsigned 64-bit shift references also have complete source and
 interface review. Their source changes only convert shift counts to the width
