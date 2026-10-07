@@ -2454,6 +2454,37 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "if: always() && runner.os == 'Windows'" in math_upload
     assert "path: directx-math-results" in math_upload
     assert "if-no-files-found: error" in math_upload
+    atan2_checks = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Validate atan2 signed-zero semantics"
+    )
+    assert mlx_porting.count('"tests/test_translator/test_directx_atan2.py"') == 2
+    assert (
+        mlx_porting.count(
+            '"tests/fixtures/runtime_verification/metal_uint32_buffers.swift"'
+        )
+        == 2
+    )
+    assert "if: runner.os == 'Windows' || runner.os == 'macOS'" in atan2_checks
+    assert (
+        "CROSTL_REQUIRE_DIRECTX_ATAN2: ${{ runner.os == 'Windows' && '1' || '0' }}"
+        in atan2_checks
+    )
+    assert (
+        "CROSTL_REQUIRE_METAL_ATAN2: ${{ runner.os == 'macOS' && '1' || '0' }}"
+        in atan2_checks
+    )
+    assert "--timeout-seconds 120 --" in atan2_checks
+    assert "pytest -q -n auto" in atan2_checks
+    assert "tests/test_translator/test_directx_atan2.py" in atan2_checks
+    atan2_upload = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Upload atan2 signed-zero evidence"
+    )
+    assert (
+        "if: always() && (runner.os == 'Windows' || runner.os == 'macOS')"
+        in atan2_upload
+    )
+    assert "path: atan2-results" in atan2_upload
+    assert "if-no-files-found: error" in atan2_upload
     opengl_math_checks = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate OpenGL Metal math semantics"
     )
@@ -2469,6 +2500,28 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "if: always() && runner.os == 'Linux'" in opengl_math_upload
     assert "path: opengl-math-results" in opengl_math_upload
     assert "if-no-files-found: error" in opengl_math_upload
+    metal_package = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Validate native Metal package execution"
+    )
+    assert 'CROSTL_REQUIRE_METAL_PACKAGE_RUNTIME: "1"' in metal_package
+    assert 'CROSTL_REQUIRE_METAL_HELPER_LINKAGE: "1"' in metal_package
+    assert "test_metal_helper_linkage.py" in metal_package
+    assert (
+        mlx_porting.count('"tests/test_translator/test_metal_helper_linkage.py"') == 2
+    )
+    assert "if: runner.os == 'macOS'" in metal_package
+    assert "--timeout-seconds 180 --" in metal_package
+    assert "pytest -q -n auto" in metal_package
+    assert "test_metal_native_runtime.py" in metal_package
+    assert (
+        mlx_porting.count('"tests/test_translator/test_metal_native_runtime.py"') == 2
+    )
+    metal_package_upload = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Upload native Metal package evidence"
+    )
+    assert "if: always() && runner.os == 'macOS'" in metal_package_upload
+    assert "path: metal-package-results" in metal_package_upload
+    assert "if-no-files-found: error" in metal_package_upload
     ownership = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate Metal builtin ownership"
     )
@@ -2486,6 +2539,47 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "if: always()" in ownership_upload
     assert "name: metal-builtin-ownership-${{ runner.os }}" in ownership_upload
     assert "if-no-files-found: error" in ownership_upload
+    struct_checks = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Prove current MLX complex-power native dispatch"
+    )
+    assert 'CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_POWER: "1"' in struct_checks
+    assert 'CROSTL_REQUIRE_STRUCT_BUFFER_RUNTIME: "1"' in struct_checks
+    assert "--timeout-seconds 900 --" in struct_checks
+    assert "pytest -q -n auto" in struct_checks
+    assert "if: runner.os" not in struct_checks
+    for filename in (
+        "test_struct_buffer_layouts.py",
+        "test_buffer_requirements.py",
+        "test_mlx_current_complex_power.py",
+    ):
+        assert mlx_porting.count(f'"tests/test_translator/{filename}"') == 2
+        assert filename in struct_checks
+    struct_upload = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Upload current MLX complex-power evidence"
+    )
+    assert "if: always()" in struct_upload
+    assert "name: mlx-complex-power-${{ runner.os }}" in struct_upload
+    assert "if-no-files-found: error" in struct_upload
+    binary_shapes = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Prove current MLX binary shape parity"
+    )
+    assert 'CROSTL_REQUIRE_MLX_CURRENT_BINARY_SHAPES: "1"' in binary_shapes
+    assert "--timeout-seconds 900 --" in binary_shapes
+    assert "pytest -q -n auto" in binary_shapes
+    assert "if: runner.os" not in binary_shapes
+    assert "test_mlx_current_binary_shapes.py" in binary_shapes
+    assert (
+        mlx_porting.count('"tests/test_translator/test_mlx_current_binary_shapes.py"')
+        == 2
+    )
+    binary_upload = _load_ci_coverage_module().workflow_step_section(
+        mlx_porting, "Upload current MLX binary shape evidence"
+    )
+    assert "if: always()" in binary_upload
+    assert "name: mlx-binary-shapes-${{ runner.os }}" in binary_upload
+    assert "mlx-current-tree-upstream/.current-binary-shapes-*" in binary_upload
+    assert "include-hidden-files: true" in binary_upload
+    assert "if-no-files-found: error" in binary_upload
     primitive_checks = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate Direct3D reduction primitives"
     )
@@ -3094,12 +3188,57 @@ def test_mlx_project_porting_workflow_runs_backend_runtime_contracts():
     assert "mlx-upstream" not in vulkan_step
 
 
+def test_mlx_project_porting_workflow_requires_native_artifact_refresh():
+    workflow = _workflow_texts().get("mlx-project-porting.yml", "")
+    coverage = _load_ci_coverage_module()
+    step = coverage.workflow_step_section(
+        workflow, "Prove native artifact contract refresh"
+    )
+    assert 'CROSTL_REQUIRE_ARTIFACT_REFRESH_COMPILER: "1"' in step
+    assert "tests/test_artifact_contract_refresh.py" in step
+    assert "tests/test_artifact_contract_refresh.py::" not in step
+    assert "-n auto" in step
+    assert "if:" not in step
+    assert "continue-on-error" not in step
+    assert "--basetemp support/generated/artifact-refresh-native" in step
+    assert "--junitxml support/generated/artifact-refresh-native.xml" in step
+    assert workflow.index("Install Linux SPIR-V tools") < workflow.index(
+        "Prove native artifact contract refresh"
+    )
+    assert workflow.index("Install Windows DirectX Shader Compiler") < workflow.index(
+        "Prove native artifact contract refresh"
+    )
+    assert workflow.index("Install macOS Metal Toolchain") < workflow.index(
+        "Prove native artifact contract refresh"
+    )
+    for path in (
+        "tools/refresh_artifact_contract.py",
+        "tests/test_artifact_contract_refresh.py",
+    ):
+        assert workflow.count(f'"{path}"') == 2
+    upload = coverage.workflow_step_section(
+        workflow, "Upload native artifact refresh evidence"
+    )
+    assert "if: always()" in upload
+    assert "artifact-refresh-native-${{ runner.os }}" in upload
+    assert "support/generated/artifact-refresh-native" in upload
+
+
 def test_mlx_project_porting_workflow_runs_native_loader_dispatch_bridge():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
     ci_coverage = _load_ci_coverage_module()
     integration_test = "test_native_loader_dispatch_integration.py"
+    limits_step = ci_coverage.workflow_step_section(
+        mlx_porting, "Validate native dispatch limits"
+    )
+    assert "test_native_dispatch_limits.py" in limits_step
+    assert "-n auto" in limits_step
+    assert "if:" not in limits_step
 
     assert mlx_porting.count(f'"tests/test_translator/{integration_test}"') == 2
+    assert (
+        mlx_porting.count('"tests/test_translator/test_native_dispatch_limits.py"') == 2
+    )
 
     directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
@@ -3114,6 +3253,7 @@ def test_mlx_project_porting_workflow_runs_native_loader_dispatch_bridge():
     assert "-n auto" in directx_step
     assert "-k" not in directx_step
     assert "mlx-upstream" not in directx_step
+    assert f"{integration_test}::test_native_directx_workgroup_limits" in directx_step
 
     opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
@@ -3131,6 +3271,11 @@ def test_mlx_project_porting_workflow_runs_native_loader_dispatch_bridge():
     assert "-n auto" in opengl_step
     assert "-k" not in opengl_step
     assert "mlx-upstream" not in opengl_step
+    assert f"{integration_test}::test_native_opengl_workgroup_limits" in opengl_step
+    assert (
+        f"{integration_test}::test_native_opengl_submission_error_is_not_success"
+        in opengl_step
+    )
 
 
 def test_mlx_project_porting_workflow_proves_initialized_read_write_execution():

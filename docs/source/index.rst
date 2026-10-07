@@ -13,6 +13,7 @@ systems-language targets.
    architecture
    translation-pipeline
    project-porting
+   artifact-contract-refresh
    lexer
    ast
    codegen-utilities
