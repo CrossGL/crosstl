@@ -3103,7 +3103,7 @@ and deterministic samples. Comparisons require exact words without NaN exception
 or readback normalization. Saved input encodings, output bytes and unchanged input
 buffers are independently replayed. This is not exhaustive pair coverage.
 
-`tests/kernels/test_current_extrema.py` translates six vector-vector kernels at
+`tests/kernels/test_current_extrema.py` supplies six vector-vector kernels at
 `9c3d3557` and checks 28,032 results and 48 guards through generated packages per
 native target. Metal and OpenGL pass locally, with unchanged upstream Metal as
 an additional control. All six HLSL packages pass strict DXC compilation;
@@ -3131,15 +3131,19 @@ with strict DXC. Windows execution is a separate required check. Bit-observable
 numeric NaN conversions remain tracked in #2081. This does not establish
 bitwise NaN or whole-family parity.
 
-The binary step now schedules each remainder type and floating operator/type
-pair independently across its existing two workers. Original Metal library
-builds are shared per source root and worker, but source dispatches and their
-input checks remain per case. Explicit native-test selection avoids repeating
-portable tests already covered on Ubuntu. Neither the native runner count nor
-the 900-second deadline increases. The 15 complex-power layouts share setup in
-three translation/package batches of five. Every layout retains its own native
-compiler check, descriptor and all three datasets. Exact source-entry matching
-prevents selecting another artifact from the same package.
+The binary step schedules remainder types and compatible translation batches
+across its existing two workers. Original Metal library builds are shared per
+source root and worker, but source dispatches and their input checks remain per
+case. Explicit native-test selection avoids repeating portable tests already
+covered on Ubuntu. Neither the native runner count nor the 900-second deadline
+increases. The 15 complex-power layouts share setup in three translation/package
+batches of five. Every layout retains its own native compiler check, descriptor
+and all three datasets. Exact source-entry matching prevents selecting another
+artifact from the same package.
+
+The longest binary batches are listed first and subsequent tests are assigned
+one at a time with xdist's load scheduler. This avoids leaving large batches
+in one worker's queue while the other worker is idle; it does not add workers.
 
 Division selects `binary32_division_profile = "rne-flush"` for float32/bfloat
 operands; half division retains gradual subnormals and binary16 rounding. All
@@ -3151,7 +3155,7 @@ audit checks physical inputs, readonly buffers and readbacks without rewriting
 their values. The integer `sizeof` inference correction tracked in #2115 keeps
 work-per-thread constants outside the floating arithmetic profile.
 
-`tests/kernels/test_current_division.py` requires three vector-vector kernels at
+`tests/kernels/test_current_division.py` supplies three vector-vector kernels at
 `9c3d3557`, covering 31,232 values and 24 guards per target. Metal and OpenGL
 pass locally; all three HLSL packages compile with strict DXC. Native Windows
 execution remains a separate requirement. Finite values, infinities, signed
@@ -3170,7 +3174,7 @@ words against zero in both positions and against a deterministic permutation;
 they do not cover every possible operand pair. Arithmetic NaNs are compared by
 classification, while finite values, infinities, zero signs and guards are exact.
 
-`tests/kernels/test_current_multiplication.py` requires the current-pin
+`tests/kernels/test_current_multiplication.py` supplies the current-pin
 vector-vector half kernel through generated packages on each native target.
 It covers 5,632 boundary, exponent and deterministic pairs plus eight guards.
 Metal and OpenGL pass locally, and the HLSL package compiles with strict DXC;
@@ -3178,16 +3182,29 @@ native Windows execution remains a required CI check. This shares the existing
 binary-math job and its 900-second bound, without adding a runner or relaxing
 comparison rules. It does not establish float32/bfloat multiplication parity.
 
+`tests/kernels/test_current_floating_binary.py` owns native execution for these
+four fixture modules. The 16 kernels share four translation/package batches:
+six half kernels without a binary32 profile, four comparison kernels, four
+additive kernels and two division kernels. Compared with separate per-family
+batches, this avoids three repeated frontend and package setup passes per target.
+Every kernel retains its compiler check, descriptor, dispatch, readonly input
+checks, result evidence and applicable unchanged Metal control. The inventory
+test checks all 99,088 values and 128 guards against the original fixtures and
+verifies each batch's settings against single-entry configuration. Comparison
+policy is selected per operation: selection preserves exact NaN payloads even
+when sharing a batch with arithmetic operations that permit payload differences.
+
 After these reviewed updates, 126 changed binary references remain under review
 in #2073: 36 each for arctangent, log-add-exp and power, and 18 for multiplication.
 Float32/bfloat multiplication's source subnormal policy remains tracked in #2114.
 Fresh native probes also expose arctangent zero/NaN boundary failures (#2118)
 and floating-power domain failures (#2119). Reduced binary32 kernels reproduce
 both without MLX headers; successful compilation does not justify accepting
-those references. The Windows native run at `6f325314` also exposed 217
-signaling-NaN word differences in the half minimum selection case, recorded in
-#2081. Its exact comparison remains
-required; neither successful compilation nor a timeout excuses that failure.
+those references. The Windows native run at `6f325314` exposed signaling-NaN
+differences in half minimum selection, recorded in #2081. The later run at
+`cf6a8194` passes all six extrema cases with exact operand words, but times out
+before completing float32/bfloat division. A completed native step remains
+required; neither successful compilation nor partial execution is a passing gate.
 
 The native arithmetic step runs device execution, original-source controls and
 Metal linkage checks only. Platform-independent configuration and generation

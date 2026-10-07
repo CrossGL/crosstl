@@ -1,5 +1,7 @@
 """Coverage and descriptor selection for batched native binary checks."""
 
+from dataclasses import replace
+
 import pytest
 
 from crosstl.project import load_project_config
@@ -7,40 +9,47 @@ from demos.integrations.mlx.tests.kernels import (
     test_current_additive,
     test_current_division,
     test_current_extrema,
+    test_current_floating_binary,
+    test_current_multiplication,
 )
 from demos.integrations.mlx.tests.kernels.floating_binary_runtime import (
     MLX_BINARY_SOURCE,
-    NATIVE_DTYPE_BATCHES,
     _batch_workloads,
     _binary_load_units,
     _project_config,
 )
 
 
-@pytest.mark.parametrize(
-    "fixture,entry_count,pair_count",
-    (
-        (test_current_extrema, 6, 28032),
-        (test_current_additive, 6, 34192),
-        (test_current_division, 3, 31232),
-    ),
-)
-def test_batches_preserve_every_case_and_source_profile(
-    tmp_path, fixture, entry_count, pair_count
-):
-    native_name = fixture.__name__.rsplit(".", 1)[1] + "_native_parity"
-    native_test = getattr(fixture, native_name)
+def test_batches_preserve_every_case_and_source_profile(tmp_path):
+    native_test = (
+        test_current_floating_binary.test_current_floating_binary_native_parity
+    )
     (parameters,) = (
         mark.args[1]
         for mark in native_test.pytestmark
-        if mark.name == "parametrize" and mark.args[0] == "dtypes"
+        if mark.name == "parametrize" and mark.args[0] == "profile"
     )
-    assert parameters == NATIVE_DTYPE_BATCHES
-    all_cases = list(fixture._cases(("float16", "bfloat16", "float32")))
-    batches = [list(fixture._cases(dtypes)) for dtypes in NATIVE_DTYPE_BATCHES]
-    assert [case for batch in batches for case in batch] == all_cases
-    assert len({case.entry for case in all_cases}) == entry_count
-    assert sum(len(case.pairs) for case in all_cases) == pair_count
+    assert parameters == ("division", "half", "comparison", "additive")
+    all_cases = [
+        case
+        for fixture in (
+            test_current_extrema,
+            test_current_additive,
+            test_current_division,
+        )
+        for case in fixture._cases(("float16", "bfloat16", "float32"))
+    ] + list(test_current_multiplication._cases())
+    batches = [
+        list(test_current_floating_binary._cases(profile)) for profile in parameters
+    ]
+    flattened = [case for batch in batches for case in batch]
+    assert [len(batch) for batch in batches] == [2, 6, 4, 4]
+    assert sorted(flattened, key=lambda c: c.entry) == sorted(
+        all_cases, key=lambda c: c.entry
+    )
+    assert len(flattened) == len({case.entry for case in flattened}) == 16
+    assert sum(len(case.pairs) for case in flattened) == 99088
+    assert sum(len(case.expected) - len(case.pairs) for case in flattened) == 128
     for cases in batches:
         workloads = _batch_workloads(cases)
         entries = [case.entry for case in cases]
@@ -56,6 +65,56 @@ def test_batches_preserve_every_case_and_source_profile(
             single = load_project_config(tmp_path, path)
             assert single.source_options == batch.source_options
             assert single.index_range_assertions == batch.index_range_assertions
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+def test_mixed_half_batch_preserves_operation_specific_comparisons(target):
+    cases = list(test_current_floating_binary._cases("half"))
+    assert {case.operation for case in cases} == {
+        "Minimum",
+        "Maximum",
+        "Add",
+        "Subtract",
+        "Divide",
+        "Multiply",
+    }
+    guard = test_current_extrema._guard("float16")
+
+    def encoded(words):
+        return test_current_extrema._payload("float16", target, words)["values"]
+
+    for case in cases:
+        compare = test_current_floating_binary._compare_for(case)
+        selection = case.operation in ("Minimum", "Maximum")
+        assert compare is (
+            test_current_extrema._compare_native
+            if selection
+            else test_current_additive._check_words
+        )
+        expected = encoded([0x7E01] + [guard] * 8)
+        actual = encoded([0x7E02] + [guard] * 8)
+        if selection:
+            with pytest.raises(AssertionError):
+                compare(actual, expected, "float16", target)
+        else:
+            assert compare(actual, expected, "float16", target) == {
+                "nanPayloadDifferences": 1,
+                "finiteMismatchCount": 0,
+            }
+        for actual, expected in (
+            ([0x8000] + [guard] * 8, [0] + [guard] * 8),
+            ([1] + [guard] * 8, [0] + [guard] * 8),
+            ([0x7C00] + [guard] * 8, [0x7E01] + [guard] * 8),
+            ([0] + [guard] * 7 + [0], [0] + [guard] * 8),
+        ):
+            with pytest.raises(AssertionError):
+                compare(encoded(actual), encoded(expected), "float16", target)
+
+
+def test_unknown_operation_has_no_default_comparison():
+    case = next(test_current_multiplication._cases())
+    with pytest.raises(ValueError, match="No comparison policy"):
+        test_current_floating_binary._compare_for(replace(case, operation="Unknown"))
 
 
 @pytest.mark.parametrize("failure", ("empty", "duplicate", "mixed-profile"))

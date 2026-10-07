@@ -2,14 +2,11 @@
 
 import itertools
 import random
-from pathlib import Path
 
 import pytest
 
 from demos.integrations.mlx.tests.kernels.floating_binary_runtime import (
-    NATIVE_DTYPE_BATCHES,
     BinaryCase,
-    run_binary_cases,
 )
 from demos.integrations.mlx.tests.kernels.test_current_copy import _half_payload
 from tests.test_translator.test_bfloat_buffer_runtime import _storage as _bfloat_payload
@@ -20,10 +17,7 @@ from tests.test_translator.test_boolean_buffer_runtime import (
     _request as _dispatch_request,
 )
 from tests.test_translator.test_software_subgroup_product import _package
-from tools import ci_coverage
 
-ROOT = Path(__file__).resolve().parents[5]
-REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_EXTREMA"
 TYPES = {
     "float16": ("half", 16, 0x7C00),
     "bfloat16": ("bfloat", 16, 0x7F80),
@@ -237,31 +231,3 @@ def _cases(dtypes=TYPES):
 
 def _compare_native(actual, expected, _dtype, _target):
     _check_words(actual, expected)
-
-
-@pytest.mark.parametrize(
-    "dtypes", NATIVE_DTYPE_BATCHES, ids=lambda types: "-".join(types)
-)
-def test_current_extrema_native_parity(tmp_path, dtypes, binary_metal_reference):
-    run_binary_cases(
-        tmp_path,
-        REQUIRE_ENV,
-        _cases(dtypes),
-        request_for=_request,
-        guard_for=_guard,
-        source_control=binary_metal_reference,
-        compare=_compare_native,
-    )
-
-
-def test_ci_requires_extrema_once_per_native_target():
-    workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
-        workflow, "portable-host", "Validate pinned native binary math"
-    )
-    assert "if:" not in step
-    assert f'{REQUIRE_ENV}: "1"' in step
-    path = "demos/integrations/mlx/tests/kernels/test_current_extrema.py"
-    assert workflow.count(path) == 1
-    assert path in step and "pytest -q -n auto" in step
-    assert "--timeout-seconds 900" in step

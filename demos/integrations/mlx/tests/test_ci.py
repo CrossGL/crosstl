@@ -49,12 +49,16 @@ def test_pinned_binary_step_selects_every_native_case_without_portable_duplicate
         s for s in job["steps"] if s.get("name") == "Validate pinned native binary math"
     )
     command = step["run"]
-    assert "--dist worksteal" in command
+    assert "--dist load --maxschedchunk=1" in command
     assert "--timeout-seconds 900" in command
     assert "-n auto" in command and "if" not in step
     tokens = shlex.split(command.replace("\\\n", " "))
     selected = [token for token in tokens if ".py::test_" in token]
-    assert len(selected) == len(set(selected)) == 13
+    assert len(selected) == len(set(selected)) == 10
+    assert [token.split("::")[0].rsplit("/", 1)[1] for token in selected[:2]] == [
+        "test_current_floating_binary.py",
+        "test_current_binary_shapes.py",
+    ]
     modules = {token.split("::")[0] for token in selected}
     expected_modules = {
         "tests/test_translator/test_struct_buffer_layouts.py",
@@ -69,10 +73,7 @@ def test_pinned_binary_step_selects_every_native_case_without_portable_duplicate
             "half_remainder",
             "floating_remainder",
             "integer_remainder",
-            "extrema",
-            "additive",
-            "division",
-            "multiplication",
+            "floating_binary",
         )
     )
     assert modules == expected_modules

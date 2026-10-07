@@ -3,27 +3,21 @@
 import itertools
 import math
 import struct
-from pathlib import Path
 
 import pytest
 
 from demos.integrations.mlx.tests.kernels.floating_binary_runtime import (
-    NATIVE_DTYPE_BATCHES,
     BinaryCase,
-    run_binary_cases,
 )
 from demos.integrations.mlx.tests.kernels.test_current_extrema import (
     TYPES,
     _guard,
 )
 from demos.integrations.mlx.tests.kernels.test_current_extrema import _pairs as _edges
-from demos.integrations.mlx.tests.kernels.test_current_extrema import _payload, _request
+from demos.integrations.mlx.tests.kernels.test_current_extrema import _payload
 from tests.test_translator.test_metal_additive_profile import _oracle as _add
 from tests.test_translator.test_metal_division import _bfloat
-from tools import ci_coverage
 
-ROOT = Path(__file__).resolve().parents[5]
-REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_ADDITIVE"
 OPERATIONS = ("Add", "Subtract")
 
 
@@ -165,31 +159,3 @@ def test_additive_native_case_inventory():
         assert case.provenance == (
             {} if case.dtype == "float16" else {"binary32AdditiveProfile": "rne-flush"}
         )
-
-
-@pytest.mark.parametrize(
-    "dtypes", NATIVE_DTYPE_BATCHES, ids=lambda types: "-".join(types)
-)
-def test_current_additive_native_parity(tmp_path, dtypes, binary_metal_reference):
-    run_binary_cases(
-        tmp_path,
-        REQUIRE_ENV,
-        _cases(dtypes),
-        request_for=_request,
-        guard_for=_guard,
-        source_control=binary_metal_reference,
-        compare=_check_words,
-    )
-
-
-def test_ci_requires_additive_once_per_native_target():
-    workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
-        workflow, "portable-host", "Validate pinned native binary math"
-    )
-    assert "if:" not in step
-    assert f'{REQUIRE_ENV}: "1"' in step
-    path = "demos/integrations/mlx/tests/kernels/test_current_additive.py"
-    assert workflow.count(path) == 1
-    assert path in step and "pytest -q -n auto" in step
-    assert "--timeout-seconds 900" in step

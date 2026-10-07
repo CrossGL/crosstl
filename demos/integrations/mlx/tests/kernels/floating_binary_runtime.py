@@ -34,8 +34,6 @@ from demos.integrations.mlx.tests.kernels.test_current_complex_power import MLX_
 from tests.runtime_helpers import _validate
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
-NATIVE_DTYPE_BATCHES = (("float16",), ("bfloat16", "float32"))
-
 
 @dataclass(frozen=True)
 class BinaryCase:
@@ -120,7 +118,7 @@ def _original_metal(work, runner, library, case, guard, compare):
 
 
 def run_binary_cases(
-    tmp_path, require_env, cases, *, request_for, guard_for, compare, source_control
+    tmp_path, require_env, cases, *, request_for, guard_for, compare_for, source_control
 ):
     if os.environ.get(require_env) != "1":
         pytest.skip(f"set {require_env}=1 for pinned native binary checks")
@@ -200,6 +198,7 @@ def run_binary_cases(
             )
             units = _binary_load_units(loader, entries, target)
             for case in cases:
+                compare = compare_for(case)
                 work = batch_work / case.entry
                 work.mkdir()
                 artifact = artifacts[case.entry]
