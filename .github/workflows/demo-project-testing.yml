@@ -1717,7 +1717,7 @@ jobs:
           set -euo pipefail
           mkdir -p .mlx-portable-host/binary-math
           python tools/run_bounded_command.py --timeout-seconds 900 --label "Pinned native binary math" -- \
-            python -m pytest -q -n auto --dist load --maxschedchunk=1 \
+            python -m pytest -q -n auto --dist load --maxschedchunk=1 -vv --durations=10 \
               --basetemp=.mlx-portable-host/binary-math/pytest \
               --junitxml=.mlx-portable-host/binary-math/results.xml \
               demos/integrations/mlx/tests/kernels/test_current_floating_binary.py::test_current_floating_binary_native_parity \

@@ -68,4 +68,5 @@ def test_ci_requires_floating_binary_once_per_native_target():
     assert f"{path}::test_current_floating_binary_native_parity" in step
     assert "pytest -q -n auto" in step
     assert "--dist load --maxschedchunk=1" in step
+    assert "-vv" in step and "--durations=10" in step
     assert "--timeout-seconds 900" in step
