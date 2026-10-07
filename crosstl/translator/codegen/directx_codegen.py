@@ -2224,6 +2224,8 @@ class HLSLCodeGen:
         self.hlsl_atan2_helper_names = {}
         self.required_hlsl_half_helpers = set()
         self.hlsl_half_helper_names = {}
+        self.required_hlsl_half_selection_helpers = set()
+        self.hlsl_half_selection_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
         self.hlsl_defined_relative_wave_shuffle_helper_names = {}
@@ -3196,6 +3198,8 @@ class HLSLCodeGen:
         self.hlsl_atan2_helper_names = {}
         self.required_hlsl_half_helpers = set()
         self.hlsl_half_helper_names = {}
+        self.required_hlsl_half_selection_helpers = set()
+        self.hlsl_half_selection_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
         self.hlsl_defined_relative_wave_shuffle_helper_names = {}
@@ -3396,6 +3400,7 @@ class HLSLCodeGen:
         self.prepare_hlsl_inverse_hyperbolic_helper_names(functions)
         self.prepare_hlsl_atan2_helper_names(functions)
         self.prepare_hlsl_half_helper_names(functions)
+        self.prepare_hlsl_half_selection_helper_names(functions)
         self.prepare_hlsl_physical_subgroup_id_helper_names(functions)
         self.hlsl_float_atomic_reserved_names = self.hlsl_helper_reserved_names(
             functions
@@ -4511,6 +4516,7 @@ class HLSLCodeGen:
             + code[:half_helper_offset]
             + self.generate_hlsl_explicit_bitcast_helpers()
             + self.generate_hlsl_half_helpers()
+            + self.generate_hlsl_half_selection_helpers()
             + code[half_helper_offset:]
         )
 
@@ -5645,6 +5651,149 @@ uint {helper_name}(uint groupIndex) {{
 }}
 """)
         return "\n".join(helpers) + ("\n" if helpers else "")
+
+    def prepare_hlsl_half_selection_helper_names(self, functions):
+        used_names = self.hlsl_helper_reserved_names(functions)
+        self.hlsl_half_selection_helper_names = {}
+        for width in range(1, 5):
+            name = f"__crossgl_select_half_bits{width}"
+            while name in used_names:
+                name += "_"
+            self.hlsl_half_selection_helper_names[width] = name
+            used_names.add(name)
+
+    def hlsl_half_selection_condition_is_eager_safe(self, node):
+        if isinstance(node, (VariableNode, IdentifierNode, LiteralNode)):
+            return True
+        if isinstance(node, UnaryOpNode) and node.op in {"!", "~", "+", "-"}:
+            return self.hlsl_half_selection_condition_is_eager_safe(node.operand)
+        if isinstance(node, BinaryOpNode) and node.op in {
+            "==",
+            "!=",
+            "<",
+            "<=",
+            ">",
+            ">=",
+            "&&",
+            "||",
+            "&",
+            "|",
+            "^",
+        }:
+            return all(
+                self.hlsl_half_selection_condition_is_eager_safe(value)
+                for value in (node.left, node.right)
+            )
+        if isinstance(node, FunctionCallNode):
+            name = self.function_call_name(node)
+            return (
+                name in {"isnan", "isinf", "isfinite"}
+                and not self.hlsl_function_name_is_shadowed(name)
+                and all(
+                    isinstance(arg, (VariableNode, IdentifierNode))
+                    for arg in node.arguments
+                )
+            )
+        return False
+
+    def hlsl_half_selection_info(self, node, *, allow_condition_reads=True):
+        if self.current_function_name is None:
+            return None
+        if not self.hlsl_half_selection_condition_is_eager_safe(
+            node.condition
+        ) and not (
+            allow_condition_reads
+            and not self.hlsl_expression_has_observable_side_effects(node.condition)
+        ):
+            return None
+        # Only private values and recursively safe selections may be eager arms.
+        for arm in (node.true_expr, node.false_expr):
+            if isinstance(arm, (VariableNode, IdentifierNode)):
+                continue
+            if isinstance(arm, TernaryOpNode) and self.hlsl_half_selection_info(
+                arm, allow_condition_reads=False
+            ):
+                continue
+            return None
+        if self.map_type(self.expression_result_type(node.condition)) != "bool":
+            return None
+        infos = [
+            self.hlsl_floating_arithmetic_type_info(self.expression_result_type(arm))
+            for arm in (node.true_expr, node.false_expr)
+        ]
+        if not all(info and info["native_16_bit"] for info in infos):
+            return None
+        if infos[0]["width"] != infos[1]["width"]:
+            return None
+        return infos[0]
+
+    def generate_hlsl_half_selection(self, node):
+        info = self.hlsl_half_selection_info(node)
+        if info is None:
+            return None
+        for intrinsic in ("asuint16", "asfloat16"):
+            if intrinsic in self.global_variable_types or (
+                intrinsic in self.function_return_types
+                and intrinsic not in self.hlsl_function_name_aliases
+            ):
+                raise DirectXContextualConversionError(
+                    f"DirectX cannot preserve binary16 selection: '{intrinsic}' is shadowed",
+                    source_type=info["mapped_type"],
+                    target_type=info["mapped_type"],
+                    reason="half-selection-intrinsic-shadowed",
+                    source_location=getattr(node, "source_location", None),
+                )
+        width = info["width"]
+        self.required_hlsl_half_selection_helpers.add(width)
+        condition = self.generate_expression_with_expected(node.condition, "bool")
+        yes = self.generate_expression_with_expected(node.true_expr, None)
+        no = self.generate_expression_with_expected(node.false_expr, None)
+        return (
+            f"{self.hlsl_half_selection_helper_names[width]}({condition}, {yes}, {no})"
+        )
+
+    def hlsl_half_selection_tail_return(self, branch, fallback):
+        if not isinstance(branch, IfNode) or not isinstance(fallback, ReturnNode):
+            return None
+        if (
+            branch.else_branch is not None
+            or branch.else_body is not None
+            or branch.else_if_conditions
+        ):
+            return None
+        statements = self.hlsl_statement_body_items(branch.then_branch)
+        if len(statements) != 1 or not isinstance(statements[0], ReturnNode):
+            return None
+        selection = TernaryOpNode(
+            branch.condition,
+            statements[0].value,
+            fallback.value,
+            source_location=getattr(branch, "source_location", None),
+        )
+        if self.hlsl_half_selection_info(selection) is None:
+            return None
+        # A separate early return can reintroduce a half-valued select after CSE.
+        return ReturnNode(
+            selection, source_location=getattr(branch, "source_location", None)
+        )
+
+    def generate_hlsl_half_selection_helpers(self):
+        code = ""
+        for width in sorted(self.required_hlsl_half_selection_helpers):
+            suffix = str(width) if width > 1 else ""
+            value_type = f"float16_t{suffix}"
+            bits_type = f"uint16_t{suffix}"
+            mask_type = f"uint{suffix}"
+            name = self.hlsl_half_selection_helper_names[width]
+            # Direct integer ternaries are optimized back to half-valued selects.
+            code += (
+                f"{value_type} {name}(bool condition, {value_type} yes, {value_type} no) {{\n"
+                f"    {mask_type} mask = ({mask_type})(0u - uint(condition));\n"
+                f"    return asfloat16({bits_type}(({mask_type}(asuint16(yes)) & mask) | "
+                f"({mask_type}(asuint16(no)) & ~mask)));\n"
+                "}\n\n"
+            )
+        return code
 
     def prepare_hlsl_half_helper_names(self, functions):
         used_names = self.hlsl_helper_reserved_names(functions)
@@ -14677,6 +14826,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return overloaded_return_type
             if func_name in getattr(self, "function_return_types", {}):
                 return self.function_return_types[func_name]
+            if func_name in {"isnan", "isinf", "isfinite"} and len(args) == 1:
+                argument_type = self.expression_result_type(args[0])
+                if self.hlsl_floating_arithmetic_type_info(argument_type) is not None:
+                    return self.hlsl_boolean_expression_result_type(argument_type)
             if (
                 len(args) == 1
                 and self.function_map.get(func_name, func_name)
@@ -20994,6 +21147,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             statements = []
 
         for index, stmt in enumerate(statements):
+            if index == len(statements) - 2:
+                selection_return = self.hlsl_half_selection_tail_return(
+                    stmt, statements[index + 1]
+                )
+                if selection_return is not None:
+                    code += self.generate_statement(selection_return, indent)
+                    break
             if isinstance(stmt, VariableNode):
                 following_statements = statements[index + 1 :]
                 self.prepare_hlsl_resource_pointer_array(stmt, following_statements)
@@ -22462,6 +22622,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         "statement control flow"
                     ),
                 )
+            half_selection = self.generate_hlsl_half_selection(expr)
+            if half_selection is not None:
+                return half_selection
             condition = self.generate_expression_with_expected(
                 getattr(expr, "condition", ""), "bool"
             )

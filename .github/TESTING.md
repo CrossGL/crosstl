@@ -117,6 +117,14 @@ Each native job keeps its source pin, numerical comparisons, guards, bounded exe
 and retained evidence. Moving a compiler-only job must not disable an execution
 gate or be presented as proof of runtime parity.
 
+The existing comparison step also checks binary16 operand selection through
+runtime packages. Two dispatch batches cover every binary16 word in both operand
+positions, plus signed-zero, infinity and NaN boundary pairs. Scalar comparisons,
+NaN early returns and two-, three- and four-component selections must preserve
+the selected storage words exactly. Original Metal controls and output guards
+remain required; no NaN normalization is permitted. The step keeps its two
+workers and 180-second limit, with no additional runner.
+
 The native host's binary32 arithmetic step selects device execution, original
 source controls and Metal module-linkage tests. Configuration, reference-model
 and generation-only checks remain in the complete Ubuntu suite. A workflow
