@@ -5264,24 +5264,52 @@ def test_metal_precise_functions_and_locals_disable_contraction():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert generated_code.count("#pragma clang fp contract(off)") == 2
-    assert generated_code.count("#pragma clang fp contract(fast)") == 2
+    assert "#pragma clang fp contract(fast)" not in generated_code
+    assert "\n#pragma clang fp contract(" not in generated_code
     assert generated_code.count("#pragma clang fp reassociate(off)") == 2
     assert "#pragma clang fp reassociate(on)" not in generated_code
-    assert "{\n    #pragma clang fp reassociate(off)\n" in generated_code
+    directives = (
+        "{\n    #pragma clang fp contract(off)\n"
+        "    #pragma clang fp reassociate(off)\n"
+    )
     assert (
-        "#pragma clang fp contract(off)\n"
-        "float stableProduct(float left, float right)"
+        "float stableProduct(float left, float right) " + directives
     ) in generated_code
     assert (
-        "#pragma clang fp contract(off)\n"
-        "float scopedProduct(float left, float right)"
+        "float scopedProduct(float left, float right) " + directives
     ) in generated_code
     assert (
-        "#pragma clang fp contract(off)\n"
-        "float relaxedProduct(float left, float right)"
+        "float relaxedProduct(float left, float right) " + directives
     ) not in generated_code
     assert "[[precise]]" not in generated_code
     compile_with_metal_if_available(generated_code)
+
+
+@pytest.mark.parametrize("annotation", ("function", "local"))
+def test_metal_precise_entry_point_directives_stay_inside_body(annotation):
+    function_annotation = "@precise" if annotation == "function" else ""
+    local_annotation = "@precise" if annotation == "local" else ""
+    shader = f"""
+    shader PreciseEntry {{
+        compute {{
+            {function_annotation}
+            void main(uint3 tid @ gl_GlobalInvocationID) {{
+                float value {local_annotation} = float(tid.x) * 1.25;
+            }}
+        }}
+    }}
+    """
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+    assert generated.count("    #pragma clang fp contract(off)") == 1
+    assert "\n#pragma clang fp contract(" not in generated
+    assert "contract(fast)" not in generated
+    assert (
+        "{\n    #pragma clang fp contract(off)\n"
+        "    #pragma clang fp reassociate(off)\n"
+    ) in generated
+    compile_with_metal_if_available(generated)
 
 
 def test_metal_float16_matrix_ir_aliases_map_to_half_matrices():

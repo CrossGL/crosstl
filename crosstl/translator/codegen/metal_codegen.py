@@ -5287,8 +5287,6 @@ class MetalCodeGen:
         precise_arithmetic = (
             body is not None and self.metal_function_requires_no_contraction(func)
         )
-        if precise_arithmetic:
-            code += "#pragma clang fp contract(off)\n"
         if shader_type is None and body is None:
             semantic = self.semantic_from_node(func)
             function_name = entry_name or func.name
@@ -5611,6 +5609,7 @@ class MetalCodeGen:
             )
 
         if precise_arithmetic:
+            code += "    #pragma clang fp contract(off)\n"
             code += "    #pragma clang fp reassociate(off)\n"
 
         previous_sampler_parameters = self.current_sampler_parameters
@@ -5780,8 +5779,6 @@ class MetalCodeGen:
         )
 
         code += "}\n"
-        if precise_arithmetic:
-            code += "#pragma clang fp contract(fast)\n"
         code += "\n"
         return code
 

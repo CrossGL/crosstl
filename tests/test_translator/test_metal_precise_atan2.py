@@ -8,6 +8,7 @@ import sys
 from copy import deepcopy
 from decimal import Decimal, localcontext
 from functools import lru_cache, partial
+from pathlib import Path
 
 import pytest
 
@@ -80,6 +81,24 @@ kernel void angles(const device uint* values [[buffer(0)]],
 }
 """
 
+PRECISION_SCOPE_SOURCE = """#include <metal_stdlib>
+using namespace metal;
+float product(float a, float b) { return a * b; }
+float difference(float a, float b, float c, float d) {
+    return product(a, b) - product(c, d);
+}
+kernel void scope(const device uint* values [[buffer(0)]],
+                 device uint* results [[buffer(1)]],
+                 uint i [[thread_position_in_grid]]) {
+    float a = as_type<float>(values[4u*i]);
+    float b = as_type<float>(values[4u*i+1u]);
+    float c = as_type<float>(values[4u*i+2u]);
+    float d = as_type<float>(values[4u*i+3u]);
+    results[4u+2u*i] = as_type<uint>(difference(a, b, c, d));
+    results[5u+2u*i] = as_type<uint>(metal::precise::atan2(a, b));
+}
+"""
+
 
 def _translate(tmp_path, source=SOURCE, target="crossgl", profile=None, **options):
     path = tmp_path / "atan2.metal"
@@ -102,6 +121,32 @@ def test_precise_atan2_helpers_compile(tmp_path, target, profile):
     assert "crossgl_divide_bits(" in generated
     assert "double" not in generated
     _compile(generated, target, tmp_path, metal_compile_flags=("-fno-fast-math",))
+
+
+def test_precise_atan2_does_not_set_file_scope_contraction(tmp_path):
+    generated = _translate(tmp_path, source=PRECISION_SCOPE_SOURCE, target="metal")
+    assert generated.count("    #pragma clang fp contract(off)") == 2
+    assert "\n#pragma clang fp contract(" not in generated
+    assert "#pragma clang fp contract(fast)" not in generated
+    product = generated.split("float product(", 1)[1].split("}", 1)[0]
+    assert "#pragma" not in product
+
+
+def test_ci_requires_metal_contraction_scope_in_existing_native_step():
+    from tools import ci_coverage
+
+    workflow = (
+        Path(__file__).resolve().parents[2]
+        / ".github/workflows/demo-project-testing.yml"
+    ).read_text()
+    step = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Validate pinned arctangent"
+    )
+    selector = "tests/test_translator/test_metal_precise_atan2.py::test_precise_helpers_preserve_enclosing_metal_contraction"
+    assert workflow.count(selector) == 1 and selector in step
+    assert f'{REQUIRE_ENV}: "1"' in step
+    assert "--timeout-seconds 180" in step
+    assert "continue-on-error" not in step and "if:" not in step
 
 
 @pytest.mark.parametrize("profile", PROFILES)
@@ -566,3 +611,68 @@ def test_precise_atan2_executes(tmp_path, profile, monkeypatch):
             indent=2,
         )
     )
+
+
+@pytest.mark.parametrize("contraction", ("off", "on", "fast"))
+def test_precise_helpers_preserve_enclosing_metal_contraction(
+    tmp_path, contraction, monkeypatch
+):
+    if os.environ.get(REQUIRE_ENV) != "1" or sys.platform != "darwin":
+        pytest.skip(f"set {REQUIRE_ENV}=1 on macOS for contraction scope execution")
+    from tests.test_translator import test_fused_math as native_math
+
+    flags = ("-fno-fast-math", f"-ffp-contract={contraction}")
+    monkeypatch.setattr(
+        native_math, "_compile", partial(_compile, metal_compile_flags=flags)
+    )
+    pairs = [
+        (0x3F800001, 0x3F800001, 0x3F800002, 0x3F800000),
+        (0x3F800001, 0x3F7FFFFE, 0x3F800000, 0x3F800000),
+        (0x3F800002, 0x3F800002, 0x3F800004, 0x3F800000),
+    ]
+    products = (
+        [0x28800000, 0xA8800000, 0x29800000] if contraction == "fast" else [0] * 3
+    )
+    angles = [_oracle(a, b, "preserve-subnormals") for a, b, _, _ in pairs]
+    expected = [GUARD] * 4
+    for product, angle in zip(products, angles):
+        expected.extend((product, angle))
+    expected.extend([GUARD] * 4)
+    generated = _translate(tmp_path, source=PRECISION_SCOPE_SOURCE, target="metal")
+    for label, source in (
+        ("original", PRECISION_SCOPE_SOURCE),
+        ("translated", generated),
+    ):
+        work = tmp_path / label
+        work.mkdir()
+        actual, evidence = native_math._dispatch(
+            work,
+            "metal",
+            source,
+            pairs,
+            len(expected),
+            entry="scope",
+            initial_output=[GUARD] * len(expected),
+        )
+        (work / "expected.json").write_text(json.dumps(expected))
+        assert len(actual) == len(expected)
+        assert actual[:4] == actual[-4:] == [GUARD] * 4
+        assert actual[4:-4:2] == products
+        maximum_angle_error = max(
+            abs(got - want) for got, want in zip(actual[5:-4:2], angles)
+        )
+        (work / "evidence.json").write_text(
+            json.dumps(
+                {
+                    **evidence,
+                    "compilerFlags": flags,
+                    "contraction": contraction,
+                    "unchangedSourceControl": label == "original",
+                    "guardCount": 8,
+                    "maximumAngleUlpError": maximum_angle_error,
+                    "angleUlpLimit": 6,
+                },
+                indent=2,
+            )
+        )
+        assert maximum_angle_error <= 6

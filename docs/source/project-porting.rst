@@ -1187,6 +1187,12 @@ tests cover both policies; the unchanged Metal control checks the characterized
 flush policy with the same numerical assertions. DirectX native execution is a
 separate required CI gate.
 
+Generated Metal scopes contraction and reassociation directives to each precise
+function body. It does not change the compiler's contraction setting for later
+helpers or entry points. Native source/roundtrip checks exercise arithmetic
+across function-return boundaries with contraction disabled, expression-local,
+and unrestricted, while retaining the precise helper's numerical checks.
+
 Power-function domains
 ~~~~~~~~~~~~~~~~~~~~~~
 

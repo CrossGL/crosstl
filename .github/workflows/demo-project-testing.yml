@@ -1654,6 +1654,7 @@ jobs:
               --junitxml=.mlx-portable-host/atan/results.xml \
               tests/test_translator/test_metal_precise_atan.py \
               tests/test_translator/test_metal_precise_atan2.py::test_precise_atan2_executes \
+              tests/test_translator/test_metal_precise_atan2.py::test_precise_helpers_preserve_enclosing_metal_contraction \
               demos/integrations/mlx/tests/kernels/test_current_atan2.py::test_current_atan2_native_parity \
               demos/integrations/mlx/tests/kernels/test_current_unary_atan.py \
               2>&1 | tee .mlx-portable-host/atan.log
