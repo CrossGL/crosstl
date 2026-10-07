@@ -3966,13 +3966,28 @@ jobs:
           demos/integrations/mlx/tests/kernels/test_layer_norm_vjp_native_loader.py::test_pinned_mlx_layer_norm_vjp_executes_through_directx_native_loader
 
       - name: Prove pinned MLX dot Direct3D native-loader execution
+        id: dot-directx
         if: runner.os == 'Windows'
         env:
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_DOT_DIRECTX_NATIVE_LOADER: "1"
+          CROSTL_KEEP_CORPUS_EVIDENCE: "1"
         run: >-
           python -m pytest -q -n auto
+          --junitxml=demo-results/dot/directx.xml
           demos/integrations/mlx/tests/kernels/test_dot_native_loader.py::test_pinned_mlx_dot_executes_through_directx_native_loader
+
+      - name: Upload dot Direct3D evidence
+        if: always() && runner.os == 'Windows' && steps.dot-directx.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-dot-directx
+          path: |
+            mlx-current-upstream/.crosstl-corpus-evidence/dot-directx-*/**
+            demo-results/dot/directx.xml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Prove pinned MLX unary Square Direct3D native-loader execution
         if: runner.os == 'Windows'

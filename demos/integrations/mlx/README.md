@@ -2794,6 +2794,15 @@ the guarded 5,188-byte GLSL artifact with `glslangValidator`; its SHA-256 remain
 continues to reject a device subgroup width other than 32 before translated
 work.
 
+The native DirectX case is not currently a passing portability claim: the
+checkpoint run returned an incorrect value, tracked in
+[#2120](https://github.com/CrossGL/crosstl/issues/2120). The original numerical
+assertion remains required. Windows CI retains the translation report, package,
+loader descriptor, input fixture, dispatch plan, availability details, DXC
+command and compiled artifacts, and returned values under `mlx-dot-directx`,
+including when validation fails. These records describe the native request and
+readback; they do not establish the exact bytes uploaded by the driver.
+
 A separate software artifact is 6,275 bytes with SHA-256
 `a3c1958daa680419ce3f38559de1a6a2319a7abdac556a049632194c88223a32`.
 It allocates 512 shared float elements and partitions them into sixteen

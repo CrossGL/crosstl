@@ -27,6 +27,12 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from demos.integrations.mlx.tests.corpus_evidence import (
+    corpus_workspace,
+    native_compiler_runner,
+    record_native_request,
+    record_native_result,
+)
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_DOT_SOURCE = "mlx/backend/metal/kernels/dot.metal"
@@ -171,6 +177,8 @@ def _translate_dot_artifact(
         run_toolchains=run_toolchains,
     )
     payload = report.to_json()
+    report_path = work_dir / "portability-report.json"
+    report.write_json(report_path)
 
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
@@ -244,8 +252,6 @@ def _translate_dot_artifact(
         assert generated.count("uintBitsToFloat(floatBitsToUint(b[int(") >= 4
         assert generated.count("subgroupAdd(sum)") == 2
 
-    report_path = work_dir / "portability-report.json"
-    report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
     runtime_artifacts = build_runtime_artifact_manifest(report_path)
     assert runtime_artifacts["success"] is True, json.dumps(
@@ -441,6 +447,7 @@ def _build_directx_runtime_package(
     loader_manifest = build_runtime_loader_manifest(
         package_dir / "runtime-package.json"
     )
+    _write_json(work_dir / "loader-manifest.json", loader_manifest)
     assert loader_manifest["success"] is True, json.dumps(
         loader_manifest,
         indent=2,
@@ -451,6 +458,7 @@ def _build_directx_runtime_package(
         loader_manifest,
         load_unit_id=loader_manifest["loadUnits"][0]["id"],
     )
+    _write_json(work_dir / "descriptor.json", descriptor)
     assert descriptor["target"] == "directx"
     assert descriptor["entryPoint"]["name"] == "CSMain"
     assert descriptor["entryPoint"]["stage"] == "compute"
@@ -463,9 +471,11 @@ def _build_directx_runtime_package(
 
 def test_pinned_mlx_dot_executes_through_directx_native_loader():
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-dot-directx-native-loader-",
-        dir=mlx_root,
+    with corpus_workspace(
+        mlx_root,
+        family="dot",
+        target="directx",
+        entry_point=MLX_DOT_ENTRY,
     ) as temporary_directory:
         descriptor, package_dir = _build_directx_runtime_package(
             mlx_root,
@@ -504,6 +514,12 @@ def test_pinned_mlx_dot_executes_through_directx_native_loader():
             (1, 1, 1),
             expected_target="directx",
         )
+        record_native_request(
+            Path(temporary_directory),
+            request,
+            commit=MLX_COMMIT,
+            workload_id=MLX_DOT_ENTRY,
+        )
         assert request.execution_plan is not None
         assert request.execution_plan.diagnostics == ()
         assert request.execution_plan.dispatch.workgroup_size == (512, 1, 1)
@@ -518,10 +534,19 @@ def test_pinned_mlx_dot_executes_through_directx_native_loader():
                 adapter_kind="directx-native-runtime",
             ),
             runtime_adapter=DirectXRuntimeParityAdapter(
-                runtime=DirectXComputeRuntime()
+                runtime=DirectXComputeRuntime(),
+                command_runner=native_compiler_runner(Path(temporary_directory)),
             ),
         )
         availability = executor.is_available(request)
+        _write_json(
+            Path(temporary_directory) / "availability.json",
+            {
+                "available": availability.available,
+                "reason": availability.reason,
+                "details": availability.details,
+            },
+        )
         if not availability.available:
             _skip_or_fail(
                 "directx",
@@ -529,6 +554,7 @@ def test_pinned_mlx_dot_executes_through_directx_native_loader():
             )
 
         result = executor.run(request)
+        record_native_result(Path(temporary_directory), result)
 
     assert result.status == "ok"
     assert result.outputs["output"]["dtype"] == "float32"

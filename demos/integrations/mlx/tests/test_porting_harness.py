@@ -11355,7 +11355,19 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     )
 
     status = gaps["dot_native_runtime_status"]
-    assert status["status"] == "translated-packaged-and-cross-target-executed"
+    assert status["status"] == "translated-packaged-native-regression"
+    assert status["native_validation_regression"] == {
+        "target": "directx",
+        "source_commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+        "translator_commit": "f5bd9c6842c134bde92b2108b48cd4af2d26d899",
+        "run": (
+            "https://github.com/CrossGL/crosstl/actions/runs/37659104143/job/112922487218"
+        ),
+        "tracked_by": "https://github.com/CrossGL/crosstl/issues/2120",
+        "observed_output": 2.7272588775775887e23,
+        "expected_output": 256.0,
+        "readback_retained": False,
+    }
     assert status["commit"] == CURRENT_MLX_COMMIT
     assert status["source"] == "mlx/backend/metal/kernels/dot.metal"
     assert status["source_sha256"] == (
@@ -11462,8 +11474,8 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     assert status["mlx_host_runtime_included"] is False
     assert status["runtime_integration_included"] is True
     assert status["metal_roundtrip_included"] is False
-    assert status["selected_workload_numerical_parity_verified"] is True
-    assert status["cross_target_selected_workload_numerical_parity_verified"] is True
+    assert status["selected_workload_numerical_parity_verified"] is False
+    assert status["cross_target_selected_workload_numerical_parity_verified"] is False
     assert status["full_mlx_test_suite_included"] is False
     assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False

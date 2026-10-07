@@ -967,6 +967,135 @@ def test_attention_retains_native_results_without_suppressing_failures(
     assert json.loads((work_dir / "result.json").read_text()) == vars(result)
 
 
+@pytest.mark.parametrize("failure", ("translation", "identity"))
+def test_dot_retains_report_before_translation_and_identity_assertions(
+    failure, tmp_path, monkeypatch
+):
+    from demos.integrations.mlx.tests.kernels import test_dot_native_loader as proof
+
+    payload = {"summary": {"unitCount": 0}, "diagnostics": [{"message": "failed"}]}
+    if failure == "identity":
+        payload = {
+            "summary": {"unitCount": 1, "translatedCount": 1, "failedCount": 0},
+            "artifacts": [
+                {
+                    "source": proof.MLX_DOT_SOURCE,
+                    "sourceHash": {
+                        "algorithm": "sha256",
+                        "value": proof.MLX_DOT_SHA256,
+                    },
+                    "generatedHash": {"algorithm": "sha256", "value": "0" * 64},
+                }
+            ],
+        }
+
+    class Report:
+        def to_json(self):
+            return payload
+
+        def write_json(self, path):
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setenv(KEEP_EVIDENCE_ENV, "1")
+    monkeypatch.setattr(proof, "_pinned_mlx_root", lambda: tmp_path)
+    monkeypatch.setattr(proof, "load_project_config", lambda *args: None)
+    monkeypatch.setattr(proof, "translate_project", lambda *args, **kwargs: Report())
+    with pytest.raises(AssertionError):
+        proof.test_pinned_mlx_dot_executes_through_directx_native_loader()
+    (report,) = tmp_path.rglob("portability-report.json")
+    assert json.loads(report.read_text()) == payload
+    assert (report.parent / "crosstl.toml").is_file()
+    assert report.parent.parent == tmp_path / EVIDENCE_DIRECTORY
+
+
+@pytest.mark.parametrize("failure", (None, "status", "readback", "unavailable"))
+def test_dot_retains_native_results_without_suppressing_failures(
+    failure, tmp_path, monkeypatch
+):
+    from demos.integrations.mlx.tests.kernels import test_dot_native_loader as proof
+
+    monkeypatch.setenv(KEEP_EVIDENCE_ENV, "1")
+    monkeypatch.setenv(proof.REQUIRE_PROOF_ENVS["directx"], "1")
+    monkeypatch.setattr(proof, "_pinned_mlx_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        proof, "_build_directx_runtime_package", lambda *args: ({}, tmp_path)
+    )
+    fixture = {}
+    plan = {
+        "dispatch": {
+            "workgroupSize": [512, 1, 1],
+            "workgroupCount": [1, 1, 1],
+            "globalSize": [512, 1, 1],
+        }
+    }
+
+    def build_request(descriptor, package, inputs, outputs, groups, **kwargs):
+        assert descriptor == {} and package == tmp_path
+        assert inputs["a"]["values"] == [1.0] * 1024
+        assert inputs["b"]["values"] == [0.25] * 1024
+        assert inputs[f"{proof.MLX_DOT_ENTRY}_n_Constants"]["values"] == [1024]
+        assert outputs["output"]["values"] == [256.0]
+        assert outputs["output"]["tolerance"] == {"absolute": 1e-5, "relative": 1e-5}
+        assert groups == (1, 1, 1) and kwargs == {"expected_target": "directx"}
+        fixture.update(inputs=inputs, expectedOutputs=outputs)
+        return SimpleNamespace(
+            fixture=SimpleNamespace(to_json=lambda: fixture),
+            execution_plan=SimpleNamespace(
+                diagnostics=(),
+                dispatch=SimpleNamespace(
+                    workgroup_size=(512, 1, 1),
+                    workgroup_count=(1, 1, 1),
+                    global_size=(512, 1, 1),
+                ),
+                to_json=lambda: plan,
+            ),
+        )
+
+    monkeypatch.setattr(proof, "build_native_loader_dispatch_request", build_request)
+    availability = SimpleNamespace(
+        available=failure != "unavailable",
+        reason="test capability unavailable" if failure == "unavailable" else None,
+        details={"case": "unit-test-only"},
+    )
+    result = SimpleNamespace(
+        status="failed" if failure == "status" else "ok",
+        outputs={
+            "output": {
+                "dtype": "float32",
+                "shape": [1],
+                "values": [2.7272588775775887e23 if failure == "readback" else 256.0],
+            }
+        },
+        message=None,
+        details={"case": "unit-test-only"},
+    )
+    dispatched = []
+
+    def execute(request):
+        dispatched.append(request)
+        return result
+
+    executor = SimpleNamespace(is_available=lambda request: availability, run=execute)
+    monkeypatch.setattr(proof, "RuntimeParityExecutor", lambda *a, **kw: executor)
+    error = pytest.fail.Exception if failure == "unavailable" else AssertionError
+    with pytest.raises(error) if failure else nullcontext():
+        proof.test_pinned_mlx_dot_executes_through_directx_native_loader()
+    (work,) = (tmp_path / EVIDENCE_DIRECTORY).iterdir()
+    request = json.loads((work / "request.json").read_text())
+    assert request == {
+        "commit": proof.MLX_COMMIT,
+        "workload": proof.MLX_DOT_ENTRY,
+        "fixture": fixture,
+        "executionPlan": plan,
+    }
+    assert json.loads((work / "availability.json").read_text()) == vars(availability)
+    if failure == "unavailable":
+        assert not dispatched and not (work / "result.json").exists()
+    else:
+        assert len(dispatched) == 1
+        assert json.loads((work / "result.json").read_text()) == vars(result)
+
+
 @pytest.mark.parametrize(
     "family,target",
     [

@@ -1970,6 +1970,9 @@ def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
         "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
     )
     assert 'CROSTL_REQUIRE_MLX_DOT_DIRECTX_NATIVE_LOADER: "1"' in directx_step
+    assert 'CROSTL_KEEP_CORPUS_EVIDENCE: "1"' in directx_step
+    assert "--junitxml=demo-results/dot/directx.xml" in directx_step
+    assert "id: dot-directx" in directx_step
     assert (
         f"{test_path}::test_pinned_mlx_dot_executes_through_directx_native_loader"
         in directx_step
@@ -1980,6 +1983,20 @@ def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
         mlx_porting,
         "Prove pinned MLX dot Direct3D native-loader execution",
         "Checkout current MLX runtime proof corpus",
+    )
+    upload = ci_coverage.workflow_step_section(
+        mlx_porting, "Upload dot Direct3D evidence"
+    )
+    assert "if: always() && runner.os == 'Windows'" in upload
+    assert "steps.dot-directx.outcome != 'skipped'" in upload
+    assert "mlx-current-upstream/.crosstl-corpus-evidence/dot-directx-*/**" in upload
+    assert "demo-results/dot/directx.xml" in upload
+    assert "include-hidden-files: true" in upload
+    assert "if-no-files-found: error" in upload
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        "Upload dot Direct3D evidence",
+        "Prove pinned MLX dot Direct3D native-loader execution",
     )
 
     metal_step = ci_coverage.workflow_step_section(
