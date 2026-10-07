@@ -90,6 +90,24 @@ def test_pinned_binary_step_selects_every_native_case_without_portable_duplicate
     )
 
 
+def test_precise_atan2_uses_existing_native_arctangent_gate():
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    job = yaml.safe_load(workflow)["jobs"]["portable-host"]
+    step = next(
+        s for s in job["steps"] if s.get("name") == "Validate pinned arctangent"
+    )
+    selector = (
+        "tests/test_translator/test_metal_precise_atan2.py::test_precise_atan2_executes"
+    )
+    assert workflow.count(selector) == 1
+    assert selector in step["run"]
+    assert step["env"]["CROSTL_REQUIRE_METAL_PRECISE_ATAN2"] == "1"
+    assert step["env"]["PYTEST_XDIST_AUTO_NUM_WORKERS"] == "2"
+    assert "--timeout-seconds 180" in step["run"]
+    assert "pytest -q -n auto" in step["run"]
+    assert "if" not in step and "continue-on-error" not in step
+
+
 def test_project_demo_triggers_cover_code_without_root_documentation():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     paths = _workflow_event_paths(workflow, "pull_request")

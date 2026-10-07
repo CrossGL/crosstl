@@ -70,8 +70,9 @@ def _translate(tmp_path, source=SOURCE, suffix="metal"):
 
 def test_atan2_scalar_and_vector_helpers_compile(tmp_path):
     generated = _translate(tmp_path)
-    for suffix in ("", "2", "3", "4"):
+    for suffix in ("", "2", "4"):
         assert f"__crossgl_atan2_float{suffix}(" in generated
+    assert "__crossgl_metal_precise_atan2_float3(" in generated
     assert not re.search(r"\batan2\s*\(", generated)
     assert "precise float reduced" in generated
     assert "precise float angle" in generated

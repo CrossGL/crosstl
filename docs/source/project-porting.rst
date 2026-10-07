@@ -1140,6 +1140,51 @@ not a universal Metal policy. Remainder and conversion subnormal behavior remain
 separate contracts; selecting a comparison profile does not establish full
 project numerical parity.
 
+Precise two-argument arctangent
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Metal ``precise::atan2`` retains a portable implementation for binary32 scalars
+and two- to four-lane vectors, including scalar-to-vector broadcasts. Scalar half
+and bfloat arguments promote to binary32, as required by the precise overload.
+Each argument is evaluated once;
+source-defined functions and default/fast-mode calls keep their separate paths.
+Unsupported operand types, shapes and global runtime initializers produce
+``project.translate.metal-precise-math-unsupported`` diagnostics.
+
+The implementation handles signed-zero axes, infinities and NaN classification
+explicitly, using integer-word division and the existing precise arctangent
+range reduction for finite operands. Native checks use an independent decimal
+reference and the six-ULP binary32 limit in Table 8.1 of the
+`Metal Shading Language Specification
+<https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf>`_.
+Axis results, zero signs, operand copies, evaluation counts and guards are exact.
+This accuracy contract is not a claim of bit-identical transcendental results.
+
+The default preserves represented subnormals. A characterized source execution
+can select an explicit policy:
+
+.. code-block:: toml
+
+   [project.source_options.metal]
+   binary32_atan2_profile = "flush-subnormals"
+
+``preserve-subnormals`` preserves operands and gradual result underflow.
+``flush-subnormals`` replaces subnormal operands with signed zero and flushes
+finite result underflow to positive zero. Exact signed-zero axes are unchanged.
+The latter matches the tested original Metal implementation; it is not a
+universal device assumption. Neither policy modifies stored inputs, normalizes
+readbacks, nor selects a policy for other arithmetic or default/fast intrinsics.
+
+Reports and runtime manifests retain ``binary32Atan2Profile`` when explicitly
+selected. Validation checks it against resolved target/path source options, and
+saved CrossGL retains the selected implementation. Generated Metal and OpenGL
+tests cover both policies; the unchanged Metal control checks the characterized
+flush policy with the same numerical assertions. DirectX native execution is a
+separate required CI gate.
+
+Binary32 remainder
+~~~~~~~~~~~~~~~~~~
+
 Binary32 ``fmod`` has a separate, opt-in operation policy:
 
 .. code-block:: toml

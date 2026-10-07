@@ -1306,6 +1306,7 @@ class MetalToCrossGLConverter:
         binary32_comparison_profile=None,
         binary32_remainder_profile=None,
         binary32_additive_profile=None,
+        binary32_atan2_profile=None,
     ):
         if binary32_fma_profile not in (None, "rne-gradual", "rne-flush"):
             raise ValueError(
@@ -1332,6 +1333,16 @@ class MetalToCrossGLConverter:
                 "'flush-subnormals', or None"
             )
         self.binary32_comparison_profile = binary32_comparison_profile
+        if binary32_atan2_profile not in (
+            None,
+            "preserve-subnormals",
+            "flush-subnormals",
+        ):
+            raise ValueError(
+                "binary32_atan2_profile must be 'preserve-subnormals', "
+                "'flush-subnormals', or None"
+            )
+        self.binary32_atan2_profile = binary32_atan2_profile
         if binary32_remainder_profile not in (
             None,
             "preserve-subnormals",
@@ -1748,6 +1759,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_asin_widths = set()
         self.required_metal_precise_acosh_widths = set()
         self.required_metal_precise_atan_widths = set()
+        self.required_metal_precise_atan2_widths = set()
         self.required_metal_precise_exp_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
@@ -2942,6 +2954,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_asin_widths = set()
         self.required_metal_precise_acosh_widths = set()
         self.required_metal_precise_atan_widths = set()
+        self.required_metal_precise_atan2_widths = set()
         self.required_metal_precise_exp_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
@@ -11288,6 +11301,9 @@ class MetalToCrossGLConverter:
             )
             if materialized_math_call is not None:
                 return materialized_math_call
+            atan2_call = self.generate_metal_precise_atan2_call(expr, is_main)
+            if atan2_call is not None:
+                return atan2_call
             fused_call = self.generate_metal_fma_call(expr, is_main)
             if fused_call is not None:
                 return fused_call
@@ -14168,6 +14184,8 @@ class MetalToCrossGLConverter:
         if self.metal_math_builtin_namespace_mode(text) != "precise":
             return None
         operation = text.rsplit("::", 1)[-1]
+        if operation == "atan2":
+            return self.map_metal_precise_atan2_function_name(args)
         if operation not in {"acos", "asin", "acosh", "atan", "sin", "cos", "exp"}:
             return None
         arguments = list(args or [])
@@ -14260,6 +14278,73 @@ class MetalToCrossGLConverter:
             return self.metal_precise_acosh_helper_name(width)
         self.required_metal_precise_acos_widths.add(width)
         return self.metal_precise_acos_helper_name(width)
+
+    def map_metal_precise_atan2_function_name(self, args):
+        arguments = list(args or [])
+        types = [self.expression_metal_type(argument) for argument in arguments]
+        location = getattr(arguments[0], "source_location", None) if arguments else None
+
+        def unsupported(reason):
+            return MetalPreciseMathLoweringError(
+                "atan2", ", ".join(str(value) for value in types), reason, location
+            )
+
+        if len(arguments) != 2:
+            raise unsupported("the operation requires exactly two operands")
+        if self.current_function is None:
+            raise unsupported(
+                "global initializers cannot call the runtime arctangent helper"
+            )
+        widths = []
+        for value_type in types:
+            info = self.metal_math_builtin_type_info(value_type)
+            if info is None or info["category"] not in {"floating", "bfloat"}:
+                raise unsupported("both operands must have known floating-point types")
+            width = info["width"]
+            scalar = self.metal_scalar_arithmetic_type_info(info["element_type"])
+            if width not in {1, 2, 3, 4} or not (
+                scalar == ("floating", True, 32)
+                or (
+                    width == 1
+                    and (
+                        info["category"] == "bfloat" or scalar == ("floating", True, 16)
+                    )
+                )
+            ):
+                raise unsupported(
+                    "precise arctangent requires binary32 scalar or vector operands"
+                )
+            widths.append(width)
+        if widths[0] != widths[1] and 1 not in widths:
+            raise unsupported("vector operands must have matching widths")
+        width = max(widths)
+        self.required_metal_precise_atan2_widths.add(width)
+        self.required_metal_precise_atan_widths.add(1)
+        return self.metal_precise_atan2_helper_name(width)
+
+    def generate_metal_precise_atan2_call(self, expression, is_main=False):
+        if (
+            self.metal_math_builtin_namespace_mode(expression.name) != "precise"
+            or self.resolve_metal_math_builtin_name(expression.name, expression.args)
+            != "atan2"
+        ):
+            return None
+        name = self.map_metal_precise_atan2_function_name(expression.args)
+        types = [
+            self.metal_math_builtin_type_info(self.expression_metal_type(argument))
+            for argument in expression.args
+        ]
+        width = max(info["width"] for info in types)
+        mapped = "float" if width == 1 else f"vec{width}"
+        arguments = []
+        for argument, info in zip(expression.args, types):
+            value = self.generate_expression(argument, is_main)
+            if info["width"] != width or self.metal_scalar_arithmetic_type_info(
+                info["element_type"]
+            ) != ("floating", True, 32):
+                value = f"{mapped}({value})"
+            arguments.append(value)
+        return f"{name}({', '.join(arguments)})"
 
     def generate_profiled_metal_comparison(self, expression, is_main=False):
         operands = (expression.left, expression.right)
@@ -14617,6 +14702,7 @@ class MetalToCrossGLConverter:
         if not (
             self.required_metal_division_widths
             or self.required_metal_half_remainder_widths
+            or self.required_metal_precise_atan2_widths
         ):
             return ""
         bits = self.metal_precise_math_unique_helper_name(
@@ -15013,6 +15099,7 @@ class MetalToCrossGLConverter:
         independent_code = self.generate_metal_precise_trig_support_code(indent)
         independent_code += self.generate_metal_precise_acosh_support_code(indent)
         independent_code += self.generate_metal_precise_atan_support_code(indent)
+        independent_code += self.generate_metal_precise_atan2_support_code(indent)
         independent_code += self.generate_metal_precise_exp_support_code(indent)
         widths = sorted(self.required_metal_precise_acos_widths)
         if not widths and not self.required_metal_precise_asin_widths:
@@ -15195,6 +15282,74 @@ float {scalar}(float value) {{
             arguments = ", ".join(f"{scalar}(value.{lane})" for lane in "xyzw"[:width])
             code += (
                 f"@precise\n@metal_static\nvec{width} {vector}(vec{width} value) {{\n"
+                f"    return vec{width}({arguments});\n}}\n"
+            )
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
+
+    def metal_precise_atan2_helper_name(self, width):
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            f"atan2-float{suffix}", f"__crossgl_metal_precise_atan2_float{suffix}"
+        )
+
+    def generate_metal_precise_atan2_support_code(self, indent=0):
+        if not self.required_metal_precise_atan2_widths:
+            return ""
+        scalar = self.metal_precise_atan2_helper_name(1)
+        atan = self.metal_precise_atan_helper_name(1)
+        divide = self.metal_precise_math_unique_helper_name(
+            "division-bits", "__crossgl_divide_bits"
+        )
+        flush = "true" if self.binary32_atan2_profile == "flush-subnormals" else "false"
+        # Integer division prevents target denormal handling from changing the ratio.
+        code = f"""@precise
+@metal_static
+float {scalar}(float y, float x) {{
+    uint yBits = asuint(y);
+    uint xBits = asuint(x);
+    if ({flush}) {{
+        if ((yBits & 0x7f800000u) == 0u) {{ yBits &= 0x80000000u; }}
+        if ((xBits & 0x7f800000u) == 0u) {{ xBits &= 0x80000000u; }}
+    }}
+    uint yMagnitude = yBits & 0x7fffffffu;
+    uint xMagnitude = xBits & 0x7fffffffu;
+    uint sign = yBits & 0x80000000u;
+    bool negativeX = (xBits & 0x80000000u) != 0u;
+    if (yMagnitude > 0x7f800000u || xMagnitude > 0x7f800000u) {{
+        return asfloat(0x7fc00000u);
+    }}
+    if (yMagnitude == 0u) {{
+        return asfloat(sign | (negativeX ? 0x40490fdbu : 0u));
+    }}
+    if (xMagnitude == 0u) {{ return asfloat(sign | 0x3fc90fdbu); }}
+    if (yMagnitude == 0x7f800000u) {{
+        uint angleBits = xMagnitude == 0x7f800000u
+            ? (negativeX ? 0x4016cbe4u : 0x3f490fdbu) : 0x3fc90fdbu;
+        return asfloat(sign | angleBits);
+    }}
+    if (xMagnitude == 0x7f800000u) {{
+        return asfloat(sign | (negativeX ? 0x40490fdbu : 0u));
+    }}
+    bool invert = yMagnitude > xMagnitude;
+    uint smaller = invert ? xMagnitude : yMagnitude;
+    uint larger = invert ? yMagnitude : xMagnitude;
+    float ratio = asfloat({divide}(smaller, larger, false));
+    float angle @precise = {atan}(ratio);
+    if (invert) {{ angle = 1.5707963267948966192 - angle; }}
+    if (negativeX) {{ angle = 3.1415926535897932385 - angle; }}
+    uint result = asuint(angle);
+    if ({flush} && (result & 0x7f800000u) == 0u) {{ return asfloat(0u); }}
+    return asfloat(result | sign);
+}}
+"""
+        for width in sorted(self.required_metal_precise_atan2_widths - {1}):
+            vector = self.metal_precise_atan2_helper_name(width)
+            arguments = ", ".join(
+                f"{scalar}(y.{lane}, x.{lane})" for lane in "xyzw"[:width]
+            )
+            code += (
+                f"@precise\n@metal_static\nvec{width} {vector}(vec{width} y, vec{width} x) {{\n"
                 f"    return vec{width}({arguments});\n}}\n"
             )
         pad = "    " * indent
