@@ -150,8 +150,15 @@ The native host's binary32 arithmetic step selects device execution, original
 source controls and Metal module-linkage tests. Configuration, reference-model
 and generation-only checks remain in the complete Ubuntu suite. A workflow
 regression test verifies that the selection includes every opt-in device test
-in the seven arithmetic modules. All numerical inputs, profile variants and
+in the arithmetic modules. All numerical inputs, profile variants and
 guards remain required under the same 120-second bound, without new runners.
+
+Multiplication profiles run in that same step. Exact integer references cover
+subnormal inputs and outputs, normal-range rounding, signed zeros, overflow,
+NaNs, literal zero products, scalar/vector forms and compound assignments.
+Original Metal controls, input copies, output guards and single-evaluation
+counters distinguish arithmetic policies from storage changes. These tests do
+not infer a contraction policy for surrounding additions or subtractions.
 
 The half-remainder profile runs in the existing arithmetic step on each native
 target, with no additional runner. It checks 5,176 input pairs in scalar/vector

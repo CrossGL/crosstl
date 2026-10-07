@@ -1366,6 +1366,37 @@ CrossGL retains the implementation. Native controls characterize only the
 tested source compiler and device; selecting this profile alone does not prove
 whole-project numerical parity or select comparison and remainder policies.
 
+Binary32 multiplication has a separate, opt-in policy:
+
+.. code-block:: toml
+
+   [project.source_options.metal]
+   binary32_multiplication_profile = "rne-flush"
+
+``rne-gradual`` preserves subnormal operands and results. ``rne-flush`` treats
+subnormal operands as signed zero and flushes results whose exact magnitude is
+below the smallest normal value before rounding. Both round to nearest, ties
+to even, preserve the product's zero sign, and canonicalize arithmetic NaNs.
+Integer-word multiplication prevents target constant-folding rules from
+discarding the sign or exceptional result of a literal zero product.
+
+Scalar and vector ``*`` preserve source conversions and bfloat result narrowing;
+wide vectors lower per lane. Proven side-effect-free ``*=`` supports writable
+thread storage, direct buffer elements and indexed vector components. Unknown
+types, global constant expressions requiring runtime helpers and unproven
+compound assignments produce
+``project.translate.metal-multiplication-profile-unsupported``. Source-defined
+operators retain their ownership. Integer, half-only and binary64 arithmetic,
+stored operand words and the other arithmetic profiles are unchanged.
+
+Reports, manifests and runtime packages retain ``binary32MultiplicationProfile``
+and validate it against resolved source, target and path-specific options.
+Saved CrossGL retains the implementation. This profile introduces an explicit
+rounding boundary at each selected product; it does not reproduce a source
+compiler's optional contraction of products with surrounding additions or
+subtractions. Qualify the policy against the source build and device before
+using it for a project. It does not establish whole-project numerical parity.
+
 The legacy MLX copy reference at
 ``846d176227a0ac13d2667e58d2bb68b322109ab0`` proves all 2,496 discovered entries
 from ``copy.metal`` through Metal-to-CrossGL-to-Metal translation. The family

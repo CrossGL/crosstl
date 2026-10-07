@@ -1466,6 +1466,7 @@ jobs:
           CROSTL_REQUIRE_COMPARISON_PROFILE: "1"
           CROSTL_REQUIRE_REMAINDER_PROFILE: "1"
           CROSTL_REQUIRE_ADDITIVE_PROFILE: "1"
+          CROSTL_REQUIRE_MULTIPLICATION_PROFILE: "1"
           CROSTL_REQUIRE_METAL_POWER: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -1485,6 +1486,7 @@ jobs:
               tests/test_translator/test_metal_comparison_profile.py \
               tests/test_translator/test_metal_remainder_profile.py \
               tests/test_translator/test_metal_additive_profile.py \
+              tests/test_translator/test_metal_multiplication_profile.py \
               tests/test_translator/test_metal_power.py \
               2>&1 | tee .mlx-portable-host/fused-math.log
       - name: Checkout and prepare pinned upstream MLX

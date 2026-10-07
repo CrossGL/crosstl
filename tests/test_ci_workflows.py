@@ -3232,9 +3232,11 @@ def test_native_arithmetic_selection_retains_every_device_test():
     assert f'-k "{expression}"' in step
     assert "--timeout-seconds 120" in step
     modules = re.findall(r"tests/test_translator/test_[a-z_]+\.py", step)
-    assert len(modules) == len(set(modules)) == 8
+    assert len(modules) == len(set(modules)) == 9
     assert 'CROSTL_REQUIRE_METAL_POWER: "1"' in step
     assert "tests/test_translator/test_metal_power.py" in modules
+    assert 'CROSTL_REQUIRE_MULTIPLICATION_PROFILE: "1"' in step
+    assert "tests/test_translator/test_metal_multiplication_profile.py" in modules
     selected = set()
     required = set()
     for module in modules:
@@ -3260,7 +3262,7 @@ def test_native_arithmetic_selection_retains_every_device_test():
                 for node in ast.walk(function)
             ):
                 required.add(identity)
-    assert len(required) == 12
+    assert len(required) == 13
     assert selected == required
     full_suite = (WORKFLOW_DIR / "full-tests.yml").read_text()
     assert "runs-on: ubuntu-latest" in full_suite
