@@ -90,6 +90,9 @@ jobs:
             translator-tests.yml
             docs.yml
             examples-test.yml
+            native-host-loader.yml
+            deferred-native-compilation.yml
+            demo-project-testing.yml
           )
 
           for workflow in "${required_workflows[@]}"; do

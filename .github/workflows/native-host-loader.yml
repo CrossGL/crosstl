@@ -9,6 +9,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "pyproject.toml"
       - ".github/workflows/native-host-loader.yml"
       - "crosstl/_crosstl.py"
       - "crosstl/project/native_loader_abi.py"
@@ -38,6 +39,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - "pyproject.toml"
       - ".github/workflows/native-host-loader.yml"
       - "crosstl/_crosstl.py"
       - "crosstl/project/native_loader_abi.py"

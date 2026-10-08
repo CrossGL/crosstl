@@ -321,15 +321,35 @@ def test_release_metadata_must_agree(release_tree, name, text):
         ("completed\tskipped\turl", False),
     ],
 )
+@pytest.mark.parametrize(
+    "workflow",
+    (
+        "full-tests.yml",
+        "native-host-loader.yml",
+        "deferred-native-compilation.yml",
+        "demo-project-testing.yml",
+    ),
+)
 def test_release_gate_requires_successful_main_push_at_exact_commit(
-    tmp_path, status, success
+    tmp_path, status, success, workflow
 ):
+    required = (
+        "full-tests.yml",
+        "backend-tests.yml",
+        "translator-tests.yml",
+        "docs.yml",
+        "examples-test.yml",
+        "native-host-loader.yml",
+        "deferred-native-compilation.yml",
+        "demo-project-testing.yml",
+    )
     gh = tmp_path / "gh"
     log = tmp_path / "calls.jsonl"
     gh.write_text(
         f"#!{sys.executable}\nimport json, os, sys\n"
         "with open(os.environ['CALLS'], 'a') as output: output.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-        "print(os.environ['RUN_STATUS'])\n",
+        "workflow = sys.argv[sys.argv.index('--workflow') + 1]\n"
+        "print(os.environ['RUN_STATUS'] if workflow == os.environ['WORKFLOW'] else 'completed\\tsuccess\\turl')\n",
         encoding="utf-8",
     )
     gh.chmod(0o755)
@@ -338,6 +358,7 @@ def test_release_gate_requires_successful_main_push_at_exact_commit(
         PATH=str(tmp_path) + os.pathsep + os.environ["PATH"],
         CALLS=str(log),
         RUN_STATUS=status,
+        WORKFLOW=workflow,
         GITHUB_SHA="exact-commit",
         GITHUB_REPOSITORY="CrossGL/crosstl",
     )
@@ -357,11 +378,27 @@ def test_release_gate_requires_successful_main_push_at_exact_commit(
     )
     assert (result.returncode == 0) == success, result.stderr
     calls = [json.loads(line) for line in log.read_text().splitlines()]
-    assert len(calls) == (5 if success else 1)
+    checked = required if success else required[: required.index(workflow) + 1]
+    assert [call[call.index("--workflow") + 1] for call in calls] == list(checked)
     for call in calls:
         assert call[call.index("--commit") + 1] == "exact-commit"
         assert call[call.index("--branch") + 1] == "main"
         assert call[call.index("--event") + 1] == "push"
+
+
+def test_native_release_gates_run_for_package_version_changes():
+    for name in (
+        "native-host-loader.yml",
+        "deferred-native-compilation.yml",
+        "demo-project-testing.yml",
+    ):
+        workflow = yaml.load(
+            (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8"),
+            Loader=yaml.BaseLoader,
+        )
+        for event in ("push", "pull_request"):
+            assert "main" in workflow["on"][event]["branches"]
+            assert "pyproject.toml" in workflow["on"][event]["paths"]
 
 
 @pytest.mark.skipif(

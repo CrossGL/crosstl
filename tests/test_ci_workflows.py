@@ -592,6 +592,7 @@ def test_full_suite_runs_fail_closed_windows_directx_native_runtime_smoke():
 def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
     workflow = _workflow_texts().get("native-host-loader.yml", "")
     expected_trigger_paths = {
+        "pyproject.toml",
         ".github/workflows/native-host-loader.yml",
         "crosstl/_crosstl.py",
         "crosstl/project/native_directx_adapter.py",
