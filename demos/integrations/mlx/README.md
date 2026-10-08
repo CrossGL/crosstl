@@ -2940,7 +2940,23 @@ boundaries, zeros, odd tails, two-dimensional dispatch and padded three-dimensio
 strides; all read-only buffers remain unchanged. Reports retain file-level
 provenance, not precise operation mappings. This review updates only the five
 historical unsigned Sign identities and the corresponding scalar-subset entry;
-complex Sign, other dtypes and DirectX/OpenGL references are not covered by it.
+complex Sign, other dtypes and DirectX references are not covered by it.
+
+The same five OpenGL references have a separate full-source and native review.
+The square-root helper change reconstructs each recorded previous source hash;
+interfaces and template specializations are unchanged. Previous sources and
+translations from both MLX revisions compile to byte-identical SPIR-V modules
+with glslang and pass `spirv-val`. Linux software OpenGL execution returns the
+same 3,303 integer results and 40 guards per path as the unchanged Metal kernels
+at both revisions. No generated shader is patched before execution. Only these
+five historical OpenGL fingerprints are updated; complex Sign and other unary
+changes require their own review.
+
+The pinned comparison-arithmetic CI step also exercises unsigned Sign across all
+five layouts through reflected packages, with exact integer comparisons and
+trailing guards. The Metal job additionally runs the unchanged upstream entries
+and checks that their read-only buffers remain unchanged. This is bounded kernel
+and host-binding coverage, not completion of the upstream MLX test suite.
 
 The required family gate covers all 877 unary entries at the legacy reference
 revision `846d176227a0ac13d2667e58d2bb68b322109ab0`, including 694 non-scalar

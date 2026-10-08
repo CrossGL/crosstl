@@ -463,7 +463,7 @@
       1,
       1
     ],
-    "generatedSizeBytesTotal": 4771646,
+    "generatedSizeBytesTotal": 4780991,
     "generatedSizeRange": {
       "minimum": {
         "entryPoint": "v_Absint32int32",
@@ -2071,8 +2071,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "1ad2cc2c21575e71c847bc20c8b425a0ec4e13c322e7fffb9118e5bed8267154",
-      "sizeBytes": 6982
+      "sha256": "351b8c231b19765577e8ffc8083b5bfea40f78c600729c2ad50296f5f6dbf73d",
+      "sizeBytes": 8851
     },
     {
       "entryPoint": "gn1_Signuint64uint64",
@@ -4084,8 +4084,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "13fbf638f7fe492f2b6acdb031a711eb0b1b5f0317bb0f6c2a2063190c474a2f",
-      "sizeBytes": 7044
+      "sha256": "1ac4aa3d3a0366afe852349d373120c94d7f67cebd6aa05e2fe8549cec9c874f",
+      "sizeBytes": 8913
     },
     {
       "entryPoint": "gn4large_Signuint64uint64",
@@ -6097,8 +6097,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "cd3f15d322b5b1a397058176a718bad1260796cd73cd9e5b72c8232a8e52bf5f",
-      "sizeBytes": 6212
+      "sha256": "c760609d74002efcea82268c6ffbea84c608adfe000cac40ae937e87a92bb3a9",
+      "sizeBytes": 8081
     },
     {
       "entryPoint": "v2_Signuint64uint64",
@@ -8110,8 +8110,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "bbfaa7fd6c85212aaa1e107f44c677818d45156bd4d410450a839414cf5d92ba",
-      "sizeBytes": 5686
+      "sha256": "d5c7458b9ca305116c6e0cbc794e3828811a2071a6288dd11a7cee87aca1ede5",
+      "sizeBytes": 7555
     },
     {
       "entryPoint": "v_Signuint64uint64",
@@ -9804,8 +9804,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "6a705bc4597b98089236b81ef0f31a03d2eb84e36d263d0b9d6457df8ed4ef82",
-      "sizeBytes": 5985
+      "sha256": "b56c8eabab32c8bdc75e3ef3e0e13615933bd89abb0eabe23eeb09b955cfeb99",
+      "sizeBytes": 7854
     },
     {
       "entryPoint": "vn_Signuint8uint8",
