@@ -55,7 +55,9 @@ def test_pinned_binary_step_selects_every_native_case_without_portable_duplicate
     tokens = shlex.split(command.replace("\\\n", " "))
     selected = [token for token in tokens if ".py::test_" in token]
     assert len(selected) == len(set(selected)) == 10
-    assert [token.split("::")[0].rsplit("/", 1)[1] for token in selected[:2]] == [
+    # Keep the long integer batch away from the tail, where a worker can sit idle.
+    assert [token.split("::")[0].rsplit("/", 1)[1] for token in selected[:3]] == [
+        "test_current_integer_remainder.py",
         "test_current_floating_binary.py",
         "test_current_binary_shapes.py",
     ]
