@@ -1314,9 +1314,11 @@ bits, including the boundary above which all represented integers are even.
 This avoids target-dependent negative-base behavior and out-of-range integer
 conversions. Scalar and two- to four-lane calls evaluate each argument once;
 scalar broadcasts, half return narrowing and materialized standard-library
-bfloat wrappers retain their conversion boundaries. Calls with a subnormal
-operand keep their existing target-native path; the new domain handling does
-not impose a subnormal policy. Source-defined functions
+bfloat wrappers retain their conversion boundaries. An exponent of exactly one
+returns the base without arithmetic, preserving finite values, subnormals,
+signed zeros and infinities exactly. Other calls with a subnormal operand keep
+their existing target-native path; the domain handling does not impose a
+general subnormal policy. Source-defined functions
 and explicit fast-mode calls keep their separate implementations.
 
 Saved CrossGL retains these helpers. Global initializers requiring the runtime
@@ -1324,8 +1326,11 @@ helper produce ``project.translate.metal-precise-math-unsupported``. Native
 regressions compare domain results exactly and selected ordinary finite results
 against an independent decimal reference, including unchanged Metal source
 execution. Binary32 controls use the specification's 16-ULP power bound; selected
-half controls use a one-storage-ULP regression bound. NaN payload identity is not
-claimed. Positive finite arithmetic still uses the target's intrinsic: these
+half controls use a one-storage-ULP regression bound. Separate identity controls
+require exact results across all binary32 exponent classes, boundary
+significands and deterministic sampled inputs, with original Metal execution,
+evaluation counters and buffer guards. NaN payload identity is not claimed.
+Other positive finite arithmetic still uses the target's intrinsic: these
 checks do not establish full-domain accuracy, a shared subnormal policy, or
 complete project numerical parity.
 

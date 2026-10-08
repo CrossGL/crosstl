@@ -3262,7 +3262,11 @@ def test_native_arithmetic_selection_retains_every_device_test():
                 for node in ast.walk(function)
             ):
                 required.add(identity)
-    assert len(required) == 13
+    assert len(required) == 14
+    assert (
+        "tests/test_translator/test_metal_power.py",
+        "test_power_executes_exact_identity",
+    ) in required
     assert selected == required
     full_suite = (WORKFLOW_DIR / "full-tests.yml").read_text()
     assert "runs-on: ubuntu-latest" in full_suite

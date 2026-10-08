@@ -14562,6 +14562,10 @@ float {scalar}(float base, float exponent) {{
     uint b = asuint(exponent);
     uint magnitude = a & 0x7fffffffu;
     uint power = b & 0x7fffffffu;
+    // Preserve the identity without passing subnormals through arithmetic.
+    if (b == 0x3f800000u) {{
+        return base;
+    }}
     // Keep existing subnormal behavior until a source policy is selected.
     if ((magnitude != 0u && magnitude < 0x00800000u) ||
         (power != 0u && power < 0x00800000u)) {{

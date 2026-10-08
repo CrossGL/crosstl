@@ -3,6 +3,7 @@
 import json
 import math
 import os
+import random
 import struct
 import sys
 from decimal import Decimal, localcontext
@@ -71,6 +72,42 @@ kernel void powers(const device uint* values [[buffer(0)]],
 }
 """
 
+IDENTITY_FIELDS = 16
+IDENTITY_SOURCE = """#include <metal_stdlib>
+using namespace metal;
+float record(thread uint& count, float value) { count += 1; return value; }
+float pow(float a, float b) { return b; }
+kernel void powers(const device uint* values [[buffer(0)]],
+                   device uint* results [[buffer(1)]],
+                   uint i [[thread_position_in_grid]]) {
+    float a = as_type<float>(values[2u * i]);
+    float b = as_type<float>(values[2u * i + 1u]);
+    float na = as_type<float>(values[2u * i] ^ 0x80000000u);
+    uint count = 0;
+    float value = metal::pow(record(count, a), record(count, b));
+    float2 pair = metal::pow(float2(a, na), float2(b));
+    float3 triple = precise::pow(float3(a, na, a), b);
+    float4 quad = metal::precise::pow(float4(a, na, a, na), float4(b));
+    float2 broadcast = metal::pow(a, float2(b));
+    results[4u + 16u * i] = as_type<uint>(a);
+    results[5u + 16u * i] = as_type<uint>(b);
+    results[6u + 16u * i] = as_type<uint>(value);
+    results[7u + 16u * i] = as_type<uint>(metal::precise::pow(a, b));
+    results[8u + 16u * i] = as_type<uint>(pair.x);
+    results[9u + 16u * i] = as_type<uint>(pair.y);
+    results[10u + 16u * i] = as_type<uint>(triple.x);
+    results[11u + 16u * i] = as_type<uint>(triple.y);
+    results[12u + 16u * i] = as_type<uint>(triple.z);
+    results[13u + 16u * i] = as_type<uint>(quad.x);
+    results[14u + 16u * i] = as_type<uint>(quad.y);
+    results[15u + 16u * i] = as_type<uint>(quad.z);
+    results[16u + 16u * i] = as_type<uint>(quad.w);
+    results[17u + 16u * i] = as_type<uint>(broadcast.y);
+    results[18u + 16u * i] = count;
+    results[19u + 16u * i] = as_type<uint>(::pow(a, b));
+}
+"""
+
 
 def _translate(tmp_path, source=SOURCE, target="crossgl"):
     path = tmp_path / "power.metal"
@@ -79,8 +116,11 @@ def _translate(tmp_path, source=SOURCE, target="crossgl"):
 
 
 @pytest.mark.parametrize("target", ("directx", "opengl", "metal"))
-def test_power_domain_helpers_compile(tmp_path, target):
-    generated = _translate(tmp_path, target=target)
+@pytest.mark.parametrize(
+    "source", (SOURCE, IDENTITY_SOURCE), ids=("domain", "identity")
+)
+def test_power_domain_helpers_compile(tmp_path, target, source):
+    generated = _translate(tmp_path, source=source, target=target)
     for suffix in ("", "2", "3", "4"):
         assert f"metal_power_float{suffix}(" in generated
     _compile(
@@ -330,6 +370,119 @@ def test_power_reference_and_comparison_preserve_domain_contracts():
         changed[index] ^= 0x80000000
         with pytest.raises(AssertionError):
             _check(changed, pairs)
+
+
+def _identity_pairs():
+    words = {
+        sign | exponent << 23 | fraction
+        for sign in (0, 0x80000000)
+        for exponent in range(256)
+        for fraction in (0, 1, 0x3FFFFF, 0x7FFFFE, 0x7FFFFF)
+    }
+    generator = random.Random(2121)
+    words.update(generator.getrandbits(32) for _ in range(2048))
+    words.update(
+        sign | generator.randrange(1, 0x800000)
+        for sign in (0, 0x80000000)
+        for _ in range(512)
+    )
+    return [(word, 0x3F800000) for word in sorted(words)]
+
+
+def _identity_expected(pairs):
+    words = [GUARD] * 4
+    for a, b in pairs:
+        assert b == 0x3F800000
+        opposite = a ^ 0x80000000
+        words.extend(
+            (a, b, a, a, a, opposite, a, opposite, a, a, opposite, a, opposite, a, 2, b)
+        )
+    return words + [GUARD] * 4
+
+
+def _check_identity(actual, pairs):
+    expected = _identity_expected(pairs)
+    assert len(actual) == len(expected) == IDENTITY_FIELDS * len(pairs) + 8
+    assert actual[:4] == actual[-4:] == [GUARD] * 4, "guards"
+    for i, (a, b) in enumerate(pairs):
+        row = actual[4 + IDENTITY_FIELDS * i : 4 + IDENTITY_FIELDS * (i + 1)]
+        want = expected[4 + IDENTITY_FIELDS * i : 4 + IDENTITY_FIELDS * (i + 1)]
+        assert row[:2] == [a, b], "operand copies"
+        assert row[-2:] == [2, b], "evaluation count and source overload"
+        for got, reference in zip(row[2:-2], want[2:-2]):
+            assert type(got) is int and 0 <= got <= 0xFFFFFFFF
+            if reference & 0x7FFFFFFF > 0x7F800000:
+                assert got & 0x7FFFFFFF > 0x7F800000, "NaN classification"
+            else:
+                assert got == reference, (i, hex(a), hex(got), hex(reference))
+
+
+def test_power_identity_preserves_raw_values_and_evaluation_contracts():
+    pairs = _identity_pairs()
+    assert {a >> 23 & 255 for a, _ in pairs} == set(range(256))
+    assert (1, 0x3F800000) in pairs and (0x807FFFFF, 0x3F800000) in pairs
+    expected = _identity_expected(pairs)
+    _check_identity(expected, pairs)
+    for index in (
+        0,
+        4,
+        6,
+        4 + IDENTITY_FIELDS - 2,
+        4 + IDENTITY_FIELDS - 1,
+        len(expected) - 1,
+    ):
+        changed = expected.copy()
+        changed[index] ^= 1
+        with pytest.raises(AssertionError):
+            _check_identity(changed, pairs)
+
+
+@pytest.mark.parametrize("source_control", (False, True))
+def test_power_executes_exact_identity(tmp_path, source_control, monkeypatch):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for native power checks")
+    from tests.test_translator import test_fused_math as native_math
+
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    if source_control and target != "metal":
+        pytest.skip("The unchanged source control requires Metal")
+    monkeypatch.setattr(
+        native_math,
+        "_compile",
+        partial(_compile, metal_compile_flags=("-fno-fast-math",)),
+    )
+    pairs = _identity_pairs()
+    expected = _identity_expected(pairs)
+    source = (
+        IDENTITY_SOURCE
+        if source_control
+        else _translate(tmp_path, source=IDENTITY_SOURCE, target=target)
+    )
+    actual, evidence = native_math._dispatch(
+        tmp_path,
+        target,
+        source,
+        pairs,
+        len(expected),
+        entry="powers" if target == "metal" else None,
+        initial_output=[GUARD] * len(expected),
+    )
+    (tmp_path / "expected.json").write_text(json.dumps(expected))
+    _check_identity(actual, pairs)
+    (tmp_path / "evidence.json").write_text(
+        json.dumps(
+            {
+                **evidence,
+                "sourceControl": source_control,
+                "pairCount": len(pairs),
+                "valueCount": 12 * len(pairs),
+                "guardCount": 8,
+                "maximumStorageUlpError": 0,
+                "generalPowerSubnormalParityVerified": False,
+            },
+            indent=2,
+        )
+    )
 
 
 @pytest.mark.parametrize("source_control", (False, True))
