@@ -33,8 +33,8 @@ MLX_QUANTIZED_SHA256 = (
 )
 MLX_QUANTIZED_ENTRY = "affine_quantize_float_gs_32_b_2"
 MLX_QUANTIZED_OPENGL_ARTIFACT = {
-    "sha256": "e4d8e5931bfc93f81e2c3686c102a1d676c9a3dcdfd6447e90918aa7581beecb",
-    "sizeBytes": 6642,
+    "sha256": "61cc1cf6f33ecab9919191db3f68bf57267d549fb3d638d595d464e68d2f494c",
+    "sizeBytes": 7949,
 }
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_QUANTIZED_OPENGL_NATIVE_LOADER"
 
@@ -165,9 +165,17 @@ def _translate_affine_artifact(mlx_root: Path, work_dir: Path) -> Path:
     assert materialization["status"] == "materialized"
     assert materialization["specializationCount"] == 3
     assert materialization["accounting"] == {
-        "reachableSpecializationCount": 9,
+        "reachableSpecializationCount": 8,
         "dependencyDiscoveryWorkCount": 0,
         "prunedCandidateCount": 104702,
+    }
+    assert {
+        (item["name"], item["materializedName"])
+        for item in materialization["specializations"]
+    } == {
+        ("affine_quantize", MLX_QUANTIZED_ENTRY),
+        ("get_bytes_per_pack", "get_bytes_per_pack_2"),
+        ("get_pack_factor", "get_pack_factor_2_8"),
     }
     affine = next(
         item
@@ -203,8 +211,10 @@ def _translate_affine_artifact(mlx_root: Path, work_dir: Path) -> Path:
     assert "w_min = crossglSoftwareSubgroupMinFloat(w_min);" in generated
     assert "w_max = crossglSoftwareSubgroupMaxFloat(w_max);" in generated
     assert (
-        "uint sval = crossglSoftwareSubgroupShuffleDownUint(val, uint(j));" in generated
+        "uint sval = crossglSoftwareSubgroupShuffleDownUint(val, "
+        "uint((uint(j) & 65535u)));" in generated
     )
+    assert "float q0 = crossgl_metal_round_float(float((edge / scale)));" in generated
     assert generated.count("barrier();") == 8
     assert (
         "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;" in generated
@@ -337,7 +347,14 @@ def _build_runtime_package(mlx_root: Path, work_dir: Path) -> tuple[dict, Path]:
     return descriptor, package_dir
 
 
-def test_pinned_mlx_quantized_affine_executes_through_opengl_native_loader():
+@pytest.mark.parametrize(
+    "input_pattern,packed_value",
+    (([0.0, 1.0, 2.0, 3.0], 27), ([0.0, 0.5, 1.5, 3.0], 47)),
+    ids=("endpoints", "midpoints"),
+)
+def test_pinned_mlx_quantized_affine_executes_through_opengl_native_loader(
+    input_pattern, packed_value
+):
     mlx_root = _pinned_mlx_root()
     with tempfile.TemporaryDirectory(
         prefix=".crosstl-quantized-affine-opengl-native-loader-",
@@ -347,7 +364,7 @@ def test_pinned_mlx_quantized_affine_executes_through_opengl_native_loader():
             mlx_root,
             Path(temporary_directory),
         )
-        input_values = [0.0, 1.0, 2.0, 3.0] * 8
+        input_values = input_pattern * 8
         request = build_native_loader_dispatch_request(
             descriptor,
             package_dir,
@@ -362,7 +379,7 @@ def test_pinned_mlx_quantized_affine_executes_through_opengl_native_loader():
                 "out_Buffer": {
                     "dtype": "uint32",
                     "shape": [8],
-                    "values": [27] * 8,
+                    "values": [packed_value] * 8,
                 },
                 "scalesBuffer": {
                     "dtype": "float32",
@@ -407,7 +424,7 @@ def test_pinned_mlx_quantized_affine_executes_through_opengl_native_loader():
     assert result.outputs["out_Buffer"] == {
         "dtype": "uint32",
         "shape": [8],
-        "values": [27] * 8,
+        "values": [packed_value] * 8,
     }
     assert result.outputs["scalesBuffer"]["values"] == pytest.approx(
         [-1.0], abs=1e-6, rel=1e-6

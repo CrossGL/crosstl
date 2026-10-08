@@ -2508,8 +2508,8 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert opengl_quantized["native_validation_attempted"] is True
     assert opengl_quantized["native_validation_status"] == "passed"
     assert opengl_quantized["generated_glsl"] == {
-        "sha256": "e4d8e5931bfc93f81e2c3686c102a1d676c9a3dcdfd6447e90918aa7581beecb",
-        "size_bytes": 6642,
+        "sha256": "61cc1cf6f33ecab9919191db3f68bf57267d549fb3d638d595d464e68d2f494c",
+        "size_bytes": 7949,
     }
     assert opengl_quantized["software_subgroup"] == {
         "configuration": (
@@ -9800,7 +9800,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "`gindex`" in readme
     assert "`out_index / writes_per_reduce`" in readme
     assert "inclusive bounds `[0, 2147483647]`" in normalized_readme
-    assert "6,642 bytes" in normalized_readme
+    assert "7,949 bytes" in normalized_readme
     assert "`CROSSTL_SOFTWARE_SUBGROUP_WIDTH`" in readme
     assert "eight control barriers" in normalized_readme
     assert "no group-nonuniform instruction" in normalized_readme
@@ -9809,7 +9809,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "not inferred or enforced at runtime" in normalized_readme
     assert "eight packed `uint32` values of `27`" in normalized_readme
     assert "scale `-1`, and bias `3`" in normalized_readme
-    assert "one deterministic affine-quantize workload" in normalized_readme
+    assert "two bounded affine-quantize workloads" in normalized_readme
+    assert "eight packed values of `47`" in normalized_readme
     for issue in (1497, 1515, 1799, 1800, 1801, 1802, 1894):
         assert f"https://github.com/CrossGL/crosstl/issues/{issue}" in readme
 
@@ -9881,7 +9882,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         "max_template_materialization_work": 4096,
     }
     assert opengl["materialization"] == {
-        "reachable_specialization_count": 9,
+        "reachable_specialization_count": 8,
         "concrete_specialization_count": 3,
         "dependency_discovery_work_count": 0,
         "pruned_candidate_count": 104702,
@@ -9912,8 +9913,15 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         "observed_failure_count": 0,
     }
     assert opengl["generated_glsl"] == {
-        "sha256": "e4d8e5931bfc93f81e2c3686c102a1d676c9a3dcdfd6447e90918aa7581beecb",
-        "size_bytes": 6642,
+        "sha256": "61cc1cf6f33ecab9919191db3f68bf57267d549fb3d638d595d464e68d2f494c",
+        "size_bytes": 7949,
+    }
+    assert opengl["midpoint_workload"] == {
+        "input_pattern": [0.0, 0.5, 1.5, 3.0],
+        "pattern_repetitions": 8,
+        "packed_values": [47] * 8,
+        "scale": -1.0,
+        "bias": 3.0,
     }
     assert opengl["software_subgroup"]["width"] == 32
     assert opengl["software_subgroup"]["control_barrier_instruction_count"] == 8

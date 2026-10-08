@@ -1302,7 +1302,7 @@ MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE = {
         "max_template_materialization_work": 4096,
     },
     "materialization": {
-        "reachable_specialization_count": 9,
+        "reachable_specialization_count": 8,
         "concrete_specialization_count": 3,
         "dependency_discovery_work_count": 0,
         "pruned_candidate_count": 104702,
@@ -1347,8 +1347,8 @@ MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE = {
         "unsupported_contract_behavior": "reject-before-artifact-emission",
     },
     "generated_glsl": {
-        "sha256": "e4d8e5931bfc93f81e2c3686c102a1d676c9a3dcdfd6447e90918aa7581beecb",
-        "size_bytes": 6642,
+        "sha256": "61cc1cf6f33ecab9919191db3f68bf57267d549fb3d638d595d464e68d2f494c",
+        "size_bytes": 7949,
     },
     "required_capabilities": [],
     "artifact_emitted": True,
@@ -1411,7 +1411,14 @@ MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE = {
     "mlx_host_runtime_integration_included": False,
     "numerical_parity_claimed": True,
     "runtime_parity_claimed": True,
-    "parity_scope": "one deterministic affine_quantize_float_gs_32_b_2 workload",
+    "parity_scope": "endpoint and midpoint affine_quantize_float_gs_32_b_2 workloads",
+    "midpoint_workload": {
+        "input_pattern": [0.0, 0.5, 1.5, 3.0],
+        "pattern_repetitions": 8,
+        "packed_values": [47] * 8,
+        "scale": -1.0,
+        "bias": 3.0,
+    },
 }
 MLX_OPENGL_LOGSUMEXP_SOFTWARE_RUNTIME_EVIDENCE = {
     "status": "translated-toolchain-validated-native-loader-required",

@@ -1624,9 +1624,9 @@ barriers, emits `CROSSTL_SOFTWARE_SUBGROUP_WIDTH`, and emits no KHR subgroup
 extension, `gl_Subgroup*` use, `CROSSTL_REQUIRED_SUBGROUP_WIDTH`, or hardware
 subgroup-width runtime metadata.
 
-The exact generated GLSL is 6,642 bytes with SHA-256
-`e4d8e5931bfc93f81e2c3686c102a1d676c9a3dcdfd6447e90918aa7581beecb`.
-Materialization records three concrete and nine reachable specializations, zero
+The exact generated GLSL is 7,949 bytes with SHA-256
+`61cc1cf6f33ecab9919191db3f68bf57267d549fb3d638d595d464e68d2f494c`.
+Materialization records three concrete and eight reachable specializations, zero
 dependency-discovery work, and 104,702 pruned candidates. Linux CI compiles it
 for OpenGL/SPIR-V 1.3 with `glslangValidator`; `spirv-val` accepts the module,
 whose disassembly contains eight control barriers and no group-nonuniform
@@ -1635,9 +1635,14 @@ instruction. The runtime package reflects `wBuffer` at binding 0 and the
 bindings 1 through 3. Through surfaceless EGL and Mesa software OpenGL, one
 32-thread dispatch transforms `[0, 1, 2, 3]` repeated eight times into eight
 packed `uint32` values of `27`, scale `-1`, and bias `3`.
+A second dispatch uses `[0, 0.5, 1.5, 3]` repeated eight times and requires
+eight packed values of `47`, with the same scale and bias. This midpoint case
+checks Metal's halfway-away rounding; the generated helper also preserves the
+source's narrow shuffle operand conversion. The shader reference was reviewed
+against original Metal endpoint and midpoint readbacks before being updated.
 
 This is exact translation, packaging, native execution, and numerical parity
-for that one deterministic affine-quantize workload. It does not redirect the
+for these two bounded affine-quantize workloads. It does not redirect the
 MLX host runtime, run MLX's test suite, cover other quantized entries, or turn
 the constrained software subgroup mode into a general divergent-subgroup
 implementation. [#1515](https://github.com/CrossGL/crosstl/issues/1515) records
