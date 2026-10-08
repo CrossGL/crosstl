@@ -1329,6 +1329,7 @@ class MetalToCrossGLConverter:
         binary32_atan2_profile=None,
         binary32_log_profile=None,
         binary32_sqrt_profile=None,
+        binary32_rsqrt_profile=None,
     ):
         if binary32_fma_profile not in (None, "rne-gradual", "rne-flush"):
             raise ValueError(
@@ -1385,6 +1386,16 @@ class MetalToCrossGLConverter:
                 "'flush-subnormals', or None"
             )
         self.binary32_sqrt_profile = binary32_sqrt_profile
+        if binary32_rsqrt_profile not in (
+            None,
+            "preserve-subnormals",
+            "flush-subnormals",
+        ):
+            raise ValueError(
+                "binary32_rsqrt_profile must be 'preserve-subnormals', "
+                "'flush-subnormals', or None"
+            )
+        self.binary32_rsqrt_profile = binary32_rsqrt_profile
         if binary32_remainder_profile not in (
             None,
             "preserve-subnormals",
@@ -1811,6 +1822,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_exp_widths = set()
         self.required_metal_precise_log_widths = set()
         self.required_metal_precise_sqrt_widths = set()
+        self.required_metal_precise_rsqrt_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
         self.required_metal_division_widths = set()
@@ -3011,6 +3023,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_exp_widths = set()
         self.required_metal_precise_log_widths = set()
         self.required_metal_precise_sqrt_widths = set()
+        self.required_metal_precise_rsqrt_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
         self.required_metal_division_widths = set()
@@ -14257,6 +14270,7 @@ class MetalToCrossGLConverter:
             "exp",
             "log",
             "sqrt",
+            "rsqrt",
         }:
             return None
         arguments = list(args or [])
@@ -14371,6 +14385,23 @@ class MetalToCrossGLConverter:
                 )
             self.required_metal_precise_sqrt_widths.add(width)
             return self.metal_precise_sqrt_helper_name(width)
+        if operation == "rsqrt":
+            if not binary32_operand:
+                raise MetalPreciseMathLoweringError(
+                    operation,
+                    operand_type,
+                    "precise reciprocal-square-root lowering requires binary32 operands",
+                    source_location,
+                )
+            if self.current_function is None:
+                raise MetalPreciseMathLoweringError(
+                    operation,
+                    operand_type,
+                    "global initializers cannot call the runtime reciprocal-square-root helper",
+                    source_location,
+                )
+            self.required_metal_precise_rsqrt_widths.add(width)
+            return self.metal_precise_rsqrt_helper_name(width)
         if operation == "acosh":
             if not binary32_operand:
                 raise MetalPreciseMathLoweringError(
@@ -15409,6 +15440,7 @@ float {scalar}(float base, float exponent) {{
         independent_code += self.generate_metal_precise_exp_support_code(indent)
         independent_code += self.generate_metal_precise_log_support_code(indent)
         independent_code += self.generate_metal_precise_sqrt_support_code(indent)
+        independent_code += self.generate_metal_precise_rsqrt_support_code(indent)
         widths = sorted(self.required_metal_precise_acos_widths)
         if not widths and not self.required_metal_precise_asin_widths:
             return independent_code
@@ -15602,6 +15634,89 @@ float {scalar}(float value) {{
 """
         for width in sorted(self.required_metal_precise_sqrt_widths - {1}):
             vector = self.metal_precise_sqrt_helper_name(width)
+            arguments = ", ".join(f"{scalar}(value.{lane})" for lane in "xyzw"[:width])
+            code += (
+                f"@precise\n@metal_static\nvec{width} {vector}(vec{width} value) {{\n"
+                f"    return vec{width}({arguments});\n}}\n"
+            )
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
+
+    def metal_precise_rsqrt_helper_name(self, width):
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            f"rsqrt-float{suffix}", f"__crossgl_metal_precise_rsqrt_float{suffix}"
+        )
+
+    def generate_metal_precise_rsqrt_support_code(self, indent=0):
+        if not self.required_metal_precise_rsqrt_widths:
+            return ""
+        scalar = self.metal_precise_rsqrt_helper_name(1)
+        flush = "true" if self.binary32_rsqrt_profile == "flush-subnormals" else "false"
+        # For even source exponent, the output significand is sqrt(2^71 / m).
+        # Keep both division and integer-root remainders: if Q = n*n + S,
+        # compare S + R/m with n + 1/4 to round once at the output midpoint.
+        code = f"""@precise
+@metal_static
+float {scalar}(float value) {{
+    uint bits = asuint(value);
+    uint magnitude = bits & 0x7fffffffu;
+    uint sign = bits & 0x80000000u;
+    if ({flush} && magnitude < 0x00800000u) {{ magnitude = 0u; }}
+    if (magnitude == 0u) {{ return asfloat(sign | 0x7f800000u); }}
+    if (magnitude > 0x7f800000u || sign != 0u) {{ return asfloat(0x7fc00000u); }}
+    if (magnitude == 0x7f800000u) {{ return 0.0f; }}
+    int exponent = int(magnitude >> 23u) - 127;
+    uint significand = magnitude & 0x007fffffu;
+    if (exponent == -127) {{
+        exponent = -126;
+        while ((significand & 0x00800000u) == 0u) {{
+            significand <<= 1u;
+            exponent -= 1;
+        }}
+    }} else {{ significand |= 0x00800000u; }}
+    if ((exponent & 1) != 0) {{
+        significand <<= 1u;
+        exponent -= 1;
+    }}
+    if (significand == 0x00800000u) {{
+        return asfloat(uint(-exponent / 2 + 127) << 23u);
+    }}
+    uint remainder = 0x00800000u;
+    uint high = 0u;
+    uint low = 0u;
+    for (int digit = 0; digit < 48; digit += 1) {{
+        remainder <<= 1u;
+        high = (high << 1u) | (low >> 31u);
+        low <<= 1u;
+        if (remainder >= significand) {{
+            remainder -= significand;
+            low |= 1u;
+        }}
+    }}
+    uint root = 0u;
+    uint residual = 0u;
+    for (int digit = 0; digit < 24; digit += 1) {{
+        residual = (residual << 2u) | (high >> 14u);
+        high = ((high << 2u) & 0xffffu) | (low >> 30u);
+        low <<= 2u;
+        root <<= 1u;
+        uint trial = (root << 1u) | 1u;
+        if (residual >= trial) {{
+            residual -= trial;
+            root |= 1u;
+        }}
+    }}
+    if (residual > root || (residual == root &&
+        ((remainder << 2u) > significand ||
+         ((remainder << 2u) == significand && (root & 1u) != 0u)))) {{
+        root += 1u;
+    }}
+    return asfloat((uint(-exponent / 2 + 126) << 23u) + root - 0x00800000u);
+}}
+"""
+        for width in sorted(self.required_metal_precise_rsqrt_widths - {1}):
+            vector = self.metal_precise_rsqrt_helper_name(width)
             arguments = ", ".join(f"{scalar}(value.{lane})" for lane in "xyzw"[:width])
             code += (
                 f"@precise\n@metal_static\nvec{width} {vector}(vec{width} value) {{\n"

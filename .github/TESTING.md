@@ -279,6 +279,10 @@ The same step requires correctly rounded precise square roots with preserved
 and flushed subnormal inputs, vector and composed results, exhaustive non-NaN
 half/bfloat scalar promotion, single evaluation and guards. Finite outputs are
 bit-exact against an independent decimal reference, not an approximate tolerance.
+Precise reciprocal square roots share this step and its unchanged deadline.
+Their 21,026 binary32 inputs cover reciprocal output midpoints and both
+subnormal policies; scalar/vector and nested results, exhaustive non-NaN
+half/bfloat promotion, single evaluation and guards are checked independently.
 The byte-conversion step also covers writable scalar/vector arguments, nested
 calls, aliases, indexed locations and lazy conditional calls. Signed and unsigned
 overflow checks retain output guards and original Metal comparisons. Separate

@@ -1278,6 +1278,32 @@ validate it against resolved target/path options. Saved CrossGL retains the
 implementation. Required native checks share the existing project-demo runners;
 the contract does not establish complete project numerical parity.
 
+Precise reciprocal square roots
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Metal ``precise::rsqrt`` and ``metal::precise::rsqrt`` use correctly rounded
+binary32 helpers for scalar and two- to four-lane calls. Scalar half and bfloat
+arguments promote to binary32. Default/fast calls and source-owned functions
+are unchanged; unsupported operands and global runtime initializers produce
+``project.translate.metal-precise-math-unsupported``.
+
+The helper retains both the division remainder and the integer square-root
+remainder until final nearest-even rounding. It uses only bounded 32-bit integer
+arithmetic, without target reciprocal-root approximations or an intermediate
+rounded square root. Native tests use an independent 120-digit decimal reference,
+including reciprocal output midpoints and nested calls. Signed zeros produce
+signed infinities; positive infinity produces positive zero; negative nonzero
+operands and NaNs produce NaN.
+
+The default preserves subnormal operands. A characterized source may select
+``binary32_rsqrt_profile = "flush-subnormals"`` in its Metal source options to
+treat subnormal operands as signed zero. ``preserve-subnormals`` remains an
+explicit alternative. The policy is independent of ``binary32_sqrt_profile``
+and does not alter stored operands or readbacks. Reports and runtime packages
+retain ``binary32RsqrtProfile`` and validate it against resolved target/path
+options; saved CrossGL retains the implementation. Native source controls
+characterize the selected policy on the tested Metal compiler and device.
+
 Power-function domains
 ~~~~~~~~~~~~~~~~~~~~~~
 

@@ -1601,6 +1601,7 @@ jobs:
           CROSTL_REQUIRE_METAL_PRECISE_EXP: "1"
           CROSTL_REQUIRE_METAL_PRECISE_LOG: "1"
           CROSTL_REQUIRE_METAL_PRECISE_SQRT: "1"
+          CROSTL_REQUIRE_METAL_PRECISE_RSQRT: "1"
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_TRIG: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -1619,6 +1620,8 @@ jobs:
               tests/test_translator/test_metal_precise_log.py::test_precise_log_promotes_narrow_alias_once \
               tests/test_translator/test_metal_precise_sqrt.py::test_precise_sqrt_executes \
               tests/test_translator/test_metal_precise_sqrt.py::test_precise_sqrt_promotes_narrow_alias_once \
+              tests/test_translator/test_metal_precise_rsqrt.py::test_precise_rsqrt_executes \
+              tests/test_translator/test_metal_precise_rsqrt.py::test_precise_rsqrt_promotes_narrow_alias_once \
               demos/integrations/mlx/tests/kernels/test_current_unary_trig.py \
               2>&1 | tee .mlx-portable-host/unary-fma.log
       - name: Validate pinned inverse hyperbolic cosine
