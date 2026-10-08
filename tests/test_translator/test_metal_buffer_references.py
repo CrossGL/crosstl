@@ -20,6 +20,7 @@ from crosstl.project.native_loader_abi import _binding_descriptors
 from crosstl.project.native_loader_dispatch import _validated_scalar_layout
 from crosstl.project.runtime_verification import RuntimeAllocationView, RuntimeValue
 from tests.runtime_helpers import _prepare_native_package, _validate
+from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_native_loader_dispatch import _write_descriptor
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
@@ -246,6 +247,139 @@ def _request(descriptor, package, inputs, outputs, target):
         {"workgroupCount": [1, 1, 1], "workgroupSize": [1, 1, 1]},
         expected_target=target,
     )
+
+
+def _reserved_reference_source(qualifier, name, collision):
+    additional = f", {qualifier} const int& {name}_ [[buffer(1)]]" if collision else ""
+    operand = f"{name}_" if collision else "17"
+    return f"""#include <metal_stdlib>
+using namespace metal;
+kernel void references({qualifier} const int& {name} [[buffer(0)]]{additional},
+                       device int* result [[buffer(2)]]) {{
+    result[1] = {name} + {operand};
+    result[2] = {name} - {operand};
+}}
+"""
+
+
+@pytest.mark.parametrize("qualifier", ["device", "constant"])
+@pytest.mark.parametrize("name", ["sample", "patch", "subroutine", "common"])
+@pytest.mark.parametrize("collision", [False, True])
+def test_glsl_reference_keywords_compile(tmp_path, qualifier, name, collision):
+    source = tmp_path / "reference.metal"
+    source.write_text(
+        _reserved_reference_source(qualifier, name, collision), encoding="utf-8"
+    )
+    generated = translate(str(source), backend="opengl", format_output=False)
+    assert generated == translate(str(source), backend="opengl", format_output=False)
+    if qualifier == "device":
+        escaped = f"{name}_2" if collision else f"{name}_"
+        assert f"int {escaped}[];" in generated
+        assert f"result[1] = ({escaped}[0] + " in generated
+        assert f"result[2] = ({escaped}[0] - " in generated
+        if collision:
+            assert f"int {name}_[];" in generated
+    _compile(generated, "opengl", tmp_path)
+    intermediate = tmp_path / "reference.cgl"
+    intermediate.write_text(
+        translate(str(source), backend="crossgl", format_output=False),
+        encoding="utf-8",
+    )
+    assert (
+        translate(str(intermediate), backend="opengl", format_output=False) == generated
+    )
+
+
+def _reserved_reference_package(tmp_path, target, qualifier, collision):
+    (tmp_path / "reference.metal").write_text(
+        _reserved_reference_source(qualifier, "sample", collision), encoding="utf-8"
+    )
+    (tmp_path / "crosstl.toml").write_text(
+        f"""[project]
+include = ["reference.metal"]
+targets = ["{target}"]
+workgroup_size = [1, 1, 1]
+[project.entry_points]
+"reference.metal" = "references"
+""",
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(tmp_path), format_output=False)
+    assert report.to_json()["summary"]["failedCount"] == 0, report.to_json()
+    descriptor, package = _prepare_native_package(report, tmp_path)
+    bindings = {item["coordinates"]["binding"]: item for item in descriptor["bindings"]}
+    assert set(bindings) == ({0, 1, 2} if collision else {0, 2})
+    assert len({item["name"] for item in bindings.values()}) == len(bindings)
+    guard = 1037
+    inputs, outputs = {}, {}
+    for index, binding in bindings.items():
+        assert binding["coordinates"]["set"] == 0
+        assert binding["access"] == ("read_write" if index == 2 else "read")
+        layout = binding["scalarLayout"]
+        assert layout["elementType"] == "int32"
+        assert layout["elementSizeBytes"] == 4
+        values = [guard] * 11 if index == 2 else ([-7] if index == 0 else [17])
+        inputs[binding["name"]] = RuntimeValue(
+            name=binding["name"], dtype="int32", shape=(len(values),), values=values
+        )
+        if index == 2:
+            outputs[binding["name"]] = replace(
+                inputs[binding["name"]], values=[guard, 10, -24] + [guard] * 8
+            )
+    return descriptor, package, inputs, outputs
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
+@pytest.mark.parametrize("qualifier", ["device", "constant"])
+@pytest.mark.parametrize("collision", [False, True])
+def test_reserved_reference_package_bindings(tmp_path, target, qualifier, collision):
+    descriptor, package, inputs, outputs = _reserved_reference_package(
+        tmp_path, target, qualifier, collision
+    )
+    request = _request(descriptor, package, inputs, outputs, target)
+    assert request.execution_plan.diagnostics == ()
+
+
+def test_reserved_reference_native_readback(tmp_path):
+    target = {"win32": "directx", "linux": "opengl", "darwin": "metal"}.get(
+        sys.platform
+    )
+    if os.environ.get("CROSTL_REQUIRE_DEVICE_REFERENCES") != "1" or target is None:
+        pytest.skip("requires native device-reference validation")
+    executor = _executor(target)
+    try:
+        for qualifier in ("device", "constant"):
+            for collision in (False, True):
+                work = tmp_path / f"{qualifier}-{collision}"
+                work.mkdir()
+                descriptor, package, inputs, outputs = _reserved_reference_package(
+                    work, target, qualifier, collision
+                )
+                artifact = package / descriptor["artifact"]["packagePath"]
+                _validate(artifact, work, target)
+                request = _request(descriptor, package, inputs, outputs, target)
+                _record_reference_request(work, request)
+                availability = executor.is_available(request)
+                assert availability.available, availability.reason
+                result = executor.run(request)
+                (work / "readback.json").write_text(
+                    json.dumps(
+                        {
+                            "status": result.status,
+                            "outputs": result.outputs,
+                            "details": result.details,
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                assert result.status == "ok", result.details
+                for name, expected in outputs.items():
+                    assert result.outputs[name]["values"] == expected.values
+    finally:
+        close = getattr(executor.runtime_adapter.runtime, "close", None)
+        if close:
+            close()
 
 
 def _writable_source(width):

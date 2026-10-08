@@ -1703,7 +1703,34 @@ class GLSLCodeGen:
     }
     GLSL_PRECISION_QUALIFIERS = {"lowp", "mediump", "highp"}
     GLSL_PARAMETER_QUALIFIERS = {"out", "inout"}
-    GLSL_RESERVED_IDENTIFIERS = {"active", "input", "output"}
+    # GLSL qualifiers and future-reserved words can be source-backend identifiers.
+    GLSL_RESERVED_IDENTIFIERS = GLSL_VARIABLE_QUALIFIER_ATTRIBUTE_NAMES | {
+        "active",
+        "attribute",
+        "buffer",
+        "cast",
+        "coherent",
+        "common",
+        "external",
+        "filter",
+        "fixed",
+        "input",
+        "interface",
+        "layout",
+        "noinline",
+        "output",
+        "partition",
+        "precision",
+        "readonly",
+        "resource",
+        "restrict",
+        "shared",
+        "subroutine",
+        "superp",
+        "uniform",
+        "varying",
+        "writeonly",
+    }
     GLSL_RESERVED_IDENTIFIER_PREFIXES = ("gl_",)
     GLSL_BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
     COMPOUND_ASSIGNMENT_BINARY_OPERATORS = {

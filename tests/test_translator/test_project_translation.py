@@ -48540,9 +48540,10 @@ def test_translate_project_opencl_targets_do_not_leak_resource_parameter_syntax(
     assert ": group" not in combined
     assert "[[group]]" not in combined
 
-    assert "layout(std430, binding = 0) buffer outBuffer { float out[]; };" in (
+    assert "layout(std430, binding = 0) buffer out_Buffer { float out_[]; };" in (
         outputs["opengl"]
     )
+    assert "out_[i] = (in_[i] * factor);" in outputs["opengl"]
     assert "layout(std140, binding = 2) uniform scale_Args" in outputs["opengl"]
     assert "uint i = gl_GlobalInvocationID.x;" in outputs["opengl"]
     assert not re.search(r"\b(?:f32|u32)\b", outputs["opengl"])
