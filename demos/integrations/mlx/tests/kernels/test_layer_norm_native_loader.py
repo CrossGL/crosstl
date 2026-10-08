@@ -59,12 +59,12 @@ MLX_LAYER_NORM_DISPATCH_CONTRACT = (
 )
 MLX_LAYER_NORM_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "7b0698cb49d6131e1e22313b00c9cf38602e6b8f68698c711deb20166c7977ae",
-        "sizeBytes": 5256,
+        "sha256": "2750fea6d568a99f11f62768a60fc8aac91911ecfe83180148248116c58b8147",
+        "sizeBytes": 7274,
     },
     "opengl": {
-        "sha256": "fb1f8ee898f4093157d12e70a2c6bfe545aa4fb1376278ebfff003f940641a8d",
-        "sizeBytes": 5999,
+        "sha256": "8baa04a8c4125c96f1c8f0ad42f86bfc7b2497ba5a59178d199a1a3fbe3d110e",
+        "sizeBytes": 8403,
     },
 }
 REQUIRE_DIRECTX_PROOF_ENV = "CROSTL_REQUIRE_MLX_LAYER_NORM_DIRECTX_NATIVE_LOADER"
@@ -451,6 +451,10 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert dxc_compiler_arguments_for_source(generated) == ("-enable-16bit-types",)
         assert generated.count("WaveActiveSum(") == 2
         assert generated.count("GroupMemoryBarrierWithGroupSync();") == 3
+        assert (
+            "__crossgl_metal_precise_rsqrt_float(((normalizer / layer_normfloat32_axis_size)"
+            in generated
+        )
         _assert_directx_compiles(generated_path, work_dir)
     else:
         assert "subgroupWidth" not in entry
@@ -465,6 +469,10 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "subgroupAdd" not in generated
         assert generated.count("crossglSoftwareSubgroupSumFloat(") == 3
         assert generated.count("barrier();") == 6
+        assert (
+            "crossgl_metal_precise_rsqrt_float(((normalizer / float(axis_size))"
+            in generated
+        )
         assert (
             "threadgroup_sum_1_glsl_xs_layer_normfloat32_local_buffer_float_32"
             in generated

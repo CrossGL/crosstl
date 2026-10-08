@@ -2511,21 +2511,29 @@ Materialization emits the forward entry plus `initialize_buffer<1>` and
 `threadgroup_sum<1>` from six reachable specializations while pruning 194
 candidates.
 
-The generated HLSL artifact is 5,256 bytes with SHA-256
-`7b0698cb49d6131e1e22313b00c9cf38602e6b8f68698c711deb20166c7977ae`.
+The generated HLSL artifact is 7,274 bytes with SHA-256
+`2750fea6d568a99f11f62768a60fc8aac91911ecfe83180148248116c58b8147`.
 It retains `[WaveSize(32)]`, two `WaveActiveSum` calls, and compiles as
 `cs_6_6` with `-enable-16bit-types`; Windows CI requires Direct3D 12 WARP
-execution. The generated GLSL artifact is 5,999 bytes with SHA-256
-`fb1f8ee898f4093157d12e70a2c6bfe545aa4fb1376278ebfff003f940641a8d`.
-The four selected normalization loaders (LayerNorm and RMSNorm, forward and
-VJP) at `846d1762` have complete old/current body comparisons and unchanged
-resource interfaces. HLSL differences make source-width index conversions
-explicit; GLSL differences add shared-memory ordering to the existing subgroup
-sum helper. All eight artifacts pass strict compiler checks. Linux OpenGL
-execution passes all four cases, and an independent 100-digit calculation from
-the uploaded binary32 inputs checks all 256 returned values within the unchanged
-tolerances. Maximum absolute error is below `1.36e-7`. Windows execution remains
-required separately. The existing CI steps retain reports, requests, compiler
+execution. The generated GLSL artifact is 8,403 bytes with SHA-256
+`8baa04a8c4125c96f1c8f0ad42f86bfc7b2497ba5a59178d199a1a3fbe3d110e`.
+An earlier reference review covered the four selected normalization loaders
+(LayerNorm and RMSNorm, forward and VJP) at `846d1762`: source-width index
+conversions in HLSL and shared-memory ordering in GLSL preserved the resource
+interfaces. All eight artifacts passed strict compiler checks at that revision.
+Linux OpenGL execution and an independent 100-digit calculation checked all 256
+returned values within unchanged tolerances, with maximum absolute error below
+`1.36e-7`. Windows execution remains required separately.
+
+The forward LayerNorm references now retain the source's explicit precise
+reciprocal-square-root helper. Complete body review found only that helper, its
+declaration and one call substitution, with unchanged resource interfaces and
+source-map origins. Previous and current OpenGL readbacks are identical for the
+selected 64-value workload and differ from unchanged original Metal by at most
+`7.46e-9`; original Metal output guards and read-only inputs remain intact.
+The same helper passes independent replay of retained Windows execution, while
+the complete updated HLSL kernel still requires its own Windows CI result.
+The existing CI steps retain reports, requests, compiler
 records, returned values and JUnit results on success or failure; these selected
 cases do not establish whole-family or upstream-suite parity.
 
@@ -3506,7 +3514,7 @@ bounded LogSumExp proof above exercises the exact-width OpenGL contract without
 inflating the RMSNorm claim.
 
 The 24-artifact specialization proof above remains translation and native
-compilation evidence only. A separate bounded proof selects the current-corpus
+compilation evidence only. A separate bounded proof selects the historical
 `rmsfloat32` entry at commit
 `846d176227a0ac13d2667e58d2bb68b322109ab0` through
 [`contracts/rms_norm.native-loader.dispatch.json`](contracts/rms_norm.native-loader.dispatch.json).
@@ -3518,16 +3526,25 @@ preserving reachable constants, resolving
 materializes one `rms_single_row<float, RMS_N_READS>` specialization from four
 reachable specializations while pruning 168 unrelated candidates.
 
-The generated HLSL artifact is 3,526 bytes with SHA-256
-`f1910bc37d2fabd46213add21ed22fd35691794ece36d0917cde6b7f209403ea`;
+The generated HLSL artifact is 5,544 bytes with SHA-256
+`27146f3b1c16701885dd133b628c602027152453041badf9652450cb3e386c51`;
 it retains `[WaveSize(32)]` and compiles as `cs_6_6` with
 `-enable-16bit-types`. The generated GLSL
-artifact is 4,478 bytes with SHA-256
-`c878dfac029400c584c909b722168189b08abd4206f525c2c3bee6bbe60e2b58`.
+artifact is 6,882 bytes with SHA-256
+`04b447795637318a75158fac8025e189a6374dc8a97311d49597dc9f04f76fad`.
 Its explicit target-scoped 32-lane software subgroup lowers scalar
 `WaveActiveSum`, emits six `OpControlBarrier` instructions and no
 `OpGroupNonUniform` instruction, and passes `glslangValidator` plus
 `spirv-val`. Default OpenGL generation remains on the hardware-subgroup path.
+
+The updated forward references replace the target intrinsic with the source's
+explicit precise reciprocal-square-root helper. Complete source comparison
+isolates the helper, its declaration and one call substitution; resources and
+source-map origins are unchanged. The new OpenGL readback matches unchanged
+original Metal for all 64 selected results, with eight source-output guards and
+unchanged read-only buffers. HLSL strictly compiles and uses the same helper as
+the independently replayed Windows reciprocal-root test. Full updated-kernel
+execution remains required on Windows; no tolerance or dispatch setting changes.
 
 The six-buffer native-loader ABI packages float32 input, weights, and output,
 plus 16-byte scalar blocks for epsilon, axis size, and weight stride. The

@@ -40,6 +40,33 @@ def _load_rms_norm_harness():
     return module
 
 
+def test_forward_normalization_reference_metadata_matches_native_workloads():
+    from demos.integrations.mlx.tests.kernels import (
+        test_layer_norm_native_loader,
+        test_rms_norm_native_loader,
+    )
+
+    demo_root = ROOT / "demos" / "integrations" / "mlx"
+    gaps = json.loads((demo_root / "expected-gaps.json").read_text(encoding="utf-8"))
+    readme = MLX_README_PATH.read_text(encoding="utf-8")
+    for family, identities in (
+        ("rms_norm", test_rms_norm_native_loader.MLX_RMS_NORM_GENERATED_ARTIFACTS),
+        (
+            "layer_norm",
+            test_layer_norm_native_loader.MLX_LAYER_NORM_GENERATED_ARTIFACTS,
+        ),
+    ):
+        artifacts = gaps[family + "_native_runtime_status"]["artifacts"]
+        for target, identity in identities.items():
+            assert artifacts[target]["sha256"] == identity["sha256"]
+            assert artifacts[target]["size_bytes"] == identity["sizeBytes"]
+            assert identity["sha256"] in readme
+            assert f'{identity["sizeBytes"]:,} bytes' in readme
+    assert _load_harness().MLX_RMS_NORM_NATIVE_RUNTIME_EVIDENCE["artifacts"] == (
+        gaps["rms_norm_native_runtime_status"]["artifacts"]
+    )
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -10669,16 +10696,16 @@ def test_rms_norm_native_runtime_evidence_records_bounded_cross_target_proof():
         "selected_parameters": {"N_READS": "RMS_N_READS", "T": "float"},
     }
     assert status["artifacts"]["directx"]["sha256"] == (
-        "f1910bc37d2fabd46213add21ed22fd35691794ece36d0917cde6b7f209403ea"
+        "27146f3b1c16701885dd133b628c602027152453041badf9652450cb3e386c51"
     )
-    assert status["artifacts"]["directx"]["size_bytes"] == 3526
+    assert status["artifacts"]["directx"]["size_bytes"] == 5544
     assert status["artifacts"]["directx"]["native_runtime"]["status"] == (
         "required-on-ci"
     )
     assert status["artifacts"]["opengl"]["sha256"] == (
-        "c878dfac029400c584c909b722168189b08abd4206f525c2c3bee6bbe60e2b58"
+        "04b447795637318a75158fac8025e189a6374dc8a97311d49597dc9f04f76fad"
     )
-    assert status["artifacts"]["opengl"]["size_bytes"] == 4478
+    assert status["artifacts"]["opengl"]["size_bytes"] == 6882
     assert status["artifacts"]["opengl"]["control_barrier_instruction_count"] == 6
     assert status["artifacts"]["opengl"]["group_non_uniform_instruction_count"] == 0
     assert status["artifacts"]["opengl"]["native_runtime"]["status"] == (
@@ -10743,7 +10770,7 @@ def test_rms_norm_native_runtime_evidence_records_bounded_cross_target_proof():
     assert issue in gaps["resolved_issues"]
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "selects the current-corpus `rmsfloat32` entry" in readme
+    assert "selects the historical `rmsfloat32` entry" in readme
     assert "two deterministic float32 rows of axis size 32" in readme
     assert "six-buffer native-loader ABI" in readme
     assert "six `OpControlBarrier` instructions" in readme
@@ -10973,17 +11000,17 @@ def test_layer_norm_native_runtime_evidence_records_bounded_cross_target_proof()
         },
     }
     assert status["artifacts"]["directx"]["sha256"] == (
-        "7b0698cb49d6131e1e22313b00c9cf38602e6b8f68698c711deb20166c7977ae"
+        "2750fea6d568a99f11f62768a60fc8aac91911ecfe83180148248116c58b8147"
     )
-    assert status["artifacts"]["directx"]["size_bytes"] == 5256
+    assert status["artifacts"]["directx"]["size_bytes"] == 7274
     assert status["artifacts"]["directx"]["wave_active_sum_call_count"] == 2
     assert status["artifacts"]["directx"]["native_runtime"]["status"] == (
         "required-on-ci"
     )
     assert status["artifacts"]["opengl"]["sha256"] == (
-        "fb1f8ee898f4093157d12e70a2c6bfe545aa4fb1376278ebfff003f940641a8d"
+        "8baa04a8c4125c96f1c8f0ad42f86bfc7b2497ba5a59178d199a1a3fbe3d110e"
     )
-    assert status["artifacts"]["opengl"]["size_bytes"] == 5999
+    assert status["artifacts"]["opengl"]["size_bytes"] == 8403
     assert status["artifacts"]["opengl"]["control_barrier_instruction_count"] == 6
     assert status["artifacts"]["opengl"]["group_non_uniform_instruction_count"] == 0
     assert status["artifacts"]["opengl"]["local_validation"] == {
