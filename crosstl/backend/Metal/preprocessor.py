@@ -57,6 +57,8 @@ METAL_ANGLE_OPERATOR_RE = re.compile(
     r"\boperator(?:\s|/\*[\s\S]*?\*/|//[^\n]*(?:\n|$))*"
     r"(?:<<=|>>=|<=>|<<|>>|<=|>=|<|>)"
 )
+METAL_STATEMENT_DELIMITER_RE = re.compile(r"[()\[\]<>{};\"'/]")
+METAL_NAMESPACE_DELIMITER_RE = re.compile(r"namespace|[{}\"'/]")
 METAL_STRING_LITERAL_PATTERN = r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'"
 METAL_STRING_EXPRESSION_PATTERN = (
     rf"(?:{METAL_STRING_LITERAL_PATTERN})"
@@ -26933,6 +26935,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         active_namespace: List[str] = []
         i = 0
         while i < len(code):
+            match = METAL_NAMESPACE_DELIMITER_RE.search(code, i)
+            if match is None:
+                break
+            i = match.start()
             if code[i] in "\"'":
                 _literal, consumed = self._read_string(code, i)
                 i += consumed
@@ -27689,6 +27695,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         brace_depth = 0
         i = start
         while i < len(code):
+            match = METAL_STATEMENT_DELIMITER_RE.search(code, i)
+            if match is None:
+                return None
+            i = match.start()
             ch = code[i]
             if ch == '"' or ch == "'":
                 _literal, consumed = self._read_string(code, i)

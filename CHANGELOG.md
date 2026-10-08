@@ -24,6 +24,7 @@ All notable changes to CrossTL are documented in this file.
 - Python compatibility matrices run on Ubuntu, with grouped Windows and macOS suites retaining platform coverage. Compiler-only DirectX checks run on Ubuntu; Metal artifact generation is separated from native compilation. Required numerical execution remains on the corresponding native platforms.
 - Native demo checks reuse compatible translation and source-library setup, retain per-test progress and preserve numerical cases, guards and evidence when a check fails.
 - Runtime manifest construction reuses source reflection, and project report operations reuse completed validation without reinterpreting its result.
+- Metal statement and namespace scans skip ordinary source-text runs while preserving delimiter handling, source positions and incomplete-input behavior.
 
 ### Fixed
 

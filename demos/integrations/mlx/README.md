@@ -41,8 +41,9 @@ execution remains on Windows. Metal compilation and execution remain on macOS.
 See the [CI coverage policy](../../../.github/TESTING.md) for the platform split.
 Scheduled runs cover the existing corpus audits; changes to translation code,
 tests, demo inputs or toolchain configuration run the complete workflow on pull
-requests and main-branch pushes. In-progress proof runs are not cancelled by a
-newer revision. Core and demo tests also remain part of the complete test suite.
+requests and main-branch pushes. A newer revision cancels superseded runs for the
+same pull request; main-branch and scheduled runs keep independent execution.
+Core and demo tests also remain part of the complete test suite.
 
 The host adaptation documentation records upstream changes explicitly. A passing
 kernel or bounded host check is not a claim that the entire upstream MLX suite
