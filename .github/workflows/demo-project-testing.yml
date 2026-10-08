@@ -1477,6 +1477,7 @@ jobs:
           python tools/run_bounded_command.py --timeout-seconds 120 --label "Native binary32 arithmetic" -- \
             python -m pytest -q -n auto \
               -k "execute or original_metal or modules_link_together" \
+              -m "not extended_power" \
               --basetemp=.mlx-portable-host/fused-math/pytest \
               --junitxml=.mlx-portable-host/fused-math/results.xml \
               tests/test_translator/test_fused_math.py \
@@ -1750,6 +1751,7 @@ jobs:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
           CROSTL_REQUIRE_MLX_CURRENT_REAL_POWER: "1"
+          CROSTL_REQUIRE_METAL_POWER: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -1759,9 +1761,11 @@ jobs:
           mkdir -p .mlx-portable-host/real-power
           python tools/run_bounded_command.py --timeout-seconds 180 --label "Pinned real power" -- \
             python -m pytest -q -n auto \
+              -m extended_power \
               --basetemp=.mlx-portable-host/real-power/pytest \
               --junitxml=.mlx-portable-host/real-power/results.xml \
               demos/integrations/mlx/tests/kernels/test_current_real_power.py::test_current_real_power_native_parity \
+              tests/test_translator/test_metal_power.py \
               2>&1 | tee .mlx-portable-host/real-power.log
       - name: Execute pinned resident attention reductions
         env:

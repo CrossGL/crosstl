@@ -530,6 +530,7 @@ def _reverse_metal(
     binary32_sqrt_profile=None,
     binary32_rsqrt_profile=None,
     binary32_power_operand_profile=None,
+    binary32_power_accuracy_profile=None,
 ):
     from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
 
@@ -552,6 +553,7 @@ def _reverse_metal(
         binary32_sqrt_profile=binary32_sqrt_profile,
         binary32_rsqrt_profile=binary32_rsqrt_profile,
         binary32_power_operand_profile=binary32_power_operand_profile,
+        binary32_power_accuracy_profile=binary32_power_accuracy_profile,
     )
 
 

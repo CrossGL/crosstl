@@ -19,6 +19,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
 )
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
+from crosstl.translator.source_licenses import SOURCE_LICENSES
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_precise_trig import _bits, _float, _round_decimal
 
@@ -110,7 +111,13 @@ kernel void powers(const device uint* values [[buffer(0)]],
 """
 
 
-def _translate(tmp_path, source=SOURCE, target="crossgl", operand_profile=None):
+def _translate(
+    tmp_path,
+    source=SOURCE,
+    target="crossgl",
+    operand_profile=None,
+    accuracy_profile=None,
+):
     path = tmp_path / "power.metal"
     path.write_text(source, encoding="utf-8")
     options = (
@@ -118,19 +125,30 @@ def _translate(tmp_path, source=SOURCE, target="crossgl", operand_profile=None):
         if operand_profile is not None
         else {}
     )
+    if accuracy_profile is not None:
+        options["binary32_power_accuracy_profile"] = accuracy_profile
     return translate(
         str(path), backend=target, format_output=False, source_options=options
     )
 
 
 @pytest.mark.parametrize("target", ("directx", "opengl", "metal"))
+@pytest.mark.parametrize("accuracy_profile", (None, "portable-finite"))
 @pytest.mark.parametrize(
     "source", (SOURCE, IDENTITY_SOURCE), ids=("domain", "identity")
 )
-def test_power_domain_helpers_compile(tmp_path, target, source):
-    generated = _translate(tmp_path, source=source, target=target)
+def test_power_domain_helpers_compile(tmp_path, target, source, accuracy_profile):
+    generated = _translate(
+        tmp_path, source=source, target=target, accuracy_profile=accuracy_profile
+    )
     for suffix in ("", "2", "3", "4"):
         assert f"metal_power_float{suffix}(" in generated
+    assert ("metal_power_positive_float(" in generated) == (
+        accuracy_profile is not None
+    )
+    if accuracy_profile is not None:
+        for line in SOURCE_LICENSES["fdlibm"].splitlines():
+            assert line in generated
     _compile(
         generated,
         target,
@@ -141,12 +159,17 @@ def test_power_domain_helpers_compile(tmp_path, target, source):
 
 
 @pytest.mark.parametrize("target", ("directx", "opengl", "metal"))
-def test_power_domain_survives_saved_crossgl(tmp_path, target):
+@pytest.mark.parametrize("accuracy_profile", (None, "portable-finite"))
+def test_power_domain_survives_saved_crossgl(tmp_path, target, accuracy_profile):
     saved = tmp_path / "saved.cgl"
-    saved.write_text(_translate(tmp_path), encoding="utf-8")
-    assert translate(str(saved), backend=target, format_output=False) == _translate(
-        tmp_path, target=target
+    saved.write_text(
+        _translate(tmp_path, accuracy_profile=accuracy_profile), encoding="utf-8"
     )
+    assert translate(str(saved), backend=target, format_output=False) == _translate(
+        tmp_path, target=target, accuracy_profile=accuracy_profile
+    )
+    if accuracy_profile is not None:
+        assert SOURCE_LICENSES["fdlibm"].splitlines()[-1] in saved.read_text()
 
 
 def test_power_keeps_fast_mode_integer_helpers_and_source_overloads(tmp_path):
@@ -169,16 +192,25 @@ def test_power_keeps_fast_mode_integer_helpers_and_source_overloads(tmp_path):
 
 
 @pytest.mark.parametrize("operand_profile", (None, "flush-subnormals"))
-def test_power_helpers_reset_and_avoid_source_names(operand_profile):
-    converter = MetalToCrossGLConverter(binary32_power_operand_profile=operand_profile)
+@pytest.mark.parametrize("accuracy_profile", (None, "portable-finite"))
+def test_power_helpers_reset_and_avoid_source_names(operand_profile, accuracy_profile):
+    converter = MetalToCrossGLConverter(
+        binary32_power_operand_profile=operand_profile,
+        binary32_power_accuracy_profile=accuracy_profile,
+    )
     source = """
         float __crossgl_metal_power_float(float a) { return a; }
         float2 __crossgl_metal_power_float2(float2 a) { return a; }
+        float __crossgl_metal_power_positive_float(float a) { return a; }
         float2 evaluate(float2 a, float2 b) { return metal::pow(a, b); }
     """
     generated = converter.generate(MetalParser(MetalLexer(source).tokenize()).parse())
     assert "float __crossgl_metal_power_float_(float base, float exponent)" in generated
     assert "__crossgl_metal_power_float2_(vec2(a), vec2(b))" in generated
+    assert (
+        "float __crossgl_metal_power_positive_float_(float base, float exponent)"
+        in generated
+    ) == (accuracy_profile is not None)
     source = "float evaluate(float a, float b) { return metal::fast::pow(a, b); }"
     generated = converter.generate(MetalParser(MetalLexer(source).tokenize()).parse())
     assert "__crossgl_metal_power" not in generated
@@ -199,8 +231,9 @@ def test_power_diagnoses_global_runtime_initialization(tmp_path):
 @pytest.mark.parametrize("namespace", ("", "precise", "fast"))
 @pytest.mark.parametrize("materialized", (False, True))
 @pytest.mark.parametrize("operand_profile", (None, "flush-subnormals"))
+@pytest.mark.parametrize("accuracy_profile", (None, "portable-finite"))
 def test_power_preserves_bfloat_wrapper_ownership_and_narrowing(
-    namespace, materialized, operand_profile
+    namespace, materialized, operand_profile, accuracy_profile
 ):
     qualifier = "METAL_FUNC" if materialized else ""
     body = "__metal_pow(float(x), float(y))" if materialized else "float(x) + float(y)"
@@ -217,7 +250,10 @@ bfloat16_t apply(bfloat16_t x, bfloat16_t y) {{
     return metal::{(namespace + '::') if namespace else ''}pow(x, y);
 }}
 """
-    converter = MetalToCrossGLConverter(binary32_power_operand_profile=operand_profile)
+    converter = MetalToCrossGLConverter(
+        binary32_power_operand_profile=operand_profile,
+        binary32_power_accuracy_profile=accuracy_profile,
+    )
     generated = converter.generate(MetalParser(MetalLexer(source).tokenize()).parse())
     lowered = materialized and namespace != "fast"
     assert ("__crossgl_metal_power_float" in generated) == lowered
@@ -290,6 +326,30 @@ def _pairs():
         for exponent in range(-8, 9):
             for sign in (1, -1):
                 pairs.add((_bits(sign * base), _bits(exponent / 2)))
+    return sorted(pairs)
+
+
+def _finite_pairs(extended=False):
+    powers = (10, 15, 20, 22, 23, 24) + ((26, 27, 28, 29, 30) if extended else ())
+    exponents = {
+        (_bits(2.0**power) + offset) | sign
+        for power in powers
+        for offset in (-1, 0, 1)
+        for sign in (0, 0x80000000)
+    }
+    pairs = {
+        (a, b)
+        for a in range(0x3F800000 - 64, 0x3F800000 + 65)
+        for b in exponents
+        if abs(math.log(_float(a)) * _float(b)) < 70
+    }
+    generator = random.Random(2134)
+    for _ in range(512):
+        a = generator.randrange(0x800000, 0x7F800000)
+        if a == 0x3F800000:
+            continue
+        exponent = generator.uniform(-80.0, 80.0) / math.log2(_float(a))
+        pairs.add((a, _bits(exponent)))
     return sorted(pairs)
 
 
@@ -380,6 +440,104 @@ def test_power_reference_and_comparison_preserve_domain_contracts():
         changed[index] ^= 0x80000000
         with pytest.raises(AssertionError):
             _check(changed, pairs)
+
+
+def test_power_finite_reference_rejects_near_one_accuracy_loss():
+    pairs = [(0x3F7FFFFF, 0x4B800000), (0x3F800001, 0x4D000001)]
+    assert all(pair in _finite_pairs(extended=True) for pair in pairs)
+    expected = _expected(pairs)
+    assert _oracle(*pairs[0]) == 0x3EBC5AB1
+    assert _check(expected, pairs) == 0
+    # Previously emitted OpenGL power differs by more than a factor of two.
+    changed = expected.copy()
+    changed[6] = 0x3E3504F5
+    with pytest.raises(AssertionError):
+        _check(changed, pairs)
+
+
+def test_power_range_boundaries_keep_the_native_path(tmp_path):
+    generated = _translate(tmp_path, accuracy_profile="portable-finite")
+    assert (
+        "if (!(z > -125.0 && z < 127.0)) { return pow(base, exponent); }" in generated
+    )
+    assert "return asfloat((uint(scale + 127) << 23u)" in generated
+
+
+@pytest.mark.extended_power
+def test_power_accuracy_profile_executes_unchanged_metal_range_boundaries(
+    tmp_path, monkeypatch
+):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for native power checks")
+    if sys.platform != "darwin":
+        pytest.skip("The unchanged source control requires Metal")
+    from tests.test_translator import test_fused_math as native_math
+
+    monkeypatch.setattr(
+        native_math,
+        "_compile",
+        partial(_compile, metal_compile_flags=("-std=metal3.1", "-fno-fast-math")),
+    )
+    pairs = sorted(
+        {
+            (a + da, b + db)
+            for a, b in ((0x1B2E7B6F, 0x3FDE4ADF), (0x5CC8921C, 0xC0097F95))
+            for da in range(-2, 3)
+            for db in range(-2, 3)
+        }
+        | {(0x20000000 + offset, 0x40000000) for offset in range(-2, 3)}
+        | {
+            (0x40000000, _bits(exponent))
+            for exponent in (-150, -126, -125, 127, 128, 129)
+        }
+    )
+    count = IDENTITY_FIELDS * len(pairs) + 8
+    outputs = {}
+    receipts = {}
+    for mode in ("original", "profiled"):
+        work = tmp_path / mode
+        work.mkdir()
+        source = (
+            IDENTITY_SOURCE
+            if mode == "original"
+            else _translate(
+                work, IDENTITY_SOURCE, "metal", accuracy_profile="portable-finite"
+            )
+        )
+        outputs[mode], receipts[mode] = native_math._dispatch(
+            work,
+            "metal",
+            source,
+            pairs,
+            count,
+            entry="powers",
+            initial_output=[GUARD] * count,
+        )
+        actual = outputs[mode]
+        assert len(actual) == count
+        assert actual[:4] == actual[-4:] == [GUARD] * 4
+        for index, pair in enumerate(pairs):
+            row = actual[
+                4 + IDENTITY_FIELDS * index : 4 + IDENTITY_FIELDS * (index + 1)
+            ]
+            assert row[:2] == list(pair) and row[-2:] == [2, pair[1]]
+    for got, expected in zip(outputs["profiled"], outputs["original"]):
+        if expected & 0x7FFFFFFF > 0x7F800000:
+            assert got & 0x7FFFFFFF > 0x7F800000
+        else:
+            assert got == expected
+    (tmp_path / "evidence.json").write_text(
+        json.dumps(
+            {
+                "receipts": receipts,
+                "pairs": pairs,
+                "guardCountPerPath": 8,
+                "binary32PowerAccuracyProfile": "portable-finite",
+                "crossTargetResultFlushingVerified": False,
+            },
+            indent=2,
+        )
+    )
 
 
 def _identity_pairs():
@@ -495,10 +653,20 @@ def test_power_executes_exact_identity(tmp_path, source_control, monkeypatch):
     )
 
 
-@pytest.mark.parametrize("source_control", (False, True))
 @pytest.mark.parametrize("operand_profile", (None, "flush-subnormals"))
+@pytest.mark.parametrize(
+    "dataset,source_control",
+    (
+        ("domain", False),
+        ("domain", True),
+        pytest.param("finite", False, marks=pytest.mark.extended_power),
+        pytest.param("finite", True, marks=pytest.mark.extended_power),
+        pytest.param("extended", False, marks=pytest.mark.extended_power),
+        pytest.param("portable-domain", False, marks=pytest.mark.extended_power),
+    ),
+)
 def test_power_executes_native_domains(
-    tmp_path, source_control, operand_profile, monkeypatch
+    tmp_path, source_control, operand_profile, dataset, monkeypatch
 ):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for native power checks")
@@ -516,12 +684,22 @@ def test_power_executes_native_domains(
             directx_compile_flags=("-enable-16bit-types",),
         ),
     )
-    pairs = _pairs()
+    pairs = (
+        _pairs()
+        if dataset in ("domain", "portable-domain")
+        else _finite_pairs(extended=dataset == "extended")
+    )
+    accuracy_profile = None if dataset == "domain" else "portable-finite"
     expected = _expected(pairs)
     source = (
         SOURCE
         if source_control
-        else _translate(tmp_path, target=target, operand_profile=operand_profile)
+        else _translate(
+            tmp_path,
+            target=target,
+            operand_profile=operand_profile,
+            accuracy_profile=accuracy_profile,
+        )
     )
     actual, evidence = native_math._dispatch(
         tmp_path,
@@ -539,12 +717,16 @@ def test_power_executes_native_domains(
             {
                 **evidence,
                 "sourceControl": source_control,
+                "dataset": dataset,
                 "pairCount": len(pairs),
                 "valueCount": 20 * len(pairs),
                 "maximumStorageUlpError": maximum,
                 "guardCount": 8,
                 "completeFiniteDomainVerified": False,
                 "binary32PowerOperandProfile": operand_profile,
+                "binary32PowerAccuracyProfile": (
+                    accuracy_profile if not source_control else None
+                ),
             },
             indent=2,
         )
@@ -757,6 +939,23 @@ def test_power_operand_profile_rejects_unsupported_configuration(profile):
         MetalToCrossGLConverter(binary32_power_operand_profile=profile)
 
 
+@pytest.mark.parametrize("profile", ("native", "gradual", "", False, 1))
+def test_power_accuracy_profile_rejects_unsupported_configuration(profile):
+    with pytest.raises(ValueError, match="binary32_power_accuracy_profile"):
+        MetalToCrossGLConverter(binary32_power_accuracy_profile=profile)
+
+
+def test_power_accuracy_profile_keeps_fast_and_source_owned_calls(tmp_path):
+    source = """
+float pow(float a, float b) { return a + b; }
+float fast_call(float a, float b) { return metal::fast::pow(a, b); }
+float source_call(float a, float b) { return ::pow(a, b); }
+"""
+    assert _translate(tmp_path, source) == _translate(
+        tmp_path, source, accuracy_profile="portable-finite"
+    )
+
+
 def test_power_operand_profile_keeps_fast_calls_and_source_functions(tmp_path):
     source = """
         float pow(float a, float b) { return b; }
@@ -768,7 +967,24 @@ def test_power_operand_profile_keeps_fast_calls_and_source_functions(tmp_path):
     )
 
 
-def test_power_operand_profile_report_and_package_provenance(tmp_path):
+@pytest.mark.parametrize(
+    "option,field,value",
+    (
+        (
+            "binary32_power_operand_profile",
+            "binary32PowerOperandProfile",
+            "flush-subnormals",
+        ),
+        (
+            "binary32_power_accuracy_profile",
+            "binary32PowerAccuracyProfile",
+            "portable-finite",
+        ),
+    ),
+)
+def test_power_operand_profile_report_and_package_provenance(
+    tmp_path, option, field, value
+):
     from crosstl.project import (
         build_runtime_artifact_manifest,
         build_runtime_package,
@@ -778,17 +994,17 @@ def test_power_operand_profile_report_and_package_provenance(tmp_path):
     )
 
     (tmp_path / "power.metal").write_text(IDENTITY_SOURCE)
-    (tmp_path / "crosstl.toml").write_text("""[project]
+    (tmp_path / "crosstl.toml").write_text(f"""[project]
 targets = ["metal", "directx", "opengl"]
 [project.source_options.metal.target_options.opengl.source_patterns."power.metal"]
-binary32_power_operand_profile = "flush-subnormals"
+{option} = "{value}"
 """)
     report = translate_project(load_project_config(tmp_path), format_output=False)
     data = report.to_json()
     assert data["summary"]["translatedCount"] == 3, data["diagnostics"]
-    expected = {"metal": None, "directx": None, "opengl": "flush-subnormals"}
+    expected = {"metal": None, "directx": None, "opengl": value}
     assert {
-        artifact["target"]: artifact["provenance"].get("binary32PowerOperandProfile")
+        artifact["target"]: artifact["provenance"].get(field)
         for artifact in data["artifacts"]
     } == expected
     path = tmp_path / "report.json"
@@ -797,7 +1013,7 @@ binary32_power_operand_profile = "flush-subnormals"
     manifest = build_runtime_artifact_manifest(path)
     assert manifest["success"], manifest
     assert {
-        artifact["target"]: artifact["provenance"].get("binary32PowerOperandProfile")
+        artifact["target"]: artifact["provenance"].get(field)
         for artifact in manifest["artifacts"]
     } == expected
     manifest_path = tmp_path / "artifacts.json"
@@ -809,13 +1025,13 @@ binary32_power_operand_profile = "flush-subnormals"
             item for item in changed["artifacts"] if item["target"] == "opengl"
         )
         if invalid is None:
-            artifact["provenance"].pop("binary32PowerOperandProfile")
+            artifact["provenance"].pop(field)
         else:
-            artifact["provenance"]["binary32PowerOperandProfile"] = invalid
+            artifact["provenance"][field] = invalid
         path.write_text(json.dumps(changed))
         validation = validate_project_report(path)
         assert not validation["success"]
-        assert "binary32PowerOperandProfile" in json.dumps(validation["diagnostics"])
+        assert field in json.dumps(validation["diagnostics"])
 
 
 @pytest.mark.parametrize("source_control", (False, True))

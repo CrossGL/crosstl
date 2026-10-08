@@ -1323,8 +1323,8 @@ Power-function domains
 ~~~~~~~~~~~~~~~~~~~~~~
 
 Metal default and precise ``pow`` calls preserve signed-zero, negative-base,
-infinity and NaN domain behavior before invoking target-native power arithmetic
-on a positive finite base. Integral-exponent parity is determined from binary32
+infinity and NaN domain behavior before evaluating a positive finite base.
+Integral-exponent parity is determined from binary32
 bits, including the boundary above which all represented integers are even.
 This avoids target-dependent negative-base behavior and out-of-range integer
 conversions. Scalar and two- to four-lane calls evaluate each argument once;
@@ -1360,9 +1360,34 @@ half controls use a one-storage-ULP regression bound. Separate identity controls
 require exact results across all binary32 exponent classes, boundary
 significands and deterministic sampled inputs, with original Metal execution,
 evaluation counters and buffer guards. NaN payload identity is not claimed.
-Other positive finite arithmetic still uses the target's intrinsic: these
-checks do not establish full-domain accuracy, common result-underflow behavior, or
-complete project numerical parity.
+Applications that require portable finite-result accuracy can opt in separately:
+
+.. code-block:: toml
+
+   [project.source_options.metal]
+   binary32_power_accuracy_profile = "portable-finite"
+
+The default remains target-native, preserving existing Metal round-trip results.
+The profile is retained as ``binary32PowerAccuracyProfile`` in reports, runtime
+manifests and packages, and validated against resolved target/path options.
+For ordinary finite results, its licensed fdlibm-derived approximation retains
+separate high and low logarithm and exponent products. This avoids the large
+errors caused by multiplying a rounded target logarithm by a large exponent
+when the base is close to one. The same scalar helper serves all vector lanes
+and narrowing boundaries. Near-one inputs and seeded general inputs are checked
+against a high-precision decimal reference in native execution. It is an
+accuracy contract, not bit-exact reproduction of a source device's approximation.
+In particular, original Metal execution on the characterized device returns
+infinity for ``pow(0x3f7fffff, 0xce7fffff)`` (binary32 operand words), although the
+mathematical result is finite. Extended-exponent approximation tests use the
+decimal reference; the native source controls are recorded separately.
+
+Range-boundary behavior remains target-native: the approximation is used only
+when its logarithmic result is strictly between -125 and 127. The surrounding
+binades, overflow and underflow retain the existing intrinsic, rather than
+guessing a source-device flushing rule. This is not an output-underflow profile
+or a full-domain accuracy guarantee. Cross-target result-underflow parity and
+complete project numerical parity remain unresolved.
 
 Binary32 remainder
 ~~~~~~~~~~~~~~~~~~

@@ -3231,6 +3231,14 @@ def test_native_arithmetic_selection_retains_every_device_test():
     )
     expression = "execute or original_metal or modules_link_together"
     assert f'-k "{expression}"' in step
+    assert '-m "not extended_power"' in step
+    power_step = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Validate pinned real power"
+    )
+    assert "-m extended_power" in power_step
+    assert "tests/test_translator/test_metal_power.py" in power_step
+    assert 'CROSTL_REQUIRE_METAL_POWER: "1"' in power_step
+    assert "--timeout-seconds 180" in power_step
     assert "--timeout-seconds 120" in step
     modules = re.findall(r"tests/test_translator/test_[a-z_]+\.py", step)
     assert len(modules) == len(set(modules)) == 9
@@ -3263,7 +3271,7 @@ def test_native_arithmetic_selection_retains_every_device_test():
                 for node in ast.walk(function)
             ):
                 required.add(identity)
-    assert len(required) == 15
+    assert len(required) == 16
     assert (
         "tests/test_translator/test_metal_power.py",
         "test_power_executes_exact_identity",
@@ -3272,7 +3280,52 @@ def test_native_arithmetic_selection_retains_every_device_test():
         "tests/test_translator/test_metal_power.py",
         "test_power_executes_profiled_subnormal_operands",
     ) in required
+    assert (
+        "tests/test_translator/test_metal_power.py",
+        "test_power_accuracy_profile_executes_unchanged_metal_range_boundaries",
+    ) in required
     assert selected == required
+    power_tree = ast.parse(
+        (ROOT / "tests/test_translator/test_metal_power.py").read_text()
+    )
+    functions = {
+        node.name: node for node in power_tree.body if isinstance(node, ast.FunctionDef)
+    }
+    boundary = functions[
+        "test_power_accuracy_profile_executes_unchanged_metal_range_boundaries"
+    ]
+    assert any(
+        isinstance(node, ast.Attribute) and node.attr == "extended_power"
+        for node in boundary.decorator_list
+    )
+    domain = functions["test_power_executes_native_domains"]
+    grouped = next(
+        node.args[1]
+        for node in domain.decorator_list
+        if isinstance(node, ast.Call)
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "dataset,source_control"
+    )
+    assert [
+        ast.literal_eval(node) for node in grouped.elts if isinstance(node, ast.Tuple)
+    ] == [("domain", False), ("domain", True)]
+    extended = [node for node in grouped.elts if isinstance(node, ast.Call)]
+    assert [tuple(ast.literal_eval(arg) for arg in node.args) for node in extended] == [
+        ("finite", False),
+        ("finite", True),
+        ("extended", False),
+        ("portable-domain", False),
+    ]
+    assert all(
+        any(
+            keyword.arg == "marks"
+            and isinstance(keyword.value, ast.Attribute)
+            and keyword.value.attr == "extended_power"
+            for keyword in node.keywords
+        )
+        for node in extended
+    )
     full_suite = (WORKFLOW_DIR / "full-tests.yml").read_text()
     assert "runs-on: ubuntu-latest" in full_suite
     assert (

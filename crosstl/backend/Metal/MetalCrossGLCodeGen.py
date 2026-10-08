@@ -10,6 +10,7 @@ from ...translator.cooperative_matrix import (
 from ...translator.division_math import binary32_division_support
 from ...translator.fused_math import FMA_HELPER_KEYS, binary32_fma_support
 from ...translator.precise_exp import binary32_exp_support
+from ...translator.precise_power import binary32_power_support
 from ...translator.precise_trig import TRIG_HELPER_KEYS, binary32_trig_support
 from ...translator.remainder_math import binary32_remainder_support
 from ...translator.standard_constants import standard_math_constant
@@ -1331,7 +1332,13 @@ class MetalToCrossGLConverter:
         binary32_sqrt_profile=None,
         binary32_rsqrt_profile=None,
         binary32_power_operand_profile=None,
+        binary32_power_accuracy_profile=None,
     ):
+        if binary32_power_accuracy_profile not in (None, "portable-finite"):
+            raise ValueError(
+                "binary32_power_accuracy_profile must be 'portable-finite' or None"
+            )
+        self.binary32_power_accuracy_profile = binary32_power_accuracy_profile
         if binary32_power_operand_profile not in (None, "flush-subnormals"):
             raise ValueError(
                 "binary32_power_operand_profile must be 'flush-subnormals' or None"
@@ -14561,6 +14568,13 @@ class MetalToCrossGLConverter:
         if not self.required_metal_power_widths:
             return ""
         scalar = self.metal_power_helper_name(1)
+        positive = "pow"
+        support = ""
+        if self.binary32_power_accuracy_profile == "portable-finite":
+            positive = self.metal_precise_math_unique_helper_name(
+                "power-positive-float", "__crossgl_metal_power_positive_float"
+            )
+            support = binary32_power_support(positive)
         operand_policy = """    // Keep existing subnormal behavior until a source policy is selected.
     if ((magnitude != 0u && magnitude < 0x00800000u) ||
         (power != 0u && power < 0x00800000u)) {
@@ -14580,7 +14594,7 @@ class MetalToCrossGLConverter:
         power = 0u;
     }
 """
-        code = f"""@metal_static
+        code = support + f"""@metal_static
 float {scalar}(float base, float exponent) {{
     uint a = asuint(base);
     uint b = asuint(exponent);
@@ -14620,7 +14634,7 @@ float {scalar}(float base, float exponent) {{
     if ((a >> 31u) != 0u && !integral) {{
         return asfloat(0x7fc00000u);
     }}
-    float result = pow(asfloat(magnitude), exponent);
+    float result = {positive}(asfloat(magnitude), exponent);
     return asfloat(asuint(result) | sign);
 }}
 """

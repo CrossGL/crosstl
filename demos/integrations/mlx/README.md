@@ -402,11 +402,15 @@ packages. Identity checks retain all 65,536 half and bfloat storage patterns and
 5,632 binary32 inputs. A separate batch selects the explicit binary32 power
 operand profile for 82,848 float32/bfloat operand pairs. Every non-NaN result,
 signed zero and guard is checked exactly; NaNs use classification checks.
-The five cases retain 219,552 outputs and 40 guards per target, with unchanged
-original-source readbacks on Metal. Two-thread workgroups keep the complete
+Those five cases retain 219,552 outputs and 40 guards per target. A third batch
+selects `binary32_power_accuracy_profile = "portable-finite"` for 4,982 float32
+pairs, including near-one bases with large exponents and seeded general inputs.
+It compares normal finite results against a high-precision decimal reference
+within 16 representable steps; guards remain exact. All six cases retain
+unchanged original-source readbacks on Metal. Two-thread workgroups keep the complete
 input sets within DirectX dispatch limits without adding inactive invocations.
-No upstream source is modified. This covers the vector/vector entries' identity
-and operand-domain behavior, not general finite accuracy, result underflow,
+No upstream source is modified. This covers the vector/vector entries' identity,
+operand-domain behavior and selected finite accuracy, not result underflow,
 all real-power layouts or full MLX host integration. The three-minute step uses
 the existing native runners and preserves every earlier check and deadline.
 

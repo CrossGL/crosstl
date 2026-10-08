@@ -302,6 +302,7 @@ def _project_config(
     entry_points=None,
     binary32_multiplication_profile=None,
     binary32_power_operand_profile=None,
+    binary32_power_accuracy_profile=None,
     workgroup_width=1,
 ) -> str:
     assert type(workgroup_width) is int and 1 <= workgroup_width <= 1024
@@ -331,6 +332,18 @@ def _project_config(
         }
         assert selected and selected <= eligible
         profiles.append('binary32_power_operand_profile = "flush-subnormals"')
+    if binary32_power_accuracy_profile is not None:
+        assert binary32_power_accuracy_profile == "portable-finite"
+        assert workload.operator_type == "Power"
+        assert workload.input_type == "float"
+        selected = {workload.entry_point} if entry_points is None else set(entry_points)
+        eligible = {
+            item.entry_point
+            for item in BINARY_OPENGL_WORKLOADS
+            if item.operator_type == "Power" and item.input_type == "float"
+        }
+        assert selected and selected <= eligible
+        profiles.append('binary32_power_accuracy_profile = "portable-finite"')
     if binary32_multiplication_profile is not None:
         assert binary32_multiplication_profile == "rne-flush"
         assert workload.operator_type == "Multiply"

@@ -193,6 +193,9 @@ def run_binary_cases(
                     binary32_power_operand_profile=cases[0].provenance.get(
                         "binary32PowerOperandProfile"
                     ),
+                    binary32_power_accuracy_profile=cases[0].provenance.get(
+                        "binary32PowerAccuracyProfile"
+                    ),
                     workgroup_width=workgroup_width,
                 ),
                 encoding="utf-8",
@@ -244,6 +247,7 @@ def run_binary_cases(
                     "binary32RemainderProfile",
                     "binary16RemainderProfile",
                     "binary32PowerOperandProfile",
+                    "binary32PowerAccuracyProfile",
                 ):
                     assert artifact["provenance"].get(name) == case.provenance.get(name)
                 descriptor = build_native_loader_abi_descriptor(
@@ -356,6 +360,15 @@ def run_binary_cases(
                                 else {}
                             ),
                             "guardCount": 8,
+                            **(
+                                {
+                                    "powerAccuracyProfile": case.provenance[
+                                        "binary32PowerAccuracyProfile"
+                                    ]
+                                }
+                                if "binary32PowerAccuracyProfile" in case.provenance
+                                else {}
+                            ),
                             "comparison": case.comparison,
                             "comparisonDetails": comparison,
                             "sourceComparisonDetails": source_comparison,

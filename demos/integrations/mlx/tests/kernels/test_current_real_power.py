@@ -1,4 +1,4 @@
-"""Pinned real power identities and explicitly selected operand semantics."""
+"""Pinned real power identities, operand semantics and finite accuracy."""
 
 from functools import partial
 from pathlib import Path
@@ -12,9 +12,11 @@ from demos.integrations.mlx.tests.kernels.floating_binary_runtime import (
 from demos.integrations.mlx.tests.kernels.test_current_additive import _check_words
 from demos.integrations.mlx.tests.kernels.test_current_extrema import _guard, _request
 from tests.test_translator.test_metal_power import (
+    _finite_pairs,
     _identity_pairs,
     _operand_flush_oracle,
     _operand_flush_pairs,
+    _oracle,
 )
 from tools import ci_coverage
 
@@ -24,6 +26,9 @@ WORKGROUP_WIDTH = 2
 
 
 def _pairs(dtype, profile):
+    if profile == "finite":
+        assert dtype == "float32"
+        return _finite_pairs()
     if profile == "identity":
         if dtype == "float32":
             return _identity_pairs()
@@ -62,33 +67,42 @@ def _pairs(dtype, profile):
 
 
 def _cases(profile):
-    types = (
-        ("float16", "bfloat16", "float32")
-        if profile == "identity"
-        else ("bfloat16", "float32")
-    )
+    types = {
+        "identity": ("float16", "bfloat16", "float32"),
+        "operands": ("bfloat16", "float32"),
+        "finite": ("float32",),
+    }[profile]
     for dtype in types:
         pairs = _pairs(dtype, profile)
         if profile == "identity":
             expected = [a for a, _ in pairs]
             provenance = {}
-        else:
+        elif profile == "operands":
             shift = 16 if dtype == "bfloat16" else 0
             expected = [
                 _operand_flush_oracle(a << shift, b << shift) >> shift for a, b in pairs
             ]
             provenance = {"binary32PowerOperandProfile": "flush-subnormals"}
+        else:
+            expected = [_oracle(a, b) for a, b in pairs]
+            provenance = {"binary32PowerAccuracyProfile": "portable-finite"}
         yield BinaryCase(
             dtype=dtype,
             operation="Power",
             pairs=pairs,
             expected=expected + [_guard(dtype)] * 8,
             provenance=provenance,
-            comparison="exact identity or selected operand-domain result; NaN classification",
+            comparison=(
+                "finite result within 16 binary32 storage steps; exact guards"
+                if profile == "finite"
+                else "exact identity or selected operand-domain result; NaN classification"
+            ),
         )
 
 
-@pytest.mark.parametrize("profile,count", (("identity", 136704), ("operands", 82848)))
+@pytest.mark.parametrize(
+    "profile,count", (("identity", 136704), ("operands", 82848), ("finite", 4982))
+)
 def test_real_power_inventory_preserves_every_input_and_exact_grid(profile, count):
     cases = list(_cases(profile))
     assert sum(len(case.pairs) for case in cases) == count
@@ -97,10 +111,13 @@ def test_real_power_inventory_preserves_every_input_and_exact_grid(profile, coun
         assert case.expected[-8:] == [_guard(case.dtype)] * 8
         assert len(case.pairs) % WORKGROUP_WIDTH == 0
         assert 0 < len(case.pairs) // WORKGROUP_WIDTH <= 65535
-        assert case.provenance == (
-            {}
-            if profile == "identity"
-            else {"binary32PowerOperandProfile": "flush-subnormals"}
+        assert (
+            case.provenance
+            == {
+                "identity": {},
+                "operands": {"binary32PowerOperandProfile": "flush-subnormals"},
+                "finite": {"binary32PowerAccuracyProfile": "portable-finite"},
+            }[profile]
         )
         if profile == "identity" and case.dtype != "float32":
             assert [a for a, _ in case.pairs] == list(range(65536))
@@ -113,7 +130,43 @@ def test_real_power_inventory_preserves_every_input_and_exact_grid(profile, coun
             )
 
 
-@pytest.mark.parametrize("profile", ("identity", "operands"))
+def _check_finite(actual, expected, dtype, target):
+    assert dtype == "float32" and target in {"metal", "opengl", "directx"}
+    assert len(actual) == len(expected) and len(expected) > 8
+    assert all(type(word) is int and 0 <= word <= 0xFFFFFFFF for word in actual)
+    assert actual[-8:] == expected[-8:] == [_guard(dtype)] * 8
+    maximum = 0
+    for index, (got, want) in enumerate(zip(actual[:-8], expected[:-8])):
+        assert 0x800000 <= want < 0x7F800000
+        assert 0x800000 <= got < 0x7F800000
+        distance = abs(got - want)
+        assert distance <= 16, (index, hex(got), hex(want), distance)
+        maximum = max(maximum, distance)
+    return {
+        "checked": len(actual) - 8,
+        "guardCount": 8,
+        "maximumStorageUlpError": maximum,
+    }
+
+
+def test_real_power_finite_comparison_rejects_inaccurate_or_unwritten_results():
+    case = next(_cases("finite"))
+    assert (
+        _check_finite(case.expected, case.expected, "float32", "opengl")[
+            "maximumStorageUlpError"
+        ]
+        == 0
+    )
+    index = case.pairs.index((0x3F7FFFFF, 0x4B800000))
+    for offset, word in ((index, 0x3E3504F5), (0, 0x7F800000), (-1, 0)):
+        changed = list(case.expected)
+        changed[offset] = word
+        with pytest.raises(AssertionError):
+            _check_finite(changed, case.expected, "float32", "opengl")
+
+
+@pytest.mark.parametrize("profile", ("identity", "operands", "finite"))
+@pytest.mark.extended_power
 def test_current_real_power_native_parity(tmp_path, profile, binary_metal_reference):
     run_binary_cases(
         tmp_path,
@@ -121,7 +174,7 @@ def test_current_real_power_native_parity(tmp_path, profile, binary_metal_refere
         _cases(profile),
         request_for=partial(_request, workgroup_width=WORKGROUP_WIDTH),
         guard_for=_guard,
-        compare_for=lambda case: _check_words,
+        compare_for=lambda case: _check_finite if profile == "finite" else _check_words,
         source_control=binary_metal_reference,
         workgroup_width=WORKGROUP_WIDTH,
     )
@@ -139,3 +192,6 @@ def test_ci_requires_real_power_on_existing_native_targets():
     assert f"{path}::test_current_real_power_native_parity" in step
     assert "--timeout-seconds 180" in step
     assert "pytest -q -n auto" in step
+    assert 'CROSTL_REQUIRE_METAL_POWER: "1"' in step
+    assert "tests/test_translator/test_metal_power.py" in step
+    assert "-m extended_power" in step

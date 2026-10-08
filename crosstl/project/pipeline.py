@@ -1847,6 +1847,7 @@ REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(
         "binary32SqrtProfile",
         "binary32RsqrtProfile",
         "binary32PowerOperandProfile",
+        "binary32PowerAccuracyProfile",
     )
 )
 REPORT_ARTIFACT_ENTRY_POINT_FIELDS = frozenset(("source", "target", "stage"))
@@ -28389,6 +28390,20 @@ def _translate_project_impl(
                         artifact["provenance"][
                             "binary32PowerOperandProfile"
                         ] = power_operand_profile
+                    power_accuracy_profile = source_options.get(
+                        "binary32_power_accuracy_profile"
+                    )
+                    if (
+                        unit.source_backend == "metal"
+                        and power_accuracy_profile is not None
+                    ):
+                        if power_accuracy_profile != "portable-finite":
+                            raise ValueError(
+                                "binary32_power_accuracy_profile must be 'portable-finite' or None"
+                            )
+                        artifact["provenance"][
+                            "binary32PowerAccuracyProfile"
+                        ] = power_accuracy_profile
                     if (
                         unit.source_backend == "metal"
                         and comparison_profile is not None
@@ -46482,6 +46497,15 @@ def _provenance_contract_reasons(
             reasons.append(
                 f"{prefix}.binary32PowerOperandProfile must be flush-subnormals"
             )
+    if "binary32PowerAccuracyProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(
+                f"{prefix}.binary32PowerAccuracyProfile requires a Metal source"
+            )
+        if provenance["binary32PowerAccuracyProfile"] != "portable-finite":
+            reasons.append(
+                f"{prefix}.binary32PowerAccuracyProfile must be portable-finite"
+            )
     if "dispatchRegion" in provenance:
         try:
             region = DispatchRegion.from_json(provenance["dispatchRegion"])
@@ -46617,6 +46641,18 @@ def _provenance_contract_reasons(
         ):
             reasons.append(
                 f"{prefix}.binary32PowerOperandProfile must match the resolved project source options"
+            )
+        expected_power_accuracy_profile = (
+            options.get("binary32_power_accuracy_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if (
+            provenance.get("binary32PowerAccuracyProfile")
+            != expected_power_accuracy_profile
+        ):
+            reasons.append(
+                f"{prefix}.binary32PowerAccuracyProfile must match the resolved project source options"
             )
         if provenance.get("dispatchRegion") != options.get(
             DISPATCH_REGION_SOURCE_OPTION

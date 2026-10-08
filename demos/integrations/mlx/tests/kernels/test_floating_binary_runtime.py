@@ -113,38 +113,44 @@ def test_multiplication_profile_is_explicit_and_limited_to_real_float_products(
     assert len({shape for shape, _ in selected}) == 18
 
 
-def test_power_operand_profile_is_explicit_and_limited_to_characterized_types(tmp_path):
+@pytest.mark.parametrize(
+    "option,value,types,count",
+    (
+        (
+            "binary32_power_operand_profile",
+            "flush-subnormals",
+            {"float", "bfloat16_t"},
+            36,
+        ),
+        ("binary32_power_accuracy_profile", "portable-finite", {"float"}, 18),
+    ),
+)
+def test_power_operand_profile_is_explicit_and_limited_to_characterized_types(
+    tmp_path, option, value, types, count
+):
     selected = []
     for workload in BINARY_OPENGL_WORKLOADS:
-        assert "binary32_power_operand_profile" not in _project_config(workload)
-        enabled = workload.operator_type == "Power" and workload.input_type in {
-            "float",
-            "bfloat16_t",
-        }
+        assert option not in _project_config(workload)
+        enabled = workload.operator_type == "Power" and workload.input_type in types
         if not enabled:
             with pytest.raises(AssertionError):
-                _project_config(
-                    workload, binary32_power_operand_profile="flush-subnormals"
-                )
+                _project_config(workload, **{option: value})
             continue
         path = tmp_path / "crosstl.toml"
         path.write_text(
             _project_config(
                 workload,
-                binary32_power_operand_profile="flush-subnormals",
                 workgroup_width=2,
+                **{option: value},
             )
         )
         config = load_project_config(tmp_path, path)
-        assert (
-            config.source_options["metal"]["binary32_power_operand_profile"]
-            == "flush-subnormals"
-        )
+        assert config.source_options["metal"][option] == value
         assert config.entry_workgroup_size_rules[MLX_BINARY_SOURCE][
             workload.entry_point
         ] == ("2", "1", "1")
         selected.append((workload.shape, workload.input_type))
-    assert len(selected) == len(set(selected)) == 36
+    assert len(selected) == len(set(selected)) == count
     assert len({shape for shape, _ in selected}) == 18
 
 
@@ -152,7 +158,16 @@ def test_power_operand_profile_is_explicit_and_limited_to_characterized_types(tm
     "entries",
     ([], ["vv_Powerfloat32", "vv_Addfloat32"], ["vv_Powerfloat16"], ["unknown"]),
 )
-def test_power_operand_profile_rejects_unrelated_or_missing_entries(entries):
+@pytest.mark.parametrize(
+    "option,value",
+    (
+        ("binary32_power_operand_profile", "flush-subnormals"),
+        ("binary32_power_accuracy_profile", "portable-finite"),
+    ),
+)
+def test_power_operand_profile_rejects_unrelated_or_missing_entries(
+    entries, option, value
+):
     workload = next(
         w for w in BINARY_OPENGL_WORKLOADS if w.entry_point == "vv_Powerfloat32"
     )
@@ -160,17 +175,20 @@ def test_power_operand_profile_rejects_unrelated_or_missing_entries(entries):
         _project_config(
             workload,
             entry_points=entries,
-            binary32_power_operand_profile="flush-subnormals",
+            **{option: value},
         )
 
 
 @pytest.mark.parametrize("profile", ("preserve-subnormals", "rne-flush", "", False))
-def test_power_operand_profile_rejects_uncharacterized_profile(profile):
+@pytest.mark.parametrize(
+    "option", ("binary32_power_operand_profile", "binary32_power_accuracy_profile")
+)
+def test_power_operand_profile_rejects_uncharacterized_profile(profile, option):
     workload = next(
         w for w in BINARY_OPENGL_WORKLOADS if w.entry_point == "vv_Powerfloat32"
     )
     with pytest.raises(AssertionError):
-        _project_config(workload, binary32_power_operand_profile=profile)
+        _project_config(workload, **{option: profile})
 
 
 @pytest.mark.parametrize("width", (1, 2, 32))
