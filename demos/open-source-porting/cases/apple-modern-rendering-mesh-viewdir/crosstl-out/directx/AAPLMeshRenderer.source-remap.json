@@ -5,66 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 34,
-        "endOffset": 1293,
+        "endLine": 48,
+        "endOffset": 1632,
         "file": "crosstl-out/directx/AAPLMeshRenderer.hlsl",
-        "length": 39,
-        "line": 33,
-        "offset": 1254
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 2,
-        "endOffset": 43,
-        "file": "AAPLMeshRenderer.metal",
-        "length": 43,
+        "length": 1632,
         "line": 1,
         "offset": 0
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 44,
-        "endOffset": 1489,
-        "file": "crosstl-out/directx/AAPLMeshRenderer.hlsl",
-        "length": 27,
-        "line": 43,
-        "offset": 1462
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 6,
-        "endOffset": 163,
+        "endLine": 11,
+        "endOffset": 344,
         "file": "AAPLMeshRenderer.metal",
-        "length": 49,
-        "line": 5,
-        "offset": 114
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 46,
-        "endOffset": 1613,
-        "file": "crosstl-out/directx/AAPLMeshRenderer.hlsl",
-        "length": 107,
-        "line": 45,
-        "offset": 1506
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 9,
-        "endOffset": 326,
-        "file": "AAPLMeshRenderer.metal",
-        "length": 80,
-        "line": 8,
-        "offset": 246
+        "length": 344,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

@@ -19241,32 +19241,10 @@ def test_translate_project_opengl_prototypes_later_materialized_steel_helper(
     assert_compute_glsl_validates_if_available(output, tmp_path)
 
     source_map = artifact["sourceMap"]
-    expected_mappings = project_pipeline._derived_line_source_map_mappings(
-        source_path,
-        "shaders/steel_attention.metal",
-        output_path,
-        artifact["path"],
-    )
-    assert source_map["mappingGranularity"] == "line"
-    assert source_map["mappings"] == expected_mappings
-
-    helper_source_line = next(
-        line_number
-        for line_number, line in enumerate(
-            source_path.read_text(encoding="utf-8").splitlines(),
-            start=1,
-        )
-        if "METAL_FUNC SteelTile<T> tile_op(" in line
-    )
-    prototype_line = output.count("\n", 0, prototype.start()) + 1
-    definition_line = output.count("\n", 0, definition.start()) + 1
-    mappings_by_generated_line = {
-        mapping["generated"]["line"]: mapping for mapping in source_map["mappings"]
-    }
-    prototype_mapping = mappings_by_generated_line[prototype_line]
-    definition_mapping = mappings_by_generated_line[definition_line]
-    assert prototype_mapping["source"]["line"] == helper_source_line
-    assert definition_mapping["source"] == prototype_mapping["source"]
+    assert source_map["mappingGranularity"] == "file"
+    assert source_map["mappings"] == [
+        {"source": source_map["source"], "generated": source_map["generated"]}
+    ]
 
     source_remap = artifact["sourceRemap"]
     source_remap_path = repo / source_remap["path"]
@@ -19274,18 +19252,6 @@ def test_translate_project_opengl_prototypes_later_materialized_steel_helper(
     assert source_remap["mappingGranularity"] == source_map["mappingGranularity"]
     assert source_remap["mappingCount"] == len(source_map["mappings"])
     assert source_remap_payload == project_pipeline._source_remap_payload(source_map)
-    remaps_by_generated_line = {
-        mapping["generated"]["line"]: mapping
-        for mapping in source_remap_payload["mappings"]
-    }
-    assert remaps_by_generated_line[prototype_line] == {
-        "generated": prototype_mapping["generated"],
-        "original": prototype_mapping["source"],
-    }
-    assert remaps_by_generated_line[definition_line] == {
-        "generated": definition_mapping["generated"],
-        "original": definition_mapping["source"],
-    }
 
     report_path = repo / "translated" / "issue-1530-report.json"
     report.write_json(report_path)
@@ -22584,7 +22550,7 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
         "translated/opengl/shaders/graphics/simple.glsl"
     )
     assert payload["summary"]["sourceRemapCount"] == 1
-    assert payload["summary"]["sourceRemapsByGranularity"] == {"line": 1}
+    assert payload["summary"]["sourceRemapsByGranularity"] == {"file": 1}
     assert payload["summary"]["sourceRemapsByTarget"] == {"opengl": 1}
     assert payload["summary"]["sourceRemapsBySourceBackend"] == {"cgl": 1}
     assert payload["summary"]["sourceRemapsByVariant"] == {}
@@ -23084,7 +23050,7 @@ def test_translate_project_records_line_maps_across_final_newline_changes(
     assert source_map["mappings"] == expected_mappings
 
 
-def test_translate_project_records_fine_grained_source_maps_for_generated_artifacts(
+def test_translate_project_reserves_line_source_maps_for_line_preserving_artifacts(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -23103,8 +23069,8 @@ def test_translate_project_records_fine_grained_source_maps_for_generated_artifa
     }
 
     assert payload["summary"]["sourceMapCount"] == 5
-    assert payload["summary"]["fineGrainedSourceMapCount"] == 5
-    assert payload["summary"]["sourceMapsByGranularity"] == {"line": 5}
+    assert payload["summary"]["fineGrainedSourceMapCount"] == 1
+    assert payload["summary"]["sourceMapsByGranularity"] == {"line": 1, "file": 4}
     assert payload["summary"]["sourceMapsByTarget"] == {
         "cgl": 1,
         "directx": 1,
@@ -23113,7 +23079,7 @@ def test_translate_project_records_fine_grained_source_maps_for_generated_artifa
         "wgsl": 1,
     }
     assert payload["summary"]["sourceRemapCount"] == 5
-    assert payload["summary"]["sourceRemapsByGranularity"] == {"line": 5}
+    assert payload["summary"]["sourceRemapsByGranularity"] == {"line": 1, "file": 4}
     assert payload["summary"]["sourceRemapsByTarget"] == {
         "cgl": 1,
         "directx": 1,
@@ -23138,7 +23104,9 @@ def test_translate_project_records_fine_grained_source_maps_for_generated_artifa
     )
     for artifact in payload["artifacts"]:
         source_map = artifact["sourceMap"]
-        assert source_map["mappingGranularity"] == "line"
+        assert source_map["mappingGranularity"] == (
+            "line" if artifact["target"] == "cgl" else "file"
+        )
         assert source_map["mappings"]
         assert all(
             mapping["source"]["file"] == artifact["source"]
@@ -23149,13 +23117,9 @@ def test_translate_project_records_fine_grained_source_maps_for_generated_artifa
             for mapping in source_map["mappings"]
         )
         if artifact["target"] != "cgl":
-            expected_mappings = project_pipeline._derived_line_source_map_mappings(
-                repo / artifact["source"],
-                artifact["source"],
-                repo / artifact["path"],
-                artifact["path"],
-            )
-            assert source_map["mappings"] == expected_mappings
+            assert source_map["mappings"] == [
+                {"source": source_map["source"], "generated": source_map["generated"]}
+            ]
         source_remap = artifact["sourceRemap"]
         assert source_remap["target"] == artifact["target"]
         assert source_remap["generatedFile"] == artifact["path"]
@@ -31556,7 +31520,7 @@ def test_validate_project_report_accepts_fine_grained_source_map_contract(tmp_pa
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
 
-    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
     payload = report.to_json()
     source_map = payload["artifacts"][0]["sourceMap"]
     artifact = payload["artifacts"][0]
@@ -32051,20 +32015,22 @@ def test_validate_project_report_rejects_stale_line_preserving_source_map_span(
     assert f"actual {stale_mapping}" in diagnostic["message"]
 
 
-def test_validate_project_report_rejects_stale_derived_source_map_span(tmp_path):
+def test_validate_project_report_rejects_unproven_line_source_map_span(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
 
     report = translate_project(repo, targets=["opengl"], output_dir="out")
     payload = report.to_json()
-    source_map = payload["artifacts"][0]["sourceMap"]
-    assert source_map["mappingGranularity"] == "line"
-    assert source_map["mappings"]
-    original_mapping = copy.deepcopy(source_map["mappings"][0])
-    source_map["mappings"][0]["generated"]["column"] += 1
-    stale_mapping = source_map["mappings"][0]
-    report_path = repo / "out" / "stale-derived-source-map-span-report.json"
+    artifact = payload["artifacts"][0]
+    source_map = artifact["sourceMap"]
+    assert source_map["mappingGranularity"] == "file"
+    source_map["mappingGranularity"] = "line"
+    artifact["sourceRemap"]["mappingGranularity"] = "line"
+    payload["summary"].update(
+        project_pipeline._source_map_rollups(payload["artifacts"])
+    )
+    report_path = repo / "out" / "unproven-line-source-map-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
     validation = validate_project_report(report_path)
@@ -32080,12 +32046,9 @@ def test_validate_project_report_rejects_stale_derived_source_map_span(tmp_path)
     )
     assert diagnostic["missingCapabilities"] == ["source.provenance"]
     assert (
-        "sourceMap.mappings[0] must match current derived line span" in diagnostic[
-            "message"
-        ]
+        "sourceMap line mappings require line-preserving source and generated files"
+        in diagnostic["message"]
     )
-    assert f"expected {original_mapping}" in diagnostic["message"]
-    assert f"actual {stale_mapping}" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
@@ -48622,8 +48585,9 @@ def test_translate_project_cuda_pointer_parameters_lower_to_opengl_buffers(
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("opengl", "translated")}
-    assert payload["summary"]["sourceRemapMappingCount"] == 6
-    assert payload["artifacts"][0]["sourceRemap"]["mappingCount"] == 6
+    assert payload["summary"]["sourceRemapMappingCount"] == 1
+    assert payload["artifacts"][0]["sourceRemap"]["mappingCount"] == 1
+    assert payload["artifacts"][0]["sourceRemap"]["mappingGranularity"] == "file"
 
     output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
 

@@ -5,44 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 13,
-        "endOffset": 322,
+        "endLine": 365,
+        "endOffset": 9765,
         "file": "crosstl-out/vulkan/noise.vert.spvasm",
-        "length": 33,
-        "line": 12,
-        "offset": 289
+        "length": 9765,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 87,
-        "endOffset": 2164,
+        "endLine": 88,
+        "endOffset": 2166,
         "file": "noise.vert",
-        "length": 23,
-        "line": 86,
-        "offset": 2141
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 33,
-        "endOffset": 729,
-        "file": "crosstl-out/vulkan/noise.vert.spvasm",
-        "length": 26,
-        "line": 32,
-        "offset": 703
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 87,
-        "endOffset": 2164,
-        "file": "noise.vert",
-        "length": 23,
-        "line": 86,
-        "offset": 2141
+        "length": 2166,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

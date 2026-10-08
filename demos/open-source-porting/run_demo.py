@@ -18,6 +18,12 @@ from crosstl.project.directx_toolchain import (
     dxc_compiler_arguments_for_source,
     dxc_profile_for_source,
 )
+from crosstl.project.pipeline import (
+    _file_span,
+    _line_preserving_source_map_mappings,
+    _source_remap_payload,
+    _write_source_remap_sidecar,
+)
 
 DEMO_ROOT = Path(__file__).resolve().parent
 CASE_ROOT = DEMO_ROOT / "cases"
@@ -440,8 +446,35 @@ def _artifact_files(output_dir: Path, targets: list[str]) -> dict[Path, Path]:
 
 
 def _normalize_artifacts(output_dir: Path, targets: list[str]) -> None:
-    for path in _artifact_files(output_dir, targets).values():
+    files = _artifact_files(output_dir, targets)
+    changed = set()
+    for path in files.values():
+        before = path.read_bytes()
         _normalize_artifact(path)
+        if path.read_bytes() != before:
+            changed.add(path)
+    for path in files.values():
+        if not path.name.endswith(".source-remap.json"):
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        generated_file = payload["generatedFile"]
+        generated_path = output_dir.parent / generated_file
+        if generated_path not in changed:
+            continue
+        source_files = {mapping["original"]["file"] for mapping in payload["mappings"]}
+        if len(source_files) != 1:
+            raise ValueError("Cannot normalize a demo remap with multiple source files")
+        source_file = source_files.pop()
+        source_path = output_dir.parent / source_file
+        # Reference formatting changes byte positions, not the shader computation.
+        source_map = {
+            "source": _file_span(source_path, source_file).to_json(),
+            "generated": _file_span(generated_path, generated_file).to_json(),
+            "mappings": _line_preserving_source_map_mappings(
+                source_path, source_file, generated_path, generated_file
+            ),
+        }
+        _write_source_remap_sidecar(path, _source_remap_payload(source_map))
 
 
 def _normalize_artifact(path: Path) -> None:

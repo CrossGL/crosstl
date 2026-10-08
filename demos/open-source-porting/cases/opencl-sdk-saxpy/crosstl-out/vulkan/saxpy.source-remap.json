@@ -4,11 +4,11 @@
     {
       "generated": {
         "column": 1,
-        "endColumn": 14,
-        "endLine": 80,
-        "endOffset": 2023,
+        "endColumn": 1,
+        "endLine": 81,
+        "endOffset": 2024,
         "file": "crosstl-out/vulkan/saxpy.spvasm",
-        "length": 2023,
+        "length": 2024,
         "line": 1,
         "offset": 0
       },

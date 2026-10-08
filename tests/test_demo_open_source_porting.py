@@ -612,6 +612,56 @@ def test_open_source_demo_runner_ignores_trailing_text_artifact_whitespace(tmp_p
     assert runner._comparison_bytes(expected) == runner._comparison_bytes(actual)
 
 
+@pytest.mark.parametrize("line_preserving", [False, True])
+def test_demo_reference_normalization_rebuilds_generated_byte_spans(
+    tmp_path, line_preserving
+):
+    runner = _load_demo_runner()
+    source = tmp_path / "source.cgl"
+    generated = tmp_path / "crosstl-out/cgl/source.cgl"
+    generated.parent.mkdir(parents=True)
+    source.write_bytes(b"// \xc3\xa9\nvoid source() {}\n")
+    content = (
+        source.read_bytes() if line_preserving else b"// translated\nvoid target() {}\n"
+    )
+    generated.write_bytes(content.replace(b"\n", b"\r\n") + b"\r\n \t")
+    original_span = runner._file_span(source, "source.cgl").to_json()
+    sidecar = generated.with_name("source.source-remap.json")
+    runner._write_source_remap_sidecar(
+        sidecar,
+        {
+            "schemaVersion": 1,
+            "generatedFile": "crosstl-out/cgl/source.cgl",
+            "mappings": [
+                {
+                    "original": original_span,
+                    "generated": (
+                        runner._file_span(
+                            generated, "crosstl-out/cgl/source.cgl"
+                        ).to_json()
+                    ),
+                }
+            ],
+        },
+    )
+
+    runner._normalize_artifacts(tmp_path / "crosstl-out", ["cgl"])
+
+    assert generated.read_bytes() == content
+    mappings = json.loads(sidecar.read_text())["mappings"]
+    assert len(mappings) == (2 if line_preserving else 1)
+    assert mappings[-1]["generated"]["endOffset"] == len(content)
+    assert mappings[-1]["generated"]["endLine"] == 3
+    assert mappings[-1]["generated"]["endColumn"] == 1
+    assert mappings[-1]["original"]["endOffset"] == len(source.read_bytes())
+    for mapping in mappings:
+        span = mapping["generated"]
+        assert span["length"] == span["endOffset"] - span["offset"]
+    unchanged = sidecar.read_bytes()
+    runner._normalize_artifacts(tmp_path / "crosstl-out", ["cgl"])
+    assert sidecar.read_bytes() == unchanged
+
+
 def test_demo_ci_metadata_matches_checked_in_pytest_cases():
     tool = _load_demo_ci_tool()
     metadata = tool.load_metadata(DEMO_CI_METADATA_PATH)

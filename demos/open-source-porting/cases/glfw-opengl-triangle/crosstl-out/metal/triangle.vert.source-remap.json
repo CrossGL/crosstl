@@ -5,132 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 7,
-        "endOffset": 104,
+        "endLine": 24,
+        "endOffset": 553,
         "file": "crosstl-out/metal/triangle.vert.metal",
-        "length": 34,
-        "line": 6,
-        "offset": 70
+        "length": 553,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 5,
-        "endOffset": 53,
+        "endLine": 13,
+        "endOffset": 175,
         "file": "triangle.vert",
-        "length": 21,
-        "line": 4,
-        "offset": 32
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 8,
-        "endOffset": 138,
-        "file": "crosstl-out/metal/triangle.vert.metal",
-        "length": 34,
-        "line": 7,
-        "offset": 104
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 6,
-        "endOffset": 74,
-        "file": "triangle.vert",
-        "length": 21,
-        "line": 5,
-        "offset": 53
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 11,
-        "endOffset": 181,
-        "file": "crosstl-out/metal/triangle.vert.metal",
-        "length": 18,
-        "line": 10,
-        "offset": 163
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 7,
-        "endOffset": 94,
-        "file": "triangle.vert",
-        "length": 20,
-        "line": 6,
-        "offset": 74
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 12,
-        "endOffset": 218,
-        "file": "crosstl-out/metal/triangle.vert.metal",
-        "length": 37,
-        "line": 11,
-        "offset": 181
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 11,
-        "endOffset": 155,
-        "file": "triangle.vert",
-        "length": 46,
-        "line": 10,
-        "offset": 109
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 21,
-        "endOffset": 501,
-        "file": "crosstl-out/metal/triangle.vert.metal",
-        "length": 70,
-        "line": 20,
-        "offset": 431
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 11,
-        "endOffset": 155,
-        "file": "triangle.vert",
-        "length": 46,
-        "line": 10,
-        "offset": 109
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 22,
-        "endOffset": 532,
-        "file": "crosstl-out/metal/triangle.vert.metal",
-        "length": 31,
-        "line": 21,
-        "offset": 501
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 12,
-        "endOffset": 173,
-        "file": "triangle.vert",
-        "length": 18,
-        "line": 11,
-        "offset": 155
+        "length": 175,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

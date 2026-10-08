@@ -5,88 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 2,
-        "endOffset": 13,
+        "endLine": 11,
+        "endOffset": 382,
         "file": "crosstl-out/opengl/shader.vert.glsl",
-        "length": 13,
+        "length": 382,
         "line": 1,
         "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 2,
-        "endOffset": 13,
+        "endLine": 21,
+        "endOffset": 323,
         "file": "shader.vert",
-        "length": 13,
+        "length": 323,
         "line": 1,
         "offset": 0
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 3,
-        "endOffset": 54,
-        "file": "crosstl-out/opengl/shader.vert.glsl",
-        "length": 41,
-        "line": 2,
-        "offset": 13
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 4,
-        "endOffset": 53,
-        "file": "shader.vert",
-        "length": 39,
-        "line": 3,
-        "offset": 14
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 8,
-        "endOffset": 331,
-        "file": "crosstl-out/opengl/shader.vert.glsl",
-        "length": 58,
-        "line": 7,
-        "offset": 273
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 19,
-        "endOffset": 286,
-        "file": "shader.vert",
-        "length": 54,
-        "line": 18,
-        "offset": 232
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 9,
-        "endOffset": 368,
-        "file": "crosstl-out/opengl/shader.vert.glsl",
-        "length": 37,
-        "line": 8,
-        "offset": 331
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 20,
-        "endOffset": 321,
-        "file": "shader.vert",
-        "length": 35,
-        "line": 19,
-        "offset": 286
       }
     }
   ],

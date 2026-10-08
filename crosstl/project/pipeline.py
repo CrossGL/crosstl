@@ -4569,128 +4569,6 @@ def _line_preserving_source_map_mappings(
     ]
 
 
-SOURCE_MAP_LINE_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?")
-SOURCE_MAP_LINE_TOKEN_ALIASES = {
-    "bool1": "bool",
-    "bool2": "vec2",
-    "bool3": "vec3",
-    "bool4": "vec4",
-    "double2": "vec2",
-    "double3": "vec3",
-    "double4": "vec4",
-    "float2": "vec2",
-    "float3": "vec3",
-    "float4": "vec4",
-    "half2": "vec2",
-    "half3": "vec3",
-    "half4": "vec4",
-    "int2": "vec2",
-    "int3": "vec3",
-    "int4": "vec4",
-    "uint2": "vec2",
-    "uint3": "vec3",
-    "uint4": "vec4",
-    "vsmain": "main",
-    "vertex_main": "main",
-    "fragment_main": "main",
-    "compute_main": "main",
-}
-SOURCE_MAP_LINE_STOP_TOKENS = frozenset(
-    (
-        "attribute",
-        "buffer",
-        "case",
-        "cbuffer",
-        "centroid",
-        "class",
-        "const",
-        "constant",
-        "core",
-        "device",
-        "else",
-        "for",
-        "if",
-        "in",
-        "include",
-        "inout",
-        "layout",
-        "metal_stdlib",
-        "namespace",
-        "out",
-        "position",
-        "return",
-        "stage_in",
-        "static",
-        "struct",
-        "switch",
-        "uniform",
-        "using",
-        "void",
-        "while",
-    )
-)
-
-
-def _source_map_line_tokens(text: str) -> frozenset[str]:
-    tokens = set()
-    for match in SOURCE_MAP_LINE_TOKEN_RE.finditer(text):
-        raw_token = match.group(0).lower()
-        for part in raw_token.split("_"):
-            token = SOURCE_MAP_LINE_TOKEN_ALIASES.get(part, part)
-            if token and token not in SOURCE_MAP_LINE_STOP_TOKENS:
-                tokens.add(token)
-        token = SOURCE_MAP_LINE_TOKEN_ALIASES.get(raw_token, raw_token)
-        if token and token not in SOURCE_MAP_LINE_STOP_TOKENS:
-            tokens.add(token)
-    return frozenset(tokens)
-
-
-def _derived_line_source_map_mappings(
-    source_path: Path,
-    source_report_path: str,
-    generated_path: Path,
-    generated_report_path: str,
-) -> list[dict[str, Any]]:
-    source_lines = _normalized_line_text(source_path.read_bytes()).splitlines()
-    generated_lines = _normalized_line_text(generated_path.read_bytes()).splitlines()
-    source_line_spans = _line_spans(source_path, source_report_path)
-    generated_line_spans = _line_spans(generated_path, generated_report_path)
-    source_tokens_by_index = [
-        _source_map_line_tokens(line) for line in source_lines[: len(source_line_spans)]
-    ]
-    generated_tokens_by_index = [
-        _source_map_line_tokens(line)
-        for line in generated_lines[: len(generated_line_spans)]
-    ]
-    mappings = []
-    for generated_index, generated_tokens in enumerate(generated_tokens_by_index):
-        if len(generated_tokens) < 2:
-            continue
-        scores = [
-            (len(generated_tokens & source_tokens), source_index)
-            for source_index, source_tokens in enumerate(source_tokens_by_index)
-            if source_tokens
-        ]
-        if not scores:
-            continue
-        best_score = max(score for score, _source_index in scores)
-        if best_score < 2:
-            continue
-        best_source_indexes = [
-            source_index for score, source_index in scores if score == best_score
-        ]
-        if len(best_source_indexes) != 1:
-            continue
-        source_index = best_source_indexes[0]
-        mappings.append(
-            {
-                "source": source_line_spans[source_index].to_json(),
-                "generated": generated_line_spans[generated_index].to_json(),
-            }
-        )
-    return mappings
-
-
 def _artifact_report_path(path: Path, config: ProjectConfig) -> str:
     absolute_path = Path(os.path.abspath(path))
     absolute_root = Path(os.path.abspath(config.root))
@@ -13356,13 +13234,6 @@ def _artifact_source_map(
         output_path,
         artifact_path,
     )
-    if not line_mappings:
-        line_mappings = _derived_line_source_map_mappings(
-            unit.path,
-            unit.relative_path,
-            output_path,
-            artifact_path,
-        )
     mapping_granularity = "line" if line_mappings else "file"
     mappings = (
         line_mappings
@@ -29629,7 +29500,10 @@ def _source_map_line_preserving_mapping_reasons(
         artifact_report_path,
     )
     if not expected_mappings:
-        return []
+        return [
+            f"{prefix} line mappings require line-preserving source and generated files; "
+            "regenerate the project report to record file-level provenance"
+        ]
     if mappings == expected_mappings:
         return []
     if len(mappings) != len(expected_mappings):
@@ -29647,55 +29521,6 @@ def _source_map_line_preserving_mapping_reasons(
             ]
     return [
         f"{prefix}.mappings must match current line-preserving line spans "
-        f"({_value_mismatch_context(expected_mappings, mappings)})"
-    ]
-
-
-def _source_map_derived_line_mapping_reasons(
-    prefix: str,
-    source_map: Mapping[str, Any],
-    source_path: Path,
-    source_report_path: str,
-    artifact_path: Path,
-    artifact_report_path: str,
-) -> list[str]:
-    if source_map.get("mappingGranularity") != "line":
-        return []
-    mappings = source_map.get("mappings")
-    if not isinstance(mappings, list):
-        return []
-    if _line_preserving_source_map_mappings(
-        source_path,
-        source_report_path,
-        artifact_path,
-        artifact_report_path,
-    ):
-        return []
-    expected_mappings = _derived_line_source_map_mappings(
-        source_path,
-        source_report_path,
-        artifact_path,
-        artifact_report_path,
-    )
-    if not expected_mappings:
-        return []
-    if mappings == expected_mappings:
-        return []
-    if len(mappings) != len(expected_mappings):
-        return [
-            f"{prefix}.mappings count must match current derived line count "
-            f"({_value_mismatch_context(len(expected_mappings), len(mappings))})"
-        ]
-    for mapping_index, expected_mapping in enumerate(expected_mappings):
-        mapping = mappings[mapping_index]
-        if not isinstance(mapping, Mapping) or dict(mapping) != expected_mapping:
-            return [
-                f"{prefix}.mappings[{mapping_index}] must match current "
-                "derived line span "
-                f"({_value_mismatch_context(expected_mapping, mapping)})"
-            ]
-    return [
-        f"{prefix}.mappings must match current derived line spans "
         f"({_value_mismatch_context(expected_mappings, mappings)})"
     ]
 
@@ -29774,17 +29599,6 @@ def _source_map_file_span_validation_diagnostics(
                 artifact_report_path,
             )
         )
-        reasons.extend(
-            _source_map_derived_line_mapping_reasons(
-                "sourceMap",
-                source_map,
-                source_path,
-                source,
-                artifact_path,
-                artifact_report_path,
-            )
-        )
-
     if not reasons:
         return []
     return [
@@ -29793,7 +29607,8 @@ def _source_map_file_span_validation_diagnostics(
             code=(
                 "project.validate.source-map-line-span-mismatch"
                 if any(
-                    "line-preserving line" in reason or "derived line" in reason
+                    "line-preserving line" in reason
+                    or "line mappings require" in reason
                     for reason in reasons
                 )
                 else "project.validate.source-map-file-span-mismatch"

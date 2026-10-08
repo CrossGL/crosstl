@@ -391,6 +391,12 @@ write them to a separate reports directory for inspection. The runner disables
 optional code formatting during generation so artifact comparisons do not
 depend on host `clang-format` availability.
 
+Checked-in references use normalized line endings and final whitespace. Their
+source-remap sidecars are rebuilt against those stored bytes; original source
+spans remain tied to the pinned inputs. Transformed shaders carry file-level
+provenance, not guessed line locations. The separately retained translator and
+validation reports describe the raw translation before reference formatting.
+
 ### Inspecting generated reports
 
 Use `--reports-dir` when a demo check fails or when you want the generated

@@ -5451,6 +5451,17 @@ Project reports are JSON documents with:
   after newline normalization, allowing a final-newline-only difference;
   translated artifacts keep file-granularity source maps until backend pipelines
   expose generated line, statement, or token provenance.
+  Token similarity does not establish source origin. Generated helpers, reordered
+  declarations, and lowered expressions therefore do not acquire line mappings
+  from matching identifiers or comments. Validation rejects legacy heuristic
+  line maps even when their hashes and sidecars are internally consistent;
+  regenerate those reports to record file-level provenance.
+  File-granularity mappings establish an artifact's source association, not a
+  byte-for-byte or line-for-line correspondence. A schema-1 source-remap sidecar
+  does not carry this distinction by itself: consumers must consult the report's
+  ``mappingGranularity`` and must not interpolate diagnostic locations through
+  file-level mappings. Compiler-side handling of coarse and synthetic provenance
+  remains a separate integration requirement.
   Artifact provenance records the
   ``single-file-translate`` pipeline and uses ``crossgl`` as the intermediate
   marker only when both source and target backends route through the CrossGL

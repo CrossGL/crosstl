@@ -5,22 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 29,
-        "endOffset": 612,
+        "endLine": 33,
+        "endOffset": 634,
         "file": "crosstl-out/opengl/shaders.glsl",
-        "length": 47,
-        "line": 28,
-        "offset": 565
+        "length": 634,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 34,
-        "endOffset": 851,
+        "endLine": 35,
+        "endOffset": 853,
         "file": "shaders.hlsl",
-        "length": 50,
-        "line": 33,
-        "offset": 801
+        "length": 853,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

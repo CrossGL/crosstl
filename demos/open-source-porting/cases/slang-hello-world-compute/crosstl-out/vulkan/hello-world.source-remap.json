@@ -4,11 +4,11 @@
     {
       "generated": {
         "column": 1,
-        "endColumn": 14,
-        "endLine": 84,
-        "endOffset": 2185,
+        "endColumn": 1,
+        "endLine": 85,
+        "endOffset": 2186,
         "file": "crosstl-out/vulkan/hello-world.spvasm",
-        "length": 2185,
+        "length": 2186,
         "line": 1,
         "offset": 0
       },
