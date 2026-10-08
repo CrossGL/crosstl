@@ -12165,12 +12165,21 @@ def _project_workgroup_rule_execution_metadata(
             if isinstance(record, Mapping)
             and _is_non_empty_string(record.get("hostName"))
         ]
+        # Split artifacts retain one materialization, but rule coverage belongs
+        # to the source's complete project selection, including sibling jobs.
+        rule_entry_points = (
+            _resolved_entry_points_for_unit(config, unit) or host_names
+            if entry_scoped
+            else host_names
+        )
         unmatched_entry_patterns = [
             pattern
             for pattern in entry_rules
-            if not any(fnmatch.fnmatch(host_name, pattern) for host_name in host_names)
+            if not any(
+                fnmatch.fnmatch(host_name, pattern) for host_name in rule_entry_points
+            )
         ]
-        if host_names and unmatched_entry_patterns:
+        if rule_entry_points and unmatched_entry_patterns:
             raise ProjectWorkgroupSizeError(
                 "Configured entry workgroup-size patterns remain unmatched by "
                 "host-named materializations.",
@@ -12181,7 +12190,7 @@ def _project_workgroup_rule_execution_metadata(
                     "sourcePattern": entry_source_pattern,
                     "entryPatterns": sorted(unmatched_entry_patterns),
                 },
-                materialization_details={"hostNames": sorted(host_names)},
+                materialization_details={"hostNames": sorted(rule_entry_points)},
             )
     joined = _workgroup_materialization_join(
         stages=stages,
@@ -47595,10 +47604,17 @@ def _artifact_rule_execution_contract_reasons(
             normalized_entry_rules.get(selected_entry_rule_source_pattern, {})
         )
         host_names = [str(item["hostName"]) for item in host_specializations]
+        rule_entry_points = (
+            _configured_entry_points_for_artifact(record, project) or host_names
+            if isinstance(record.get("entryPoint"), Mapping)
+            else host_names
+        )
         unmatched_entry_patterns = sorted(
             pattern
             for pattern in configured_entry_patterns
-            if not any(fnmatch.fnmatch(host_name, pattern) for host_name in host_names)
+            if not any(
+                fnmatch.fnmatch(host_name, pattern) for host_name in rule_entry_points
+            )
         )
         if unmatched_entry_patterns:
             reasons.append(

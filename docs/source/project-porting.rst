@@ -4728,6 +4728,11 @@ every host-named materialization must match an entry rule. Every configured
 entry pattern must match at least one host-named materialization. Missing entry
 coverage and stale patterns fail closed with
 ``project.translate.workgroup-size-entry-rule-unmatched``.
+When entries are selected explicitly or through discovery, pattern coverage is
+checked against the complete selection for that source, not separately against
+each split artifact. Each artifact still evaluates only its own matching rule
+using its materialized template parameters. Rules that match no selected entry
+remain errors, including rules for entries excluded from the selection.
 
 Metal also consumes source-wide and entry-specific workgroup-size rules, but as
 host-dispatch contracts rather than source specialization. MSL does not encode
