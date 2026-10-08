@@ -67,12 +67,12 @@ MLX_RMS_NORM_VJP_DISPATCH_CONTRACT = (
 )
 MLX_RMS_NORM_VJP_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "803e11dafc7906880a8f631780cdec4248de591dfd19daa1d16dd34e6163ac9c",
-        "sizeBytes": 6845,
+        "sha256": "7076ecd04029ecdf6b266eef11b3bda85f261ba40767b16a11c7314a5857f846",
+        "sizeBytes": 8863,
     },
     "opengl": {
-        "sha256": "8a295133430e3398d8f9b7dcb1b1e2a8a10b2739d4febdd4092737161223e234",
-        "sizeBytes": 7853,
+        "sha256": "ac05c7d026a131807c9f0d4190642c0f8d015cd58ea4db8194ab470fb7c93ab7",
+        "sizeBytes": 10257,
     },
 }
 REQUIRE_DIRECTX_PROOF_ENV = "CROSTL_REQUIRE_MLX_RMS_NORM_VJP_DIRECTX_NATIVE_LOADER"
@@ -490,6 +490,10 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "[WaveSize(32)]" in generated
         assert "static const bool has_w = true;" in generated
         assert "constant_id" not in generated
+        assert (
+            "__crossgl_metal_precise_rsqrt_float(((sumx2 / "
+            "vjp_rmsfloat32_axis_size) + vjp_rmsfloat32_eps))"
+        ) in generated
         assert dxc_compiler_arguments_for_source(generated) == ("-enable-16bit-types",)
         assert generated.count("WaveActiveSum(") == 4
         assert generated.count("GroupMemoryBarrierWithGroupSync();") == 3
@@ -507,6 +511,9 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "gl_Subgroup" not in generated
         assert "subgroupAdd" not in generated
         assert "layout(constant_id = 20) const bool has_w = false;" in generated
+        assert (
+            "crossgl_metal_precise_rsqrt_float(((sumx2 / float(axis_size)) + eps))"
+        ) in generated
         assert generated.count("crossglSoftwareSubgroupSumFloat(") == 5
         assert generated.count("barrier();") == 6
         assert "for (uint row = (gid * rows_per_group);" in generated

@@ -40,10 +40,11 @@ def _load_rms_norm_harness():
     return module
 
 
-def test_forward_normalization_reference_metadata_matches_native_workloads():
+def test_normalization_reference_metadata_matches_native_workloads():
     from demos.integrations.mlx.tests.kernels import (
         test_layer_norm_native_loader,
         test_rms_norm_native_loader,
+        test_rms_norm_vjp_native_loader,
     )
 
     demo_root = ROOT / "demos" / "integrations" / "mlx"
@@ -54,6 +55,10 @@ def test_forward_normalization_reference_metadata_matches_native_workloads():
         (
             "layer_norm",
             test_layer_norm_native_loader.MLX_LAYER_NORM_GENERATED_ARTIFACTS,
+        ),
+        (
+            "rms_norm_vjp",
+            test_rms_norm_vjp_native_loader.MLX_RMS_NORM_VJP_GENERATED_ARTIFACTS,
         ),
     ):
         artifacts = gaps[family + "_native_runtime_status"]["artifacts"]
@@ -10862,16 +10867,16 @@ def test_rms_norm_vjp_native_runtime_evidence_records_deferred_cross_target_proo
 
     directx = status["artifacts"]["directx"]
     assert directx["sha256"] == (
-        "803e11dafc7906880a8f631780cdec4248de591dfd19daa1d16dd34e6163ac9c"
+        "7076ecd04029ecdf6b266eef11b3bda85f261ba40767b16a11c7314a5857f846"
     )
-    assert directx["size_bytes"] == 6845
+    assert directx["size_bytes"] == 8863
     assert directx["wave_active_sum_call_count"] == 4
     assert directx["native_runtime"]["status"] == "required-on-ci"
     opengl = status["artifacts"]["opengl"]
     assert opengl["sha256"] == (
-        "8a295133430e3398d8f9b7dcb1b1e2a8a10b2739d4febdd4092737161223e234"
+        "ac05c7d026a131807c9f0d4190642c0f8d015cd58ea4db8194ab470fb7c93ab7"
     )
-    assert opengl["size_bytes"] == 7853
+    assert opengl["size_bytes"] == 10257
     assert opengl["specialization_enforcement"] == (
         "deferred-opengl-spirv-specialization"
     )

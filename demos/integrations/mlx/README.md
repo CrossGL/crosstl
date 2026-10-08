@@ -3585,16 +3585,25 @@ input and cotangent views. Materialization selects
 `vjp_rms_single_row<float, RMS_N_READS>` from four reachable specializations
 while pruning 168 unrelated candidates.
 
-The generated HLSL is 6,845 bytes with SHA-256
-`803e11dafc7906880a8f631780cdec4248de591dfd19daa1d16dd34e6163ac9c`.
+The generated HLSL is 8,863 bytes with SHA-256
+`7076ecd04029ecdf6b266eef11b3bda85f261ba40767b16a11c7314a5857f846`.
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, and compiles as `cs_6_6` with
-`-enable-16bit-types`. The generated software-subgroup GLSL is 7,853 bytes
+`-enable-16bit-types`. The generated software-subgroup GLSL is 10,257 bytes
 with SHA-256
-`8a295133430e3398d8f9b7dcb1b1e2a8a10b2739d4febdd4092737161223e234`.
+`ac05c7d026a131807c9f0d4190642c0f8d015cd58ea4db8194ab470fb7c93ab7`.
 It retains deferred OpenGL specialization constant `20`, emits six control
 barriers with no hardware-subgroup extension or SPIR-V group-nonuniform
 instruction, and passes `glslangValidator` plus `spirv-val`.
+
+Complete source comparison isolates the precise reciprocal-square-root helper,
+its declaration and one call substitution; resources and source-map origins are
+unchanged. Previous and updated OpenGL readbacks are identical for all 64
+gradient values. Comparison with unchanged original Metal gives a maximum
+absolute difference below `5.97e-8`, with 16 source-output guards and unchanged
+read-only buffers. Strict HLSL compilation and independently replayed Windows
+helper tests pass; complete updated-kernel execution remains required on
+Windows. No numerical tolerance or dispatch setting changes.
 
 RMSNorm VJP exercises a canonical runtime row loop. The explicit software
 subgroup path accepts that loop only after proving its initializer and bound

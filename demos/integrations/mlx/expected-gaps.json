@@ -6570,8 +6570,8 @@
     "artifacts": {
       "directx": {
         "target_entry_point": "CSMain",
-        "sha256": "803e11dafc7906880a8f631780cdec4248de591dfd19daa1d16dd34e6163ac9c",
-        "size_bytes": 6845,
+        "sha256": "7076ecd04029ecdf6b266eef11b3bda85f261ba40767b16a11c7314a5857f846",
+        "size_bytes": 8863,
         "subgroup_enforcement": "hlsl-wave-size-attribute",
         "compiler": "dxc",
         "compiler_profile": "cs_6_6",
@@ -6588,8 +6588,8 @@
       },
       "opengl": {
         "target_entry_point": "main",
-        "sha256": "8a295133430e3398d8f9b7dcb1b1e2a8a10b2739d4febdd4092737161223e234",
-        "size_bytes": 7853,
+        "sha256": "ac05c7d026a131807c9f0d4190642c0f8d015cd58ea4db8194ab470fb7c93ab7",
+        "size_bytes": 10257,
         "subgroup_enforcement": "explicit-32-lane-software-subgroup",
         "specialization_enforcement": "deferred-opengl-spirv-specialization",
         "compiler": "glslangValidator",
