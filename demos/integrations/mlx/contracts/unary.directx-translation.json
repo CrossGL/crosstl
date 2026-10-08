@@ -484,7 +484,7 @@
       1,
       1
     ],
-    "generatedSizeBytesTotal": 3766443,
+    "generatedSizeBytesTotal": 3774223,
     "generatedSizeRange": {
       "minimum": {
         "entryPoint": "v_Absint32int32",
@@ -2094,8 +2094,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "9c926b410d65a77af4ed49c7c9d2d0ff764358f7453df80aea1eb3a1706fbfd1",
-      "sizeBytes": 5525
+      "sha256": "af8929147d0d27f2b20f6af29bc9453364e783c1b0c58b14032713c405fd18fb",
+      "sizeBytes": 7081
     },
     {
       "entryPoint": "gn1_Signuint64uint64",
@@ -4107,8 +4107,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "42c5d0a4dcf006a32101407a04e42f810531a663a8f19822ee335d559279ad6c",
-      "sizeBytes": 5647
+      "sha256": "dcc779aefa98285c2abe2d68d083a20c0eeedce24efa8fb0d346de8315e1cc20",
+      "sizeBytes": 7203
     },
     {
       "entryPoint": "gn4large_Signuint64uint64",
@@ -6120,8 +6120,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "79105fa769fc9658498122b87b85295fd48630d1a43b250a08934854f9bd5fe3",
-      "sizeBytes": 5017
+      "sha256": "1b324ca3c13f165176cfd9aba068690d077616376f6d412ea7122e31d90917d3",
+      "sizeBytes": 6573
     },
     {
       "entryPoint": "v2_Signuint64uint64",
@@ -8133,8 +8133,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "d894ed6eb56391a4e959e88ae85cb7b1b32a01706fb8cedd055f3dd682b39631",
-      "sizeBytes": 4390
+      "sha256": "fa205c9374d615aa9a594dc1a9533b671fa7bcc131dffc0daaa50c4258aea9d5",
+      "sizeBytes": 5946
     },
     {
       "entryPoint": "v_Signuint64uint64",
@@ -9827,8 +9827,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "fa36f62eed290ab40f9eff492e494187d8f7caaba428dccd619e5ebc1b9c12ae",
-      "sizeBytes": 4691
+      "sha256": "59f071abe735c2defd8f7d7d8f8f5f02432e8871016a6d029cfc1d5e9b623fbc",
+      "sizeBytes": 6247
     },
     {
       "entryPoint": "vn_Signuint8uint8",
@@ -10171,6 +10171,18 @@
         "reviewedBodyCount": 34,
         "nativeCompiledEntryCount": 34,
         "requiredNumericalEntryIdentitiesUnchanged": true,
+        "unchangedSourceAndInterfaceContracts": true,
+        "numericalExecution": false,
+        "fullUpstreamSuite": false
+      },
+      {
+        "reason": "Retain the precise square-root helper in unused complex Sign overloads.",
+        "previousContractSha256": "936601b95f9099df378f7d0c7266f1595c648caf75304c789b60f252ead8db75",
+        "changedEntryCount": 5,
+        "unaffectedEntryCount": 872,
+        "reviewedBodyCount": 5,
+        "nativeCompiledEntryCount": 5,
+        "compiledBodiesIdentical": true,
         "unchangedSourceAndInterfaceContracts": true,
         "numericalExecution": false,
         "fullUpstreamSuite": false

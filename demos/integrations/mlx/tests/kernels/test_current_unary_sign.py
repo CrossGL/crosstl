@@ -342,3 +342,12 @@ def test_ci_requires_boolean_promotion(job_id):
             assert_paths_covered(
                 ci_coverage.workflow_event_path_filters(text, event), module
             )
+    if job_id == "mlx-metal-porting":
+        upload = (
+            ci_coverage.workflow_job_text(text, job_id)
+            .split("      - name: Upload comparison arithmetic evidence\n", 1)[1]
+            .split("      - name:", 1)[0]
+        )
+        assert "if: always()" in upload
+        assert "include-hidden-files: true" in upload
+        assert "if-no-files-found: error" in upload

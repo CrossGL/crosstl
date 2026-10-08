@@ -3717,6 +3717,7 @@ jobs:
         with:
           name: mlx-boolean-promotion-${{ runner.os }}
           path: mlx-boolean-promotion-results
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
 

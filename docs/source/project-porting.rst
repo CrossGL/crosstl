@@ -751,15 +751,19 @@ in total. Source scalar uses of
 ``device const int& ndim`` alias ``ndim[0]`` and source ``out_idx++`` remains a
 postfix update.
 
-The reviewed HLSL references total 3,766,443 bytes. The earlier complete review
+The reviewed HLSL references total 3,774,223 bytes. The earlier complete review
 compared all 877 artifacts against hash-verified originals and compiled them
 with warnings fatal, updating 603 identities and retaining 274. A subsequent
 review recompiles all 34 Exp and Sigmoid entries and updates 20 identities:
 15 scalar Exp entries preserve precise exponential calls and five bfloat
 Sigmoid entries preserve source arithmetic boundaries. The remaining 14
 selected bodies are unchanged. Source pins, materialization, ABI and launch
-contracts are unchanged. The separate required Windows Square and
-ArcCos numerical tests keep their existing artifact identities and tolerances.
+contracts are unchanged. Five unsigned 32-bit Sign identities additionally
+retain a precise square-root helper in an unused complex overload; their
+warning-fatal DXC modules are byte-identical before and after the change.
+Current-pin Windows native execution separately covers all five Sign layouts,
+3,303 output values and 40 output guards. The separate required Windows Square
+and ArcCos numerical tests keep their existing artifact identities and tolerances.
 This compiler contract does not establish numerical parity for all 877 entries.
 Historical Sigmoid uses the default exponential and no optional division
 profile; the current-pin, explicitly profiled numerical proof is separate.

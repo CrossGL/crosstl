@@ -38,7 +38,7 @@ UNARY_DIRECTX_CONTRACT_PATH = (
     / "unary.directx-translation.json"
 )
 UNARY_DIRECTX_CONTRACT_SHA256 = (
-    "936601b95f9099df378f7d0c7266f1595c648caf75304c789b60f252ead8db75"
+    "94538136695c3d6aa48c850e221ae65099ddff2a8096ea764bf76c05fbec344e"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
@@ -259,7 +259,7 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
             "gn4large": 1098,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 3766443,
+        "generatedSizeBytesTotal": 3774223,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 2262},
             "maximum": {
@@ -298,7 +298,7 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 3766443
+    assert sum(entry["sizeBytes"] for entry in entries) == 3774223
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
         2262,
         "v_Absint32int32",
@@ -546,7 +546,23 @@ def test_unary_artifact_refresh_preserves_corpus_scope():
                 "unchangedSourceAndInterfaceContracts": True,
                 "numericalExecution": False,
                 "fullUpstreamSuite": False,
-            }
+            },
+            {
+                "reason": (
+                    "Retain the precise square-root helper in unused complex Sign overloads."
+                ),
+                "previousContractSha256": (
+                    "936601b95f9099df378f7d0c7266f1595c648caf75304c789b60f252ead8db75"
+                ),
+                "changedEntryCount": 5,
+                "unaffectedEntryCount": 872,
+                "reviewedBodyCount": 5,
+                "nativeCompiledEntryCount": 5,
+                "compiledBodiesIdentical": True,
+                "unchangedSourceAndInterfaceContracts": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            },
         ],
     }
 

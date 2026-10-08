@@ -558,7 +558,13 @@ The current harness verifies:
   precise exponential call and half/bfloat return boundaries; the Sigmoid
   changes preserve bfloat arithmetic instead of inferring a half temporary.
   Their complete body review rejects altered bindings, index steps, rounding
-  constants and temporary types. The references now total 3,766,443 bytes;
+  constants and temporary types. A further review updates only the five
+  unsigned 32-bit Sign layouts: the source changes retain a precise square-root
+  helper in an unused complex overload, while warning-fatal DXC compilation
+  produces identical binaries before and after the change. Current-pin Windows
+  execution separately checks all five layouts, 3,303 output values and 40
+  output guards through the native loader. The references now total 3,774,223
+  bytes;
   source identities, classifications, resource bindings and dispatch contracts
   are unchanged. The required Windows Square and ArcCos numerical tests retain
   their existing shader identities, inputs and tolerances. Other historical
