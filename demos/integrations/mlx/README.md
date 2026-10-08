@@ -2557,7 +2557,7 @@ forward workload only. It does not redirect MLX host execution, run the MLX
 test suite, or cover VJP, float16, bfloat16, looped entries, other axis sizes,
 or the historical wider dispatch records above.
 
-A sibling current-corpus proof selects `vjp_layer_normfloat32` at axis size 32
+A sibling pinned-corpus proof selects `vjp_layer_normfloat32` at axis size 32
 through
 [`contracts/layer_norm_vjp.native-loader.dispatch.json`](contracts/layer_norm_vjp.native-loader.dispatch.json).
 It fixes one float32 row, `has_w=true` through function constant ID `20`, a
@@ -2570,16 +2570,25 @@ shape and weighted-gradient provenance. Materialization selects
 `threadgroup_sum<3>`, and `threadgroup_sum<1>` from seven reachable
 specializations while pruning 194 candidates.
 
-The generated HLSL is 7,584 bytes with SHA-256
-`9ea6cc8346a8847fbfc416a64583ac5736f5f7528ad78f613f0de0d72c4c7c4e`.
+The generated HLSL is 9,140 bytes with SHA-256
+`b684a98b4ef99d01084e8d0ea4e64d3075aa4e7fd75ef8becff2608b1c46cb86`.
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, compiles as `cs_6_6` with `-enable-16bit-types`, and
 must execute numerically through Direct3D 12 WARP on Windows CI. The generated
-software-subgroup GLSL is 8,376 bytes with SHA-256
-`21df3c6a5676d70ea1a737d1219a299d812a24261513d78e8d383ea496f18f77`.
+software-subgroup GLSL is 10,245 bytes with SHA-256
+`9bfbaf8bd3e6bfff172ea8461a4f75d011e9310647b33fe933773e576298fac8`.
 It retains deferred OpenGL specialization constant `20`, emits eight control
 barriers with no hardware-subgroup extension or SPIR-V group-nonuniform
 instruction, and passes `glslangValidator` plus `spirv-val`.
+
+Both references retain the source's explicit `metal::precise::sqrt` through the
+integer square-root helper. Relative to the previous artifacts, the only kernel
+change is that helper, its declaration, and one call substitution. Resource
+interfaces, specialization values and source-map origins are unchanged. The
+previous and current OpenGL kernels produce identical readbacks for this
+workload; an unchanged original Metal kernel, specialized with `has_w=true`,
+also passes the same numerical limits. This local comparison does not replace
+the required complete-kernel Windows execution.
 
 The OpenGL ABI package keeps its exact JSON runtime variant registry ready and
 actionable. Its generated native C++ registry header is deliberately marked

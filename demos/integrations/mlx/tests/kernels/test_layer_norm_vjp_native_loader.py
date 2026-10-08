@@ -69,12 +69,12 @@ MLX_LAYER_NORM_VJP_DISPATCH_CONTRACT = (
 )
 MLX_LAYER_NORM_VJP_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "9ea6cc8346a8847fbfc416a64583ac5736f5f7528ad78f613f0de0d72c4c7c4e",
-        "sizeBytes": 7584,
+        "sha256": "b684a98b4ef99d01084e8d0ea4e64d3075aa4e7fd75ef8becff2608b1c46cb86",
+        "sizeBytes": 9140,
     },
     "opengl": {
-        "sha256": "21df3c6a5676d70ea1a737d1219a299d812a24261513d78e8d383ea496f18f77",
-        "sizeBytes": 8376,
+        "sha256": "9bfbaf8bd3e6bfff172ea8461a4f75d011e9310647b33fe933773e576298fac8",
+        "sizeBytes": 10245,
     },
 }
 REQUIRE_DIRECTX_PROOF_ENV = "CROSTL_REQUIRE_MLX_LAYER_NORM_VJP_DIRECTX_NATIVE_LOADER"
@@ -482,6 +482,12 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
     assert "initialize_buffer_3" in generated
     assert "threadgroup_sum_3" in generated
     assert "threadgroup_sum_1" in generated
+    sqrt_helper = (
+        "__crossgl_metal_precise_sqrt_float"
+        if target == "directx"
+        else "crossgl_metal_precise_sqrt_float"
+    )
+    assert f"float normalizer = {sqrt_helper}(factors[normalizer2]);" in generated
     if target == "directx":
         assert entry["subgroupWidth"] == 32
         assert artifact["dispatchArtifact"]["artifactId"] == (

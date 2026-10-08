@@ -11167,16 +11167,16 @@ def test_layer_norm_vjp_native_runtime_evidence_records_deferred_cross_target_pr
 
     directx = status["artifacts"]["directx"]
     assert directx["sha256"] == (
-        "9ea6cc8346a8847fbfc416a64583ac5736f5f7528ad78f613f0de0d72c4c7c4e"
+        "b684a98b4ef99d01084e8d0ea4e64d3075aa4e7fd75ef8becff2608b1c46cb86"
     )
-    assert directx["size_bytes"] == 7584
+    assert directx["size_bytes"] == 9140
     assert directx["wave_active_sum_call_count"] == 4
     assert directx["native_runtime"]["status"] == "required-on-ci"
     opengl = status["artifacts"]["opengl"]
     assert opengl["sha256"] == (
-        "21df3c6a5676d70ea1a737d1219a299d812a24261513d78e8d383ea496f18f77"
+        "9bfbaf8bd3e6bfff172ea8461a4f75d011e9310647b33fe933773e576298fac8"
     )
-    assert opengl["size_bytes"] == 8376
+    assert opengl["size_bytes"] == 10245
     assert opengl["specialization_enforcement"] == (
         "deferred-opengl-spirv-specialization"
     )
