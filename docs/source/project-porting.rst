@@ -2780,11 +2780,16 @@ parameters. Ordinary helper references retain their existing direction
 qualifiers. OpenGL distinguishes value updates through an entry reference from
 pointer-offset updates, including when both occur in the same function.
 Required native tests cover initialized signed 32-bit scalar writes on all
-three targets and two- or four-component vector writes on Metal and OpenGL.
+three targets, including two- and four-component vector writes.
 The tests retain buffer guards, aligned offsets and disjoint writable views of
-one allocation; Metal also executes the unchanged original source. Vector entry
-references on DirectX, unresolved aliases and overlapping writable views are
-not established by this coverage.
+one allocation; Metal also executes the unchanged original source. DirectX
+promotes read-only device vector references to structured buffers and constant
+references to constant blocks, retaining access modes, component types and
+widths in the package interface. Buffer-reference expressions address the
+first value, not a mutable pointer offset. Local values and helper parameters
+that shadow a global buffer retain their arithmetic updates. Unresolved aliases,
+padded source layouts and overlapping writable views are not established by
+this coverage.
 
 An HLSL artifact may explicitly distinguish logical binary16 values from native
 unsigned 16-bit storage. Its first line contains a versioned resource contract,

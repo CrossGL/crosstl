@@ -29250,6 +29250,27 @@ def test_directx_allows_non_resource_shadow_of_global_resource_when_not_used_as_
     assert "float3 texNormal = float3(input.uv, 1.0);" in generated_code
 
 
+@pytest.mark.parametrize("resource", ["RWStructuredBuffer<int>", "RWByteAddressBuffer"])
+@pytest.mark.parametrize("value_type", ["int", "ivec2", "ivec4"])
+def test_directx_buffer_name_shadow_preserves_value_updates(resource, value_type):
+    shader = f"""
+    shader ResourceShadow {{
+        {resource} value;
+        void adjust(inout {value_type} value) {{
+            value += {value_type}(3);
+        }}
+        {value_type} local_update() {{
+            {value_type} value = {value_type}(2);
+            value += {value_type}(5);
+            return value;
+        }}
+    }}
+    """
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert generated.count("value += ") == 2
+    assert "value_offset" not in generated
+
+
 def test_directx_rejects_texture_call_with_shadowing_non_resource_local():
     shader = """
     shader InvalidResourceShadow {

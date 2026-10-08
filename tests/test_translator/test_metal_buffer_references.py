@@ -28,6 +28,8 @@ REFERENCE_TARGETS = [
     ("metal", 2),
     ("metal", 4),
     ("directx", 1),
+    ("directx", 2),
+    ("directx", 4),
     ("opengl", 1),
     ("opengl", 2),
     ("opengl", 4),
@@ -330,6 +332,8 @@ def test_writable_entry_reference_single_file_retains_resources(
         resource["access"] == "read_write" for resource in interface["resources"]
     )
     assert "value_offset" not in generated
+    if target == "directx":
+        assert "value += " in generated
 
 
 @pytest.mark.parametrize("target,width", REFERENCE_TARGETS)
@@ -360,6 +364,19 @@ def test_reference_layout_survives_public_package(tmp_path, target, width):
     assert set(names) == {"samples", "bias", "result"}
     request = _request(descriptor, package, inputs, outputs, target)
     assert request.execution_plan.diagnostics == ()
+    bindings = {binding["name"]: binding for binding in descriptor["bindings"]}
+    assert bindings[names["samples"]]["access"] == "read"
+    assert bindings[names["bias"]]["access"] == "read"
+    assert bindings[names["result"]]["access"] == "read_write"
+    for name in ("samples", "bias", "result"):
+        layout = bindings[names[name]]["scalarLayout"]
+        assert layout["elementType"] == "int32"
+        assert layout.get("vectorWidth", 1) == width
+        assert layout["elementSizeBytes"] == width * 4
+    if target == "directx":
+        layout = bindings[names["bias"]]["scalarLayout"]
+        assert layout["storageLayout"] == "hlsl-constant-buffer"
+        assert layout["blockSizeBytes"] == 16
     if target == "metal":
         for binding in descriptor["bindings"]:
             if binding["name"] == names["samples"]:
@@ -368,6 +385,47 @@ def test_reference_layout_survives_public_package(tmp_path, target, width):
     for resource in request.execution_plan.resource_bindings:
         if resource.binding.kind == "buffer":
             assert resource.allocation.byte_offset == 256
+
+
+@pytest.mark.parametrize("qualifiers", ["device const", "const device"])
+@pytest.mark.parametrize("base_type", ["int", "uint", "float"])
+@pytest.mark.parametrize("width", [2, 4])
+def test_directx_vector_reference_component_access(
+    tmp_path, qualifiers, base_type, width
+):
+    vector = f"{base_type}{width}"
+    source = tmp_path / "reference.metal"
+    source.write_text(
+        f"""#include <metal_stdlib>
+using namespace metal;
+void adjust(device {vector}& value) {{
+    value.x += {base_type}(3);
+    value[1] -= {base_type}(2);
+}}
+kernel void references({qualifiers} {vector}& samples [[buffer(0)]],
+                       constant {vector}& bias [[buffer(1)]],
+                       device {vector}& value [[buffer(2)]]) {{
+    value = samples + bias;
+    adjust(value);
+    value[1] += samples.x + bias[1];
+}}
+""",
+        encoding="utf-8",
+    )
+    generated = translate(str(source), backend="directx", format_output=False)
+    assert f"StructuredBuffer<{vector}> samples : register(t0);" in generated
+    assert f"RWStructuredBuffer<{vector}> value : register(u2);" in generated
+    assert f"{vector} references_bias;" in generated
+    assert "void CSMain()" in generated
+    assert f"void adjust(inout {vector} value)" in generated
+    assert "adjust(value[0]);" in generated
+    ir_vector = {"int": "ivec", "uint": "uvec", "float": "vec"}[base_type]
+    helper = f"CrossGLMetalVectorIndex_{ir_vector}{width}"
+    assert (
+        f"{helper}_add_assign(value[0], 1, "
+        f"(samples[0].x + {helper}_get(references_bias, 1)));"
+    ) in generated
+    assert "_offset" not in generated
 
 
 @pytest.mark.parametrize(
@@ -379,12 +437,15 @@ def test_reference_layout_survives_public_package(tmp_path, target, width):
         ("read-only", "value-duplicate"),
     ],
 )
-def test_reference_dispatch_rejects_incompatible_values(tmp_path, mutation, code):
-    descriptor, package, inputs, outputs, names = _package(tmp_path, "metal")
+@pytest.mark.parametrize("target,width", REFERENCE_TARGETS)
+def test_reference_dispatch_rejects_incompatible_values(
+    tmp_path, mutation, code, target, width
+):
+    descriptor, package, inputs, outputs, names = _package(tmp_path, target, width)
     name = names["samples"]
     value = inputs[name]
     if mutation == "dtype":
-        inputs[name] = replace(value, dtype="uint32", values=[3])
+        inputs[name] = replace(value, dtype="uint32", values=[3] * width)
     elif mutation == "view":
         inputs[name] = replace(
             value, allocation=replace(value.allocation, byte_length=1)
@@ -396,7 +457,7 @@ def test_reference_dispatch_rejects_incompatible_values(tmp_path, mutation, code
     else:
         outputs[name] = value
     with pytest.raises(NativeLoaderDispatchError) as caught:
-        _request(descriptor, package, inputs, outputs, "metal")
+        _request(descriptor, package, inputs, outputs, target)
     assert caught.value.code.endswith(code)
     if mutation in {"view", "alignment"}:
         assert any(
@@ -415,8 +476,7 @@ def test_device_reference_native_readback(tmp_path):
     )
     if os.environ.get("CROSTL_REQUIRE_DEVICE_REFERENCES") != "1" or target is None:
         pytest.skip("requires native device-reference validation")
-    # Vector entry-reference lowering is not yet available on DirectX.
-    for width in ([1] if target == "directx" else [1, 2, 4]):
+    for width in [1, 2, 4]:
         work = tmp_path / str(width)
         work.mkdir()
         descriptor, package, inputs, outputs, names = _package(work, target, width)
@@ -424,12 +484,21 @@ def test_device_reference_native_readback(tmp_path):
         artifact = package / descriptor["artifact"]["packagePath"]
         _validate(artifact, work, target)
         request = _request(descriptor, package, inputs, outputs, target)
+        _record_reference_request(work, request)
         executor = _executor(target)
         availability = executor.is_available(request)
         assert availability.available, availability.reason
         result = executor.run(request)
         (work / "readback.json").write_text(
-            json.dumps(result.outputs, indent=2), encoding="utf-8"
+            json.dumps(
+                {
+                    "status": result.status,
+                    "outputs": result.outputs,
+                    "details": result.details,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
         )
         assert result.status == "ok"
         for name, expected in outputs.items():
