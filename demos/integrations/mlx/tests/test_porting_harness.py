@@ -2647,6 +2647,12 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert generated_identities(layer_norm["variants"], "sha256") == (
         module.MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS["layer_norm"]
     )
+    readme = MLX_README_PATH.read_text(encoding="utf-8")
+    for identity in module.MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS[
+        "layer_norm"
+    ].values():
+        assert identity["sha256"] in readme
+        assert f'{identity["sizeBytes"]:,} bytes' in readme
     assert layer_norm["dxc_validated_artifact_count"] == 2
     assert layer_norm["runtime_execution_attempted"] is False
     assert layer_norm["numerical_parity_claimed"] is False
@@ -11103,7 +11109,7 @@ def test_layer_norm_native_runtime_evidence_records_bounded_cross_target_proof()
     )
     assert historical["runtime_execution_attempted"] is False
     assert historical["runtime_execution_scope"] == (
-        "historical-axis-4096-forward-and-vjp-variants-only"
+        "historical-axis-4099-forward-and-axis-8192-vjp-variants-only"
     )
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())

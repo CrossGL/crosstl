@@ -381,15 +381,15 @@ MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS = {
     "layer_norm": {
         "layer_normfloat32": {
             "sha256": (
-                "7fb81ede8da4270a09a2c4b49918663204dc10fa9a671d614a3ff0a07c4b8995"
+                "cbe455f2066a28047f0c29b577d0805af38c038d774f19208ee13b3c90a23c54"
             ),
-            "sizeBytes": 5731,
+            "sizeBytes": 7749,
         },
         "vjp_layer_normfloat32": {
             "sha256": (
-                "252d357177714ab033fb5022e42d40e87294e7364ed60728acb7c8d4c22b02ea"
+                "0bb98d28a12fb57d0ab5c33d97ebcffc141e2ed333f76c2329957a72353ff213"
             ),
-            "sizeBytes": 8060,
+            "sizeBytes": 9616,
         },
     },
     "logsumexp": {

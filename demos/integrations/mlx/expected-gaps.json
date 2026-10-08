@@ -8304,8 +8304,8 @@
           "subgroup_width_enforcement": "WaveSize(32)",
           "specialization_constants": {},
           "generated_hlsl": {
-            "sha256": "7fb81ede8da4270a09a2c4b49918663204dc10fa9a671d614a3ff0a07c4b8995",
-            "size_bytes": 5731
+            "sha256": "cbe455f2066a28047f0c29b577d0805af38c038d774f19208ee13b3c90a23c54",
+            "size_bytes": 7749
           }
         },
         "vjp_layer_normfloat32": {
@@ -8322,15 +8322,15 @@
             "20": true
           },
           "generated_hlsl": {
-            "sha256": "252d357177714ab033fb5022e42d40e87294e7364ed60728acb7c8d4c22b02ea",
-            "size_bytes": 8060
+            "sha256": "0bb98d28a12fb57d0ab5c33d97ebcffc141e2ed333f76c2329957a72353ff213",
+            "size_bytes": 9616
           }
         }
       },
       "dxc_validated_artifact_count": 2,
       "bounded_axis_32_native_runtime_evidence": "layer_norm_native_runtime_status",
       "runtime_execution_attempted": false,
-      "runtime_execution_scope": "historical-axis-4096-forward-and-vjp-variants-only",
+      "runtime_execution_scope": "historical-axis-4099-forward-and-axis-8192-vjp-variants-only",
       "numerical_parity_claimed": false
     },
     "logsumexp_dispatch_frontier": {

@@ -2497,7 +2497,17 @@ proof into the repository-level project report; it does not add runtime
 execution or numerical parity for those historical axis-size-4099 forward and
 axis-size-8192 VJP records.
 
-A separate current-corpus proof selects the forward `layer_normfloat32` entry at
+The reviewed forward artifact is 7,749 bytes with SHA-256
+`cbe455f2066a28047f0c29b577d0805af38c038d774f19208ee13b3c90a23c54`;
+the VJP artifact is 9,616 bytes with SHA-256
+`0bb98d28a12fb57d0ab5c33d97ebcffc141e2ed333f76c2329957a72353ff213`.
+Their complete body changes preserve the source's precise reciprocal-square-root
+and square-root operations, respectively. Resource interfaces, host dispatch
+contracts and source-map origins are unchanged. Both pass strict DXC compilation;
+the shared helpers have independent native arithmetic checks, but those checks
+do not establish execution or numerical parity for these larger workloads.
+
+A separate historical proof selects the forward `layer_normfloat32` entry at
 commit `846d176227a0ac13d2667e58d2bb68b322109ab0` through
 [`contracts/layer_norm.native-loader.dispatch.json`](contracts/layer_norm.native-loader.dispatch.json).
 It records the exact host formula
