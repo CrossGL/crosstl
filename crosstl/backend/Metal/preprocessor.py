@@ -25,6 +25,7 @@ from typing import (
 
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
+from .floating_point import reject_contraction_tokens
 from .function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_function_parameter_declarations,
@@ -971,6 +972,14 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._static_constexpr_helper_resolution_stack = []
         code = self._strip_leading_compiler_diagnostics(code)
         processed = super().preprocess(code, file_path=file_path)
+        if "contract" in processed or "FP_CONTRACT" in processed:
+            # Inspect active expanded tokens before materialization changes the
+            # lexical scope of a directive or prunes its containing template.
+            from .MetalLexer import MetalLexer
+
+            reject_contraction_tokens(
+                MetalLexer(processed, preprocess=False).token_generator()
+            )
         self._configure_inferred_bitcast_ownership(processed)
         self._configure_integral_constant_contracts(processed)
         processed = self._materialize_project_template_instantiations(processed)

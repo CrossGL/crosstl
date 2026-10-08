@@ -16488,7 +16488,9 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_hash_rollups",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_variant_define_backed_include_resolution_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_variant_dynamic_include_diagnostics",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_variant_nested_include_cycle_diagnostics"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_variant_nested_include_cycle_diagnostics",
+            "tests/test_backend/test_metal/test_floating_point.py::def test_project_report_exposes_contraction_failure_for_each_target",
+            "tests/test_backend/test_metal/test_floating_point.py::def test_contraction_check_precedes_template_rewriting"
           ]
         },
         "vulkan": {

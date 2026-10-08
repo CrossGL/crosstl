@@ -1483,6 +1483,19 @@ compiler's optional contraction of products with surrounding additions or
 subtractions. Qualify the policy against the source build and device before
 using it for a project. It does not establish whole-project numerical parity.
 
+Metal source contraction controls are not yet preserved across translation.
+Active ``#pragma clang fp contract(...)``, ``#pragma STDC FP_CONTRACT`` and
+``#pragma OPENCL FP_CONTRACT`` directives, including their ``_Pragma`` forms,
+produce ``project.translate.metal-contraction-unsupported``. The check runs
+after conditional and macro expansion but before template materialization,
+so moving or pruning a template cannot silently erase its source policy.
+Comments, string literals, inactive branches and unused macro definitions do
+not select a policy. Keep affected source on its original backend until the
+directive's lexical semantics can be represented. Neither ``-fno-fast-math``
+nor an individual arithmetic profile is a substitute for contraction control.
+This diagnostic does not establish equivalence for directive-free source or
+implement source compiler flags, scoped lowering or contraction provenance.
+
 The legacy MLX copy reference at
 ``846d176227a0ac13d2667e58d2bb68b322109ab0`` proves all 2,496 discovered entries
 from ``copy.metal`` through Metal-to-CrossGL-to-Metal translation. The family

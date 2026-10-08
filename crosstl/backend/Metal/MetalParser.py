@@ -3,6 +3,7 @@
 import re
 import sys
 
+from .floating_point import reject_contraction_tokens
 from .MetalAst import *
 from .MetalLexer import *
 from .preprocessor import DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
@@ -584,6 +585,7 @@ class MetalParser:
 
     def parse(self):
         ensure_metal_parse_recursion_limit()
+        reject_contraction_tokens(self.tokens)
         try:
             shader = self.parse_shader()
             self.eat("EOF")
