@@ -76,6 +76,7 @@ from crosstl.project.translation_checkpoint import (
     ProjectTranslationCheckpointError,
     ProjectTranslationCheckpointRecorder,
     load_project_translation_checkpoint,
+    project_translation_implementation_identity,
 )
 from crosstl.translator.ast import (
     AttributeNode,
@@ -11086,6 +11087,7 @@ def _project_translation_checkpoint_identity(
         "targets": list(targets),
         "outputDir": str(scan.config.output_path),
         "packageVersion": _package_version(),
+        "implementation": project_translation_implementation_identity(),
     }
 
 

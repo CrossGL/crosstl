@@ -335,12 +335,27 @@ options:
      --checkpoint crosstl-reports/translation-checkpoint.json \
      --resume
 
-Before skipping a completed job, resume verifies the project identity, complete
-job plan, current source identity, generated artifact hash and size, and source
-remap hash and size. Stale, modified, missing, or mismatched outputs stop the
-resume instead of being trusted. A checkpoint path must be outside the artifact
-output directory and cannot replace the project configuration or a registered
-source file.
+Before skipping a completed job, resume verifies the project identity, translator
+implementation, complete job plan, current source identity, generated artifact
+hash and size, and source remap hash and size. Stale, modified, missing, or
+mismatched outputs stop the resume instead of being trusted. A checkpoint path
+must be outside the artifact output directory and cannot replace the project
+configuration or a registered source file.
+
+The implementation identity hashes the installed Python and native worker
+sources, including their package-relative paths. It does not require Git and is
+independent of installation location, bytecode caches and source newline style.
+Both released packages and editable installations use this identity; matching
+version numbers alone do not establish compatibility. Source-backed packages are
+required for checkpointing. Keep the installed sources unchanged during a run.
+This fingerprint does not identify external compilers, dependencies or in-memory
+runtime modifications.
+
+Older checkpoints without an implementation identity, or checkpoints from a
+different implementation, are rejected before completed artifacts are reused.
+Restart without ``--resume`` and select a new checkpoint path after updating
+CrossTL. Rejection does not overwrite the old checkpoint or its completed
+artifacts.
 
 The default writes each job transition. For projects with large report metadata,
 ``--checkpoint-interval-jobs N`` persists batches of completed jobs. A larger

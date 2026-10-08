@@ -28,6 +28,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Fixed
 
+- Project checkpoints identify the installed translator sources as well as the package version. Resume rejects changed implementations and legacy checkpoints before reusing artifacts, preserving saved progress and providing restart instructions.
 - Unreferenced out-of-line Metal call operators no longer block kernel translation. Library definitions, referenced owners and uncertain bindings remain intact; selected qualified bodies retain their source behavior under explicit arithmetic profiles.
 - Precise Metal square roots use correctly rounded integer arithmetic with explicit operand-underflow profiles, preserving signed zeros and recording the selected policy in reports and runtime packages.
 - Precise Metal logarithms use range-reduced binary32 arithmetic with explicit operand-underflow profiles, preserving accuracy near one and retaining the selected policy in reports and runtime packages.

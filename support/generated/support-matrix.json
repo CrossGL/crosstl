@@ -9679,9 +9679,12 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
             "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_same_version_resume_checks_implementation_before_reusing_artifacts",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_detects_same_size_same_timestamp_edits",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_is_portable_across_paths_and_text_newlines",
             "docs/source/project-porting.rst"
           ],
-          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, a path-independent SHA-256 identity of installed Python and native worker sources, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Changed implementations and legacy checkpoints require a fresh checkpoint; rejection preserves saved progress and artifacts. Package versions alone do not establish compatibility. External tools and dependencies are not covered by the implementation identity. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
           "status": "supported"
         },
         "directx": {
@@ -9691,9 +9694,12 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
             "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_same_version_resume_checks_implementation_before_reusing_artifacts",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_detects_same_size_same_timestamp_edits",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_is_portable_across_paths_and_text_newlines",
             "docs/source/project-porting.rst"
           ],
-          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, a path-independent SHA-256 identity of installed Python and native worker sources, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Changed implementations and legacy checkpoints require a fresh checkpoint; rejection preserves saved progress and artifacts. Package versions alone do not establish compatibility. External tools and dependencies are not covered by the implementation identity. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
           "status": "supported"
         },
         "hip": {
@@ -9703,9 +9709,12 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
             "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_same_version_resume_checks_implementation_before_reusing_artifacts",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_detects_same_size_same_timestamp_edits",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_is_portable_across_paths_and_text_newlines",
             "docs/source/project-porting.rst"
           ],
-          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, a path-independent SHA-256 identity of installed Python and native worker sources, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Changed implementations and legacy checkpoints require a fresh checkpoint; rejection preserves saved progress and artifacts. Package versions alone do not establish compatibility. External tools and dependencies are not covered by the implementation identity. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
           "status": "supported"
         },
         "metal": {
@@ -9715,9 +9724,12 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
             "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_same_version_resume_checks_implementation_before_reusing_artifacts",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_detects_same_size_same_timestamp_edits",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_is_portable_across_paths_and_text_newlines",
             "docs/source/project-porting.rst"
           ],
-          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, a path-independent SHA-256 identity of installed Python and native worker sources, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Changed implementations and legacy checkpoints require a fresh checkpoint; rejection preserves saved progress and artifacts. Package versions alone do not establish compatibility. External tools and dependencies are not covered by the implementation identity. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
           "status": "supported"
         },
         "mojo": {
@@ -9727,9 +9739,12 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
             "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_same_version_resume_checks_implementation_before_reusing_artifacts",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_detects_same_size_same_timestamp_edits",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_is_portable_across_paths_and_text_newlines",
             "docs/source/project-porting.rst"
           ],
-          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, a path-independent SHA-256 identity of installed Python and native worker sources, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Changed implementations and legacy checkpoints require a fresh checkpoint; rejection preserves saved progress and artifacts. Package versions alone do not establish compatibility. External tools and dependencies are not covered by the implementation identity. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
           "status": "supported"
         },
         "opengl": {
@@ -9739,9 +9754,12 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
             "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_same_version_resume_checks_implementation_before_reusing_artifacts",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_detects_same_size_same_timestamp_edits",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_is_portable_across_paths_and_text_newlines",
             "docs/source/project-porting.rst"
           ],
-          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, a path-independent SHA-256 identity of installed Python and native worker sources, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Changed implementations and legacy checkpoints require a fresh checkpoint; rejection preserves saved progress and artifacts. Package versions alone do not establish compatibility. External tools and dependencies are not covered by the implementation identity. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
           "status": "supported"
         },
         "rust": {
@@ -9751,9 +9769,12 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
             "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_same_version_resume_checks_implementation_before_reusing_artifacts",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_detects_same_size_same_timestamp_edits",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_is_portable_across_paths_and_text_newlines",
             "docs/source/project-porting.rst"
           ],
-          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, a path-independent SHA-256 identity of installed Python and native worker sources, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Changed implementations and legacy checkpoints require a fresh checkpoint; rejection preserves saved progress and artifacts. Package versions alone do not establish compatibility. External tools and dependencies are not covered by the implementation identity. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
           "status": "supported"
         },
         "slang": {
@@ -9763,9 +9784,12 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
             "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_same_version_resume_checks_implementation_before_reusing_artifacts",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_detects_same_size_same_timestamp_edits",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_is_portable_across_paths_and_text_newlines",
             "docs/source/project-porting.rst"
           ],
-          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, a path-independent SHA-256 identity of installed Python and native worker sources, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Changed implementations and legacy checkpoints require a fresh checkpoint; rejection preserves saved progress and artifacts. Package versions alone do not establish compatibility. External tools and dependencies are not covered by the implementation identity. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
           "status": "supported"
         },
         "vulkan": {
@@ -9775,9 +9799,12 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
             "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_same_version_resume_checks_implementation_before_reusing_artifacts",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_detects_same_size_same_timestamp_edits",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_is_portable_across_paths_and_text_newlines",
             "docs/source/project-porting.rst"
           ],
-          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, a path-independent SHA-256 identity of installed Python and native worker sources, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Changed implementations and legacy checkpoints require a fresh checkpoint; rejection preserves saved progress and artifacts. Package versions alone do not establish compatibility. External tools and dependencies are not covered by the implementation identity. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
           "status": "supported"
         },
         "webgl": {
@@ -9787,9 +9814,12 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
             "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_same_version_resume_checks_implementation_before_reusing_artifacts",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_detects_same_size_same_timestamp_edits",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_is_portable_across_paths_and_text_newlines",
             "docs/source/project-porting.rst"
           ],
-          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, a path-independent SHA-256 identity of installed Python and native worker sources, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Changed implementations and legacy checkpoints require a fresh checkpoint; rejection preserves saved progress and artifacts. Package versions alone do not establish compatibility. External tools and dependencies are not covered by the implementation identity. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
           "status": "supported"
         },
         "wgsl": {
@@ -9799,9 +9829,12 @@
             "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
             "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
             "demos/integrations/mlx/tests/test_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_same_version_resume_checks_implementation_before_reusing_artifacts",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_detects_same_size_same_timestamp_edits",
+            "tests/test_translator/test_checkpoint_implementation_identity.py::def test_implementation_identity_is_portable_across_paths_and_text_newlines",
             "docs/source/project-porting.rst"
           ],
-          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, a path-independent SHA-256 identity of installed Python and native worker sources, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Changed implementations and legacy checkpoints require a fresh checkpoint; rejection preserves saved progress and artifacts. Package versions alone do not establish compatibility. External tools and dependencies are not covered by the implementation identity. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
           "status": "supported"
         }
       }
