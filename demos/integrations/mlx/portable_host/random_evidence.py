@@ -8,6 +8,10 @@ from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_native_execution,
     require,
 )
+from demos.integrations.mlx.portable_host.random_layout import (
+    MAX_NATIVE_BYTES,
+    MAX_WORKGROUP_COUNT,
+)
 from demos.integrations.mlx.portable_host.random_workloads import words
 
 
@@ -101,7 +105,7 @@ def audit_event(np, event):
     require(
         per_key > 0
         and native_size == max(4, per_key)
-        and native_size * count + 17 <= 65535
+        and native_size * count <= MAX_NATIVE_BYTES
         and count == metadata["keyCount"]
         and word_count == metadata["wordCount"],
         "Random logical storage metadata differs",
@@ -136,7 +140,8 @@ def audit_event(np, event):
     )
     grid = [count, (word_count + 1) // 2, 1]
     require(
-        event["workgroupCount"] == request["dispatch"]["workgroupCount"] == grid
+        all(1 <= size <= MAX_WORKGROUP_COUNT for size in grid)
+        and event["workgroupCount"] == request["dispatch"]["workgroupCount"] == grid
         and event["workgroupSize"] == request["dispatch"]["workgroupSize"] == [1, 1, 1],
         "Random native launch differs",
     )

@@ -1,7 +1,9 @@
+import copy
 import ctypes
 import hashlib
 import json
 import math
+from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +15,7 @@ from demos.integrations.mlx import random_audit
 from demos.integrations.mlx.portable_host import (
     random_dispatch,
     random_evidence,
+    random_layout,
     random_packages,
     random_workloads,
     runtime,
@@ -83,6 +86,8 @@ def test_random_validates_contiguous_strided_and_broadcast_keys(
         "entry",
         "missing",
         "null",
+        "alignment",
+        "address-overflow",
         "dtype",
         "direction",
         "count",
@@ -110,6 +115,10 @@ def test_random_rejects_invalid_metadata(fault):
         supplied.pop("ndim")
     elif fault == "null":
         supplied["keys"].data = None
+    elif fault == "alignment":
+        supplied["keys"].data += 1
+    elif fault == "address-overflow":
+        supplied["keys"].data = (1 << (ctypes.sizeof(ctypes.c_void_p) * 8)) - 4
     elif fault == "dtype":
         supplied["keys"].dtype = b"int32"
     elif fault == "direction":
@@ -145,6 +154,7 @@ def test_random_rejects_invalid_metadata(fault):
 
 
 def descriptor(target, entry):
+    """Synthetic reflected layouts used only for host validation tests."""
     names = ["keys", "out", "odd", "bytes_per_key"]
     if entry == "rbits":
         names.extend(("ndim", "key_shape", "key_strides"))
@@ -300,6 +310,8 @@ def test_random_writeback_requires_exact_native_storage(
         "invalid",
         "list",
         "null",
+        "output-bound",
+        "legacy-bound",
     ],
 )
 def test_random_index_verifies_source_and_package_identity(
@@ -326,12 +338,17 @@ def test_random_index_verifies_source_and_package_identity(
     index = {
         "commit": random_packages.COMMIT,
         "target": "opengl",
+        "maximumNativeByteCount": random_layout.MAX_NATIVE_BYTES,
         "descriptors": json.loads(json.dumps(descriptors)),
     }
     if fault == "pin":
         index["commit"] = "wrong"
     elif fault == "target":
         index["target"] = "metal"
+    elif fault == "output-bound":
+        index["maximumNativeByteCount"] = 65518
+    elif fault == "legacy-bound":
+        index.pop("maximumNativeByteCount")
     elif fault == "entry":
         units[0]["entryPoint"]["source"] = "unknown"
     elif fault in {"source", "backend", "hash"}:
@@ -372,7 +389,8 @@ def test_random_index_verifies_source_and_package_identity(
         assert random_packages.load_index(tmp_path, "opengl") == descriptors
 
 
-def workload_records(native):
+@lru_cache(maxsize=2)
+def _workload_records(native):
     records, trace = [], []
     for case in random_workloads.cases():
         reference = random_workloads.expected(np, case)
@@ -401,6 +419,10 @@ def workload_records(native):
                 }
             )
     return records, trace
+
+
+def workload_records(native):
+    return copy.deepcopy(_workload_records(native))
 
 
 @pytest.mark.parametrize("native", [True, False])
@@ -441,7 +463,61 @@ def test_random_workload_requires_exact_inventory_and_results(native, fault):
             random_workloads.validate(np, records, trace, native=native)
     else:
         random_workloads.validate(np, records, trace, native=native)
-        assert len(records) == 42
+        assert len(records) == 48
+
+
+@pytest.mark.parametrize("per_key", (65536, 262144, 524280))
+@pytest.mark.parametrize("strides,entry", (((2, 1), "rbitsc"), ((1, 3), "rbits")))
+def test_random_output_size_is_not_a_key_storage_limit(per_key, strides, entry):
+    supplied, memory, launch = buffers(per_key, strides=strides)
+    layout, metadata = random_dispatch.validate(
+        entry, supplied, len(memory["out"]), launch.execution()
+    )
+    assert layout.native_byte_count == per_key * 3
+    assert metadata["wordCount"] == per_key // 4
+    assert layout.workgroup_count == [3, per_key // 8, 1]
+
+
+def test_random_rejects_launch_overflow_without_changing_counters():
+    supplied, memory, _ = buffers(524288, shape=(1, 2))
+    with pytest.raises(ValueError, match="workgroup limits"):
+        random_dispatch.validate(
+            "rbitsc",
+            supplied,
+            len(memory["out"]),
+            {"workgroupCount": [1, 65536, 1], "workgroupSize": [1, 1, 1]},
+        )
+
+
+@pytest.mark.parametrize("byte_count", [True, 0, random_layout.MAX_NATIVE_BYTES + 1])
+def test_random_rejects_invalid_output_size_before_reading_buffers(
+    monkeypatch, byte_count
+):
+    supplied, memory, launch = buffers()
+    monkeypatch.setattr(
+        random_dispatch,
+        "values",
+        lambda *_: pytest.fail("Invalid output size must not read native memory"),
+    )
+    with pytest.raises(ValueError, match="output size"):
+        random_dispatch.validate("rbitsc", supplied, byte_count, launch.execution())
+    assert memory
+
+
+def test_random_workloads_cover_large_outputs_and_key_layouts():
+    large = [
+        case
+        for case in random_workloads.cases()
+        if case["kind"] == "split" and case["count"] >= 8192
+    ]
+    assert len(large) == 6
+    assert {case["layout"] for case in large} == {
+        "single",
+        "contiguous",
+        "strided",
+        "broadcast",
+    }
+    assert max(case["count"] for case in large) == 65535
 
 
 def event(target, entry):

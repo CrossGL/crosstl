@@ -34,7 +34,7 @@ REQUIRED_REDUCTIONS = frozenset(
 )
 NEGATIVE_CHECKS = {
     "missing": "No translated package for rbitsc",
-    "over-limit": "CrossTL random output or key count exceeds its bounds",
+    "over-limit": "CrossTL random launch exceeds the portable workgroup limits",
 }
 
 
@@ -70,7 +70,7 @@ def worker(args):
         try:
             mx.eval(
                 mx.random.split(
-                    mx.random.key(42), 16384 if args.worker == "over-limit" else 3
+                    mx.random.key(42), 65536 if args.worker == "over-limit" else 3
                 )
             )
         except (ValueError, RuntimeError) as error:

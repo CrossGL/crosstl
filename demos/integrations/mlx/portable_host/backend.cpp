@@ -943,13 +943,19 @@ void RandomBits::eval_gpu(const std::vector<array>& inputs, array& out) {
     return;
   }
   const uint64_t key_count = inputs[0].size() / 2;
-  if (key_count == 0 || inputs[0].size() > 65535 || out.nbytes() > 65535 ||
+  constexpr uint64_t max_native_bytes = std::numeric_limits<int32_t>::max() - 17;
+  if (key_count == 0 || inputs[0].size() > 65535 || out.nbytes() > max_native_bytes ||
       out.size() % key_count != 0) {
     throw std::invalid_argument("CrossTL random output or key count exceeds its bounds.");
   }
   const uint64_t bytes_per_key = out.nbytes() / key_count;
-  if (key_count * std::max<uint64_t>(4, bytes_per_key) + 17 > 65535) {
+  if (std::max<uint64_t>(4, bytes_per_key) > max_native_bytes / key_count) {
     throw std::invalid_argument("CrossTL random native allocation exceeds its bounds.");
+  }
+  const uint64_t words = (bytes_per_key + 3) / 4;
+  const uint64_t columns = (words + 1) / 2;
+  if (key_count > 65535 || columns > 65535) {
+    throw std::invalid_argument("CrossTL random launch exceeds the portable workgroup limits.");
   }
   auto keys = gather_input(inputs[0]);
   const auto span = gather_span(keys);
@@ -967,9 +973,8 @@ void RandomBits::eval_gpu(const std::vector<array>& inputs, array& out) {
       {"key_shape", "int32", shape.data(), shape.size(), 0},
       {"key_strides", "int64", strides.data(), strides.size(), 0},
   };
-  const uint64_t words = (bytes_per_key + 3) / 4;
   const CrosstlMlxLaunch launch{
-      {static_cast<uint32_t>(key_count), static_cast<uint32_t>((words + 1) / 2), 1},
+      {static_cast<uint32_t>(key_count), static_cast<uint32_t>(columns), 1},
       {1, 1, 1}};
   char error[2048] = {};
   const int status = dispatch_callback.load()(

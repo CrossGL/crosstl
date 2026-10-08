@@ -876,10 +876,18 @@ and disjoint output storage before native execution.
 
 Native output is transferred as signed byte carriers and copied into the MLX
 array without computing random values on the CPU. Per-key slots shorter than
-four bytes use the padded layout described below. The allocation, including
-17 guard bytes, is limited to 65,535 native byte carriers. Missing packages and
-larger outputs fail explicitly. This is bounded synchronous host integration,
-not a complete random API or backend.
+four bytes use the padded layout described below. Output size is independent
+of the 65,535-element key-storage bound. The allocation and 17 guard bytes
+must fit signed 32-bit shader indices, and each launch dimension must fit
+65,535 workgroups. With the existing one-thread workgroups this permits up to
+524,280 bytes per key. The full grid is retained: splitting it naively would
+change Threefry counters and therefore the random stream. Larger grids still
+fail explicitly before dispatch. Device allocation limits also apply.
+
+Random package indexes record the expanded output bound; regenerate older
+packages before using this host route. This remains synchronous integration,
+not a complete random API or backend. Other elementwise and copy size limits
+still prevent large composed distributions and the full upstream suite.
 
 ```bash
 python -m demos.integrations.mlx.portable_host.random_packages \
@@ -893,9 +901,11 @@ python -m demos.integrations.mlx.portable_host.verify_random \
   --reductions random-reductions --output-dir random-evidence
 ```
 
-The verifier runs 42 public-API workloads: key splitting with six key layouts,
+The verifier runs 48 public-API workloads: key splitting with six key layouts,
 including empty outputs, and float32 uniform generation with three explicit
-seeds. It also runs the unchanged upstream `test_global_rng`, `test_key`,
+seeds. Six larger split cases cover 65,536 through 786,432 output bytes,
+contiguous, strided and broadcast keys, and the 65,535-workgroup boundary.
+It also runs the unchanged upstream `test_global_rng`, `test_key`,
 `test_key_split`, `test_uniform` and `test_gumbel` in separate CPU and
 translated-backend processes. Results are
 checked against an integer Threefry reference, with exact float32 output words

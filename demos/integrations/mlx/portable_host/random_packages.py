@@ -17,6 +17,10 @@ from crosstl.project import (
     translate_project,
 )
 from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
+from demos.integrations.mlx.portable_host.random_layout import (
+    MAX_KEY_ELEMENTS,
+    MAX_NATIVE_BYTES,
+)
 
 SOURCE = "mlx/backend/metal/kernels/random.metal"
 SOURCE_SHA256 = "f1a19b3f11b7b10203824890f13debc6d627959b4e7f17c219e2e9da553c1bd7"
@@ -68,7 +72,11 @@ def build_packages(root, target, output):
                         "function": function,
                         "expression": expression,
                         "minimum": 0,
-                        "maximum": 65535,
+                        "maximum": (
+                            MAX_NATIVE_BYTES - 1
+                            if expression == "idx + i"
+                            else MAX_KEY_ELEMENTS - 1
+                        ),
                     }
                     for function, expression in (
                         ("rbitsc", "idx + i"),
@@ -111,7 +119,12 @@ def build_packages(root, target, output):
             raise ValueError("Random entry coverage differs")
         write_json(
             output / "index.json",
-            {"commit": COMMIT, "target": target, "descriptors": descriptors},
+            {
+                "commit": COMMIT,
+                "target": target,
+                "maximumNativeByteCount": MAX_NATIVE_BYTES,
+                "descriptors": descriptors,
+            },
         )
         return descriptors
 
@@ -123,6 +136,7 @@ def load_index(directory, target):
         not isinstance(index, dict)
         or index.get("commit") != COMMIT
         or index.get("target") != target
+        or index.get("maximumNativeByteCount") != MAX_NATIVE_BYTES
         or not isinstance(index.get("descriptors"), dict)
         or set(index.get("descriptors", {})) != set(ENTRIES)
     ):

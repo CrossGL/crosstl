@@ -26,6 +26,21 @@ def cases():
                 "count": count,
             }
 
+    for layout, count in (
+        ("single", 8192),
+        ("single", 32768),
+        ("single", 65535),
+        ("contiguous", 32768),
+        ("strided", 32768),
+        ("broadcast", 32768),
+    ):
+        yield {
+            "id": f"split-{layout}-{count}",
+            "kind": "split",
+            "layout": layout,
+            "count": count,
+        }
+
 
 def keys(xp, layout):
     source = xp.array(KEYS, dtype=xp.uint32)

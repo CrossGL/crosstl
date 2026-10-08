@@ -2,6 +2,11 @@
 
 from dataclasses import dataclass
 
+MAX_KEY_ELEMENTS = 65535
+MAX_WORKGROUP_COUNT = 65535
+GUARD_COUNT = 17
+MAX_NATIVE_BYTES = 2**31 - 1 - GUARD_COUNT
+
 
 @dataclass(frozen=True)
 class RandomOutputLayout:
@@ -31,6 +36,14 @@ class RandomOutputLayout:
     @property
     def logical_byte_count(self):
         return self.key_count * self.bytes_per_key
+
+    @property
+    def workgroup_count(self):
+        words = (self.bytes_per_key + 3) // 4
+        count = [self.key_count, (words + 1) // 2, 1]
+        if any(not 1 <= value <= MAX_WORKGROUP_COUNT for value in count):
+            raise ValueError("Random launch exceeds the portable workgroup limits")
+        return count
 
     def unpack(self, values):
         """Copy logical bytes from signed native carriers without changing their bits."""

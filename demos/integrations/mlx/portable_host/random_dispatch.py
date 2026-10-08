@@ -7,11 +7,15 @@ import math
 
 from crosstl.project import build_native_loader_dispatch_request
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
-from demos.integrations.mlx.portable_host.random_layout import RandomOutputLayout
+from demos.integrations.mlx.portable_host.random_layout import (
+    GUARD_COUNT,
+    MAX_KEY_ELEMENTS,
+    MAX_NATIVE_BYTES,
+    RandomOutputLayout,
+)
 from demos.integrations.mlx.portable_host.random_packages import ENTRIES
 
-GUARD = [91] * 17
-MAX_ELEMENTS = 65535
+GUARD = [91] * GUARD_COUNT
 TYPES = {
     "keys": ("uint32", ctypes.c_uint32),
     "out": ("int8", ctypes.c_int8),
@@ -32,14 +36,21 @@ def validate(entry, buffers, byte_count, execution):
     if (
         entry not in ENTRIES
         or set(buffers) != set(TYPES)
-        or not 0 < byte_count <= MAX_ELEMENTS
+        or type(byte_count) is not int
+        or not 0 < byte_count <= MAX_NATIVE_BYTES
     ):
         raise ValueError("Random buffers or output size do not match the entry")
     for name, buffer in buffers.items():
+        itemsize = ctypes.sizeof(TYPES[name][1])
+        maximum = MAX_NATIVE_BYTES if name == "out" else MAX_KEY_ELEMENTS
         if (
             not buffer.data
+            or buffer.data % itemsize
+            or buffer.data + buffer.count * itemsize > 1 << (
+                8 * ctypes.sizeof(ctypes.c_void_p)
+            )
             or buffer.dtype != TYPES[name][0].encode("ascii")
-            or not 0 < buffer.count <= MAX_ELEMENTS
+            or not 0 < buffer.count <= maximum
             or buffer.output != int(name == "out")
         ):
             raise ValueError("Random buffer layout or direction is invalid")
@@ -61,8 +72,8 @@ def validate(entry, buffers, byte_count, execution):
     strides = values("key_strides", buffers["key_strides"])
     if (
         shape[-1] != 2
-        or any(not 1 <= size <= MAX_ELEMENTS for size in shape)
-        or any(not 0 <= stride <= MAX_ELEMENTS for stride in strides)
+        or any(not 1 <= size <= MAX_KEY_ELEMENTS for size in shape)
+        or any(not 0 <= stride <= MAX_KEY_ELEMENTS for stride in strides)
     ):
         raise ValueError("Random key shape or strides are invalid")
     key_count = math.prod(shape) // 2
@@ -71,7 +82,7 @@ def validate(entry, buffers, byte_count, execution):
     if (
         not per_key
         or layout.logical_byte_count != byte_count
-        or layout.native_byte_count + len(GUARD) > MAX_ELEMENTS
+        or layout.native_byte_count > MAX_NATIVE_BYTES
     ):
         raise ValueError("Random native allocation exceeds its validated bounds")
     span = 1 + sum((size - 1) * stride for size, stride in zip(shape, strides))
@@ -84,7 +95,7 @@ def validate(entry, buffers, byte_count, execution):
         raise ValueError("Contiguous random entry requires row-contiguous keys")
     word_count = (per_key + 3) // 4
     if execution != {
-        "workgroupCount": [key_count, (word_count + 1) // 2, 1],
+        "workgroupCount": layout.workgroup_count,
         "workgroupSize": [1, 1, 1],
     }:
         raise ValueError("Random launch does not match its output layout")
