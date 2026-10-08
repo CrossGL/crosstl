@@ -128,7 +128,7 @@ def test_metal_explicit_struct_layout_is_not_inferred(tmp_path, attribute):
         "device bool3* values",
         "device bool4* values",
         "device long2* values",
-        "device float& values",
+        "device Pair& values",
         "constant Pair& values",
         "device float** values",
         "volatile device int* values",

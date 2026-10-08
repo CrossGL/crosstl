@@ -646,8 +646,7 @@ def _metal_buffer_layout(
     ):
         return None
     pointer = match.group("reference") == "*"
-    if not pointer and "constant" not in qualifiers:
-        return None
+    device_reference = not pointer and "device" in qualifiers
     type_name = match.group("type")
     scalar = re.fullmatch(
         r"(bfloat|half|float|int|uint|short|ushort|int16_t|uint16_t|long|ulong|int64_t|uint64_t|bool|char|uchar|int8_t|uint8_t)([24]?)",
@@ -674,14 +673,19 @@ def _metal_buffer_layout(
     if base in {"int64_t", "uint64_t", "bool"} and width != 1:
         return None
     size = (1 if base == "bool" else SCALAR_PHYSICAL_SIZES[base]) * width
-    return _physical_value_layout(
+    layout = _physical_value_layout(
         base,
         vector_width=width,
-        storage_layout="metal-buffer" if pointer else "metal-constant",
+        storage_layout=(
+            "metal-buffer" if pointer or device_reference else "metal-constant"
+        ),
         alignment_bytes=size,
         runtime_sized=pointer,
         block_size_bytes=None if pointer else size,
     )
+    if device_reference:
+        layout["minimumBindingSizeBytes"] = size
+    return layout
 
 
 HLSL_NUMTHREADS_RE = re.compile(

@@ -2764,6 +2764,17 @@ Metal supports aligned offset views. The DirectX Python driver realizes aligned
 structured-buffer ranges with native descriptors; this does not change the
 shader's storage type or repair values after readback.
 
+Metal device references to supported scalar and naturally aligned two- or
+four-component vector values retain ``storageLayout: "metal-buffer"`` with
+``runtimeSized: false``. Their ``blockSizeBytes`` and
+``minimumBindingSizeBytes`` both describe one physical value. Const references
+remain read-only; writable references support initialized readback through the
+native loader. Offset views must satisfy the same alignment and minimum-size
+checks as other buffers. Pointer arrays and constant-address-space references
+retain their existing layouts. This layout contract does not establish support
+for unresolved aliases, padded aggregates or every source reference-lowering
+case.
+
 An HLSL artifact may explicitly distinguish logical binary16 values from native
 unsigned 16-bit storage. Its first line contains a versioned resource contract,
 serialized by ``crosstl.translator.resource_storage.resource_storage_header``:

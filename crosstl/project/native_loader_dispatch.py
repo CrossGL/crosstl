@@ -1450,14 +1450,23 @@ def _validated_scalar_layout(
             },
         )
     if resource_kind == "buffer":
+        # A Metal device reference binds one naturally aligned value, not an array.
+        device_reference = (
+            target == "metal"
+            and runtime_sized is False
+            and type(layout.get("blockSizeBytes")) is int
+            and layout["blockSizeBytes"] == element_size
+            and layout.get("minimumBindingSizeBytes") == element_size
+            and alignment == element_size
+        )
         if (
-            runtime_sized is not True
+            (runtime_sized is not True and not device_reference)
             or alignment > element_size
             or element_size % alignment
         ):
             raise NativeLoaderDispatchError(
                 "resource-layout-unsupported",
-                "Native loader storage buffers require an exact scalar or vector runtime-array layout.",
+                "Native loader storage buffers require an exact scalar or vector runtime-array layout, or a fixed Metal device reference.",
                 path=path,
                 details={
                     "binding": runtime_value.name,
