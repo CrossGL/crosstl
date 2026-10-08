@@ -1219,6 +1219,7 @@ jobs:
           CROSTL_REQUIRE_SUBGROUP_UNIFORM_ARGUMENTS: "1"
           CROSTL_REQUIRE_WORKGROUP_RANGE_READBACKS: "1"
           CROSTL_REQUIRE_ENTRY_WORKGROUP_RULES: "1"
+          CROSTL_REQUIRE_SUBGROUP_APPLICABILITY: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
@@ -1232,6 +1233,7 @@ jobs:
               tests/test_translator/test_subgroup_uniform_arguments.py \
               tests/test_translator/test_software_subgroup_workgroup_ranges.py \
               tests/test_translator/test_project_workgroup_rules.py::test_selected_entry_rules_execute \
+              tests/test_translator/test_project_subgroup_applicability.py \
               2>&1 | tee .mlx-portable-host/subgroup-arguments.log
       - name: Validate exact partial subgroup execution
         env:

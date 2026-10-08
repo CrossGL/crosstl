@@ -1943,6 +1943,32 @@ This option is target-scoped and explicit; it does not change Metal parsing or
 other target artifacts. The only accepted width is ``32``. The selected output
 must contain exactly one compute entry with concrete positive local dimensions
 and no more than 1,024 total invocations.
+
+A project containing both collective and ordinary entries can additionally set
+``software_subgroup_applicability = "when-used"`` in the same target option table.
+CrossTL evaluates this policy after entry selection and dependency pruning, so
+ordinary entries do not acquire subgroup scratch storage, barriers, or hardware
+subgroup requirements. The policy works with explicit or discovered entry
+selection, source-pattern overrides, and translation variants on DirectX and
+OpenGL. DirectX collective entries still require the explicit
+``relative_wave_shuffle_out_of_range = "self"`` policy.
+
+The default applicability is ``"required"``: requesting software lowering for an
+entry without subgroup operations remains an error. ``"when-used"`` does not
+suppress invalid widths, unknown applicability values, unsupported operations,
+divergent collective control flow, or hardware-width conflicts. Subgroup system
+inputs count as dependencies even without a collective call; unsupported
+query-only entries remain errors instead of falling back to physical waves.
+An explicit applicability option requires ``software_subgroup_width``.
+
+When applicability is explicit, artifact provenance includes
+``softwareSubgroupPolicy`` with the requested width, effective width (``null``
+for an ordinary entry), applicability, and selected dependency names. Reports,
+runtime packages, and recovered checkpoint artifacts retain this record.
+Report validation checks its shape and consistency with the resolved source
+options. This provenance describes the lowering decision; it is not a substitute
+for native compilation and numerical execution.
+
 CrossTL partitions the linear invocation range into an exact compile-time count
 of independent 32-lane software subgroups. Subgroup count, subgroup index,
 subgroup width, and lane index lower respectively to the workgroup invocation

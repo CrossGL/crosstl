@@ -83,6 +83,7 @@ from crosstl.translator.ast import (
     IdentifierNode,
     LiteralNode,
     PrimitiveType,
+    WaveOpNode,
 )
 from crosstl.translator.codegen import (
     backend_names,
@@ -1547,6 +1548,7 @@ REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
 SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
 TARGET_SOURCE_OPTIONS_KEY = "target_options"
 SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION = "software_subgroup_width"
+SOFTWARE_SUBGROUP_APPLICABILITY_SOURCE_OPTION = "software_subgroup_applicability"
 DISPATCH_REGION_SOURCE_OPTION = "dispatch_region"
 COOPERATIVE_MATRIX_SOFTWARE_LOWERING_SOURCE_OPTION = (
     "cooperative_matrix_software_lowering"
@@ -1836,6 +1838,7 @@ REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(
         "intermediate",
         "dispatchRegion",
         "dispatchRegionProgram",
+        "softwareSubgroupPolicy",
         "binary32DivisionProfile",
         "binary16RemainderProfile",
         "binary32ComparisonProfile",
@@ -6135,6 +6138,7 @@ def _frontend_source_options(source_options: Mapping[str, Any]) -> dict[str, Any
             TEMPLATE_VARIANTS_SOURCE_OPTION,
             TARGET_SOURCE_OPTIONS_KEY,
             SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION,
+            SOFTWARE_SUBGROUP_APPLICABILITY_SOURCE_OPTION,
             DISPATCH_REGION_SOURCE_OPTION,
             COOPERATIVE_MATRIX_SOFTWARE_LOWERING_SOURCE_OPTION,
             PRIVATE_POINTER_OUT_OF_BOUNDS_READ_SOURCE_OPTION,
@@ -27074,6 +27078,97 @@ def _project_software_subgroup_width(
     return width
 
 
+def _project_software_subgroup_applicability(
+    target: str, source_options: Mapping[str, Any]
+) -> str | None:
+    option = SOFTWARE_SUBGROUP_APPLICABILITY_SOURCE_OPTION
+    if option not in source_options:
+        return None
+    applicability = source_options[option]
+    error = (
+        DirectXSoftwareSubgroupError
+        if target == "directx"
+        else OpenGLSoftwareSubgroupError
+    )
+    width = source_options.get(SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION)
+    if not isinstance(applicability, str) or applicability not in {
+        "required",
+        "when-used",
+    }:
+        raise error(
+            "software_subgroup_applicability must be 'required' or 'when-used'",
+            software_subgroup_width=width,
+            reason="configured-applicability-invalid",
+        )
+    if width is None:
+        raise error(
+            "software_subgroup_applicability requires software_subgroup_width",
+            reason="configured-width-missing",
+        )
+    return applicability
+
+
+def _project_software_subgroup_requirements(
+    codegen: Any, ast: Any, target: str
+) -> list[str]:
+    if target == "directx":
+        records = codegen.hlsl_software_subgroup_operation_records(ast)
+    else:
+        records = codegen.glsl_software_subgroup_operation_records(
+            ast, discover_zero_trip=True
+        )
+    requirements = {f"operation:{operation}" for operation, _ in records}
+    # System inputs and hardware width contracts must never become native-wave
+    # operations merely because this entry has no collective function call.
+    subgroup_inputs = {
+        "gl_SubgroupInvocationID",
+        "gl_SubgroupSize",
+        "gl_SubgroupID",
+        "gl_NumSubgroups",
+    }
+    for node in codegen.walk_ast(ast):
+        if isinstance(node, WaveOpNode):
+            requirements.add(f"operation:{node.operation}")
+        semantic = codegen.semantic_from_node(node)
+        if semantic in subgroup_inputs:
+            requirements.add(f"input:{semantic}")
+        if isinstance(node, IdentifierNode) and node.name in subgroup_inputs:
+            requirements.add(f"input:{node.name}")
+        if isinstance(node, AttributeNode) and _wave_size_attribute(node):
+            requirements.add("attribute:WaveSize")
+    return sorted(requirements)
+
+
+def _software_subgroup_policy_contract_reasons(prefix: str, policy: Any) -> list[str]:
+    fields = {"applicability", "requestedWidth", "effectiveWidth", "requirements"}
+    if not isinstance(policy, Mapping) or set(policy) != fields:
+        return [
+            f"{prefix} must contain applicability, requestedWidth, effectiveWidth, and requirements"
+        ]
+    reasons = []
+    mode = policy["applicability"]
+    if not isinstance(mode, str) or mode not in {"required", "when-used"}:
+        reasons.append(f"{prefix}.applicability must be required or when-used")
+    if type(policy["requestedWidth"]) is not int or policy["requestedWidth"] != 32:
+        reasons.append(f"{prefix}.requestedWidth must be the integer 32")
+    requirements = policy["requirements"]
+    if not isinstance(requirements, list) or not all(
+        isinstance(value, str)
+        and value.startswith(("operation:", "input:", "attribute:"))
+        for value in requirements
+    ):
+        reasons.append(f"{prefix}.requirements must be a list of subgroup dependencies")
+    elif requirements != sorted(set(requirements)):
+        reasons.append(f"{prefix}.requirements must be sorted and unique")
+    expected = None if mode == "when-used" and requirements == [] else 32
+    actual = policy["effectiveWidth"]
+    if type(actual) is not type(expected) or actual != expected:
+        reasons.append(
+            f"{prefix}.effectiveWidth must match applicability and requirements"
+        )
+    return reasons
+
+
 def _project_cooperative_matrix_software_lowering(
     target: str,
     source_options: Mapping[str, Any],
@@ -27185,6 +27280,7 @@ def _generate_project_target_from_crossgl_ast(
     index_range_assertions: Sequence[IndexRangeAssertion] = (),
     workgroup_access_assertions: Sequence[WorkgroupAccessAssertion] = (),
     software_subgroup_width: Any | None = None,
+    software_subgroup_applicability: str | None = None,
     cooperative_matrix_software_lowering: bool | None = None,
     private_pointer_out_of_bounds_read: str | None = None,
     directx_relative_wave_shuffle_out_of_range: Any | None = None,
@@ -27271,6 +27367,32 @@ def _generate_project_target_from_crossgl_ast(
     selected_ast, remaining_entry_point = prepare_entry_scoped_target(
         codegen, ast, entry_point
     )
+    if software_subgroup_applicability is not None:
+        entries = (
+            codegen.hlsl_software_subgroup_stage_entries(selected_ast)
+            if target == "directx"
+            else codegen.glsl_software_subgroup_stage_entries(selected_ast)
+        )
+        if len(entries) != 1 or entries[0][0] != "compute":
+            raise software_subgroup_error(
+                "Software subgroup applicability requires one selected compute entry",
+                software_subgroup_width=software_subgroup_width,
+                reason="entry-point-contract-invalid",
+            )
+        requirements = _project_software_subgroup_requirements(
+            codegen, selected_ast, target
+        )
+        requested_width = software_subgroup_width
+        if software_subgroup_applicability == "when-used" and not requirements:
+            software_subgroup_width = None
+            configure_software_subgroup(None)
+        if provenance is not None:
+            provenance["softwareSubgroupPolicy"] = {
+                "applicability": software_subgroup_applicability,
+                "requestedWidth": requested_width,
+                "effectiveWidth": software_subgroup_width,
+                "requirements": requirements,
+            }
     if dispatch_region is not None:
         stages = _crossgl_compute_stages(selected_ast, remaining_entry_point)
         if len(stages) != 1:
@@ -28295,6 +28417,7 @@ def _translate_project_impl(
                     else ()
                 )
                 software_subgroup_width = None
+                software_subgroup_applicability = None
                 cooperative_matrix_software_lowering = None
                 private_pointer_out_of_bounds_read = None
                 directx_relative_wave_shuffle_out_of_range = None
@@ -28453,6 +28576,9 @@ def _translate_project_impl(
                     software_subgroup_width = _project_software_subgroup_width(
                         target,
                         source_options,
+                    )
+                    software_subgroup_applicability = (
+                        _project_software_subgroup_applicability(target, source_options)
                     )
                     cooperative_matrix_software_lowering = (
                         _project_cooperative_matrix_software_lowering(
@@ -28950,6 +29076,9 @@ def _translate_project_impl(
                                             software_subgroup_width=(
                                                 software_subgroup_width
                                             ),
+                                            software_subgroup_applicability=(
+                                                software_subgroup_applicability
+                                            ),
                                             cooperative_matrix_software_lowering=(
                                                 cooperative_matrix_software_lowering
                                             ),
@@ -29030,6 +29159,9 @@ def _translate_project_impl(
                                         software_subgroup_width=(
                                             software_subgroup_width
                                         ),
+                                        software_subgroup_applicability=(
+                                            software_subgroup_applicability
+                                        ),
                                         cooperative_matrix_software_lowering=(
                                             cooperative_matrix_software_lowering
                                         ),
@@ -29100,6 +29232,7 @@ def _translate_project_impl(
                             index_range_assertions=index_range_assertions,
                             workgroup_access_assertions=(workgroup_access_assertions),
                             software_subgroup_width=software_subgroup_width,
+                            software_subgroup_applicability=software_subgroup_applicability,
                             cooperative_matrix_software_lowering=(
                                 cooperative_matrix_software_lowering
                             ),
@@ -46402,6 +46535,16 @@ def _provenance_contract_reasons(
         if require_closed_fields
         else []
     )
+    if "softwareSubgroupPolicy" in provenance:
+        reasons.extend(
+            _software_subgroup_policy_contract_reasons(
+                f"{prefix}.softwareSubgroupPolicy", provenance["softwareSubgroupPolicy"]
+            )
+        )
+        if artifact.get("target") not in {"directx", "opengl"}:
+            reasons.append(
+                f"{prefix}.softwareSubgroupPolicy requires DirectX or OpenGL"
+            )
     if "binary32DivisionProfile" in provenance:
         if artifact.get("sourceBackend") != "metal":
             reasons.append(f"{prefix}.binary32DivisionProfile requires a Metal source")
@@ -46546,6 +46689,21 @@ def _provenance_contract_reasons(
         options = _source_options_for_unit(
             config, artifact["sourceBackend"], artifact["source"], artifact["target"]
         )
+        policy = provenance.get("softwareSubgroupPolicy")
+        applicability = options.get(SOFTWARE_SUBGROUP_APPLICABILITY_SOURCE_OPTION)
+        if applicability is not None:
+            if not isinstance(policy, Mapping) or (
+                policy.get("applicability") != applicability
+                or policy.get("requestedWidth")
+                != options.get(SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION)
+            ):
+                reasons.append(
+                    f"{prefix}.softwareSubgroupPolicy must match the resolved project source options"
+                )
+        elif policy is not None:
+            reasons.append(
+                f"{prefix}.softwareSubgroupPolicy requires an explicit applicability option"
+            )
         expected_division_profile = (
             options.get("binary32_division_profile")
             if artifact["sourceBackend"] == "metal"
