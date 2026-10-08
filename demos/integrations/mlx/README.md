@@ -2908,6 +2908,23 @@ relative ``1e-5`` tolerances; its finite results differ by at most two ULPs.
 This review changes only ``v_ArcCosfloat32float32``. It does not accept other
 unary fingerprints or establish complex ArcCos equivalence.
 
+The five unsigned-32-bit Sign references were reviewed separately across ``v_``,
+``v2_``, ``vn_``, ``gn1_`` and ``gn4large_`` dispatch shapes. Their only historical
+source changes are a precise square-root helper and its call in the retained,
+unused complex overload. Removing exactly that helper change recovers each
+previous complete source hash. Reflected interfaces are unchanged; old and new
+sources compile to byte-identical Metal libraries with matching output names.
+The current ``9c3d3557`` pin changes the included complex implementation, but
+each selected unsigned entry still compiles to the same library.
+
+Original kernels at both pins and their translated counterparts return identical
+results for 3,303 values and 40 output guards per path. Cases cover unsigned
+boundaries, zeros, odd tails, two-dimensional dispatch and padded three-dimensional
+strides; all read-only buffers remain unchanged. Reports retain file-level
+provenance, not precise operation mappings. This review updates only the five
+historical unsigned Sign identities and the corresponding scalar-subset entry;
+complex Sign, other dtypes and DirectX/OpenGL references are not covered by it.
+
 The required family gate covers all 877 unary entries at the legacy reference
 revision `846d176227a0ac13d2667e58d2bb68b322109ab0`, including 694 non-scalar
 entries in addition to the 183

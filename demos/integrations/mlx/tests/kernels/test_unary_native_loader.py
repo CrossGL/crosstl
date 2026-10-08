@@ -57,13 +57,13 @@ SCALAR_UNARY_METAL_CONTRACT_PATH = (
     / "unary.scalar-metal-roundtrip.json"
 )
 SCALAR_UNARY_METAL_CONTRACT_SHA256 = (
-    "3ecc6ba32226ea66ed152c392a231c9dbe0a96a2094f944490d08ad726230ae4"
+    "38c80c1458c57b44989f9ff6a4ac972a5d7cc047e4971dd5945deea4e79b0f4d"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "3846089088af475f69bf3a37290f56717e9fcc497ffef0d0e2c33e5b87d47493"
+    "7355f1cd1879cfd9d5cba1082316392a1268829c51432a12cc1c6f357c82be1e"
 )
 
 
@@ -201,6 +201,14 @@ UNARY_METAL_OPERATOR_TYPES = frozenset(
 UNARY_METAL_ARTIFACT_IDENTITIES = {
     entry["entryPoint"]: entry for entry in UNARY_METAL_ENTRIES
 }
+
+
+@pytest.mark.parametrize(
+    "entry", SCALAR_UNARY_METAL_ENTRIES, ids=lambda entry: entry["entryPoint"]
+)
+def test_scalar_metal_references_match_complete_family(entry):
+    complete = UNARY_METAL_ARTIFACT_IDENTITIES[entry["entryPoint"]]
+    assert {key: complete[key] for key in entry} == entry
 
 
 def test_scalar_arccos_metal_reference_metadata_matches_workload():

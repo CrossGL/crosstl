@@ -1417,8 +1417,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "437e87c492d7f6b07366b13c8a04d1f552e81cbe7cd5af190d8284910622e308",
-      "sizeBytes": 2785
+      "sha256": "674affb72b3168185e432402a28f03a71c45c433439eea2f9a712d46ac0d5057",
+      "sizeBytes": 4407
     },
     {
       "entryPoint": "v_Signuint64uint64",

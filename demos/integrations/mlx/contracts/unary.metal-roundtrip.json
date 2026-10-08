@@ -2017,8 +2017,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "cc6b82a5dc2c8a58e60a029fbba173daddd372926a2bf87e2dd7002d580d19fa",
-      "sizeBytes": 3292
+      "sha256": "e627acc6c93595ab4d0a32b739c1534b8d24062d7eb7cfcaa3e6032d7ab37f54",
+      "sizeBytes": 4914
     },
     {
       "entryPoint": "gn1_Signuint64uint64",
@@ -4030,8 +4030,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "8f7ae05a440a17a6b7519cece77f78d7baf92e35023e7d84799186a1e74a7293",
-      "sizeBytes": 3341
+      "sha256": "18bfa5e4d1551ae232d8afb635c775a1c9a54840bb6b0fa0410bc5330b1e0d5a",
+      "sizeBytes": 4963
     },
     {
       "entryPoint": "gn4large_Signuint64uint64",
@@ -6043,8 +6043,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "e64fba35414b414185dc1c14e08d0f8da4df8134ba8a5b0cd8e13a5326774aa8",
-      "sizeBytes": 2885
+      "sha256": "0b1028e58416f644b9c1740ffdfc536d1c6b1a8f2ca973f12561486948daf5f6",
+      "sizeBytes": 4507
     },
     {
       "entryPoint": "v2_Signuint64uint64",
@@ -8056,8 +8056,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "437e87c492d7f6b07366b13c8a04d1f552e81cbe7cd5af190d8284910622e308",
-      "sizeBytes": 2785
+      "sha256": "674affb72b3168185e432402a28f03a71c45c433439eea2f9a712d46ac0d5057",
+      "sizeBytes": 4407
     },
     {
       "entryPoint": "v_Signuint64uint64",
@@ -9750,8 +9750,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "57cdda698696f7a5f57a35b882e8e057e0cbc1c90ee4c4169342ece3aecea607",
-      "sizeBytes": 2786
+      "sha256": "65f3e9674d319a44ec6e5e3997999a968a60349f20dab14d6adeb1ced47e3735",
+      "sizeBytes": 4408
     },
     {
       "entryPoint": "vn_Signuint8uint8",
