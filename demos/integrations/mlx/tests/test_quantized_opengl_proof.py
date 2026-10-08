@@ -52,15 +52,33 @@ def _generated_glsl():
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_KHR_shader_subgroup_shuffle_relative : require
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+float crossgl_metal_round_float(float value) {
+    uint bits = floatBitsToUint(value);
+    uint magnitude = (bits & 2147483647u);
+    uint sign = (bits & 2147483648u);
+    if ((magnitude >= 1258291200u)) {
+        return value;
+    }
+    if ((magnitude < 1056964608u)) {
+        return 0.0;
+    }
+    if ((magnitude < 1065353216u)) {
+        return uintBitsToFloat((sign | 1065353216u));
+    }
+    uint shift = (150u - (magnitude >> 23u));
+    uint unit = (1u << shift);
+    uint rounded = ((magnitude + (unit >> 1u)) & (~(unit - 1u)));
+    return uintBitsToFloat((sign | rounded));
+}
 void main() {
     float val_0 = w[uint((in_index + uint64_t(i)))];
     w_min = subgroupMin(w_min);
     w_max = subgroupMax(w_max);
     float scale = max(((w_max - w_min) / n_bins), eps);
-    float q0 = round((edge / scale));
+    float q0 = crossgl_metal_round_float(float((edge / scale)));
     scales[uint(gindex)] = float(scale);
     biases[uint(gindex)] = float(bias);
-    uint val = bitfieldExtract(uint(min(round(((w_thread[i] - bias) / scale)), n_bins)), 0, 8);
+    uint val = bitfieldExtract(uint(min(crossgl_metal_round_float(float(((w_thread[i] - bias) / scale))), n_bins)), 0, 8);
     uint sval = subgroupShuffleDown(val, (uint(j) & 65535u));
     out_[uint((out_index / uint64_t(writes_per_reduce)))] = output_;
 }
@@ -694,6 +712,31 @@ def test_quantized_opengl_generated_contract_rejects_semantic_drift(
     artifact_path.write_text(_generated_glsl().replace(removed, ""), encoding="utf-8")
 
     with pytest.raises(module.MlxQuantizedOpenGLProofError, match=message):
+        module._validate_generated_glsl(artifact_path)
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    (
+        ("crossgl_metal_round_float(float((edge / scale)))", "round((edge / scale))"),
+        (
+            "crossgl_metal_round_float(float(((w_thread[i] - bias) / scale)))",
+            "round(((w_thread[i] - bias) / scale))",
+        ),
+        ("magnitude + (unit >> 1u)", "magnitude"),
+        ("return uintBitsToFloat((sign | rounded));", "return value;"),
+        ("return 0.0;", "return value;"),
+    ),
+)
+def test_quantized_opengl_rejects_changed_metal_rounding(tmp_path, before, after):
+    module = _load_proof()
+    source = _generated_glsl()
+    assert source.count(before) == 1
+    artifact_path = tmp_path / "quantized.glsl"
+    artifact_path.write_text(source.replace(before, after), encoding="utf-8")
+    with pytest.raises(
+        module.MlxQuantizedOpenGLProofError, match="quantization computation"
+    ):
         module._validate_generated_glsl(artifact_path)
 
 

@@ -105,10 +105,30 @@ _GENERATED_SEMANTIC_SENTINELS = {
     "minimumReduction": "w_min = subgroupMin(w_min);",
     "maximumReduction": "w_max = subgroupMax(w_max);",
     "scaleCalculation": "float scale = max(((w_max - w_min) / n_bins), eps);",
-    "edgeRounding": "float q0 = round((edge / scale));",
+    "roundingImplementation": (
+        """float crossgl_metal_round_float(float value) {
+    uint bits = floatBitsToUint(value);
+    uint magnitude = (bits & 2147483647u);
+    uint sign = (bits & 2147483648u);
+    if ((magnitude >= 1258291200u)) {
+        return value;
+    }
+    if ((magnitude < 1056964608u)) {
+        return 0.0;
+    }
+    if ((magnitude < 1065353216u)) {
+        return uintBitsToFloat((sign | 1065353216u));
+    }
+    uint shift = (150u - (magnitude >> 23u));
+    uint unit = (1u << shift);
+    uint rounded = ((magnitude + (unit >> 1u)) & (~(unit - 1u)));
+    return uintBitsToFloat((sign | rounded));
+}"""
+    ),
+    "edgeRounding": "float q0 = crossgl_metal_round_float(float((edge / scale)));",
     "quantization": (
-        "uint val = bitfieldExtract(uint(min(round(((w_thread[i] - bias) / "
-        "scale)), n_bins)), 0, 8);"
+        "uint val = bitfieldExtract(uint(min(crossgl_metal_round_float(float(((w_thread[i] - bias) / "
+        "scale))), n_bins)), 0, 8);"
     ),
     "subgroupPacking": "uint sval = subgroupShuffleDown(val, (uint(j) & 65535u));",
 }
