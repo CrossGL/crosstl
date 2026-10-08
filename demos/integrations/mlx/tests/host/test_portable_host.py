@@ -3,6 +3,7 @@ import json
 import math
 import shlex
 import shutil
+import struct
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -283,6 +284,15 @@ uint index [[thread_position_in_grid]]) { if (index < size) c[index] = U(a[index
             output / "translation/crosstl.toml"
         ).read_text()
     )
+    config = (output / "translation/crosstl.toml").read_text()
+    report = json.loads((output / "translation/report.json").read_text())
+    for operation in ("sqrt", "rsqrt"):
+        assert f'binary32_{operation}_profile = "flush-subnormals"' in config
+        field = f"binary32{operation.capitalize()}Profile"
+        assert all(
+            artifact["provenance"][field] == "flush-subnormals"
+            for artifact in report["artifacts"]
+        )
     return output
 
 
@@ -987,9 +997,9 @@ def test_unary_nonfinite_transport(translated_packages, tmp_path, monkeypatch, d
 def test_unary_verifier_requires_complete_independent_results(fault):
     original = unary_workloads.expected_records(cpu=True)
     translated = unary_workloads.expected_records()
-    assert len(translated) == 130
-    assert sum(record["count"] for record in translated) == 16202
-    assert len(unary_workloads.dispatches()) == 103
+    assert len(translated) == 132
+    assert sum(record["count"] for record in translated) == 19542
+    assert len(unary_workloads.dispatches()) == 105
     if fault == "missing":
         original.clear()
         translated.clear()
@@ -1033,6 +1043,90 @@ def test_unary_verifier_requires_complete_independent_results(fault):
             unary_workloads.compare(original, translated)
     else:
         unary_workloads.compare(original, translated)
+
+
+@pytest.mark.parametrize("operation", ["Sqrt", "Rsqrt"])
+@pytest.mark.parametrize(
+    "fault", ["rounding", "subnormal", "negative", "zero-sign", "infinity", "nan"]
+)
+def test_root_boundary_verifier_rejects_inexact_or_wrong_profile(operation, fault):
+    records = unary_workloads.expected_records()
+    record = next(
+        item
+        for item in records
+        if item["operation"] == operation and item.get("case") == "root-boundaries"
+    )
+    words = [
+        struct.unpack("<I", struct.pack("<f", float(value)))[0]
+        for value in record["inputs"]
+    ]
+    word = {
+        "rounding": 0x00800000,
+        "subnormal": 1,
+        "negative": 0xBF800000,
+        "zero-sign": 0x80000000,
+        "infinity": 0x7F800000,
+        "nan": 0x7FC00000,
+    }[fault]
+    index = words.index(word)
+    value = float(record["values"][index])
+    if fault == "rounding":
+        bits = struct.unpack("<I", struct.pack("<f", value))[0]
+        value = struct.unpack("<f", struct.pack("<I", bits + 1))[0]
+    elif fault == "subnormal":
+        value = unary_workloads._root_reference(operation, 2**-149, False)
+    elif fault == "zero-sign":
+        value = -value
+    else:
+        value = 1.0
+    record["values"][index] = runtime.wire_value(value)
+    with pytest.raises(AssertionError):
+        unary_workloads.validate(records)
+
+
+@pytest.mark.parametrize("operation", ["Sqrt", "Rsqrt"])
+def test_root_reference_preserves_zero_sign_and_operand_profile(operation):
+    for sign in (1, -1):
+        zero = unary_workloads._root_reference(
+            operation, math.copysign(0.0, sign), True
+        )
+        subnormal = unary_workloads._root_reference(operation, sign * 2**-149, True)
+        assert zero == subnormal and math.copysign(1, zero) == sign
+        assert (zero == 0) if operation == "Sqrt" else math.isinf(zero)
+    assert math.isnan(unary_workloads._root_reference(operation, -(2**-149), False))
+    preserved = unary_workloads._root_reference(operation, 2**-149, False)
+    assert math.isfinite(preserved) and preserved > 0
+
+
+@pytest.mark.parametrize("profile", ["generic", "apple-accelerate-arm64"])
+def test_root_cpu_counterexamples_are_not_generated_references(monkeypatch, profile):
+    monkeypatch.setattr(unary_workloads, "cpu_reference_profile", lambda: profile)
+    cpu = unary_workloads.expected_records(cpu=True)
+    generated = unary_workloads.expected_records()
+    for operation in ("Sqrt", "Rsqrt"):
+        source = next(
+            item
+            for item in cpu
+            if item["operation"] == operation and item.get("case") == "root-boundaries"
+        )
+        target = next(
+            item
+            for item in generated
+            if item["operation"] == operation and item.get("case") == "root-boundaries"
+        )
+        index = source["inputs"].index(-(2**-149))
+        assert source["values"][index] == "nan"
+        assert target["values"][index] == (
+            "-infinity" if operation == "Rsqrt" else -0.0
+        )
+        if operation == "Rsqrt":
+            index = source["inputs"].index(2**-149)
+            assert (source["values"][index] == "+infinity") == (
+                profile == "apple-accelerate-arm64"
+            )
+    unary_workloads.compare(cpu, generated)
+    with pytest.raises(AssertionError):
+        unary_workloads.validate(cpu)
 
 
 def test_unary_adapter_definitions_match_packages():
@@ -1801,7 +1895,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 assert command_result["returncode"] == (124 if mode == "native" else 0)
     else:
         evidence = verify.verify(args)
-        assert len(calls) == 20 and evidence["dispatchCount"] == 493 + len(
+        assert len(calls) == 20 and evidence["dispatchCount"] == 495 + len(
             boolean_workloads.dispatches()
         )
         assert len(identities) == 2
@@ -1809,7 +1903,17 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         assert evidence["adaptation"]["files"] == {"adapter": "unchanged"}
         assert evidence["fullUpstreamSuite"] is False
         assert evidence["fullTranslatedBackend"] is False
-        assert evidence["original"] == evidence["translated"]
+        assert evidence["original"]["unary"] == unary_workloads.expected_records(
+            cpu=True
+        )
+        assert evidence["translated"]["unary"] == unary_workloads.expected_records()
+        assert {
+            key: value for key, value in evidence["original"].items() if key != "unary"
+        } == {
+            key: value
+            for key, value in evidence["translated"].items()
+            if key != "unary"
+        }
         assert evidence["upstreamTestSources"] == {
             "python/tests/test_ops.py": (
                 verify.hashlib.sha256(b"unchanged tests").hexdigest()

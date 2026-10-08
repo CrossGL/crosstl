@@ -313,7 +313,9 @@ def build_packages(root, output, target, *, family="base"):
                 f'[project.entry_workgroup_size_rules."{source}"]\n"{patterns[source]}" = [1, 1, 1]\n'
                 for source in sources
             )
-            + '[project.source_options.metal]\nbinary32_fma_profile = "rne-flush"\n',
+            + '[project.source_options.metal]\nbinary32_fma_profile = "rne-flush"\n'
+            + 'binary32_sqrt_profile = "flush-subnormals"\n'
+            + 'binary32_rsqrt_profile = "flush-subnormals"\n',
             encoding="utf-8",
         )
         try:

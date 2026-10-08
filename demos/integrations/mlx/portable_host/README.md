@@ -479,6 +479,11 @@ including its contiguous strides and buffer-donation behavior. It performs no
 CPU calculation. Host inputs are copied before output readback, including when
 MLX donates the input allocation. Translation explicitly selects the
 `rne-flush` binary32 FMA profile required by the pinned Erf and Expm1 bodies.
+It also selects `flush-subnormals` for binary32 square root and reciprocal
+square root. These source-device policies are retained in translation and
+package provenance; they do not change CrossTL's default profiles for other
+projects. Subnormal operands retain their sign when flushed, so square root
+produces signed zero and reciprocal square root produces signed infinity.
 All selected copy and cast entries genuinely use the same `[1, 1, 1]` workgroup
 size and share one matching configuration rule. Distinct per-entry rules remain
 subject to the project validation defect tracked in
@@ -1167,15 +1172,27 @@ The CPU reference uses the unchanged CPU backend in the same adapted MLX build;
 it is not a separately rebuilt pristine binary or a Metal comparison.
 
 It also checks 20 array-creation cases spanning all five types and lengths 0, 1,
-7 and 257. The 130 unary records cover the same lengths for all 30 operations,
+7 and 257. The 132 unary records cover the same lengths for all 30 operations,
 six special-value cases, two large-angle cases, 8,193 consecutive float32 inputs
-at and above one for inverse hyperbolic cosine, and an
-arange/abs/negative/square chain, totaling 16,202 unary output values. Independent Python math references
+at and above one for inverse hyperbolic cosine, 1,670 boundary inputs each for
+square root and reciprocal square root, and an arange/abs/negative/square chain,
+totaling 19,542 unary output values. Independent Python math references
 check both CPU and native results, not just agreement between them. Readbacks
 must have complete values and unchanged case identities; finite comparisons
 use `rtol=2e-5, atol=1e-6`, with exact zero values/signs and nonfinite
 classification. The near-one inverse hyperbolic cosine case uses the upstream
 `rtol=1e-5, atol=1e-6` limits. Upstream tests and their tolerances are unchanged.
+The generated root boundary cases require exact binary32 values and zero signs,
+with NaNs compared by classification. Their 120-digit Decimal references select
+the nearest binary32 result directly. Inputs span every finite exponent,
+neighbors of one, signed subnormals, zeros, negative values and infinities.
+The unchanged Metal kernels are the source-device control, not the CPU backend.
+The CPU reference preserves subnormal operands. In the pinned Apple Silicon
+Accelerate vector path, the two smallest positive binary32 inputs in this
+inventory instead produce infinity for reciprocal square root; the CPU-only
+reference records these observed overflows explicitly. This does not relax the
+generated-output checks or alter any readback. Other CPU reciprocal-root
+rounding differences remain subject to the existing CPU tolerance.
 
 The pinned generic CPU Erf approximation returns negative zero for both zero
 input signs. The Apple Silicon Accelerate build uses eight-lane blocks with

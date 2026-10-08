@@ -6,6 +6,7 @@ import json
 import math
 import platform
 import struct
+from decimal import Decimal, localcontext
 
 from demos.integrations.mlx.portable_host.packages import UNARY_OPERATIONS
 from demos.integrations.mlx.portable_host.runtime import wire_value
@@ -23,6 +24,57 @@ NAMES = {
 
 def _f32(value):
     return struct.unpack("<f", struct.pack("<f", value))[0]
+
+
+def _root_inputs():
+    words = {
+        0,
+        1,
+        2,
+        0x3FFFFF,
+        0x400000,
+        0x7FFFFE,
+        0x7FFFFF,
+        0x7F800000,
+        0x7FC00000,
+        0x4009F038,
+        0x403A18E3,
+    }
+    for exponent in range(1, 255):
+        words.update((exponent << 23) | mantissa for mantissa in (0, 1, 0x7FFFFF))
+    words.update(range(0x3F800000 - 32, 0x3F800000 + 33))
+    words |= {word | 0x80000000 for word in words}
+    return [struct.unpack("<f", struct.pack("<I", word))[0] for word in sorted(words)]
+
+
+def _root_reference(operation, value, flush):
+    if flush and abs(value) < 2**-126:
+        value = math.copysign(0.0, value)
+    if value == 0:
+        return value if operation == "Sqrt" else math.copysign(math.inf, value)
+    if math.isnan(value) or value < 0:
+        return math.nan
+    if math.isinf(value):
+        return value if operation == "Sqrt" else 0.0
+    # Select the nearest binary32 value directly, without double rounding.
+    with localcontext() as context:
+        context.prec = 120
+        root = Decimal.from_float(value).sqrt()
+        if operation == "Rsqrt":
+            root = 1 / root
+        center = struct.unpack("<I", struct.pack("<f", float(root)))[0]
+        candidates = range(center - 1, center + 2)
+        word = min(
+            candidates,
+            key=lambda bits: (
+                abs(
+                    Decimal.from_float(struct.unpack("<f", struct.pack("<I", bits))[0])
+                    - root
+                ),
+                bits & 1,
+            ),
+        )
+        return struct.unpack("<f", struct.pack("<I", word))[0]
 
 
 def cases():
@@ -81,6 +133,16 @@ def cases():
             "inputs": values,
         }
     )
+    for operation in ("Sqrt", "Rsqrt"):
+        values = _root_inputs()
+        records.append(
+            {
+                "operation": operation,
+                "case": "root-boundaries",
+                "count": len(values),
+                "inputs": [wire_value(value) for value in values],
+            }
+        )
     return records
 
 
@@ -151,7 +213,12 @@ def expected_records(*, cpu=False):
     records = []
     for case in cases():
         values = [
-            _reference(case["operation"], float(value)) for value in case["inputs"]
+            (
+                _root_reference(case["operation"], float(value), not cpu)
+                if case.get("case") == "root-boundaries"
+                else _reference(case["operation"], float(value))
+            )
+            for value in case["inputs"]
         ]
         if cpu and case["operation"] == "Erf":
             # The pinned Accelerate path uses eight-lane blocks, then scalar
@@ -163,6 +230,24 @@ def expected_records(*, cpu=False):
             )
             values = [
                 (-0.0 if index < vector_end else 0.0) if value == 0 else value
+                for index, value in enumerate(values)
+            ]
+        if (
+            cpu
+            and case["operation"] == "Rsqrt"
+            and case.get("case") == "root-boundaries"
+            and cpu_reference_profile() == "apple-accelerate-arm64"
+        ):
+            # Retain the observed source CPU overflows for these two inputs.
+            # They are not the reference for generated Metal-profile roots.
+            vector_end = len(values) // 8 * 8
+            values = [
+                (
+                    math.inf
+                    if index < vector_end
+                    and float(case["inputs"][index]) in (2**-149, 2**-148)
+                    else value
+                )
                 for index, value in enumerate(values)
             ]
         records.append(
@@ -231,11 +316,12 @@ def validate(records, *, cpu=False):
             raise RuntimeError("Incomplete or invalid unary readbacks")
         got = np.array([float(value) for value in values])
         want = np.array([float(value) for value in reference["values"]])
+        exact = reference.get("case") == "root-boundaries" and not cpu
         np.testing.assert_allclose(
             got,
             want,
-            rtol=1e-5 if reference.get("case") == "near-one" else 2e-5,
-            atol=1e-6,
+            rtol=0 if exact else 1e-5 if reference.get("case") == "near-one" else 2e-5,
+            atol=0 if exact else 1e-6,
             equal_nan=True,
             err_msg=str(required),
         )
