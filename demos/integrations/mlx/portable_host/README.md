@@ -96,6 +96,40 @@ Metal packages, not MLX's original Metal backend. DirectX 10/11, Vulkan,
 asynchronous queues, persistent GPU allocations, automatic operation
 selection, and the complete MLX suite are not covered here.
 
+## Affine Quantization
+
+`HostRuntime(..., mlx_root=...)` routes MLX's `Quantize::eval_gpu` to the pinned
+`affine_quantize` and `affine_dequantize` entries in `quantized.metal`. The source
+and included kernel headers are unchanged. Group sizes 32, 64 and 128 and bit
+widths 2, 3, 4, 5, 6 and 8 have explicit layout contracts for float32, float16 and
+bfloat16. Non-affine quantization modes remain unsupported by this host route.
+
+The adaptation registers this multi-output primitive in the synchronous backend,
+allocates MLX's packed uint32, scale and bias arrays, and presents the packed data
+as the byte buffers expected by the upstream kernels. Complete quantization groups
+are dispatched in batches of at most 65,535 workgroups. This is a hardware launch
+bound, not a 65,535-element array limit. Partial groups and overlapping output
+allocations are rejected before dispatch. All native outputs and guard elements
+are validated before any result is copied back to MLX; packing and quantization
+arithmetic are performed by the translated kernels, not host substitutes.
+
+Packages are built on demand from the selected original entry. Cache identities
+include the pinned revision, source hash, translation implementation, layout and
+packaging recipes. OpenGL index assertions cover every permitted batch, including
+offsets computed by lanes that do not write. Float16 and bfloat16 carriers preserve
+their storage bits; malformed or inexact returned carriers are rejected rather
+than rounded by the host.
+
+The existing three-platform host jobs run `verify_quantization.py` through the
+actual MLX APIs, retaining native modules, dispatch receipts and guarded readbacks.
+Cases include 128-by-512 and 256-by-512 inputs, all supported affine bit widths,
+a strided input and a launch crossing the 65,535-workgroup batch boundary. These
+deterministic cases do not establish arbitrary numerical parity or a passing full
+upstream quantization suite. Noncontiguous inputs still use the existing translated
+copy path, with its size and dtype restrictions; in particular, strided bfloat16
+copies are not implemented. Other upstream-test prerequisites such as large random
+arrays and quantized matrix multiplication remain separate work.
+
 ## General Gather
 
 The adapter implements MLX's `Gather::eval_gpu` using the unchanged pinned JIT

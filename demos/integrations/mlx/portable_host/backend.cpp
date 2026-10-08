@@ -15,6 +15,7 @@
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/gpu/eval.h"
 #include "mlx/backend/no_gpu/crosstl_dispatch.h"
+#include "mlx/fast_primitives.h"
 #include "mlx/primitives.h"
 
 namespace {
@@ -1710,3 +1711,85 @@ void Arange::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
 }
 } // namespace mlx::core
+
+namespace mlx::core::fast {
+
+void Quantize::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  require_runtime();
+  if (mode_ != QuantizationMode::Affine ||
+      (group_size_ != 32 && group_size_ != 64 && group_size_ != 128) ||
+      (bits_ != 2 && bits_ != 3 && bits_ != 4 && bits_ != 5 && bits_ != 6 && bits_ != 8) ||
+      inputs.size() != (dequantize_ ? 3 : 1) ||
+      outputs.size() != (dequantize_ ? 1 : 3)) {
+    throw std::invalid_argument("CrossTL affine quantization parameters do not match a pinned entry.");
+  }
+  const auto dtype = dequantize_ ? outputs[0].dtype() : inputs[0].dtype();
+  if (dtype != float32 && dtype != float16 && dtype != bfloat16) {
+    throw std::invalid_argument("CrossTL affine quantization requires float32, float16 or bfloat16.");
+  }
+  const auto elements = dequantize_ ? outputs[0].size() : inputs[0].size();
+  if (elements % group_size_ != 0) {
+    throw std::invalid_argument("CrossTL affine quantization requires complete groups.");
+  }
+  const uint64_t groups = elements / group_size_;
+  const uint64_t packed_per_group = uint64_t(group_size_) * bits_ / 8;
+  const auto& packed = dequantize_ ? inputs[0] : outputs[0];
+  const auto& scales = dequantize_ ? inputs[1] : outputs[1];
+  const auto& biases = dequantize_ ? inputs[2] : outputs[2];
+  if (packed.dtype() != uint32 || packed.size() != groups * packed_per_group / 4 ||
+      scales.dtype() != dtype || biases.dtype() != dtype ||
+      scales.size() != groups || biases.size() != groups || scales.shape() != biases.shape()) {
+    throw std::invalid_argument("CrossTL affine quantization buffer shapes or types differ.");
+  }
+  const char* storage = dtype == float32 ? "float32" : dtype == float16 ? "float16" : "bfloat16";
+  const char* source = dtype == float32 ? "float" : dtype == float16 ? "float16_t" : "bfloat16_t";
+  const std::string entry = std::string("affine_") + (dequantize_ ? "dequantize_" : "quantize_") +
+      source + "_gs_" + std::to_string(group_size_) + "_b_" + std::to_string(bits_);
+  require_entry(entry);
+  for (auto& output : outputs) {
+    output.set_data(allocator::malloc(output.nbytes()));
+  }
+  if (elements == 0) {
+    return;
+  }
+  std::vector<array> dense;
+  dense.reserve(inputs.size());
+  for (const auto& input : inputs) {
+    dense.push_back(dense_input(input));
+  }
+  const uint64_t itemsize = dequantize_ ? outputs[0].itemsize() : inputs[0].itemsize();
+  const int pack_factor = bits_ == 3 || bits_ == 5 ? 8 : bits_ == 6 ? 4 : 8 / bits_;
+  const uint32_t local_size = dequantize_ ? group_size_ / pack_factor : 32;
+  // Each complete group is independent. Batch without adding out-of-range lanes.
+  for (uint64_t first = 0; first < groups;) {
+    const uint64_t count = std::min<uint64_t>(groups - first, 65535);
+    auto pointer = [](const array& value, uint64_t offset) {
+      return const_cast<uint8_t*>(value.data<uint8_t>()) + offset;
+    };
+    CrosstlMlxBuffer buffers[] = {
+        {"w", dequantize_ ? "uint8" : storage,
+         pointer(dense[0], first * (dequantize_ ? packed_per_group : group_size_ * itemsize)),
+         count * (dequantize_ ? packed_per_group : group_size_), 0},
+        {"out", dequantize_ ? storage : "uint8",
+         pointer(outputs[0], first * (dequantize_ ? group_size_ * itemsize : packed_per_group)),
+         count * (dequantize_ ? group_size_ : packed_per_group), 1},
+        {"scales", storage, pointer(dequantize_ ? dense[1] : outputs[1], first * itemsize), count,
+         dequantize_ ? uint32_t(0) : uint32_t(1)},
+        {"biases", storage, pointer(dequantize_ ? dense[2] : outputs[2], first * itemsize), count,
+         dequantize_ ? uint32_t(0) : uint32_t(1)},
+    };
+    const CrosstlMlxLaunch launch{{static_cast<uint32_t>(count), 1, 1}, {local_size, 1, 1}};
+    char error[2048] = {};
+    const int status = dispatch_callback.load()(
+        entry.c_str(), buffers, 4, count * group_size_, &launch, error, sizeof(error));
+    error[sizeof(error) - 1] = '\0';
+    if (status != 0) {
+      throw std::runtime_error(std::string("CrossTL native affine quantization failed: ") + error);
+    }
+    first += count;
+  }
+}
+
+} // namespace mlx::core::fast

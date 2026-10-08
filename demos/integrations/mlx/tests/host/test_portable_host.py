@@ -34,10 +34,11 @@ def checkout(root, monkeypatch, newline=b"\n"):
         "CMakeLists.txt": b"target_sources(mlx PRIVATE primitives.cpp)\n",
         "primitives.cpp": (
             "\n".join(
-                f"{'NO_GPU_MULTI' if name in prepare.MULTI_OUTPUT_VIEWS else 'NO_GPU'}({name})"
+                f"{'NO_GPU_MULTI' if name in prepare.MULTI_OUTPUT_VIEWS or name == 'Quantize' else 'NO_GPU'}({name})"
                 for name in (
                     "Arange",
                     "RandomBits",
+                    "Quantize",
                     "Reduce",
                     "BitwiseBinary",
                     "BitwiseInvert",
@@ -93,6 +94,10 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     assert "NO_GPU(Arange)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(RandomBits)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(RandomBits)" in (backend / "primitives.cpp").read_text()
+    assert (
+        "NO_GPU_MULTI(Quantize)" not in (backend / "crosstl_primitives.cpp").read_text()
+    )
+    assert "NO_GPU_MULTI(Quantize)" in (backend / "primitives.cpp").read_text()
     assert "NO_GPU(Abs)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(AsType)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(AsType)" in (backend / "primitives.cpp").read_text()

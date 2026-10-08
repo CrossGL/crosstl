@@ -1,0 +1,390 @@
+"""Affine host storage, complete-group launches and native output chaining."""
+
+import ctypes
+import json
+import os
+import struct
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from demos.integrations.mlx.portable_host import quantization_dispatch as dispatch
+from demos.integrations.mlx.portable_host import quantization_layout as layout
+from demos.integrations.mlx.portable_host import quantization_packages, runtime
+from demos.integrations.mlx.portable_host.quantization_packages import (
+    QuantizationPackageCache,
+)
+from demos.integrations.mlx.portable_host.verify_quantization import packed_reference
+
+
+def buffers(entry, groups, data=None):
+    memory, result = {}, {}
+    for name, (dtype, count, output) in layout.buffer_contract(entry, groups).items():
+        ctype = dispatch.WORD_TYPES[layout.ITEM_SIZES[dtype]]
+        values = data[name] if data and name in data else [0] * count
+        memory[name] = (ctype * count)(*values)
+        result[name] = runtime.Buffer(
+            name.encode(), dtype.encode(), ctypes.addressof(memory[name]), count, output
+        )
+    return result, memory
+
+
+def launch(entry, groups):
+    return runtime.Launch((groups, 1, 1), (layout.workgroup_size(entry), 1, 1))
+
+
+@pytest.mark.parametrize("dtype", layout.SOURCE_TYPES.values())
+@pytest.mark.parametrize("group", (32, 64, 128))
+@pytest.mark.parametrize("bits", (2, 3, 4, 5, 6, 8))
+@pytest.mark.parametrize("operation", ("quantize", "dequantize"))
+def test_affine_layout_covers_all_pinned_specializations(dtype, group, bits, operation):
+    entry = f"affine_{operation}_{dtype}_gs_{group}_b_{bits}"
+    supplied, memory = buffers(entry, 5)
+    assert layout.validate(
+        entry, supplied, group * 5, launch(entry, 5).execution()
+    ) == {"groupCount": 5, "elementCount": group * 5}
+    assert memory
+
+
+@pytest.mark.parametrize(
+    "fault",
+    (
+        "missing",
+        "dtype",
+        "count",
+        "direction",
+        "null",
+        "alignment",
+        "overlap",
+        "elements",
+        "launch",
+    ),
+)
+def test_affine_layout_rejects_invalid_storage_before_reading(fault):
+    entry = "affine_quantize_float_gs_32_b_2"
+    supplied, memory = buffers(entry, 5)
+    geometry, elements = launch(entry, 5).execution(), 160
+    if fault == "missing":
+        supplied.pop("scales")
+    elif fault == "dtype":
+        supplied["w"].dtype = b"float16"
+    elif fault == "count":
+        supplied["out"].count -= 1
+    elif fault == "direction":
+        supplied["biases"].output = 0
+    elif fault == "null":
+        supplied["w"].data = None
+    elif fault == "alignment":
+        supplied["w"].data += 1
+    elif fault == "overlap":
+        supplied["scales"].data = supplied["biases"].data
+    elif fault == "elements":
+        elements -= 1
+    else:
+        geometry["workgroupSize"][0] = 1
+    with pytest.raises(ValueError):
+        layout.validate(entry, supplied, elements, geometry)
+    assert memory
+
+
+def test_affine_layout_accepts_upstream_sizes_not_elementwise_limit():
+    entry = "affine_quantize_float_gs_32_b_2"
+    supplied, memory = buffers(entry, 4096)
+    assert (
+        layout.validate(entry, supplied, 131072, launch(entry, 4096).execution())[
+            "elementCount"
+        ]
+        == 131072
+    )
+    with pytest.raises(ValueError, match="complete groups"):
+        layout.buffer_contract(entry, layout.MAX_GROUPS + 1)
+    assert memory
+
+
+@pytest.mark.parametrize(
+    "logical,physical",
+    (
+        ("float16", "float16"),
+        ("float16", "float32"),
+        ("bfloat16", "float32"),
+        ("bfloat16", "bfloat16"),
+        ("bfloat16", "uint16"),
+    ),
+)
+def test_affine_narrow_transport_preserves_all_words(logical, physical):
+    values = list(range(65536))
+    assert (
+        dispatch.decode(dispatch.encode(values, logical, physical), logical, physical)
+        == values
+    )
+
+
+@pytest.mark.parametrize(
+    "logical,physical,word",
+    (
+        ("uint8", "uint32", 256),
+        ("bfloat16", "float32", 0x3F800001),
+        ("float16", "float32", 0x3F800001),
+    ),
+)
+def test_affine_transport_does_not_round_invalid_native_outputs(
+    logical, physical, word
+):
+    value = dispatch.encode([0], logical, physical)
+    value["values"] = [word]
+    with pytest.raises((ValueError, RuntimeError)):
+        dispatch.decode(value, logical, physical)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    (
+        "affine_quantize_float_gs_16_b_2",
+        "affine_dequantize_float_gs_32_b_7",
+        "affine_quantize_int_gs_32_b_2",
+        "affine_quantize_float_gs_32_b_2_extra",
+    ),
+)
+def test_affine_entries_reject_unvalidated_specializations(entry):
+    with pytest.raises(ValueError, match="Unsupported"):
+        layout.signature(entry)
+
+
+@pytest.mark.parametrize(
+    "fault", (None, "missing", "guard", "encoding", "shape", "range", "trace")
+)
+@pytest.mark.parametrize("dtype", ("float32", "float16", "bfloat16"))
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+def test_affine_dispatch_commits_all_outputs_only_after_validation(
+    tmp_path, monkeypatch, fault, dtype, target
+):
+    entry = f"affine_quantize_{layout.SOURCE_TYPES[dtype]}_gs_32_b_2"
+    supplied, memory = buffers(entry, 1)
+    descriptor = {"artifact": {}, "bindings": []}
+    for name, buffer in supplied.items():
+        kind = buffer.dtype.decode()
+        physical = kind
+        if kind == "uint8" and target != "metal":
+            physical = "uint32"
+        elif kind in {"float16", "bfloat16"} and target != "metal":
+            physical = "uint16" if target == "directx" else "float32"
+        scalar = {
+            "elementType": physical,
+            "elementStrideBytes": (
+                {"uint16": 2, "uint32": 4}.get(
+                    physical, layout.ITEM_SIZES.get(physical)
+                )
+            ),
+        }
+        if kind == "float16" and target == "directx":
+            scalar.update(
+                storageLayout="hlsl-structured-buffer",
+                runtimeSized=True,
+                storageEncoding={
+                    "encoding": "ieee754-binary16",
+                    "logicalElementType": "float16",
+                },
+            )
+        descriptor["bindings"].append(
+            {"name": name, "kind": "buffer", "scalarLayout": scalar}
+        )
+    one = {"float32": 0x3F800000, "float16": 0x3C00, "bfloat16": 0x3F80}[dtype]
+    host = SimpleNamespace(
+        target=target,
+        quantization=SimpleNamespace(get=lambda name: (descriptor, tmp_path)),
+        trace=tmp_path / "trace.jsonl",
+        dispatch_count=0,
+    )
+    monkeypatch.setattr(
+        dispatch,
+        "build_native_loader_dispatch_request",
+        lambda descriptor, directory, inputs, outputs, execution, **kwargs: outputs,
+    )
+
+    def execute(host, outputs):
+        outputs = json.loads(json.dumps(outputs))
+        for name, value in outputs.items():
+            count = supplied[name].count
+            logical = supplied[name].dtype.decode()
+            value["values"][:count] = dispatch.encode(
+                [47 if name == "out" else one] * count, logical, value["dtype"]
+            )["values"]
+        if fault == "missing":
+            outputs.pop("biases")
+        elif fault == "guard":
+            outputs["biases"]["values"][-1] ^= 1
+        elif fault == "encoding":
+            outputs["biases"]["encoding"] = "other"
+        elif fault == "shape":
+            outputs["biases"]["shape"] = [1]
+        elif fault == "range":
+            outputs["out"]["values"][0] = 256
+        return SimpleNamespace(status="ok", outputs=outputs, details={})
+
+    monkeypatch.setattr(dispatch, "execute", execute)
+    if fault == "trace":
+        host.trace.mkdir()
+    call = lambda: dispatch.dispatch(
+        host, entry, (runtime.Buffer * 4)(*supplied.values()), 4, 32, launch(entry, 1)
+    )
+    if fault:
+        with pytest.raises((ValueError, RuntimeError, OSError)):
+            call()
+        assert host.dispatch_count == 0
+        assert all(not any(value) for value in memory.values())
+    else:
+        call()
+        assert list(memory["out"]) == [47] * 8
+        assert list(memory["scales"]) == list(memory["biases"]) == [one]
+        assert host.dispatch_count == 1
+
+
+def test_affine_reference_packing_has_explicit_bit_order():
+    assert packed_reference([3, 3, 2, 0], 2) == b"\x2f"
+    assert packed_reference(list(range(8)), 3) == bytes.fromhex("88c6fa")
+    with pytest.raises(ValueError, match="incomplete"):
+        packed_reference([1], 3)
+    with pytest.raises(ValueError, match="Invalid"):
+        packed_reference([8] * 8, 3)
+
+
+@pytest.mark.parametrize("wrong_entry", (False, True))
+def test_affine_cache_verifies_selected_source_entry(
+    tmp_path, monkeypatch, wrong_entry
+):
+    entry = "affine_quantize_float_gs_32_b_2"
+    identity = {"entry": entry, "sourceHash": "a" * 64}
+    descriptor = {
+        "target": "opengl",
+        "stage": "compute",
+        "entryPoint": {"name": "main"},
+        "source": {"hash": {"algorithm": "sha256", "value": identity["sourceHash"]}},
+    }
+    (tmp_path / "index.json").write_text(
+        json.dumps({"identity": identity, "descriptor": descriptor})
+    )
+    loader = {
+        "success": True,
+        "loadUnits": [
+            {"entryPoint": {"source": "another_entry" if wrong_entry else entry}}
+        ],
+    }
+    monkeypatch.setattr(
+        quantization_packages, "build_runtime_loader_manifest", lambda path: loader
+    )
+    monkeypatch.setattr(
+        quantization_packages,
+        "build_native_loader_abi_descriptor",
+        lambda payload: descriptor,
+    )
+    cache = QuantizationPackageCache(tmp_path, tmp_path, "opengl")
+    if wrong_entry:
+        with pytest.raises(ValueError, match="selected entry"):
+            cache._load(tmp_path, identity)
+    else:
+        assert cache._load(tmp_path, identity) == (descriptor, tmp_path / "package")
+
+
+def test_affine_ci_uses_existing_platform_jobs_and_retains_evidence():
+    import yaml
+
+    root = Path(__file__).resolve().parents[5]
+    workflow = yaml.safe_load(
+        (root / ".github/workflows/demo-project-testing.yml").read_text()
+    )
+    job = workflow["jobs"]["portable-host"]
+    assert {item["target"] for item in job["strategy"]["matrix"]["include"]} == {
+        "metal",
+        "opengl",
+        "directx",
+    }
+    step = next(
+        item
+        for item in job["steps"]
+        if item.get("name") == "Execute affine quantization through MLX"
+    )
+    assert "if" not in step
+    assert "portable_host.verify_quantization" in step["run"]
+    assert "--timeout-seconds 1800" in step["run"]
+    assert "test_portable_quantization.py" in step["run"]
+    upload = next(
+        item
+        for item in job["steps"]
+        if item.get("name") == "Retain native execution evidence"
+    )
+    assert upload["if"] == "always()"
+    assert upload["with"]["include-hidden-files"] is True
+    assert upload["with"]["if-no-files-found"] == "error"
+
+
+@pytest.mark.parametrize("dtype", ("float32", "float16", "bfloat16"))
+def test_affine_native_host_chains_large_quantize_dequantize(tmp_path, dtype):
+    root = os.environ.get("CROSTL_MLX_ROOT")
+    target = os.environ.get("CROSTL_MLX_AFFINE_TARGET")
+    if not root or not target:
+        if os.environ.get("CROSTL_REQUIRE_MLX_AFFINE_NATIVE") == "1":
+            pytest.fail("Pinned source and affine native target are required")
+        pytest.skip("Affine native source and target are not configured")
+    from tests.test_translator.test_native_loader_dispatch_integration import _executor
+
+    executor = _executor(target)
+    host = SimpleNamespace(
+        target=target,
+        quantization=QuantizationPackageCache(root, tmp_path / "packages", target),
+        executor=executor,
+        trace=tmp_path / "trace.jsonl",
+        dispatch_count=0,
+    )
+    source = layout.SOURCE_TYPES[dtype]
+    quantize = f"affine_quantize_{source}_gs_32_b_2"
+    dequantize = f"affine_dequantize_{source}_gs_32_b_2"
+    groups, size = 4096, 131072
+
+    def word(value):
+        if dtype == "float16":
+            return struct.unpack("<H", struct.pack("<e", value))[0]
+        bits = struct.unpack("<I", struct.pack("<f", value))[0]
+        return bits >> 16 if dtype == "bfloat16" else bits
+
+    supplied, memory = buffers(
+        quantize,
+        groups,
+        {"w": [word(value) for value in (0.0, 0.5, 1.5, 3.0)] * (size // 4)},
+    )
+    array = (runtime.Buffer * 4)(*supplied.values())
+    try:
+        runtime.HostRuntime.dispatch(
+            host, quantize, array, 4, size, launch=launch(quantize, groups)
+        )
+        assert list(memory["out"]) == [47] * (size // 4)
+        assert list(memory["scales"]) == [word(-1.0)] * groups
+        assert list(memory["biases"]) == [word(3.0)] * groups
+        inputs = {
+            "w": list(memory["out"]),
+            "scales": list(memory["scales"]),
+            "biases": list(memory["biases"]),
+        }
+        supplied, decoded = buffers(dequantize, groups, inputs)
+        runtime.HostRuntime.dispatch(
+            host,
+            dequantize,
+            (runtime.Buffer * 4)(*supplied.values()),
+            4,
+            size,
+            launch=launch(dequantize, groups),
+        )
+        assert list(decoded["out"]) == [
+            word(value) for value in (0.0, 0.0, 1.0, 3.0)
+        ] * (size // 4)
+        assert host.dispatch_count == 2
+        events = [json.loads(line) for line in host.trace.read_text().splitlines()]
+        assert [event["entry"] for event in events] == [quantize, dequantize]
+        assert all(
+            event["quantizationMetadata"]["elementCount"] == size for event in events
+        )
+        assert set(events[0]["outputHashes"]) == {"out", "scales", "biases"}
+    finally:
+        close = getattr(executor.runtime_adapter.runtime, "close", None)
+        if close:
+            close()

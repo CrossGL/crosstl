@@ -32,6 +32,8 @@ from demos.integrations.mlx.portable_host import (
     copy_layout,
     gather_dispatch,
     half_storage,
+    quantization_dispatch,
+    quantization_layout,
     random_dispatch,
     reduction_layout,
     row_reduction_layout,
@@ -73,6 +75,9 @@ from demos.integrations.mlx.portable_host.packages import (
     SELECTION_ENTRIES,
     SLICE_UPDATE_ENTRIES,
     UNARY_ENTRIES,
+)
+from demos.integrations.mlx.portable_host.quantization_packages import (
+    QuantizationPackageCache,
 )
 from demos.integrations.mlx.portable_host.random_packages import (
     ENTRIES as RANDOM_ENTRIES,
@@ -245,6 +250,13 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        self.quantization = (
+            QuantizationPackageCache(
+                mlx_root, self.directory / "quantization", self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.descriptors = index["descriptors"]
         if set(self.descriptors) != set(ENTRIES):
             raise ValueError("Packages must contain the exact supported entry set")
@@ -359,6 +371,9 @@ class HostRuntime:
             if name.startswith(("gather", "scatter")) and self.gathers is not None:
                 gather_signature(name)
                 return 1
+            if name.startswith("affine_") and self.quantization is not None:
+                quantization_layout.signature(name)
+                return 1
             return 0
         except (AttributeError, UnicodeDecodeError, ValueError):
             return 0
@@ -402,6 +417,10 @@ class HostRuntime:
             return 1
 
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
+        if entry.startswith("affine_"):
+            return quantization_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         if entry in RANDOM_ENTRIES:
             return random_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch

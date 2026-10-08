@@ -1801,6 +1801,20 @@ jobs:
           python tools/run_bounded_command.py --timeout-seconds 2400 --label "MLX host package translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
               --target ${{ matrix.target }} --output-dir .mlx-portable-host/packages 2>&1 | tee .mlx-portable-host/translation.log
+      - name: Execute affine quantization through MLX
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_quantization.py -k 'not native_host'
+          fi
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX affine host verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_quantization --mlx-root mlx-upstream \
+              --packages .mlx-portable-host/packages --output-dir .mlx-portable-host/affine \
+              2>&1 | tee .mlx-portable-host/affine.log
       - name: Execute upstream tests on the translated backend
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"

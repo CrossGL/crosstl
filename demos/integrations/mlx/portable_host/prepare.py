@@ -49,6 +49,7 @@ def adapted_sources(original, primitives, events):
     for primitive in (
         "Arange",
         "RandomBits",
+        "Quantize",
         "Reduce",
         "BitwiseBinary",
         "BitwiseInvert",
@@ -69,7 +70,11 @@ def adapted_sources(original, primitives, events):
     ):
         if primitive in {"Log2", "Log10", "Rsqrt"}:
             continue
-        macro = "NO_GPU_MULTI" if primitive in MULTI_OUTPUT_VIEWS else "NO_GPU"
+        macro = (
+            "NO_GPU_MULTI"
+            if primitive in MULTI_OUTPUT_VIEWS or primitive == "Quantize"
+            else "NO_GPU"
+        )
         primitives = replace_once(
             primitives,
             f"{macro}({primitive})",
