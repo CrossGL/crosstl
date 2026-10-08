@@ -106,6 +106,13 @@ loop-induction branches therefore do not depend on an unrelated helper being
 present. Required native tests distinguish alternating branch computations at
 workgroup widths 32, 64 and 128, with original Metal execution as a control.
 
+Call effects distinguish buffer destinations from value-only arguments.
+Recognized ``round`` and ``buffer_load`` calls do not modify their arguments;
+``buffer_store`` modifies its destination, not its index or payload. This does
+not establish result uniformity for a load. User overloads, unknown calls and
+side effects within argument expressions retain conservative mutation checks.
+The same argument-write contracts are used by DirectX software subgroups.
+
 Generated collectives pair execution barriers with explicit shared-memory
 ordering. This preserves scratch reuse across conditional helper calls on
 the tested Mesa runtime. The required native vote gate covers repeated calls,

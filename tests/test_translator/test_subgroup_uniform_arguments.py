@@ -12,6 +12,7 @@ import pytest
 
 from crosstl.project import build_native_loader_dispatch_request
 from crosstl.translator import parse
+from crosstl.translator.codegen.call_effects import builtin_argument_write_indices
 from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
 from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLPrivatePointerParameterError,
@@ -29,6 +30,17 @@ from tests.test_translator.test_software_subgroup_product import (
 from tests.test_translator.test_software_subgroup_votes import _canonical, _codegen
 
 REQUIRE_ENV = "CROSTL_REQUIRE_SUBGROUP_UNIFORM_ARGUMENTS"
+
+
+@pytest.mark.parametrize("name", ["round", "buffer_load", "buffer_store", "unknown"])
+@pytest.mark.parametrize("arity", range(5))
+def test_builtin_write_contracts_require_known_signatures(name, arity):
+    expected = None
+    if (name, arity) in {("round", 1), ("buffer_load", 2)}:
+        expected = ()
+    elif (name, arity) == ("buffer_store", 3):
+        expected = (0,)
+    assert builtin_argument_write_indices(name, arity) == expected
 
 
 def _source(body, helpers):
@@ -108,6 +120,80 @@ def test_direct_collective_loop_branches_compile(tmp_path, target, unused_helper
     assert "WaveActiveSum" not in generated and "WaveShuffleDown" not in generated
     assert "if (" in generated
     _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("target", ["opengl", "directx"])
+@pytest.mark.parametrize(
+    "body",
+    [
+        "float value = round(float(invocation + i)); results[invocation] = uint(WaveShuffleDown(value, 1u));",
+        "uint value = buffer_load(results, invocation + i); results[invocation] = WaveShuffleDown(value, 1u);",
+        "uint value = WaveShuffleDown(invocation, 1u); buffer_store(results, invocation + i, value);",
+    ],
+)
+def test_value_only_builtin_arguments_preserve_collective_loops(tmp_path, target, body):
+    generated = _generate(
+        "for (uint i = 0u; i < groups; ++i) { " + body + " }", "", target
+    )
+    assert "WaveShuffleDown" not in generated
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("target", ["opengl", "directx"])
+@pytest.mark.parametrize(
+    "body,helpers",
+    [
+        ("float value = round(float(i++));", ""),
+        ("uint value = buffer_load(results, invocation + i++);", ""),
+        ("buffer_store(results, invocation + i++, 0u);", ""),
+        ("buffer_store(results, invocation, i++);", ""),
+        (
+            "float value = round(float(change(i, invocation)));",
+            "uint change(inout uint value, uint lane) { value = lane; return value; }",
+        ),
+        (
+            "uint value = round(i);",
+            "uint round(inout uint value) { value = gl_LocalInvocationIndex; return value; }",
+        ),
+        (
+            "uint value = buffer_load(0u, i);",
+            "uint buffer_load(uint resource, inout uint index) { index = gl_LocalInvocationIndex; return index; }",
+        ),
+        (
+            "buffer_store(0u, i, invocation);",
+            "void buffer_store(uint resource, inout uint index, uint value) { index = value; }",
+        ),
+    ],
+)
+def test_builtin_call_effects_preserve_mutation_rejection(target, body, helpers):
+    error = (
+        OpenGLSoftwareSubgroupError
+        if target == "opengl"
+        else DirectXSoftwareSubgroupError
+    )
+    with pytest.raises(error):
+        _generate(
+            "for (uint i = 0u; i < groups; ++i) { "
+            + body
+            + " results[invocation] = WaveShuffleDown(invocation, 1u); }",
+            helpers,
+            target,
+        )
+
+
+@pytest.mark.parametrize("target", ["opengl", "directx"])
+def test_nonmutating_buffer_load_does_not_establish_uniformity(target):
+    error = (
+        OpenGLSoftwareSubgroupError
+        if target == "opengl"
+        else DirectXSoftwareSubgroupError
+    )
+    with pytest.raises(error):
+        _generate(
+            "uint count = buffer_load(results, invocation); for (uint i = 0u; i < count; ++i) { results[invocation] = WaveShuffleDown(invocation, 1u); }",
+            "",
+            target,
+        )
 
 
 @pytest.mark.parametrize("target", ["opengl", "directx"])
@@ -435,6 +521,22 @@ def test_opengl_helper_loops_reject_mutable_controls(body):
 
 
 def _native_source(size, depth, mode):
+    if mode == "effects":
+        return f"""#include <metal_stdlib>
+using namespace metal;
+kernel void products(device uint* inputWords [[buffer(0)]],
+                     device uint* outputWords [[buffer(1)]],
+                     uint tid [[thread_index_in_threadgroup]],
+                     uint3 gid [[threadgroup_position_in_grid]]) {{
+    uint index = gid.x * {size}u + tid;
+    for (uint i = 0u; i < 3u; ++i) {{
+        uint loaded = inputWords[gid.x * {size}u + (tid + i) % {size}u];
+        uint rounded = uint(round(float(loaded) + float(i) + 0.25f));
+        uint result = simd_sum(rounded);
+        outputWords[index * 3u + i] = result;
+    }}
+}}
+"""
     helpers = """uint reduce_twice(uint value, uint count) {
         uint result = simd_sum(value);
         if (count > 1u) { result = simd_sum(result); }
@@ -514,7 +616,7 @@ kernel void products(device uint* inputWords [[buffer(0)]],
             "vector-loop",
         )
     ]
-    + [(0, "direct")],
+    + [(0, "direct"), (0, "effects")],
 )
 def test_uniform_arguments_execute_across_helper_calls(tmp_path, shape, depth, mode):
     if os.environ.get(REQUIRE_ENV) != "1":
@@ -546,6 +648,18 @@ def test_uniform_arguments_execute_across_helper_calls(tmp_path, shape, depth, m
                 else first
             )
             wanted.extend([value, second, 2])
+    if mode == "effects":
+        wanted = []
+        for index in range(len(words)):
+            group_start = index // size * size
+            subgroup_start = index % size // 32 * 32
+            wanted.extend(
+                sum(
+                    words[group_start + (lane + iteration) % size] + iteration
+                    for lane in range(subgroup_start, subgroup_start + 32)
+                )
+                for iteration in range(3)
+            )
     guards = [0xBAD00000 + index for index in range(17)]
 
     def payload(values):

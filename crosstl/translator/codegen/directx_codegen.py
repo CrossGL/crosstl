@@ -97,6 +97,7 @@ from .array_utils import (
 )
 from .bfloat_constants import bfloat16_constant_bits, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
+from .call_effects import builtin_argument_write_indices
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     build_generic_enum_specialization,
@@ -5250,6 +5251,11 @@ class HLSLCodeGen:
             call_name = self.function_call_name(node)
             arguments = list(getattr(node, "arguments", []) or [])
             callee = functions_by_name.get(call_name)
+            builtin_writes = (
+                builtin_argument_write_indices(call_name, len(arguments))
+                if callee is None and isinstance(node.function, (str, IdentifierNode))
+                else None
+            )
             pure_call = (
                 callee is None
                 and isinstance(node.function, (str, IdentifierNode))
@@ -5270,6 +5276,8 @@ class HLSLCodeGen:
                     or set(self.hlsl_parameter_qualifiers(parameters[index]))
                     & {"out", "inout"}
                 ]
+            elif builtin_writes is not None:
+                mutations = [arguments[index] for index in builtin_writes]
             elif callee is None and (
                 call_name in self.HLSL_WAVE_INTRINSIC_ARITIES
                 or self.hlsl_metal_simd_shuffle_name(call_name) is not None

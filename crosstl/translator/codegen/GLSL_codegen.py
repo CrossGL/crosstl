@@ -114,6 +114,7 @@ from .array_utils import (
 )
 from .bfloat_constants import bfloat16_constant_float, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
+from .call_effects import builtin_argument_write_indices
 from .constant_ordering import partition_constants_by_struct_dependency
 from .entry_selection import entry_type_references
 from .enum_utils import (
@@ -4559,6 +4560,12 @@ class GLSLCodeGen:
                     self.glsl_software_subgroup_resolved_call_targets.get(id(call))
                 )
                 arguments = list(call.arguments or [])
+                builtin_writes = (
+                    builtin_argument_write_indices(name, len(arguments))
+                    if name not in functions_by_name
+                    and isinstance(call.function, (str, IdentifierNode))
+                    else None
+                )
                 pure = name not in functions_by_name and (
                     self.glsl_software_subgroup_exit_constructor(call)
                     or (name in {"min", "max"} and len(arguments) == 2)
@@ -4578,6 +4585,8 @@ class GLSLCodeGen:
                         or set(self.glsl_parameter_qualifiers(parameters[index]))
                         & {"out", "inout"}
                     ]
+                elif builtin_writes is not None:
+                    mutations = [arguments[index] for index in builtin_writes]
                 elif pure or (
                     name not in functions_by_name
                     and self.glsl_wave_operation_name(name)
