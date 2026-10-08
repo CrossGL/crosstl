@@ -2461,7 +2461,7 @@ def test_codegen_msl_relational_namespace_intrinsics_import_to_crossgl():
     assert "bool nanValue = isnan(value);" in crossgl
     assert "bool infValue = isinf(value);" in crossgl
     assert "bool finiteValue = isfinite(value);" in crossgl
-    assert "float roundedValue = round(value);" in crossgl
+    assert "float roundedValue = __crossgl_metal_round_float(float(value));" in crossgl
     assert "bvec3 nanMask = isnan(values);" in crossgl
     assert "metal_u3a_u3a" not in crossgl
     assert parse_crossgl(crossgl) is not None

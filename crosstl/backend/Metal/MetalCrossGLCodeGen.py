@@ -141,6 +141,21 @@ class MetalPreciseMathLoweringError(ValueError):
         )
 
 
+class MetalRoundLoweringError(ValueError):
+    """Raised when source rounding cannot be represented by the portable helper."""
+
+    project_diagnostic_code = "project.translate.metal-round-unsupported"
+    missing_capabilities = ("metal.round-lowering",)
+
+    def __init__(self, operand_type, reason, source_location=None):
+        self.operand_type = operand_type
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(
+            f"Cannot preserve Metal round for '{operand_type or '<unknown>'}': {reason}"
+        )
+
+
 class MetalDivisionProfileError(ValueError):
     """Raised when a selected division profile cannot be applied faithfully."""
 
@@ -1832,6 +1847,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_atan_widths = set()
         self.required_metal_precise_atan2_widths = set()
         self.required_metal_power_widths = set()
+        self.required_metal_round_widths = set()
         self.required_metal_precise_exp_widths = set()
         self.required_metal_precise_log_widths = set()
         self.required_metal_precise_sqrt_widths = set()
@@ -3033,6 +3049,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_atan_widths = set()
         self.required_metal_precise_atan2_widths = set()
         self.required_metal_power_widths = set()
+        self.required_metal_round_widths = set()
         self.required_metal_precise_exp_widths = set()
         self.required_metal_precise_log_widths = set()
         self.required_metal_precise_sqrt_widths = set()
@@ -11390,6 +11407,9 @@ class MetalToCrossGLConverter:
             power_call = self.generate_metal_power_call(expr, is_main)
             if power_call is not None:
                 return power_call
+            round_call = self.generate_metal_round_call(expr, is_main)
+            if round_call is not None:
+                return round_call
             fused_call = self.generate_metal_fma_call(expr, is_main)
             if fused_call is not None:
                 return fused_call
@@ -14494,6 +14514,103 @@ class MetalToCrossGLConverter:
             arguments.append(value)
         return f"{name}({', '.join(arguments)})"
 
+    def generate_metal_round_call(self, expression, is_main=False):
+        if str(expression.name).rsplit("::", 1)[-1] != "round":
+            return None
+        selected = self.selected_metal_callable(expression)
+        bfloat_wrapper = self.is_materialized_metal_stdlib_wrapper(selected) and (
+            self.normalized_metal_type(
+                self.resolve_type_alias(
+                    self.selected_metal_callable_return_type(selected)
+                )
+            )
+            in self.metal_source_bfloat_types
+        )
+        if bfloat_wrapper:
+            result_type = "float"
+        elif (
+            self.resolve_metal_math_builtin_name(expression.name, expression.args)
+            == "round"
+        ):
+            result_type = self.metal_math_builtin_result_type(expression)
+        else:
+            return None
+        info = self.metal_math_builtin_type_info(result_type)
+        element = (
+            self.normalized_metal_type(self.resolve_type_alias(info["element_type"]))
+            if info is not None
+            else None
+        )
+        if (
+            info is None
+            or element not in {"float", "half"}
+            or info["width"] not in {1, 2, 3, 4}
+        ):
+            raise MetalRoundLoweringError(
+                result_type,
+                "expected a float or half scalar or vector with at most four lanes",
+                getattr(expression, "source_location", None),
+            )
+        if self.current_function is None:
+            raise MetalRoundLoweringError(
+                result_type,
+                "global initializers cannot call the runtime rounding helper",
+                getattr(expression, "source_location", None),
+            )
+        width = info["width"]
+        self.required_metal_round_widths.add(width)
+        argument = expression.args[0]
+        value = self.generate_expression(argument, is_main)
+        parameter_type = (
+            self.metal_source_overload_parameter_type(selected.params[0])
+            if bfloat_wrapper
+            else result_type
+        )
+        if self.metal_source_overload_type_identity(
+            self.expression_metal_type(argument)
+        ) != self.metal_source_overload_type_identity(parameter_type):
+            value = f"{self.map_type(parameter_type)}({value})"
+        mapped = "float" if width == 1 else f"vec{width}"
+        result = f"{self.metal_round_helper_name(width)}({mapped}({value}))"
+        return (
+            f"{self.map_type(result_type)}({result})" if element == "half" else result
+        )
+
+    def metal_round_helper_name(self, width):
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            f"round-float{suffix}", f"__crossgl_metal_round_float{suffix}"
+        )
+
+    def generate_metal_round_support_code(self, indent=0):
+        if not self.required_metal_round_widths:
+            return ""
+        scalar = self.metal_round_helper_name(1)
+        code = f"@metal_static\nfloat {scalar}(float value) {{\n" + """
+    uint bits = asuint(value);
+    uint magnitude = bits & 0x7fffffffu;
+    uint sign = bits & 0x80000000u;
+    // Integral binary32 values, infinities and NaNs need no rounding.
+    if (magnitude >= 0x4b000000u) { return value; }
+    // Metal round produces positive zero for magnitudes below one half.
+    if (magnitude < 0x3f000000u) { return 0.0; }
+    if (magnitude < 0x3f800000u) { return asfloat(sign | 0x3f800000u); }
+    // Integer-bit rounding avoids losing a half-unit near 2^23.
+    uint shift = 150u - (magnitude >> 23u);
+    uint unit = 1u << shift;
+    uint rounded = (magnitude + (unit >> 1u)) & ~(unit - 1u);
+    return asfloat(sign | rounded);
+}
+"""
+        for width in sorted(self.required_metal_round_widths - {1}):
+            lanes = ", ".join(f"{scalar}(value.{lane})" for lane in "xyzw"[:width])
+            code += (
+                f"@metal_static\nvec{width} {self.metal_round_helper_name(width)}(vec{width} value) {{\n"
+                f"    return vec{width}({lanes});\n}}\n"
+            )
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
+
     def generate_metal_power_call(self, expression, is_main=False):
         if (
             self.metal_math_builtin_namespace_mode(expression.name) == "fast"
@@ -15474,6 +15591,7 @@ float {scalar}(float base, float exponent) {{
         independent_code += self.generate_metal_precise_atan_support_code(indent)
         independent_code += self.generate_metal_precise_atan2_support_code(indent)
         independent_code += self.generate_metal_power_support_code(indent)
+        independent_code += self.generate_metal_round_support_code(indent)
         independent_code += self.generate_metal_precise_exp_support_code(indent)
         independent_code += self.generate_metal_precise_log_support_code(indent)
         independent_code += self.generate_metal_precise_sqrt_support_code(indent)
@@ -16223,6 +16341,8 @@ float {scalar}(float value) {{
             rendered = self.generate_metal_remainder_call(expression, is_main)
         if rendered is None:
             rendered = self.generate_metal_power_call(expression, is_main)
+        if rendered is None:
+            rendered = self.generate_metal_round_call(expression, is_main)
         if rendered is None:
             function_name = self.map_function_call_name(
                 expression.name,

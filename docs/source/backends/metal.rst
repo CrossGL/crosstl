@@ -14,6 +14,24 @@ Shading Language from the shared translator AST, adds ``metal_stdlib`` when
 needed, maps CrossGL resources to Metal texture/sampler/buffer types, and
 renders stage entry functions using Metal attributes.
 
+Source ``round`` calls retain Metal's halfway-away-from-zero rule, rather than
+inheriting a target's nearest-even or implementation-selected halfway rule.
+Float and half scalars and vectors of up to four lanes use a portable binary32
+helper, with the source return type restored before surrounding expressions.
+Materialized bfloat wrappers keep their explicit narrow return. Arguments are
+evaluated once. The helper uses positive zero below magnitude one half, matching
+the original Metal native controls with and without fast math; infinities are
+unchanged and NaNs remain NaNs. Integer-bit rounding avoids an extra floating
+addition near the binary32 integer-precision boundary.
+
+Saved CrossGL retains this source-specific helper. User-defined ``round``
+overloads, Metal ``rint`` and HLSL source ``round`` keep their own semantics.
+Unsupported source result types and runtime calls in global initializers emit
+``project.translate.metal-round-unsupported`` instead of a target artifact.
+Native regression checks cover halfway neighborhoods, all binary32 exponents,
+scalar/vector calls and all half and bfloat bit patterns. They supplement,
+rather than replace, numerical tests of complete translated kernels.
+
 Reverse translation uses ``crosstl.backend.Metal.MetalLexer.MetalLexer`` and
 ``crosstl.backend.Metal.MetalParser.MetalParser`` to parse MSL into the Metal
 backend AST. ``crosstl.backend.Metal.MetalCrossGLCodeGen`` then serializes that

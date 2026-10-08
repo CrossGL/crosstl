@@ -163,10 +163,11 @@
           "demos/integrations/mlx/tests/kernels/test_attention_reduce_runtime.py",
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_translator/test_metal_trunc.py",
+          "tests/test_translator/test_metal_round.py",
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 2022
+        "test_count": 2038
       },
       "translator_codegen": {
         "exists": true,
@@ -332,10 +333,11 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_translator/test_metal_trunc.py",
+          "tests/test_translator/test_metal_round.py",
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 2262
+        "test_count": 2278
       },
       "translator_codegen": {
         "exists": true,
@@ -613,7 +615,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 622,
+        "unsupported_marker_count": 623,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -716,6 +718,7 @@
           "tests/test_translator/test_wide_integer_bfloat.py",
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_translator/test_metal_trunc.py",
+          "tests/test_translator/test_metal_round.py",
           "tests/test_translator/test_metal_constructor_bitcasts.py",
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_translator/test_metal_precise_asin.py",
@@ -746,7 +749,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2439
+        "test_count": 2455
       },
       "translator_codegen": {
         "exists": true,
