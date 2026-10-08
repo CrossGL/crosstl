@@ -241,6 +241,17 @@ datasets and saved readbacks. Loader selection requires the exact source entry,
 target and complete set of ready load units; it never defaults to the first
 artifact in the batch. No additional native runners are used.
 
+The same native-host jobs include a separate 180-second real-power step. Two
+compatible translation batches cover exhaustive half/bfloat identity inputs,
+binary32 identity controls and explicitly selected subnormal-operand semantics.
+The five cases require 219,552 exact non-NaN outputs and 40 guards per target;
+NaNs use classification checks. Metal also runs the unchanged source and
+verifies its read-only inputs. Each case uses an exact two-thread workgroup
+grid so all inputs fit DirectX's group-count limit; partial groups are rejected,
+not rounded up or truncated. Reports and packages must retain the selected
+operand policy. Remaining finite accuracy and output underflow are outside
+these cases. This adds no runner and does not extend the earlier binary step.
+
 The same arithmetic step verifies source-defined bitcast-name overloads beside
 generated FMA, division and half-remainder helpers. Exact output words cover
 scalar/vector overloads, aliases, namespace-qualified calls and both binary32

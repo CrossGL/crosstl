@@ -17,6 +17,7 @@ from demos.integrations.mlx.tests.kernels.floating_binary_runtime import (
     MLX_BINARY_SOURCE,
     _batch_workloads,
     _binary_load_units,
+    _dispatch_shape,
     _project_config,
 )
 
@@ -110,6 +111,83 @@ def test_multiplication_profile_is_explicit_and_limited_to_real_float_products(
         selected.append((workload.shape, workload.input_type))
     assert len(selected) == len(set(selected)) == 36
     assert len({shape for shape, _ in selected}) == 18
+
+
+def test_power_operand_profile_is_explicit_and_limited_to_characterized_types(tmp_path):
+    selected = []
+    for workload in BINARY_OPENGL_WORKLOADS:
+        assert "binary32_power_operand_profile" not in _project_config(workload)
+        enabled = workload.operator_type == "Power" and workload.input_type in {
+            "float",
+            "bfloat16_t",
+        }
+        if not enabled:
+            with pytest.raises(AssertionError):
+                _project_config(
+                    workload, binary32_power_operand_profile="flush-subnormals"
+                )
+            continue
+        path = tmp_path / "crosstl.toml"
+        path.write_text(
+            _project_config(
+                workload,
+                binary32_power_operand_profile="flush-subnormals",
+                workgroup_width=2,
+            )
+        )
+        config = load_project_config(tmp_path, path)
+        assert (
+            config.source_options["metal"]["binary32_power_operand_profile"]
+            == "flush-subnormals"
+        )
+        assert config.entry_workgroup_size_rules[MLX_BINARY_SOURCE][
+            workload.entry_point
+        ] == ("2", "1", "1")
+        selected.append((workload.shape, workload.input_type))
+    assert len(selected) == len(set(selected)) == 36
+    assert len({shape for shape, _ in selected}) == 18
+
+
+@pytest.mark.parametrize(
+    "entries",
+    ([], ["vv_Powerfloat32", "vv_Addfloat32"], ["vv_Powerfloat16"], ["unknown"]),
+)
+def test_power_operand_profile_rejects_unrelated_or_missing_entries(entries):
+    workload = next(
+        w for w in BINARY_OPENGL_WORKLOADS if w.entry_point == "vv_Powerfloat32"
+    )
+    with pytest.raises(AssertionError):
+        _project_config(
+            workload,
+            entry_points=entries,
+            binary32_power_operand_profile="flush-subnormals",
+        )
+
+
+@pytest.mark.parametrize("profile", ("preserve-subnormals", "rne-flush", "", False))
+def test_power_operand_profile_rejects_uncharacterized_profile(profile):
+    workload = next(
+        w for w in BINARY_OPENGL_WORKLOADS if w.entry_point == "vv_Powerfloat32"
+    )
+    with pytest.raises(AssertionError):
+        _project_config(workload, binary32_power_operand_profile=profile)
+
+
+@pytest.mark.parametrize("width", (1, 2, 32))
+def test_binary_dispatch_shape_preserves_exact_thread_count(width):
+    assert _dispatch_shape(65536, width) == {
+        "workgroupCount": [65536 // width, 1, 1],
+        "workgroupSize": [width, 1, 1],
+    }
+
+
+@pytest.mark.parametrize(
+    "count,width",
+    ((0, 1), (True, 1), (1, 2), (3, 2), (4, 0), (4, True), (4, 1.5), (2048, 2048)),
+)
+def test_binary_dispatch_shape_rejects_empty_invalid_or_partial_groups(count, width):
+    with pytest.raises(AssertionError):
+        _dispatch_shape(count, width)
 
 
 @pytest.mark.parametrize("profile", ("rne-gradual", "flush", "", False))

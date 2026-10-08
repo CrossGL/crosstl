@@ -1745,6 +1745,24 @@ jobs:
               tests/test_translator/test_native_loader_dispatch_integration.py::test_native_loader_descriptor_executes_directx_on_device \
               tests/test_translator/test_native_loader_dispatch_integration.py::test_native_loader_descriptor_executes_opengl_on_device \
               2>&1 | tee .mlx-portable-host/binary-math.log
+      - name: Validate pinned real power
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
+          CROSTL_REQUIRE_MLX_CURRENT_REAL_POWER: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/real-power
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Pinned real power" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/real-power/pytest \
+              --junitxml=.mlx-portable-host/real-power/results.xml \
+              demos/integrations/mlx/tests/kernels/test_current_real_power.py::test_current_real_power_native_parity \
+              2>&1 | tee .mlx-portable-host/real-power.log
       - name: Execute pinned resident attention reductions
         env:
           CROSTL_REQUIRE_MLX_ATTENTION_REDUCE_RUNTIME: "1"

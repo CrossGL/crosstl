@@ -5,16 +5,15 @@ import random
 
 import pytest
 
+from crosstl.project import build_native_loader_dispatch_request
 from demos.integrations.mlx.tests.kernels.floating_binary_runtime import (
     BinaryCase,
+    _dispatch_shape,
 )
 from demos.integrations.mlx.tests.kernels.test_current_copy import _half_payload
 from tests.test_translator.test_bfloat_buffer_runtime import _storage as _bfloat_payload
 from tests.test_translator.test_boolean_buffer_runtime import (
     _bound_values,
-)
-from tests.test_translator.test_boolean_buffer_runtime import (
-    _request as _dispatch_request,
 )
 from tests.test_translator.test_software_subgroup_product import _package
 
@@ -103,8 +102,9 @@ def _check_words(actual, expected):
     assert not differences, differences[:20]
 
 
-def _request(descriptor, package, dtype, target, pairs, expected):
+def _request(descriptor, package, dtype, target, pairs, expected, *, workgroup_width=1):
     assert descriptor["target"] == target
+    dispatch = _dispatch_shape(len(pairs), workgroup_width)
     inputs = {
         name: _payload(dtype, target, words)
         for name, words in (
@@ -121,7 +121,14 @@ def _request(descriptor, package, dtype, target, pairs, expected):
     size = constant["scalarLayout"].get("memberName", constant["name"])
     inputs[size] = {"dtype": "uint32", "shape": [1], "values": [len(pairs)]}
     outputs = {"c": _payload(dtype, target, expected)}
-    request = _dispatch_request(descriptor, package, inputs, outputs, len(pairs))
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        _bound_values(descriptor, inputs),
+        _bound_values(descriptor, outputs),
+        dispatch,
+        expected_target=target,
+    )
     return request, inputs, _bound_values(descriptor, outputs)
 
 
@@ -151,8 +158,9 @@ def test_extrema_reference_preserves_zero_sign_nan_payload_and_comparison_policy
 
 @pytest.mark.parametrize("dtype", TYPES)
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+@pytest.mark.parametrize("workgroup_width", (1, 2))
 def test_extrema_request_retains_operand_bits_and_physical_storage(
-    tmp_path, dtype, target
+    tmp_path, dtype, target, workgroup_width
 ):
     typename = TYPES[dtype][0]
     source = f"""#include <metal_stdlib>
@@ -166,15 +174,28 @@ kernel void selection(const device {typename}* a [[buffer(0)]],
 }}
 """
     _, descriptor, package = _package(
-        tmp_path, target, typename, (1, 1, 1), source=source, software_subgroups=False
+        tmp_path,
+        target,
+        typename,
+        (workgroup_width, 1, 1),
+        source=source,
+        software_subgroups=False,
     )
     sign = 1 << (TYPES[dtype][1] - 1)
-    pairs = [(sign, TYPES[dtype][2] + 1)]
-    expected = [sign] + [_guard(dtype)] * 8
+    pairs = [(sign, TYPES[dtype][2] + 1)] * workgroup_width
+    expected = [sign] * workgroup_width + [_guard(dtype)] * 8
     request, inputs, outputs = _request(
-        descriptor, package, dtype, target, pairs, expected
+        descriptor,
+        package,
+        dtype,
+        target,
+        pairs,
+        expected,
+        workgroup_width=workgroup_width,
     )
     assert not request.execution_plan.diagnostics
+    assert request.execution_plan.dispatch.workgroup_size == (workgroup_width, 1, 1)
+    assert request.execution_plan.dispatch.workgroup_count == (1, 1, 1)
     by_name = {value.name: value for value in request.fixture.inputs}
     for binding in descriptor["bindings"]:
         if binding["kind"] != "buffer":

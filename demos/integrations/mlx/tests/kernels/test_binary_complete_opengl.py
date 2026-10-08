@@ -301,11 +301,15 @@ def _project_config(
     *,
     entry_points=None,
     binary32_multiplication_profile=None,
+    binary32_power_operand_profile=None,
+    workgroup_width=1,
 ) -> str:
+    assert type(workgroup_width) is int and 1 <= workgroup_width <= 1024
     entries = workload.entry_point if entry_points is None else list(entry_points)
     workgroup_entries = [workload.entry_point] if entry_points is None else ["*"]
     workgroup_rules = "\n        ".join(
-        f"{json.dumps(entry)} = [1, 1, 1]" for entry in workgroup_entries
+        f"{json.dumps(entry)} = [{workgroup_width}, 1, 1]"
+        for entry in workgroup_entries
     )
     profiles = (
         ['binary16_remainder_profile = "binary32-quotient"']
@@ -314,6 +318,19 @@ def _project_config(
     )
     if workload.operator_type == "ArcTan2":
         profiles.append('binary32_atan2_profile = "flush-subnormals"')
+    if binary32_power_operand_profile is not None:
+        assert binary32_power_operand_profile == "flush-subnormals"
+        assert workload.operator_type == "Power"
+        assert workload.input_type in {"float", "bfloat16_t"}
+        selected = {workload.entry_point} if entry_points is None else set(entry_points)
+        eligible = {
+            item.entry_point
+            for item in BINARY_OPENGL_WORKLOADS
+            if item.operator_type == "Power"
+            and item.input_type in {"float", "bfloat16_t"}
+        }
+        assert selected and selected <= eligible
+        profiles.append('binary32_power_operand_profile = "flush-subnormals"')
     if binary32_multiplication_profile is not None:
         assert binary32_multiplication_profile == "rne-flush"
         assert workload.operator_type == "Multiply"

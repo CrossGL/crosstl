@@ -75,7 +75,17 @@ def _binary_load_units(loader, entries, target):
     return by_entry
 
 
-def _original_metal(work, runner, library, case, guard, compare):
+def _dispatch_shape(count, workgroup_width=1):
+    assert type(count) is int and count > 0
+    assert type(workgroup_width) is int and 1 <= workgroup_width <= 1024
+    assert count % workgroup_width == 0, "Binary entries require an exact thread grid"
+    return {
+        "workgroupCount": [count // workgroup_width, 1, 1],
+        "workgroupSize": [workgroup_width, 1, 1],
+    }
+
+
+def _original_metal(work, runner, library, case, guard, compare, workgroup_width=1):
     buffers = []
     for index, words in enumerate(
         (
@@ -94,8 +104,7 @@ def _original_metal(work, runner, library, case, guard, compare):
         json.dumps(
             {
                 "buffers": buffers,
-                "workgroupCount": [len(case.pairs), 1, 1],
-                "workgroupSize": [1, 1, 1],
+                **_dispatch_shape(len(case.pairs), workgroup_width),
                 "simdWidth": 32,
             }
         ),
@@ -118,7 +127,15 @@ def _original_metal(work, runner, library, case, guard, compare):
 
 
 def run_binary_cases(
-    tmp_path, require_env, cases, *, request_for, guard_for, compare_for, source_control
+    tmp_path,
+    require_env,
+    cases,
+    *,
+    request_for,
+    guard_for,
+    compare_for,
+    source_control,
+    workgroup_width=1,
 ):
     if os.environ.get(require_env) != "1":
         pytest.skip(f"set {require_env}=1 for pinned native binary checks")
@@ -131,7 +148,7 @@ def run_binary_cases(
         ).strip()
         == MLX_COMMIT
     )
-    subprocess.run(
+    source_diff = subprocess.run(
         [
             "git",
             "-C",
@@ -142,10 +159,14 @@ def run_binary_cases(
             "--",
             "mlx/backend/metal/kernels",
         ],
-        check=True,
         capture_output=True,
+        text=True,
         timeout=30,
     )
+    (tmp_path / "source-integrity.diff").write_text(
+        source_diff.stdout + source_diff.stderr, encoding="utf-8"
+    )
+    assert source_diff.returncode == 0, source_diff.stdout + source_diff.stderr
     assert (
         hashlib.sha256((root / MLX_BINARY_SOURCE).read_bytes()).hexdigest()
         == MLX_BINARY_SHA256
@@ -157,6 +178,7 @@ def run_binary_cases(
     for case in cases:
         assert len(case.expected) == len(case.pairs) + 8
         assert list(case.expected[-8:]) == [guard_for(case.dtype)] * 8
+        _dispatch_shape(len(case.pairs), workgroup_width)
     with tempfile.TemporaryDirectory(prefix=".current-binary-", dir=root) as directory:
         batch_work = Path(directory)
         try:
@@ -168,6 +190,10 @@ def run_binary_cases(
                     binary32_multiplication_profile=cases[0].provenance.get(
                         "binary32MultiplicationProfile"
                     ),
+                    binary32_power_operand_profile=cases[0].provenance.get(
+                        "binary32PowerOperandProfile"
+                    ),
+                    workgroup_width=workgroup_width,
                 ),
                 encoding="utf-8",
             )
@@ -217,6 +243,7 @@ def run_binary_cases(
                     "binary32Atan2Profile",
                     "binary32RemainderProfile",
                     "binary16RemainderProfile",
+                    "binary32PowerOperandProfile",
                 ):
                     assert artifact["provenance"].get(name) == case.provenance.get(name)
                 descriptor = build_native_loader_abi_descriptor(
@@ -273,7 +300,13 @@ def run_binary_cases(
                 source_comparison = None
                 if target == "metal":
                     source_comparison = _original_metal(
-                        work, runner, library, case, guard_for(case.dtype), compare
+                        work,
+                        runner,
+                        library,
+                        case,
+                        guard_for(case.dtype),
+                        compare,
+                        workgroup_width,
                     )
                 (work / "evidence.json").write_text(
                     json.dumps(
@@ -313,6 +346,15 @@ def run_binary_cases(
                                 else {}
                             ),
                             "pairCount": len(case.pairs),
+                            **(
+                                {
+                                    "powerOperandProfile": case.provenance[
+                                        "binary32PowerOperandProfile"
+                                    ]
+                                }
+                                if "binary32PowerOperandProfile" in case.provenance
+                                else {}
+                            ),
                             "guardCount": 8,
                             "comparison": case.comparison,
                             "comparisonDetails": comparison,

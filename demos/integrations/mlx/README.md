@@ -397,6 +397,19 @@ proven constant-index accesses in the generated helpers, not from MLX-specific
 buffer names. Valid workloads still run unchanged; this preflight guarantee does
 not cover arbitrary dynamic indexing.
 
+The existing native-host jobs also run real-valued power through public runtime
+packages. Identity checks retain all 65,536 half and bfloat storage patterns and
+5,632 binary32 inputs. A separate batch selects the explicit binary32 power
+operand profile for 82,848 float32/bfloat operand pairs. Every non-NaN result,
+signed zero and guard is checked exactly; NaNs use classification checks.
+The five cases retain 219,552 outputs and 40 guards per target, with unchanged
+original-source readbacks on Metal. Two-thread workgroups keep the complete
+input sets within DirectX dispatch limits without adding inactive invocations.
+No upstream source is modified. This covers the vector/vector entries' identity
+and operand-domain behavior, not general finite accuracy, result underflow,
+all real-power layouts or full MLX host integration. The three-minute step uses
+the existing native runners and preserves every earlier check and deadline.
+
 ## Scope
 
 The general-gather jobs in [Project Demo Testing](../../../.github/workflows/demo-project-testing.yml)
