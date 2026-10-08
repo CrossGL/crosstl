@@ -3473,6 +3473,14 @@ translation and compiler coverage for the listed unit-test dispatch variants;
 the MLX runtime is not redirected to these artifacts, the kernels are not
 executed, and numerical parity is not claimed.
 
+All twelve compiler references preserve the source's precise reciprocal-square-root
+operation. Complete old/current body review isolates one shared helper, its
+declaration and one call substitution per artifact. Resource interfaces, dispatch
+identities, specialization constants and source origins are unchanged. Both sets
+pass strict DXC compilation. The helper matches the independently checked native
+arithmetic implementation; this does not extend the bounded 32-element forward
+execution proof to other dtypes, gradients or larger workloads.
+
 Validate the RMSNorm contract schema, provenance, deterministic identities, and
 bounded workload set with:
 
