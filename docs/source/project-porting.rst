@@ -2775,6 +2775,17 @@ retain their existing layouts. This layout contract does not establish support
 for unresolved aliases, padded aggregates or every source reference-lowering
 case.
 
+Writable entry references remain bound storage rather than value-result entry
+parameters. Ordinary helper references retain their existing direction
+qualifiers. OpenGL distinguishes value updates through an entry reference from
+pointer-offset updates, including when both occur in the same function.
+Required native tests cover initialized signed 32-bit scalar writes on all
+three targets and two- or four-component vector writes on Metal and OpenGL.
+The tests retain buffer guards, aligned offsets and disjoint writable views of
+one allocation; Metal also executes the unchanged original source. Vector entry
+references on DirectX, unresolved aliases and overlapping writable views are
+not established by this coverage.
+
 An HLSL artifact may explicitly distinguish logical binary16 values from native
 unsigned 16-bit storage. Its first line contains a versioned resource contract,
 serialized by ``crosstl.translator.resource_storage.resource_storage_header``:

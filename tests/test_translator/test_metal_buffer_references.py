@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from crosstl import translate
 from crosstl.project import (
     NativeLoaderDispatchError,
     build_native_loader_dispatch_request,
@@ -21,6 +22,16 @@ from crosstl.project.runtime_verification import RuntimeAllocationView, RuntimeV
 from tests.runtime_helpers import _prepare_native_package, _validate
 from tests.test_translator.test_native_loader_dispatch import _write_descriptor
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
+
+REFERENCE_TARGETS = [
+    ("metal", 1),
+    ("metal", 2),
+    ("metal", 4),
+    ("directx", 1),
+    ("opengl", 1),
+    ("opengl", 2),
+    ("opengl", 4),
+]
 
 
 def _reflect(tmp_path, declaration):
@@ -235,18 +246,115 @@ def _request(descriptor, package, inputs, outputs, target):
     )
 
 
-@pytest.mark.parametrize(
-    "target,width",
-    [
-        ("metal", 1),
-        ("metal", 2),
-        ("metal", 4),
-        ("directx", 1),
-        ("opengl", 1),
-        ("opengl", 2),
-        ("opengl", 4),
-    ],
-)
+def _writable_source(width):
+    scalar = "int" if width == 1 else f"int{width}"
+    return f"""#include <metal_stdlib>
+using namespace metal;
+void increment(device {scalar}& value) {{ value += {scalar}(3); }}
+kernel void mutate(device {scalar}& value [[buffer(0)]],
+                   device {scalar}* result [[buffer(1)]]) {{
+    value = value * {scalar}(2);
+    increment(value);
+    result[0] = value;
+    value -= {scalar}(1);
+    result[1] = value;
+}}
+"""
+
+
+def _writable_package(tmp_path, target, width, *, shared=False):
+    (tmp_path / "reference.metal").write_text(_writable_source(width), encoding="utf-8")
+    (tmp_path / "crosstl.toml").write_text(
+        f"""[project]
+include = ["reference.metal"]
+targets = ["{target}"]
+workgroup_size = [1, 1, 1]
+[project.entry_points]
+"reference.metal" = "mutate"
+""",
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(tmp_path), format_output=False)
+    assert report.to_json()["summary"]["failedCount"] == 0, report.to_json()
+    descriptor, package = _prepare_native_package(report, tmp_path)
+    values = list(range(-7, -7 + width))
+    guard = [1037] * 8
+    before = {"value": values + guard, "result": [0] * (2 * width) + guard}
+    after = {
+        "value": [2 * item + 2 for item in values] + guard,
+        "result": (
+            [2 * item + 3 for item in values]
+            + [2 * item + 2 for item in values]
+            + guard
+        ),
+    }
+    inputs, outputs, names = {}, {}, {}
+    for binding in descriptor["bindings"]:
+        layout = binding["scalarLayout"] or {}
+        member = layout.get("memberName", binding["name"])
+        assert member in before
+        assert binding["kind"] == "buffer" and binding["access"] == "read_write"
+        names[member] = binding["name"]
+        value = RuntimeValue(
+            name=binding["name"],
+            dtype="int32",
+            shape=(len(before[member]),),
+            values=before[member],
+            allocation=RuntimeAllocationView(
+                "shared" if shared else member,
+                256 if member == "value" else 512,
+                len(before[member]) * 4,
+                1024,
+            ),
+        )
+        inputs[value.name] = value
+        outputs[value.name] = replace(value, values=after[member])
+    assert set(names) == {"value", "result"}
+    return descriptor, package, inputs, outputs, names
+
+
+@pytest.mark.parametrize("target,width", REFERENCE_TARGETS)
+def test_writable_entry_reference_single_file_retains_resources(
+    tmp_path, target, width
+):
+    source = tmp_path / "source.metal"
+    source.write_text(_writable_source(width), encoding="utf-8")
+    generated = translate(str(source), backend=target, format_output=False)
+    suffix = {"directx": "hlsl", "opengl": "glsl", "metal": "metal"}[target]
+    artifact = tmp_path / f"translated.{suffix}"
+    artifact.write_text(generated, encoding="utf-8")
+    interface = reflect_target_host_interface(artifact, target=target, stage="compute")
+    assert interface["status"] == "ready"
+    assert len(interface["resources"]) == 2
+    assert all(
+        resource["access"] == "read_write" for resource in interface["resources"]
+    )
+    assert "value_offset" not in generated
+
+
+@pytest.mark.parametrize("target,width", REFERENCE_TARGETS)
+@pytest.mark.parametrize("shared", [False, True])
+def test_writable_entry_reference_survives_public_package(
+    tmp_path, target, width, shared
+):
+    descriptor, package, inputs, outputs, names = _writable_package(
+        tmp_path, target, width, shared=shared
+    )
+    request = _request(descriptor, package, inputs, outputs, target)
+    assert request.execution_plan.diagnostics == ()
+    allocations = {
+        resource.binding.name: resource.allocation
+        for resource in request.execution_plan.resource_bindings
+    }
+    assert allocations[names["value"]].byte_offset == 256
+    assert allocations[names["result"]].byte_offset == 512
+    assert (
+        allocations[names["value"]].allocation_id
+        == allocations[names["result"]].allocation_id
+    ) is shared
+
+
+@pytest.mark.parametrize("target,width", REFERENCE_TARGETS)
 def test_reference_layout_survives_public_package(tmp_path, target, width):
     descriptor, package, inputs, outputs, names = _package(tmp_path, target, width)
     assert set(names) == {"samples", "bias", "result"}
@@ -328,6 +436,110 @@ def test_device_reference_native_readback(tmp_path):
             assert result.outputs[name]["values"] == expected.values
 
 
+def _record_reference_request(work, request):
+    (work / "request.json").write_text(
+        json.dumps(
+            {
+                "fixture": request.fixture.to_json(),
+                "executionPlan": request.execution_plan.to_json(),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_writable_entry_reference_native_readback(tmp_path):
+    target = {"win32": "directx", "linux": "opengl", "darwin": "metal"}.get(
+        sys.platform
+    )
+    if os.environ.get("CROSTL_REQUIRE_DEVICE_REFERENCES") != "1" or target is None:
+        pytest.skip("requires native device-reference validation")
+    for case_target, width in REFERENCE_TARGETS:
+        if case_target != target:
+            continue
+        for shared in (False, True):
+            work = tmp_path / f"{width}-{shared}"
+            work.mkdir()
+            descriptor, package, inputs, outputs, _ = _writable_package(
+                work, target, width, shared=shared
+            )
+            artifact = package / descriptor["artifact"]["packagePath"]
+            _validate(artifact, work, target)
+            request = _request(descriptor, package, inputs, outputs, target)
+            _record_reference_request(work, request)
+            executor = _executor(target)
+            availability = executor.is_available(request)
+            assert availability.available, availability.reason
+            result = executor.run(request)
+            (work / "readback.json").write_text(
+                json.dumps(
+                    {
+                        "status": result.status,
+                        "outputs": result.outputs,
+                        "details": result.details,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            assert result.status == "ok"
+            for name, expected in outputs.items():
+                assert result.outputs[name]["values"] == expected.values
+            if target == "metal":
+                original = work / "original"
+                original.mkdir()
+                source_descriptor = _original_metal_descriptor(
+                    original, _writable_source(width), "mutate"
+                )
+                _validate(
+                    original / source_descriptor["artifact"]["packagePath"],
+                    original,
+                    "metal",
+                )
+                source_request = _request(
+                    source_descriptor, original, inputs, outputs, "metal"
+                )
+                _record_reference_request(original, source_request)
+                control = executor.run(source_request)
+                (original / "readback.json").write_text(
+                    json.dumps(
+                        {
+                            "status": control.status,
+                            "outputs": control.outputs,
+                            "details": control.details,
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                assert control.status == "ok"
+                assert control.outputs == result.outputs
+
+
+def _original_metal_descriptor(tmp_path, source, entry):
+    descriptor = _write_descriptor(
+        tmp_path,
+        "metal",
+        constants=[],
+        artifact_format="Metal source",
+        artifact_bytes=source.encode(),
+    )
+    artifact = tmp_path / descriptor["artifact"]["packagePath"]
+    artifact = artifact.rename(artifact.with_suffix(".metal"))
+    descriptor["artifact"]["packagePath"] = artifact.relative_to(tmp_path).as_posix()
+    interface = reflect_target_host_interface(artifact, target="metal", stage="compute")
+    descriptor["entryPoint"].update(
+        name=entry, executionConfig={"workgroupSize": [1, 1, 1]}
+    )
+    descriptor["bindings"] = _binding_descriptors("metal", interface["resources"])
+    descriptor["scalarLayout"]["bindings"] = [
+        {"binding": binding["name"], "layout": binding["scalarLayout"]}
+        for binding in descriptor["bindings"]
+    ]
+    return descriptor
+
+
 @pytest.mark.parametrize("width", [1, 2, 4])
 def test_writable_metal_reference_native_readback(tmp_path, width):
     if (
@@ -341,25 +553,8 @@ using namespace metal;
 kernel void mutate(device {scalar}& value [[buffer(0)]]) {{ value += {scalar}(3); }}
 """
     # This control tests the reflected source ABI independently of entry lowering.
-    descriptor = _write_descriptor(
-        tmp_path,
-        "metal",
-        constants=[],
-        artifact_format="Metal source",
-        artifact_bytes=source.encode(),
-    )
+    descriptor = _original_metal_descriptor(tmp_path, source, "mutate")
     artifact = tmp_path / descriptor["artifact"]["packagePath"]
-    artifact = artifact.rename(artifact.with_suffix(".metal"))
-    descriptor["artifact"]["packagePath"] = artifact.relative_to(tmp_path).as_posix()
-    interface = reflect_target_host_interface(artifact, target="metal", stage="compute")
-    descriptor["entryPoint"].update(
-        name="mutate", executionConfig={"workgroupSize": [1, 1, 1]}
-    )
-    descriptor["bindings"] = _binding_descriptors("metal", interface["resources"])
-    descriptor["scalarLayout"]["bindings"] = [
-        {"binding": binding["name"], "layout": binding["scalarLayout"]}
-        for binding in descriptor["bindings"]
-    ]
     values = list(range(-3, -3 + width)) + [1037] * 8
     value = RuntimeValue(
         name="value",

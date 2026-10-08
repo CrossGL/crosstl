@@ -8903,17 +8903,16 @@ class MetalToCrossGLConverter:
                 if is_reference:
                     declaration = re.sub(r"(?<=\S)&(?=\s)", "", declaration, count=1)
                 return f"{qualifier} {declaration}"
+        if (
+            is_reference
+            and id(var) in self.current_stage_entry_resource_parameter_ids
+            and self.is_stage_entry_buffer_resource_parameter(var)
+        ):
+            return declaration
         if is_reference and not is_readonly_reference:
             declaration = re.sub(r"(?<=\S)&(?=\s)", "", declaration, count=1)
             return f"inout {declaration}"
-        if (
-            is_reference
-            and is_readonly_reference
-            and not (
-                id(var) in self.current_stage_entry_resource_parameter_ids
-                and self.is_stage_entry_buffer_resource_parameter(var)
-            )
-        ):
+        if is_reference and is_readonly_reference:
             declaration = re.sub(r"(?<=\S)&(?=\s)", "", declaration, count=1)
             return f"in {declaration}"
         if self.writable_c_array_parameter(var, semantic_context):

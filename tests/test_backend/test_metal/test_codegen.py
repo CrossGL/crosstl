@@ -1339,6 +1339,28 @@ def test_codegen_reference_parameters_preserve_readonly_direction(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
 
 
+@pytest.mark.parametrize(
+    "source_type,mapped_type", [("int", "int"), ("int2", "ivec2"), ("float4", "vec4")]
+)
+def test_codegen_writable_entry_reference_retains_bound_storage(
+    source_type, mapped_type
+):
+    code = f"""
+    #include <metal_stdlib>
+    using namespace metal;
+    void increment(device {source_type}& value) {{ value += {source_type}(3); }}
+    kernel void apply(device {source_type}& value [[buffer(3)]],
+                      device {source_type}* result [[buffer(5)]]) {{
+        increment(value);
+        result[0] = value;
+    }}
+    """
+    crossgl = normalize(convert(code))
+    assert f"void increment(inout device {mapped_type} value)" in crossgl
+    assert f"device {mapped_type}& value @buffer(3)" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_pointer_reference_direction_is_independent_of_pointee_constness():
     code = """
     void advance(

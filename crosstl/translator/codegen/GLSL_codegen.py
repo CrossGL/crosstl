@@ -17232,6 +17232,14 @@ class GLSLCodeGen:
             **(getattr(func, "_glsl_storage_pointer_aliases", {}) or {}),
             **self.stage_entry_storage_pointer_bindings.get(id(func), {}),
         }
+        if shader_type is not None:
+            for parameter in param_list:
+                if (
+                    self.stage_entry_metal_scalar_reference_element_type(parameter)
+                    is not None
+                ):
+                    # Updating a bound reference writes its value, not a pointer offset.
+                    storage_pointer_aliases.pop(parameter.name, None)
         stage_entry_resource_aliases = (
             self.stage_entry_resource_parameter_aliases.get(id(func), {})
             if shader_type is not None
