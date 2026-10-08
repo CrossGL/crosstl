@@ -6648,8 +6648,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "352e14c92299445a80e72876025534c6e9a4a8e944f81932594d16897ac083f9",
-      "sizeBytes": 3163
+      "sha256": "89f3c54496eb122be45dd67963b51e7cef4f1111151dbe2b7d6a923d32f0c1ba",
+      "sizeBytes": 3107
     },
     {
       "entryPoint": "v_ArcCoshbfloat16bfloat16",

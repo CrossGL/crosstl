@@ -57,13 +57,13 @@ SCALAR_UNARY_METAL_CONTRACT_PATH = (
     / "unary.scalar-metal-roundtrip.json"
 )
 SCALAR_UNARY_METAL_CONTRACT_SHA256 = (
-    "879f995939531bee3644bd276f7e3a86dc73fd58e91dfdbfabf2330e8c28f20e"
+    "3ecc6ba32226ea66ed152c392a231c9dbe0a96a2094f944490d08ad726230ae4"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "1abade37246164ea73ebfbbd837bd8bba6bec17db1a2e13d90359b4e7c2a4287"
+    "3846089088af475f69bf3a37290f56717e9fcc497ffef0d0e2c33e5b87d47493"
 )
 
 
@@ -142,9 +142,9 @@ ARCCOS_WORKLOAD = UnaryWorkload(
         },
         "metal": {
             "sha256": (
-                "352e14c92299445a80e72876025534c6e9a4a8e944f81932594d16897ac083f9"
+                "89f3c54496eb122be45dd67963b51e7cef4f1111151dbe2b7d6a923d32f0c1ba"
             ),
-            "sizeBytes": 3163,
+            "sizeBytes": 3107,
         },
         "opengl": {
             "sha256": (
@@ -201,6 +201,24 @@ UNARY_METAL_OPERATOR_TYPES = frozenset(
 UNARY_METAL_ARTIFACT_IDENTITIES = {
     entry["entryPoint"]: entry for entry in UNARY_METAL_ENTRIES
 }
+
+
+def test_scalar_arccos_metal_reference_metadata_matches_workload():
+    identity = ARCCOS_WORKLOAD.generated_artifacts["metal"]
+    for entries in (
+        SCALAR_UNARY_METAL_ARTIFACT_IDENTITIES,
+        UNARY_METAL_ARTIFACT_IDENTITIES,
+    ):
+        entry = entries[ARCCOS_WORKLOAD.entry_point]
+        assert {key: entry[key] for key in identity} == identity
+    demo_root = ROOT / "demos" / "integrations" / "mlx"
+    gaps = json.loads((demo_root / "expected-gaps.json").read_text(encoding="utf-8"))
+    artifact = gaps["unary_arccos_native_runtime_status"]["artifacts"]["metal"]
+    assert artifact["sha256"] == identity["sha256"]
+    assert artifact["size_bytes"] == identity["sizeBytes"]
+    readme = (demo_root / "README.md").read_text(encoding="utf-8")
+    assert identity["sha256"] in readme
+    assert f'{identity["sizeBytes"]:,}-byte artifact' in readme
 
 
 def _metal_roundtrip_workload(entry: dict) -> UnaryWorkload:
@@ -1060,7 +1078,13 @@ def _translate_unary_artifact(
             assert "float __crossgl_metal_precise_acos_ratio(float value)" in generated
             assert "float __crossgl_metal_precise_acos_float(float value)" in generated
             assert generated.count("#pragma clang fp contract(off)") == 2
-            assert generated.count("#pragma clang fp contract(fast)") == 2
+            assert "#pragma clang fp contract(fast)" not in generated
+            for helper in ("ratio", "float"):
+                assert (
+                    f"static float __crossgl_metal_precise_acos_{helper}(float value) {{\n"
+                    "    #pragma clang fp contract(off)\n"
+                    "    #pragma clang fp reassociate(off)\n"
+                ) in generated
     assert "Log{}(x + i * Sqrt{}(1.0 - x * x))" not in generated
     assert "template <" not in generated
     assert "decltype(" not in generated

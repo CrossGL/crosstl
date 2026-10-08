@@ -11644,8 +11644,8 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     }
     assert arccos["artifacts"]["metal"] == {
         "target_entry_point": "v_ArcCosfloat32float32",
-        "sha256": "1247739bc0c48d11692aee81953d8a6a4071de488bfe7ea8d7b2083aa48d9b2b",
-        "size_bytes": 2742,
+        "sha256": "89f3c54496eb122be45dd67963b51e7cef4f1111151dbe2b7d6a923d32f0c1ba",
+        "size_bytes": 3107,
         "host_dispatch_workgroup_size": [1, 1, 1],
         "native_roundtrip": {
             "platform": "macos-latest",
@@ -11706,7 +11706,7 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     assert "preserving SPIR-V `NoContraction`" in readme
     assert "target intrinsic's unspecified accuracy" in readme
     assert "The Square and ArcCos entries now also round-trip through Metal" in readme
-    assert "2,742-byte artifact" in readme
+    assert "3,107-byte artifact" in readme
     assert "Both exact artifacts compile with ``xcrun -sdk macosx metal -c``" in (
         readme
     )
@@ -11763,7 +11763,7 @@ def test_unary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "1abade37246164ea73ebfbbd837bd8bba6bec17db1a2e13d90359b4e7c2a4287",
+        "sha256": "3846089088af475f69bf3a37290f56717e9fcc497ffef0d0e2c33e5b87d47493",
         "entry_identity_fields": [
             "entryPoint",
             "shape",

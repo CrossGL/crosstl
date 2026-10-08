@@ -2865,18 +2865,29 @@ proof is separate from the complete historical OpenGL corpus review in
 The Square and ArcCos entries now also round-trip through Metal. Square is one
 1,015-byte artifact with SHA-256
 ``244e34b7aa58b7abe7c3ff09f3f51f3aa283a42bf7585bf88200590767032495``;
-ArcCos is one 2,742-byte artifact with SHA-256
-``1247739bc0c48d11692aee81953d8a6a4071de488bfe7ea8d7b2083aa48d9b2b``.
+ArcCos is one 3,107-byte artifact with SHA-256
+``89f3c54496eb122be45dd67963b51e7cef4f1111151dbe2b7d6a923d32f0c1ba``.
 Entry reachability retains only the selected ``struct Square`` or ``struct
 ArcCos`` and its call helpers, with no unrelated unary struct, complex ArcCos
 body, or illegal ``[[static]]`` member. The ArcCos artifact retains the
-portable float32 range-reduction helper and brackets both helper regions with
-``#pragma clang fp contract(off)`` so the source precise-math contract is not
-silently weakened. Bounded Metal source reflection records each exact kernel
-plus read-only buffer 0, read-write buffer 1, and read-only constant buffer 2.
+portable float32 range-reduction helper with function-local
+``#pragma clang fp contract(off)`` and ``reassociate(off)`` directives. Neither
+helper changes contraction settings in its callers. Bounded Metal source
+reflection records each exact kernel plus read-only buffer 0, read-write buffer 1,
+and read-only constant buffer 2.
 Their ``[1, 1, 1]`` workgroup sizes are explicitly host-dispatch-owned because
 MSL has no fixed source attribute equivalent to HLSL ``numthreads``. Both exact
 artifacts compile with ``xcrun -sdk macosx metal -c`` on macOS CI.
+
+The scalar float32 ArcCos reference was reviewed after moving those directives
+inside the two helpers and removing file-level contraction resets. All
+computations, resource interfaces and fourteen source-map origins are unchanged.
+Previous and current sources compile to identical Metal libraries and produce
+identical readbacks for 8,211 inputs with eight trailing guards. The unchanged
+upstream kernel passes the same inputs within the existing absolute ``1e-6`` and
+relative ``1e-5`` tolerances; its finite results differ by at most two ULPs.
+This review changes only ``v_ArcCosfloat32float32``. It does not accept other
+unary fingerprints or establish complex ArcCos equivalence.
 
 The required family gate covers all 877 unary entries at the legacy reference
 revision `846d176227a0ac13d2667e58d2bb68b322109ab0`, including 694 non-scalar
