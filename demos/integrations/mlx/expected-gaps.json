@@ -1346,7 +1346,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/unary.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "71ef7c7626c7670a0efb1cd3bf1907d5942bcfc6b1f751dd0f78625efd4060bb",
+      "sha256": "dbbcf1fa515ca24e979b1a5e8fcf9b74d3f8deb7af75569e9c3640b9d3e0b111",
       "size_bytes": 317654,
       "entry_identity_fields": [
         "entryPoint",
@@ -1477,7 +1477,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 4771646,
+      "generated_size_bytes_total": 4780991,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "v_Absint32int32",

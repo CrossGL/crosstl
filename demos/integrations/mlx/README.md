@@ -509,7 +509,7 @@ The current harness verifies:
   at the same legacy reference revision to OpenGL. The schema-v2
   `contracts/unary.opengl-translation.json` contract pins every standalone
   `main` artifact across the same five shapes, 37 operators, 20 type pairs,
-  1,243 materializations, and 3,363 reflected resources, totaling 4,771,646
+  1,243 materializations, and 3,363 reflected resources, totaling 4,780,991
   generated GLSL bytes. The references incorporate reviewed scalar/vector
   conversions and numeric helpers; every complete shader body and host
   interface is compared before accepting an identity change. Translation
