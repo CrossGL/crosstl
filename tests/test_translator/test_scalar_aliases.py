@@ -5,6 +5,7 @@ import os
 import re
 import struct
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -16,11 +17,19 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
 )
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
-from crosstl.project import translate_project
+from crosstl.project import (
+    build_native_loader_dispatch_request,
+    load_project_config,
+    translate_project,
+)
+from crosstl.project.runtime_verification import RuntimeAllocationView, RuntimeValue
 from crosstl.translator import parse
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from tests.runtime_helpers import _prepare_native_package, _validate
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_precise_trig import GUARD, _execute
+from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
 
 def _convert(source):
@@ -747,3 +756,172 @@ def test_ci_requires_scalar_alias_controls_without_an_additional_runner():
     assert "--timeout-seconds 120" in step
     assert "pytest -q -n auto" in step
     assert "if:" not in step and "continue-on-error" not in step
+
+
+@pytest.mark.parametrize("generator", [MetalCodeGen, GLSLCodeGen])
+@pytest.mark.parametrize(
+    "declarations,parameters,body",
+    [
+        ("", "const device Value& sample @buffer(0)", ""),
+        ("", "RWStructuredBuffer<Value> sample @buffer(0)", ""),
+        ("", "", "Value sample = 3; int Value = 4;"),
+        ("Value helper(Value sample) { return sample; }", "", "helper(3);"),
+        ("Value retained = 7;", "", "int sample = retained;"),
+        ("cbuffer Config { Value retained; };", "", "int sample = retained;"),
+        ("struct Payload { Value field; };", "", "Payload sample;"),
+        ("", "", "Value sample[2];"),
+    ],
+)
+def test_entry_scope_preserves_transitive_type_dependencies(
+    generator, declarations, parameters, body
+):
+    ast = parse(f"""shader Dependencies {{
+    typedef int Base;
+    typedef Base Value;
+    typedef uint Unused;
+    Unused unrelated = 1u;
+    {declarations}
+    compute {{ @stage_entry void selected({parameters}) {{ {body} }} }}
+    compute {{ @stage_entry void other() {{ Unused value = unrelated; }} }}
+}}""")
+    before = [declaration.name for declaration in ast.global_variables]
+    scoped = generator().entry_scoped_ast(ast, "selected")
+    aliases = [
+        declaration.name
+        for declaration in scoped.global_variables
+        if getattr(declaration, "is_type_alias", False)
+    ]
+    assert aliases == ["Base", "Value"]
+    assert "unrelated" not in [node.name for node in scoped.global_variables]
+    assert [declaration.name for declaration in ast.global_variables] == before
+
+
+@pytest.mark.parametrize("generator", [MetalCodeGen, GLSLCodeGen])
+def test_entry_scope_keeps_aliases_for_retained_structs(generator):
+    ast = parse("""shader Dependencies {
+    typedef int Base;
+    typedef Base Value;
+    struct Payload { Value field; };
+    compute { @stage_entry void selected() {} }
+}""")
+    scoped = generator().entry_scoped_ast(ast, "selected")
+    names = [node.name for node in scoped.global_variables]
+    if generator is MetalCodeGen:
+        assert scoped.structs == [] and names == []
+    else:
+        assert [node.name for node in scoped.structs] == ["Payload"]
+        assert names == ["Base", "Value"]
+
+
+def _reference_alias_project(tmp_path, target, syntax, address_space):
+    (tmp_path / "aliases.metal").write_text(
+        f"""#include <metal_stdlib>
+using namespace metal;
+{_alias('Base', 'int', syntax)}
+{_alias('Value', 'Base', syntax)}
+{_alias('Unused', 'uint', syntax)}
+kernel void selected({address_space} const Value& value [[buffer(0)]],
+                     device int* result [[buffer(1)]]) {{
+    result[0] = value;
+    result[1] = -value;
+}}
+kernel void other(device Unused* result [[buffer(0)]]) {{ result[0] = 7u; }}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "crosstl.toml").write_text(
+        f"""[project]
+include = ["aliases.metal"]
+targets = ["{target}"]
+workgroup_size = [1, 1, 1]
+[project.entry_points]
+"aliases.metal" = "selected"
+""",
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(tmp_path), format_output=False)
+    assert report.to_json()["summary"]["failedCount"] == 0, report.to_json()
+    return _prepare_native_package(report, tmp_path)
+
+
+@pytest.mark.parametrize("target", ["metal", "opengl", "directx"])
+@pytest.mark.parametrize("syntax", ["using", "typedef"])
+@pytest.mark.parametrize("address_space", ["device", "constant"])
+def test_entry_reference_aliases_translate_and_compile(
+    tmp_path, target, syntax, address_space
+):
+    descriptor, package = _reference_alias_project(
+        tmp_path, target, syntax, address_space
+    )
+    artifact = package / descriptor["artifact"]["packagePath"]
+    generated = artifact.read_text(encoding="utf-8")
+    assert "Unused" not in generated and "void other(" not in generated
+    assert len(descriptor["bindings"]) == 2
+    assert all(
+        binding["scalarLayout"]["elementType"] == "int32"
+        for binding in descriptor["bindings"]
+    )
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("address_space", ["device", "constant"])
+def test_entry_reference_aliases_execute(tmp_path, address_space):
+    if os.environ.get("CROSTL_REQUIRE_SCALAR_ALIASES") != "1":
+        pytest.skip("set CROSTL_REQUIRE_SCALAR_ALIASES=1 for native alias checks")
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    descriptor, package = _reference_alias_project(
+        tmp_path, target, "using", address_space
+    )
+    artifact = package / descriptor["artifact"]["packagePath"]
+    module = _validate(artifact, tmp_path, target)
+    assert module.stat().st_size > 0
+    guard = [1037] * 8
+    for index, sample in enumerate([-2147483647, -1, 0, 2147483647]):
+        inputs, outputs = {}, {}
+        for binding in descriptor["bindings"]:
+            name = binding["name"]
+            writable = binding["access"] == "read_write"
+            values = [0, 0] + guard if writable else [sample]
+            value = RuntimeValue(
+                name=name,
+                dtype="int32",
+                shape=(len(values),),
+                values=values,
+                allocation=(
+                    RuntimeAllocationView(name, 256, len(values) * 4, 1024)
+                    if binding["kind"] == "buffer"
+                    else None
+                ),
+            )
+            inputs[name] = value
+            if writable:
+                outputs[name] = replace(value, values=[sample, -sample] + guard)
+        assert len(outputs) == 1
+        request = build_native_loader_dispatch_request(
+            descriptor,
+            package,
+            inputs,
+            outputs,
+            {"workgroupCount": [1, 1, 1], "workgroupSize": [1, 1, 1]},
+            expected_target=target,
+        )
+        executor = _executor(target)
+        availability = executor.is_available(request)
+        assert availability.available, availability.reason
+        result = executor.run(request)
+        (tmp_path / f"readback-{index}.json").write_text(
+            json.dumps(
+                {
+                    "fixture": request.fixture.to_json(),
+                    "executionPlan": request.execution_plan.to_json(),
+                    "status": result.status,
+                    "outputs": result.outputs,
+                    "details": result.details,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        assert result.status == "ok", result.details
+        for name, expected in outputs.items():
+            assert result.outputs[name]["values"] == expected.values

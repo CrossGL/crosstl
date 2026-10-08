@@ -1,5 +1,16 @@
 """Shared preparation for entry-scoped target generation."""
 
+from ..ast import NamedType
+
+
+def entry_type_references(root, walk):
+    """Collect named types independently of shadowable value references."""
+    return {
+        str(node.name)
+        for node in walk(root)
+        if isinstance(node, NamedType) and node.name
+    }
+
 
 def prepare_entry_scoped_target(codegen, ast, entry_point):
     """Return the AST and residual selector for one target entry.

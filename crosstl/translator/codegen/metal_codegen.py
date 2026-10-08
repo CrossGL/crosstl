@@ -84,6 +84,7 @@ from .array_utils import (
     split_array_type_suffix,
 )
 from .constant_ordering import partition_constants_by_struct_dependency
+from .entry_selection import entry_type_references
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_enum_struct_variant_fields,
@@ -1582,6 +1583,7 @@ class MetalCodeGen:
             if getattr(function, "name", None)
         }
         referenced_names = set()
+        referenced_types = set()
         for function in functions:
             local_names = {
                 getattr(parameter, "name", None)
@@ -1603,7 +1605,11 @@ class MetalCodeGen:
             referenced_names.update(
                 self.entry_identifier_references(function) - local_names
             )
+            referenced_types.update(
+                entry_type_references(function, self.entry_ast_nodes)
+            )
         referenced_names.difference_update(function_names)
+        referenced_names.update(referenced_types)
 
         declaration_groups = [
             (ast, "global_variables", False),
@@ -1618,8 +1624,14 @@ class MetalCodeGen:
                 )
             )
 
+        # Struct fields can depend on aliases even when the entry names only the struct.
+        dependency_groups = declaration_groups + [(ast, "structs", False)]
+        dependency_groups.extend(
+            (stage, "local_structs", False)
+            for stage in getattr(ast, "stages", {}).values()
+        )
         declarations = []
-        for owner, attribute, include_members in declaration_groups:
+        for owner, attribute, include_members in dependency_groups:
             for declaration in getattr(owner, attribute, []) or []:
                 names = self.entry_declaration_names(
                     declaration,
@@ -1638,6 +1650,9 @@ class MetalCodeGen:
                 retained_ids.add(declaration_id)
                 referenced_names.update(
                     self.entry_identifier_references(declaration) - names
+                )
+                referenced_names.update(
+                    entry_type_references(declaration, self.entry_ast_nodes)
                 )
                 changed = True
 

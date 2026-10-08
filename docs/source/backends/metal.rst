@@ -55,6 +55,14 @@ aliases are also diagnosed because their value qualification is not yet
 represented in the shared source. Pointer, aggregate and template aliases
 continue to use their existing resolution paths.
 
+Selecting one project entry retains scalar aliases used by its reference
+parameters, reachable helper signatures, local types and module declarations.
+Alias dependencies are followed transitively, including fields of retained
+structs; unrelated aliases can still be removed. Type dependencies are distinct
+from local value names, so a variable shadow does not discard a required type.
+The native alias checks exercise device and constant references through packaged
+Metal, OpenGL and DirectX dispatches.
+
 Explicit struct specializations compare primitive alias arguments by their
 resolved type before materializing the primary template. Static member lookup
 uses the same owner, including specialization declarations written through an

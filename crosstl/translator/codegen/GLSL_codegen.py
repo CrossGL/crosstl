@@ -115,6 +115,7 @@ from .array_utils import (
 from .bfloat_constants import bfloat16_constant_float, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .constant_ordering import partition_constants_by_struct_dependency
+from .entry_selection import entry_type_references
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -3193,6 +3194,7 @@ class GLSLCodeGen:
             if getattr(function, "name", None)
         }
         referenced_names = set()
+        referenced_types = set()
         for function in functions:
             local_names = {
                 getattr(parameter, "name", None)
@@ -3214,7 +3216,20 @@ class GLSLCodeGen:
             referenced_names.update(
                 self.entry_identifier_references(function) - local_names
             )
+            referenced_types.update(
+                entry_type_references(function, self.entry_ast_nodes)
+            )
         referenced_names.difference_update(function_names)
+        referenced_names.update(referenced_types)
+
+        # GLSL keeps struct declarations, so their field types must remain available.
+        structs = list(getattr(ast, "structs", []) or [])
+        for stage in getattr(ast, "stages", {}).values():
+            structs.extend(getattr(stage, "local_structs", []) or [])
+        for declaration in structs:
+            referenced_names.update(
+                entry_type_references(declaration, self.entry_ast_nodes)
+            )
 
         declaration_groups = [
             (ast, "global_variables", False),
@@ -3249,6 +3264,9 @@ class GLSLCodeGen:
                 retained_ids.add(declaration_id)
                 referenced_names.update(
                     self.entry_identifier_references(declaration) - names
+                )
+                referenced_names.update(
+                    entry_type_references(declaration, self.entry_ast_nodes)
                 )
                 changed = True
 
