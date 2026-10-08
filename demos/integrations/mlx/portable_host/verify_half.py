@@ -1,12 +1,14 @@
 """Verify pinned MLX half storage on CPU and a generated native backend."""
 
 import argparse
+import ctypes
 import hashlib
 import json
 import subprocess
 import sys
 from pathlib import Path
 
+from crosstl.translator.resource_storage import encoded_storage_dtype
 from demos.integrations.mlx.portable_host import half_workloads
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_input_bindings,
@@ -14,7 +16,7 @@ from demos.integrations.mlx.portable_host.gather_evidence import (
 )
 from demos.integrations.mlx.portable_host.packages import HALF_COPY_ENTRY, HALF_ENTRIES
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
-from demos.integrations.mlx.portable_host.runtime import HostRuntime
+from demos.integrations.mlx.portable_host.runtime import TYPES, HostRuntime
 from demos.integrations.mlx.portable_host.verify_bitwise import verify_native_identity
 from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
 
@@ -163,6 +165,34 @@ def verify(args):
     )
 
 
+def audit_upload_layout(target, value, binding):
+    layout = binding["binding"]["metadata"]["scalarLayout"]
+    storage = encoded_storage_dtype(
+        layout,
+        target=target,
+        resource_kind=binding["binding"]["kind"],
+        logical_dtype=value["dtype"],
+    )
+    size = ctypes.sizeof(TYPES[value["dtype"]])
+    if (
+        binding["dtype"] != value["dtype"]
+        or binding["shape"] != value["shape"]
+        or binding.get("encoding") != value.get("encoding")
+        or layout["elementType"] != storage
+        or layout["elementSizeBytes"] != size
+        or layout["elementStrideBytes"] != size
+        or value["shape"] != [len(value["values"])]
+    ):
+        raise ValueError("Half native upload layout differs")
+    if "storageEncoding" in layout and (
+        value.get("encoding") != layout["storageEncoding"]["encoding"]
+        or layout["physicalType"] != "uint16_t"
+        or layout["alignmentBytes"] != 2
+        or layout["memberOffsetBytes"] != 0
+    ):
+        raise ValueError("Half native encoded storage layout differs")
+
+
 def audit_half_events(events, output):
     for event in events:
         audit_input_bindings(event)
@@ -183,15 +213,7 @@ def audit_half_events(events, output):
             raise ValueError("Half native entry differs")
         for name, value in event["inputs"].items():
             binding = request["buffers"][name]
-            layout = binding["binding"]["metadata"]["scalarLayout"]
-            if (
-                binding["dtype"] != value["dtype"]
-                or binding["shape"] != value["shape"]
-                or binding.get("encoding") != value.get("encoding")
-                or layout["elementType"] != value["dtype"]
-                or value["shape"] != [len(value["values"])]
-            ):
-                raise ValueError("Half native upload layout differs")
+            audit_upload_layout(event["target"], value, binding)
         for module in [details["module"], *details["validationModules"]]:
             path = Path(module["file"]).resolve()
             if (

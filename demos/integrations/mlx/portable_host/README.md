@@ -770,12 +770,15 @@ readback that is not an exact binary16 representation is rejected rather than
 rounded by the host.
 
 Generated HLSL half buffers use unsigned 16-bit physical storage with an explicit
-binary16 codec in the package descriptor. The callback validates that contract
-through the translator's shared storage validator while retaining the logical
+binary16 codec in the package descriptor. The callback and evidence audit validate
+that contract through the translator's shared storage validator while retaining the logical
 `float16` payload, two-byte stride and exact readback checks. Missing or
 incompatible codecs are rejected; the demo does not reinterpret arbitrary integer
 buffers as half values or repair results after execution. Windows native checks
 remain required to establish correctness of the generated storage operations.
+The evidence audit also checks the physical element size, encoded storage
+alignment and offset; a logical type annotation alone cannot authorize a different
+buffer layout.
 
 ```sh
 python -m demos.integrations.mlx.portable_host.packages \

@@ -13,6 +13,7 @@ from demos.integrations.mlx.portable_host import (
     packages,
     prepare,
     runtime,
+    verify_half,
 )
 
 
@@ -83,6 +84,117 @@ decltype(cast_signature<float, half>) cast_signature<float, half>;
         )
     assert set(index["descriptors"]) == set(packages.HALF_ENTRIES)
     return root / "half", index
+
+
+def upload_evidence(resource, target):
+    layout = resource["scalarLayout"]
+    dtype = layout.get("storageEncoding", {}).get(
+        "logicalElementType", layout["elementType"]
+    )
+    value = {"dtype": dtype, "shape": [3], "values": [0, 0, 0]}
+    if dtype in {"float16", "float32"}:
+        value["encoding"] = (
+            half_storage.encoding(target) if dtype == "float16" else "ieee754-binary32"
+        )
+    binding = {
+        **copy.deepcopy(value),
+        "binding": {
+            "kind": resource["kind"],
+            "metadata": {"scalarLayout": copy.deepcopy(layout)},
+        },
+    }
+    return value, binding
+
+
+def test_half_evidence_accepts_reflected_storage_for_all_entries(translated):
+    _, index = translated
+    for descriptor in index["descriptors"].values():
+        for resource in descriptor["bindings"]:
+            if "executionInput" not in resource.get("provenance", {}):
+                value, binding = upload_evidence(resource, index["target"])
+                verify_half.audit_upload_layout(index["target"], value, binding)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    (
+        "dtype",
+        "shape",
+        "encoding",
+        "values",
+        "elementType",
+        "elementSizeBytes",
+        "elementStrideBytes",
+    ),
+)
+def test_half_evidence_rejects_upload_layout_changes(translated, fault):
+    _, index = translated
+    resource = next(
+        resource
+        for resource in index["descriptors"][packages.HALF_COPY_ENTRY]["bindings"]
+        if resource["scalarLayout"]["elementType"] in {"float16", "float32", "uint16"}
+    )
+    value, binding = upload_evidence(resource, index["target"])
+    if fault == "values":
+        value["values"].pop()
+    elif fault in {"dtype", "shape", "encoding"}:
+        binding[fault] = [2] if fault == "shape" else "invalid"
+    else:
+        binding["binding"]["metadata"]["scalarLayout"][fault] = (
+            "int32" if fault == "elementType" else 8
+        )
+    with pytest.raises(ValueError):
+        verify_half.audit_upload_layout(index["target"], value, binding)
+
+
+@pytest.mark.parametrize("translated", ["directx"], indirect=True)
+@pytest.mark.parametrize(
+    "fault",
+    (
+        "missing",
+        "encoding",
+        "logical",
+        "physical",
+        "alignment",
+        "offset",
+        "kind",
+        "layout",
+        "runtime",
+        "target",
+        "transport",
+    ),
+)
+def test_half_evidence_requires_explicit_directx_binary16_contract(translated, fault):
+    _, index = translated
+    resource = next(
+        resource
+        for resource in index["descriptors"][packages.HALF_COPY_ENTRY]["bindings"]
+        if "storageEncoding" in resource["scalarLayout"]
+    )
+    value, binding = upload_evidence(resource, "directx")
+    layout = binding["binding"]["metadata"]["scalarLayout"]
+    if fault == "missing":
+        layout.pop("storageEncoding")
+    elif fault in {"encoding", "logical"}:
+        key = "encoding" if fault == "encoding" else "logicalElementType"
+        layout["storageEncoding"][key] = "invalid"
+    elif fault == "kind":
+        binding["binding"]["kind"] = "texture"
+    elif fault == "transport":
+        binding["encoding"] = value["encoding"] = "ieee754-binary32"
+    elif fault != "target":
+        key, replacement = {
+            "physical": ("physicalType", "half"),
+            "alignment": ("alignmentBytes", 4),
+            "offset": ("memberOffsetBytes", 2),
+            "layout": ("storageLayout", "hlsl-constant-buffer"),
+            "runtime": ("runtimeSized", False),
+        }[fault]
+        layout[key] = replacement
+    with pytest.raises(ValueError):
+        verify_half.audit_upload_layout(
+            "metal" if fault == "target" else "directx", value, binding
+        )
 
 
 @pytest.fixture
