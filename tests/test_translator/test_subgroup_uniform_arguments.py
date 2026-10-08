@@ -13,7 +13,10 @@ import pytest
 from crosstl.project import build_native_loader_dispatch_request
 from crosstl.translator import parse
 from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
-from crosstl.translator.codegen.GLSL_codegen import OpenGLSoftwareSubgroupError
+from crosstl.translator.codegen.GLSL_codegen import (
+    OpenGLPrivatePointerParameterError,
+    OpenGLSoftwareSubgroupError,
+)
 from tests.ci_helpers import assert_paths_covered
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_metal_builtin_ownership import _compile
@@ -81,6 +84,69 @@ def test_uniform_helper_loop_arguments_compile(tmp_path, target):
         target,
     )
     _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("target", ["opengl", "directx"])
+@pytest.mark.parametrize("unused_helper", [False, True])
+def test_direct_collective_loop_branches_compile(tmp_path, target, unused_helper):
+    helpers = (
+        "uint unused_collective(uint value) { return WaveActiveSum(value); }"
+        if unused_helper
+        else ""
+    )
+    body = """uint result = 0u;
+        for (uint i = 0u; i < groups; ++i) {
+            if (i % 2u == 0u) { result += WaveActiveSum(invocation); }
+            else {
+                for (uint j = 1u; j < 4u; ++j) {
+                    result += WaveShuffleDown(invocation, j);
+                }
+            }
+        }
+        results[invocation] = result;"""
+    generated = _generate(body, helpers, target)
+    assert "WaveActiveSum" not in generated and "WaveShuffleDown" not in generated
+    assert "if (" in generated
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("target", ["opengl", "directx"])
+@pytest.mark.parametrize(
+    "prefix,condition,helpers",
+    [
+        ("", "invocation == 0u", ""),
+        ("uint count = groups; count = invocation;", "count > 0u", ""),
+        (
+            "uint count = groups; uint& alias = count; alias = invocation;",
+            "count > 0u",
+            "",
+        ),
+        ("uint count = groups; unknown(count);", "count > 0u", ""),
+        (
+            "uint count = groups; mutate(count, invocation);",
+            "count > 0u",
+            "void mutate(inout uint value, uint lane) { value = lane; }",
+        ),
+        ("uint i = invocation;", "i > 0u", ""),
+        ("if (invocation == 0u) { return; }", "i > 0u", ""),
+    ],
+)
+def test_direct_collective_branches_reject_unproven_control(
+    target, prefix, condition, helpers
+):
+    error = (
+        (OpenGLSoftwareSubgroupError, OpenGLPrivatePointerParameterError)
+        if target == "opengl"
+        else DirectXSoftwareSubgroupError
+    )
+    with pytest.raises(error):
+        _generate(
+            "for (uint i = 0u; i < groups; ++i) { "
+            + prefix
+            + f" if ({condition}) {{ results[invocation] = WaveShuffleDown(invocation, 1u); }} }}",
+            helpers,
+            target,
+        )
 
 
 @pytest.mark.parametrize(
@@ -398,6 +464,14 @@ def _native_source(size, depth, mode):
         f"uint first = {callee}(value + counter++, 1u);\n"
         f"uint second = {callee}(value + counter++, {count});"
     )
+    if mode == "direct":
+        helpers = ""
+        calls = """uint first = simd_sum(value + counter++);
+        uint second = value + counter++;
+        for (uint i = 0u; i < groups; ++i) {
+            if (i % 2u == 0u) { second = simd_sum(second); }
+            else { second = simd_sum(second + 1u); }
+        }"""
     if mode in {"block", "block-loop"}:
         calls = (
             "uint first = 0u; uint second = 0u;\n"
@@ -425,9 +499,22 @@ kernel void products(device uint* inputWords [[buffer(0)]],
 
 
 @pytest.mark.parametrize("shape", [(32, 1, 1), (64, 1, 1), (32, 4, 1)])
-@pytest.mark.parametrize("depth", [0, 2])
 @pytest.mark.parametrize(
-    "mode", ["groups", "parity", "loop", "block", "block-loop", "vector", "vector-loop"]
+    "depth,mode",
+    [
+        (depth, mode)
+        for depth in (0, 2)
+        for mode in (
+            "groups",
+            "parity",
+            "loop",
+            "block",
+            "block-loop",
+            "vector",
+            "vector-loop",
+        )
+    ]
+    + [(0, "direct")],
 )
 def test_uniform_arguments_execute_across_helper_calls(tmp_path, shape, depth, mode):
     if os.environ.get(REQUIRE_ENV) != "1":
@@ -448,6 +535,10 @@ def test_uniform_arguments_execute_across_helper_calls(tmp_path, shape, depth, m
             else int(count > 1)
         )
         second = (first + 32) * 32**repeats
+        if mode == "direct":
+            second = first + 32
+            for iteration in range(1, count):
+                second = (second + (iteration % 2)) * 32
         for lane in range(start, start + 32):
             value = (
                 first + size // 32 + lane % size

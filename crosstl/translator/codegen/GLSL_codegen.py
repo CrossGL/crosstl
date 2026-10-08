@@ -4417,8 +4417,6 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_helper_function_names = set()
         self.glsl_software_subgroup_helper_function_ids = set()
         self.glsl_software_subgroup_omitted_helper_function_ids = set()
-        if not helper_records:
-            return
 
         functions = self.glsl_software_subgroup_functions(ast)
         functions_by_id = {id(function): function for function in functions}
@@ -4646,8 +4644,12 @@ class GLSLCodeGen:
                 )
             roots.add(target_id)
 
-        if not roots and not self.glsl_software_subgroup_operation_records(
-            getattr(entry_function, "body", None)
+        if (
+            helper_records
+            and not roots
+            and not self.glsl_software_subgroup_operation_records(
+                getattr(entry_function, "body", None)
+            )
         ):
             operation, node, function = helper_records[0]
             raise self.glsl_software_subgroup_error(

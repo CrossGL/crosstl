@@ -100,6 +100,12 @@ errors. Const qualification alone does not prove invocation uniformity.
 Raw hardware subgroup builtins are rejected in software mode; annotated
 subgroup inputs use the configured logical width instead.
 
+The entry point receives the same call-effect and local control-flow analysis
+when it contains collectives directly, without a collective helper. Uniform
+loop-induction branches therefore do not depend on an unrelated helper being
+present. Required native tests distinguish alternating branch computations at
+workgroup widths 32, 64 and 128, with original Metal execution as a control.
+
 Generated collectives pair execution barriers with explicit shared-memory
 ordering. This preserves scratch reuse across conditional helper calls on
 the tested Mesa runtime. The required native vote gate covers repeated calls,
