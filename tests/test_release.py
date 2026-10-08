@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import os
@@ -5,14 +6,17 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import urllib.error
 import zipfile
 from pathlib import Path
 
 import pytest
 import yaml
 
+from tools import check_release
 from tools.check_release import (
     check_distributions,
+    check_published_distributions,
     check_versions,
     package_metadata,
     release_notes,
@@ -184,6 +188,15 @@ def test_release_checks_and_publishes_the_same_distributions():
     assert publish["with"]["attestations"] == "false"
     release = jobs["github-release"]["steps"][-1]["run"]
     assert "--verify-tag" in release and "dist/*" in release
+    steps = jobs["github-release"]["steps"]
+    names = [step["name"] for step in steps]
+    verify = names.index("Verify published PyPI archive identities")
+    assert names.index("Download distributions") < verify
+    assert verify < names.index("Create or update GitHub Release with distributions")
+    assert steps[verify]["run"] == "python tools/check_release.py published dist"
+    assert "if" not in steps[verify] and "continue-on-error" not in steps[verify]
+    python = steps[names.index("Set up Python 3.12")]
+    assert python["with"]["python-version"] == "3.12"
 
 
 @pytest.fixture
@@ -245,6 +258,177 @@ def test_release_archive_checks_accept_complete_payload(release_tree, tmp_path):
     result = check_distributions(release_tree, directory)
     assert result["version"] == "1.2.3" and result["packageFiles"] == 2
     assert release_notes(release_tree, "1.2.3") == "### Fixed\n\n- A change.\n"
+
+
+@pytest.fixture
+def published_release(release_tree, tmp_path):
+    directory = tmp_path / "dist"
+    _archives(release_tree, directory)
+    metadata = {
+        "info": {"name": "crosstl", "version": "1.2.3"},
+        "urls": [
+            {
+                "filename": path.name,
+                "size": path.stat().st_size,
+                "digests": {"sha256": hashlib.sha256(path.read_bytes()).hexdigest()},
+                "yanked": False,
+            }
+            for path in sorted(directory.iterdir())
+        ],
+    }
+    return directory, metadata
+
+
+def _pypi_responses(monkeypatch, responses):
+    calls, sleeps = [], []
+    pending = iter(responses)
+
+    def open_url(request, *, timeout):
+        assert request.full_url == "https://pypi.org/pypi/crosstl/1.2.3/json"
+        assert request.get_header("Accept") == "application/json"
+        assert timeout == 20
+        calls.append(request.full_url)
+        response = next(pending)
+        if isinstance(response, Exception):
+            raise response
+        return io.BytesIO(json.dumps(response).encode("utf-8"))
+
+    monkeypatch.setattr(check_release.urllib.request, "urlopen", open_url)
+    monkeypatch.setattr(check_release.time, "sleep", sleeps.append)
+    return calls, sleeps
+
+
+def test_published_archives_match_local_validated_bytes(
+    release_tree, published_release, monkeypatch
+):
+    directory, metadata = published_release
+    calls, sleeps = _pypi_responses(monkeypatch, [metadata])
+    result = check_published_distributions(release_tree, directory)
+    assert len(calls) == 1 and sleeps == []
+    assert result["version"] == "1.2.3"
+    for item in metadata["urls"]:
+        assert result["published"][item["filename"]] == {
+            "sha256": item["digests"]["sha256"],
+            "sizeBytes": item["size"],
+        }
+
+
+def test_published_command_checks_validated_distribution_identities(
+    release_tree, published_release, monkeypatch, capsys
+):
+    directory, metadata = published_release
+    _pypi_responses(monkeypatch, [metadata])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["check_release.py", "published", str(directory), "--root", str(release_tree)],
+    )
+    check_release.main()
+    result = json.loads(capsys.readouterr().out)
+    assert result["version"] == "1.2.3"
+    assert set(result["published"]) == {item["filename"] for item in metadata["urls"]}
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["name", "version", "sha256", "size", "yanked", "duplicate", "unexpected"],
+)
+def test_published_archive_mismatches_fail_without_retry(
+    release_tree, published_release, monkeypatch, mutation
+):
+    directory, metadata = published_release
+    first = metadata["urls"][0]
+    if mutation in ("name", "version"):
+        metadata["info"][mutation] = "different"
+    elif mutation == "sha256":
+        first["digests"]["sha256"] = "0" * 64
+    elif mutation == "size":
+        first["size"] += 1
+    elif mutation == "yanked":
+        first["yanked"] = True
+    elif mutation == "duplicate":
+        metadata["urls"].append(first.copy())
+    else:
+        first["filename"] = "unexpected.whl"
+    calls, sleeps = _pypi_responses(monkeypatch, [metadata])
+    with pytest.raises(ValueError, match="PyPI"):
+        check_published_distributions(release_tree, directory)
+    assert len(calls) == 1 and sleeps == []
+
+
+@pytest.mark.parametrize("code", [404, 429, 500, 503, "timeout", "network", "missing"])
+def test_published_archives_retry_index_visibility_and_transient_errors(
+    release_tree, published_release, monkeypatch, code
+):
+    directory, metadata = published_release
+    if code == "missing":
+        first = dict(metadata, urls=metadata["urls"][:1])
+    elif code == "timeout":
+        first = TimeoutError("timeout")
+    elif code == "network":
+        first = urllib.error.URLError("connection failed")
+    else:
+        first = urllib.error.HTTPError("url", code, "unavailable", None, io.BytesIO())
+    calls, sleeps = _pypi_responses(monkeypatch, [first, metadata])
+    assert check_published_distributions(release_tree, directory)["version"] == "1.2.3"
+    assert len(calls) == 2 and sleeps == [10]
+
+
+def test_published_archive_retry_limit_fails_closed(
+    release_tree, published_release, monkeypatch
+):
+    directory, metadata = published_release
+    incomplete = dict(metadata, urls=[])
+    calls, sleeps = _pypi_responses(monkeypatch, [incomplete] * 6)
+    with pytest.raises(ValueError, match="retry limit"):
+        check_published_distributions(release_tree, directory)
+    assert len(calls) == 6 and sleeps == [10] * 5
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        None,
+        {},
+        {"info": []},
+        {"info": {"name": "crosstl", "version": "1.2.3"}, "urls": None},
+        {"info": {"name": "crosstl", "version": "1.2.3"}, "urls": [None]},
+        {"info": {"name": "crosstl", "version": "1.2.3"}, "urls": [{}]},
+    ],
+)
+def test_published_archive_malformed_metadata_fails_without_retry(
+    release_tree, published_release, monkeypatch, metadata
+):
+    directory, _ = published_release
+    calls, sleeps = _pypi_responses(monkeypatch, [metadata])
+    with pytest.raises(ValueError, match="PyPI"):
+        check_published_distributions(release_tree, directory)
+    assert len(calls) == 1 and sleeps == []
+
+
+@pytest.mark.parametrize("code", [400, 401, 403])
+def test_published_archive_permanent_http_errors_fail_immediately(
+    release_tree, published_release, monkeypatch, code
+):
+    directory, _ = published_release
+    calls, sleeps = _pypi_responses(
+        monkeypatch,
+        [urllib.error.HTTPError("url", code, "rejected", None, io.BytesIO())],
+    )
+    with pytest.raises(urllib.error.HTTPError):
+        check_published_distributions(release_tree, directory)
+    assert len(calls) == 1 and sleeps == []
+
+
+def test_published_archives_check_local_payload_before_network(
+    release_tree, published_release, monkeypatch
+):
+    directory, metadata = published_release
+    (directory / "unexpected.txt").write_text("unexpected", encoding="utf-8")
+    calls, sleeps = _pypi_responses(monkeypatch, [metadata])
+    with pytest.raises(ValueError, match="Expected only"):
+        check_published_distributions(release_tree, directory)
+    assert calls == sleeps == []
 
 
 @pytest.mark.parametrize(

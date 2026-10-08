@@ -5,14 +5,19 @@ import argparse
 import ast
 import configparser
 import email.parser
+import hashlib
 import importlib.metadata
 import importlib.resources
 import json
 import re
+import socket
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -247,6 +252,82 @@ def check_installation(version):
     }
 
 
+class _PublicationPending(ValueError):
+    pass
+
+
+def _check_published_metadata(metadata, version, identities):
+    _require(isinstance(metadata, dict), "Invalid PyPI release metadata")
+    info = metadata.get("info")
+    _require(isinstance(info, dict), "Missing PyPI package metadata")
+    _require(info.get("name") == "crosstl", "PyPI package name differs")
+    _require(info.get("version") == version, "PyPI version differs")
+    files = metadata.get("urls")
+    _require(isinstance(files, list), "Missing PyPI file inventory")
+    _require(all(isinstance(item, dict) for item in files), "Invalid PyPI file record")
+    names = [item.get("filename") for item in files]
+    _require(all(isinstance(name, str) for name in names), "Invalid PyPI filename")
+    _require(len(names) == len(set(names)), "Duplicate PyPI filenames")
+    _require(not set(names) - identities.keys(), "Unexpected PyPI distribution")
+    for item in files:
+        name = item["filename"]
+        expected = identities[name]
+        _require(item.get("yanked") is False, f"PyPI distribution is yanked: {name}")
+        _require(
+            type(item.get("size")) is int and item["size"] == expected["sizeBytes"],
+            f"PyPI size differs: {name}",
+        )
+        digests = item.get("digests")
+        _require(isinstance(digests, dict), f"Missing PyPI digests: {name}")
+        _require(
+            digests.get("sha256") == expected["sha256"],
+            f"PyPI SHA-256 differs: {name}",
+        )
+    if set(names) != identities.keys():
+        raise _PublicationPending("PyPI release is missing a distribution")
+
+
+def check_published_distributions(root, directory, *, attempts=6, retry_seconds=10):
+    result = check_distributions(root, directory)
+    identities = {}
+    for name in result["distributions"]:
+        data = (directory / name).read_bytes()
+        identities[name] = {
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "sizeBytes": len(data),
+        }
+    request = urllib.request.Request(
+        f'https://pypi.org/pypi/crosstl/{result["version"]}/json',
+        headers={"Accept": "application/json"},
+    )
+    _require(attempts > 0 and retry_seconds >= 0, "Invalid publication retry limits")
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                metadata = json.load(response)
+            _check_published_metadata(metadata, result["version"], identities)
+            return dict(result, published=identities)
+        except urllib.error.HTTPError as error:
+            error.close()
+            if error.code not in (404, 429) and not 500 <= error.code < 600:
+                raise
+            last_error = error
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            socket.timeout,
+            _PublicationPending,
+        ) as error:
+            last_error = error
+        # A successful upload may precede the index update. Never retry mismatches.
+        if attempt + 1 < attempts:
+            time.sleep(retry_seconds)
+    raise ValueError(
+        "PyPI publication could not be verified within the retry limit"
+    ) from last_error
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -259,17 +340,23 @@ def main():
     distributions.add_argument(
         "--root", type=Path, default=Path(__file__).resolve().parents[1]
     )
+    published = commands.add_parser("published")
+    published.add_argument("directory", type=Path)
+    published.add_argument(
+        "--root", type=Path, default=Path(__file__).resolve().parents[1]
+    )
     installed = commands.add_parser("installed")
     installed.add_argument("--version", required=True)
     args = parser.parse_args()
     if args.command == "version":
         print(package_version(args.root))
         return
-    result = (
-        check_installation(args.version)
-        if args.command == "installed"
-        else check_distributions(args.root, args.directory)
-    )
+    if args.command == "installed":
+        result = check_installation(args.version)
+    elif args.command == "published":
+        result = check_published_distributions(args.root, args.directory)
+    else:
+        result = check_distributions(args.root, args.directory)
     print(json.dumps(result, indent=2))
 
 
