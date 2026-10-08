@@ -1330,7 +1330,13 @@ class MetalToCrossGLConverter:
         binary32_log_profile=None,
         binary32_sqrt_profile=None,
         binary32_rsqrt_profile=None,
+        binary32_power_operand_profile=None,
     ):
+        if binary32_power_operand_profile not in (None, "flush-subnormals"):
+            raise ValueError(
+                "binary32_power_operand_profile must be 'flush-subnormals' or None"
+            )
+        self.binary32_power_operand_profile = binary32_power_operand_profile
         if binary32_fma_profile not in (None, "rne-gradual", "rne-flush"):
             raise ValueError(
                 "binary32_fma_profile must be 'rne-gradual', 'rne-flush', or None"
@@ -14555,6 +14561,25 @@ class MetalToCrossGLConverter:
         if not self.required_metal_power_widths:
             return ""
         scalar = self.metal_power_helper_name(1)
+        operand_policy = """    // Keep existing subnormal behavior until a source policy is selected.
+    if ((magnitude != 0u && magnitude < 0x00800000u) ||
+        (power != 0u && power < 0x00800000u)) {
+        return pow(base, exponent);
+    }
+"""
+        if self.binary32_power_operand_profile == "flush-subnormals":
+            operand_policy = """    // Apply the selected operand policy after the exact identity shortcut.
+    if (magnitude != 0u && magnitude < 0x00800000u) {
+        a = a & 0x80000000u;
+        base = asfloat(a);
+        magnitude = 0u;
+    }
+    if (power != 0u && power < 0x00800000u) {
+        b = b & 0x80000000u;
+        exponent = asfloat(b);
+        power = 0u;
+    }
+"""
         code = f"""@metal_static
 float {scalar}(float base, float exponent) {{
     uint a = asuint(base);
@@ -14565,12 +14590,7 @@ float {scalar}(float base, float exponent) {{
     if (b == 0x3f800000u) {{
         return base;
     }}
-    // Keep existing subnormal behavior until a source policy is selected.
-    if ((magnitude != 0u && magnitude < 0x00800000u) ||
-        (power != 0u && power < 0x00800000u)) {{
-        return pow(base, exponent);
-    }}
-    if (power == 0u || a == 0x3f800000u) {{
+{operand_policy}    if (power == 0u || a == 0x3f800000u) {{
         return 1.0;
     }}
     if (magnitude > 0x7f800000u || power > 0x7f800000u) {{

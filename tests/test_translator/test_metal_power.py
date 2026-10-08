@@ -6,6 +6,7 @@ import os
 import random
 import struct
 import sys
+from copy import deepcopy
 from decimal import Decimal, localcontext
 from functools import lru_cache, partial
 
@@ -109,10 +110,17 @@ kernel void powers(const device uint* values [[buffer(0)]],
 """
 
 
-def _translate(tmp_path, source=SOURCE, target="crossgl"):
+def _translate(tmp_path, source=SOURCE, target="crossgl", operand_profile=None):
     path = tmp_path / "power.metal"
     path.write_text(source, encoding="utf-8")
-    return translate(str(path), backend=target, format_output=False)
+    options = (
+        {"binary32_power_operand_profile": operand_profile}
+        if operand_profile is not None
+        else {}
+    )
+    return translate(
+        str(path), backend=target, format_output=False, source_options=options
+    )
 
 
 @pytest.mark.parametrize("target", ("directx", "opengl", "metal"))
@@ -160,8 +168,9 @@ def test_power_keeps_fast_mode_integer_helpers_and_source_overloads(tmp_path):
     assert "return pow__metal_overload_2(a, b);" in generated
 
 
-def test_power_helpers_reset_and_avoid_source_names():
-    converter = MetalToCrossGLConverter()
+@pytest.mark.parametrize("operand_profile", (None, "flush-subnormals"))
+def test_power_helpers_reset_and_avoid_source_names(operand_profile):
+    converter = MetalToCrossGLConverter(binary32_power_operand_profile=operand_profile)
     source = """
         float __crossgl_metal_power_float(float a) { return a; }
         float2 __crossgl_metal_power_float2(float2 a) { return a; }
@@ -189,8 +198,9 @@ def test_power_diagnoses_global_runtime_initialization(tmp_path):
 
 @pytest.mark.parametrize("namespace", ("", "precise", "fast"))
 @pytest.mark.parametrize("materialized", (False, True))
+@pytest.mark.parametrize("operand_profile", (None, "flush-subnormals"))
 def test_power_preserves_bfloat_wrapper_ownership_and_narrowing(
-    namespace, materialized
+    namespace, materialized, operand_profile
 ):
     qualifier = "METAL_FUNC" if materialized else ""
     body = "__metal_pow(float(x), float(y))" if materialized else "float(x) + float(y)"
@@ -207,7 +217,7 @@ bfloat16_t apply(bfloat16_t x, bfloat16_t y) {{
     return metal::{(namespace + '::') if namespace else ''}pow(x, y);
 }}
 """
-    converter = MetalToCrossGLConverter()
+    converter = MetalToCrossGLConverter(binary32_power_operand_profile=operand_profile)
     generated = converter.generate(MetalParser(MetalLexer(source).tokenize()).parse())
     lowered = materialized and namespace != "fast"
     assert ("__crossgl_metal_power_float" in generated) == lowered
@@ -486,7 +496,10 @@ def test_power_executes_exact_identity(tmp_path, source_control, monkeypatch):
 
 
 @pytest.mark.parametrize("source_control", (False, True))
-def test_power_executes_native_domains(tmp_path, source_control, monkeypatch):
+@pytest.mark.parametrize("operand_profile", (None, "flush-subnormals"))
+def test_power_executes_native_domains(
+    tmp_path, source_control, operand_profile, monkeypatch
+):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for native power checks")
     from tests.test_translator import test_fused_math as native_math
@@ -505,7 +518,11 @@ def test_power_executes_native_domains(tmp_path, source_control, monkeypatch):
     )
     pairs = _pairs()
     expected = _expected(pairs)
-    source = SOURCE if source_control else _translate(tmp_path, target=target)
+    source = (
+        SOURCE
+        if source_control
+        else _translate(tmp_path, target=target, operand_profile=operand_profile)
+    )
     actual, evidence = native_math._dispatch(
         tmp_path,
         target,
@@ -527,6 +544,7 @@ def test_power_executes_native_domains(tmp_path, source_control, monkeypatch):
                 "maximumStorageUlpError": maximum,
                 "guardCount": 8,
                 "completeFiniteDomainVerified": False,
+                "binary32PowerOperandProfile": operand_profile,
             },
             indent=2,
         )
@@ -588,6 +606,267 @@ def test_power_executes_metal_subnormal_control(tmp_path, monkeypatch):
                 "valueCount": 20 * len(pairs),
                 "guardCountPerPath": 8,
                 "crossTargetSubnormalParityVerified": False,
+            },
+            indent=2,
+        )
+    )
+
+
+def _operand_flush_pairs():
+    magnitudes = (1, 2, 0x10000, 0x3FFFFF, 0x400000, 0x7FFFFE, 0x7FFFFF)
+    subnormals = [word | sign for word in magnitudes for sign in (0, 0x80000000)]
+    controls = (
+        0,
+        0x800000,
+        0x800001,
+        0x3F000000,
+        0x3F7FFFFF,
+        0x3F800000,
+        0x3F800001,
+        0x40000000,
+        0x40400000,
+        0x4B000001,
+        0x4B7FFFFF,
+        0x4B800000,
+        0x7F7FFFFF,
+        0x7F800000,
+        0x7FC12345,
+    )
+    controls = [word | sign for word in controls for sign in (0, 0x80000000)]
+    pairs = {(a, b) for a in subnormals for b in subnormals + controls}
+    pairs.update((a, b) for a in controls for b in subnormals)
+    generator = random.Random(2121)
+    for _ in range(1024):
+        subnormal = generator.randrange(1, 0x800000) | (generator.getrandbits(1) << 31)
+        word = generator.getrandbits(32)
+        pairs.update(((subnormal, word), (word, subnormal), (subnormal, 0x3F800000)))
+    return sorted(pairs)
+
+
+def _operand_flush_oracle(a, b):
+    if b == 0x3F800000:
+        return a
+    operands = [
+        word & 0x80000000 if 0 < word & 0x7FFFFFFF < 0x800000 else word
+        for word in (a, b)
+    ]
+    return _oracle(*operands)
+
+
+def _operand_flush_expected(pairs):
+    words = [GUARD] * 4
+    for a, b in pairs:
+        assert any(0 < word & 0x7FFFFFFF < 0x800000 for word in (a, b))
+        value = _operand_flush_oracle(a, b)
+        opposite = _operand_flush_oracle(a ^ 0x80000000, b)
+        words.extend(
+            (
+                a,
+                b,
+                value,
+                value,
+                value,
+                opposite,
+                value,
+                opposite,
+                value,
+                value,
+                opposite,
+                value,
+                opposite,
+                value,
+                2,
+                b,
+            )
+        )
+    return words + [GUARD] * 4
+
+
+def _check_operand_flush(actual, pairs):
+    expected = _operand_flush_expected(pairs)
+    assert len(actual) == len(expected)
+    assert actual[:4] == actual[-4:] == [GUARD] * 4, "guards"
+    for index, pair in enumerate(pairs):
+        offset = 4 + IDENTITY_FIELDS * index
+        row = actual[offset : offset + IDENTITY_FIELDS]
+        wanted = expected[offset : offset + IDENTITY_FIELDS]
+        assert row[:2] == list(pair), "operand copies"
+        assert row[-2:] == [2, pair[1]], "evaluation count and source overload"
+        for got, reference in zip(row[2:-2], wanted[2:-2]):
+            assert type(got) is int and 0 <= got <= 0xFFFFFFFF
+            if reference & 0x7FFFFFFF > 0x7F800000:
+                assert got & 0x7FFFFFFF > 0x7F800000, "NaN classification"
+            else:
+                assert got == reference, (
+                    index,
+                    [hex(v) for v in pair],
+                    hex(got),
+                    hex(reference),
+                )
+
+
+def test_power_operand_flush_reference_preserves_identity_and_guards():
+    pairs = _operand_flush_pairs()
+    for pair, expected in (
+        ((0, 1), 0x3F800000),
+        ((0, 0x80000001), 0x3F800000),
+        ((1, 0x3F800000), 1),
+        ((0x80000001, 0x3F800000), 0x80000001),
+        ((1, 0x800000), 0),
+        ((0x80000001, 0x800000), 0),
+        ((0x80000001, 0xBF800000), 0xFF800000),
+    ):
+        assert pair in pairs
+        assert _operand_flush_oracle(*pair) == expected
+    expected = _operand_flush_expected(pairs)
+    _check_operand_flush(expected, pairs)
+    for index in (
+        0,
+        4,
+        6,
+        4 + IDENTITY_FIELDS - 2,
+        4 + IDENTITY_FIELDS - 1,
+        len(expected) - 1,
+    ):
+        changed = expected.copy()
+        changed[index] ^= 1
+        with pytest.raises(AssertionError):
+            _check_operand_flush(changed, pairs)
+
+
+@pytest.mark.parametrize("target", ("metal", "opengl", "directx"))
+def test_power_operand_profile_compiles_and_survives_saved_crossgl(tmp_path, target):
+    profile = "flush-subnormals"
+    source = IDENTITY_SOURCE.replace(
+        "float value =", "using Scalar = float; Scalar value ="
+    )
+    saved = tmp_path / "saved.cgl"
+    saved.write_text(_translate(tmp_path, source=source, operand_profile=profile))
+    generated = _translate(
+        tmp_path, source=source, target=target, operand_profile=profile
+    )
+    assert translate(str(saved), backend=target, format_output=False) == generated
+    _compile(generated, target, tmp_path, metal_compile_flags=("-fno-fast-math",))
+
+
+@pytest.mark.parametrize(
+    "profile", (True, 1, "", "preserve-subnormals", "rne-flush", [], {})
+)
+def test_power_operand_profile_rejects_unsupported_configuration(profile):
+    with pytest.raises(ValueError, match="binary32_power_operand_profile"):
+        MetalToCrossGLConverter(binary32_power_operand_profile=profile)
+
+
+def test_power_operand_profile_keeps_fast_calls_and_source_functions(tmp_path):
+    source = """
+        float pow(float a, float b) { return b; }
+        float source_call(float a, float b) { return ::pow(a, b); }
+        float fast_call(float a, float b) { return metal::fast::pow(a, b); }
+    """
+    assert _translate(tmp_path, source) == _translate(
+        tmp_path, source, operand_profile="flush-subnormals"
+    )
+
+
+def test_power_operand_profile_report_and_package_provenance(tmp_path):
+    from crosstl.project import (
+        build_runtime_artifact_manifest,
+        build_runtime_package,
+        load_project_config,
+        translate_project,
+        validate_project_report,
+    )
+
+    (tmp_path / "power.metal").write_text(IDENTITY_SOURCE)
+    (tmp_path / "crosstl.toml").write_text("""[project]
+targets = ["metal", "directx", "opengl"]
+[project.source_options.metal.target_options.opengl.source_patterns."power.metal"]
+binary32_power_operand_profile = "flush-subnormals"
+""")
+    report = translate_project(load_project_config(tmp_path), format_output=False)
+    data = report.to_json()
+    assert data["summary"]["translatedCount"] == 3, data["diagnostics"]
+    expected = {"metal": None, "directx": None, "opengl": "flush-subnormals"}
+    assert {
+        artifact["target"]: artifact["provenance"].get("binary32PowerOperandProfile")
+        for artifact in data["artifacts"]
+    } == expected
+    path = tmp_path / "report.json"
+    report.write_json(path)
+    assert validate_project_report(path)["success"]
+    manifest = build_runtime_artifact_manifest(path)
+    assert manifest["success"], manifest
+    assert {
+        artifact["target"]: artifact["provenance"].get("binary32PowerOperandProfile")
+        for artifact in manifest["artifacts"]
+    } == expected
+    manifest_path = tmp_path / "artifacts.json"
+    manifest_path.write_text(json.dumps(manifest))
+    assert build_runtime_package(manifest_path, tmp_path / "package")["success"]
+    for invalid in (None, "preserve-subnormals", False):
+        changed = deepcopy(data)
+        artifact = next(
+            item for item in changed["artifacts"] if item["target"] == "opengl"
+        )
+        if invalid is None:
+            artifact["provenance"].pop("binary32PowerOperandProfile")
+        else:
+            artifact["provenance"]["binary32PowerOperandProfile"] = invalid
+        path.write_text(json.dumps(changed))
+        validation = validate_project_report(path)
+        assert not validation["success"]
+        assert "binary32PowerOperandProfile" in json.dumps(validation["diagnostics"])
+
+
+@pytest.mark.parametrize("source_control", (False, True))
+def test_power_executes_profiled_subnormal_operands(
+    tmp_path, source_control, monkeypatch
+):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for native power checks")
+    from tests.test_translator import test_fused_math as native_math
+
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    if source_control and target != "metal":
+        pytest.skip("The unchanged source control requires Metal")
+    monkeypatch.setattr(
+        native_math,
+        "_compile",
+        partial(_compile, metal_compile_flags=("-fno-fast-math",)),
+    )
+    pairs = _operand_flush_pairs()
+    expected = _operand_flush_expected(pairs)
+    source = (
+        IDENTITY_SOURCE
+        if source_control
+        else _translate(
+            tmp_path,
+            source=IDENTITY_SOURCE,
+            target=target,
+            operand_profile="flush-subnormals",
+        )
+    )
+    actual, evidence = native_math._dispatch(
+        tmp_path,
+        target,
+        source,
+        pairs,
+        len(expected),
+        entry="powers" if target == "metal" else None,
+        initial_output=[GUARD] * len(expected),
+    )
+    (tmp_path / "expected.json").write_text(json.dumps(expected))
+    _check_operand_flush(actual, pairs)
+    (tmp_path / "evidence.json").write_text(
+        json.dumps(
+            {
+                **evidence,
+                "sourceControl": source_control,
+                "pairCount": len(pairs),
+                "valueCount": 12 * len(pairs),
+                "guardCount": 8,
+                "binary32PowerOperandProfile": "flush-subnormals",
+                "resultUnderflowParityVerified": False,
             },
             indent=2,
         )

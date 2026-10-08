@@ -1846,6 +1846,7 @@ REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(
         "binary32LogProfile",
         "binary32SqrtProfile",
         "binary32RsqrtProfile",
+        "binary32PowerOperandProfile",
     )
 )
 REPORT_ARTIFACT_ENTRY_POINT_FIELDS = frozenset(("source", "target", "stage"))
@@ -28374,6 +28375,20 @@ def _translate_project_impl(
                                 "'flush-subnormals', or None"
                             )
                         artifact["provenance"]["binary32RsqrtProfile"] = rsqrt_profile
+                    power_operand_profile = source_options.get(
+                        "binary32_power_operand_profile"
+                    )
+                    if (
+                        unit.source_backend == "metal"
+                        and power_operand_profile is not None
+                    ):
+                        if power_operand_profile != "flush-subnormals":
+                            raise ValueError(
+                                "binary32_power_operand_profile must be 'flush-subnormals' or None"
+                            )
+                        artifact["provenance"][
+                            "binary32PowerOperandProfile"
+                        ] = power_operand_profile
                     if (
                         unit.source_backend == "metal"
                         and comparison_profile is not None
@@ -46458,6 +46473,15 @@ def _provenance_contract_reasons(
             reasons.append(
                 f"{prefix}.binary32RsqrtProfile must be preserve-subnormals or flush-subnormals"
             )
+    if "binary32PowerOperandProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(
+                f"{prefix}.binary32PowerOperandProfile requires a Metal source"
+            )
+        if provenance["binary32PowerOperandProfile"] != "flush-subnormals":
+            reasons.append(
+                f"{prefix}.binary32PowerOperandProfile must be flush-subnormals"
+            )
     if "dispatchRegion" in provenance:
         try:
             region = DispatchRegion.from_json(provenance["dispatchRegion"])
@@ -46581,6 +46605,18 @@ def _provenance_contract_reasons(
         if provenance.get("binary32RsqrtProfile") != expected_rsqrt_profile:
             reasons.append(
                 f"{prefix}.binary32RsqrtProfile must match the resolved project source options"
+            )
+        expected_power_operand_profile = (
+            options.get("binary32_power_operand_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if (
+            provenance.get("binary32PowerOperandProfile")
+            != expected_power_operand_profile
+        ):
+            reasons.append(
+                f"{prefix}.binary32PowerOperandProfile must match the resolved project source options"
             )
         if provenance.get("dispatchRegion") != options.get(
             DISPATCH_REGION_SOURCE_OPTION

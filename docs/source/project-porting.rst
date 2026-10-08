@@ -1331,10 +1331,25 @@ conversions. Scalar and two- to four-lane calls evaluate each argument once;
 scalar broadcasts, half return narrowing and materialized standard-library
 bfloat wrappers retain their conversion boundaries. An exponent of exactly one
 returns the base without arithmetic, preserving finite values, subnormals,
-signed zeros and infinities exactly. Other calls with a subnormal operand keep
-their existing target-native path; the domain handling does not impose a
-general subnormal policy. Source-defined functions
+signed zeros and infinities exactly. By default, other calls with a subnormal
+operand keep their existing target-native path. Source-defined functions
 and explicit fast-mode calls keep their separate implementations.
+
+Characterized sources may select an operand policy:
+
+.. code-block:: toml
+
+   [project.source_options.metal]
+   binary32_power_operand_profile = "flush-subnormals"
+
+This treats binary32 subnormal operands as signed zero after the exact
+exponent-one shortcut, before applying the domain rules. It does not change
+stored operands, flush normal inputs or select an output-underflow policy.
+The default remains unset; preservation on arbitrary target-native paths is
+not offered as a separate profile. Reports, runtime manifests and packages
+retain ``binary32PowerOperandProfile`` and validate it against resolved
+target/path options. Native source controls characterize the tested Metal
+compiler and device, not a universal Metal policy.
 
 Saved CrossGL retains these helpers. Global initializers requiring the runtime
 helper produce ``project.translate.metal-precise-math-unsupported``. Native
@@ -1346,7 +1361,7 @@ require exact results across all binary32 exponent classes, boundary
 significands and deterministic sampled inputs, with original Metal execution,
 evaluation counters and buffer guards. NaN payload identity is not claimed.
 Other positive finite arithmetic still uses the target's intrinsic: these
-checks do not establish full-domain accuracy, a shared subnormal policy, or
+checks do not establish full-domain accuracy, common result-underflow behavior, or
 complete project numerical parity.
 
 Binary32 remainder
