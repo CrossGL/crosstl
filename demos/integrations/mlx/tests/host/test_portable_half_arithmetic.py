@@ -13,6 +13,7 @@ from demos.integrations.mlx.portable_host import (
     packages,
     prepare,
     runtime,
+    verify_half,
 )
 
 
@@ -62,6 +63,36 @@ decltype(absolute_impl<half>) absolute_impl<half>;
         )
     assert set(index["descriptors"]) == set(packages.HALF_ARITHMETIC_ENTRIES)
     return root / "arithmetic", index
+
+
+@pytest.mark.parametrize("fault", (None, "elementSizeBytes", "elementStrideBytes"))
+def test_half_arithmetic_evidence_checks_value_and_boolean_layouts(translated, fault):
+    _, index = translated
+    for descriptor in index["descriptors"].values():
+        for resource in descriptor["bindings"]:
+            if "executionInput" in resource.get("provenance", {}):
+                continue
+            layout = copy.deepcopy(resource["scalarLayout"])
+            dtype = layout.get("storageEncoding", {}).get(
+                "logicalElementType", layout["elementType"]
+            )
+            value = {"dtype": dtype, "shape": [3], "values": [0, 0, 0]}
+            if dtype in {"float16", "float32"}:
+                value["encoding"] = (
+                    "ieee754-binary16" if dtype == "float16" else "ieee754-binary32"
+                )
+            binding = {
+                **copy.deepcopy(value),
+                "binding": {
+                    "kind": resource["kind"],
+                    "metadata": {"scalarLayout": layout},
+                },
+            }
+            verify_half.audit_upload_layout(index["target"], value, binding)
+            if fault:
+                layout[fault] *= 2
+                with pytest.raises(ValueError, match="upload layout"):
+                    verify_half.audit_upload_layout(index["target"], value, binding)
 
 
 @pytest.fixture

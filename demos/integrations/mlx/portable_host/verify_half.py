@@ -173,7 +173,7 @@ def audit_upload_layout(target, value, binding):
         resource_kind=binding["binding"]["kind"],
         logical_dtype=value["dtype"],
     )
-    size = ctypes.sizeof(TYPES[value["dtype"]])
+    size = 1 if value["dtype"] == "bool" else ctypes.sizeof(TYPES[value["dtype"]])
     if (
         binding["dtype"] != value["dtype"]
         or binding["shape"] != value["shape"]
