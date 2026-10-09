@@ -248,7 +248,9 @@ def test_column_rank_checked_before_array_read(monkeypatch):
 
 @pytest.mark.parametrize("target", ["metal", "opengl", "directx"])
 @pytest.mark.parametrize("two_pass", [False, True])
-@pytest.mark.parametrize("fault", [None, "span", "missing-variant", "guard"])
+@pytest.mark.parametrize(
+    "fault", [None, "span", "missing-variant", "element-size", "guard"]
+)
 def test_column_runtime_checks_layout_and_guards(
     tmp_path, monkeypatch, target, two_pass, fault
 ):
@@ -270,6 +272,7 @@ def test_column_runtime_checks_layout_and_guards(
                 "scalarLayout": {
                     "memberName": member,
                     "elementType": dtype,
+                    "elementSizeBytes": ctypes.sizeof(runtime.TYPES[dtype]),
                     "elementStrideBytes": ctypes.sizeof(runtime.TYPES[dtype]),
                 },
             }
@@ -321,6 +324,8 @@ def test_column_runtime_checks_layout_and_guards(
         supplied["in"].count -= 1
     elif fault == "missing-variant":
         host.reduction_descriptors = {}
+    elif fault == "element-size":
+        bindings[0]["scalarLayout"]["elementSizeBytes"] += 1
     buffers = (runtime.Buffer * len(supplied))(*supplied.values())
     launch = runtime.Launch(
         tuple(execution["workgroupCount"]), tuple(execution["workgroupSize"])

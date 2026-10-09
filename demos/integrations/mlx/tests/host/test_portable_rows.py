@@ -428,7 +428,17 @@ def test_row_ci_preserves_all_three_targets_and_full_width_sets():
 @pytest.mark.parametrize("simple", [False, True])
 @pytest.mark.parametrize(
     "fault",
-    [None, "count", "direction", "missing-variant", "null", "rank", "span", "guard"],
+    [
+        None,
+        "count",
+        "direction",
+        "missing-variant",
+        "null",
+        "rank",
+        "span",
+        "element-size",
+        "guard",
+    ],
 )
 def test_row_host_dispatch_checks_metadata_before_native_execution(
     tmp_path, monkeypatch, target, simple, fault
@@ -452,6 +462,7 @@ def test_row_host_dispatch_checks_metadata_before_native_execution(
                 "scalarLayout": {
                     "memberName": member,
                     "elementType": dtype,
+                    "elementSizeBytes": ctypes.sizeof(runtime.TYPES[dtype]),
                     "elementStrideBytes": ctypes.sizeof(runtime.TYPES[dtype]),
                 },
             }
@@ -488,6 +499,8 @@ def test_row_host_dispatch_checks_metadata_before_native_execution(
         buffers[0].output = 1
     elif fault == "missing-variant":
         host.reduction_descriptors = {}
+    elif fault == "element-size":
+        bindings[0]["scalarLayout"]["elementSizeBytes"] += 1
     elif fault == "null":
         buffers[0].data = None
     elif fault == "span":
