@@ -100,6 +100,19 @@ when the resulting shader compiles. This guard is conservative for fields and
 array elements; it does not prove their disjointness or provide alias-aware
 lowering. Wider source-reference aliasing remains outside this byte contract.
 
+Shared References in Aggregates
+-------------------------------
+
+Private aggregates can carry references to fixed groupshared arrays of 32-bit
+integer or floating-point elements. Each allocation keeps a distinct identity,
+including shadowed source names. Aggregate copies, helper calls, pointer rebasing
+and writes retain the original shared storage. Device and workgroup references
+cannot select each other's backings. Unsupported layouts, initialized shared
+allocations and dynamic entry-point workgroup bindings remain diagnostic.
+Required native controls compare guarded, four-lane workloads across Windows,
+OpenGL and original/generated Metal. These references do not yet support typed
+pointer reinterpretation inside an aggregate.
+
 Storage-to-Workgroup Record Copies
 ----------------------------------
 

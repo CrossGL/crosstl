@@ -29958,9 +29958,8 @@ complex64_t crossgl_complex64_mod_assign(
 
         argument = arguments[0]
         source_type = self.glsl_source_expression_type(argument)
-        rendered = self.generate_expression(argument)
         if source_type is not None and self.map_type(source_type) == constructor:
-            return rendered
+            return self.generate_expression(argument)
 
         constructor_fields = list(
             self.struct_member_types.get(source_constructor, {}).values()
@@ -29968,6 +29967,7 @@ complex64_t crossgl_complex64_mod_assign(
         if len(constructor_fields) == 1:
             return None
 
+        rendered = self.generate_expression(argument)
         promoted = self.glsl_registered_scalar_to_struct_conversion(
             expr,
             rendered,

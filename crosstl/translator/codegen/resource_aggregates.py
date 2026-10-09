@@ -1,8 +1,9 @@
 """Lower private aggregates containing storage pointers to resource handles.
 
 Handles are private values, never a buffer ABI. Their identity is drawn from the
-selected entry's bindings; access helpers branch over concrete resource arguments
-instead of constructing target resource-object arrays. The source AST is retained.
+selected entry's bindings and fixed workgroup allocations; access helpers branch
+over concrete storage instead of constructing target resource-object arrays.
+The source AST is retained.
 """
 
 from copy import copy, deepcopy
@@ -257,10 +258,28 @@ def _pointer_type(value, owner=None):
     if not isinstance(value, PointerType):
         return None
     space = value.address_space or next(
-        (q for q in ("constant", "device", "global", "storage") if q in qualifiers),
+        (
+            q
+            for q in (
+                "constant",
+                "device",
+                "global",
+                "storage",
+                "threadgroup",
+                "workgroup",
+            )
+            if q in qualifiers
+        ),
         None,
     )
-    if space not in {"constant", "device", "global", "storage"}:
+    if space not in {
+        "constant",
+        "device",
+        "global",
+        "storage",
+        "threadgroup",
+        "workgroup",
+    }:
         return None
     element = element_name(value.pointee_type)
     if not element or getattr(value.pointee_type, "generic_args", None):
@@ -277,14 +296,28 @@ def _pointer_type(value, owner=None):
         qualifiers & {"write", "writeonly"}
     )
     return _Pointer(
-        element, "constant" if space == "constant" else "device", writable, readable
+        element,
+        (
+            "threadgroup"
+            if space in {"threadgroup", "workgroup"}
+            else "constant" if space == "constant" else "device"
+        ),
+        writable,
+        readable,
     )
 
 
 def _contains_storage_pointer(node):
     return any(
         isinstance(child, PointerType)
-        and child.address_space in {"constant", "device", "global", "storage"}
+        and child.address_space in {
+            "constant",
+            "device",
+            "global",
+            "storage",
+            "threadgroup",
+            "workgroup",
+        }
         for child in node.walk()
     )
 
@@ -299,6 +332,8 @@ class _Lowering:
             for node in ast.walk()
             if isinstance(getattr(node, "name", None), str)
         }
+        self.workgroup_roots = {}
+        self.workgroup_declarations = []
         self.structs = {}
         for node in ast.walk():
             if isinstance(node, StructNode):
@@ -320,6 +355,8 @@ class _Lowering:
         for param in entry.parameters:
             pointer = _pointer_type(param.param_type, param)
             if pointer is not None:
+                if pointer.space == "threadgroup":
+                    raise ResourceAggregateError("dynamic-workgroup-binding", param)
                 if self.contains_reference(NamedType(pointer.element)):
                     raise ResourceAggregateError("aggregate-buffer-abi", param)
                 self.resources.append((param, pointer, self.fresh("crosstl_resource")))
@@ -384,6 +421,8 @@ class _Lowering:
         return name
 
     def source_type(self, value, owner=None):
+        if id(owner) in self.workgroup_roots:
+            return self.workgroup_roots[id(owner)]
         pointer = _pointer_type(value, owner)
         if pointer is not None:
             return pointer
@@ -392,6 +431,60 @@ class _Lowering:
         if isinstance(value, ReferenceType):
             return self.source_type(value.referenced_type, owner)
         return value
+
+    def collect_workgroup_roots(self, function):
+        # Shared arrays have workgroup lifetime even when their source declaration
+        # is nested. Hoist each physical allocation once; bind source names only
+        # at their lexical declaration, including shadowed names.
+        for node in function.body.walk():
+            if not isinstance(node, VariableNode) or not isinstance(
+                node.var_type, ArrayType
+            ):
+                continue
+            qualifiers = set(node.qualifiers)
+            qualifiers.update(_name(a) for a in node.attributes)
+            if not qualifiers & {"threadgroup", "workgroup", "shared", "groupshared"}:
+                continue
+            if id(node) in self.workgroup_roots:
+                continue
+            extent = evaluate_literal_int_expression(node.var_type.size)
+            element = node.var_type.element_type
+            numeric = _numeric(element)
+            if (
+                extent is None
+                or extent <= 0
+                or numeric is None
+                or numeric.bits != 32
+                or numeric.lanes != 1
+                or numeric.kind == ArithmeticScalarKind.BOOLEAN
+            ):
+                raise ResourceAggregateError("workgroup-allocation-layout", node)
+            if node.initial_value is not None or qualifiers - {
+                "threadgroup",
+                "workgroup",
+                "shared",
+                "groupshared",
+            }:
+                raise ResourceAggregateError(
+                    "workgroup-allocation-initializer-or-qualifier", node
+                )
+            pointer = _Pointer(_name(element), "threadgroup", True, True)
+            root = self.fresh(f"crosstl_workgroup_{node.name}")
+            handle = self.fresh(f"crosstl_reference_{node.name}")
+            identity = len(self.resources)
+            declaration = copy(node)
+            declaration.name = root
+            declaration.var_type = declaration.vtype = ArrayType(
+                deepcopy(element), _integer(extent)
+            )
+            self.workgroup_declarations.append(declaration)
+            parameter = ParameterNode(
+                root, PointerType(deepcopy(element), address_space="threadgroup")
+            )
+            self.resources.append((parameter, pointer, root))
+            self.workgroup_roots[id(node)] = _RootPointer(
+                pointer.element, pointer.space, True, True, identity, handle
+            )
 
     def handle_name(self, pointer):
         if pointer.element not in self.handles:
@@ -421,6 +514,7 @@ class _Lowering:
                 name, **self.resource_declaration(param, pointer, "param_type")
             )
             for param, pointer, name in self.resources
+            if pointer.space != "threadgroup"
         ]
 
     def resource_declaration(self, param, pointer, field):
@@ -448,7 +542,11 @@ class _Lowering:
         }
 
     def resource_arguments(self):
-        return [_id(name) for _param, _pointer, name in self.resources]
+        return [
+            _id(name)
+            for _param, pointer, name in self.resources
+            if pointer.space != "threadgroup"
+        ]
 
     def function_for_call(self, node, env=None):
         if id(node) in self.bound_calls:
@@ -547,6 +645,7 @@ class _Lowering:
             raise ResourceAggregateError("reference-return", function)
         if function.body is None:
             raise ResourceAggregateError("external-resource-call", function)
+        self.collect_workgroup_roots(function)
         env = dict(self.global_types)
         env.update(
             zip(
@@ -885,7 +984,8 @@ class _Lowering:
         key = pointer, operation
         if key in self.helpers:
             return self.helpers[key]
-        name = self.fresh(f"crosstl_resource_{operation}_{pointer.element}")
+        storage = "workgroup" if pointer.space == "threadgroup" else "resource"
+        name = self.fresh(f"crosstl_{storage}_{operation}_{pointer.element}")
         self.helpers[key] = name
         handle = self.target_type(pointer)
         params = [ParameterNode("reference", handle)]
@@ -920,6 +1020,7 @@ class _Lowering:
                     self.resources
                 )
                 if resource.element == pointer.element
+                and resource.space == pointer.space
                 and (operation != "store" or resource.writable)
                 and (operation != "load" or resource.readable)
             ]
@@ -1355,6 +1456,14 @@ class _Lowering:
                 source_location=node.source_location,
             )
         if isinstance(node, VariableNode):
+            if id(node) in self.workgroup_roots:
+                pointer = self.workgroup_roots[id(node)]
+                env[node.name] = pointer
+                return VariableNode(
+                    pointer.local_name,
+                    self.target_type(pointer),
+                    _call(self.helper(pointer, "make"), [_integer(pointer.identity)]),
+                )
             if isinstance(node.var_type, ReferenceType):
                 raise ResourceAggregateError("local-reference-alias", node)
             source_type = self.source_type(node.var_type, node)
@@ -1469,7 +1578,15 @@ class _Lowering:
                         a
                         for a in member.attributes
                         if _name(a)
-                        not in {"const", "device", "constant", "global", "storage"}
+                        not in {
+                            "const",
+                            "device",
+                            "constant",
+                            "global",
+                            "storage",
+                            "threadgroup",
+                            "workgroup",
+                        }
                     ]
         for overloads in self.functions.values():
             for function in overloads:
@@ -1486,6 +1603,8 @@ class _Lowering:
                 )
                 if function is self.entry:
                     for index, (param, pointer, _root) in enumerate(self.resources):
+                        if pointer.space == "threadgroup":
+                            continue
                         env[param.name] = _RootPointer(
                             pointer.element,
                             pointer.space,
@@ -1513,6 +1632,7 @@ class _Lowering:
                 **self.resource_declaration(param, pointer, "var_type"),
             )
             for param, pointer, name in self.resources
+            if pointer.space != "threadgroup"
         ] + [
             VariableNode(
                 self.entry_handles[param.name],
@@ -1520,7 +1640,9 @@ class _Lowering:
                 _call(self.helper(pointer, "make"), [_integer(index)]),
             )
             for index, (param, pointer, _name_) in enumerate(self.resources)
+            if pointer.space != "threadgroup"
         ]
+        self.ast.global_variables.extend(self.workgroup_declarations)
         self.ast.structs = [
             node for node in self.generated if isinstance(node, StructNode)
         ] + self.ast.structs

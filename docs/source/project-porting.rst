@@ -5036,12 +5036,23 @@ Windows numerical controls use the same inputs and guarded outputs as the
 original/generated Metal controls. Unknown pointer escapes, incompatible access
 contracts, local reference aliases, reference returns, pointer identity operations,
 compound pointee updates and external
-aggregate buffer layouts remain diagnostic. This representation does not yet
-cover thread/threadgroup pointer members, and it
-does not change the source buffer ABI to store these private handles.
+aggregate buffer layouts remain diagnostic. This representation does not change
+the source buffer ABI to store these private handles; thread-local pointer
+members remain unsupported.
 OpenGL specializes the same private handles against concrete storage buffers;
 final subscripts require proven bounds or explicit allocation-derived range
 assertions. Unsupported aggregate escapes remain diagnostic on both targets.
+Fixed workgroup arrays of 32-bit scalar integer or floating-point elements can
+also back these references. Their allocations retain distinct identities when
+source names are shadowed; copies, rebasing and helper calls preserve the shared
+storage rather than copying array contents. Access helpers select only compatible
+address spaces. Initializers, unsupported layouts, qualified allocations and
+dynamic entry-point workgroup bindings remain diagnostic. OpenGL index conversion
+still requires a range proof: bounded project assertions can target the generated
+``crosstl_workgroup_load_<element>`` and ``crosstl_workgroup_store_<element>``
+helpers' ``reference.offset + index`` expressions. Four-lane native controls
+exercise barriers, cross-lane reads, multiple allocations and untouched guards.
+This does not enable typed reinterpretation through aggregate-held references.
 Calls within the selected resource-helper graph are bound to source overloads
 before private handles replace pointers. Selection uses lexical declarations,
 array and vector components, scalar arithmetic conversions, and exact aggregate
