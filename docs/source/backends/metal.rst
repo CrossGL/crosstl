@@ -128,11 +128,17 @@ source. This does not establish general heterogeneous aggregate packing or
 optional omission of inactive bindings.
 
 Unnamed source parameters receive generated identifiers with ``@maybe_unused``
-metadata in CrossGL. Metal marks only those declarations unused, preserving
-strict warnings for ordinary named parameters. Parameter types, arity, defaults
+metadata in CrossGL. Synthesized receivers and source-used parameters whose uses
+disappear during static-member lowering, constant specialization, type-only
+evaluation or side-effect-free discard retain the same metadata. Metal marks
+only those declarations unused, preserving strict warnings for genuinely unused
+named parameters. Parameter types, arity, defaults
 and argument evaluation are retained. Required native controls cover helpers,
 constructors, template deduction, tag arguments, overloads and identifier
 collisions, including discarded arguments with side effects.
+Parameter-use controls also cover lexical shadowing, saved intermediates,
+type aliases and retained compute-input bindings. Side-effectful discard
+expressions are still evaluated.
 
 Primary struct-template forward declarations retain their parameter signatures
 and defaults for selecting a unique partial specialization. They do not invent

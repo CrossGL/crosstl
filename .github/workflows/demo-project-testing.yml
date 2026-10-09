@@ -1215,6 +1215,7 @@ jobs:
           CROSTL_REQUIRE_SUBGROUP_UNIFORM_ARGUMENTS: "1"
           CROSTL_REQUIRE_METAL_NESTED_MEMBERS: "1"
           CROSTL_REQUIRE_REFERENCE_CAPTURE: "1"
+          CROSTL_REQUIRE_PARAMETER_USAGE: "1"
           CROSTL_REQUIRE_PROJECT_TEMPLATE_GROUPING: "1"
           CROSTL_REQUIRE_METAL_AUTO_POINTER: "1"
           CROSTL_REQUIRE_CONDITIONAL_RESOURCES: "1"
@@ -1237,6 +1238,7 @@ jobs:
               tests/test_translator/test_subgroup_uniform_arguments.py \
               tests/test_translator/test_metal_nested_member_context.py \
               tests/test_translator/test_reference_capture.py \
+              tests/test_translator/test_parameter_usage.py \
               tests/test_translator/test_project_template_grouping.py \
               tests/test_translator/test_metal_auto_pointer.py \
               tests/test_translator/test_conditional_resources.py \

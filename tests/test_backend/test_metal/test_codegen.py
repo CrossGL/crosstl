@@ -13538,12 +13538,12 @@ def test_mlx_materialized_collapsed_member_overloads_reach_project_targets(tmp_p
     half_wrapper = f"{half_helper}__temporary"
     bfloat_wrapper = f"{bfloat_helper}__temporary"
     assert (
-        f"float16 {half_helper}(inout thread FloorDivide self, "
+        f"float16 {half_helper}(inout thread FloorDivide self @maybe_unused, "
         "float16 x, float16 y) @metal_static @metal_inline { return trunc(x / y); }"
         in normalized_intermediate
     )
     assert (
-        f"bfloat16_t {bfloat_helper}(inout thread FloorDivide self, "
+        f"bfloat16_t {bfloat_helper}(inout thread FloorDivide self @maybe_unused, "
         "bfloat16_t x, bfloat16_t y) @metal_static @metal_inline { return x - y; }"
         in normalized_intermediate
     )

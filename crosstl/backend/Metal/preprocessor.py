@@ -3529,6 +3529,11 @@ class MetalPreprocessor(HLSLPreprocessor):
             all_struct_names=all_struct_names,
         )
         replacements.extend(call_replacements)
+        replacements.extend(
+            self._preserve_rewritten_function_parameter_usage(
+                code, call_replacements, function_excluded_spans, replacements
+            )
+        )
         free_functions.extend(instantiated_template_functions.values())
 
         rewritten = self._apply_text_replacements(code, replacements)
@@ -7491,15 +7496,90 @@ class MetalPreprocessor(HLSLPreprocessor):
         params = self._canonicalize_struct_scoped_parameters(
             method.parameters, struct, structs_by_name
         )
+        params = self._preserve_parameter_usage(params, method.body, rewritten_body)
         if method.is_static:
             new_params = params if params and params != "void" else ""
         else:
             self_param = self._instance_receiver_parameter(struct, method)
+            if not self._bare_identifier_use_count(
+                self._mask_comments_and_literals(rewritten_body), "self"
+            ):
+                self_param += " [[maybe_unused]]"
             if params and params != "void":
                 new_params = f"{self_param}, {params}"
             else:
                 new_params = self_param
         return f"static inline {return_type} {method.free_name}({new_params}) {{{rewritten_body}}}"
+
+    def _preserve_parameter_usage(
+        self, parameters: str, original_body: str, rewritten_body: str
+    ) -> str:
+        """Retain source usage intent without hiding originally unused parameters."""
+        original = self._mask_comments_and_literals(original_body)
+        rewritten = self._mask_comments_and_literals(rewritten_body)
+        shadowed = self._local_variable_names(original)
+        declarations = self._split_top_level_commas(parameters)
+        changed = False
+        for index, declaration in enumerate(declarations):
+            name = self._declared_data_member_name(declaration)
+            if (
+                not name
+                or name in shadowed
+                or self._lambda_binds_identifier(original, name)
+                or "[[maybe_unused]]" in declaration
+                or not self._bare_identifier_use_count(original, name)
+                or self._bare_identifier_use_count(rewritten, name)
+            ):
+                continue
+            declaration = declaration.strip()
+            prefix = self._strip_top_level_default_value(declaration)
+            declarations[index] = (
+                prefix + " [[maybe_unused]]" + declaration[len(prefix) :]
+            )
+            changed = True
+        return ", ".join(declarations) if changed else parameters
+
+    def _preserve_rewritten_function_parameter_usage(
+        self,
+        code: str,
+        call_replacements: List[Tuple[int, int, str]],
+        excluded_spans: List[Tuple[int, int]],
+        existing_replacements: List[Tuple[int, int, str]],
+    ) -> List[Tuple[int, int, str]]:
+        replacements = []
+        for function in self._find_non_template_function_definitions(
+            code, excluded_spans
+        ):
+            start, end = function.body_span
+            body_replacements = [
+                (left - start, right - start, value)
+                for left, right, value in call_replacements
+                if start <= left < right <= end
+            ]
+            if not body_replacements:
+                continue
+            header_start = function.span[0]
+            header = code[header_start : start - 1]
+            parameter_span = self._function_parameter_list_span(header)
+            if parameter_span is None:
+                continue
+            left, right = parameter_span
+            left += header_start + 1
+            right += header_start
+            if any(
+                old_left < right and left < old_right
+                for old_left, old_right, _ in existing_replacements
+            ):
+                continue
+            body = code[start:end]
+            parameters = self._preserve_parameter_usage(
+                code[left:right],
+                body,
+                self._apply_text_replacements(body, body_replacements),
+            )
+            if parameters != code[left:right]:
+                replacements.append((left, right, parameters))
+        return replacements
 
     def _rewrite_explicit_conversion_operator_calls(
         self,
@@ -15782,6 +15862,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         instantiated_return = re.sub(r"\s+", " ", instantiated_return).strip()
         instantiated_parameters = self._replace_identifiers(method.parameters, bindings)
         instantiated_body = self._replace_identifiers(method.body, bindings)
+        source_body = instantiated_body
         instantiated_body = self._specialize_concrete_method_body(
             struct, method, instantiated_body, rewrite_structs_by_name
         )
@@ -15790,6 +15871,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         )
         concrete_parameters = self._strip_function_parameter_defaults(
             instantiated_parameters
+        )
+        concrete_parameters = self._preserve_parameter_usage(
+            concrete_parameters, source_body, instantiated_body
         )
         concrete_method = _MetalStructMethod(
             name=method.name,

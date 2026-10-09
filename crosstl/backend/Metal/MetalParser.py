@@ -3847,6 +3847,7 @@ class MetalParser:
             if grouped_suffix and self.current_token[0] == "LPAREN":
                 self.parse_function_pointer_parameter_suffix()
             param_type = self.apply_declarator_type_suffix(vtype, type_suffix)
+            attributes.extend(self.parse_attributes())
             default_value = None
             if self.current_token[0] == "EQUALS":
                 self.eat("EQUALS")

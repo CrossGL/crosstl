@@ -4041,7 +4041,10 @@ def test_materialized_static_layout_substitution_preserves_method_shadowing():
 
     assert "struct alignas(8) Storage" in output
     assert "uint8_t data[8];" in output
-    assert "int Layout_4__read(thread const Layout_4& self, int width)" in output
+    assert (
+        "int Layout_4__read(thread const Layout_4& self [[maybe_unused]], int width)"
+        in output
+    )
     assert "return width;" in output
 
 
@@ -5315,7 +5318,9 @@ def test_preprocessor_lowers_method_with_elaborated_struct_return_type():
 
     output = MetalPreprocessor().preprocess(code)
 
-    assert "struct Result Factory__make(thread Factory& self)" in output
+    assert (
+        "struct Result Factory__make(thread Factory& self [[maybe_unused]])" in output
+    )
     assert "Result result = Factory__make(factory);" in output
     assert "factory.make()" not in output
 
@@ -6383,7 +6388,10 @@ def test_preprocessor_lowers_call_operator_functor():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "float Sum__operator_call(thread Sum& self, float a, float b)" in output
+    assert (
+        "float Sum__operator_call(thread Sum& self [[maybe_unused]], float a, float b)"
+        in output
+    )
     assert "Sum__operator_call(op, in[i], out[i])" in output
 
 
@@ -6423,7 +6431,7 @@ def test_preprocessor_keeps_method_local_call_operator_with_owner_type():
 
     output = MetalPreprocessor().preprocess(code)
 
-    assert "uint Outer__read_word(thread Outer& self)" in output
+    assert "uint Outer__read_word(thread Outer& self [[maybe_unused]])" in output
     assert "struct LocalValue" in output
     assert "uint operator()() { return 7; }" in output
     assert "return local();" in output
@@ -6472,7 +6480,7 @@ def test_preprocessor_keeps_unlowered_member_local_call_operator_with_owner_type
     assert "uint operator()() { return 7; }" in output
     assert "LocalValue local;" in output
     assert "LocalValue__operator_call" not in output
-    assert "uint Outer__ordinary(thread Outer& self)" in output
+    assert "uint Outer__ordinary(thread Outer& self [[maybe_unused]])" in output
 
 
 def test_preprocessor_lowers_readonly_conversion_operator_chain():
@@ -6850,7 +6858,7 @@ def test_preprocessor_lowers_materialized_template_functor():
     output = MetalPreprocessor().preprocess(code)
     assert "struct Sum_float {" in output
     assert (
-        "float Sum_float__operator_call(thread Sum_float& self, float a, float b)"
+        "float Sum_float__operator_call(thread Sum_float& self [[maybe_unused]], float a, float b)"
         in output
     )
     assert "Sum_float__operator_call(op, in[i], out[i])" in output
@@ -6883,7 +6891,10 @@ def test_preprocessor_substitutes_materialized_static_bool_and_int_constants():
 
     output = MetalPreprocessor().preprocess(code)
 
-    assert "int Reduction_1__apply(thread const Reduction_1& self, int value)" in output
+    assert (
+        "int Reduction_1__apply(thread const Reduction_1& self [[maybe_unused]], int value)"
+        in output
+    )
     assert "return (false) ? value + (2) + (base_count + 1) : value;" in output
     assert "Reduction_1__apply(reduction, out[0])" in output
 
@@ -7669,7 +7680,10 @@ def test_preprocessor_instantiates_template_method_from_buffer_element_arg():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "float Sum__reduce__float(thread Sum& self, float val)" in output
+    assert (
+        "float Sum__reduce__float(thread Sum& self [[maybe_unused]], float val)"
+        in output
+    )
     assert "Sum__reduce__float(op, in[i])" in output
     # The struct is data-only; the template method is gone from it.
     assert "template" not in output.split("struct Sum")[1].split("}")[0]
@@ -7797,7 +7811,7 @@ def test_preprocessor_preserves_generic_pointer_argument_expressions():
 
     helper = (
         "float Loader__load__const_device_half_ptr("
-        "thread Loader& self, const device half* src)"
+        "thread Loader& self [[maybe_unused]], const device half* src)"
     )
     assert output.count(helper) == 1
     assert "Loader__load__const_device_half_ptr(loader, src)" in output
@@ -7833,7 +7847,7 @@ def test_preprocessor_preserves_addressed_pointer_through_auto_locals():
 
     helper = (
         "float Loader__load__const_device_half_ptr("
-        "thread Loader& self, const device half* src)"
+        "thread Loader& self [[maybe_unused]], const device half* src)"
     )
     assert output.count(helper) == 1
     assert "Loader__load__const_device_half_ptr(loader, cast_ptr)" in output
@@ -7864,7 +7878,7 @@ def test_preprocessor_declared_pointer_parameter_still_binds_pointee():
 
     output = MetalPreprocessor().preprocess(code)
 
-    helper = "float Loader__load__half(thread Loader& self, const device half* src)"
+    helper = "float Loader__load__half(thread Loader& self [[maybe_unused]], const device half* src)"
     assert output.count(helper) == 1
     assert "Loader__load__half(loader, src)" in output
     assert "Loader__load__half(loader, src + offset)" in output
@@ -7900,11 +7914,11 @@ def test_preprocessor_matches_concrete_pointer_template_member_parameters():
     output = MetalPreprocessor().preprocess(code)
 
     assert (
-        "float Loader__load_pointer__int(thread Loader& self, "
+        "float Loader__load_pointer__int(thread Loader& self [[maybe_unused]], "
         "const device float* src, int tag)" in output
     )
     assert (
-        "float Loader__load_qualified__int(thread Loader& self, "
+        "float Loader__load_qualified__int(thread Loader& self [[maybe_unused]], "
         "const volatile device float* src, int tag)" in output
     )
 
@@ -8217,7 +8231,7 @@ def test_preprocessor_selects_template_pointer_overload_by_concrete_pointee():
     output = MetalPreprocessor().preprocess(code)
 
     assert (
-        "int Loader__load_pointer__int(thread Loader& self, "
+        "int Loader__load_pointer__int(thread Loader& self [[maybe_unused]], "
         "const device int* src, int tag)" in output
     )
     assert "const device float* src, int tag" not in output
@@ -8240,7 +8254,8 @@ def test_preprocessor_preserves_scalar_conversion_for_concrete_parameter():
 
     assert "Loader__load__int(loader, 1, 2)" in output
     assert (
-        "float Loader__load__int(thread Loader& self, float value, int tag)" in output
+        "float Loader__load__int(thread Loader& self [[maybe_unused]], float value, int tag)"
+        in output
     )
 
 
@@ -8479,10 +8494,21 @@ def test_preprocessor_resolves_local_constants_in_template_member_arguments():
     assert "Loader__load__Int_4(loader, Int<Padding>{})" in output
     assert "Loader__load__Int_16(loader, Int<Padding>{})" in output
     assert "Loader__explicit_width__8(loader)" in output
-    assert "int Loader__load__Int_8(thread Loader& self, Int<8> stride)" in output
-    assert "int Loader__load__Int_4(thread Loader& self, Int<4> stride)" in output
-    assert "int Loader__load__Int_16(thread Loader& self, Int<16> stride)" in output
-    assert "int Loader__explicit_width__8(thread Loader& self)" in output
+    assert (
+        "int Loader__load__Int_8(thread Loader& self [[maybe_unused]], Int<8> stride [[maybe_unused]])"
+        in output
+    )
+    assert (
+        "int Loader__load__Int_4(thread Loader& self [[maybe_unused]], Int<4> stride [[maybe_unused]])"
+        in output
+    )
+    assert (
+        "int Loader__load__Int_16(thread Loader& self [[maybe_unused]], Int<16> stride [[maybe_unused]])"
+        in output
+    )
+    assert (
+        "int Loader__explicit_width__8(thread Loader& self [[maybe_unused]])" in output
+    )
 
 
 def test_preprocessor_does_not_borrow_template_member_constant_from_sibling():
@@ -8548,7 +8574,10 @@ def test_preprocessor_resolves_local_constant_in_instantiated_member_body():
 
     assert "Loader__run__int(loader, output[0])" in output
     assert "Loader__consume__Int_4(self, Int<Padding>{})" in output
-    assert "int Loader__consume__Int_4(thread Loader& self, Int<4> stride)" in output
+    assert (
+        "int Loader__consume__Int_4(thread Loader& self [[maybe_unused]], Int<4> stride [[maybe_unused]])"
+        in output
+    )
     assert "Loader__consume__Int_Padding" not in output
 
 
@@ -8574,7 +8603,7 @@ def test_preprocessor_selects_template_member_overload_by_arity():
 
     assert "Tile__load__float(tile, input, stride)" in output
     assert (
-        "void Tile__load__float(thread Tile& self, "
+        "void Tile__load__float(thread Tile& self [[maybe_unused]], "
         "const device float* src, int stride)" in output
     )
     assert "StrideX" not in output
@@ -8614,7 +8643,7 @@ def test_preprocessor_selects_reference_template_overload_with_pointer_field():
         in output
     )
     assert (
-        "void Tile__apply__Transform(thread Tile& self, const device half* src, "
+        "void Tile__apply__Transform(thread Tile& self [[maybe_unused]], const device half* src, "
         "const int ldc, const int fdc, thread const Transform& op)" in output
     )
     assert "tile.apply(" not in output
@@ -9129,7 +9158,9 @@ def test_preprocessor_instantiates_template_method_from_typed_local_arg():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "half Sum__reduce__half(thread Sum& self, half val)" in output
+    assert (
+        "half Sum__reduce__half(thread Sum& self [[maybe_unused]], half val)" in output
+    )
     assert "Sum__reduce__half(op, v)" in output
 
 
@@ -9203,7 +9234,7 @@ def test_preprocessor_instantiates_template_operator_call_from_typed_local():
     output = MetalPreprocessor().preprocess(code)
     assert "struct Op_float {" in output
     assert (
-        "float Op_float__operator_call__float(thread Op_float& self, "
+        "float Op_float__operator_call__float(thread Op_float& self [[maybe_unused]], "
         "float a, float b)" in output
     )
     assert "Op_float__operator_call__float(op, acc, x)" in output
@@ -9232,7 +9263,7 @@ def test_preprocessor_instantiates_template_operator_call_from_temporary_functor
     output = MetalPreprocessor().preprocess(code)
 
     assert (
-        "float Select__operator_call__float(thread Select& self, bool condition, "
+        "float Select__operator_call__float(thread Select& self [[maybe_unused]], bool condition, "
         "float x, float y)"
     ) in output
     assert (
@@ -9321,7 +9352,7 @@ def test_preprocessor_infers_materialized_free_template_call_argument():
     assert "float cast_to_float_float(float value)" in output
     assert (
         "float ReduceOp_float__operator_call__float("
-        "thread ReduceOp_float& self, float value, float total)"
+        "thread ReduceOp_float& self [[maybe_unused]], float value, float total)"
     ) in output
     assert (
         "ReduceOp_float__operator_call__float(" "op, cast_to_float_float(in[i]), total)"
@@ -9403,8 +9434,14 @@ def test_preprocessor_lowers_temporary_functor_call_with_arithmetic_and_functor_
     assert output.count("Sqrt__operator_call__temporary(1.0 - x * x)") == 1
     # The complex `Sqrt`/`Log` operator() overloads were emitted as free
     # functions (the argument resolved to the concrete complex overload).
-    assert "complex64_t Log__operator_call(thread Log& self, complex64_t x)" in output
-    assert "complex64_t Sqrt__operator_call(thread Sqrt& self, complex64_t x)" in output
+    assert (
+        "complex64_t Log__operator_call(thread Log& self [[maybe_unused]], complex64_t x)"
+        in output
+    )
+    assert (
+        "complex64_t Sqrt__operator_call(thread Sqrt& self [[maybe_unused]], complex64_t x)"
+        in output
+    )
 
 
 def test_preprocessor_materializes_boolean_constrained_free_operator():
@@ -9680,7 +9717,7 @@ def test_preprocessor_lowers_const_template_operator_on_stateless_temporary():
 
     assert (
         "float Identity__operator_call__float("
-        "thread const Identity& self, float value)"
+        "thread const Identity& self [[maybe_unused]], float value)"
     ) in output
     assert "Identity__operator_call__float__temporary(values[0])" in output
     assert "Identity{}(" not in output
@@ -9941,11 +9978,11 @@ def test_preprocessor_rewrites_temporary_functor_calls_inside_template_operator(
     assert "Remainder__operator_call__complex64_t__temporary(x, y)" in output
     assert (
         "complex64_t FloorDivide__operator_call__complex64_t"
-        "(thread FloorDivide& self, complex64_t x, complex64_t y)"
+        "(thread FloorDivide& self [[maybe_unused]], complex64_t x, complex64_t y)"
     ) in output
     assert (
         "complex64_t Remainder__operator_call__complex64_t"
-        "(thread Remainder& self, complex64_t x, complex64_t y)"
+        "(thread Remainder& self [[maybe_unused]], complex64_t x, complex64_t y)"
     ) in output
     assert "FloorDivide{}(" not in output
     assert "Remainder{}(" not in output
@@ -10449,8 +10486,8 @@ def test_preprocessor_expands_nested_const_for_loop_in_template_member_ordered()
     calls = re.findall(r"(?m)^\s+(Fragment__load__[A-Za-z0-9_]+)\(src,$", output)
     definitions = re.findall(
         r"void (Fragment__load__[A-Za-z0-9_]+)\("
-        r"const device float\* src, (integral_constant_int_\d+) row, "
-        r"(integral_constant_int_\d+) col\)",
+        r"const device float\* src, (integral_constant_int_\d+) row \[\[maybe_unused\]\], "
+        r"(integral_constant_int_\d+) col \[\[maybe_unused\]\]\)",
         output,
     )
 
@@ -11222,7 +11259,12 @@ def test_preprocessor_template_method_instantiations_are_deduplicated():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert output.count("float Sum__reduce__float(thread Sum& self, float val)") == 1
+    assert (
+        output.count(
+            "float Sum__reduce__float(thread Sum& self [[maybe_unused]], float val)"
+        )
+        == 1
+    )
     assert "Sum__reduce__float(op, in[i])" in output
     assert "Sum__reduce__float(op, a)" in output
 
@@ -11473,7 +11515,10 @@ def test_preprocessor_template_method_consistent_multi_param_instantiates():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "float D__pick__float(thread D& self, float a, float b)" in output
+    assert (
+        "float D__pick__float(thread D& self [[maybe_unused]], float a, float b)"
+        in output
+    )
     assert "D__pick__float(d, o[i], o[i])" in output
 
 
@@ -11538,7 +11583,8 @@ def test_preprocessor_template_method_full_pipeline_to_hlsl():
     )
     pre = MetalPreprocessor().preprocess(code)
     assert (
-        "float Sum_float__simd_reduce__float(thread Sum_float& self, float val)" in pre
+        "float Sum_float__simd_reduce__float(thread Sum_float& self [[maybe_unused]], float val)"
+        in pre
     )
     tokens = MetalLexer(pre).tokenize()
     ast = MetalParser(tokens).parse()
@@ -11571,7 +11617,10 @@ def test_preprocessor_instantiates_template_method_from_local_array_subscript():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "float Sum__reduce__float(thread Sum& self, float val)" in output
+    assert (
+        "float Sum__reduce__float(thread Sum& self [[maybe_unused]], float val)"
+        in output
+    )
     assert "Sum__reduce__float(op, totals[i])" in output
 
 
@@ -11622,7 +11671,9 @@ def test_preprocessor_instantiates_template_method_from_threadgroup_array_subscr
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "half Sum__reduce__half(thread Sum& self, half val)" in output
+    assert (
+        "half Sum__reduce__half(thread Sum& self [[maybe_unused]], half val)" in output
+    )
     assert "Sum__reduce__half(op, shared_vals[i])" in output
 
 
@@ -11642,7 +11693,10 @@ def test_preprocessor_instantiates_template_method_from_member_access_subscript(
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "float Sum__reduce__float(thread Sum& self, float val)" in output
+    assert (
+        "float Sum__reduce__float(thread Sum& self [[maybe_unused]], float val)"
+        in output
+    )
     assert "Sum__reduce__float(op, init.data[i])" in output
 
 
@@ -11664,7 +11718,10 @@ def test_preprocessor_instantiates_template_method_from_stdint_array_subscript()
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "int32_t Sum__reduce__int32_t(thread Sum& self, int32_t val)" in output
+    assert (
+        "int32_t Sum__reduce__int32_t(thread Sum& self [[maybe_unused]], int32_t val)"
+        in output
+    )
     assert "Sum__reduce__int32_t(op, values[i])" in output
 
 
@@ -11975,7 +12032,7 @@ def test_preprocessor_lowers_constrained_functor_from_postincremented_pointer():
 
     assert (
         "float Max_float__operator_call__float("
-        "thread Max_float& self, float a, float b)" in output
+        "thread Max_float& self [[maybe_unused]], float a, float b)" in output
     )
     assert "Max_float__operator_call__float(op, *row++, total)" in output
     assert output.count("row++") == 1
@@ -12191,7 +12248,10 @@ def test_preprocessor_instantiates_template_method_from_member_access():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "float Sum__reduce__float(thread Sum& self, float val)" in output
+    assert (
+        "float Sum__reduce__float(thread Sum& self [[maybe_unused]], float val)"
+        in output
+    )
     assert "Sum__reduce__float(op, p.x)" in output
 
 
@@ -12209,7 +12269,7 @@ def test_preprocessor_instantiates_template_method_from_pointer_member_access():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "int Sum__reduce__int(thread Sum& self, int val)" in output
+    assert "int Sum__reduce__int(thread Sum& self [[maybe_unused]], int val)" in output
     assert "Sum__reduce__int(op, params->stride)" in output
 
 
@@ -12230,7 +12290,7 @@ def test_preprocessor_instantiates_template_method_from_union_local():
     """
     output = MetalPreprocessor().preprocess(code)
     assert (
-        "bool4_or_uint Sum__reduce__bool4_or_uint(thread Sum& self, "
+        "bool4_or_uint Sum__reduce__bool4_or_uint(thread Sum& self [[maybe_unused]], "
         "bool4_or_uint val)" in output
     )
     assert "Sum__reduce__bool4_or_uint(op, update)" in output
@@ -12251,7 +12311,9 @@ def test_preprocessor_instantiates_template_method_from_struct_local():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "Pair Sum__reduce__Pair(thread Sum& self, Pair val)" in output
+    assert (
+        "Pair Sum__reduce__Pair(thread Sum& self [[maybe_unused]], Pair val)" in output
+    )
     assert "Sum__reduce__Pair(op, p)" in output
 
 
@@ -12273,7 +12335,10 @@ def test_preprocessor_instantiates_template_method_from_function_pointer_paramet
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "float Sum__reduce__float(thread Sum& self, float val)" in output
+    assert (
+        "float Sum__reduce__float(thread Sum& self [[maybe_unused]], float val)"
+        in output
+    )
     assert "Sum__reduce__float(op, p[i])" in output
 
 
@@ -12296,7 +12361,9 @@ def test_preprocessor_instantiates_template_method_from_function_scalar_paramete
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "half Sum__reduce__half(thread Sum& self, half val)" in output
+    assert (
+        "half Sum__reduce__half(thread Sum& self [[maybe_unused]], half val)" in output
+    )
     assert "Sum__reduce__half(op, v)" in output
 
 
@@ -12328,8 +12395,13 @@ def test_preprocessor_template_member_lowering_is_deterministic_across_kernels()
     """
     output = MetalPreprocessor().preprocess(code)
     # Each kernel binds `op` to its OWN struct type and element type.
-    assert "float SumF__reduce__float(thread SumF& self, float val)" in output
-    assert "int MaxF__reduce__int(thread MaxF& self, int val)" in output
+    assert (
+        "float SumF__reduce__float(thread SumF& self [[maybe_unused]], float val)"
+        in output
+    )
+    assert (
+        "int MaxF__reduce__int(thread MaxF& self [[maybe_unused]], int val)" in output
+    )
     assert "SumF__reduce__float(op, totals[i])" in output
     assert "MaxF__reduce__int(op, totals[i])" in output
     # No cross-kernel mis-binding.

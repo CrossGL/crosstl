@@ -2270,7 +2270,23 @@ class MetalToCrossGLConverter:
             f"{resolved_owner}::{member}",
             require_constant=True,
         )
+        if rendered is not None:
+            self.record_elided_parameter_uses(arguments[0])
         return rendered
+
+    def record_elided_parameter_uses(self, expression):
+        parameter_scope = getattr(self, "current_parameter_scope", None)
+        if parameter_scope is None:
+            return
+        names = set()
+        self.collect_identifier_references(expression, names)
+        for name in names:
+            binding = next(
+                (scope for scope in reversed(self.identifier_maps) if name in scope),
+                None,
+            )
+            if binding is parameter_scope:
+                self.current_elided_parameter_uses.add(name)
 
     def render_metal_sizeof_expression(self, expr):
         if str(getattr(expr, "name", "")) != "sizeof":
@@ -2292,6 +2308,7 @@ class MetalToCrossGLConverter:
         resolved_type = self.resolve_type_alias(local_alias)
         layout = self.metal_concrete_type_layout(resolved_type)
         if layout is not None:
+            self.record_elided_parameter_uses(operand)
             return str(layout[0])
 
         normalized_type = self.normalized_metal_type(resolved_type)
@@ -9140,6 +9157,12 @@ class MetalToCrossGLConverter:
             self.template_type_bindings.append(active_type_bindings)
         self.template_binding_shadow_scopes.append(set())
         self.push_identifier_scope()
+        previous_parameter_scope = getattr(self, "current_parameter_scope", None)
+        previous_elided_parameter_uses = getattr(
+            self, "current_elided_parameter_uses", set()
+        )
+        self.current_parameter_scope = self.identifier_maps[-1]
+        self.current_elided_parameter_uses = set()
         self.current_constructor_scope_index = (
             len(self.identifier_maps) - 1
             if getattr(func, "is_metal_constructor_factory", False)
@@ -9161,10 +9184,11 @@ class MetalToCrossGLConverter:
                 "kind": "parameter",
                 "function_qualifier": getattr(func, "qualifier", None),
             }
-            params = ", ".join(
+            parameter_declarations = [
                 self.format_parameter_decl(p, index, semantic_context=semantic_context)
                 for index, p in enumerate(func.params)
-            )
+            ]
+            parameter_names = [self.render_identifier(p.name) for p in func.params]
             if out_of_line_replacement is not None:
                 for definition_name, helper_name in out_of_line_replacement[
                     "parameter_aliases"
@@ -9220,14 +9244,26 @@ class MetalToCrossGLConverter:
                     bound_value_names=active_value_bindings,
                 )
             )
+            body = value_param_decls + self.generate_function_body(
+                function_body, indent=indent + 1
+            )
+            for index, parameter in enumerate(func.params):
+                if (
+                    parameter.name in self.current_elided_parameter_uses
+                    and "@maybe_unused" not in parameter_declarations[index]
+                    and not re.search(rf"\b{re.escape(parameter_names[index])}\b", body)
+                ):
+                    parameter_declarations[index] += " @maybe_unused"
+            params = ", ".join(parameter_declarations)
             code += (
                 f"{generic_prefix}{return_type} {function_name}({params})"
                 f"{suffix} {{\n"
             )
-            code += value_param_decls
-            code += self.generate_function_body(function_body, indent=indent + 1)
+            code += body
             code += "    }\n\n"
         finally:
+            self.current_parameter_scope = previous_parameter_scope
+            self.current_elided_parameter_uses = previous_elided_parameter_uses
             for param, attributes in implicit_buffer_bindings:
                 param.attributes = attributes
             self.pop_identifier_scope()
@@ -9801,6 +9837,7 @@ class MetalToCrossGLConverter:
                 if self.discarded_expression_is_proven_side_effect_free(
                     stmt.expression
                 ):
+                    self.record_elided_parameter_uses(stmt.expression)
                     code = code[: len(code) - 4 * indent]
                 else:
                     code += f"{self.generate_expression(stmt.expression, is_main)};\n"
@@ -10429,6 +10466,7 @@ class MetalToCrossGLConverter:
         alias_type = getattr(alias, "alias_type", None)
         if not name or not alias_type:
             return
+        alias_type = self.resolve_metal_decltype_type(alias_type) or alias_type
         alias_qualifiers = list(getattr(alias, "qualifiers", None) or [])
         binding = self.scalar_alias_binding(alias_type)
         if binding is not None:
@@ -17295,6 +17333,7 @@ float {scalar}(float value) {{
         inferred_type = self.expression_metal_type(expression)
         if inferred_type is None:
             return None
+        self.record_elided_parameter_uses(expression)
         resolved_type = str(self.resolve_type_alias(inferred_type)).strip()
         if (
             self.metal_decltype_expression_is_fully_parenthesized(expression_text)

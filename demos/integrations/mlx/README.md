@@ -56,10 +56,12 @@ The selected tiled GEMM entry at pin `9c3d3557` now passes explicit `auto*`
 deduction through the public project pipeline, without changing upstream
 sources or bypassing specialization analysis. It now produces a Metal artifact:
 `MMATile::frag_at(i, j)` aliases retain their original storage and binding-time
-indices, including writes through `accum[k]`. Strict native compilation still
-fails on unused parameters introduced or exposed by specialization
-([#2164](https://github.com/CrossGL/crosstl/issues/2164)), so this entry is not yet
-counted as compiled or numerically validated. The constant
+indices, including writes through `accum[k]`. The selected float32, non-transposed
+entry now passes strict Metal compilation with the six Boolean function constants
+set to false. Source-used parameter intent survives specialization and explicit
+discard lowering ([#2164](https://github.com/CrossGL/crosstl/issues/2164)).
+This is a compilation result, not numerical matrix execution or coverage of all
+GEMM specializations. The constant
 `GEMMParams` and `GEMMAddMMParams` pointers now retain their indirection, address
 space and bindings ([#2160](https://github.com/CrossGL/crosstl/issues/2160)).
 Conditional scalar-buffer parameters now retain their bindings and conditions
@@ -103,6 +105,13 @@ Seven native controls on Metal and OpenGL verify argument side effects, defaults
 overload selection and output guards. Strict Metal compilation keeps unrelated
 unused-parameter warnings enabled. These controls do not resolve the remaining
 matrix helper materialization and host-dispatch requirements.
+
+Parameter-use controls cover synthesized receivers, object-based static calls,
+type-only expressions, explicit discards, local type aliases and compute-input
+bindings. Thirteen cases execute on Metal and OpenGL with exact readback,
+argument side-effect counts and output guards; Metal also executes the original
+sources. Genuine unused named parameters remain warning-fatal. The same cases
+are required in the Windows native job, separately from local HLSL compilation.
 
 Partial-specialization static-owner controls cover primary forward declarations,
 default arguments, scoped aliases, constructor initializers and method calls
