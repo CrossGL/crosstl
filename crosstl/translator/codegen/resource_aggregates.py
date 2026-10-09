@@ -57,6 +57,7 @@ from ..ast import (
     WhileNode,
 )
 from .array_utils import evaluate_literal_int_expression
+from .resource_origins import ResourceOriginAnalysis
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
 
@@ -346,6 +347,7 @@ class _Lowering:
         }
         self.workgroup_roots = {}
         self.workgroup_declarations = []
+        self.resource_origins = {}
         self.structs = {}
         for node in ast.walk():
             if isinstance(node, StructNode):
@@ -461,6 +463,10 @@ class _Lowering:
                 continue
             extent = evaluate_literal_int_expression(node.var_type.size)
             element = node.var_type.element_type
+            # The qualifier belongs to the pointee, not the private array of
+            # pointer values (for example ``threadgroup float* choices[2]``).
+            if isinstance(element, PointerType):
+                continue
             numeric = _numeric(element)
             if (
                 extent is None
@@ -989,11 +995,13 @@ class _Lowering:
             ):
                 raise ResourceAggregateError("pointer-contract-mismatch", node)
 
-    def helper(self, pointer, operation):
+    def helper(self, pointer, operation, origins=None):
         pointer = _Pointer(
             pointer.element, pointer.space, pointer.writable, pointer.readable
         )
-        key = pointer, operation
+        if pointer.space != "threadgroup" or operation not in {"load", "store"}:
+            origins = None
+        key = pointer, operation, origins
         if key in self.helpers:
             return self.helpers[key]
         storage = "workgroup" if pointer.space == "threadgroup" else "resource"
@@ -1035,6 +1043,7 @@ class _Lowering:
                 and resource.space == pointer.space
                 and (operation != "store" or resource.writable)
                 and (operation != "load" or resource.readable)
+                and (origins is None or index in origins)
             ]
             if not candidates:
                 raise ResourceAggregateError("missing-compatible-resource")
@@ -1380,6 +1389,10 @@ class _Lowering:
             if pointer.space == dst.space
             and pointer.element == dst.element
             and pointer.writable
+            and (
+                id(destination.expression) not in self.resource_origins
+                or index in self.resource_origins[id(destination.expression)]
+            )
         ]
         sources = [
             (index, root)
@@ -1387,6 +1400,10 @@ class _Lowering:
             if pointer.space == src.space
             and pointer.element == src.element
             and pointer.readable
+            and (
+                id(source.expression) not in self.resource_origins
+                or index in self.resource_origins[id(source.expression)]
+            )
         ]
         extents = {
             declaration.name: evaluate_literal_int_expression(declaration.var_type.size)
@@ -1403,7 +1420,16 @@ class _Lowering:
         # Assertions cover every accessed element, including the expanded tail.
         # They therefore prove the destination offset fits a signed target index.
         # Source offsets remain wide and retain the target's ordinary index checks.
-        key = ("record-copy", src, dst, words, minimum, maximum)
+        key = (
+            "record-copy",
+            src,
+            dst,
+            words,
+            minimum,
+            maximum,
+            tuple(destinations),
+            tuple(sources),
+        )
         if key not in self.helpers:
             name = self.fresh(f"crosstl_workgroup_copy_{src.element}")
             self.helpers[key] = name
@@ -1494,7 +1520,7 @@ class _Lowering:
                     raise ResourceAggregateError("compound-resource-write", node)
                 pointer, owner, index = access
                 return _call(
-                    self.helper(pointer, "store"),
+                    self.helper(pointer, "store", self.resource_origins.get(id(owner))),
                     [
                         self.expression(owner, env),
                         _call("int64_t", [self.expression(index, env)]),
@@ -1519,7 +1545,7 @@ class _Lowering:
         if access is not None:
             pointer, owner, index = access
             return _call(
-                self.helper(pointer, "load"),
+                self.helper(pointer, "load", self.resource_origins.get(id(owner))),
                 [
                     self.expression(owner, env),
                     _call("int64_t", [self.expression(index, env)]),
@@ -1740,6 +1766,29 @@ class _Lowering:
             result = copy(node)
             result.var_type = result.vtype = self.target_type(source_type)
             result.initial_value = value
+            pointer = source_type
+            while isinstance(pointer, tuple):
+                pointer = pointer[0]
+            if isinstance(pointer, _Pointer):
+                # Address/access qualifiers describe the pointee. The lowered
+                # handle (or array of handles) is still private, mutable data.
+                pointee_qualifiers = {
+                    "const",
+                    "device",
+                    "constant",
+                    "global",
+                    "storage",
+                    "threadgroup",
+                    "workgroup",
+                    "readonly",
+                    "writeonly",
+                }
+                result.qualifiers = [
+                    q for q in result.qualifiers if q not in pointee_qualifiers
+                ]
+                result.attributes = [
+                    a for a in result.attributes if _name(a) not in pointee_qualifiers
+                ]
             return result
         if isinstance(node, ReturnNode):
             return ReturnNode(
@@ -1793,6 +1842,8 @@ class _Lowering:
     def run(self):
         self.discover(self.entry)
         self.elide_unused_null_parameters()
+        if any(isinstance(node, PointerReinterpretNode) for node in self.ast.walk()):
+            self.resource_origins = ResourceOriginAnalysis(self, _Pointer).analyze()
         # Bind calls to distinct symbols before pointer handles erase access and
         # address-space differences between source overloads.
         for name, overloads in self.functions.items():

@@ -14585,13 +14585,12 @@ class MetalCodeGen:
     def metal_thread_pointer_return_surrogate_type(self, func):
         """Recover a pointer ABI from one canonical CrossGL buffer surrogate.
 
-        CrossGL deliberately has no general function-pointer return syntax.  The
-        Metal importer therefore represents a source ``thread T*`` return as a
+        Older Metal imports represented a source ``thread T*`` return as a
         ``RWStructuredBuffer<T>`` (or ``StructuredBuffer<T>`` for a const
-        pointee) while retaining the exact pointer type on the sole
-        ``PointerReinterpretNode`` returned by the helper.  Reconstruct only
-        that narrow shape: arbitrary resource-returning functions must not be
-        mistaken for thread-local pointer views.
+        pointee), retaining the exact pointer type on the sole returned
+        ``PointerReinterpretNode``. Preserve compatibility with that narrow
+        shape without mistaking arbitrary resource returns for local views.
+        New imports carry the pointer return type directly.
         """
 
         declared_type = getattr(func, "return_type", None)
@@ -14649,6 +14648,8 @@ class MetalCodeGen:
         return pointer_type
 
     def metal_effective_function_return_type(self, func):
+        if isinstance(getattr(func, "return_type", None), PointerType):
+            return func.return_type
         pointer_type = self.metal_thread_pointer_return_surrogate_type(func)
         if pointer_type is not None:
             return pointer_type
@@ -15470,7 +15471,15 @@ class MetalCodeGen:
             memory_qualifiers = self.resource_memory_qualifier_prefix(
                 node, raw_param_type
             )
-            return f"{memory_qualifiers}{address_space} {pointee_type}* {name}"
+            reference = (
+                " thread&"
+                if shader_type is None
+                and self.parameter_qualifier_names(node) & {"out", "inout"}
+                else ""
+            )
+            return (
+                f"{memory_qualifiers}{address_space} {pointee_type}*{reference} {name}"
+            )
 
         if isinstance(raw_param_type, ReferenceType):
             address_space = self.effective_parameter_address_space(

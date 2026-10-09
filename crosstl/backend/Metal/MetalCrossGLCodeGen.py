@@ -9402,6 +9402,10 @@ class MetalToCrossGLConverter:
             str(element_type).strip(),
         )
         element_type = self.resolve_type_alias(element_type)
+        if qualifier_names & {"thread", "threadgroup"}:
+            const = "const " if "const" in qualifier_names else ""
+            space = "threadgroup" if "threadgroup" in qualifier_names else "thread"
+            return f"{const}{space} {self.map_type(element_type)}*"
         buffer_type = (
             "StructuredBuffer"
             if qualifier_names & {"const", "constant", "readonly"}

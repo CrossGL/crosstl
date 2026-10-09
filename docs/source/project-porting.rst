@@ -5082,12 +5082,23 @@ DirectX and OpenGL with explicit ``workgroup_access_assertions``. The assertion
 selects the source entry, function and destination member path (for example
 ``cursor.dst``) and covers all absolute destination elements, not only the first
 element of each copy. Its inclusive range must contain the complete record and
-fit every compatible shared allocation. Missing, conflicting and out-of-bounds
+fit every compatible shared allocation that can reach the destination. A
+conservative allocation-origin analysis follows constructors, aggregate fields,
+pointer returns, pointer arrays, copies and mutable argument writebacks before
+pointer types are replaced by handles. Different source aggregate types remain
+distinct; instances of the same type join their possible origins. Unresolved
+pointer producers retain all compatible allocations rather than excluding them.
+Private handles retain their initialization and do not become shared variables
+merely because their pointees use workgroup storage. Missing, conflicting and out-of-bounds
 contracts remain diagnostic. Assertions are caller-supplied preconditions; they
 do not insert runtime checks or establish that arbitrary input values satisfy
 the contract. Source offsets remain signed and wide; OpenGL still requires its
 ordinary index-narrowing proofs. This does not establish full matrix-kernel
 translation, numerical parity or host-runtime integration.
+Metal-imported thread and threadgroup pointer returns preserve their address space
+and pointee constness in the intermediate type and Metal round-trip output.
+This type preservation does not establish general private-pointer lowering for
+DirectX or OpenGL.
 
 HLSL writable arguments capture nonliteral array indices at the call expression
 before copy-in and copy-out, including indexed aggregate receivers. The captured

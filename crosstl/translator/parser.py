@@ -534,7 +534,9 @@ class Parser:
                 enums.append(self.parse_enum())
             elif self.is_cbuffer_declaration():
                 cbuffers.append(self.parse_cbuffer_as_struct())
-            elif self.current_token[0] == "CONST":
+            elif (
+                self.current_token[0] == "CONST" and not self.is_function_declaration()
+            ):
                 constants.append(self.parse_constant())
             elif self.current_token[0] == "LET":
                 global_variables.append(self.parse_let_declaration())
@@ -652,7 +654,9 @@ class Parser:
                 )
             elif self.is_cbuffer_declaration():
                 cbuffers.append(self.parse_cbuffer_as_struct())
-            elif self.current_token[0] == "CONST":
+            elif (
+                self.current_token[0] == "CONST" and not self.is_function_declaration()
+            ):
                 constants.append(self.parse_constant())
             elif self.current_token[0] == "LET":
                 global_variables.append(self.parse_let_declaration())
@@ -1651,7 +1655,7 @@ class Parser:
         if saw_function_keyword and self.current_token_starts_bare_function_name():
             return_type = PrimitiveType("void")
         else:
-            return_type = self.parse_type()
+            return_type = self.parse_function_return_type()
 
         if not (
             self.current_token[0] == "KERNEL"
@@ -1673,7 +1677,7 @@ class Parser:
             if self.is_arrow_token():
                 self.eat_arrow()
                 attributes.extend(self.parse_return_type_attributes())
-                return_type = self.parse_type()
+                return_type = self.parse_function_return_type()
 
             post_attributes = self.parse_post_declaration_attributes()
 
@@ -1753,6 +1757,21 @@ class Parser:
     def parse_return_type_attributes(self):
         """Parse WGSL-style metadata between ``->`` and the return type."""
         return self.parse_attribute_annotations(allow_single_square=False)
+
+    def parse_function_return_type(self):
+        """Keep pointer return address spaces and pointee access in the type."""
+        qualifiers, resource_qualifiers = self.partition_resource_qualifiers(
+            self.parse_parameter_qualifiers()
+        )
+        return_type = self.parse_type()
+        self.apply_pointer_resource_contract(
+            return_type, qualifiers, resource_qualifiers
+        )
+        if isinstance(return_type, PointerType):
+            return_type.is_mutable = not set(qualifiers).intersection(
+                {"const", "constant", "readonly", "in"}
+            )
+        return return_type
 
     def parse_parameter_list(self):
         """Parse a comma-separated function parameter list."""
@@ -5731,8 +5750,10 @@ class Parser:
                 if self.current_token_starts_bare_function_name():
                     return True
 
+            self.parse_parameter_qualifiers()
             if self.is_type_token():
                 self.advance_over_type()
+                self.advance_over_pointer_suffix()
                 if (
                     self.current_token[0] == "KERNEL"
                     or self.current_token_is_binding_identifier()
@@ -6081,7 +6102,7 @@ class Parser:
         if self.current_token[0] == "STRUCT":
             return self.parse_struct()
 
-        if self.current_token[0] == "CONST":
+        if self.current_token[0] == "CONST" and not self.is_function_declaration():
             return self.parse_constant()
 
         if self.current_token[0] == "LET":

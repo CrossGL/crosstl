@@ -3710,11 +3710,32 @@ def test_codegen_address_of_device_buffer_element_preserves_lvalue():
     assert parse_crossgl(crossgl) is not None
 
 
-def test_codegen_thread_pointer_return_surrogate_round_trips_as_lvalue(tmp_path):
-    # Reduced from MLX steel/gemm/mma.h MMATile::elems(). CrossGL has no
-    # direct pointer-return syntax, so the importer carries the return through
-    # a buffer surrogate while the PointerReinterpretNode retains the exact
-    # source address space and pointee mutability.
+@pytest.mark.parametrize("readonly", [False, True])
+def test_codegen_threadgroup_pointer_return_preserves_contract(tmp_path, readonly):
+    const = "const " if readonly else ""
+    code = f"""
+    #include <metal_stdlib>
+    using namespace metal;
+    {const}threadgroup uint* forward_pointer({const}threadgroup uint* p) {{
+        return p + 1;
+    }}
+    kernel void run(device uint* out [[buffer(0)]]) {{
+        threadgroup uint tile[2];
+        tile[1] = 17u;
+        out[0] = forward_pointer(tile)[0];
+    }}
+    """
+    crossgl = convert(code)
+    assert f"{const}threadgroup uint* forward_pointer" in crossgl
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert f"{const}threadgroup uint* forward_pointer" in metal
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "shared-pointer-return"
+    )
+
+
+def test_codegen_thread_pointer_return_round_trips_as_lvalue(tmp_path):
+    # Reduced from a matrix tile exposing its vector fragments as scalars.
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -3745,8 +3766,8 @@ def test_codegen_thread_pointer_return_surrogate_round_trips_as_lvalue(tmp_path)
 
     crossgl = convert(code)
 
-    assert "RWStructuredBuffer<float> Tile__elems" in crossgl
-    assert "StructuredBuffer<float> Tile__elems" in crossgl
+    assert "thread float* Tile__elems" in crossgl
+    assert "const thread float* Tile__elems" in crossgl
     metal = MetalCodeGen().generate(parse_crossgl(crossgl))
     assert (
         "thread float* Tile__elems__metal_receiver_mutable_thread_unqualified" in metal

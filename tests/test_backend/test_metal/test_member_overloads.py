@@ -771,8 +771,8 @@ def test_codegen_retains_selected_pointer_return_mutability():
 
     crossgl = _crossgl_artifact(source)
 
-    assert f"RWStructuredBuffer<float> {MUTABLE_ELEMS}(" in crossgl
-    assert f"StructuredBuffer<float> {CONST_ELEMS}(" in crossgl
+    assert f"thread float* {MUTABLE_ELEMS}(" in crossgl
+    assert f"const thread float* {CONST_ELEMS}(" in crossgl
 
 
 def test_receiver_cv_selection_reaches_validated_target_artifacts(tmp_path):

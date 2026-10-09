@@ -205,6 +205,11 @@ the interface unchanged. Before accepting the new Metal fingerprint, the old
 artifact, new artifact and unchanged upstream source each returned the same
 65,282 results and eight guards, with read-only buffers unchanged. This review
 does not accept the remaining exponential or complex-unary family references.
+A subsequent unused-receiver annotation changes only the Metal source fingerprint.
+The previous and annotated shaders compile to identical library bytes and both
+match the unchanged upstream kernel across the same 65,282 inputs and eight
+guards. Read-only buffers and the reflected interface remain unchanged; no
+other corpus reference is updated by this review.
 
 Cross-backend controls also found a separate Metal narrow-field reference
 failure ([#2102](https://github.com/CrossGL/crosstl/issues/2102)): the field
