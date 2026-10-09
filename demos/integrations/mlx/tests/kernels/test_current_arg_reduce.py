@@ -86,15 +86,15 @@ ARTIFACTS = {
         },
         "argmin_uint8": {
             "sha256": (
-                "b559c4b42abe98a88c45f745983ef530a11a40c030b6cc7caa2b2a92448eab20"
+                "37be693aa42c3bc31c2f97a8d3d7b1cbb6ec4d07e4703ad2186da7451a7a1d8c"
             ),
-            "sizeBytes": 7038,
+            "sizeBytes": 6982,
         },
         "argmax_uint8": {
             "sha256": (
-                "01a92ab4d688d99ce49e4fbb5cf17ee4af4cab70d80ae32280aae82d283218a5"
+                "532099709a78d7909ae2b15c73b5ef1ceb36725c015fcc193bd163385563ee56"
             ),
-            "sizeBytes": 7034,
+            "sizeBytes": 6978,
         },
         "argmin_uint16": {
             "sha256": (
@@ -134,15 +134,15 @@ ARTIFACTS = {
         },
         "argmin_int8": {
             "sha256": (
-                "8f2aa463537c2df44de8f3d076c0b52d0c75fe427cb29bb41d390caf1b0c1ec0"
+                "2c08e3a540b8bced73590416fe038ac8fc038ad77acebc4aa237d8d1e37453b5"
             ),
-            "sizeBytes": 7480,
+            "sizeBytes": 7401,
         },
         "argmax_int8": {
             "sha256": (
-                "b34b249fd1a810333f11be91964eb99f02d40f142b453182378237ad68c70009"
+                "6daa7dfd9c2e57c82d9aac2aa948f5f355403172cbf2e6c9ad120d6a64b9cd47"
             ),
-            "sizeBytes": 7482,
+            "sizeBytes": 7403,
         },
         "argmin_int16": {
             "sha256": (
@@ -1149,6 +1149,9 @@ def test_current_mlx_arg_reduce_native_validation(
         (execution,) = artifact["execution"]["entryPoints"]
         assert execution["workgroupSize"] == [32, 1, 1]
         if target == "directx":
+            if entry in {"argmin_uint8", "argmax_uint8", "argmin_int8", "argmax_int8"}:
+                assert "in_[uint(current_in_offset)]" in generated_text
+                assert "(current_in_offset) / 4" not in generated_text
             if entry in RUNTIME_ENTRIES:
                 assert "WaveReadLaneAt" not in generated_text
                 assert "WaveGetLane" not in generated_text

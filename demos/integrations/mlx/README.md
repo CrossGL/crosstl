@@ -184,6 +184,13 @@ an independent audit of retained uploads and outputs verifies all 32 reduction
 indices, parameter bindings and executed module identities. This confirms the
 existing float32 subset, not numerical coverage of all 24 scalar entries.
 
+The four DirectX byte-entry references additionally include logical element
+addressing for widened byte buffers. Their complete-body diffs replace packed
+word extraction with one indexed resource read, retaining signed-byte extension.
+Source hashes, template materializations, resource declarations and workgroup
+metadata are unchanged. All four updated artifacts pass strict DXC compilation;
+this reference review does not add native byte-entry numerical coverage.
+
 Original Metal reference libraries use the unchanged upstream sources with
 compiler warnings retained but not promoted to errors. The pinned headers use
 C++17 constructs that some Metal 3.1 toolchains diagnose as extensions.
