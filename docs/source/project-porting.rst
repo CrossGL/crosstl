@@ -5059,6 +5059,14 @@ Native controls check two- and four-lane 32-bit integer and floating-point views
 at nonzero offsets against exact output words and allocation guards. This does
 not extend vector reinterpretation through aggregate-held pointers or the Metal
 round-trip target.
+DirectX also supports immediate storage-to-workgroup copies through aligned
+single-byte-array record views when both backings have matching 32-bit scalar
+layouts. The copy retains the record's byte extent, captures the addresses once,
+and proves the full destination span through helper forwarding and bounded
+loops. Required native controls cover integer and floating-point backing words,
+nonzero offsets, pointer rebasing, and allocation guards. This does not enable
+reinterpretation of pointers held inside private resource aggregates, which
+still blocks the selected MLX matrix loader.
 
 HLSL writable arguments capture nonliteral array indices at the call expression
 before copy-in and copy-out, including indexed aggregate receivers. The captured

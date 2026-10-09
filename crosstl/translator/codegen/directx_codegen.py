@@ -18851,6 +18851,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         detail,
         binding=None,
         access="read",
+        alignment=4,
     ):
         pointer_type = getattr(expression, "target_type", None)
         address_space = (
@@ -18868,12 +18869,241 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             source_type=source_type,
             target_type=target_type,
             address_space=address_space,
-            alignment=4,
+            alignment=alignment,
             access=access,
             target_backend="directx",
             reason=reason,
             source_location=getattr(expression, "source_location", None),
         )
+
+    def hlsl_workgroup_record_transfer(self, target, value):
+        def reinterpretation(expression):
+            if (
+                isinstance(expression, UnaryOpNode)
+                and expression.op == "*"
+                and not getattr(expression, "is_postfix", False)
+                and isinstance(expression.operand, PointerReinterpretNode)
+            ):
+                return expression.operand
+            return None
+
+        destination = reinterpretation(target)
+        source = reinterpretation(value)
+        if destination is None or source is None:
+            return None
+        destination_space = str(destination.target_type.address_space or "").lower()
+        source_space = str(source.target_type.address_space or "").lower()
+        target_name = self.type_name_string(destination.target_type.pointee_type)
+        if (
+            destination_space not in {"threadgroup", "workgroup"}
+            or source_space not in {"device", "constant", "storage", "global"}
+            or target_name not in self.structs_by_name
+        ):
+            return None
+        if target_name != self.type_name_string(source.target_type.pointee_type):
+            self.hlsl_storage_struct_view_error(
+                source,
+                source_type=None,
+                target_type=target_name,
+                reason="storage-workgroup-aggregate-target-mismatch",
+                detail="the source and destination record types differ",
+            )
+        return destination, source
+
+    def hlsl_workgroup_record_layout(self, reinterpretation, constants):
+        target_name = self.type_name_string(reinterpretation.target_type.pointee_type)
+        struct = self.structs_by_name[target_name]
+
+        def reject(detail):
+            self.hlsl_storage_struct_view_error(
+                reinterpretation,
+                source_type=None,
+                target_type=target_name,
+                reason="unsupported-storage-workgroup-aggregate-layout",
+                detail=detail,
+            )
+
+        members = [
+            member
+            for member in struct.members
+            if not self.hlsl_static_struct_member(member)
+        ]
+        if (
+            len(members) != 1
+            or getattr(struct, "generic_params", None)
+            or getattr(struct, "inheritance", None)
+            or self.hlsl_union_layout_for_type(target_name) is not None
+        ):
+            reject("the record must have one fixed byte-array member")
+        alignment = 1
+        attributes = list(getattr(struct, "attributes", None) or [])
+        if attributes:
+            attribute = attributes[0]
+            arguments = list(getattr(attribute, "arguments", None) or [])
+            if (
+                len(attributes) != 1
+                or attribute.name != "metal_alignas"
+                or len(arguments) != 1
+            ):
+                reject("the record has unsupported layout attributes")
+            alignment = self.literal_int_value(arguments[0], constants)
+            if (
+                not isinstance(alignment, int)
+                or isinstance(alignment, bool)
+                or alignment <= 0
+                or alignment & (alignment - 1)
+            ):
+                reject("the alignment must be a fixed positive power of two")
+        member = members[0]
+        member_type = getattr(member, "member_type", None)
+        if (
+            not isinstance(member_type, ArrayType)
+            or getattr(member, "attributes", None)
+            or getattr(member, "resource_qualifiers", None)
+        ):
+            reject("the member must be an unqualified fixed byte array")
+        layout = scalar_storage_layout(self.type_name_string(member_type.element_type))
+        extent = self.literal_int_value(member_type.size, constants)
+        if (
+            layout is None
+            or layout.kind != "integer"
+            or layout.bit_width != 8
+            or not isinstance(extent, int)
+            or isinstance(extent, bool)
+            or extent <= 0
+            or extent % alignment
+        ):
+            reject("the byte extent must be fixed and have no alignment padding")
+        return extent, alignment
+
+    def generate_hlsl_workgroup_record_transfer(
+        self, target, value, operator, *, statement_context
+    ):
+        transfer = self.hlsl_workgroup_record_transfer(target, value)
+        if transfer is None:
+            return None
+        destination, source = transfer
+        extent, alignment = self.hlsl_workgroup_record_layout(
+            source, self.current_hlsl_visible_int_constants
+        )
+        target_name = self.type_name_string(source.target_type.pointee_type)
+
+        def reject(reason, detail):
+            self.hlsl_storage_struct_view_error(
+                source,
+                source_type=None,
+                target_type=target_name,
+                reason=reason,
+                detail=detail,
+                alignment=alignment,
+            )
+
+        if operator != "=" or not statement_context:
+            reject(
+                "storage-workgroup-aggregate-expression-unsupported",
+                "the record copy must be a standalone simple assignment",
+            )
+        if any(
+            getattr(view.target_type, "resource_qualifiers", None) for view in transfer
+        ):
+            reject(
+                "unsupported-storage-workgroup-aggregate-layout",
+                "qualified pointer views cannot be expanded into ordinary word accesses",
+            )
+        if any(
+            self.hlsl_private_pointer_expression_has_side_effects(view.expression)
+            for view in transfer
+        ):
+            reject(
+                "storage-workgroup-aggregate-offset-unprovable",
+                "the source and destination offsets must not have side effects",
+            )
+        destination_binding = self.hlsl_resource_pointer_binding(destination.expression)
+        source_binding = self.hlsl_resource_pointer_binding(source.expression)
+        if (
+            destination_binding is None
+            or destination_binding.get("kind") != "workgroup-pointer"
+            or source_binding is None
+            or source_binding.get("kind") == "workgroup-pointer"
+            or not source_binding.get("root")
+        ):
+            reject(
+                "storage-workgroup-aggregate-backing-unresolved",
+                "the copy requires a storage-buffer source and a shared-array destination",
+            )
+        layouts = [
+            scalar_storage_layout(
+                binding.get("source_element_type") or binding.get("element_type")
+            )
+            for binding in (destination_binding, source_binding)
+        ]
+        if (
+            layouts[0] is None
+            or layouts[0].bit_width != 32
+            or layouts[0] != layouts[1]
+            or any(
+                binding.get("pointer_reinterpretation") is not None
+                or str(binding.get("byte_offset", "0")) not in {"0", "0u"}
+                for binding in (destination_binding, source_binding)
+            )
+        ):
+            reject(
+                "storage-workgroup-aggregate-backing-mismatch",
+                "the backings must have the same non-reinterpreted 32-bit scalar layout",
+            )
+        if alignment > layouts[0].byte_width or extent % layouts[0].byte_width:
+            reject(
+                "unsupported-storage-workgroup-aggregate-alignment",
+                "the record must occupy whole backing words with scalar-guaranteed alignment",
+            )
+        if not image_access_satisfies_requirement("read", source_binding.get("access")):
+            reject(
+                "storage-workgroup-aggregate-source-not-readable",
+                "the source is not readable",
+            )
+        if not getattr(
+            destination.target_type, "is_mutable", True
+        ) or not image_access_satisfies_requirement(
+            "write", destination_binding.get("access")
+        ):
+            reject(
+                "storage-workgroup-aggregate-destination-read-only",
+                "the destination is not writable",
+            )
+        if not getattr(destination, "_hlsl_record_transfer_bounds_checked", False):
+            reject(
+                "storage-workgroup-aggregate-offset-unprovable",
+                "the complete destination range has not been proven within its backing",
+            )
+        # Bind both addresses before any write, including offsets loaded from memory.
+        assignments = []
+        offsets = []
+        for role, binding in (
+            ("source", source_binding),
+            ("destination", destination_binding),
+        ):
+            if binding.get("offset") is None:
+                reject(
+                    "storage-workgroup-aggregate-offset-unprovable",
+                    "a backing offset is unresolved",
+                )
+            used_names = set(self.local_variable_types) | set(
+                self.global_variable_types
+            )
+            used_names.update(self.current_identifier_reserved_names)
+            used_names.update(self.current_identifier_aliases.values())
+            name = self.hlsl_unique_local_identifier(
+                f"__crossgl_copy_{role}", used_names
+            )
+            self.current_identifier_reserved_names.add(name)
+            self.local_variable_types[name] = "uint"
+            assignments.append(f"uint {name} = uint({binding.get('offset', '0')})")
+            offsets.append(name)
+        for index in range(extent // layouts[0].byte_width):
+            left = f"{destination_binding['root']}[{offsets[1]} + {index}u]"
+            right = f"{source_binding['root']}[{offsets[0]} + {index}u]"
+            assignments.append(f"{left} = {right}")
+        return "\n".join(assignments)
 
     def hlsl_storage_struct_view_offset_is_provable(self, expression):
         if isinstance(expression, (str, IdentifierNode, VariableNode)):
@@ -20253,6 +20483,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         self.hlsl_private_pointer_word_view_write_error(target)
         self.hlsl_storage_struct_view_write_error(target)
+        record_transfer = self.generate_hlsl_workgroup_record_transfer(
+            target, value, op, statement_context=statement_context
+        )
+        if record_transfer is not None:
+            return record_transfer
         storage_assignment = self.hlsl_half_storage.assignment(
             node, target, value, op, statement_context=statement_context
         )
@@ -35838,7 +36073,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             pointer_parameter_indices
         )
         self.function_hlsl_workgroup_pointer_base_names = pointer_base_names
-        if not pointer_parameters:
+        if not pointer_parameters and not any(
+            isinstance(node, AssignmentNode)
+            and self.hlsl_workgroup_record_transfer(node.target, node.value) is not None
+            for function in functions_by_name.values()
+            for node in self.walk_ast(getattr(function, "body", []))
+        ):
             return
 
         calls_by_caller = {function_name: [] for function_name in functions_by_name}
@@ -36055,7 +36295,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if root is not None:
                     direct_observations.add(root)
 
-        def record_access(binding, index_expression, source):
+        def record_access(binding, index_expression, source, *, required=False):
             if binding is None or binding.get("kind") != "workgroup-pointer":
                 return
             record_observation(binding, source)
@@ -36066,6 +36306,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 index_expression, intervals, constants
             )
             if offset_range is None or index_range is None:
+                if required:
+                    raise self.hlsl_workgroup_pointer_error(
+                        "DirectX cannot prove the expanded record copy range",
+                        function_name=function_name,
+                        parameter_name=binding.get("root"),
+                        reason="unprovable-view-offset",
+                        node=source,
+                    )
                 return
             access_range = (
                 offset_range[0] + index_range[0],
@@ -36189,6 +36437,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if isinstance(value, AssignmentNode):
                 target = getattr(value, "target", getattr(value, "left", None))
                 assigned = getattr(value, "value", getattr(value, "right", None))
+                transfer = self.hlsl_workgroup_record_transfer(target, assigned)
+                if transfer is not None:
+                    destination, source = transfer
+                    destination._hlsl_record_transfer_bounds_checked = False
+                    binding = self.hlsl_static_workgroup_pointer_binding(
+                        destination.expression, aliases, constants
+                    )
+                    if binding is not None:
+                        extent, _ = self.hlsl_workgroup_record_layout(source, constants)
+                        layout = scalar_storage_layout(binding.get("element_type"))
+                        if (
+                            layout is not None
+                            and layout.bit_width == 32
+                            and extent % 4 == 0
+                        ):
+                            record_access(binding, 0, destination, required=True)
+                            record_access(
+                                binding, extent // 4 - 1, destination, required=True
+                            )
+                            destination._hlsl_record_transfer_bounds_checked = True
                 if not isinstance(target, (str, IdentifierNode, VariableNode)):
                     visit(assigned, aliases, control_depth)
                     visit(target, aliases, control_depth)
@@ -36212,6 +36480,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         node=value,
                     )
                 if operator in {"+=", "-="}:
+                    delta = assigned if operator == "+=" else UnaryOpNode("-", assigned)
+                    aliases[target_name] = {
+                        **current,
+                        "offset": self.hlsl_static_workgroup_pointer_offset_sum(
+                            current.get("offset"), delta
+                        ),
+                    }
                     return
                 if operator != "=":
                     raise self.hlsl_workgroup_pointer_error(
@@ -36307,8 +36582,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             "callee": callee_name,
                             "node": value,
                             "bindings": bindings,
-                            "constants": constants,
-                            "intervals": intervals,
+                            "constants": dict(constants),
+                            "intervals": dict(intervals),
                         }
                     )
                 for index, argument in enumerate(arguments):
@@ -36359,6 +36634,50 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if isinstance(value, ForNode):
                 loop_aliases = dict(aliases)
                 visit(getattr(value, "init", None), loop_aliases, control_depth + 1)
+                saved_intervals = dict(intervals)
+                saved_constants = dict(constants)
+                init = getattr(value, "init", None)
+                loop_name = getattr(init, "name", None)
+                initial = self.hlsl_private_pointer_interval(
+                    getattr(init, "initial_value", None), intervals, constants
+                )
+                if loop_name:
+                    constants.pop(loop_name, None)
+                    intervals.pop(loop_name, None)
+                    if initial is not None:
+                        intervals[loop_name] = initial
+                    _, loop_interval = self.hlsl_private_pointer_loop_interval(
+                        value, intervals, constants
+                    )
+                    condition_names = {
+                        self.expression_name(item)
+                        for item in self.walk_ast(getattr(value, "condition", None))
+                        if isinstance(item, (IdentifierNode, VariableNode))
+                    }
+                    for item in self.walk_ast(getattr(value, "body", None)):
+                        changed = None
+                        if isinstance(item, AssignmentNode):
+                            changed = self.expression_name(item.target)
+                        elif isinstance(item, UnaryOpNode) and item.op in {
+                            "++",
+                            "--",
+                            "&",
+                        }:
+                            changed = self.expression_name(item.operand)
+                        elif isinstance(item, VariableNode):
+                            changed = item.name
+                        elif isinstance(item, FunctionCallNode):
+                            if any(
+                                self.expression_name(argument) in condition_names
+                                for argument in getattr(item, "arguments", []) or []
+                            ):
+                                loop_interval = None
+                        if changed in condition_names:
+                            loop_interval = None
+                    if loop_interval is None:
+                        intervals.pop(loop_name, None)
+                    else:
+                        intervals[loop_name] = loop_interval
                 visit(
                     getattr(value, "condition", None),
                     loop_aliases,
@@ -36366,6 +36685,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 visit(getattr(value, "body", None), loop_aliases, control_depth + 1)
                 visit(getattr(value, "update", None), loop_aliases, control_depth + 1)
+                intervals.clear()
+                intervals.update(saved_intervals)
+                constants.clear()
+                constants.update(saved_constants)
                 return
             if isinstance(value, (ForInNode, WhileNode, DoWhileNode, LoopNode)):
                 loop_aliases = dict(aliases)
@@ -43419,6 +43742,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value = stmt.right
             operator = getattr(stmt, "operator", "=")
 
+        record_transfer = self.generate_hlsl_workgroup_record_transfer(
+            target, value, operator, statement_context=True
+        )
+        if record_transfer is not None:
+            return self.generate_statement_code(record_transfer, indent)
         target_type = self.expression_result_type(target)
         if self.hlsl_aggregate_conditional_type(value, target_type) is None:
             return None

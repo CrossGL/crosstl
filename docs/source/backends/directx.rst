@@ -100,6 +100,23 @@ when the resulting shader compiles. This guard is conservative for fields and
 array elements; it does not prove their disjointness or provide alias-aware
 lowering. Wider source-reference aliasing remains outside this byte contract.
 
+Storage-to-Workgroup Record Copies
+----------------------------------
+
+Immediate assignments between aligned byte-record pointer views can copy from
+typed storage buffers into groupshared arrays. The record must contain one fixed
+8-bit array, with no padding, spanning whole words of matching 32-bit integer or
+floating-point backings. Copy addresses are captured before the first write;
+the byte record is not represented as an expanded HLSL integer array.
+
+The entire destination span is checked against its concrete backing, including
+forwarded helper offsets, pointer rebasing and bounded loop iterations. Unknown
+ranges, incompatible layouts, excessive alignment, read-only destinations and
+side-effecting addresses remain diagnostic. Native controls check exact output
+words and untouched guards on Windows, with original/generated Metal and OpenGL
+controls. Pointer views inside resource-bearing aggregates remain a separate
+lowering limitation.
+
 Software Subgroup Reductions
 ----------------------------
 
