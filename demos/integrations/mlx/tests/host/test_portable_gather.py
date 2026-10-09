@@ -1,5 +1,6 @@
 """Storage validation and guarded host dispatch for pinned general gather."""
 
+import copy
 import ctypes
 import hashlib
 import json
@@ -9,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from demos.integrations.mlx.portable_host import (
+    gather_capacity_workloads,
     gather_dispatch,
     gather_evidence,
     gather_layout,
@@ -282,6 +284,7 @@ def test_gather_ci_requires_unchanged_tests_on_all_three_targets():
         "set -euo pipefail" in step["run"] and "--timeout-seconds 3600" in step["run"]
     )
     assert "portable_host.verify_gather" in step["run"]
+    assert "--capacity" in step["run"]
     assert (
         "--packages" in step["run"]
         and "--integer64" in step["run"]
@@ -357,6 +360,128 @@ def test_gather_layout_matches_all_supported_storage_types(dtype, index_dtype):
             )
             == result
         )
+
+
+def replace_buffer(supplied, memory, name, kind, values):
+    size = values if isinstance(values, int) else len(values)
+    allocation = runtime.TYPES[kind] * size
+    memory[name] = allocation() if isinstance(values, int) else allocation(*values)
+    supplied[name] = runtime.Buffer(
+        name.encode(),
+        kind.encode(),
+        ctypes.addressof(memory[name]),
+        size,
+        int(name == "out"),
+    )
+
+
+@pytest.mark.parametrize("dtype", gather_layout.TYPES)
+def test_gather_storage_capacity_is_independent_of_each_dispatch_axis(dtype):
+    supplied, memory = buffers(dtype)
+    replace_buffer(supplied, memory, "src", dtype, 65536 * 3)
+    replace_buffer(supplied, memory, "out", dtype, 65536 * 3)
+    replace_buffer(supplied, memory, "idx0", "int32", 65536)
+    replace_buffer(supplied, memory, "idx_shapes", "int32", [256, 256])
+    replace_buffer(supplied, memory, "idx_strides", "int64", [256, 1])
+    memory["src_shape"][0] = 65536
+    memory["idx_ndim"][0] = 2
+    memory["idx0"][0], memory["idx0"][-1] = 65535, -1
+    entry = f"gather{dtype}int32_1_2_int"
+    metadata = gather_layout.validate(
+        entry, supplied, 65536 * 3, runtime.Launch((256, 256, 3), (1, 1, 1)).execution()
+    )
+    assert metadata["sourceCount"] == metadata["outputCount"] == 196608
+    assert metadata["maximumIndex"] == 196607
+    assert metadata["indexShape"] == [256, 256]
+    for shape, strides in (([65536, 1], [1, 1]), ([1, 65536], [65536, 1])):
+        memory["idx_shapes"][:] = shape
+        memory["idx_strides"][:] = strides
+        with pytest.raises(ValueError, match="per-axis"):
+            gather_layout.validate(
+                entry,
+                supplied,
+                65536 * 3,
+                {"workgroupCount": [*shape, 3], "workgroupSize": [1, 1, 1]},
+            )
+
+
+@pytest.mark.parametrize("name", ("src", "out", "idx0", "src_shape"))
+@pytest.mark.parametrize("fault", ("alignment", "address-wrap", "capacity"))
+def test_gather_rejects_invalid_storage_before_dereferencing(name, fault):
+    supplied, memory = buffers()
+    if fault == "alignment":
+        supplied[name].data += 1
+    elif fault == "address-wrap":
+        supplied[name].data = (1 << (8 * ctypes.sizeof(ctypes.c_void_p))) - 4
+    else:
+        supplied[name].count = gather_layout.MAX_STORAGE_ELEMENTS + 1
+    with pytest.raises(ValueError, match="buffer layout"):
+        gather_layout.validate(
+            ENTRY, supplied, 6, runtime.Launch((2, 1, 3), (1, 1, 1)).execution()
+        )
+
+
+@pytest.mark.parametrize(
+    "fault", (None, "missing", "duplicate", "reordered", "extra", "source", "index")
+)
+def test_gather_batch_audit_requires_complete_ordered_workload(tmp_path, fault):
+    import numpy as np
+
+    first = evidence_event(tmp_path)
+    second = copy.deepcopy(first)
+    second["inputs"]["idx0"]["values"] = [1, 2]
+    values = np.array([3, 4, 5, 6, 7, 8], dtype=np.float32)
+    second["gatherValues"] = values.view(np.uint32).tolist()
+    second["outputHash"] = hashlib.sha256(values.tobytes()).hexdigest()
+    events = [first, second]
+    source = np.arange(12, dtype=np.float32).reshape(4, 3)
+    indices = np.array([3, 0, 1, 2], dtype=np.int32)
+    expected = source[indices]
+    if fault == "missing":
+        events.pop()
+    elif fault == "duplicate":
+        events[1] = first
+    elif fault == "reordered":
+        events.reverse()
+    elif fault == "extra":
+        events.append(second)
+    elif fault == "source":
+        source[0, 0] = 100
+    elif fault == "index":
+        indices[-1] = 1
+    if fault:
+        with pytest.raises(ValueError):
+            gather_evidence.audit_batches(np, events, source, (indices,), expected)
+    else:
+        assert gather_evidence.audit_batches(
+            np, events, source, (indices,), expected
+        ) == gather_workloads.words(np, expected)
+
+
+def test_capacity_workloads_keep_existing_cases_and_cover_large_strided_views():
+    import numpy as np
+
+    cases = list(gather_capacity_workloads.cases())
+    assert cases[:42] == list(gather_workloads.cases())
+    assert len(cases) == len({case["id"] for case in cases}) == 55
+    assert verify_gather.selected_workloads(capacity=True) is gather_capacity_workloads
+    with pytest.raises(ValueError, match="not GatherAxis"):
+        verify_gather.selected_workloads(axis=True, capacity=True)
+    for case in cases[42:]:
+        source, indices, expected = gather_capacity_workloads.reference(np, case)
+        if case["layout"] == "large-table":
+            assert source.size == 32 and indices[0].size == case["count"]
+        else:
+            assert source.size > 65535 and indices[0].size > 65535
+        assert expected.size > 65535 and source.base is not None
+        assert all(np.any(index < 0) for index in indices)
+        if case["layout"] == "large-multiple":
+            assert indices[0].strides[-1] == 0 and indices[1].strides[0] == 0
+            assert indices[1].strides[-1] == 8
+        else:
+            assert indices[0].strides[-1] == 8
+        if case["layout"] == "large-row":
+            assert indices[0].strides[0] // indices[0].itemsize > 65535
 
 
 @pytest.mark.parametrize(
@@ -599,11 +724,12 @@ def test_gather_cache_reuses_covering_range_and_rechecks_source(
         ),
     )
     first = cache.get(entry, 11)
-    for bound in (0, 11, 14, 19, 65534):
+    capacity = gather_layout.MAX_STORAGE_ELEMENTS if entry == ENTRY else 65535
+    for bound in (0, 11, 14, 19, 65534, capacity - 1):
         assert cache.get(entry, bound) == first and len(calls) == 1
-    assert calls[0]["maximumIndex"] == gather_packages.MAX_ELEMENTS - 1 == 65534
+    assert calls[0]["maximumIndex"] == capacity - 1
     assert calls[0]["entry"] == entry and calls[0]["target"] == target
-    for invalid in (-1, 65535, True, 1.0, None):
+    for invalid in (-1, capacity, True, 1.0, None):
         with pytest.raises(ValueError, match="index bound"):
             cache.get(entry, invalid)
     assert len(calls) == 1
@@ -642,11 +768,12 @@ def test_gather_covering_assertion_matches_validated_host_capacity(
         raise RuntimeError("configuration captured")
 
     monkeypatch.setattr(gather_packages, "translate_project", translate)
+    capacity = gather_layout.MAX_STORAGE_ELEMENTS if entry == ENTRY else 65535
     with pytest.raises(RuntimeError, match="configuration captured"):
         cache._build(
             entry,
             tmp_path / "package",
-            {"maximumIndex": gather_packages.MAX_ELEMENTS - 1},
+            {"maximumIndex": capacity - 1},
         )
     (config,) = configurations
     assert config.entry_points == {config.include_patterns[0]: (entry,)}
@@ -655,7 +782,7 @@ def test_gather_covering_assertion_matches_validated_host_capacity(
         assert assertion.source == config.include_patterns[0]
         assert assertion.expression == expression and assertion.function is None
         assert assertion.value_range.minimum == 0
-        assert assertion.value_range.maximum == 65534
+        assert assertion.value_range.maximum == capacity - 1
         assert assertion.value_range.status == "asserted"
         assert assertion.value_range.provenance == "project-config"
     else:

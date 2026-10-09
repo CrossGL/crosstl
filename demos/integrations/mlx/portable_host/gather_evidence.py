@@ -253,6 +253,7 @@ def audit_result(np, event, inputs, source, indices, expected, grid, metadata):
     )
     require(
         event["threads"] == math.prod(grid) == len(actual)
+        and all(1 <= dimension <= 65535 for dimension in grid)
         and event["dispatchVersion"] == 3
         and event["gatherStorageType"] == dtype
         and event["workgroupCount"] == grid
@@ -327,34 +328,27 @@ def audit_native_execution(event):
     )
 
 
-def validate(np, records, trace, upstream, *, workloads=gather_workloads):
-    require(
-        len(records) == len(list(workloads.cases())),
-        "Gather workload set is incomplete",
+def audit_batches(np, events, expected_source, expected_indices, expected):
+    """Reconcile each rectangular upload against the complete logical operation."""
+    require(events, "Gather workload has no native dispatch")
+    layout_source = (
+        np.ascontiguousarray(expected_source)
+        if any(stride < 0 for stride in expected_source.strides)
+        else expected_source
     )
-    cursor, targets = 0, set()
-    for case, record in zip(workloads.cases(), records):
-        require(
-            record["dispatchStart"] == cursor,
-            "Gather workload dispatch boundary changed",
+    index_layouts = [
+        (
+            np.ascontiguousarray(index)
+            if any(stride < 0 for stride in index.strides)
+            else index
         )
-        end = cursor + record["dispatchCount"]
-        events = [
-            event for event in trace[cursor:end] if event["entry"].startswith("gather")
-        ]
+        for index in expected_indices
+    ]
+    first, actual = 0, []
+    for event in events:
+        source, indices, values = audit_event(np, event)
         require(
-            len(events) == 1, "Each gather workload requires exactly one native gather"
-        )
-        event = events[0]
-        source, indices, actual = audit_event(np, event)
-        expected_source, expected_indices, expected = workloads.reference(np, case)
-        layout_source = (
-            np.ascontiguousarray(expected_source)
-            if any(stride < 0 for stride in expected_source.strides)
-            else expected_source
-        )
-        require(
-            list(source.shape) == list(expected_source.shape)
+            source.shape == expected_source.shape
             and gather_workloads.words(np, source)
             == gather_workloads.words(np, expected_source),
             "Gather source upload does not belong to its workload",
@@ -364,22 +358,20 @@ def validate(np, records, trace, upstream, *, workloads=gather_workloads):
             == [stride // layout_source.itemsize for stride in layout_source.strides],
             "Gather workload source layout changed",
         )
+        require(len(indices) == len(index_layouts), "Gather index count changed")
+        size = indices[0].size
         require(
-            len(indices) == len(expected_indices)
-            and all(
-                left.shape == right.shape and left.tolist() == right.tolist()
-                for left, right in zip(indices, expected_indices)
+            all(
+                left.ndim == right.ndim
+                and left.dtype == right.dtype
+                and left.size == size
+                and np.array_equal(
+                    left.reshape(-1), right.reshape(-1)[first : first + size]
+                )
+                for left, right in zip(indices, index_layouts)
             ),
             "Gather index upload does not belong to its workload",
         )
-        index_layouts = [
-            (
-                np.ascontiguousarray(index)
-                if any(stride < 0 for stride in index.strides)
-                else index
-            )
-            for index in expected_indices
-        ]
         require(
             event["gatherMetadata"]["indexStrides"]
             == (
@@ -392,11 +384,44 @@ def validate(np, records, trace, upstream, *, workloads=gather_workloads):
             ),
             "Gather workload index layout changed",
         )
+        first += size
+        actual.extend(values)
+    require(
+        first == index_layouts[0].size
+        and actual == gather_workloads.words(np, expected),
+        "Gather batches do not cover the complete workload in order",
+    )
+    return actual
+
+
+def validate(np, records, trace, upstream, *, workloads=gather_workloads):
+    require(
+        len(records) == len(list(workloads.cases())),
+        "Gather workload set is incomplete",
+    )
+    cursor, targets, dispatches = 0, set(), 0
+    for case, record in zip(workloads.cases(), records):
+        require(
+            record["dispatchStart"] == cursor,
+            "Gather workload dispatch boundary changed",
+        )
+        end = cursor + record["dispatchCount"]
+        events = [
+            event for event in trace[cursor:end] if event["entry"].startswith("gather")
+        ]
+        if not case["layout"].startswith("large-"):
+            require(
+                len(events) == 1,
+                "Each gather workload requires exactly one native gather",
+            )
+        expected_source, expected_indices, expected = workloads.reference(np, case)
+        actual = audit_batches(np, events, expected_source, expected_indices, expected)
         require(
             actual == record["actual"] == gather_workloads.words(np, expected),
             "Gather readback and MLX result disagree",
         )
-        targets.add(event["target"])
+        targets.update(event["target"] for event in events)
+        dispatches += len(events)
         cursor = end
     require(
         upstream["dispatchStart"] == cursor
@@ -423,4 +448,4 @@ def validate(np, records, trace, upstream, *, workloads=gather_workloads):
     verify_native_identity(
         [event for event in trace if not event["entry"].startswith("gather")], target
     )
-    return {"target": target, "gatherDispatchCount": len(records) + len(remaining)}
+    return {"target": target, "gatherDispatchCount": dispatches + len(remaining)}

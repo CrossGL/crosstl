@@ -175,7 +175,12 @@ class GatherPackageCache:
 
     def get(self, entry, maximum_index):
         signature(entry)
-        if type(maximum_index) is not int or not 0 <= maximum_index < MAX_ELEMENTS:
+        capacity = (
+            gather_layout.MAX_STORAGE_ELEMENTS
+            if entry.startswith("gather") and not entry.startswith("gather_axis")
+            else MAX_ELEMENTS
+        )
+        if type(maximum_index) is not int or not 0 <= maximum_index < capacity:
             raise ValueError("Gather index bound exceeds the validated host contract")
         with self._lock:
             self._require_source()
@@ -185,9 +190,9 @@ class GatherPackageCache:
                 "revision": COMMIT,
                 "target": self.target,
                 "entry": entry,
-                # Dispatch validation bounds every storage span by MAX_ELEMENTS.
+                # Dispatch validation bounds storage independently of launch axes.
                 # Share the covering contract instead of rebuilding for each size.
-                "maximumIndex": MAX_ELEMENTS - 1,
+                "maximumIndex": capacity - 1,
                 "implementationHash": implementation,
                 "recipeHash": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             }

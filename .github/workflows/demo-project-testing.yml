@@ -2611,7 +2611,7 @@ jobs:
         run: |
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 3600 --label "MLX gather verification" -- \
-            python -m demos.integrations.mlx.portable_host.verify_gather --mlx-root mlx-upstream \
+            python -m demos.integrations.mlx.portable_host.verify_gather --capacity --mlx-root mlx-upstream \
               --packages .mlx-portable-slice-update/base/base/packages --integer64 .mlx-portable-slice-update/base/integer64-packages \
               --reductions .mlx-portable-slice-update/base/reductions \
               --output-dir .mlx-portable-slice-update/gather-evidence \

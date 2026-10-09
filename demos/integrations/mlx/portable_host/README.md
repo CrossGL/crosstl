@@ -324,9 +324,10 @@ numerical results.
 
 The same verifier runs in the existing Metal, OpenGL and DirectX half-host CI
 jobs, without adding operating-system runners. This bounded API proof does not
-establish a passing upstream suite. The four unchanged block-format tests still
-expose large indexed-input limits
-([#2146](https://github.com/CrossGL/crosstl/issues/2146)) and bfloat16 cast/unary
+establish a passing upstream suite. General-gather batching now permits the large
+indexed inputs in these tests. Re-running the four unchanged block-format tests
+exposes large slice-assignment limits
+([#2148](https://github.com/CrossGL/crosstl/issues/2148)) and bfloat16 cast/unary
 composition gaps ([#2147](https://github.com/CrossGL/crosstl/issues/2147)). Those
 tests are not rewritten, skipped or given wider tolerances. Strided bfloat16 and
 encoded-scale copies remain subject to the existing copy-path restrictions.
@@ -337,7 +338,7 @@ The adapter implements MLX's `Gather::eval_gpu` using the unchanged pinned JIT
 wrapper and `indexing/gather.h`. `HostRuntime(..., mlx_root=...)` enables on-demand
 translation and packaging for the selected target. Cache identity includes the
 upstream revision, translator implementation, packaging recipe, entry point and
-validated index bound. The package uses the shared host upper bound of 65,534,
+validated index bound. General-gather packages use the storage upper bound of 268,435,422,
 so workloads with different array sizes reuse one translation of an entry.
 Every dispatch still validates its actual allocations, indices and launch before
 loading the package; a cache hit does not bypass those checks. OpenGL packages
@@ -347,8 +348,13 @@ rejected, including when loading an existing cached package.
 
 Supported source storage is float32, int32, uint32, int64, uint64 and bool;
 indices may be signed or unsigned 32-bit or 64-bit integers. The current contract
-allows one through ten index arrays, rank at most 64, and at most 65,535 elements
-in each input storage span and output. Scalar indices, multiple indices,
+allows one through ten index arrays, rank at most 64, and at most 268,435,423 elements
+in each input storage span and output. This conservative element bound leaves room
+for guards even with eight-byte storage. Each dispatch axis remains limited to
+65,535 workgroups. Larger index grids are split into exact rectangular slabs;
+index pointers and output views advance while source coordinates, index strides
+and logical output order are preserved. The source slice per index is still
+limited to 65,535 values. Scalar indices, multiple indices,
 negative index values, transposed and strided sources, and broadcast views retain
 their MLX semantics. Negative storage strides are materialized by translated GPU
 copies; source and output values are never computed or corrected on the CPU.
@@ -363,16 +369,21 @@ payloads. Reflection must match every supplied binding and physical storage type
 invalid metadata or readbacks are rejected before writing into the MLX output.
 
 ```sh
-python -m demos.integrations.mlx.portable_host.verify_gather \
+python -m demos.integrations.mlx.portable_host.verify_gather --capacity \
   --mlx-root mlx-upstream --packages host-packages \
   --integer64 integer64-packages --reductions equality-reductions \
   --output-dir gather-evidence
 ```
 
 The equality companion is `all_reduce_andbool_` at width 32. The verifier runs
-42 workloads in separate CPU and native processes: six source storage types
+42 base workloads in separate CPU and native processes: six source storage types
 times dense, transposed, strided, broadcast, reversed, scalar-index and
-multiple-index layouts. It also runs unchanged upstream
+multiple-index layouts. `--capacity`, required by CI, adds 13 workloads covering
+large offset allocations, strided and broadcast index arrays, multidimensional
+batch boundaries, and small source tables with 65,534, 65,535 and 131,071 indices.
+The audit checks each batch's uploads and native readback against the complete
+logical workload, including output order, input storage and trailing guards.
+It also runs unchanged upstream
 `test_ops.TestOps.test_take` on each path, without skips. Retained uploads are
 independently reconstructed into reference views and compared to native
 readbacks and the MLX result. Missing dispatches, changed modules, corrupt guards
@@ -383,12 +394,13 @@ check after building MLX with its original GPU backends disabled.
 `indexing/gather_axis.h` specialization. Its source and index contiguity flags,
 removed-axis shape and strides, axis extent and three-dimensional grid follow
 the pinned upstream host implementation. It uses the same six source storage
-types, four index types and allocation bounds as general Gather. Negative
+types and four index types as general Gather, but retains its 65,535-element
+allocation bound. Negative
 source or index storage strides are materialized through translated copies;
 positive and zero strides retain their views. Index values, allocation spans
 and contiguity claims are checked before native submission.
 
-Add `--axis` to the command above to run 60 axis-gather workloads and unchanged
+Replace `--capacity` with `--axis` to run 60 axis-gather workloads and unchanged
 upstream `test_take_along_axis` in separate CPU and native processes. Coverage
 includes each axis, flattened input, noncontiguous source/index combinations,
 broadcasts, negative indices, reversed views, exact floating-point payloads and
@@ -396,8 +408,10 @@ broadcasts, negative indices, reversed views, exact floating-point payloads and
 retains the same compiled-module, upload, readback and guard evidence as general
 Gather. No extra OpenGL index-range assertion is needed for this kernel.
 
-Zero-index general-gather specializations, additional storage types, larger
-allocations and full indexing/autodiff coverage are not claimed.
+Zero-index general-gather specializations, additional storage types, source slices
+larger than one launch axis, allocations above the documented bound and full
+indexing/autodiff coverage are not claimed. Negative-stride materialization remains
+subject to the separate translated copy limits.
 These workloads and the additional upstream test do not establish full-suite
 or complete-backend parity.
 

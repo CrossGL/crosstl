@@ -10,6 +10,7 @@ from pathlib import Path
 
 from demos.integrations.mlx.portable_host import (
     gather_axis_workloads,
+    gather_capacity_workloads,
     gather_evidence,
     gather_workloads,
 )
@@ -21,11 +22,21 @@ UPSTREAM_TESTS = ("test_ops.TestOps.test_take",)
 AXIS_UPSTREAM_TESTS = ("test_ops.TestOps.test_take_along_axis",)
 
 
+def selected_workloads(*, axis=False, capacity=False):
+    if axis and capacity:
+        raise ValueError("Capacity workloads exercise general gather, not GatherAxis")
+    return (
+        gather_axis_workloads
+        if axis
+        else gather_capacity_workloads if capacity else gather_workloads
+    )
+
+
 def worker(args):
     import mlx.core as mx
     import numpy as np
 
-    workloads = gather_axis_workloads if args.axis else gather_workloads
+    workloads = selected_workloads(axis=args.axis, capacity=args.capacity)
     upstream_tests = AXIS_UPSTREAM_TESTS if args.axis else UPSTREAM_TESTS
     args.output_dir.mkdir(parents=True)
     if mx.is_available(mx.gpu):
@@ -107,8 +118,8 @@ def validate_upstream(summary, *, native, tests=UPSTREAM_TESTS):
             raise ValueError("Upstream gather dispatch accounting is incomplete")
 
 
-def validate_records(np, records, *, native, axis=False):
-    workloads = gather_axis_workloads if axis else gather_workloads
+def validate_records(np, records, *, native, axis=False, capacity=False):
+    workloads = selected_workloads(axis=axis, capacity=capacity)
     cases = list(workloads.cases())
     if len(records) != len(cases):
         raise ValueError("Gather evidence does not cover every required workload")
@@ -138,7 +149,7 @@ def validate_records(np, records, *, native, axis=False):
 def verify(args):
     import numpy as np
 
-    workloads = gather_axis_workloads if args.axis else gather_workloads
+    workloads = selected_workloads(axis=args.axis, capacity=args.capacity)
     upstream_tests = AXIS_UPSTREAM_TESTS if args.axis else UPSTREAM_TESTS
     args.output_dir.mkdir(parents=True)
     before = verify_prepared(args.mlx_root)
@@ -171,6 +182,8 @@ def verify(args):
         ]
         if args.axis:
             command.append("--axis")
+        if args.capacity:
+            command.append("--capacity")
         with (args.output_dir / f"{mode}.stdout").open("w") as stdout, (
             args.output_dir / f"{mode}.stderr"
         ).open("w") as stderr:
@@ -185,7 +198,13 @@ def verify(args):
         records[mode] = json.loads(
             (args.output_dir / mode / "results.json").read_text()
         )
-        validate_records(np, records[mode], native=mode == "native", axis=args.axis)
+        validate_records(
+            np,
+            records[mode],
+            native=mode == "native",
+            axis=args.axis,
+            capacity=args.capacity,
+        )
         upstream[mode] = json.loads(
             (args.output_dir / mode / "upstream.json").read_text()
         )
@@ -223,8 +242,14 @@ if __name__ == "__main__":
     for name in ("mlx-root", "packages", "reductions", "integer64", "output-dir"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--worker", choices=("cpu", "native"))
-    parser.add_argument(
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument(
         "--axis", action="store_true", help="Verify GatherAxis and take_along_axis"
+    )
+    selection.add_argument(
+        "--capacity",
+        action="store_true",
+        help="Include large general-gather views and batch boundaries",
     )
     args = parser.parse_args()
     worker(args) if args.worker else verify(args)

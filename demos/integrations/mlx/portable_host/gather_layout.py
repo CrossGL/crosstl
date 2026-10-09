@@ -6,6 +6,8 @@ import math
 import re
 
 MAX_ELEMENTS = 65535
+# Reserve 32 output guards and fit even eight-byte carriers in signed byte sizes.
+MAX_STORAGE_ELEMENTS = 2**28 - 33
 TYPES = {
     "float32": ctypes.c_float,
     "int32": ctypes.c_int32,
@@ -59,14 +61,17 @@ def validate(entry, buffers, logical_size, execution):
         "out": dtype,
         **{f"idx{i}": index_dtype for i in range(count)},
     }
-    if set(buffers) != set(dtypes) or not 0 < logical_size <= MAX_ELEMENTS:
+    if set(buffers) != set(dtypes) or not 0 < logical_size <= MAX_STORAGE_ELEMENTS:
         raise ValueError("Native gather buffers or logical size do not match")
     for name, buffer in buffers.items():
         if (
             not buffer.data
             or buffer.dtype != dtypes[name].encode("ascii")
-            or not 0 < buffer.count <= MAX_ELEMENTS
+            or not 0 < buffer.count <= MAX_STORAGE_ELEMENTS
             or buffer.output != int(name == "out")
+            or buffer.data % ctypes.alignment(TYPES[dtypes[name]])
+            or buffer.data + buffer.count * ctypes.sizeof(TYPES[dtypes[name]])
+            > 1 << (8 * ctypes.sizeof(ctypes.c_void_p))
         ):
             raise ValueError("Native gather buffer layout or direction is invalid")
     rank = buffers["src_shape"].count
@@ -93,8 +98,8 @@ def validate(entry, buffers, logical_size, execution):
         for name in ("src_shape", "src_strides", "slice_sizes", "axes")
     )
     if (
-        any(not 1 <= extent <= MAX_ELEMENTS for extent in shape)
-        or any(not 0 <= stride <= MAX_ELEMENTS for stride in strides)
+        any(not 1 <= extent <= MAX_STORAGE_ELEMENTS for extent in shape)
+        or any(not 0 <= stride <= MAX_STORAGE_ELEMENTS for stride in strides)
         or any(not 1 <= size <= extent for size, extent in zip(slices, shape))
         or len(set(axes)) != count
         or any(not 0 <= axis < rank for axis in axes)
@@ -111,13 +116,15 @@ def validate(entry, buffers, logical_size, execution):
         values(buffers[name]) for name in ("idx_shapes", "idx_strides", "idx_contigs")
     )
     index_shape = shapes[:ndim]
-    if any(not 1 <= size <= MAX_ELEMENTS for size in index_shape):
+    if any(not 1 <= size <= MAX_STORAGE_ELEMENTS for size in index_shape):
         raise ValueError("Native gather index shape is invalid")
     grid = [
         index_shape[0] if ndim else 1,
         math.prod(index_shape[1:]),
         math.prod(slices),
     ]
+    if any(not 1 <= dimension <= MAX_ELEMENTS for dimension in grid):
+        raise ValueError("Native gather launch exceeds per-axis workgroup limits")
     if math.prod(grid) != logical_size or execution != {
         "workgroupCount": grid,
         "workgroupSize": [1, 1, 1],
@@ -127,7 +134,7 @@ def validate(entry, buffers, logical_size, execution):
         current_shape = shapes[i * ndim : (i + 1) * ndim]
         current_steps = steps[i * ndim : (i + 1) * ndim]
         if current_shape != index_shape or any(
-            not 0 <= stride <= MAX_ELEMENTS for stride in current_steps
+            not 0 <= stride <= MAX_STORAGE_ELEMENTS for stride in current_steps
         ):
             raise ValueError("Native gather index layouts must have matching shapes")
         span = 1 + sum(
