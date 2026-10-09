@@ -41,8 +41,11 @@ execution remains on Windows. Metal compilation and execution remain on macOS.
 See the [CI coverage policy](../../../.github/TESTING.md) for the platform split.
 Scheduled runs cover the existing corpus audits; changes to translation code,
 tests, demo inputs or toolchain configuration run the complete workflow on pull
-requests and main-branch pushes. A newer revision cancels superseded runs for the
-same pull request; main-branch and scheduled runs keep independent execution.
+requests and main-branch pushes. Each job and matrix leg has its own queue:
+active work finishes, while a newer revision replaces only an older waiting job.
+There is no workflow-wide cancellation rule or queue coupling unrelated platform
+checks. A previous revision's successful proof does not satisfy the current
+revision's required checks.
 Core and demo tests also remain part of the complete test suite.
 
 The host adaptation documentation records upstream changes explicitly. A passing
