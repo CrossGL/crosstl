@@ -127,8 +127,13 @@ forwarded helper offsets, pointer rebasing and bounded loop iterations. Unknown
 ranges, incompatible layouts, excessive alignment, read-only destinations and
 side-effecting addresses remain diagnostic. Native controls check exact output
 words and untouched guards on Windows, with original/generated Metal and OpenGL
-controls. Pointer views inside resource-bearing aggregates remain a separate
-lowering limitation.
+controls. The same whole-word copy can use pointers held in private aggregates
+when a project ``workgroup_access_assertions`` contract covers every destination
+element, including the expanded record tail. Its ``parameter`` selector is the
+source member path, such as ``cursor.destination``; ``function`` and ``entry_point``
+select the source use. The asserted span must fit every compatible shared backing.
+These are caller-supplied preconditions, not inferred bounds or runtime guards.
+General pointer reinterpretation through aggregate members remains unsupported.
 
 Software Subgroup Reductions
 ----------------------------

@@ -5052,7 +5052,8 @@ still requires a range proof: bounded project assertions can target the generate
 ``crosstl_workgroup_load_<element>`` and ``crosstl_workgroup_store_<element>``
 helpers' ``reference.offset + index`` expressions. Four-lane native controls
 exercise barriers, cross-lane reads, multiple allocations and untouched guards.
-This does not enable typed reinterpretation through aggregate-held references.
+General typed reinterpretation through aggregate-held references remains unsupported;
+the immediate byte-record copy contract below is a separate supported operation.
 Calls within the selected resource-helper graph are bound to source overloads
 before private handles replace pointers. Selection uses lexical declarations,
 array and vector components, scalar arithmetic conversions, and exact aggregate
@@ -5075,9 +5076,18 @@ single-byte-array record views when both backings have matching 32-bit scalar
 layouts. The copy retains the record's byte extent, captures the addresses once,
 and proves the full destination span through helper forwarding and bounded
 loops. Required native controls cover integer and floating-point backing words,
-nonzero offsets, pointer rebasing, and allocation guards. This does not enable
-reinterpretation of pointers held inside private resource aggregates, which
-still blocks the selected MLX matrix loader.
+nonzero offsets, pointer rebasing, and allocation guards.
+Immediate byte-record copies through aggregate-held pointers are supported on
+DirectX and OpenGL with explicit ``workgroup_access_assertions``. The assertion
+selects the source entry, function and destination member path (for example
+``cursor.dst``) and covers all absolute destination elements, not only the first
+element of each copy. Its inclusive range must contain the complete record and
+fit every compatible shared allocation. Missing, conflicting and out-of-bounds
+contracts remain diagnostic. Assertions are caller-supplied preconditions; they
+do not insert runtime checks or establish that arbitrary input values satisfy
+the contract. Source offsets remain signed and wide; OpenGL still requires its
+ordinary index-narrowing proofs. This does not establish full matrix-kernel
+translation, numerical parity or host-runtime integration.
 
 HLSL writable arguments capture nonliteral array indices at the call expression
 before copy-in and copy-out, including indexed aggregate receivers. The captured

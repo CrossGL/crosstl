@@ -30,6 +30,7 @@ from ..ast import (
     CastNode,
     CooperativeMatrixType,
     DoWhileNode,
+    ExpressionStatementNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
@@ -56,6 +57,7 @@ from ..ast import (
     WhileNode,
 )
 from .array_utils import evaluate_literal_int_expression
+from .workgroup_access_contracts import parse_workgroup_access_assertions
 
 
 class ResourceAggregateError(ValueError):
@@ -64,8 +66,9 @@ class ResourceAggregateError(ValueError):
     project_diagnostic_code = "project.translate.resource-aggregate-unsupported"
     missing_capabilities = ("resource-aggregate-lowering",)
 
-    def __init__(self, reason, node=None):
-        super().__init__(f"Cannot preserve aggregate resource references: {reason}")
+    def __init__(self, reason, node=None, *, detail=None):
+        message = f"Cannot preserve aggregate resource references: {reason}"
+        super().__init__(f"{message}: {detail}" if detail else message)
         self.reason = reason
         self.source_location = getattr(node, "source_location", None)
 
@@ -323,10 +326,19 @@ def _contains_storage_pointer(node):
 
 
 class _Lowering:
-    def __init__(self, ast, entry, storage_pointer_parameters=False):
+    def __init__(
+        self,
+        ast,
+        entry,
+        storage_pointer_parameters=False,
+        workgroup_access_assertions=(),
+    ):
         self.ast = ast
         self.entry = entry
         self.storage_pointer_parameters = storage_pointer_parameters
+        self.workgroup_access_assertions = parse_workgroup_access_assertions(
+            workgroup_access_assertions
+        )
         self.reserved = {
             node.name
             for node in ast.walk()
@@ -1224,6 +1236,245 @@ class _Lowering:
             source_location=node.source_location,
         )
 
+    def record_copy(self, node, env):
+        if not isinstance(node, AssignmentNode):
+            return None
+        views = []
+        for operand in (node.target, node.value):
+            if not (
+                isinstance(operand, UnaryOpNode)
+                and operand.operator == "*"
+                and not operand.is_postfix
+                and isinstance(operand.operand, PointerReinterpretNode)
+            ):
+                return None
+            views.append(operand.operand)
+        destination, source = views
+        pointers = [self.infer(view.expression, env) for view in views]
+        if not all(isinstance(pointer, _Pointer) for pointer in pointers):
+            return None
+        dst, src = pointers
+        if dst.space != "threadgroup" or src.space not in {"device", "constant"}:
+            return None
+        if node.operator != "=":
+            raise ResourceAggregateError("record-copy-assignment-operator", node)
+        if (
+            not dst.writable
+            or not src.readable
+            or not destination.target_type.is_mutable
+            or any(view.target_type.resource_qualifiers for view in views)
+        ):
+            raise ResourceAggregateError("record-copy-access-contract", node)
+        view_pointers = [_pointer_type(view.target_type) for view in views]
+        if (
+            any(pointer is None for pointer in view_pointers)
+            or view_pointers[0].space != dst.space
+            or view_pointers[1].space != src.space
+        ):
+            raise ResourceAggregateError("record-copy-address-space", node)
+        if not view_pointers[0].writable or not view_pointers[1].readable:
+            raise ResourceAggregateError("record-copy-access-contract", node)
+        record_name = _name(destination.target_type.pointee_type)
+        if record_name != _name(source.target_type.pointee_type):
+            raise ResourceAggregateError("record-copy-type-mismatch", node)
+        record = self.structs.get(record_name)
+        if (
+            record is None
+            or len(record.members) != 1
+            or record.generic_params
+            or record.inheritance
+        ):
+            raise ResourceAggregateError("record-copy-layout", node)
+        member = record.members[0]
+        array = member.member_type
+        numeric = _numeric(array.element_type) if isinstance(array, ArrayType) else None
+        extent = (
+            evaluate_literal_int_expression(array.size)
+            if isinstance(array, ArrayType)
+            else None
+        )
+        alignment = 1
+        attributes = list(record.attributes or ())
+        if attributes:
+            if (
+                len(attributes) != 1
+                or attributes[0].name != "metal_alignas"
+                or len(attributes[0].arguments) != 1
+            ):
+                raise ResourceAggregateError("record-copy-layout", node)
+            alignment = evaluate_literal_int_expression(attributes[0].arguments[0])
+        if (
+            numeric is None
+            or not numeric.is_integer
+            or numeric.bits != 8
+            or numeric.lanes != 1
+            or member.attributes
+            or getattr(member, "resource_qualifiers", None)
+            or extent is None
+            or extent <= 0
+            or alignment is None
+            or alignment <= 0
+            or alignment & (alignment - 1)
+            or extent % alignment
+        ):
+            raise ResourceAggregateError("record-copy-layout", node)
+        backing = _numeric(src.element)
+        if (
+            src.element != dst.element
+            or backing is None
+            or backing.bits != 32
+            or backing.lanes != 1
+            or backing.kind == ArithmeticScalarKind.BOOLEAN
+            or alignment > 4
+            or extent % 4
+        ):
+            raise ResourceAggregateError("record-copy-backing-layout", node)
+        if any(
+            isinstance(child, (FunctionCallNode, AssignmentNode))
+            or isinstance(child, UnaryOpNode)
+            and child.operator in {"++", "--"}
+            for view in views
+            for child in view.expression.walk()
+        ):
+            raise ResourceAggregateError("record-copy-address-side-effects", node)
+
+        def path(expression):
+            if isinstance(expression, IdentifierNode):
+                return expression.name
+            if isinstance(expression, MemberAccessNode):
+                owner = path(expression.object_expr)
+                return f"{owner}.{expression.member}" if owner else None
+            if isinstance(expression, UnaryOpNode) and expression.operator == "&":
+                return path(expression.operand)
+            if isinstance(expression, ArrayAccessNode):
+                return path(expression.array_expr)
+            if isinstance(expression, BinaryOpNode) and expression.operator in {
+                "+",
+                "-",
+            }:
+                return path(expression.left)
+            return None
+
+        selector = path(destination.expression)
+        matches = [
+            assertion
+            for assertion in self.workgroup_access_assertions
+            if assertion.applies_to(self.entry.name, self.current.name, selector)
+        ]
+        if not matches:
+            raise ResourceAggregateError(
+                "record-copy-destination-range-unproven",
+                node,
+                detail=f"entry '{self.entry.name}', function '{self.current.name}', pointer '{selector}' requires an absolute range covering every copied word",
+            )
+        minimum = max(assertion.minimum for assertion in matches)
+        maximum = min(assertion.maximum for assertion in matches)
+        words = extent // 4
+        if minimum > maximum or maximum - minimum + 1 < words:
+            raise ResourceAggregateError(
+                "record-copy-conflicting-access-assertions", node
+            )
+        destinations = [
+            (index, root)
+            for index, (_param, pointer, root) in enumerate(self.resources)
+            if pointer.space == dst.space
+            and pointer.element == dst.element
+            and pointer.writable
+        ]
+        sources = [
+            (index, root)
+            for index, (_param, pointer, root) in enumerate(self.resources)
+            if pointer.space == src.space
+            and pointer.element == src.element
+            and pointer.readable
+        ]
+        extents = {
+            declaration.name: evaluate_literal_int_expression(declaration.var_type.size)
+            for declaration in self.workgroup_declarations
+        }
+        if not destinations or not sources:
+            raise ResourceAggregateError("missing-compatible-resource", node)
+        if (
+            minimum < 0
+            or maximum > 2147483647
+            or any(maximum >= extents[root] for _, root in destinations)
+        ):
+            raise ResourceAggregateError("record-copy-destination-out-of-bounds", node)
+        # Assertions cover every accessed element, including the expanded tail.
+        # They therefore prove the destination offset fits a signed target index.
+        # Source offsets remain wide and retain the target's ordinary index checks.
+        key = ("record-copy", src, dst, words, minimum, maximum)
+        if key not in self.helpers:
+            name = self.fresh(f"crosstl_workgroup_copy_{src.element}")
+            self.helpers[key] = name
+            body = [
+                VariableNode(
+                    "destination_index",
+                    PrimitiveType("int"),
+                    _call("int", [_member(_id("destination"), "offset")]),
+                )
+            ]
+            for destination_index, destination_root in destinations:
+                for source_index, source_root in sources:
+                    statements = [
+                        AssignmentNode(
+                            ArrayAccessNode(
+                                _id(destination_root),
+                                BinaryOpNode(
+                                    _id("destination_index"), "+", _integer(word)
+                                ),
+                            ),
+                            ArrayAccessNode(
+                                _id(source_root),
+                                BinaryOpNode(
+                                    _member(_id("source"), "offset"),
+                                    "+",
+                                    _integer(word),
+                                ),
+                            ),
+                        )
+                        for word in range(words)
+                    ]
+                    statements.append(ReturnNode())
+                    body.append(
+                        IfNode(
+                            BinaryOpNode(
+                                BinaryOpNode(
+                                    _member(_id("destination"), "identity"),
+                                    "==",
+                                    _integer(destination_index),
+                                ),
+                                "&&",
+                                BinaryOpNode(
+                                    _member(_id("source"), "identity"),
+                                    "==",
+                                    _integer(source_index),
+                                ),
+                            ),
+                            BlockNode(statements),
+                        )
+                    )
+            self.generated.append(
+                FunctionNode(
+                    name,
+                    PrimitiveType("void"),
+                    [
+                        ParameterNode("destination", self.target_type(dst)),
+                        ParameterNode("source", self.target_type(src)),
+                        *self.resource_parameters(),
+                    ],
+                    BlockNode(body),
+                )
+            )
+        return _call(
+            self.helpers[key],
+            [
+                self.expression(destination.expression, env),
+                self.expression(source.expression, env),
+                *self.resource_arguments(),
+            ],
+        )
+
     def expression(self, node, env, expected=None):
         if node is None:
             return None
@@ -1449,6 +1700,14 @@ class _Lowering:
         return result
 
     def statement(self, node, env):
+        expression = (
+            node.expression if isinstance(node, ExpressionStatementNode) else node
+        )
+        record_copy = self.record_copy(expression, env)
+        if record_copy is not None:
+            return ExpressionStatementNode(
+                record_copy, source_location=node.source_location
+            )
         if isinstance(node, BlockNode):
             scoped = dict(env)
             return BlockNode(
@@ -1760,7 +2019,9 @@ class _Lowering:
                 del candidates[name]
 
 
-def lower_resource_aggregates(ast, *, storage_pointer_parameters=False):
+def lower_resource_aggregates(
+    ast, *, storage_pointer_parameters=False, workgroup_access_assertions=()
+):
     """Lower a selected compute entry's private resource-reference aggregates."""
     if not isinstance(ast, ASTNode):
         return ast
@@ -1774,4 +2035,6 @@ def lower_resource_aggregates(ast, *, storage_pointer_parameters=False):
         return ast
     result = deepcopy(ast)
     entry = list(result.stages.values())[0].entry_point
-    return _Lowering(result, entry, storage_pointer_parameters).run()
+    return _Lowering(
+        result, entry, storage_pointer_parameters, workgroup_access_assertions
+    ).run()

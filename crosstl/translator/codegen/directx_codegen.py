@@ -363,6 +363,7 @@ from .stage_utils import (
 )
 from .subgroup_control_flow import converge_subgroup_guarded_returns
 from .union_layout import UnionLayoutCollector
+from .workgroup_access_contracts import parse_workgroup_access_assertions
 
 
 class DirectXUnresolvedSourceTypeError(ValueError):
@@ -2649,6 +2650,10 @@ class HLSLCodeGen:
             raise TypeError("widen_native_float16 must be a boolean")
         self.widen_native_float16 = enabled
 
+    def set_workgroup_access_assertions(self, assertions):
+        """Configure absolute shared-storage ranges for aggregate record copies."""
+        self.workgroup_access_assertions = parse_workgroup_access_assertions(assertions)
+
     def set_software_subgroup_width(self, width):
         """Configure fail-closed barrier-backed DirectX subgroup lowering."""
         if width is not None and (
@@ -3053,7 +3058,12 @@ class HLSLCodeGen:
 
     def generate_program(self, ast, target_stage=None):
         """Render an AST to HLSL, optionally filtering stage entry points."""
-        ast = lower_resource_aggregates(ast)
+        ast = lower_resource_aggregates(
+            ast,
+            workgroup_access_assertions=getattr(
+                self, "workgroup_access_assertions", ()
+            ),
+        )
         self.hlsl_type_aliases = {
             node.name: getattr(node, "var_type", None)
             for node in getattr(ast, "global_variables", []) or []

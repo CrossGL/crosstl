@@ -89,7 +89,15 @@ kernel void record_transfer(const device {kind}* inputs [[buffer(0)]],
 """
 
 
-def _request(root, target, case):
+def _request(
+    root,
+    target,
+    case,
+    *,
+    source=None,
+    workgroup_access_assertions=(),
+    index_range_assertions=(),
+):
     kind, mode = case
     count = 1 if mode == "small" else 8 if mode == "loop" else 4
     words = [WORDS[i % len(WORDS)] for i in range(4 + count * 5)]
@@ -104,7 +112,14 @@ def _request(root, target, case):
         )
     expected_words.extend([GUARD] * 4)
     source, descriptor, package = _package(
-        root, target, kind, (1, 1, 1), source=_source(*case), software_subgroups=False
+        root,
+        target,
+        kind,
+        (1, 1, 1),
+        source=source or _source(*case),
+        software_subgroups=False,
+        workgroup_access_assertions=workgroup_access_assertions,
+        index_range_assertions=index_range_assertions,
     )
     inputs = _bound_values(
         descriptor,

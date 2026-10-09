@@ -28414,7 +28414,7 @@ def _translate_project_impl(
                         config,
                         unit.relative_path,
                     )
-                    if target == "opengl"
+                    if target in {"opengl", "directx"}
                     else ()
                 )
                 software_subgroup_width = None

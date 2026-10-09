@@ -7005,7 +7005,11 @@ class GLSLCodeGen:
 
     def _generate_program(self, ast, target_stage=None):
         """Render an AST to GLSL, optionally filtering stage entry points."""
-        ast = lower_resource_aggregates(ast, storage_pointer_parameters=True)
+        ast = lower_resource_aggregates(
+            ast,
+            storage_pointer_parameters=True,
+            workgroup_access_assertions=self.workgroup_access_assertions,
+        )
         ast = self.with_glsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:
             ast = converge_subgroup_guarded_returns(
