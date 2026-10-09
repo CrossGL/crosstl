@@ -2078,10 +2078,10 @@ class HLSLCodeGen:
         widen_native_float16=False,
     ):
         """Initialize DirectX type maps and per-generation resource state."""
-        if not isinstance(cooperative_matrix_software_lowering, bool):
-            raise TypeError("cooperative_matrix_software_lowering must be a boolean")
         self.target_profile = self.normalize_directx_target_profile(target_profile)
-        self.cooperative_matrix_software_lowering = cooperative_matrix_software_lowering
+        self.set_cooperative_matrix_software_lowering(
+            cooperative_matrix_software_lowering
+        )
         self.set_relative_wave_shuffle_out_of_range(relative_wave_shuffle_out_of_range)
         self.set_software_subgroup_width(software_subgroup_width)
         self.set_widen_native_float16(widen_native_float16)
@@ -2650,6 +2650,13 @@ class HLSLCodeGen:
         if not isinstance(enabled, bool):
             raise TypeError("widen_native_float16 must be a boolean")
         self.widen_native_float16 = enabled
+
+    def set_cooperative_matrix_software_lowering(self, enabled):
+        """Configure checked lane-local cooperative-matrix operations."""
+        if not isinstance(enabled, bool):
+            raise TypeError("cooperative_matrix_software_lowering must be a boolean")
+        self.cooperative_matrix_software_lowering = enabled
+        return self
 
     def set_workgroup_access_assertions(self, assertions):
         """Configure absolute shared-storage ranges for aggregate record copies."""

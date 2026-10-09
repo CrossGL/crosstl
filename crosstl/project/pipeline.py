@@ -27178,10 +27178,10 @@ def _project_cooperative_matrix_software_lowering(
     if option not in source_options:
         return None
     enabled = source_options[option]
-    if target != "opengl":
+    if target not in {"opengl", "directx"}:
         raise ValueError(
             "cooperative_matrix_software_lowering is supported only by "
-            "the OpenGL target"
+            "the OpenGL and DirectX targets"
         )
     if not isinstance(enabled, bool):
         raise TypeError("cooperative_matrix_software_lowering must be a boolean")

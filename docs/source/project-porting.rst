@@ -1944,9 +1944,19 @@ Two optional target policies are available through project source options:
    cooperative_matrix_software_lowering = true
    private_pointer_out_of_bounds_read = "error"
 
-``cooperative_matrix_software_lowering`` defaults to ``false``. When enabled,
-supported fragment operations lower to explicit scalar storage and subgroup
-operations. Multiply-accumulate currently requires the float 8-by-8,
+   [project.source_options.metal.target_options.directx]
+   cooperative_matrix_software_lowering = true
+
+``cooperative_matrix_software_lowering`` defaults to ``false`` on both targets.
+DirectX supports checked lane-local element access, copying, addition,
+subtraction, elementwise multiplication, and negation. Matrix multiplication,
+multiply-accumulate, loads and stores remain structured translation errors;
+enabling this policy does not substitute elementwise multiplication for a
+matrix product. Fragment dimensions, scalar types, registered mappings and
+source provenance must still be compatible.
+
+On OpenGL, supported fragment operations lower to explicit scalar storage and
+subgroup operations. Multiply-accumulate currently requires the float 8-by-8,
 32-lane, two-elements-per-lane ``tile_4x4_row_pair`` contract, matching operand
 dimensions, and an exact subgroup-width contract. Unsupported mappings are
 rejected. This option does not remove the hardware subgroup requirement or
