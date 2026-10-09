@@ -47482,8 +47482,13 @@ def test_hlsl_metal_private_scalar_struct_view_materializes_exact_value(tmp_path
         source_backend="metal",
     )
 
-    assert "ByteView direct;" in generated
-    assert "direct.bits = ((uint(byte) & 255u) & 0xffu);" in generated
+    assert (
+        "ByteView direct = _crosstl_metal_load_value_ByteView((uint(byte) & 255u));"
+        in generated
+    )
+    assert "ByteView result;" in generated
+    assert "result.bits = (uint(value) & 255u);" in generated
+    assert "return result;" in generated
     assert "consume(ByteView(((uint(byte) & 255u) & 0xffu)))" in generated
     assert "PointerReinterpretNode" not in generated
     assert "&byte" not in generated

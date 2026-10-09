@@ -6561,6 +6561,53 @@ def test_conversion_of_auto_alias_uses_concrete_lexical_type(
     assert "return First__operator_float(item);" in output
 
 
+@pytest.mark.parametrize("space", ["device", "constant", "thread", "threadgroup"])
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "((const SPACE Value*)data)[index++]",
+        "((const SPACE Value*)(data + 3))[index]",
+        "((const SPACE Value*)(&data[index]))[0]",
+        "*(const SPACE Value*)(&data[index])",
+    ],
+)
+def test_conversion_of_loaded_auto_alias_uses_lexical_type(space, expression):
+    code = f"""
+    struct First {{ uchar value; operator uint() const {{ return value + 1; }} }};
+    struct Second {{ uchar value; operator uint() const {{ return value + 2; }} }};
+    uint load(const {space} uchar* data, uint index) {{
+        using Value = First;
+        auto value = {expression.replace('SPACE', space)};
+        {{ using Value = Second; return uint(value); }}
+    }}
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "return First__operator_uint(value);" in output
+    assert "return Second__operator_uint(value);" not in output
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "*(Value*)data",
+        "*(device thread Value*)data",
+        "*(device Value**)data",
+        "((device Value*)data + 1.0)[index]",
+        "*(device Value*)(data) + unknown",
+        "((device Value*)data)[]",
+    ],
+)
+def test_pointer_cast_value_inference_rejects_unproven_shapes(expression):
+    assert MetalPreprocessor()._infer_argument_type(expression, {}, {}) is None
+
+
+@pytest.mark.parametrize(
+    "expression", ["(device Value*)data + 1", "(device Value*)(data) + 1"]
+)
+def test_pointer_cast_type_does_not_consume_binary_tail(expression):
+    assert MetalPreprocessor()._c_style_pointer_cast_type(expression) is None
+
+
 def test_conversion_restores_auto_type_after_inner_scope():
     output = MetalPreprocessor().preprocess("""
     struct First { float value; operator float() const { return value + 1; } };

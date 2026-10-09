@@ -10738,7 +10738,10 @@ def test_glsl_metal_private_scalar_struct_view_materializes_exact_value(tmp_path
         source_backend="metal",
     )
 
-    assert "ByteView direct = ByteView((byte & 0xffu));" in generated
+    assert "ByteView direct = _crosstl_metal_load_value_ByteView(byte);" in generated
+    assert "ByteView result;" in generated
+    assert "result.bits = value;" in generated
+    assert "return result;" in generated
     assert "consume(ByteView((byte & 0xffu)))" in generated
     assert "PointerReinterpretNode" not in generated
     assert "&byte" not in generated

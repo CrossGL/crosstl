@@ -22088,7 +22088,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if private_pointer_access is not None:
                 return private_pointer_access
             pointer_access = None
-            if self.hlsl_resource_pointer_alias_expression(array_expr):
+            if self.hlsl_resource_pointer_alias_expression(array_expr) or (
+                isinstance(array_expr, BinaryOpNode) and array_expr.op in {"+", "-"}
+            ):
                 pointer_access = self.generate_hlsl_resource_pointer_access(
                     array_expr, index_expr
                 )

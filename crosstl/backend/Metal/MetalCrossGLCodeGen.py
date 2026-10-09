@@ -3,6 +3,10 @@
 import re
 
 from ...translator.codegen.array_utils import evaluate_literal_int_expression
+from ...translator.codegen.pointer_reinterpret import (
+    PointerReinterpretationError,
+    scalar_storage_layout,
+)
 from ...translator.cooperative_matrix import (
     get_cooperative_matrix_fragment_mapping,
     has_cooperative_matrix_fragment_mapping,
@@ -1866,6 +1870,7 @@ class MetalToCrossGLConverter:
         self.metal_multiplication_assignments = {}
         self.metal_division_assignments = {}
         self.cooperative_matrix_fragment_helpers = {}
+        self.storage_wrapper_read_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
         self.cooperative_matrix_fragment_type_contracts = {}
         self.cooperative_matrix_fragment_type_replacements = {}
@@ -3068,6 +3073,7 @@ class MetalToCrossGLConverter:
         self.metal_multiplication_assignments = {}
         self.metal_division_assignments = {}
         self.cooperative_matrix_fragment_helpers = {}
+        self.storage_wrapper_read_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
         self.cooperative_matrix_fragment_type_contracts = {}
         self.cooperative_matrix_fragment_type_replacements = {}
@@ -3480,6 +3486,7 @@ class MetalToCrossGLConverter:
             self.preserve_unmaterialized_template_calls = False
 
         code += self.generate_pending_constructor_factories()
+        code += self.generate_storage_wrapper_read_helpers()
         code += "".join(deferred_template_code)
         for key in self.ordered_value_template_specialization_keys(
             specialization_entries
@@ -10931,6 +10938,13 @@ class MetalToCrossGLConverter:
         receiver_address_space=None,
         copy_initialize_lvalue=False,
     ):
+        wrapper_read = (
+            self.generate_storage_wrapper_value_read(expr, is_main, expected_type)
+            if not expected_array
+            else None
+        )
+        if wrapper_read is not None:
+            return wrapper_read
         if (
             expected_type
             and not self.is_plain_metal_auto_type(expected_type)
@@ -16846,6 +16860,8 @@ float {scalar}(float value) {{
         )
 
     def generate_postfix_operand(self, operand, is_main=False):
+        if isinstance(operand, (CastNode, UnaryOpNode)):
+            return f"({self.generate_expression(operand, is_main)})"
         return self.generate_precedence_operand(
             operand,
             self.postfix_precedence,
@@ -16860,6 +16876,152 @@ float {scalar}(float value) {{
         ):
             return f"({rendered_operand})"
         return rendered_operand
+
+    def generate_storage_wrapper_value_read(
+        self, expression, is_main=False, expected_type=None
+    ):
+        """Copy an immediate scalar-wrapper load without invoking constructors."""
+        cast = None
+        index = None
+        if isinstance(expression, ArrayAccessNode) and isinstance(
+            expression.array, CastNode
+        ):
+            cast, index = expression.array, expression.index
+        elif (
+            isinstance(expression, UnaryOpNode)
+            and expression.op == "*"
+            and isinstance(expression.operand, CastNode)
+        ):
+            cast = expression.operand
+        if cast is None:
+            return None
+        target_type = self.metal_pointer_pointee_type_once(
+            self.resolve_type_alias(cast.target_type)
+        )
+        if target_type is None:
+            return None
+        target_type = self.normalized_metal_type(target_type)
+        target_type = (
+            self.resolve_conditional_type(target_type, require_concrete=True)
+            or target_type
+        )
+        if expected_type:
+            destination = self.resolve_type_alias(expected_type)
+            if "&" in str(destination) or "*" in str(destination):
+                return None
+            destination = self.normalized_metal_type(destination)
+            destination = (
+                self.resolve_conditional_type(destination, require_concrete=True)
+                or destination
+            )
+            if (
+                not self.is_plain_metal_auto_type(destination)
+                and destination != target_type
+            ):
+                return None
+        declaration = self.struct_declarations.get(target_type)
+        if declaration is None:
+            return None
+        members = [
+            member
+            for member in declaration.members
+            if isinstance(member, VariableNode)
+            and "static" not in (getattr(member, "qualifiers", ()) or ())
+        ]
+        if (
+            len(members) != 1
+            or getattr(declaration, "aggregate_kind", None) == "union"
+            or getattr(declaration, "attributes", None)
+            or getattr(declaration, "alignas", None)
+        ):
+            return None
+        member = members[0]
+        if (
+            getattr(member, "array_sizes", None)
+            or getattr(member, "attributes", None)
+            or getattr(member, "alignas", None)
+            or getattr(member, "bitfield_width", None) is not None
+            or getattr(member, "declarator_type_suffix", None)
+            or set(getattr(member, "qualifiers", ()) or ()) & {"const", "volatile"}
+        ):
+            return None
+        member_type = self.resolve_type_alias(member.vtype)
+        if set(str(member_type).split()) & {"const", "volatile"}:
+            return None
+        member_layout = scalar_storage_layout(member_type)
+        if member_layout is None:
+            return None
+        constructors = self.metal_constructor_contract(target_type)
+        if constructors and self.has_declared_copy_or_move_constructor(
+            target_type, constructors[1]
+        ):
+            return None
+        source = cast.expression
+        source_type = self.metal_pointer_pointee_type_once(
+            self.expression_metal_type(source)
+        )
+        source_layout = scalar_storage_layout(source_type)
+        if source_layout != member_layout or self.metal_concrete_type_layout(
+            target_type
+        ) != (member_layout.byte_width, member_layout.byte_width):
+            return None
+        source_qualifiers = self.metal_addressable_storage_qualifiers(source)
+        target_qualifiers = set(getattr(cast, "qualifiers", ()) or ())
+        address_spaces = {"device", "constant", "thread", "threadgroup"}
+        source_spaces = set(source_qualifiers or ()) & address_spaces
+        target_spaces = target_qualifiers & address_spaces
+        if (
+            source_qualifiers is None
+            or len(source_spaces) != 1
+            or target_spaces != source_spaces
+            or "volatile" in set(source_qualifiers) | target_qualifiers
+        ):
+            raise PointerReinterpretationError(
+                "Cannot preserve scalar-wrapper load address space or volatile access",
+                source_type=source_type,
+                target_type=target_type,
+                address_space=" ".join(sorted(target_spaces)) or None,
+                access="read",
+                reason="wrapper-load-storage-unproven",
+                source_location=getattr(expression, "source_location", None),
+            )
+        if isinstance(source, UnaryOpNode) and source.op == "&" and index is None:
+            value = source.operand
+        else:
+            value = ArrayAccessNode(source, index if index is not None else "0")
+        mapped_type = self.map_type(target_type)
+        key = (mapped_type, member.name, self.map_type(member_type))
+        if key not in self.storage_wrapper_read_helpers:
+            base_name = self.sanitize_identifier(
+                f"_crosstl_metal_load_value_{target_type}"
+            )
+            reserved = self.wide_vector_reserved_names | {
+                self.sanitize_identifier(name) for name in self.user_function_names
+            }
+            name = base_name
+            while name in reserved:
+                name += "_"
+            self.wide_vector_reserved_names.add(name)
+            field = self.struct_member_name_maps.get(target_type, {}).get(
+                member.name, self.sanitize_identifier(member.name)
+            )
+            self.storage_wrapper_read_helpers[key] = (name, field)
+        helper = self.storage_wrapper_read_helpers[key][0]
+        return f"{helper}({self.generate_expression(value, is_main)})"
+
+    def generate_storage_wrapper_read_helpers(self):
+        code = ""
+        for (wrapper, _, scalar), (name, field) in sorted(
+            self.storage_wrapper_read_helpers.items()
+        ):
+            code += (
+                f"    {wrapper} {name}({scalar} value) {{\n"
+                f"        {wrapper} result;\n"
+                f"        result.{field} = value;\n"
+                "        return result;\n"
+                "    }\n\n"
+            )
+        return code
 
     def cast_uses_constructor_syntax(self, mapped_type):
         mapped_text = str(mapped_type).strip()

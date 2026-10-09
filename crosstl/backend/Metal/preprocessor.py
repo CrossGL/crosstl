@@ -13079,8 +13079,19 @@ class MetalPreprocessor(HLSLPreprocessor):
         )
         if closing != len(expression) - 1:
             return None
+        return self._concrete_type_alias_at(
+            constructor.group("name"), position, type_aliases, local_integral_constants
+        )
+
+    def _concrete_type_alias_at(
+        self,
+        type_name: str,
+        position: int,
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        local_integral_constants: Dict[str, List[_MetalIntegralConstantBinding]],
+    ) -> Optional[str]:
         source_type = self._canonicalize_type_aliases_at(
-            constructor.group("name"), type_aliases, position
+            type_name, type_aliases, position
         )
         conditional = re.sub(r"^typename\s+", "", str(source_type or "").strip())
         type_accessor = conditional.endswith("::type")
@@ -20247,6 +20258,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                     self._is_metal_scalar_or_vector_type(inferred or "")
                 ):
                     inferred = None
+            if inferred and type_aliases:
+                inferred = self._concrete_type_alias_at(
+                    inferred, position, type_aliases, local_integral_constants or {}
+                )
             normalized = self._normalize_inferred_expression_type(inferred or "")
             entries = local_variable_types.setdefault(match.group("name"), [])
             scope = self._innermost_lexical_scope(
@@ -20639,20 +20654,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         # and unbalanced/compound tails remain unresolved rather than guessed.
         if expr.startswith("*") and not expr.startswith("**"):
             cast = expr[1:].lstrip()
-            if cast.startswith("("):
-                cast_close = self._find_matching_delimiter(cast, 0, "(", ")")
-                if cast_close is not None:
-                    cast_type = cast[1:cast_close].strip()
-                    value = cast[cast_close + 1 :].strip()
-                    if cast_type.endswith("*") and value:
-                        pointee = cast_type[:-1].strip()
-                        pointee = re.sub(
-                            r"^(?:(?:const|volatile|thread|private|function)\s+)+",
-                            "",
-                            pointee,
-                        ).strip()
-                        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_:]*", pointee):
-                            return self._normalize_inferred_type(pointee)
+            cast_type = self._c_style_pointer_cast_type(cast)
+            if cast_type is not None:
+                return self._pointer_pointee_value_type(cast_type)
 
             operand = expr[1:].strip()
             parenthesized = False
@@ -20751,8 +20755,8 @@ class MetalPreprocessor(HLSLPreprocessor):
 
         # Resolve one declared array/pointer layer per balanced subscript. Do not
         # collapse an array of pointers to its pointee before the second index.
-        bracket = expr.find("[")
-        if bracket != -1 and expr.endswith("]"):
+        bracket = self._find_next_top_level_char(expr, 0, "[", track_angles=False)
+        if bracket is not None and expr.endswith("]"):
             element = self._infer_subscript_base_element_type(
                 expr[:bracket].strip(), buffer_element_types, struct_field_types
             )
@@ -21573,10 +21577,32 @@ class MetalPreprocessor(HLSLPreprocessor):
         #     struct field `member`.
         if IDENTIFIER_RE.fullmatch(base):
             return self._buffer_element_type(buffer_element_types, base)
+        cast_type = self._c_style_pointer_cast_type(base)
+        if cast_type is not None:
+            return self._pointer_pointee_value_type(cast_type)
         field_type = self._struct_member_field_type(base, struct_field_types)
         if field_type is None:
             return None
         return self._subscript_declared_element_type(field_type)
+
+    def _c_style_pointer_cast_type(self, expression: str) -> Optional[str]:
+        expression = self._strip_enclosing_parens(expression.strip())
+        if not expression.startswith("("):
+            return None
+        close = self._find_matching_delimiter(expression, 0, "(", ")")
+        if close is None:
+            return None
+        pointer = self._normalize_known_address_space_pointer_type(expression[1:close])
+        operand = expression[close + 1 :].strip()
+        # Admit one complete operand, not a cast followed by a binary tail.
+        if pointer is None or not operand:
+            return None
+        if IDENTIFIER_RE.fullmatch(operand) or (
+            operand.startswith("(")
+            and self._find_matching_delimiter(operand, 0, "(", ")") == len(operand) - 1
+        ):
+            return pointer
+        return None
 
     def _subscript_declared_element_type(self, type_text: str) -> Optional[str]:
         text = self._normalize_template_argument_text(type_text)

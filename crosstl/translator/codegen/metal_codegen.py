@@ -17,6 +17,7 @@ from ..ast import (
     BinaryOpNode,
     BlockNode,
     BreakNode,
+    CastNode,
     ConstructorNode,
     ContinueNode,
     CooperativeMatrixOpNode,
@@ -10642,6 +10643,18 @@ class MetalCodeGen:
             if block_load is not None:
                 return block_load
             array = self.generate_expression(expr.array)
+            if isinstance(
+                expr.array,
+                (
+                    AssignmentNode,
+                    BinaryOpNode,
+                    TernaryOpNode,
+                    CastNode,
+                    PointerReinterpretNode,
+                    UnaryOpNode,
+                ),
+            ):
+                array = f"({array})"
             index = self.generate_expression(expr.index)
             return f"{array}[{index}]"
         elif isinstance(expr, ConstructorNode):
