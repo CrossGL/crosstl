@@ -8,7 +8,15 @@ instead of constructing target resource-object arrays. The source AST is retaine
 from copy import copy, deepcopy
 from dataclasses import dataclass
 
-from ..arithmetic_conversions import arithmetic_type_name, target_arithmetic_type
+from ..arithmetic_conversions import (
+    ArithmeticScalarKind,
+    ArithmeticType,
+    UnrepresentableArithmeticConversion,
+    arithmetic_type_name,
+    resolve_arithmetic_conversion,
+    source_integer_shape,
+    target_arithmetic_type,
+)
 from ..ast import (
     AST_CHILD_FIELD_EXCLUSIONS,
     ArrayAccessNode,
@@ -19,12 +27,15 @@ from ..ast import (
     BinaryOpNode,
     BlockNode,
     CastNode,
+    CooperativeMatrixType,
+    DoWhileNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
     IfNode,
     LiteralNode,
+    MatrixType,
     MemberAccessNode,
     NamedType,
     ParameterNode,
@@ -35,11 +46,13 @@ from ..ast import (
     ReturnNode,
     StructMemberNode,
     StructNode,
+    SwitchNode,
     TernaryOpNode,
     TypeNode,
     UnaryOpNode,
     VariableNode,
     VectorType,
+    WhileNode,
 )
 from .array_utils import evaluate_literal_int_expression
 
@@ -72,6 +85,118 @@ class _RootPointer(_Pointer):
 
 def _name(value):
     return value if isinstance(value, str) else getattr(value, "name", None)
+
+
+def _numeric(value):
+    if isinstance(value, VectorType):
+        scalar = _numeric(value.element_type)
+        if scalar is not None and scalar.lanes == 1:
+            return ArithmeticType(
+                scalar.source_type,
+                scalar.target_type,
+                scalar.kind,
+                scalar.bits,
+                value.size,
+            )
+        return None
+    name = _name(value)
+    numeric = target_arithmetic_type(name)
+    integer = source_integer_shape(name or "")
+    if integer is not None:
+        kind, bits, lanes = integer
+        return ArithmeticType(
+            name, name, kind, getattr(value, "size_bits", None) or bits, lanes
+        )
+    if numeric is not None and getattr(value, "size_bits", None) is not None:
+        return ArithmeticType(name, name, numeric.kind, value.size_bits, numeric.lanes)
+    return numeric
+
+
+def _numeric_node(numeric, lanes=1):
+    narrow = numeric.kind != ArithmeticScalarKind.BOOLEAN and numeric.bits < 32
+    component = PrimitiveType(
+        arithmetic_type_name(numeric.kind, 32 if narrow else numeric.bits),
+        size_bits=numeric.bits if narrow else None,
+    )
+    return component if lanes == 1 else VectorType(component, lanes)
+
+
+def _type_key(value):
+    if isinstance(value, _Pointer):
+        return ("pointer", value.element, value.space, value.writable, value.readable)
+    if isinstance(value, tuple):
+        size = evaluate_literal_int_expression(value[1])
+        element = _type_key(value[0])
+        return (
+            ("array", element, size)
+            if size is not None and element is not None
+            else None
+        )
+    if isinstance(value, (MatrixType, CooperativeMatrixType)):
+        rows = evaluate_literal_int_expression(value.rows)
+        cols = evaluate_literal_int_expression(value.cols)
+        element = _type_key(value.element_type)
+        if rows is None or cols is None or element is None:
+            return None
+        key = ("matrix", element, rows, cols)
+        if isinstance(value, CooperativeMatrixType):
+            key = (
+                "cooperative",
+                *key,
+                value.scope,
+                value.use,
+                value.layout,
+                value.fragment_layout,
+                value.subgroup_size,
+                value.elements_per_lane,
+                value.fragment_provenance,
+                value.fragment_mapping,
+                value.fragment_mapping_provenance,
+            )
+        return key
+    numeric = _numeric(value)
+    if numeric is not None:
+        return ("numeric", numeric.kind, numeric.bits, numeric.lanes)
+    if _name(value) and not getattr(value, "generic_args", None):
+        return ("named", _name(value))
+    return None
+
+
+def _conversion_rank(expected, actual):
+    if _type_key(expected) is not None and _type_key(expected) == _type_key(actual):
+        return 0
+    if isinstance(expected, _Pointer) and isinstance(actual, _Pointer):
+        if (
+            expected.element == actual.element
+            and expected.space == actual.space
+            and expected.readable == actual.readable
+            and not expected.writable
+            and actual.writable
+        ):
+            return 1
+        return None
+    left, right = _numeric(expected), _numeric(actual)
+    if left is None or right is None or left.lanes != 1 or right.lanes != 1:
+        return None
+    if any(
+        type_.kind == ArithmeticScalarKind.FLOATING and type_.bits not in {32, 64}
+        for type_ in (left, right)
+    ):
+        return None
+    if (
+        left.kind == ArithmeticScalarKind.SIGNED_INTEGER
+        and left.bits == 32
+        and right.is_integer
+        and right.bits < 32
+    ):
+        return 1
+    if (
+        left.kind == right.kind == ArithmeticScalarKind.FLOATING
+        and left.bits == 64
+        and right.bits == 32
+    ):
+        return 1
+    return 2
 
 
 def _id(name):
@@ -240,6 +365,13 @@ class _Lowering:
             for function in overloads
         }
         self.reachable = set()
+        self.bound_calls = {}
+        self.overload_names = {}
+        self.global_types = {
+            variable.name: self.source_type(variable.var_type, variable)
+            for variable in ast.global_variables
+            if isinstance(variable, VariableNode) and not variable.is_type_alias
+        }
         self.current = entry
 
     def fresh(self, stem):
@@ -318,7 +450,9 @@ class _Lowering:
     def resource_arguments(self):
         return [_id(name) for _param, _pointer, name in self.resources]
 
-    def function_for_call(self, node):
+    def function_for_call(self, node, env=None):
+        if id(node) in self.bound_calls:
+            return self.bound_calls[id(node)]
         candidates = self.functions.get(_name(node.function), [])
         candidates = [
             f
@@ -326,8 +460,84 @@ class _Lowering:
             if len(self.parameter_types[id(f)]) == len(node.arguments)
         ]
         if len(candidates) > 1:
-            raise ResourceAggregateError("overloaded-resource-call", node)
-        return candidates[0] if candidates else None
+            actual = [self.infer(arg, env or {}) for arg in node.arguments]
+            if any(type_ is None for type_ in actual) or node.generic_args:
+                raise ResourceAggregateError("overloaded-resource-call", node)
+            ranked = []
+            for function in candidates:
+                ranks = tuple(
+                    _conversion_rank(expected, type_)
+                    for expected, type_ in zip(
+                        self.parameter_types[id(function)], actual
+                    )
+                )
+                if None not in ranks:
+                    # Reference binding needs address, constness and value-category
+                    # evidence in addition to the value type. Do not guess it.
+                    if any(
+                        isinstance(p.param_type, ReferenceType)
+                        for p in function.parameters
+                    ):
+                        raise ResourceAggregateError("overloaded-reference-call", node)
+                    if any(
+                        rank and set(p.qualifiers) & {"out", "inout"}
+                        for rank, p in zip(ranks, function.parameters)
+                    ):
+                        continue
+                    ranked.append((function, ranks))
+            winners = [
+                function
+                for function, ranks in ranked
+                if all(
+                    other is function
+                    or (
+                        all(a <= b for a, b in zip(ranks, other_ranks))
+                        and any(a < b for a, b in zip(ranks, other_ranks))
+                    )
+                    for other, other_ranks in ranked
+                )
+            ]
+            if len(winners) != 1:
+                raise ResourceAggregateError("overloaded-resource-call", node)
+            candidates = winners
+        callee = candidates[0] if candidates else None
+        self.bound_calls[id(node)] = callee
+        return callee
+
+    def bind_calls(self, node, env):
+        if isinstance(node, BlockNode):
+            scoped = dict(env)
+            for item in node.statements:
+                self.bind_calls(item, scoped)
+        elif isinstance(node, VariableNode):
+            self.bind_calls(node.initial_value, env)
+            type_ = self.source_type(node.var_type, node)
+            env[node.name] = (
+                self.infer(node.initial_value, env) if _name(type_) == "auto" else type_
+            )
+        elif isinstance(node, ForNode):
+            scoped = dict(env)
+            for item in (node.init, node.condition, node.update, node.body):
+                self.bind_calls(item, scoped)
+        elif isinstance(node, SwitchNode):
+            self.bind_calls(node.expression, env)
+            scoped = dict(env)
+            for case in node.cases:
+                self.bind_calls(case.value, scoped)
+                for item in case.statements:
+                    self.bind_calls(item, scoped)
+            self.bind_calls(node.default_case, scoped)
+        elif isinstance(node, FunctionCallNode):
+            for argument in node.arguments:
+                self.bind_calls(argument, env)
+            callee = self.function_for_call(node, env)
+            if callee is self.entry:
+                raise ResourceAggregateError("recursive-entry", node)
+            if callee is not None:
+                self.discover(callee)
+        elif isinstance(node, ASTNode) and not isinstance(node, TypeNode):
+            for child in node.child_nodes():
+                self.bind_calls(child, dict(env))
 
     def discover(self, function):
         if id(function) in self.reachable:
@@ -337,13 +547,14 @@ class _Lowering:
             raise ResourceAggregateError("reference-return", function)
         if function.body is None:
             raise ResourceAggregateError("external-resource-call", function)
-        for node in function.body.walk():
-            if isinstance(node, FunctionCallNode):
-                callee = self.function_for_call(node)
-                if callee is not None:
-                    if callee is self.entry:
-                        raise ResourceAggregateError("recursive-entry", node)
-                    self.discover(callee)
+        env = dict(self.global_types)
+        env.update(
+            zip(
+                (p.name for p in function.parameters),
+                self.parameter_types[id(function)],
+            )
+        )
+        self.bind_calls(function.body, env)
 
     def elide_unused_null_parameters(self):
         """Remove proven unused helper formals, never manufacture null handles."""
@@ -546,45 +757,103 @@ class _Lowering:
             ]
 
     def infer(self, node, env):
+        if isinstance(node, LiteralNode):
+            return node.literal_type
+        if isinstance(node, CastNode):
+            return self.source_type(node.target_type)
         if isinstance(node, IdentifierNode):
             return env.get(node.name)
         if isinstance(node, MemberAccessNode):
-            return self.fields.get(_name(self.infer(node.object_expr, env)), {}).get(
-                node.member
-            )
+            owner = self.infer(node.object_expr, env)
+            numeric = _numeric(owner)
+            if (
+                numeric is not None
+                and numeric.lanes > 1
+                and any(
+                    node.member
+                    and all(c in alphabet[: numeric.lanes] for c in node.member)
+                    for alphabet in ("xyzw", "rgba", "stpq")
+                )
+                and 1 <= len(node.member) <= 4
+            ):
+                return _numeric_node(numeric, len(node.member))
+            return self.fields.get(_name(owner), {}).get(node.member)
         if isinstance(node, ArrayAccessNode):
             owner = self.infer(node.array_expr, env)
             if isinstance(owner, tuple):
                 return owner[0]
             if isinstance(owner, _Pointer):
                 return PrimitiveType(owner.element)
+            numeric = _numeric(owner)
+            if numeric is not None and numeric.lanes > 1:
+                return _numeric_node(numeric)
         if isinstance(node, FunctionCallNode):
             if _name(node.function) in self.structs:
                 return NamedType(_name(node.function))
-            callee = self.function_for_call(node)
+            if _numeric(_name(node.function)) is not None:
+                return PrimitiveType(_name(node.function))
+            callee = self.function_for_call(node, env)
             if callee is not None:
                 return self.returns[id(callee)]
-        if isinstance(node, BinaryOpNode) and node.operator in {"+", "-"}:
+        if isinstance(node, BinaryOpNode):
             left = self.infer(node.left, env)
             right = self.infer(node.right, env)
-            if isinstance(left, _Pointer):
+            if node.operator in {"+", "-"} and isinstance(left, _Pointer):
                 if isinstance(right, _Pointer):
                     return PrimitiveType("int64_t")
                 return left
             if node.operator == "+" and isinstance(right, _Pointer):
                 return right
+            return self.arithmetic_result(left, right, node.operator)
         if isinstance(node, UnaryOpNode):
             if node.operator == "&" and isinstance(node.operand, ArrayAccessNode):
                 return self.infer(node.operand.array_expr, env)
             if node.operator in {"++", "--"}:
                 return self.infer(node.operand, env)
+            if node.operator == "*":
+                pointer = self.infer(node.operand, env)
+                if isinstance(pointer, _Pointer):
+                    return PrimitiveType(pointer.element)
+            if node.operator in {"+", "-", "~"}:
+                value = self.infer(node.operand, env)
+                return self.arithmetic_result(value, PrimitiveType("int"), "+")
+            if node.operator == "!":
+                numeric = _numeric(self.infer(node.operand, env))
+                if numeric is not None and numeric.lanes == 1:
+                    return PrimitiveType("bool")
         if isinstance(node, TernaryOpNode):
             left, right = self.infer(node.true_expr, env), self.infer(
                 node.false_expr, env
             )
             if isinstance(left, _Pointer) and left == right:
                 return left
+            if _type_key(left) is not None and _type_key(left) == _type_key(right):
+                return left
+            return self.arithmetic_result(left, right, "?:")
         return None
+
+    def arithmetic_result(self, left, right, operator):
+        left, right = _numeric(left), _numeric(right)
+        if left is None or right is None:
+            return None
+        if any(
+            type_.kind == ArithmeticScalarKind.FLOATING and type_.bits not in {32, 64}
+            for type_ in (left, right)
+        ):
+            return None
+        if operator in {"&&", "||"} and left.lanes == right.lanes == 1:
+            return PrimitiveType("bool")
+        try:
+            conversion = resolve_arithmetic_conversion(
+                left,
+                right,
+                operator,
+                supported_integer_widths=frozenset({8, 16, 32, 64}),
+                supported_floating_widths=frozenset({16, 32, 64}),
+            )
+        except UnrepresentableArithmeticConversion:
+            return None
+        return PrimitiveType(conversion.result_type) if conversion is not None else None
 
     def contains_reference(self, source, visited=()):
         if isinstance(source, _Pointer):
@@ -1011,7 +1280,7 @@ class _Lowering:
                         *self.resource_arguments(),
                     ],
                 )
-            callee = self.function_for_call(node)
+            callee = self.function_for_call(node, env)
             fields = self.fields.get(_name(node.function))
             types = (
                 self.parameter_types[id(callee)]
@@ -1033,7 +1302,14 @@ class _Lowering:
             if callee is not None:
                 args.extend(self.resource_arguments())
             return FunctionCallNode(
-                node.function, args, node.generic_args or None, source_location=location
+                (
+                    _id(self.overload_names[id(callee)])
+                    if id(callee) in self.overload_names
+                    else node.function
+                ),
+                args,
+                node.generic_args or None,
+                source_location=location,
             )
         if isinstance(node, TernaryOpNode):
             if isinstance(actual, _Pointer):
@@ -1125,11 +1401,39 @@ class _Lowering:
                 self.statement(node.body, scoped),
                 source_location=node.source_location,
             )
+        if isinstance(node, (WhileNode, DoWhileNode)):
+            result = copy(node)
+            result.condition = self.expression(node.condition, env)
+            result.body = self.statement(node.body, dict(env))
+            return result
+        if isinstance(node, SwitchNode):
+            result = copy(node)
+            result.expression = self.expression(node.expression, env)
+            result.cases = []
+            scoped = dict(env)
+            for case in node.cases:
+                rewritten = copy(case)
+                rewritten.value = self.expression(case.value, scoped)
+                rewritten.statements = [
+                    self.statement(item, scoped) for item in case.statements
+                ]
+                result.cases.append(rewritten)
+            result.default_case = self.statement(node.default_case, scoped)
+            return result
         return self.expression(node, env)
 
     def run(self):
         self.discover(self.entry)
         self.elide_unused_null_parameters()
+        # Bind calls to distinct symbols before pointer handles erase access and
+        # address-space differences between source overloads.
+        for name, overloads in self.functions.items():
+            if len(overloads) > 1:
+                for function in overloads:
+                    if id(function) in self.reachable and function is not self.entry:
+                        self.overload_names[id(function)] = self.fresh(
+                            f"{name}_resource_overload"
+                        )
         # A changed resource-aggregate type cannot retain an unlowered helper ABI.
         # Prune only unreachable resource helpers; unrelated global initializers
         # may still refer to ordinary value functions outside the entry closure.
@@ -1173,10 +1477,13 @@ class _Lowering:
                     continue
                 self.current = function
                 types = self.parameter_types[id(function)]
-                env = {
-                    param.name: type_
-                    for param, type_ in zip(function.parameters, types)
-                }
+                env = dict(self.global_types)
+                env.update(
+                    {
+                        param.name: type_
+                        for param, type_ in zip(function.parameters, types)
+                    }
+                )
                 if function is self.entry:
                     for index, (param, pointer, _root) in enumerate(self.resources):
                         env[param.name] = _RootPointer(
@@ -1198,6 +1505,7 @@ class _Lowering:
                             param.param_type = self.target_type(type_)
                     function.parameters.extend(self.resource_parameters())
                     function.return_type = self.target_type(self.returns[id(function)])
+                    function.name = self.overload_names.get(id(function), function.name)
         self.entry.body.statements[:0] = [
             VariableNode(
                 name,

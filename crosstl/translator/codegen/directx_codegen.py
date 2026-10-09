@@ -39746,16 +39746,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.hlsl_parameter_qualifiers(parameters[index])
             ).intersection({"out", "inout"}):
                 # Value conversion would turn a writable argument into a temporary.
-                # Capture indexed byte locations before HLSL's copy-in/copy-out.
-                if self.hlsl_byte_integer_shape(expected_type) is not None:
-                    assignments, arg = self.hlsl_stabilize_inout_lvalue(
-                        call_node or arg,
-                        arg,
-                        self.map_type(expected_type),
-                        operation="byte-reference argument",
-                        reason="byte-reference-unstable-lvalue",
-                    )
-                    argument_assignments.extend(assignments)
+                # Capture the location for both copy-in and copy-out, including
+                # aggregate receivers and indices changed inside the callee.
+                byte = self.hlsl_byte_integer_shape(expected_type) is not None
+                assignments, arg = self.hlsl_stabilize_inout_lvalue(
+                    call_node or arg,
+                    arg,
+                    self.map_type(expected_type),
+                    operation=(
+                        "byte-reference argument" if byte else "reference argument"
+                    ),
+                    reason=(
+                        "byte-reference-unstable-lvalue"
+                        if byte
+                        else "reference-unstable-lvalue"
+                    ),
+                )
+                argument_assignments.extend(assignments)
                 rendered_args.append(self.generate_expression_with_expected(arg, None))
             else:
                 rendered_args.append(

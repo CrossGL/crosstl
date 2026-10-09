@@ -212,6 +212,20 @@ FIELD_CASES = (
 FIELD_INPUTS = (0, 11, 0xFFFFFFFF, 0x80000000, 0x89ABCDEF)
 
 
+@pytest.mark.parametrize("case", ["array", "grid"])
+def test_hlsl_template_field_receiver_captures_each_index(tmp_path, case):
+    _, request, _ = _field_request(tmp_path, "directx", case)
+    generated = request.artifact_path.read_text()
+    call = next(
+        line for line in generated.splitlines() if "Payload__update(self.items[" in line
+    )
+    assert "Payload__update(self.items[__crossgl_integer_index" in call
+    assert call.count(" = ") == (2 if case == "grid" else 1)
+    assert generated.count("index++") == (1 if case == "array" else 0)
+    assert generated.count("row++") == (1 if case == "grid" else 0)
+    assert generated.count("column++") == (1 if case == "grid" else 0)
+
+
 def _field_source(case):
     field = "Payload item;"
     parameters = "T delta"

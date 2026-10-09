@@ -50334,6 +50334,39 @@ def test_hlsl_software_subgroup_rejects_mutated_loop_controls(mutation):
     assert excinfo.value.reason == "potentially-divergent-control-flow"
 
 
+@pytest.mark.parametrize("qualifier", ["out", "inout"])
+@pytest.mark.parametrize("rank", [1, 2])
+@pytest.mark.parametrize("effectful", [False, True])
+def test_hlsl_aggregate_reference_indices_are_captured(
+    tmp_path, qualifier, rank, effectful
+):
+    indices = "[index++]" if effectful else "[index]"
+    if rank == 2:
+        indices += "[column++]" if effectful else "[column]"
+    dimensions = "[2]" * rank
+    source = f"""shader IndexedReference {{
+        struct Payload {{ uint value; }}
+        void update({qualifier} Payload target) {{ target.value = 7u; }}
+        compute {{ void main(RWStructuredBuffer<uint> output @buffer(0)) {{
+            Payload values{dimensions};
+            uint index = 0u;
+            uint column = 0u;
+            if (output[0] != 0u) {{ update(values{indices}); }}
+            output[1] = index + column;
+        }} }}
+    }}"""
+    ast = parse_code(tokenize_code(source))
+    generated = HLSLCodeGen().generate(ast)
+    call = next(line for line in generated.splitlines() if "update(values[" in line)
+    assert "update(values[__crossgl_integer_index" in call
+    assert call.count(" = ") == rank
+    assert generated.index("if (") < generated.index(call.strip())
+    if effectful:
+        assert generated.count("index++") == 1
+        assert generated.count("column++") == (rank - 1)
+    assert_directx_warnings_clean_if_available(generated, tmp_path, profile="cs_6_6")
+
+
 def test_hlsl_software_subgroup_helper_cannot_inherit_uniform_parameter_name():
     code = """
     shader ShadowedUniformParameter {

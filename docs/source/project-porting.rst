@@ -5042,6 +5042,23 @@ does not change the source buffer ABI to store these private handles.
 OpenGL specializes the same private handles against concrete storage buffers;
 final subscripts require proven bounds or explicit allocation-derived range
 assertions. Unsupported aggregate escapes remain diagnostic on both targets.
+Calls within the selected resource-helper graph are bound to source overloads
+before private handles replace pointers. Selection uses lexical declarations,
+array and vector components, scalar arithmetic conversions, and exact aggregate
+or cooperative-matrix contracts. A candidate must be no worse for every argument
+and better for at least one; unresolved types, ambiguous conversions and unproven
+reference bindings remain diagnostic. Selected overloads receive distinct symbols
+so target type erasure cannot change the call. Native controls cover scalar and
+aggregate arguments, pointer access modes, loop-local shadows and single argument
+evaluation. This does not establish support for arbitrary pointer reinterpretation
+inside aggregate helpers or for a complete matrix kernel.
+
+HLSL writable arguments capture nonliteral array indices at the call expression
+before copy-in and copy-out, including indexed aggregate receivers. The captured
+location is reused for writeback; index side effects are not repeated, and captures
+remain inside their original conditional or loop evaluation. This does not solve
+overlapping source references whose writes must be visible through another
+parameter within the callee.
 Two- and four-component vectors of 32-bit floating-point, signed integer and
 unsigned integer elements retain their component types and widths in these
 private references. Offsets count complete vectors, not scalar components;
