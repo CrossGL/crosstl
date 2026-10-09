@@ -93,12 +93,10 @@ from demos.integrations.mlx.portable_host.random_packages import (
     load_index as load_random_index,
 )
 from demos.integrations.mlx.portable_host.reduction_packages import (
+    ALL_ENTRIES as REDUCTION_ENTRIES,
+)
+from demos.integrations.mlx.portable_host.reduction_packages import (
     COLUMN_ENTRIES,
-)
-from demos.integrations.mlx.portable_host.reduction_packages import (
-    ENTRIES as REDUCTION_ENTRIES,
-)
-from demos.integrations.mlx.portable_host.reduction_packages import (
     INIT_ENTRIES,
     ROW_ENTRIES,
 )
@@ -830,7 +828,8 @@ class HostRuntime:
                 buffer.data, ctypes.POINTER(ctype * buffer.count)
             ).contents
             if (
-                comparison
+                (comparison or (reduction and dtype == "bfloat16"))
+                and buffer.output == 0
                 and dtype in {"float32", "bfloat16"}
                 and self.target != "metal"
             ):
@@ -1192,6 +1191,14 @@ class HostRuntime:
                                     buffer.count :
                                 ],
                                 "reductionValues": output["values"][: buffer.count],
+                                **(
+                                    {
+                                        "inputs": inputs,
+                                        "packageRoot": str(package_directory),
+                                    }
+                                    if self.retain_native_modules
+                                    else {}
+                                ),
                                 "reductionMetadata": (
                                     {"outputSize": threads}
                                     if initialization

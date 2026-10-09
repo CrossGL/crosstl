@@ -41,7 +41,8 @@ def test_invalid_all_reduce_stage_is_rejected(count):
 
 
 @pytest.mark.parametrize(
-    "dtype,itemsize", [("float32", 4), ("int32", 4), ("uint32", 4), ("bool_", 1)]
+    "dtype,itemsize",
+    [("float32", 4), ("int32", 4), ("uint32", 4), ("bool_", 1), ("bfloat16", 2)],
 )
 @pytest.mark.parametrize(
     "boundary", [65536, 131075, "before", "at", "after", 2**31 - 1]

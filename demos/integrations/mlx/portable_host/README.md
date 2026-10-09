@@ -327,10 +327,13 @@ jobs, without adding operating-system runners. This bounded API proof does not
 establish a passing upstream suite. General-gather batching now permits the large
 indexed inputs in these tests. With large slice assignments enabled, all four
 unchanged block-format tests can execute bfloat16 casts, arithmetic and copies
-with the optional bfloat family. Local OpenGL execution passes the unchanged
-MXFP4 and MXFP8 quantize/dequantize tests after supplying their Boolean reduction
-variants. The scale-error and NVFP4 tests still reach unsupported bfloat16
-reductions under [#2147](https://github.com/CrossGL/crosstl/issues/2147). Larger copy
+with the optional bfloat family. Local generated Metal and OpenGL execution now
+passes all four unchanged tests: MXFP4 and MXFP8 quantize/dequantize, MXFP8 scale
+error, and NVFP4 quantize/dequantize with its global-scale graph. These runs load
+the bfloat extrema family and Boolean/float32 reduction variants at widths 32,
+128 and 256; separate CPU controls pass the same tests. Windows execution and
+full-suite parity remain required under
+[#2147](https://github.com/CrossGL/crosstl/issues/2147). Larger copy
 launches remain separate work under [#2148](https://github.com/CrossGL/crosstl/issues/2148). Those
 tests are not rewritten, skipped or given wider tolerances. Strided bfloat16 and
 encoded-scale copies remain subject to the existing copy-path restrictions.
@@ -1125,7 +1128,8 @@ float32/bfloat16 casts, strided copies, absolute value, six arithmetic operation
 and seven comparisons. `HostRuntime(..., bfloat=...)` preserves bfloat16 output
 allocations; it does not promote the computation graph or use CPU fallback.
 Full-array fills and replacement slice assignments use the same translated copy
-path. Reduction updates and bfloat16 reductions remain unsupported.
+path. Bfloat minimum and maximum reductions have a separate optional package
+family described below. Reduction updates, sums and products remain unsupported.
 Typed storage views remain separate work under
 [#2150](https://github.com/CrossGL/crosstl/issues/2150); they must not be
 substituted with numeric casts.
@@ -1161,6 +1165,43 @@ not establish exceptional-value arithmetic, all bfloat operators, arbitrary
 copy grids or a passing complete upstream suite. The existing half-host jobs
 run the native checks without additional runners; shared Python contract tests
 run on Linux only. The job deadline accounts for the bounded commands and setup.
+
+### Bfloat Reductions
+
+The reduction builder's `bfloat` family packages unchanged `reduce.metal`
+minimum and maximum entries. Host routing preserves two-byte logical allocation
+sizes, upstream launch selection and intermediate bfloat storage in two-pass
+whole-array reductions. Small rows use the existing exact-grid package cache,
+including partial workgroups and cooperative reductions. Larger row and column
+plans remain explicit unsupported operations; they are not promoted to float32.
+
+```sh
+python -m demos.integrations.mlx.portable_host.reduction_packages \
+  --mlx-root mlx-upstream --target metal --family bfloat \
+  --width 32 --width 128 --width 256 --output-dir bfloat-reductions
+python -m demos.integrations.mlx.portable_host.verify_bfloat_reductions \
+  --mlx-root mlx-upstream --packages host-packages --bfloat bfloat-packages \
+  --reductions bfloat-reductions --output-dir bfloat-reductions-evidence
+```
+
+The required native proof checks 36 public-API workloads against separate CPU
+execution and independent storage-word references. It covers negative maxima,
+positive and negative infinity, NaNs, signed zero, 65,536-element inputs, both
+reduction passes, scalar/cooperative rows and a 1,031-row partial workgroup.
+Every partial result, output guard, source artifact and native module is checked.
+Local Metal and OpenGL runs each pass all 36 workloads with 40 native dispatches;
+all six HLSL variants compile with DXC. Windows native execution is a separate
+required CI result, not inferred from those compiler checks.
+The default reduction package inventory is unchanged. Existing platform jobs
+run this optional family without adding runners.
+
+Software subgroup lowering retains narrow conversions and their rounding when
+converging pure vote-guarded reductions. It does not treat subgroup votes as
+workgroup-uniform or speculate memory accesses and effectful calls. The shared
+native regression gate also compares generated and original Metal execution.
+Non-Metal subnormal bfloat reductions remain rejected under
+[#2000](https://github.com/CrossGL/crosstl/issues/2000). These checks do not establish
+all narrow reduction operations or a complete upstream test-suite pass.
 
 ## Random Generation
 

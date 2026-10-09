@@ -4,7 +4,7 @@ import ctypes
 
 # Generated buffer indices share the copy adapter's signed 32-bit bound.
 MAX_ELEMENTS = 2**31 - 1
-ITEM_SIZES = {"float32": 4, "int32": 4, "uint32": 4, "bool_": 1}
+ITEM_SIZES = {"float32": 4, "int32": 4, "uint32": 4, "bool_": 1, "bfloat16": 2}
 
 
 def stage(count, dtype="float32"):
@@ -14,7 +14,7 @@ def stage(count, dtype="float32"):
         )
     if not isinstance(dtype, str) or dtype not in ITEM_SIZES:
         raise ValueError("Unsupported whole-array reduction dtype")
-    # MLX plans using logical bytes, not the target's widened Boolean storage.
+    # MLX plans using logical bytes, not the target's widened storage.
     rows = 1 if count <= 4096 else 128 if count * ITEM_SIZES[dtype] <= 2**26 else 4096
     row_size = (count + rows - 1) // rows
     width = min(1024, ((row_size + 127) // 128) * 32)

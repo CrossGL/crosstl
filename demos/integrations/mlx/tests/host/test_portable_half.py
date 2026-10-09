@@ -594,5 +594,18 @@ def test_half_ci_requires_every_target_and_retained_evidence():
         for step in job["steps"]
         for value in re.findall(r"--timeout-seconds (\d+)", step.get("run", ""))
     ]
-    assert deadlines == [1800, 1800, 1800, 1200, 1200, 1800, 600, 2100, 900, 1200]
+    assert deadlines == [
+        1800,
+        1800,
+        1800,
+        1200,
+        1200,
+        1800,
+        600,
+        2100,
+        900,
+        1200,
+        900,
+        1800,
+    ]
     assert sum(deadlines) + 900 < job["timeout-minutes"] * 60

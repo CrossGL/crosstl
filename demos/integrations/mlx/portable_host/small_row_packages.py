@@ -22,12 +22,12 @@ from crosstl.project import (
 from crosstl.translator.dispatch_region_identity import translation_implementation_hash
 from crosstl.translator.dispatch_regions import plan_dispatch_regions
 from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
-from demos.integrations.mlx.portable_host.reduction_packages import ENTRIES, SOURCE
+from demos.integrations.mlx.portable_host.reduction_packages import ALL_ENTRIES, SOURCE
 
 SMALL_ROW_ENTRIES = {
     f"row_reduce_small_{dimension}_reduce_" + entry.removeprefix("all_reduce_"): dtype
     for dimension in (1, 2, 5)
-    for entry, dtype in ENTRIES.items()
+    for entry, dtype in ALL_ENTRIES.items()
 }
 
 

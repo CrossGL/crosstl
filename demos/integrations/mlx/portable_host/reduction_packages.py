@@ -26,6 +26,10 @@ ENTRIES = {
     for dtype in ("float32", "int32", "uint32")
 }
 ENTRIES.update({"all_reduce_andbool_": "bool_", "all_reduce_orbool_": "bool_"})
+BFLOAT_ENTRIES = {
+    f"all_reduce_{operation}bfloat16": "bfloat16" for operation in ("min", "max")
+}
+ALL_ENTRIES = {**ENTRIES, **BFLOAT_ENTRIES}
 INIT_ENTRIES = {
     f"init_reduce_{operation}{dtype}": dtype
     for operation in ("sum", "prod")
@@ -57,13 +61,20 @@ COLUMN_ENTRIES = {
 }
 ENTRY_GROUPS = {
     "all": ENTRIES,
+    "bfloat": BFLOAT_ENTRIES,
     "row": ROW_ENTRIES,
     "column": COLUMN_ENTRIES,
     "init": INIT_ENTRIES,
 }
 WIDTHS = tuple(range(32, 1025, 32))
 ROW_WIDTHS = (32, 128, *range(288, 1025, 32))
-FAMILY_WIDTHS = {"all": WIDTHS, "row": ROW_WIDTHS, "column": (256,), "init": (1,)}
+FAMILY_WIDTHS = {
+    "all": WIDTHS,
+    "bfloat": WIDTHS,
+    "row": ROW_WIDTHS,
+    "column": (256,),
+    "init": (1,),
+}
 
 
 def load_index(directory, target):

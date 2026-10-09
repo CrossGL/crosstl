@@ -1484,7 +1484,8 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
     dispatch_cast({identity}, out);
     return;
   }
-  const char* dtype = storage_type(in.dtype());
+  const bool bfloat_extrema = in.dtype() == bfloat16 && (reduce_type_ == Min || reduce_type_ == Max);
+  const char* dtype = bfloat_extrema ? "bfloat16" : storage_type(in.dtype());
   const bool boolean = in.dtype() == bool_;
   const bool logical = reduce_type_ == And || reduce_type_ == Or;
   const char* operation = nullptr;
@@ -1512,6 +1513,12 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (plan.type == GeneralReduce) {
     in = dense_input(in);
     plan = get_reduction_plan(in, axes_);
+  }
+  if (bfloat_extrema && plan.type != ContiguousAllReduce &&
+      !((plan.type == ContiguousReduce || plan.type == GeneralContiguousReduce) &&
+        plan.shape.back() <= 64)) {
+    throw std::invalid_argument(
+        "CrossTL bfloat extrema require whole-array or small-row reduction packages.");
   }
   if (plan.type == ContiguousReduce || plan.type == GeneralContiguousReduce) {
     dispatch_row_reduce(in, out, plan, axes_, operation, dtype);

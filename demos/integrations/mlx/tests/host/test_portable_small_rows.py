@@ -258,6 +258,7 @@ def test_small_row_host_dispatch_checks_before_writeback(
                     "memberName": member,
                     "elementType": dtype,
                     "elementStrideBytes": ctypes.sizeof(runtime.TYPES[dtype]),
+                    "elementSizeBytes": ctypes.sizeof(runtime.TYPES[dtype]),
                 },
             }
         )
