@@ -130,6 +130,67 @@ def test_unused_method_receiver_does_not_prevent_convergence(tmp_path, target):
     _compile(generated, target, tmp_path)
 
 
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize(
+    "dtype", ["half", "float16_t", "bfloat", "bfloat16", "bfloat16_t"]
+)
+@pytest.mark.parametrize("form", ["constructor", "cast"])
+def test_narrow_conversions_preserve_guarded_collectives(target, dtype, form):
+    def convert(value):
+        return f"{dtype}({value})" if form == "constructor" else f"({dtype})({value})"
+
+    source = _program(
+        f"if (WaveActiveAnyTrue(value != value)) {{ return {convert('NAN')}; }} "
+        f"return {convert('WaveActiveMax(float(value))')};",
+        f"{dtype} value",
+        f"{dtype}(float(invocation))",
+    ).replace("float guarded(", f"{dtype} guarded(")
+    ast = parse(source)
+    generator = _codegen(target)
+    transformed = converge_subgroup_guarded_returns(
+        ast, generator.walk_ast, generator.map_operator
+    )
+    assert transformed is not ast
+    (original,) = (
+        node
+        for node in generator.walk_ast(ast)
+        if getattr(node, "name", None) == "guarded" and hasattr(node, "body")
+    )
+    (rewritten,) = (
+        node
+        for node in generator.walk_ast(transformed)
+        if getattr(node, "name", None) == "guarded" and hasattr(node, "body")
+    )
+    assert isinstance(original.body.statements[0], IfNode)
+    assert rewritten.body.statements[1].var_type == rewritten.return_type
+    assert type(rewritten.body.statements[1].initial_value) is type(
+        original.body.statements[1].value
+    )
+    generated = generator.generate_stage(ast, "compute")
+    assert "subgroup_result" in generated and "WaveActive" not in generated
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "int(WaveActiveMax(value))",
+        "unknown(WaveActiveMax(value))",
+        "float(WaveActiveMax(value++))",
+    ],
+)
+def test_unsafe_collective_wrappers_remain_diagnostic(target, tail):
+    with pytest.raises(ValueError):
+        _codegen(target).generate_stage(
+            parse(
+                _program(
+                    f"if (WaveActiveAnyTrue(value != value)) {{ return NAN; }} return {tail};"
+                )
+            ),
+            "compute",
+        )
+
+
 def test_declared_intrinsics_and_unsafe_parameter_types_are_not_speculated():
     generator = _codegen("directx")
     for parameters in ("float* value", "inout float value", "volatile float value"):
@@ -150,6 +211,18 @@ def test_declared_intrinsics_and_unsafe_parameter_types_are_not_speculated():
     )
     source = source.replace(
         "compute {", "bool WaveActiveAnyTrue(bool value) { return value; } compute {"
+    )
+    ast = parse(source)
+    assert (
+        converge_subgroup_guarded_returns(
+            ast, generator.walk_ast, generator.map_operator
+        )
+        is ast
+    )
+    source = _program(
+        "if (WaveActiveAnyTrue(value != value)) { return NAN; } return bfloat16(WaveActiveMin(value));"
+    ).replace(
+        "compute {", "float bfloat16(float x) { results[0] = 1u; return x; } compute {"
     )
     ast = parse(source)
     assert (
@@ -183,7 +256,7 @@ def test_guarded_return_gate_is_required_on_every_native_target():
         )
 
 
-def _native_source(operation, form, size):
+def _native_source(operation, form, size, dtype="float"):
     condition = "simd_any(value != value)"
     prefix = ""
     if form == "alias":
@@ -191,21 +264,21 @@ def _native_source(operation, form, size):
         condition = "!good"
     return f"""#include <metal_stdlib>
 using namespace metal;
-float guarded(float value) {{
+{dtype} guarded({dtype} value) {{
     {prefix}
-    if ({condition}) {{ return NAN; }}
-    return simd_{operation}(value);
+    if ({condition}) {{ return {dtype}(NAN); }}
+    return {dtype}(simd_{operation}(float(value)));
 }}
-float wrapped(float value) {{ return guarded(value); }}
+float wrapped({dtype} value) {{ return float(guarded(value)); }}
 kernel void products(device uint* inputWords [[buffer(0)]],
                      device uint* outputWords [[buffer(1)]],
                      uint invocation [[thread_index_in_threadgroup]],
                      uint3 group [[threadgroup_position_in_grid]]) {{
     uint index = group.x * {size}u + invocation;
-    float value = as_type<float>(inputWords[index]);
+    {dtype} value = {dtype}(as_type<float>(inputWords[index]));
     uint counter = 0u;
-    float first = wrapped(counter++ == 0u ? value : 123.0f);
-    float second = wrapped(counter++ == 1u ? -value : 123.0f);
+    float first = wrapped({dtype}(counter++ == 0u ? value : 123.0f));
+    float second = wrapped({dtype}(counter++ == 1u ? -value : 123.0f));
     outputWords[index * 3u] = as_type<uint>(first);
     outputWords[index * 3u + 1u] = as_type<uint>(second);
     outputWords[index * 3u + 2u] = counter;
@@ -241,8 +314,9 @@ def _input_words():
 @pytest.mark.parametrize("shape", [(32, 1, 1), (32, 4, 1)])
 @pytest.mark.parametrize("form", ["direct", "alias"])
 @pytest.mark.parametrize("operation", ["min", "max"])
+@pytest.mark.parametrize("dtype", ["float", "bfloat"])
 def test_guarded_reduction_executes_with_independent_subgroups(
-    tmp_path, shape, form, operation
+    tmp_path, shape, form, operation, dtype
 ):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required native guarded reductions")
@@ -252,9 +326,14 @@ def test_guarded_reduction_executes_with_independent_subgroups(
         target,
         "float",
         shape,
-        source=_native_source(operation, form, math.prod(shape)),
+        source=_native_source(operation, form, math.prod(shape), dtype),
     )
     words = _input_words()
+    if dtype == "bfloat":
+        # Every finite source value is exactly representable as bfloat.
+        assert all(
+            not math.isfinite(_float(word)) or word & 0xFFFF == 0 for word in words
+        )
     wanted = []
     reduction = min if operation == "min" else max
     for start in range(0, len(words), 32):
@@ -336,6 +415,7 @@ def test_guarded_reduction_executes_with_independent_subgroups(
                 {
                     "target": target,
                     "operation": operation,
+                    "dtype": dtype,
                     "form": form,
                     "shape": shape,
                     "inputs": inputs,

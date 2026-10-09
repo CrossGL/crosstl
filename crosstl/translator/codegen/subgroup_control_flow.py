@@ -20,7 +20,16 @@ from ..ast import (
     WaveOpNode,
 )
 
-_SCALARS = {"bool", "float", "int", "uint", "int32_t", "uint32_t", "float32_t"}
+_FLOATS = {
+    "float",
+    "float32_t",
+    "half",
+    "float16_t",
+    "bfloat",
+    "bfloat16",
+    "bfloat16_t",
+}
+_SCALARS = {"bool", "int", "uint", "int32_t", "uint32_t"} | _FLOATS
 _VOTES = {"WaveActiveAnyTrue", "WaveActiveAllTrue"}
 _REDUCTIONS = {"WaveActiveSum", "WaveActiveProduct", "WaveActiveMin", "WaveActiveMax"}
 
@@ -48,13 +57,15 @@ def _operation(node):
     return None
 
 
-def _safe_value(node, names, map_operator, *, speculate=False):
+def _safe_value(node, names, map_operator, declared_functions, *, speculate=False):
     def safe(child):
-        return _safe_value(child, names, map_operator, speculate=speculate)
+        return _safe_value(
+            child, names, map_operator, declared_functions, speculate=speculate
+        )
 
     def safe_conversion(type_name):
         return type_name in _SCALARS and (
-            not speculate or type_name in {"bool", "float", "float32_t"}
+            not speculate or type_name in {"bool"} | _FLOATS
         )
 
     if isinstance(node, LiteralNode):
@@ -72,7 +83,8 @@ def _safe_value(node, names, map_operator, *, speculate=False):
         )
     if isinstance(node, FunctionCallNode):
         return (
-            _operation(node) in {"bool", "float", "int", "uint"}
+            _operation(node) in _SCALARS
+            and _operation(node) not in declared_functions
             and safe_conversion(_operation(node))
             and len(node.arguments) == 1
             and not getattr(node, "generic_args", None)
@@ -100,7 +112,31 @@ def _safe_value(node, names, map_operator, *, speculate=False):
     return False
 
 
-def _guarded_return_plan(function, declared_names, map_operator):
+def _collective_value(node, declared_functions):
+    """Look through pure floating conversions without removing their rounding."""
+    while True:
+        if isinstance(node, CastNode) and _type_name(node.target_type) in _FLOATS:
+            node = node.expression
+        elif (
+            isinstance(node, ConstructorNode)
+            and _type_name(node.constructor_type) in _FLOATS
+            and not node.named_arguments
+            and len(node.arguments) == 1
+        ):
+            node = node.arguments[0]
+        elif (
+            isinstance(node, FunctionCallNode)
+            and _operation(node) in _FLOATS
+            and _operation(node) not in declared_functions
+            and not getattr(node, "generic_args", None)
+            and len(node.arguments) == 1
+        ):
+            node = node.arguments[0]
+        else:
+            return node
+
+
+def _guarded_return_plan(function, declared_names, map_operator, declared_functions):
     if _type_name(function.return_type) not in _SCALARS - {"bool"}:
         return None
     parameters = function.parameters or []
@@ -145,19 +181,23 @@ def _guarded_return_plan(function, declared_names, map_operator):
         if not isinstance(vote, IdentifierNode) or vote.name != alias.name:
             return None
         vote = alias.initial_value
-    reduction = tail[0].value
+    reduction = _collective_value(tail[0].value, declared_functions)
     if _operation(vote) not in _VOTES or _operation(reduction) not in _REDUCTIONS:
         return None
     if _operation(vote) in declared_names or _operation(reduction) in declared_names:
         return None
     for call in (vote, reduction):
         if len(call.arguments) != 1 or not _safe_value(
-            call.arguments[0], names, map_operator, speculate=call is reduction
+            call.arguments[0],
+            names,
+            map_operator,
+            declared_functions,
+            speculate=call is reduction,
         ):
             return None
-    if not _safe_value(early[0].value, names, map_operator):
+    if not _safe_value(early[0].value, names, map_operator, declared_functions):
         return None
-    return alias, condition, reduction, early[0].value
+    return alias, condition, tail[0].value, early[0].value
 
 
 def converge_subgroup_guarded_returns(ast, walk_ast, map_operator):
@@ -169,6 +209,7 @@ def converge_subgroup_guarded_returns(ast, walk_ast, map_operator):
     calls, mutation and potentially trapping arithmetic are not speculated.
     """
     nodes = list(walk_ast(ast))
+    declared_functions = {node.name for node in nodes if isinstance(node, FunctionNode)}
     declared_names = {
         node.name
         for node in nodes
@@ -179,7 +220,11 @@ def converge_subgroup_guarded_returns(ast, walk_ast, map_operator):
         (node, plan)
         for node in nodes
         if isinstance(node, FunctionNode)
-        and (plan := _guarded_return_plan(node, declared_names, map_operator))
+        and (
+            plan := _guarded_return_plan(
+                node, declared_names, map_operator, declared_functions
+            )
+        )
         is not None
     ]
     if not plans:
