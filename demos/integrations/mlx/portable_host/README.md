@@ -325,10 +325,10 @@ numerical results.
 The same verifier runs in the existing Metal, OpenGL and DirectX half-host CI
 jobs, without adding operating-system runners. This bounded API proof does not
 establish a passing upstream suite. General-gather batching now permits the large
-indexed inputs in these tests. Re-running the four unchanged block-format tests
-exposes large slice-assignment limits
-([#2148](https://github.com/CrossGL/crosstl/issues/2148)) and bfloat16 cast/unary
-composition gaps ([#2147](https://github.com/CrossGL/crosstl/issues/2147)). Those
+indexed inputs in these tests. With large slice assignments enabled, all four
+unchanged block-format tests reach bfloat16 cast/unary composition gaps
+([#2147](https://github.com/CrossGL/crosstl/issues/2147)) on OpenGL. Larger copy
+launches remain separate work under [#2148](https://github.com/CrossGL/crosstl/issues/2148). Those
 tests are not rewritten, skipped or given wider tolerances. Strided bfloat16 and
 encoded-scale copies remain subject to the existing copy-path restrictions.
 
@@ -1805,8 +1805,9 @@ destination bounds, preserved regions and nonoverlapping writes are checked
 before native submission. Aliased base/update views remain alive while a distinct
 output allocation is populated.
 
-These hooks support float32, int32, uint32, bool, int64 and uint64, with at most
-65,535 output elements. The wider types require the optional `integer64` packages.
+These hooks support float32, int32, uint32, bool, int64 and uint64. Padding retains
+its 65,535-output-element limit; slice updates use the separate allocation and
+dispatch bounds described below. The wider types require the optional `integer64` packages.
 MLX's unchanged edge, reflect and symmetric padding implementations compose these
 hooks with shared-buffer slices. Slice-update reductions require the optional
 packages described below; replacement support does not imply scatter or general
@@ -1853,16 +1854,34 @@ upstream intentionally retains unnormalized stop indices. Negative bounds,
 clipped stops, reversed destinations and aliased inputs therefore retain upstream
 slice semantics.
 
+Destination allocations are bounded independently from the 65,535-invocation
+limit of an individual reduction dispatch. The adapter accepts up to
+268,435,423 destination elements, subject to the translated copy path's separate
+per-axis limits. Larger updates are divided into dense rectangular slabs. Each
+slab retains the original destination strides, rebases its offset, and advances
+only the update pointer. Full-destination readbacks check untouched values and
+guards before committing the result. The source kernel is unchanged.
+
 `crosstl_mlx_register_runtime` registers both dispatch and package-availability
 callbacks, retaining dispatch ABI version 3. This lets the adapter reject a
 missing reduction package before copying the base. The earlier dispatch-only
 registration entry point remains available, but cannot enable slice reductions.
 The Python adapter and prepared MLX build must be regenerated together.
 
-`verify_slice_updates` requires 304 CPU/native workloads, the unchanged
+`verify_slice_updates` requires 304 existing and 16 allocation-capacity CPU/native
+workloads, the unchanged
 `test_array_at_slice_update_extensive` method and eight isolated rejection
 checks. It checks exact result storage, source preservation, native copy
 and reduction readbacks, destination metadata, guards and artifact hashes.
+Capacity cases cover all six storage types, every reduction operation, slice
+replacement, offset inputs, negative destination strides, strided updates,
+broadcasts, aliasing, rank-three arrays and the old allocation boundary. Each
+batch's uploaded values and complete intermediate destination are checked
+against an independent flattened selection, including ordered exact coverage.
+The verifier checks retained compiled modules, source identities, entry points
+and actual dispatch geometry. Boolean full-region arithmetic can be simplified
+into binary operations before reaching the slice hook; that separate host gap
+is tracked in [#2149](https://github.com/CrossGL/crosstl/issues/2149).
 The separate three-OS slice-update job requires the same verifier after building
 its matching host adapter and downloading the same-run integer64 packages.
 
@@ -1882,5 +1901,5 @@ native storage words alongside display values. Special-value storage cases do
 not impose payload-preservation rules on arithmetic NaN results.
 
 This bounded integration does not establish full upstream suite parity.
-General scatter, other storage widths, outputs above 65,535
-elements and asynchronous device-resident execution remain separate work.
+General scatter, other storage widths, copy launches exceeding 65,535 groups
+on any axis and asynchronous device-resident execution remain separate work.

@@ -22,6 +22,7 @@ namespace {
 std::atomic<CrosstlMlxDispatch> dispatch_callback{nullptr};
 std::atomic<CrosstlMlxEntryAvailable> entry_available_callback{nullptr};
 std::mutex registration_mutex;
+constexpr uint64_t max_slice_update_elements = (uint64_t(1) << 28) - 33;
 
 void require_runtime() {
   if (!dispatch_callback.load()) {
@@ -381,39 +382,68 @@ void dispatch_slice_update(
   if (updates.size() == 0) {
     return;
   }
+  if (updates.size() > max_slice_update_elements || out.size() > max_slice_update_elements ||
+      out.offset() < 0 || uint64_t(out.offset()) > out.buffer_size() ||
+      out.nbytes() > out.buffer_size() - uint64_t(out.offset())) {
+    throw std::invalid_argument("CrossTL slice update storage exceeds its bounds.");
+  }
   auto dense = dense_input(updates);
   std::vector<int32_t> shape(dense.shape().begin(), dense.shape().end());
-  std::vector<int64_t> strides(shape.size());
-  int64_t stride = 1;
-  for (size_t axis = shape.size(); axis-- > 0;) {
-    strides[axis] = stride;
-    stride *= shape[axis];
-  }
   if (shape.empty()) {
     shape = {1};
-    strides = {1};
     output_strides = {1};
   }
   int32_t ndim = static_cast<int32_t>(shape.size());
-  int64_t size = dense.size();
   const char* dtype = storage_type(out.dtype());
-  CrosstlMlxBuffer buffers[] = {
-      {"updates", dtype, dense.data<void>(), dense.size(), 0},
-      {"out", dtype, out.data<void>(), out.size(), CROSTL_MLX_BUFFER_INOUT},
-      {"update_shape", "int32", shape.data(), uint64_t(ndim), 0},
-      {"update_strides", "int64", strides.data(), uint64_t(ndim), 0},
-      {"update_ndim", "int32", &ndim, 1, 0},
-      {"update_size", "int64", &size, 1, 0},
-      {"output_strides", "int64", output_strides.data(), uint64_t(ndim), 0},
-      {"output_offset", "int64", &output_offset, 1, 0},
-  };
-  char error[2048] = {};
-  const auto launch = elementwise_launch(dense.size());
-  const int status = dispatch_callback.load()(
-      entry.c_str(), buffers, 8, dense.size(), &launch, error, sizeof(error));
-  error[sizeof(error) - 1] = '\0';
-  if (status != 0) {
-    throw std::runtime_error(std::string("CrossTL native slice update failed: ") + error);
+  // Each rectangular slab is dense in update storage and retains destination strides.
+  size_t split_axis = 0;
+  uint64_t suffix = dense.size() / shape.front();
+  while (suffix > 65535) {
+    suffix /= shape[++split_axis];
+  }
+  const uint64_t axis_limit = 65535 / suffix;
+  for (uint64_t first = 0; first < dense.size();) {
+    auto tile_shape = shape;
+    std::vector<uint64_t> coordinates(ndim);
+    uint64_t remaining = first;
+    int64_t tile_offset = output_offset;
+    for (size_t axis = ndim; axis-- > 0;) {
+      coordinates[axis] = remaining % shape[axis];
+      remaining /= shape[axis];
+      tile_offset += int64_t(coordinates[axis]) * output_strides[axis];
+    }
+    for (size_t axis = 0; axis < split_axis; ++axis) {
+      tile_shape[axis] = 1;
+    }
+    const uint64_t extent = std::min<uint64_t>(
+        axis_limit, shape[split_axis] - coordinates[split_axis]);
+    tile_shape[split_axis] = static_cast<int32_t>(extent);
+    int64_t size = extent * suffix;
+    std::vector<int64_t> strides(ndim);
+    int64_t stride = 1;
+    for (size_t axis = ndim; axis-- > 0;) {
+      strides[axis] = stride;
+      stride *= tile_shape[axis];
+    }
+    CrosstlMlxBuffer buffers[] = {
+        {"updates", dtype, dense.data<char>() + first * dense.itemsize(), uint64_t(size), 0},
+        {"out", dtype, out.data<void>(), out.size(), CROSTL_MLX_BUFFER_INOUT},
+        {"update_shape", "int32", tile_shape.data(), uint64_t(ndim), 0},
+        {"update_strides", "int64", strides.data(), uint64_t(ndim), 0},
+        {"update_ndim", "int32", &ndim, 1, 0},
+        {"update_size", "int64", &size, 1, 0},
+        {"output_strides", "int64", output_strides.data(), uint64_t(ndim), 0},
+        {"output_offset", "int64", &tile_offset, 1, 0},
+    };
+    char error[2048] = {};
+    const auto launch = elementwise_launch(size);
+    const int status = dispatch_callback.load()(
+        entry.c_str(), buffers, 8, size, &launch, error, sizeof(error));
+    error[sizeof(error) - 1] = '\0';
+    if (status != 0) {
+      throw std::runtime_error(std::string("CrossTL native slice update failed: ") + error);
+    }
+    first += size;
   }
 }
 
@@ -1546,11 +1576,11 @@ void SliceUpdate::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (inputs.size() != 2 || inputs[0].shape() != out.shape() ||
       inputs[1].ndim() != out.ndim() || inputs[0].dtype() != out.dtype() ||
       inputs[1].dtype() != out.dtype() || !storage_type(out.dtype()) ||
-      out.size() > 65535 || out.ndim() > 64 ||
+      out.size() > max_slice_update_elements || out.ndim() > 64 ||
       start_indices_.size() != out.ndim() || end_indices_.size() != out.ndim() ||
       strides_.size() != out.ndim()) {
     throw std::invalid_argument(
-        "CrossTL slice updates require matching supported arrays and at most 65535 output elements.");
+        "CrossTL slice updates require matching supported arrays within the storage capacity.");
   }
   const auto& update = inputs[1];
   int64_t offset = 0;

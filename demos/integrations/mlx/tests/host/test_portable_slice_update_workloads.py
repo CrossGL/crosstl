@@ -254,6 +254,11 @@ def test_slice_update_ci_requires_native_execution_and_evidence():
     )
     assert "--family slice-update" in translation
     assert "portable_host.verify_slice_updates" in execution
+    verifier = Path(
+        "demos/integrations/mlx/portable_host/verify_slice_updates.py"
+    ).read_text()
+    assert "capacity.run(" in verifier and "capacity.validate(" in verifier
+    assert "retain_native_modules=True" in verifier
     assert (
         "--slice-updates .mlx-portable-slice-update/slice-update-packages" in execution
     )

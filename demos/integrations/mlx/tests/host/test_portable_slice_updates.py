@@ -118,7 +118,11 @@ def test_slice_update_layout_rejects_invalid_storage_before_dispatch(change, err
     elif change == "update-count":
         buffers["updates"].count = 5
     elif change.startswith("output-"):
-        buffers["out"].count = 5 if change == "output-count" else 65536
+        buffers["out"].count = (
+            5
+            if change == "output-count"
+            else slice_update_layout.MAX_STORAGE_ELEMENTS + 1
+        )
     elif change.startswith("shape-"):
         values["update_shape"][0] = 0 if change == "shape-zero" else 3
     elif change == "source-stride":
@@ -155,6 +159,35 @@ def test_slice_update_layout_accepts_maximum_count():
     assert list(slice_update_layout.destination_indices(metadata)) == list(
         range(65534, -1, -1)
     )
+    assert keepalive
+
+
+@pytest.mark.parametrize("dtype", packages.SLICE_UPDATE_TYPES)
+@pytest.mark.parametrize("stride,offset", [(65536, 0), (-65536, 65536)])
+def test_slice_update_layout_separates_storage_from_launch(dtype, stride, offset):
+    buffers, keepalive, logical = buffers_for(
+        dtype, shape=(2,), strides=(stride,), offset=offset, count=65537
+    )
+    metadata = slice_update_layout.validate(buffers, logical, dtype=dtype)
+    assert list(slice_update_layout.destination_indices(metadata)) == [
+        offset,
+        offset + stride,
+    ]
+    assert metadata["destinationCount"] == 65537
+    assert keepalive
+
+
+@pytest.mark.parametrize("name", ["updates", "out", "update_shape", "output_offset"])
+@pytest.mark.parametrize("fault", ["alignment", "wrap"])
+def test_slice_update_layout_rejects_invalid_addresses(name, fault):
+    buffers, keepalive, logical = buffers_for()
+    buffers[name].data = (
+        buffers[name].data + 1
+        if fault == "alignment"
+        else (1 << (ctypes.sizeof(ctypes.c_void_p) * 8)) - 4
+    )
+    with pytest.raises(ValueError, match="buffer address"):
+        slice_update_layout.validate(buffers, logical, dtype="float32")
     assert keepalive
 
 

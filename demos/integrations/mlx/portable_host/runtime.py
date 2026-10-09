@@ -1042,6 +1042,14 @@ class HostRuntime:
                                 "sliceUpdateMetadata": slice_metadata,
                                 **(
                                     {
+                                        "inputs": inputs,
+                                        "packageRoot": str(package_directory),
+                                    }
+                                    if self.retain_native_modules
+                                    else {}
+                                ),
+                                **(
+                                    {
                                         "sliceUpdateStorageWords": output["values"][
                                             : buffer.count
                                         ],

@@ -8,7 +8,9 @@ import sys
 import unittest
 from pathlib import Path
 
+from demos.integrations.mlx.portable_host import slice_capacity_workloads as capacity
 from demos.integrations.mlx.portable_host import slice_update_workloads as workloads
+from demos.integrations.mlx.portable_host.gather_evidence import audit_native_execution
 from demos.integrations.mlx.portable_host.packages import (
     SLICE_UPDATE_ENTRIES,
     SLICE_UPDATE_TYPES,
@@ -16,8 +18,10 @@ from demos.integrations.mlx.portable_host.packages import (
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.reduction_packages import load_index
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
+from demos.integrations.mlx.portable_host.slice_update_layout import (
+    MAX_STORAGE_ELEMENTS,
+)
 from demos.integrations.mlx.portable_host.verify import upstream_test_sources
-from demos.integrations.mlx.portable_host.verify_bitwise import verify_native_identity
 from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
 
 UPSTREAM_TESTS = ("test_array.TestArray.test_array_at_slice_update_extensive",)
@@ -53,6 +57,7 @@ def worker(args):
             integer64=args.integer64,
             slice_updates=args.slice_updates,
             reductions=args.reductions,
+            retain_native_modules=True,
         )
         if args.worker.startswith("missing-"):
             host.descriptors.pop(
@@ -65,7 +70,9 @@ def worker(args):
             if args.worker.startswith("missing-")
             else ("int16" if args.worker == "int16" else "float32")
         )
-        operand = mx.array(np.ones(65536 if args.worker == "limit" else 4, dtype=dtype))
+        operand = mx.array(np.ones(4, dtype=dtype))
+        if args.worker == "limit":
+            operand = mx.broadcast_to(operand[:1], (MAX_STORAGE_ELEMENTS + 1,))
         update = mx.array(np.ones(1, dtype=dtype))
         try:
             mx.eval(operand.at[1:2].add(update))
@@ -85,6 +92,11 @@ def worker(args):
     workloads.run(
         mx, np, host, lambda record: write_json(output / "results.json", record)
     )
+    small_count = host.dispatch_count if host else 0
+    capacity.run(
+        mx, np, host, lambda record: write_json(output / "capacity.json", record)
+    )
+    write_json(output / "capacity-start.json", {"dispatchCount": small_count})
     count = host.dispatch_count if host else 0
     os.environ["DEVICE"], os.environ["CI"] = ("gpu" if host else "cpu"), "1"
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
@@ -130,6 +142,30 @@ def validate_upstream(record, *, native):
     count = record.get("workloadDispatchCount")
     if type(count) is not int or (count <= 0 if native else count != 0):
         raise ValueError("Slice update workload dispatch count differs")
+
+
+def validate_native_event(event, package_directory, target, output):
+    details = event["details"]
+    request = details["request"]
+    artifact = event["artifact"]
+    if (
+        event["target"] != target
+        or request.get("target") != target
+        or request.get("entryPoint")
+        != {"metal": event["entry"], "opengl": "main", "directx": "CSMain"}[target]
+        or request.get("artifact", {}).get("target") != target
+        or request.get("artifact", {}).get("packagePath") != artifact["packagePath"]
+        or any(
+            request.get("dispatch", {}).get(key) != event[key]
+            for key in ("workgroupSize", "workgroupCount")
+        )
+    ):
+        raise ValueError("Slice update native dispatch identity differs")
+    retained = (output / "native/native-modules").resolve()
+    for module in [details["module"], *details["validationModules"]]:
+        if not Path(module["file"]).resolve().is_relative_to(retained):
+            raise ValueError("Slice update native module is outside retained evidence")
+    audit_native_execution(dict(event, packageRoot=str(package_directory)))
 
 
 def verify(args):
@@ -221,8 +257,16 @@ def verify(args):
     ) != len(trace):
         raise ValueError("Slice update trace count differs")
     workloads.validate(results["cpu"], [], native=False)
-    workloads.validate(results["native"], trace[:count], native=True)
-    verify_native_identity(trace, target)
+    small_count = json.loads((output / "native/capacity-start.json").read_text())[
+        "dispatchCount"
+    ]
+    workloads.validate(results["native"], trace[:small_count], native=True)
+    for mode in ("cpu", "native"):
+        capacity.validate(
+            json.loads((output / mode / "capacity.json").read_text()),
+            trace[small_count:count] if mode == "native" else [],
+            native=mode == "native",
+        )
     checked = 0
     for directory, index, variants in packages:
         events = [
@@ -237,6 +281,8 @@ def verify(args):
         ]
         checked += len(events)
         verify_artifacts(events, directory, index, variants=variants)
+        for event in events:
+            validate_native_event(event, directory / "package", target, output)
     if checked != len(trace):
         raise ValueError(
             "Slice update trace references an unknown or duplicate artifact"
@@ -251,6 +297,7 @@ def verify(args):
         "adaptation": before,
         "upstreamTestSources": sources,
         "casesPerPath": len(results["native"]),
+        "capacityCasesPerPath": len(list(capacity.cases())),
         "dispatchCount": len(trace),
         "upstream": upstream,
         "negativeChecks": rejections,

@@ -6,6 +6,17 @@ import math
 from demos.integrations.mlx.portable_host.copy_layout import INOUT, destination_indices
 from demos.integrations.mlx.portable_host.packages import SLICE_UPDATE_TYPES
 
+MAX_STORAGE_ELEMENTS = 2**28 - 33
+MAX_INDEX = 2**31 - 1
+TYPES = {
+    "bool_": ctypes.c_uint8,
+    "float32": ctypes.c_float,
+    "int32": ctypes.c_int32,
+    "uint32": ctypes.c_uint32,
+    "int64": ctypes.c_int64,
+    "uint64": ctypes.c_uint64,
+}
+
 DTYPES = {
     "updates": None,
     "out": None,
@@ -37,7 +48,7 @@ def validate(buffers, logical_size, *, dtype):
             )
         )
         if name == "out":
-            if not logical_size <= buffer.count <= 65535:
+            if not logical_size <= buffer.count <= MAX_STORAGE_ELEMENTS:
                 raise ValueError("Native slice update output span exceeds its bounds")
         elif buffer.count != expected:
             raise ValueError("Native slice update metadata shape does not match")
@@ -49,6 +60,13 @@ def validate(buffers, logical_size, *, dtype):
             raise ValueError(
                 "Native slice update buffer type or direction does not match"
             )
+        scalar = TYPES[DTYPES[name] or dtype]
+        address_limit = 1 << (ctypes.sizeof(ctypes.c_void_p) * 8)
+        if (
+            buffer.data % ctypes.alignment(scalar)
+            or buffer.data + buffer.count * ctypes.sizeof(scalar) > address_limit
+        ):
+            raise ValueError("Native slice update buffer address is invalid")
 
     def values(name, ctype):
         buffer = buffers[name]
@@ -73,7 +91,8 @@ def validate(buffers, logical_size, *, dtype):
     offset = values("output_offset", ctypes.c_int64)[0]
     extents = [(size - 1) * stride for size, stride in zip(shape, strides)]
     if (
-        any(abs(stride) > 65535 for stride in strides)
+        any(abs(stride) > MAX_INDEX for stride in strides)
+        or sum(abs(extent) for extent in extents) >= MAX_INDEX
         or offset < 0
         or offset + sum(min(extent, 0) for extent in extents) < 0
         or offset + sum(max(extent, 0) for extent in extents) >= buffers["out"].count
@@ -87,7 +106,7 @@ def validate(buffers, logical_size, *, dtype):
     }
     if len(set(destination_indices(metadata))) != logical_size:
         raise ValueError("Native slice update destinations overlap")
-    size = 1 if dtype == "bool_" else 8 if dtype in {"int64", "uint64"} else 4
+    size = ctypes.sizeof(TYPES[dtype])
     source, destination = buffers["updates"], buffers["out"]
     if max(source.data, destination.data) < min(
         source.data + source.count * size,
