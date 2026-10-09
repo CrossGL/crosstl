@@ -11740,6 +11740,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def is_hlsl_declaration_metadata_attribute(self, attr):
         metadata = {
             "hlsl_program_constant",
+            "maybe_unused",
             "precise",
         }
         metadata.update(self.METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES)

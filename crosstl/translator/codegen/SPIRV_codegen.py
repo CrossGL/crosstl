@@ -13675,6 +13675,7 @@ class VulkanSPIRVCodeGen:
             "max_vertices",
             "maxprimitives",
             "maxvertices",
+            "maybe_unused",
             "numthreads",
             "output",
             "output_control_points",

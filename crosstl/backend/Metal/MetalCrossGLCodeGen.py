@@ -8936,9 +8936,10 @@ class MetalToCrossGLConverter:
                 semantic_context=semantic_context,
             )
             declaration = self.lower_c_array_parameter_reference(var, declaration)
-            return self.with_parameter_direction_qualifier(
+            declaration = self.with_parameter_direction_qualifier(
                 var, declaration, semantic_context=semantic_context
             )
+            return f"{declaration} @maybe_unused"
         finally:
             var.name = original_name
 

@@ -127,6 +127,13 @@ unsigned wraparound cases and output guards; Metal also executes the original
 source. This does not establish general heterogeneous aggregate packing or
 optional omission of inactive bindings.
 
+Unnamed source parameters receive generated identifiers with ``@maybe_unused``
+metadata in CrossGL. Metal marks only those declarations unused, preserving
+strict warnings for ordinary named parameters. Parameter types, arity, defaults
+and argument evaluation are retained. Required native controls cover helpers,
+constructors, template deduction, tag arguments, overloads and identifier
+collisions, including discarded arguments with side effects.
+
 Explicit struct specializations compare primitive alias arguments by their
 resolved type before materializing the primary template. Static member lookup
 uses the same owner, including specialization declarations written through an

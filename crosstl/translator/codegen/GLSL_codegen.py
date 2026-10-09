@@ -50612,6 +50612,7 @@ complex64_t crossgl_complex64_mod_assign(
                 continue
             if (
                 self.is_glsl_stage_io_metadata_attribute(attr)
+                or str(getattr(attr, "name", "")).lower() == "maybe_unused"
                 or is_image_format_attribute(attr)
                 or self.is_resource_binding_attribute(attr)
                 or is_resource_access_attribute(attr)

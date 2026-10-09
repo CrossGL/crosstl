@@ -94,6 +94,13 @@ numerical execution is required separately. These homogeneous-record controls
 do not establish heterogeneous aggregate packing, inactive-binding omission,
 complete GEMM translation or matrix host dispatch.
 
+Unnamed helper and constructor parameters retain their intent through saved
+CrossGL and Metal round trips ([#2161](https://github.com/CrossGL/crosstl/issues/2161)).
+Seven native controls on Metal and OpenGL verify argument side effects, defaults,
+overload selection and output guards. Strict Metal compilation keeps unrelated
+unused-parameter warnings enabled. These controls do not resolve the remaining
+matrix helper materialization and host-dispatch requirements.
+
 Reduction reference review found an alias-specialization error
 ([#2100](https://github.com/CrossGL/crosstl/issues/2100)): `float16_t` selected
 the primary `Limits` template instead of the explicit `half` specialization.

@@ -3277,6 +3277,7 @@ class MetalCodeGen:
             "const",
             "constexpr",
             "inline",
+            "maybe_unused",
             "mutable",
             "static",
             "volatile",
@@ -4999,6 +5000,11 @@ class MetalCodeGen:
             declaration = self.format_parameter_declaration(
                 raw_param_type, param_type, p.name, p, shader_type
             )
+            if any(
+                str(getattr(attribute, "name", "")).lower() == "maybe_unused"
+                for attribute in getattr(p, "attributes", []) or []
+            ):
+                declaration = self.format_unused_metal_declaration(declaration)
             if self.should_wrap_metal_vertex_stage_input_parameter(
                 raw_param_type, shader_type, p
             ):
