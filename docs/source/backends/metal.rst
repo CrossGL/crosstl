@@ -143,6 +143,17 @@ Ambiguous partial matches remain unresolved rather than selecting an arbitrary
 body. Native controls cover side effects, unsigned wraparound and output guards
 through project packages, with separate saved-intermediate compilation checks.
 
+Instantiated member templates qualify implicit fields and explicit ``this``
+receivers before resolving nested calls. Ordinary and template methods share
+the same scope-aware lowering, preserving parameter and local shadowing,
+const receivers and nested aggregate fields. Indexed aggregate arrays retain
+their full receiver expressions, including multidimensional indices and their
+side effects. Native controls check mutation, read-only access, single
+evaluation, unsigned wraparound and output guards. Unresolved receivers produce
+structured diagnostics instead of abandoning the member-lowering pass.
+Reference-returning accessors still require identity-preserving lowering;
+unsupported aliases are diagnosed rather than copied into temporary values.
+
 Explicit struct specializations compare primitive alias arguments by their
 resolved type before materializing the primary template. Static member lookup
 uses the same owner, including specialization declarations written through an

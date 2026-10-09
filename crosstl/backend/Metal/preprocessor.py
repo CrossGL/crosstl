@@ -13766,10 +13766,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                 return None
             arg_open, explicit_template_arguments = call_suffix
             if struct_type is None:
-                assert receiver_declaration is not None
                 arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
                 location_end = arg_close + 1 if arg_close is not None else arg_open + 1
-                receiver_type = receiver_declaration.raw_type_text.strip()
+                receiver_type = (
+                    receiver_declaration.raw_type_text.strip()
+                    if receiver_declaration is not None
+                    else "<unknown>"
+                )
                 raise MetalStructMethodError(
                     "Cannot lower concrete member call "
                     f"'{ident}.{member}' because receiver declaration "
@@ -14176,6 +14179,20 @@ class MetalPreprocessor(HLSLPreprocessor):
             if current_struct is None:
                 return None
             field_type = current_struct.data_member_types.get(member)
+            field = next(
+                (item for item in current_struct.data_members if item.name == member),
+                None,
+            )
+            if field is not None and field.array_suffix:
+                for _ in range(field.array_suffix.count("[")):
+                    cursor = self._skip_cpp_trivia(code, cursor)
+                    if cursor >= len(code) or code[cursor] != "[":
+                        return None
+                    closing = self._find_matching_delimiter(code, cursor, "[", "]")
+                    if closing is None:
+                        return None
+                    cursor = closing + 1
+                field_type = field.type_text
             receiver_info = self._nested_member_receiver_info(
                 field_type, field_structs_by_name
             )
@@ -15771,23 +15788,6 @@ class MetalPreprocessor(HLSLPreprocessor):
         instantiated_body = self._substitute_integral_constant_parameter_values(
             instantiated_parameters, instantiated_body
         )
-        # Lower any call to a SIBLING template member method made from this body
-        # (the second SFINAE layer: `simd_reduce` calls `simd_reduce_impl`). With
-        # the outer bindings applied the body's parameter/local types are concrete,
-        # so each internal call selects+instantiates its own overload and is
-        # rewritten to the concrete free function — leaving no dangling call.
-        if instantiated_template_functions is not None and template_methods_by_struct:
-            instantiated_body = self._lower_internal_template_member_calls(
-                struct,
-                method,
-                instantiated_parameters,
-                instantiated_body,
-                instantiated_template_functions,
-                template_methods_by_struct,
-                methods_by_struct=methods_by_struct,
-                operator_call_structs=operator_call_structs,
-                rewrite_structs_by_name=rewrite_structs_by_name,
-            )
         concrete_parameters = self._strip_function_parameter_defaults(
             instantiated_parameters
         )
@@ -15807,8 +15807,16 @@ class MetalPreprocessor(HLSLPreprocessor):
             receiver_address_spaces=method.receiver_address_spaces,
             trailing_qualifiers=method.trailing_qualifiers,
         )
+        # Qualify owner fields before resolving nested calls, as for ordinary
+        # methods. The instantiated signature supplies the lexical parameters.
         return self._emit_free_function(
-            struct, concrete_method, structs_by_name=rewrite_structs_by_name
+            struct,
+            concrete_method,
+            instantiated_template_functions=instantiated_template_functions,
+            template_methods_by_struct=template_methods_by_struct,
+            methods_by_struct=methods_by_struct,
+            operator_call_structs=operator_call_structs,
+            structs_by_name=rewrite_structs_by_name,
         )
 
     def _substitute_integral_constant_parameter_values(

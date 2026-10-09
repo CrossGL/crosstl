@@ -55,8 +55,10 @@ passes on a translated backend.
 The selected tiled GEMM entry at pin `9c3d3557` now passes explicit `auto*`
 deduction through the public project pipeline, without changing upstream
 sources or bypassing specialization analysis. It is not yet executable:
-strict Metal compilation still reports missing aggregate, loader and matrix
-helpers ([#2157](https://github.com/CrossGL/crosstl/issues/2157)). The constant
+member lowering now reaches a structured `struct.reference-return` diagnostic
+for `MMATile::frag_at(i, j)`, instead of abandoning the pass with unresolved
+aggregate, loader and matrix calls. Its mutable result must retain the original
+storage identity; substituting a value copy would change the computation. The constant
 `GEMMParams` and `GEMMAddMMParams` pointers now retain their indirection, address
 space and bindings ([#2160](https://github.com/CrossGL/crosstl/issues/2160)).
 Conditional scalar-buffer parameters now retain their bindings and conditions
@@ -106,9 +108,19 @@ default arguments, scoped aliases, constructor initializers and method calls
 ([#2157](https://github.com/CrossGL/crosstl/issues/2157)). Thirteen cases execute
 on Metal and OpenGL with exact readback, side-effect counts and output guards;
 Metal also executes the original sources. All thirteen HLSL variants compile
-with strict DXC checks, with Windows execution required separately. The real
-matrix kernel still encounters a nested member-lowering failure; these controls
+with strict DXC checks, with Windows execution required separately. These controls
 do not establish complete GEMM compilation or numerical matrix execution.
+
+Aggregate-field receiver controls cover implicit fields, explicit `this`,
+parameter and local shadowing, sibling templates, call operators, nested fields
+and multidimensional arrays
+([#2162](https://github.com/CrossGL/crosstl/issues/2162)). Thirteen cases execute on
+Metal and OpenGL, including read-only receivers, argument/index side effects,
+wraparound and output guards; Metal also executes the unchanged source controls.
+All thirteen HLSL variants compile with strict DXC checks. Windows execution
+remains a separate required gate in the existing native job. The selected real
+GEMM entry still requires reference-return identity preservation before it can
+produce an executable artifact.
 
 Reduction reference review found an alias-specialization error
 ([#2100](https://github.com/CrossGL/crosstl/issues/2100)): `float16_t` selected
