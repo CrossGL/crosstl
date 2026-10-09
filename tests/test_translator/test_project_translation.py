@@ -50319,8 +50319,10 @@ def test_translate_project_metal_matmul_constant_pointer_params_lower_to_resourc
     }
 
     opengl = outputs["opengl"]
-    assert "layout(std140, binding = 0) uniform MatMulParams" in opengl
-    assert "} params;" in opengl
+    assert (
+        "layout(std430, binding = 0) readonly buffer paramsBuffer "
+        "{ MatMulParams params[]; };" in opengl
+    )
     assert (
         "layout(std430, binding = 1) readonly buffer ABuffer { float A[]; };" in opengl
     )
@@ -50328,25 +50330,25 @@ def test_translate_project_metal_matmul_constant_pointer_params_lower_to_resourc
         "layout(std430, binding = 2) readonly buffer BBuffer { float B[]; };" in opengl
     )
     assert "layout(std430, binding = 3) buffer XBuffer { float X[]; };" in opengl
-    assert "params.cols" in opengl
-    assert "params.rows" in opengl
-    assert "params.inner" in opengl
-    assert "paramsBuffer" not in opengl
+    assert "params[0].cols" in opengl
+    assert "params[0].rows" in opengl
+    assert "params[0].inner" in opengl
+    assert "uniform MatMulParams" not in opengl
     assert "void matmul(" not in opengl
     assert "float* A" not in opengl
     assert "float* B" not in opengl
     assert "float* X" not in opengl
 
     directx = outputs["directx"]
-    assert "ConstantBuffer<MatMulParams> params : register(b0);" in directx
+    assert "StructuredBuffer<MatMulParams> params : register(t0);" in directx
     assert "StructuredBuffer<float> A : register(t1);" in directx
     assert "StructuredBuffer<float> B : register(t2);" in directx
     assert "RWStructuredBuffer<float> X : register(u3);" in directx
     assert "void CSMain(uint3 gid : SV_DispatchThreadID)" in directx
-    assert "params.cols" in directx
-    assert "params.rows" in directx
-    assert "params.inner" in directx
-    assert "StructuredBuffer<MatMulParams> params" not in directx
+    assert "params[uint(0)].cols" in directx
+    assert "params[uint(0)].rows" in directx
+    assert "params[uint(0)].inner" in directx
+    assert "ConstantBuffer<MatMulParams> params" not in directx
     assert "float* A" not in directx
     assert "float* B" not in directx
     assert "float* X" not in directx
@@ -50406,7 +50408,9 @@ def test_translate_project_metal_template_member_infers_pointer_struct_field(
     )
     directx = (repo / directx_artifact["path"]).read_text(encoding="utf-8")
     assert "int Identity__apply__int(inout Identity self, int value)" in directx
-    assert "forward_value_int(Identity__apply__int(op, params.stride))" in directx
+    assert (
+        "forward_value_int(Identity__apply__int(op, params[uint(0)].stride))" in directx
+    )
     assert "apply_Params" not in directx
 
 

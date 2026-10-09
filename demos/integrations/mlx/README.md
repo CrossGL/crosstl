@@ -55,9 +55,10 @@ passes on a translated backend.
 The selected tiled GEMM entry at pin `9c3d3557` now passes explicit `auto*`
 deduction through the public project pipeline, without changing upstream
 sources or bypassing specialization analysis. It is not yet executable:
-strict Metal compilation still reports missing aggregate helpers and unresolved
-constant-buffer types ([#2157](https://github.com/CrossGL/crosstl/issues/2157),
-[#2160](https://github.com/CrossGL/crosstl/issues/2160)).
+strict Metal compilation still reports missing aggregate, loader and matrix
+helpers ([#2157](https://github.com/CrossGL/crosstl/issues/2157)). The constant
+`GEMMParams` and `GEMMAddMMParams` pointers now retain their indirection, address
+space and bindings ([#2160](https://github.com/CrossGL/crosstl/issues/2160)).
 Conditional scalar-buffer parameters now retain their bindings and conditions
 ([#2153](https://github.com/CrossGL/crosstl/issues/2153)). The pointer-deduction
 controls cover native Metal/OpenGL execution and strict HLSL compilation;
@@ -79,9 +80,19 @@ OpenGL execution includes the specialized binary load path tracked in
 HLSL variants have separate strict DXC compilation checks; Windows numerical
 execution remains a required CI gate. These controls currently supply all
 reflected bindings, including inactive inputs. Conditional aggregate references
-compile, but aggregate native packing remains under
-[#1991](https://github.com/CrossGL/crosstl/issues/1991); no aggregate runtime
-pass or complete GEMM translation is claimed.
+compile, but their native packing remains under
+[#1991](https://github.com/CrossGL/crosstl/issues/1991).
+
+Constant aggregate pointer controls use read-only structured buffers on DirectX
+and OpenGL, preserving element indexing instead of treating every pointer as a
+single constant-buffer object. Twenty-four cases execute on Metal and OpenGL
+through project packages and reflected two-member layouts. They cover offsets,
+single evaluation, local aliases, helper calls, constructors, conditional
+specializations, wraparound and output guards. Generated Metal matches original
+Metal; all twenty-four HLSL variants compile with strict DXC checks. Windows
+numerical execution is required separately. These homogeneous-record controls
+do not establish heterogeneous aggregate packing, inactive-binding omission,
+complete GEMM translation or matrix host dispatch.
 
 Reduction reference review found an alias-specialization error
 ([#2100](https://github.com/CrossGL/crosstl/issues/2100)): `float16_t` selected

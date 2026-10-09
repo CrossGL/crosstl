@@ -113,6 +113,20 @@ descriptor. Aggregate constant references have compilation coverage; their
 native execution still requires complete aggregate layout reflection and
 packing. Neither limitation is bypassed by fabricating scalar metadata.
 
+Constant aggregate pointers use read-only structured resources in CrossGL, not
+single-object constant buffers. Metal restores the original ``constant T*``
+declaration and binding; HLSL uses an SRV and GLSL uses a read-only storage block.
+Pointer-member access retains an explicit dereference, including computed
+offsets, without repeating side effects. Constructor factories continue to
+access their materialized ``this`` object by value.
+
+Required native controls cover direct and indexed access, pointer arithmetic,
+local aliases, helper calls and constructors, with unconditional and specialized
+conditional bindings. The homogeneous two-member records use reflected layouts,
+unsigned wraparound cases and output guards; Metal also executes the original
+source. This does not establish general heterogeneous aggregate packing or
+optional omission of inactive bindings.
+
 Explicit struct specializations compare primitive alias arguments by their
 resolved type before materializing the primary template. Static member lookup
 uses the same owner, including specialization declarations written through an

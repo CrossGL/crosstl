@@ -8524,9 +8524,6 @@ class MetalToCrossGLConverter:
 
     def map_variable_type(self, var):
         raw_type = self.effective_metal_variable_type(var)
-        constant_buffer_type = self.constant_buffer_pointer_type(var)
-        if constant_buffer_type:
-            return constant_buffer_type
         structured_buffer_type = self.structured_buffer_pointer_type(var)
         if structured_buffer_type:
             return structured_buffer_type
@@ -8582,9 +8579,7 @@ class MetalToCrossGLConverter:
         return mapped_type
 
     def address_space_qualifier_prefix(self, var):
-        if self.constant_buffer_pointer_type(
-            var
-        ) or self.structured_buffer_pointer_type(var):
+        if self.structured_buffer_pointer_type(var):
             return ""
 
         qualifiers = self.effective_declaration_qualifiers(var)
@@ -8806,9 +8801,7 @@ class MetalToCrossGLConverter:
                     self.current_type_resolution_context, "source_location", None
                 ),
             )
-        lowered_buffer_type = self.constant_buffer_pointer_type(
-            var
-        ) or self.structured_buffer_pointer_type(var)
+        lowered_buffer_type = self.structured_buffer_pointer_type(var)
         resolved_effective_type = self.resolve_type_alias(
             self.effective_metal_variable_type(var)
         )
@@ -11633,6 +11626,13 @@ class MetalToCrossGLConverter:
             if static_member is not None:
                 return static_member
             obj = self.generate_postfix_operand(expr.object, is_main)
+            constructor_this = (
+                isinstance(expr.object, VariableNode)
+                and expr.object.name == "this"
+                and self.render_constructor_member_identifier("this") is not None
+            )
+            if getattr(expr, "is_pointer", False) and not constructor_this:
+                obj = f"(*{obj})"
             wide_vector = self.wide_vector_expression_info(expr.object)
             if wide_vector is not None:
                 lane = self.wide_vector_lane_index(
@@ -21219,13 +21219,6 @@ float {scalar}(float value) {{
         if not element_type:
             return None
         element_type = self.resolve_type_alias(element_type)
-        if (
-            array_element_type is None
-            and "constant" in qualifiers
-            and element_type in self.struct_member_types
-        ):
-            return None
-
         buffer_type = (
             "StructuredBuffer"
             if qualifiers.intersection({"constant", "const"})
@@ -21233,24 +21226,6 @@ float {scalar}(float value) {{
         )
         mapped_element_type = self.map_resource_pointer_element_type(var, element_type)
         return f"{buffer_type}<{mapped_element_type}>"
-
-    def constant_buffer_pointer_type(self, var):
-        if not self.has_attribute(var, "buffer"):
-            return None
-
-        qualifiers = set(self.effective_declaration_qualifiers(var))
-        if "constant" not in qualifiers:
-            return None
-
-        element_type = self.pointer_element_type(
-            self.resolve_type_alias(getattr(var, "vtype", None))
-        )
-        if not element_type:
-            return None
-        element_type = self.resolve_type_alias(element_type)
-        if element_type not in self.struct_member_types:
-            return None
-        return f"ConstantBuffer<{self.map_type(element_type)}>"
 
     def is_structured_buffer_expression(self, expr):
         name = self.expression_base_name(expr)
