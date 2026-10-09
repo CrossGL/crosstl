@@ -155,7 +155,9 @@ def _execute(
             "request": native.to_json(),
             "adapterSteps": [step.to_json() for step in state.adapter_steps],
             "moduleFile": retained.name,
-            "moduleKind": "source" if target == "opengl" else "binary",
+            "moduleKind": (
+                "source" if isinstance(native.loaded_artifact, str) else "binary"
+            ),
             "moduleSha256": hashlib.sha256(retained.read_bytes()).hexdigest(),
             "validationModuleFile": str(module.relative_to(work)),
             "validationModuleSha256": hashlib.sha256(module.read_bytes()).hexdigest(),

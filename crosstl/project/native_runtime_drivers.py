@@ -960,6 +960,13 @@ class OpenGLComputeRuntime:
         is_spirv = artifact_format == "SPIR-V binary" or (
             artifact_format is None and Path(module_path).suffix.lower() == ".spv"
         )
+        request = getattr(state, "request", None)
+        if (
+            request is not None
+            and getattr(request, "adapter_contract", None) is not None
+        ):
+            # GLSL specialization compiles to a binary module before this load.
+            is_spirv = is_spirv or _opengl_request_requires_specialization(request)
         if is_spirv:
             try:
                 binary = Path(module_path).read_bytes()

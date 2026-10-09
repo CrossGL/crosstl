@@ -3377,6 +3377,64 @@ def test_opengl_compute_runtime_rejects_truncated_spirv_header(tmp_path):
     assert excinfo.value.details["minimumByteLength"] == 20
 
 
+@pytest.mark.parametrize("name", ("compiled.spv", "compiled.bin"))
+def test_opengl_compute_runtime_loads_specialized_glsl_binary(tmp_path, name):
+    artifact_path = tmp_path / name
+    artifact_path.write_bytes(_OPENGL_SPIRV_HEADER)
+    state = SimpleNamespace(
+        request=SimpleNamespace(
+            artifact={"target": "opengl", "artifactFormat": "GLSL source"},
+            adapter_contract=SimpleNamespace(
+                specialization_constants=[SimpleNamespace(kind="function-constant")]
+            ),
+        )
+    )
+    runtime = OpenGLComputeRuntime(module_loader=lambda name: object())
+    assert runtime.load_artifact(None, state, artifact_path) == _OPENGL_SPIRV_HEADER
+
+
+def test_opengl_compute_runtime_does_not_treat_uniforms_as_binary(tmp_path):
+    artifact_path = tmp_path / "compiled.spv"
+    source = "#version 430\nuniform float scale;\nvoid main() {}\n"
+    artifact_path.write_text(source)
+    state = SimpleNamespace(
+        request=SimpleNamespace(
+            artifact={"target": "opengl", "artifactFormat": "GLSL source"},
+            adapter_contract=SimpleNamespace(
+                specialization_constants=[SimpleNamespace(kind="uniform")]
+            ),
+        )
+    )
+    runtime = OpenGLComputeRuntime(module_loader=lambda name: object())
+    assert runtime.load_artifact(None, state, artifact_path) == source
+
+
+@pytest.mark.parametrize(
+    "binary,reason",
+    (
+        (b"short", "spirv-artifact-layout-invalid"),
+        (b"\x00" * 20, "spirv-artifact-magic-invalid"),
+    ),
+)
+def test_opengl_compute_runtime_validates_specialized_binary(tmp_path, binary, reason):
+    artifact_path = tmp_path / "compiled.bin"
+    artifact_path.write_bytes(binary)
+    state = SimpleNamespace(
+        request=SimpleNamespace(
+            artifact={"target": "opengl", "artifactFormat": "GLSL source"},
+            adapter_contract=SimpleNamespace(
+                specialization_constants=[
+                    SimpleNamespace(kind="specialization-constant")
+                ]
+            ),
+        )
+    )
+    runtime = OpenGLComputeRuntime(module_loader=lambda name: object())
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        runtime.load_artifact(None, state, artifact_path)
+    assert excinfo.value.details["reasonKind"] == reason
+
+
 def test_opengl_compute_runtime_specializes_typed_values_and_binds_uniforms(
     tmp_path,
 ):
