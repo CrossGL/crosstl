@@ -25,6 +25,7 @@ from demos.integrations.mlx.portable_host.quantization_layout import (
 )
 
 SOURCE = "mlx/backend/metal/kernels/quantized.metal"
+BLOCK_SOURCE = "mlx/backend/metal/kernels/fp_quantized.metal"
 INDEX_EXPRESSIONS = (
     "in_index + i",
     "gindex",
@@ -37,13 +38,16 @@ INDEX_EXPRESSIONS = (
     "out_index + 4",
     "offset",
     "oindex",
+    "index",
+    "index / pack_factor",
+    "i",
 )
 
 
 class QuantizationPackageCache:
     def __init__(self, root, directory, target):
         if target not in {"metal", "directx", "opengl"}:
-            raise ValueError("Unsupported affine quantization target")
+            raise ValueError("Unsupported quantization target")
         self.root, self.directory = Path(root).resolve(), Path(directory).resolve()
         self.target = target
         self._lock = threading.RLock()
@@ -64,18 +68,21 @@ class QuantizationPackageCache:
             timeout=30,
         )
         if dirty.strip():
-            raise ValueError("Affine translation requires unchanged pinned kernels")
+            raise ValueError(
+                "Quantization translation requires unchanged pinned kernels"
+            )
 
     def get(self, entry):
         signature(entry)
+        source = SOURCE if entry.startswith("affine_") else BLOCK_SOURCE
         with self._lock:
             self._require_source()
             identity = {
                 "schemaVersion": 1,
                 "revision": COMMIT,
-                "source": SOURCE,
+                "source": source,
                 "sourceHash": (
-                    hashlib.sha256((self.root / SOURCE).read_bytes()).hexdigest()
+                    hashlib.sha256((self.root / source).read_bytes()).hexdigest()
                 ),
                 "target": self.target,
                 "entry": entry,
@@ -96,7 +103,7 @@ class QuantizationPackageCache:
             if not destination.exists():
                 self.directory.mkdir(parents=True, exist_ok=True)
                 with tempfile.TemporaryDirectory(
-                    prefix=".affine-", dir=self.directory
+                    prefix=".quantization-", dir=self.directory
                 ) as temporary:
                     staging = Path(temporary) / "entry"
                     staging.mkdir()
@@ -115,14 +122,14 @@ class QuantizationPackageCache:
                         ).hexdigest()
                     ):
                         raise ValueError(
-                            "Affine translation implementation changed while packaging"
+                            "Quantization translation implementation changed while packaging"
                         )
                     loader = build_runtime_loader_manifest(
                         staging / "package/runtime-package.json"
                     )
                     if not loader["success"] or len(loader["loadUnits"]) != 1:
                         raise ValueError(
-                            f"Invalid affine package: {loader['diagnostics']}"
+                            f"Invalid quantization package: {loader['diagnostics']}"
                         )
                     descriptor = build_native_loader_abi_descriptor(loader)
                     (staging / "index.json").write_text(
@@ -140,14 +147,18 @@ class QuantizationPackageCache:
     def _load(self, directory, identity):
         record = json.loads((directory / "index.json").read_text())
         if record.get("identity") != identity:
-            raise ValueError("Affine cache identity does not match the request")
+            raise ValueError("Quantization cache identity does not match the request")
         loader = build_runtime_loader_manifest(
             directory / "package/runtime-package.json"
         )
         if not loader["success"] or len(loader["loadUnits"]) != 1:
-            raise ValueError(f"Invalid affine runtime package: {loader['diagnostics']}")
+            raise ValueError(
+                f"Invalid quantization runtime package: {loader['diagnostics']}"
+            )
         if loader["loadUnits"][0]["entryPoint"]["source"] != identity["entry"]:
-            raise ValueError("Affine package selected entry does not match the request")
+            raise ValueError(
+                "Quantization package selected entry does not match the request"
+            )
         descriptor = build_native_loader_abi_descriptor(loader)
         if (
             descriptor != record.get("descriptor")
@@ -162,15 +173,22 @@ class QuantizationPackageCache:
                 "value": identity["sourceHash"],
             }
         ):
-            raise ValueError("Affine cache descriptor does not match its package")
+            raise ValueError("Quantization cache descriptor does not match its package")
         return descriptor, directory / "package"
 
     def _build(self, entry, output):
         _, _, group, _ = signature(entry)
+        source = SOURCE if entry.startswith("affine_") else BLOCK_SOURCE
         options = {
             "max_template_specializations": 128,
             "max_template_materialization_work": 4096,
         }
+        if source == BLOCK_SOURCE:
+            options.update(
+                binary32_multiplication_profile="rne-flush",
+                binary32_log2_operand_profile="flush-subnormals",
+                binary32_log2_accuracy_profile="portable-finite",
+            )
         if self.target != "metal":
             settings = {
                 "software_subgroup_width": 32,
@@ -180,24 +198,24 @@ class QuantizationPackageCache:
                 settings["relative_wave_shuffle_out_of_range"] = "self"
             options["target_options"] = {self.target: settings}
         with tempfile.TemporaryDirectory(
-            prefix=".affine-translate-", dir=self.root
+            prefix=".quantization-translate-", dir=self.root
         ) as temporary:
             work = Path(temporary)
             config = ProjectConfig(
                 root=self.root,
                 source_roots=("mlx/backend/metal/kernels",),
-                include_patterns=(SOURCE,),
+                include_patterns=(source,),
                 include_dirs=(".",),
                 targets=(self.target,),
                 output_dir=f"{work.name}/out",
-                entry_points={SOURCE: (entry,)},
+                entry_points={source: (entry,)},
                 workgroup_size=(workgroup_size(entry), 1, 1),
                 source_options={"metal": options},
                 # Include pre-predicate byte offsets for all lanes, not just writers.
                 index_range_assertions=(
                     tuple(
                         {
-                            "source": SOURCE,
+                            "source": source,
                             "expression": expression,
                             "minimum": 0,
                             "maximum": MAX_GROUPS * group * 5 + 4,
@@ -213,13 +231,19 @@ class QuantizationPackageCache:
             payload = report.to_json()
             shutil.copytree(work, output / "translation")
             if payload["summary"]["failedCount"] or len(payload["artifacts"]) != 1:
-                raise ValueError(f"Affine translation failed: {payload['diagnostics']}")
+                raise ValueError(
+                    f"Quantization translation failed: {payload['diagnostics']}"
+                )
             if payload["artifacts"][0]["entryPoint"]["source"] != entry:
-                raise ValueError("Affine translation selected a different entry")
+                raise ValueError("Quantization translation selected a different entry")
             manifest = build_runtime_artifact_manifest(work / "report.json")
             if not manifest["success"]:
-                raise ValueError(f"Affine manifest failed: {manifest['diagnostics']}")
+                raise ValueError(
+                    f"Quantization manifest failed: {manifest['diagnostics']}"
+                )
             (work / "artifacts.json").write_text(json.dumps(manifest))
             package = build_runtime_package(work / "artifacts.json", output / "package")
             if not package["success"]:
-                raise ValueError(f"Affine packaging failed: {package['diagnostics']}")
+                raise ValueError(
+                    f"Quantization packaging failed: {package['diagnostics']}"
+                )

@@ -375,7 +375,10 @@ class HostRuntime:
             if name.startswith(("gather", "scatter")) and self.gathers is not None:
                 gather_signature(name)
                 return 1
-            if name.startswith("affine_") and self.quantization is not None:
+            if (
+                name.startswith(quantization_layout.ENTRY_PREFIXES)
+                and self.quantization is not None
+            ):
                 quantization_layout.signature(name)
                 return 1
             return 0
@@ -421,7 +424,7 @@ class HostRuntime:
             return 1
 
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
-        if entry.startswith("affine_"):
+        if entry.startswith(quantization_layout.ENTRY_PREFIXES):
             return quantization_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
             )

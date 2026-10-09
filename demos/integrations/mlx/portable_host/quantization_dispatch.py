@@ -1,4 +1,4 @@
-"""Execute affine packages and commit all guarded outputs to MLX storage."""
+"""Execute quantization packages and atomically commit guarded MLX outputs."""
 
 import ctypes
 import hashlib
@@ -25,7 +25,7 @@ def encode(words, logical, physical):
     words = list(words)
     size = quantization_layout.ITEM_SIZES[logical]
     if any(type(word) is not int or not 0 <= word < 1 << (8 * size) for word in words):
-        raise ValueError("Invalid affine storage word")
+        raise ValueError("Invalid quantization storage word")
     if logical == "uint8" and physical in {"uint8", "uint32"}:
         return {"dtype": physical, "shape": [len(words)], "values": words}
     if logical == "bfloat16" and physical == "uint16":
@@ -41,7 +41,7 @@ def encode(words, logical, physical):
         if physical == "float32":
             words = [word << 16 for word in words]
     else:
-        raise ValueError("Unsupported affine physical storage")
+        raise ValueError("Unsupported quantization physical storage")
     return {
         "dtype": physical,
         "shape": [len(words)],
@@ -53,7 +53,7 @@ def encode(words, logical, physical):
 def decode(value, logical, physical):
     words = value.get("values")
     if not isinstance(words, list):
-        raise RuntimeError("Native affine readback words are missing")
+        raise RuntimeError("Native quantization readback words are missing")
     if logical == "float16" and physical == "float32":
         words = [half_storage.narrow(word) for word in words]
     elif logical == "bfloat16" and physical == "float32":
@@ -61,28 +61,29 @@ def decode(value, logical, physical):
             type(word) is not int or not 0 <= word <= 0xFFFFFFFF or word & 0xFFFF
             for word in words
         ):
-            raise RuntimeError("Native affine bfloat carrier is not exact")
+            raise RuntimeError("Native quantization bfloat carrier is not exact")
         words = [word >> 16 for word in words]
     if encode(words, logical, physical) != value:
-        raise RuntimeError("Native affine readback storage differs")
+        raise RuntimeError("Native quantization readback storage differs")
     return words
 
 
 def dispatch(host, entry, buffers, count, elements, launch):
     from demos.integrations.mlx.portable_host.runtime import DISPATCH_VERSION
 
-    if host.quantization is None or count != 4 or not buffers or launch is None:
+    required = len(quantization_layout.buffer_contract(entry, 1))
+    if host.quantization is None or count != required or not buffers or launch is None:
         raise ValueError(
-            "Affine dispatch requires pinned packages, four buffers and geometry"
+            "Quantization dispatch requires pinned packages, matching buffers and geometry"
         )
     supplied = {}
     for i in range(count):
         buffer = buffers[i]
         if not buffer.name or not buffer.dtype:
-            raise ValueError("Affine buffer identity is missing")
+            raise ValueError("Quantization buffer identity is missing")
         name = buffer.name.decode("ascii")
         if name in supplied:
-            raise ValueError("Affine buffer names must be unique")
+            raise ValueError("Quantization buffer names must be unique")
         supplied[name] = buffer
     execution = launch.execution()
     metadata = quantization_layout.validate(entry, supplied, elements, execution)
@@ -94,8 +95,27 @@ def dispatch(host, entry, buffers, count, elements, launch):
         layout = binding["scalarLayout"]
         name = layout.get("memberName", binding["name"]).removeprefix(entry + "_")
         name = "out" if name == "out_" else name
+        if (
+            name == "global_scale"
+            and entry.startswith(("mxfp4_", "mxfp8_", "nvfp4_"))
+            and entry.endswith("_hgs_false")
+        ):
+            # The pinned template retains this argument when its reads are disabled.
+            # Supply an explicit inert binding; never synthesize an active scale.
+            if (
+                binding.get("kind") != "buffer"
+                or binding.get("access") != "read"
+                or layout["elementType"] != "float32"
+                or layout["elementStrideBytes"] != 4
+                or binding["name"] in inputs
+            ):
+                raise ValueError("Inactive global scale reflection differs")
+            inputs[binding["name"]] = encode([0], "float32", "float32")
+            continue
         if name not in supplied or name in matched or binding["name"] in inputs:
-            raise ValueError("Affine reflection does not match its buffer contract")
+            raise ValueError(
+                "Quantization reflection does not match its buffer contract"
+            )
         buffer = supplied[name]
         logical, physical = buffer.dtype.decode("ascii"), layout["elementType"]
         size = quantization_layout.ITEM_SIZES[logical]
@@ -111,7 +131,7 @@ def dispatch(host, entry, buffers, count, elements, launch):
             )
             != physical
         ):
-            raise ValueError("Affine reflected storage encoding differs")
+            raise ValueError("Quantization reflected storage encoding differs")
         if layout["elementStrideBytes"] != {
             "uint8": 1,
             "uint16": 2,
@@ -120,7 +140,7 @@ def dispatch(host, entry, buffers, count, elements, launch):
             "bfloat16": 2,
             "float32": 4,
         }.get(physical):
-            raise ValueError("Affine reflected element stride differs")
+            raise ValueError("Quantization reflected element stride differs")
         if buffer.output:
             words = [GUARDS[logical]] * (buffer.count + GUARD_COUNT)
         else:
@@ -135,13 +155,13 @@ def dispatch(host, entry, buffers, count, elements, launch):
         if buffer.output:
             outputs[binding["name"]] = value
     if set(matched) != set(supplied):
-        raise ValueError("Affine reflected buffers are incomplete")
+        raise ValueError("Quantization reflected buffers are incomplete")
     request = build_native_loader_dispatch_request(
         descriptor, directory, inputs, outputs, execution, expected_target=host.target
     )
     result = execute(host, request)
     if result.status != "ok" or set(result.outputs) != set(outputs):
-        raise RuntimeError("Native affine execution returned incomplete outputs")
+        raise RuntimeError("Native quantization execution returned incomplete outputs")
     readbacks, storage = {}, {}
     for name, buffer in supplied.items():
         if not buffer.output:
@@ -153,13 +173,13 @@ def dispatch(host, entry, buffers, count, elements, launch):
         if {key: item for key, item in output.items() if key != "values"} != {
             key: item for key, item in initial.items() if key != "values"
         }:
-            raise RuntimeError("Native affine output layout differs")
+            raise RuntimeError("Native quantization output layout differs")
         words = decode(output, logical, initial["dtype"])
         if (
             len(words) != buffer.count + GUARD_COUNT
             or words[buffer.count :] != [GUARDS[logical]] * GUARD_COUNT
         ):
-            raise RuntimeError("Native affine output guard differs")
+            raise RuntimeError("Native quantization output guard differs")
         readbacks[name] = words
         storage[name] = struct.pack(
             "<"

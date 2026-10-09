@@ -2205,6 +2205,21 @@ jobs:
             python -m demos.integrations.mlx.portable_host.verify_quantization --mlx-root mlx-upstream \
               --packages .mlx-portable-half/base/packages --output-dir .mlx-portable-half/affine \
               2>&1 | tee .mlx-portable-half/affine.log
+      - name: Execute block quantization through MLX
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          CROSTL_DIRECTX_FORCE_WARP: "1"
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_block_quantization.py
+          fi
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX block host verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_block_quantization --mlx-root mlx-upstream \
+              --packages .mlx-portable-half/base/packages --output-dir .mlx-portable-half/block \
+              2>&1 | tee .mlx-portable-half/block.log
       - name: Translate half host packages
         run: |
           set -euo pipefail

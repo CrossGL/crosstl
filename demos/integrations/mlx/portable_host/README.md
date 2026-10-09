@@ -208,8 +208,8 @@ removing native cases; affine logs and artifacts are retained with half-host evi
 `affine_quantize` and `affine_dequantize` entries in `quantized.metal`. The source
 and included kernel headers are unchanged. Group sizes 32, 64 and 128 and bit
 widths 2, 3, 4, 5, 6 and 8 have explicit layout contracts for float32, float16 and
-bfloat16. Non-affine quantization modes remain unsupported by this host route.
-Block-scaled MXFP4, MXFP8 and NVFP4 integration is tracked in
+bfloat16. The block-scaled route is described below; its remaining integration
+requirements are tracked in
 [#2140](https://github.com/CrossGL/crosstl/issues/2140). The translator supports
 declaration-initializer and resolved by-value function-argument loads from
 single-scalar storage wrappers when the source and member layouts match
@@ -218,8 +218,8 @@ Indexed, offset and addressed loads retain the original scalar storage, includin
 targets that widen byte elements. Native regressions check 8-, 16- and 32-bit
 unsigned payloads, conversion operators, constructor behavior, overload selection,
 single evaluation of indices, unchanged source values and output guards
-in the existing three-platform scalar-alias gate. This does not add block-format
-host bindings or support general aggregate reinterpretation, reference copies,
+in the existing three-platform scalar-alias gate. This does not establish
+support for general aggregate reinterpretation, reference copies,
 volatile accesses or address-space changes. Argument loads require a resolved
 matching value parameter; reference parameters and explicit copy constructors
 are not replaced with field-wise copies. Passing packed and widened byte storage
@@ -239,7 +239,7 @@ match original Metal for these bounded inputs with the explicitly selected
 DXC; that compiler check is not Windows numerical execution. Default-profile
 subnormal differences remain tracked in
 [#2114](https://github.com/CrossGL/crosstl/issues/2114). These probes do not establish
-block-format host integration or a passing upstream quantization suite.
+a passing upstream quantization suite.
 
 Separate quantizer probes use `binary32_log2_operand_profile = "flush-subnormals"`
 and `binary32_log2_accuracy_profile = "portable-finite"`, alongside the explicit
@@ -250,8 +250,8 @@ separately, with 32,304 computed values and 2,040 guards per target. These publi
 source options replace experimental generated-shader edits; source kernels,
 input storage and comparisons are unchanged. The required generic logarithm
 regressions run in the existing native arithmetic CI step. These bounded probes
-are not permanent complete-family execution, Windows numerical evidence or
-block-format host routing. Default logarithm behavior is unchanged.
+are not complete-family execution or Windows numerical evidence. Default
+logarithm behavior is unchanged.
 
 Packed outputs are not universally bit-identical between the pinned upstream CPU
 and Metal kernels, including FP4 halfway cases, signed-zero encodings and the
@@ -285,6 +285,51 @@ upstream quantization suite. Noncontiguous inputs still use the existing transla
 copy path, with its size and dtype restrictions; in particular, strided bfloat16
 copies are not implemented. Other upstream-test prerequisites such as large random
 arrays and quantized matrix multiplication remain separate work.
+
+## Block Quantization
+
+The host adapter routes MXFP4, MXFP8 and NVFP4 quantization and dequantization
+to unchanged `fp_quantized.metal` specializations. Payloads remain packed uint32
+MLX arrays; scales remain encoded uint8 arrays. No affine bias is introduced.
+NVFP4 accepts an optional scalar float32 global scale. Specializations without
+a global scale retain an inert binding for the source template's unused argument.
+The adapter never substitutes that binding for an active scale.
+
+Float32, float16 and bfloat16 storage have explicit contracts. Each dispatch
+checks complete groups, exact byte counts, buffer directions, alignment, output
+overlaps and geometry before native execution. Quantization uses 32 lanes for MX
+and 16 for NVFP4; dequantization uses one lane per packed byte. Large operations
+are batched at 65,535 groups with independently advanced payload and scale pointers.
+The packaging recipe selects the explicit multiplication and logarithm profiles
+described above, and records the unchanged source and translation identity.
+
+```sh
+python -m demos.integrations.mlx.portable_host.verify_block_quantization \
+  --mlx-root mlx-upstream --packages host-packages --output-dir block-evidence
+```
+
+This verifier calls the two public MLX APIs separately, with explicit native
+streams. It covers all 24 declared entries through 25 workloads: three dtypes,
+four format/global-scale combinations, contiguous and offset views, plus a
+65,536-group NVFP4 case. Independent exact-format references check packed bytes,
+encoded scales and reconstructed values, including adjacent blocks with different
+magnitudes and an all-zero block. Every output has 17 trailing guards; the host
+commits outputs only after all readbacks validate. Full inputs, readbacks,
+module identities and dispatch traces are retained.
+Each distinct packaged entry is also checked by the platform toolchain before
+execution: Metal with warnings as errors and fast math disabled, DXC shader model
+6.6 with warnings as errors, or glslang followed by SPIR-V validation. Compiler
+commands, output and compiled-module hashes are retained separately from native
+numerical results.
+
+The same verifier runs in the existing Metal, OpenGL and DirectX half-host CI
+jobs, without adding operating-system runners. This bounded API proof does not
+establish a passing upstream suite. The four unchanged block-format tests still
+expose large indexed-input limits
+([#2146](https://github.com/CrossGL/crosstl/issues/2146)) and bfloat16 cast/unary
+composition gaps ([#2147](https://github.com/CrossGL/crosstl/issues/2147)). Those
+tests are not rewritten, skipped or given wider tolerances. Strided bfloat16 and
+encoded-scale copies remain subject to the existing copy-path restrictions.
 
 ## General Gather
 
