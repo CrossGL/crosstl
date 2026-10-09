@@ -2731,8 +2731,8 @@ helper-contained operations, unsupported payloads, and unproven divergent
 control flow. The default hardware artifacts and host width preflight are
 unchanged.
 
-The software artifact is 4,676 bytes with SHA-256
-``813762d4535fdd693ca0a48c3c3f5dc79f6cc298050faae6e180d3cc9f1d60e5``.
+The software artifact is 4,846 bytes with SHA-256
+``2aeeafbf86fe61d3ddc8b9d4a6e23945ea8a34724f0689cd8a4149f0f1a8c7fc``.
 It contains ``CROSSTL_SOFTWARE_SUBGROUP_WIDTH``, no KHR subgroup extension or
 ``gl_Subgroup*`` use, and no hardware subgroup execution metadata.
 ``glslangValidator`` and ``spirv-val`` accept its OpenGL/SPIR-V 1.3 module; the
@@ -2740,6 +2740,14 @@ SPIR-V contains ten control-barrier instructions and no group-nonuniform
 instruction. Runtime reflection packages ``in_Buffer`` and ``out_Buffer`` as
 std430 float32 resources at bindings 0 and 1, plus the 16-byte std140
 axis-size block at binding 2, with one ready native load unit.
+The reviewed reference adds six shared-memory barriers in the sum/max helpers;
+all arithmetic, bindings and existing control barriers are unchanged. Original
+Metal and both GLSL revisions were executed for axis sizes 1, 31, 32, 33, 64, 127
+and 128 with eight input patterns per size. All 56 results per version match the
+stable reference and original Metal within the existing tolerance; old/new GLSL
+readbacks match exactly and all 28 suffix guards remain intact. This retained
+reference review is separate from the single-workload CI proof below and uses
+the historical ``846d1762`` pin, not the current integration pin.
 
 Linux CI requires a surfaceless Mesa EGL dispatch of that software artifact.
 The workload binds the 32 values ``(index - 16) / 8``, sets axis size 32,

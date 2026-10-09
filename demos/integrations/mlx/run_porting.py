@@ -113,8 +113,8 @@ MLX_LOGSUMEXP_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY = (
     "sha256:3cfc400f25cf49cb16d028fdba59ebe8b56b729ade919f711de4b8b67bfa5ab4"
 )
 MLX_LOGSUMEXP_SOFTWARE_OPENGL_ARTIFACT = {
-    "sha256": "813762d4535fdd693ca0a48c3c3f5dc79f6cc298050faae6e180d3cc9f1d60e5",
-    "size_bytes": 4676,
+    "sha256": "2aeeafbf86fe61d3ddc8b9d4a6e23945ea8a34724f0689cd8a4149f0f1a8c7fc",
+    "size_bytes": 4846,
 }
 MLX_LOGSUMEXP_DISPATCH_VARIANTS = {
     "block-float32-axis-32": {
@@ -1470,6 +1470,7 @@ MLX_OPENGL_LOGSUMEXP_SOFTWARE_RUNTIME_EVIDENCE = {
         },
         "artifact_marker": "CROSSTL_SOFTWARE_SUBGROUP_WIDTH",
         "control_barrier_instruction_count": 10,
+        "memory_barrier_instruction_count": 6,
         "group_non_uniform_instruction_count": 0,
         "hardware_subgroup_extensions_emitted": False,
         "hardware_subgroup_marker_emitted": False,

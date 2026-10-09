@@ -72,8 +72,8 @@ MLX_LOGSUMEXP_GENERATED_ARTIFACTS = {
     },
 }
 MLX_LOGSUMEXP_SOFTWARE_OPENGL_ARTIFACT = {
-    "sha256": "813762d4535fdd693ca0a48c3c3f5dc79f6cc298050faae6e180d3cc9f1d60e5",
-    "sizeBytes": 4676,
+    "sha256": "2aeeafbf86fe61d3ddc8b9d4a6e23945ea8a34724f0689cd8a4149f0f1a8c7fc",
+    "sizeBytes": 4846,
 }
 MLX_LOGSUMEXP_DISPATCH_IDENTITY = (
     "3cfc400f25cf49cb16d028fdba59ebe8b56b729ade919f711de4b8b67bfa5ab4"
@@ -723,6 +723,7 @@ def _translate_software_opengl_artifact(
     assert generated.count("crossglSoftwareSubgroupSumFloat(") == 3
     assert generated.count("crossglSoftwareSubgroupMaxFloat(") == 3
     assert generated.count("barrier();") == 10
+    assert generated.count("memoryBarrierShared();") == 6
     assert "block_logsumexp_float32_local_max[0u] = maxval;" in generated
     assert "block_logsumexp_float32_local_normalizer[0u] = normalizer;" in generated
     assert (
@@ -771,6 +772,7 @@ def _translate_software_opengl_artifact(
         )
         assembly = assembly_path.read_text(encoding="utf-8")
         assert assembly.count("OpControlBarrier") == 10
+        assert assembly.count("OpMemoryBarrier") == 6
         assert "OpGroupNonUniform" not in assembly
     elif os.environ.get(REQUIRE_OPENGL_RUNTIME_ENV) == "1":
         missing = [

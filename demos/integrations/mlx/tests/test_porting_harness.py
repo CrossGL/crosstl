@@ -2474,8 +2474,8 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     software_logsumexp = opengl_logsumexp["current_corpus_software_runtime"]
     assert software_logsumexp == (module.MLX_OPENGL_LOGSUMEXP_SOFTWARE_RUNTIME_EVIDENCE)
     assert software_logsumexp["generated_glsl"] == {
-        "sha256": "813762d4535fdd693ca0a48c3c3f5dc79f6cc298050faae6e180d3cc9f1d60e5",
-        "size_bytes": 4676,
+        "sha256": "2aeeafbf86fe61d3ddc8b9d4a6e23945ea8a34724f0689cd8a4149f0f1a8c7fc",
+        "size_bytes": 4846,
     }
     assert software_logsumexp["software_subgroup"]["operations"] == [
         "WaveActiveMax(float)",
@@ -2486,6 +2486,9 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         == 10
     )
     assert software_logsumexp["runtime_package"]["ready_load_unit_count"] == 1
+    assert (
+        software_logsumexp["software_subgroup"]["memory_barrier_instruction_count"] == 6
+    )
     assert software_logsumexp["runtime_execution"]["status"] == "required-on-ci"
     assert software_logsumexp["remaining_scope"] == {
         "workload": "block-float32-axis-1025",
@@ -9722,11 +9725,12 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "``WaveActiveMax(float)`` and ``WaveActiveSum(float)``" in (
         normalized_readme
     )
-    assert "4,676 bytes" in normalized_readme
+    assert "4,846 bytes" in normalized_readme
     assert (
-        "`813762d4535fdd693ca0a48c3c3f5dc79f6cc298050faae6e180d3cc9f1d60e5`" in readme
+        "`2aeeafbf86fe61d3ddc8b9d4a6e23945ea8a34724f0689cd8a4149f0f1a8c7fc`" in readme
     )
     assert "ten control-barrier instructions" in normalized_readme
+    assert "six shared-memory barriers" in normalized_readme
     assert "`3.9978051379373145`" in readme
     assert "axis-size-1025 record still produces a ``[288, 1, 1]`` artifact" in (
         normalized_readme
