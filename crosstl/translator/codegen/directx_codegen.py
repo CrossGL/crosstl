@@ -16419,7 +16419,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "resource_type": f"{resource_name}<{mapped_element_type}>",
         }
 
-    def hlsl_resource_pointer_parameter_alias_binding(self, contract, *, root, offset):
+    def hlsl_resource_pointer_parameter_alias_binding(
+        self, contract, *, root, offset, logical_storage=False
+    ):
         logical_element_type = contract["element_type"]
         physical_element_type = self.hlsl_resource_pointer_element_type(
             contract["resource_type"]
@@ -16438,8 +16440,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
         source_layout = scalar_storage_layout(physical_element_type)
         target_layout = scalar_storage_layout(logical_element_type)
+        # Root buffers have one physical element per logical source element.
+        # Widening a byte carrier does not turn that buffer into packed words.
         if (
-            source_layout is not None
+            not logical_storage
+            and source_layout is not None
             and target_layout is not None
             and source_layout != target_layout
             and source_layout.bit_width == 32
@@ -18655,6 +18660,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     },
                     root=rendered_root,
                     offset=offset,
+                    logical_storage=True,
                 )
             return {
                 "root": rendered_root,
@@ -18786,7 +18792,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             view_layout is None
             or source_layout is None
             or target_layout is None
-            or source_layout.bit_width != 32
+            or source_layout.bit_width not in {8, 32}
             or target_layout.bit_width not in {8, 16, 32}
             or target_width > 1
             and target_layout.bit_width != 32
@@ -18794,7 +18800,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and target_layout.bit_width != 32
         ):
             raise PointerReinterpretationError(
-                "DirectX storage pointer reinterpretation requires a 32-bit "
+                "DirectX storage pointer reinterpretation requires an 8- or 32-bit "
                 "scalar backing element and either an 8-, 16-, or 32-bit scalar "
                 "view or a 2- to 4-lane 32-bit vector view",
                 source_type=source_type_name,
@@ -19906,6 +19912,28 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         effective_index = self.hlsl_resource_pointer_offset_sum(
             binding.get("offset"), rendered_index
         )
+        if (
+            reinterpretation is not None
+            and reinterpretation["source_layout"].bit_width == 8
+            and reinterpretation["target_layout"].bit_width > 8
+            and (
+                self.hlsl_private_pointer_expression_has_side_effects(
+                    pointer_expression
+                )
+                or self.hlsl_private_pointer_expression_has_side_effects(
+                    index_expression
+                )
+            )
+        ):
+            raise PointerReinterpretationError(
+                "DirectX byte assembly requires a stable source offset",
+                source_type=reinterpretation["source_layout"].name,
+                target_type=reinterpretation["target_layout"].name,
+                address_space="storage",
+                access=binding_access,
+                reason="side-effecting-byte-assembly-offset",
+                source_location=getattr(pointer_expression, "source_location", None),
+            )
         reinterpret_read = self.hlsl_pointer_reinterpret_read_expression(
             binding, effective_index
         )
@@ -19936,6 +19964,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             byte_index = byte_offset
         else:
             byte_index = f"({byte_offset} + {element_bytes})"
+
+        if source_layout.bit_width == 8:
+            components = []
+            for lane in range(target_layout.byte_width):
+                index = byte_index if lane == 0 else f"({byte_index} + {lane})"
+                value = f"(uint({binding['root']}[uint({index})]) & 255u)"
+                components.append(value if lane == 0 else f"({value} << {lane * 8}u)")
+            bits = "(" + " | ".join(components) + ")"
+            if target_layout.kind == "floating":
+                return f"asfloat({bits})"
+            if target_layout.signed:
+                if target_layout.bit_width == 32:
+                    return f"asint({bits})"
+                shift = 32 - target_layout.bit_width
+                return f"(int({bits} << {shift}u) >> {shift})"
+            return bits
 
         if target_width > 1:
             components = []
@@ -22088,8 +22132,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if private_pointer_access is not None:
                 return private_pointer_access
             pointer_access = None
-            if self.hlsl_resource_pointer_alias_expression(array_expr) or (
-                isinstance(array_expr, BinaryOpNode) and array_expr.op in {"+", "-"}
+            if (
+                self.hlsl_resource_pointer_alias_expression(array_expr)
+                or isinstance(array_expr, PointerReinterpretNode)
+                or isinstance(array_expr, BinaryOpNode)
+                and array_expr.op in {"+", "-"}
             ):
                 pointer_access = self.generate_hlsl_resource_pointer_access(
                     array_expr, index_expr
@@ -26677,6 +26724,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     pointer_contract,
                     root=self.hlsl_identifier_name(emitted_name),
                     offset=offset_name,
+                    logical_storage=True,
                 )
             else:
                 entry_binding = {

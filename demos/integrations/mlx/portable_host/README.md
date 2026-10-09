@@ -211,15 +211,20 @@ widths 2, 3, 4, 5, 6 and 8 have explicit layout contracts for float32, float16 a
 bfloat16. Non-affine quantization modes remain unsupported by this host route.
 Block-scaled MXFP4, MXFP8 and NVFP4 integration is tracked in
 [#2140](https://github.com/CrossGL/crosstl/issues/2140). The translator supports
-declaration-initializer loads from single-scalar storage wrappers when the source
-and member layouts match ([#2141](https://github.com/CrossGL/crosstl/issues/2141)).
+declaration-initializer and resolved by-value function-argument loads from
+single-scalar storage wrappers when the source and member layouts match
+([#2141](https://github.com/CrossGL/crosstl/issues/2141)).
 Indexed, offset and addressed loads retain the original scalar storage, including
 targets that widen byte elements. Native regressions check 8-, 16- and 32-bit
-unsigned payloads, conversion operators, constructor behavior and output guards
+unsigned payloads, conversion operators, constructor behavior, overload selection,
+single evaluation of indices, unchanged source values and output guards
 in the existing three-platform scalar-alias gate. This does not add block-format
 host bindings or support general aggregate reinterpretation, reference copies,
-volatile accesses or address-space changes. Direct storage-wrapper loads used as
-function arguments still produce diagnostics. Concrete scale conversion
+volatile accesses or address-space changes. Argument loads require a resolved
+matching value parameter; reference parameters and explicit copy constructors
+are not replaced with field-wise copies. Passing packed and widened byte storage
+through the same pointer parameter remains a separate layout issue
+([#2145](https://github.com/CrossGL/crosstl/issues/2145)). Concrete scale conversion
 is covered by source-level regressions
 ([#1744](https://github.com/CrossGL/crosstl/issues/1744)); the all-zero MX scale
 boundary remains open ([#2143](https://github.com/CrossGL/crosstl/issues/2143)). A combined

@@ -52958,7 +52958,7 @@ def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_pat
     assert set(artifacts) == {"directx", "opengl"}
     expected_errors = {
         "directx": (
-            "DirectX storage pointer reinterpretation requires a 32-bit scalar "
+            "DirectX storage pointer reinterpretation requires an 8- or 32-bit scalar "
             "backing element and either an 8-, 16-, or 32-bit scalar view or a "
             "2- to 4-lane 32-bit vector view"
         ),

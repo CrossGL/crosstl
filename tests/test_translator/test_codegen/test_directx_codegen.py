@@ -9012,6 +9012,38 @@ def test_hlsl_metal_constant_pointer_helpers_forward_alias_offsets(tmp_path):
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
+@pytest.mark.parametrize("scalar", ["uchar", "char"])
+@pytest.mark.parametrize(
+    "body",
+    [
+        "output[i] = int((values + 3)[i]);",
+        "output[i] = int(*(values + i + 3));",
+        "const device Scalar* cursor = values + 3; output[i] = int(cursor[i]);",
+        "values += 3; output[i] = int(values[i]);",
+    ],
+)
+def test_hlsl_byte_buffer_offsets_keep_logical_element_stride(tmp_path, scalar, body):
+    shader_path = tmp_path / "byte_offsets.metal"
+    shader_path.write_text(f"""
+    #include <metal_stdlib>
+    using namespace metal;
+    using Scalar = {scalar};
+    kernel void byte_offsets(const device Scalar* values [[buffer(0)]],
+                             device int* output [[buffer(1)]],
+                             uint i [[thread_position_in_grid]]) {{
+        {body}
+    }}
+    """)
+    generated = crosstl.translate(
+        str(shader_path), backend="directx", format_output=False
+    )
+    assert "StructuredBuffer<" in generated
+    assert "values[uint(" in generated or "values.Load(uint(" in generated
+    assert "/ 4" not in generated and "% 4" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
 def test_hlsl_metal_narrow_storage_helper_preserves_byte_view_offset(tmp_path):
     shader = """
     #include <metal_stdlib>
@@ -47489,7 +47521,9 @@ def test_hlsl_metal_private_scalar_struct_view_materializes_exact_value(tmp_path
     assert "ByteView result;" in generated
     assert "result.bits = (uint(value) & 255u);" in generated
     assert "return result;" in generated
-    assert "consume(ByteView(((uint(byte) & 255u) & 0xffu)))" in generated
+    assert (
+        "consume(_crosstl_metal_load_value_ByteView((uint(byte) & 255u)))" in generated
+    )
     assert "PointerReinterpretNode" not in generated
     assert "&byte" not in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
@@ -47925,8 +47959,14 @@ def test_hlsl_metal_storage_struct_view_preserves_typed_alias_offset(tmp_path):
     )
 
     assert "words_offset += uint((gid * 2));" in generated
-    assert "local.words[0] = packed[uint(((words_offset * 4)) / 4)];" in generated
-    assert "local.words[1] = packed[uint((((words_offset + 1) * 4)) / 4)];" in generated
+    for index in ("(words_offset * 4)", "((words_offset + 1) * 4)"):
+        assert f"uint(packed[uint({index})]) & 255u" in generated
+        for lane in (1, 2, 3):
+            assert (
+                f"(uint(packed[uint(({index} + {lane}))]) & 255u) << {lane * 8}u"
+                in generated
+            )
+    assert "/ 4" not in generated
     assert "local.words[0] = packed[uint(0)]" not in generated
     assert "PointerReinterpretNode" not in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()

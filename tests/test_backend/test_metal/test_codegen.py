@@ -125,15 +125,61 @@ def test_storage_wrapper_load_does_not_bypass_declared_copy_constructor():
     assert "crosstl_ctor_" in result
 
 
+@pytest.mark.parametrize("parameter", ["device Wrapper&", "const device Wrapper&"])
+def test_storage_wrapper_argument_does_not_copy_reference(parameter):
+    result = convert(f"""
+    struct Wrapper {{ uchar payload; }};
+    uint consume({parameter} value) {{ return uint(value.payload); }}
+    kernel void load(device uchar* values [[buffer(0)]], device uint* output [[buffer(1)]], uint i [[thread_position_in_grid]]) {{
+        output[i] = consume(((device Wrapper*)values)[i]);
+    }}
+    """)
+    assert "_crosstl_metal_load_value_" not in result
+
+
+def test_storage_wrapper_argument_does_not_bypass_declared_copy_constructor():
+    result = convert("""
+    struct Wrapper {
+        uchar payload;
+        Wrapper(const device Wrapper& other) : payload(other.payload + 1) {}
+    };
+    uint consume(Wrapper value) { return uint(value.payload); }
+    kernel void load(const device uchar* values [[buffer(0)]], device uint* output [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+        output[i] = consume(((const device Wrapper*)values)[i]);
+    }
+    """)
+    assert "_crosstl_metal_load_value_" not in result
+
+
+@pytest.mark.parametrize("callee", ["undeclared", "scalar_only"])
+def test_storage_wrapper_argument_requires_matching_value_parameter(callee):
+    result = convert(f"""
+    struct Wrapper {{ uchar payload; }};
+    uint scalar_only(uint value) {{ return value; }}
+    kernel void load(const device uchar* values [[buffer(0)]], device uint* output [[buffer(1)]], uint i [[thread_position_in_grid]]) {{
+        output[i] = {callee}(((const device Wrapper*)values)[i]);
+    }}
+    """)
+    assert "_crosstl_metal_load_value_" not in result
+
+
+@pytest.mark.parametrize("context", ["initializer", "argument"])
 @pytest.mark.parametrize(
     "target_space", ["thread", "threadgroup", "constant", "volatile device"]
 )
-def test_storage_wrapper_load_rejects_changed_access_contract(target_space):
+def test_storage_wrapper_load_rejects_changed_access_contract(target_space, context):
+    expression = f"(({target_space} Wrapper*)values)[i]"
+    statement = (
+        f"auto loaded = {expression};"
+        if context == "initializer"
+        else f"consume({expression});"
+    )
     with pytest.raises(PointerReinterpretationError) as error:
         convert(f"""
         struct Wrapper {{ uchar payload; }};
+        uint consume(Wrapper value) {{ return uint(value.payload); }}
         kernel void load(const device uchar* values [[buffer(0)]], uint i [[thread_position_in_grid]]) {{
-            auto loaded = (({target_space} Wrapper*)values)[i];
+            {statement}
         }}
         """)
     assert error.value.reason == "wrapper-load-storage-unproven"

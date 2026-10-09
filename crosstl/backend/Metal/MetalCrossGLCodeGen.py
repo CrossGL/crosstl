@@ -11460,6 +11460,9 @@ class MetalToCrossGLConverter:
                 return f"(({left}) / ({right}))"
             if self.resolve_metal_math_builtin_name(expr.name, expr.args) == "copysign":
                 self.metal_math_builtin_result_type(expr)
+            wrapper_arguments = self.generate_storage_wrapper_call_arguments(
+                materialized_name, expr, is_main
+            )
             materialized_name = self.transported_metal_source_overload_name(
                 materialized_name,
                 expr.args,
@@ -11477,8 +11480,12 @@ class MetalToCrossGLConverter:
                 )
             else:
                 args = ", ".join(
-                    self.generate_metal_wave_argument(
-                        materialized_name, function_name, expr, index, is_main
+                    (
+                        wrapper_arguments[index]
+                        if index in wrapper_arguments
+                        else self.generate_metal_wave_argument(
+                            materialized_name, function_name, expr, index, is_main
+                        )
                     )
                     for index in range(len(expr.args))
                 )
@@ -16877,24 +16884,63 @@ float {scalar}(float value) {{
             return f"({rendered_operand})"
         return rendered_operand
 
-    def generate_storage_wrapper_value_read(
-        self, expression, is_main=False, expected_type=None
-    ):
-        """Copy an immediate scalar-wrapper load without invoking constructors."""
-        cast = None
-        index = None
+    @staticmethod
+    def storage_wrapper_load_parts(expression):
         if isinstance(expression, ArrayAccessNode) and isinstance(
             expression.array, CastNode
         ):
-            cast, index = expression.array, expression.index
+            return expression.array, expression.index
         elif (
             isinstance(expression, UnaryOpNode)
             and expression.op == "*"
             and isinstance(expression.operand, CastNode)
         ):
-            cast = expression.operand
-        if cast is None:
+            return expression.operand, None
+        return None
+
+    def generate_storage_wrapper_call_arguments(
+        self, function_name, expression, is_main=False
+    ):
+        candidates = [
+            index
+            for index, argument in enumerate(expression.args)
+            if self.storage_wrapper_load_parts(argument) is not None
+        ]
+        if not candidates:
+            return {}
+        selected = self.resolve_transported_metal_source_overload(
+            function_name, expression.args, getattr(expression, "source_location", None)
+        )
+        if selected is None:
+            _binding, selected = self.resolve_metal_user_function_overload(
+                function_name,
+                expression.args,
+                source_offset=self.alias_source_offset(expression),
+            )
+        if selected is None:
+            return {}
+        rendered = {}
+        for index in candidates:
+            parameter = selected.params[index]
+            if self.reference_parameter(parameter):
+                continue
+            value = self.generate_storage_wrapper_value_read(
+                expression.args[index],
+                is_main,
+                self.metal_source_overload_parameter_type(parameter),
+            )
+            if value is not None:
+                rendered[index] = value
+        return rendered
+
+    def generate_storage_wrapper_value_read(
+        self, expression, is_main=False, expected_type=None
+    ):
+        """Copy an immediate scalar-wrapper load without invoking constructors."""
+        parts = self.storage_wrapper_load_parts(expression)
+        if parts is None:
             return None
+        cast, index = parts
         target_type = self.metal_pointer_pointee_type_once(
             self.resolve_type_alias(cast.target_type)
         )
