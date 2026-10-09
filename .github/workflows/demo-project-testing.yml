@@ -2879,14 +2879,17 @@ jobs:
             target: opengl
             family: all
             verifier: verify
+            companion_args: --upstream-quantization
           - os: windows-2025
             target: directx
             family: all
             verifier: verify
+            companion_args: --upstream-quantization
           - os: macos-26
             target: metal
             family: all
             verifier: verify
+            companion_args: --upstream-quantization
           - os: ubuntu-24.04
             target: opengl
             family: row

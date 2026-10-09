@@ -93,7 +93,7 @@ their metadata; noncontiguous inputs use translated copies before unary dispatch
 Dispatch is synchronous and uses host staging buffers. Layout copies accept signed
 32-bit element counts and storage spans, with up to 64 axes and 65,535 workgroups
 per launch axis. Unary operations also batch stored elements without changing
-their layout. Arange, selection and reductions retain their current size limits;
+their layout. Arange, selection and shaped reductions retain their current size limits;
 binary operations, casts and concatenation can produce larger outputs as described below.
 Elementwise operations use one thread per workgroup; reductions
 preserve upstream launch widths and multipass planning. Empty elementwise arrays
@@ -149,7 +149,7 @@ first launch-axis limit; larger multidimensional arrays can fit. Invalid backing
 views, overlapping destinations and out-of-range signed indices are rejected
 before native submission. The adapter stages whole source/destination spans, so
 large sparse layouts can require substantial host and device memory. This removes
-the former 65,535-element copy limit, not the remaining reduction size limits.
+the former 65,535-element copy limit, not the remaining shaped-reduction size limits.
 
 ## Batched Binary Operations
 
@@ -162,7 +162,7 @@ python -m demos.integrations.mlx.portable_host.verify_binary_batches \
 ```
 
 Its 48 API cases cover every base arithmetic, comparison and logical binary entry
-except NaN-equality, whose large-array API additionally needs reduction support.
+except NaN-equality, whose large-array API additionally needs the optional reduction packages.
 They include 65,535, 65,536 and 131,075 elements, distinct input offsets, a large
 transpose, a reversed input and row/column broadcasts. The 98 binary batches and
 four materializing copies require exact CPU/reference/native bytes, unchanged
@@ -679,8 +679,13 @@ Boolean sum/product and narrow or complex types are not implemented yet.
 The host uses upstream's reduction planner. Noncontiguous whole-array inputs
 are materialized with translated copies when required. Arrays up to 4,096
 elements use the exact source launch width, rounded to a multiple of 32. Larger
-bounded arrays retain the two source passes: 128 partial rows followed by a
-32-thread final reduction. Intermediate values are staged synchronously, not
+arrays retain the two source passes: logical inputs up to 64 MiB use 128 partial
+rows followed by a 32-thread final reduction; larger inputs use 4,096 partial
+rows followed by a 1,024-thread final reduction. The threshold uses MLX's logical
+item size, including one byte for Boolean values, independently of widened target
+storage. Whole-array inputs must fit their backing allocation and the signed
+32-bit buffer-index range; native device buffer limits also apply. Row and column
+reductions retain their 65,535-element bound. Intermediate values are staged synchronously, not
 kept in persistent GPU allocations. Unsupported column plans still produce
 explicit errors. No reduction arithmetic is
 performed on the CPU by the adapter.
@@ -746,6 +751,30 @@ retain intermediate readbacks, size metadata, dispatch dimensions and output
 guards. The verifier requires every source pass and retains readbacks before
 comparison. These are additional host workloads, not replacements for upstream
 tests or evidence that the full upstream reduction suite passes.
+
+The default workload includes 28 additional cases at 65,536 and 131,075 elements
+across all 14 entries. These use nonzero allocation offsets and a distinct final
+element to exercise full rows and tails. Both passes' numerical readbacks, source
+size metadata and output guards are checked, not only the final scalar. Invalid
+large backing views must fail before any native dispatch. Launch-plan tests cover
+both sides of the 64 MiB threshold for every logical dtype; those tests do not by
+themselves establish native execution of such large allocations. No floating-point
+tolerance or upstream test is changed by the adapter.
+
+The same three whole-array CI jobs require `--upstream-quantization`. This runs
+the pinned `test_quantized.TestQuantized.test_quantize_dequantize` unchanged in
+separate CPU and native processes. The native trace must contain all 36 affine
+specializations, both random and zero-valued input families, the upstream strided
+slice comparison and all 36 large Boolean error assertions. The test's explicit
+CPU comparison remains intact; the adapter does not redirect unsupported work to
+a CPU fallback. Random packages are translated from the same pin, and source
+hashes, worker logs, commands and native traces are retained even on failure.
+No test is skipped or assigned a more permissive tolerance. This is one upstream
+test, not evidence that the entire quantization or MLX suite passes.
+
+```sh
+python -m demos.integrations.mlx.portable_host.verify_upstream_quantization --mlx-root mlx-upstream --packages host-packages --reductions reduction-packages --output-dir upstream-quantization-evidence
+```
 
 ## Row Reductions
 

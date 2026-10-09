@@ -34,10 +34,65 @@ def test_all_reduce_stage_preserves_upstream_geometry(count):
         assert reduction_layout.stage(rows)["workgroupSize"] == [32, 1, 1]
 
 
-@pytest.mark.parametrize("count", [0, -1, 65536, True, 32.0, "32"])
+@pytest.mark.parametrize("count", [0, -1, 2**31, True, 32.0, "32"])
 def test_invalid_all_reduce_stage_is_rejected(count):
     with pytest.raises(ValueError, match="stored elements"):
         reduction_layout.stage(count)
+
+
+@pytest.mark.parametrize(
+    "dtype,itemsize", [("float32", 4), ("int32", 4), ("uint32", 4), ("bool_", 1)]
+)
+@pytest.mark.parametrize(
+    "boundary", [65536, 131075, "before", "at", "after", 2**31 - 1]
+)
+def test_large_reduction_stage_uses_logical_bytes(dtype, itemsize, boundary):
+    count = {
+        "before": 2**26 // itemsize - 1,
+        "at": 2**26 // itemsize,
+        "after": 2**26 // itemsize + 1,
+    }.get(boundary, boundary)
+    rows = 128 if count * itemsize <= 2**26 else 4096
+    row_size = (count + rows - 1) // rows
+    width = ((min((row_size + 3) // 4, 1024) + 31) // 32) * 32
+    assert reduction_layout.stage(count, dtype) == {
+        "rowSize": row_size,
+        "workgroupCount": [1, rows, 1],
+        "workgroupSize": [width, 1, 1],
+    }
+    final = reduction_layout.stage(rows, dtype)
+    assert final["workgroupCount"] == [1, 1, 1]
+    assert final["workgroupSize"] == [32 if rows == 128 else 1024, 1, 1]
+
+
+@pytest.mark.parametrize("dtype", [None, [], "bool", "float16", "uint64", 4])
+def test_reduction_plan_rejects_unsupported_logical_dtype(dtype):
+    with pytest.raises(ValueError, match="dtype"):
+        reduction_layout.stage(65536, dtype)
+
+
+@pytest.mark.parametrize("dtype", ["float32", "bool_"])
+@pytest.mark.parametrize("fault", [None, "rows", "width", "row-size"])
+def test_large_reduction_metadata_is_validated_without_reading_input(dtype, fault):
+    count = 2**26 // reduction_layout.ITEM_SIZES[dtype] + 1
+    plan = reduction_layout.stage(count, dtype)
+    size, row = ctypes.c_uint64(count), ctypes.c_uint64(plan["rowSize"])
+    buffers = {
+        "in_size": runtime.Buffer(b"in_size", b"uint64", ctypes.addressof(size), 1, 0),
+        "row_size": runtime.Buffer(b"row_size", b"uint64", ctypes.addressof(row), 1, 0),
+    }
+    execution = {key: plan[key][:] for key in ("workgroupCount", "workgroupSize")}
+    if fault == "rows":
+        execution["workgroupCount"][1] = 128
+    elif fault == "width":
+        execution["workgroupSize"][0] = 32
+    elif fault == "row-size":
+        row.value += 1
+    if fault:
+        with pytest.raises(ValueError, match="upstream plan"):
+            reduction_layout.validate(buffers, count, execution, dtype)
+    else:
+        assert reduction_layout.validate(buffers, count, execution, dtype) == plan
 
 
 @pytest.mark.parametrize("fault", [None, "row", "size", "width", "rows", "axis"])
@@ -118,7 +173,7 @@ decltype(reduce_values<float>) reduce_values<float>;
             root,
             output,
             request.param,
-            widths=(32, 64),
+            widths=(32, 64, 128),
             entries=("all_reduce_sumfloat32",),
         )
     assert reduction_packages.load_index(output, request.param) == index
@@ -150,7 +205,8 @@ decltype(reduce_values<float>) reduce_values<float>;
         "readback-count",
     ],
 )
-def test_reduction_dispatch_contract(packages, tmp_path, monkeypatch, fault):
+@pytest.mark.parametrize("count", [129, 65536])
+def test_reduction_dispatch_contract(packages, tmp_path, monkeypatch, fault, count):
     directory, index = packages
     entry = "all_reduce_sumfloat32"
     host = runtime.HostRuntime.__new__(runtime.HostRuntime)
@@ -160,11 +216,15 @@ def test_reduction_dispatch_contract(packages, tmp_path, monkeypatch, fault):
     host.reduction_directories = {key: directory for key in index["descriptors"]}
     host.reduction_descriptors = index["descriptors"].copy()
     host.trace = tmp_path / "trace.jsonl"
+    plan = reduction_layout.stage(count)
+    rows = plan["workgroupCount"][1]
+    width = plan["workgroupSize"][0]
+    values = [8256.0] * rows
     memory = [
-        (ctypes.c_float * 129)(*range(129)),
-        (ctypes.c_float * 1)(),
-        ctypes.c_uint64(129),
-        ctypes.c_uint64(129),
+        (ctypes.c_float * count)(*range(count)),
+        (ctypes.c_float * rows)(),
+        ctypes.c_uint64(count),
+        ctypes.c_uint64(plan["rowSize"]),
     ]
     buffers = (runtime.Buffer * 4)(
         *[
@@ -178,12 +238,12 @@ def test_reduction_dispatch_contract(packages, tmp_path, monkeypatch, fault):
             for name, dtype, count, data in zip(
                 ("in", "out", "in_size", "row_size"),
                 ("float32", "float32", "uint64", "uint64"),
-                (129, 1, 1, 1),
+                (count, rows, 1, 1),
                 memory,
             )
         ]
     )
-    launch = runtime.Launch((1, 1, 1), (64, 1, 1))
+    launch = runtime.Launch((1, rows, 1), (width, 1, 1))
     if fault == "variant":
         host.reduction_descriptors = {}
     elif fault == "input-count":
@@ -208,7 +268,7 @@ def test_reduction_dispatch_contract(packages, tmp_path, monkeypatch, fault):
         ctypes.c_float.from_buffer_copy(ctypes.c_uint32(word)).value
         for word in runtime.COPY_GUARD
     ]
-    descriptor = index["descriptors"][f"w64/{entry}"]
+    descriptor = index["descriptors"][f"w{width}/{entry}"]
     name = next(
         binding["name"]
         for binding in descriptor["bindings"]
@@ -223,9 +283,9 @@ def test_reduction_dispatch_contract(packages, tmp_path, monkeypatch, fault):
             outputs={
                 name: {
                     "dtype": "float32",
-                    "shape": [33],
+                    "shape": [rows + 32],
                     "values": (
-                        [8256.0]
+                        values
                         + (
                             []
                             if fault == "readback-count"
@@ -240,23 +300,24 @@ def test_reduction_dispatch_contract(packages, tmp_path, monkeypatch, fault):
     host.executor = SimpleNamespace(run=execute)
     if fault in {"guard", "readback-count"}:
         with pytest.raises(RuntimeError, match="guard|readback size"):
-            host.dispatch(entry, buffers, 4, 129, launch=launch)
-        assert list(memory[1]) == [0.0] and not host.trace.exists()
+            host.dispatch(entry, buffers, 4, count, launch=launch)
+        assert list(memory[1]) == [0.0] * rows and not host.trace.exists()
     elif fault:
         with pytest.raises(ValueError):
             host.dispatch(
                 entry,
                 buffers,
                 3 if fault == "count" else 4,
-                129,
+                count,
                 launch=None if fault == "launch" else launch,
             )
-        assert not calls and list(memory[1]) == [0.0]
+        assert not calls and list(memory[1]) == [0.0] * rows
     else:
-        host.dispatch(entry, buffers, 4, 129, launch=launch)
-        assert list(memory[1]) == [8256.0]
-        assert calls[0].execution_plan.dispatch.workgroup_size == (64, 1, 1)
-        assert calls[0].execution_plan.dispatch.workgroup_count == (1, 1, 1)
+        host.dispatch(entry, buffers, 4, count, launch=launch)
+        assert list(memory[1]) == values
+        assert calls[0].execution_plan.dispatch.workgroup_size == (width, 1, 1)
+        assert calls[0].execution_plan.dispatch.workgroup_count == (1, rows, 1)
+        assert not calls[0].execution_plan.diagnostics
         assert json.loads(host.trace.read_text())["reductionGuardValues"] == guard
 
 
@@ -314,8 +375,10 @@ def reduction_evidence():
                     )
                 }
             )
-        for count in [case["count"]] + ([128] if case["count"] > 4096 else []):
-            plan = reduction_layout.stage(count)
+        rows = reduction_layout.stage(case["count"], case["dtype"])["workgroupCount"][1]
+        partials = case["inputs"]
+        for count in [case["count"]] + ([rows] if rows > 1 else []):
+            plan = reduction_layout.stage(count, case["dtype"])
             trace.append(
                 {
                     "entry": case["entry"],
@@ -326,6 +389,28 @@ def reduction_evidence():
                     "reductionGuardValues": [],
                 }
             )
+            if case.get("offset"):
+                partials = reduction_workloads.partial_reference(
+                    partials, case["operation"], case["dtype"], plan
+                )
+                guard = (
+                    list(runtime.BOOLEAN_GUARD)
+                    if case["dtype"] == "bool_"
+                    else (
+                        [
+                            ctypes.c_float.from_buffer_copy(ctypes.c_uint32(word)).value
+                            for word in runtime.COPY_GUARD
+                        ]
+                        if case["dtype"] == "float32"
+                        else runtime.COPY_GUARD
+                    )
+                )
+                trace[-1].update(
+                    target="metal",
+                    reductionValues=partials,
+                    reductionGuardValues=guard,
+                    reductionMetadata={"in_size": count, "row_size": plan["rowSize"]},
+                )
         value = (
             float(case["expected"]) if case["dtype"] == "float32" else case["expected"]
         )
@@ -369,6 +454,10 @@ def reduction_evidence():
         "guard",
         "interval",
         "trailing-dispatch",
+        "large-partial",
+        "large-guard",
+        "large-metadata",
+        "large-result-count",
     ],
 )
 def test_reduction_evidence_requires_complete_numerical_execution(fault):
@@ -415,6 +504,16 @@ def test_reduction_evidence_requires_complete_numerical_execution(fault):
         records[0]["dispatchStart"] = True
     elif fault == "trailing-dispatch":
         trace.append(trace[-1])
+    elif fault and fault.startswith("large-"):
+        dispatch = next(record for record in trace if record.get("threads", 0) > 65535)
+        if fault == "large-partial":
+            dispatch["reductionValues"][0] = 7.0
+        elif fault == "large-guard":
+            dispatch["reductionGuardValues"] = []
+        elif fault == "large-metadata":
+            dispatch["reductionMetadata"]["row_size"] += 1
+        elif fault == "large-result-count":
+            dispatch["reductionValues"].pop()
     if fault:
         with pytest.raises(RuntimeError):
             reduction_workloads.validate(records, (32, 64, 128), trace=trace)

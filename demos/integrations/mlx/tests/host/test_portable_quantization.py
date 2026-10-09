@@ -12,10 +12,200 @@ import pytest
 from demos.integrations.mlx.portable_host import quantization_dispatch as dispatch
 from demos.integrations.mlx.portable_host import quantization_layout as layout
 from demos.integrations.mlx.portable_host import quantization_packages, runtime
+from demos.integrations.mlx.portable_host import (
+    verify_upstream_quantization as upstream,
+)
 from demos.integrations.mlx.portable_host.quantization_packages import (
     QuantizationPackageCache,
 )
 from demos.integrations.mlx.portable_host.verify_quantization import packed_reference
+
+
+def upstream_record(mode):
+    return {
+        "mode": mode,
+        "tests": list(upstream.UPSTREAM_TESTS),
+        "testsRun": 1,
+        "success": True,
+        "skipped": [],
+        "errors": [],
+        "failures": [],
+        "nativeDispatches": 110 if mode == "native" else 0,
+    }
+
+
+def upstream_trace(target="opengl"):
+    return [
+        {"entry": f"affine_{operation}_float_gs_{group}_b_{bits}", "target": target}
+        for operation in ("quantize", "dequantize")
+        for group in (32, 64, 128)
+        for bits in (2, 3, 4, 5, 6, 8)
+        for _ in range(3 if (group, bits) == (32, 4) else 2)
+    ] + [
+        {"entry": "all_reduce_andbool_", "target": target, "threads": count}
+        for count in (65536, 131072)
+        for _ in range(18)
+    ]
+
+
+@pytest.mark.parametrize("mode", ["cpu", "native"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "mode",
+        "tests",
+        "count",
+        "success",
+        "skipped",
+        "errors",
+        "failures",
+        "dispatches",
+        "dispatch-type",
+    ],
+)
+def test_upstream_affine_results_require_the_complete_unchanged_test(mode, fault):
+    record = upstream_record(mode)
+    if fault in {"mode", "tests"}:
+        record[fault] = "other"
+    elif fault == "count":
+        record["testsRun"] = True
+    elif fault == "success":
+        record["success"] = False
+    elif fault in {"skipped", "errors", "failures"}:
+        record[fault] = ["not passing"]
+    elif fault == "dispatches":
+        record["nativeDispatches"] = 0 if mode == "native" else 1
+    elif fault == "dispatch-type":
+        record["nativeDispatches"] = False
+    if fault:
+        with pytest.raises(RuntimeError, match="did not pass"):
+            upstream.validate_result(record, mode)
+    else:
+        upstream.validate_result(record, mode)
+
+
+@pytest.mark.parametrize("target", ["metal", "opengl", "directx"])
+@pytest.mark.parametrize(
+    "fault",
+    [None, "missing", "extra", "target", "specialization", "slices", "large-assertion"],
+)
+def test_upstream_affine_trace_requires_both_input_families_and_slices(target, fault):
+    trace = upstream_trace(target)
+    count = len(trace)
+    if fault == "missing":
+        trace.pop()
+    elif fault == "extra":
+        trace.append(trace[0])
+    elif fault == "target":
+        trace[0]["target"] = "other"
+    elif fault == "specialization":
+        trace[0]["entry"] = "all_reduce_andbool_"
+    elif fault == "slices":
+        trace.pop(
+            next(
+                i
+                for i, item in enumerate(trace)
+                if item["entry"] == "affine_dequantize_float_gs_32_b_4"
+            )
+        )
+        count -= 1
+    elif fault == "large-assertion":
+        trace[-1]["threads"] = 65535
+    if fault:
+        with pytest.raises(RuntimeError):
+            upstream.validate_trace(trace, target, count)
+    else:
+        upstream.validate_trace(trace, target, count)
+
+
+@pytest.mark.parametrize("fault", [None, "random", "cpu", "native", "source"])
+def test_upstream_affine_runner_retains_workers_and_source_checks(
+    tmp_path, monkeypatch, fault
+):
+    packages = tmp_path / "packages"
+    packages.mkdir()
+    (packages / "index.json").write_text(json.dumps({"target": "opengl"}))
+    preparations = []
+
+    def prepared(root):
+        preparations.append(root)
+        return {
+            "source": (
+                "changed" if fault == "source" and len(preparations) > 1 else "pinned"
+            )
+        }
+
+    monkeypatch.setattr(upstream, "verify_prepared", prepared)
+    monkeypatch.setattr(
+        upstream, "upstream_test_sources", lambda *args: {"test_quantized.py": "pinned"}
+    )
+    commands = []
+
+    def execute(command, **kwargs):
+        mode = (
+            command[command.index("--worker") + 1]
+            if "--worker" in command
+            else "random"
+        )
+        commands.append((mode, command))
+        destination = Path(command[command.index("--output-dir") + 1])
+        destination.mkdir()
+        if mode != "random":
+            upstream.write_json(destination / "results.json", upstream_record(mode))
+            if mode == "native":
+                (destination / "trace.jsonl").write_text(
+                    "\n".join(json.dumps(item) for item in upstream_trace())
+                )
+        return SimpleNamespace(returncode=int(mode == fault))
+
+    monkeypatch.setattr(upstream.subprocess, "run", execute)
+    output = tmp_path / "evidence"
+    if fault:
+        with pytest.raises(RuntimeError, match="workers failed|sources changed"):
+            upstream.run(tmp_path, packages, tmp_path / "reductions", output)
+        assert not (output / "evidence.json").exists()
+    else:
+        record = upstream.run(tmp_path, packages, tmp_path / "reductions", output)
+        assert (
+            record["fullUpstreamSuite"] is False and record["sourceUnchanged"] is True
+        )
+    assert [mode for mode, _ in commands] == (
+        ["random"] if fault == "random" else ["random", "cpu", "native"]
+    )
+    for mode, command in commands:
+        assert (output / f"{mode}.command.json").exists()
+        assert (
+            command[command.index("--timeout-seconds") + 1]
+            == {"random": "600", "cpu": "180", "native": "1800"}[mode]
+        )
+        if mode != "random":
+            assert (
+                "demos.integrations.mlx.portable_host.verify_upstream_quantization"
+                in command
+            )
+    assert len(preparations) == 2
+
+
+def test_upstream_affine_ci_reuses_existing_whole_reduction_jobs():
+    import yaml
+
+    root = Path(__file__).resolve().parents[5]
+    job = yaml.safe_load(
+        (root / ".github/workflows/demo-project-testing.yml").read_text()
+    )["jobs"]["reductions"]
+    cases = [
+        item for item in job["strategy"]["matrix"]["include"] if item["family"] == "all"
+    ]
+    assert {item["target"] for item in cases} == {"metal", "opengl", "directx"}
+    assert all(item["companion_args"] == "--upstream-quantization" for item in cases)
+    assert len(job["strategy"]["matrix"]["include"]) == 9
+    assert job["timeout-minutes"] == 360
+    execution = next(
+        step for step in job["steps"] if step.get("name") == "Execute MLX reductions"
+    )
+    assert "${{ matrix.companion_args }}" in execution["run"]
+    assert "5400" in execution["run"] and "continue-on-error" not in execution
 
 
 def buffers(entry, groups, data=None):

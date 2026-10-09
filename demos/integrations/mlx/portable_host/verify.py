@@ -17,6 +17,7 @@ from demos.integrations.mlx.portable_host import (
     cast_workloads,
     copy_workloads,
     full_workloads,
+    reduction_layout,
     reduction_workloads,
     unary_workloads,
     view_workloads,
@@ -105,7 +106,8 @@ NEGATIVE_CHECKS = {
 }
 REDUCTION_NEGATIVE_CHECKS = {
     "reduce-dtype": "matching float32/int32/uint32",
-    "reduce-limit": "65535",
+    "reduce-large-allocation": "storage does not match",
+    "reduce-row-limit": "row and column reductions support at most 65535",
     "reduce-allocation": "storage does not match",
     "reduce-empty": "No translated reduction variant",
     "reduce-row": "Small-row dispatch requires the pinned MLX source root",
@@ -202,8 +204,11 @@ def worker(args):
                 value = mx.full((3, 2), source)
             elif args.worker == "reduce-dtype":
                 value = mx.sum(mx.array(np.ones(2, dtype=np.float16)))
-            elif args.worker == "reduce-limit":
-                value = mx.sum(mx.array(np.ones(65536, dtype=np.float32)))
+            elif args.worker == "reduce-large-allocation":
+                source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (65536,), (1,), 2)
+                value = mx.sum(source)
+            elif args.worker == "reduce-row-limit":
+                value = mx.sum(mx.array(np.ones((256, 256), dtype=np.float32)), axis=1)
             elif args.worker == "reduce-allocation":
                 source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (5,), (1,), 2)
                 value = mx.sum(source)
@@ -222,7 +227,27 @@ def worker(args):
             expected = checks[args.worker]
             if expected not in message:
                 raise
-            save(output / "result.json", {"rejected": True, "message": message})
+            guarded_rejection = args.worker in {
+                "reduce-large-allocation",
+                "reduce-row-limit",
+                "reduce-allocation",
+            }
+            if guarded_rejection and runtime.dispatch_count:
+                raise RuntimeError(
+                    "Invalid reduction dispatched native work"
+                ) from error
+            save(
+                output / "result.json",
+                {
+                    "rejected": True,
+                    "message": message,
+                    **(
+                        {"dispatchCount": runtime.dispatch_count}
+                        if guarded_rejection
+                        else {}
+                    ),
+                },
+            )
             return
         raise RuntimeError(f"{args.worker} unexpectedly executed")
 
@@ -356,6 +381,10 @@ def verify(args):
     save(output / "adaptation-before.json", adaptation)
     test_sources = upstream_test_sources(args.mlx_root)
     reductions = getattr(args, "reductions", None)
+    if getattr(args, "upstream_quantization", False) and reductions is None:
+        raise ValueError(
+            "Upstream quantization requires whole-array reduction packages"
+        )
     reduction_index = None
     if reductions is not None:
         target = json.loads((args.packages / "index.json").read_text())["target"]
@@ -426,6 +455,17 @@ def verify(args):
             results[mode].get("rejected") is not True
             or not isinstance(results[mode].get("message"), str)
             or expected not in results[mode]["message"]
+            or (
+                mode in {
+                    "reduce-large-allocation",
+                    "reduce-row-limit",
+                    "reduce-allocation",
+                }
+                and (
+                    type(results[mode].get("dispatchCount")) is not int
+                    or results[mode]["dispatchCount"] != 0
+                )
+            )
         ):
             raise RuntimeError(f"Missing required rejection evidence: {mode}")
     trace = [
@@ -450,7 +490,14 @@ def verify(args):
     if [(record["entry"], record.get("threads")) for record in trace][
         : len(expected_dispatches)
     ] != expected_dispatches or any(
-        type(record.get("threads")) is not int or not 1 <= record["threads"] <= 65535
+        type(record.get("threads")) is not int
+        or not 1
+        <= record["threads"]
+        <= (
+            reduction_layout.MAX_ELEMENTS
+            if reductions is not None and record["entry"] in REDUCTION_ENTRIES
+            else 65535
+        )
         for record in trace
     ):
         raise RuntimeError("Native trace has incomplete or invalid dispatch sizes")
@@ -498,6 +545,15 @@ def verify(args):
         if getattr(args, "unary_batches", False)
         else None
     )
+    upstream_quantization = None
+    if getattr(args, "upstream_quantization", False):
+        from demos.integrations.mlx.portable_host.verify_upstream_quantization import (
+            run,
+        )
+
+        upstream_quantization = run(
+            args.mlx_root, args.packages, reductions, output / "upstream-quantization"
+        )
     after = verify_prepared(args.mlx_root)
     save(output / "adaptation-after.json", after)
     if after != adaptation or upstream_test_sources(args.mlx_root) != test_sources:
@@ -519,6 +575,11 @@ def verify(args):
         "negativeChecks": {mode: results[mode] for mode in checks},
         "fullUpstreamSuite": False,
         "fullTranslatedBackend": False,
+        **(
+            {"upstreamQuantization": upstream_quantization}
+            if upstream_quantization is not None
+            else {}
+        ),
         **({"reductionWidths": reduction_index["widths"]} if reduction_index else {}),
         **({"castBatches": cast_batches} if cast_batches is not None else {}),
         **({"largeCopies": large_copies} if large_copies is not None else {}),
@@ -534,6 +595,7 @@ if __name__ == "__main__":
     parser.add_argument("--mlx-root", type=Path, required=True)
     parser.add_argument("--packages", type=Path, required=True)
     parser.add_argument("--reductions", type=Path)
+    parser.add_argument("--upstream-quantization", action="store_true")
     parser.add_argument("--cast-batches", action="store_true")
     parser.add_argument("--large-copies", action="store_true")
     parser.add_argument("--binary-batches", action="store_true")

@@ -477,7 +477,15 @@ class HostRuntime:
             or not buffers
             or not 0
             < threads
-            <= (copy_layout.MAX_DESTINATION_ELEMENTS if copy else 65535)
+            <= (
+                copy_layout.MAX_DESTINATION_ELEMENTS
+                if copy
+                else (
+                    reduction_layout.MAX_ELEMENTS
+                    if entry in REDUCTION_ENTRIES
+                    else 65535
+                )
+            )
         ):
             raise ValueError("Invalid or unsupported native dispatch dimensions")
         execution = launch.execution() if launch is not None else None
@@ -658,7 +666,9 @@ class HostRuntime:
                 entry, supplied, threads, execution
             )
         elif reduction and not initialization:
-            reduction_layout.validate(supplied, threads, execution)
+            reduction_layout.validate(
+                supplied, threads, execution, REDUCTION_ENTRIES[entry]
+            )
         copy_metadata = (
             copy_layout.validate(
                 supplied,

@@ -415,19 +415,27 @@ void dispatch_slice_update(
   }
 }
 
+uint32_t all_reduce_rows(const mlx::core::array& in) {
+  if (in.size() <= 4096) {
+    return 1;
+  }
+  return in.size() <= (uint64_t(1) << 26) / in.itemsize() ? 128 : 4096;
+}
+
 void dispatch_all_reduce(
     const mlx::core::array& in,
     mlx::core::array& out,
     const std::string& operation,
     const char* dtype) {
   uint64_t size = in.size();
-  const uint32_t rows = size <= 4096 ? 1 : 128;
+  const uint32_t rows = all_reduce_rows(in);
   uint64_t row_size = (size + rows - 1) / rows;
   const uint32_t width = static_cast<uint32_t>(
       std::min<uint64_t>(1024, ((row_size + 127) / 128) * 32));
-  if (out.size() != rows || in.data_size() != size || in.offset() < 0 ||
+  if (size == 0 || size > 2147483647 || out.size() != rows ||
+      in.data_size() != size || in.offset() < 0 ||
       uint64_t(in.offset()) > in.buffer_size() ||
-      in.nbytes() > in.buffer_size() - uint64_t(in.offset())) {
+      size > (in.buffer_size() - uint64_t(in.offset())) / in.itemsize()) {
     throw std::invalid_argument("CrossTL reduction storage does not match its pass.");
   }
   out.set_data(mlx::core::allocator::malloc(std::max<size_t>(out.nbytes(), 4)));
@@ -1377,9 +1385,6 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
     throw std::invalid_argument("CrossTL reduction requires one input and nonempty axes.");
   }
   array in = inputs[0];
-  if (in.size() > 65535) {
-    throw std::invalid_argument("CrossTL reduction supports at most 65535 elements.");
-  }
   if (in.size() > 0 && out.size() == in.size()) {
     array identity(out.shape(), in.dtype(), nullptr, {});
     reshape_view(inputs, identity);
@@ -1408,6 +1413,9 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
         "CrossTL reductions require matching float32/int32/uint32 numeric arrays or Boolean all/any.");
   }
   auto plan = get_reduction_plan(in, axes_);
+  if (out.size() != 1 && in.size() > 65535) {
+    throw std::invalid_argument("CrossTL row and column reductions support at most 65535 elements.");
+  }
   if (plan.type == GeneralReduce) {
     in = dense_input(in);
     plan = get_reduction_plan(in, axes_);
@@ -1427,7 +1435,7 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
     dispatch_all_reduce(in, out, operation, dtype);
   } else {
     // Retain upstream's two passes; each callback completes before its input expires.
-    array intermediate({128}, out.dtype(), nullptr, {});
+    array intermediate({static_cast<int>(all_reduce_rows(in))}, out.dtype(), nullptr, {});
     dispatch_all_reduce(in, intermediate, operation, dtype);
     dispatch_all_reduce(intermediate, out, operation, dtype);
   }

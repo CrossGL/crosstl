@@ -125,6 +125,39 @@ def cases(widths=WIDTHS):
                 "expected": value,
             }
 
+    # Append boundary cases without changing the established workload inventory.
+    for entry, dtype in ENTRIES.items():
+        operation = entry.removeprefix("all_reduce_").removesuffix(dtype)
+        for count in (65536, 131075):
+            if reduction_layout.stage(count, dtype)["workgroupSize"][0] not in widths:
+                continue
+            identity = (
+                3 if operation == "min" else 1 if operation in {"prod", "and"} else 0
+            )
+            tail = 0 if operation in {"and", "min"} else 2 if operation == "prod" else 1
+            values = [identity] * count
+            values[-1] = tail
+            if dtype == "bool_":
+                values = list(map(bool, values))
+            expected = {
+                "sum": sum,
+                "prod": math.prod,
+                "min": min,
+                "max": max,
+                "and": all,
+                "or": any,
+            }[operation](values)
+            yield {
+                "id": f"{entry}-large-offset-{count}",
+                "entry": entry,
+                "dtype": dtype,
+                "count": count,
+                "operation": operation,
+                "inputs": values,
+                "offset": 7,
+                "expected": expected,
+            }
+
 
 def wire(value):
     if isinstance(value, float) and not math.isfinite(value):
@@ -142,11 +175,74 @@ def matches(actual, expected, dtype):
     return type(actual) is (bool if dtype == "bool_" else int) and actual == expected
 
 
+def partial_reference(values, operation, dtype, plan):
+    """Reduce exact-valued boundary inputs independently for each source row."""
+    reduce = {
+        "sum": sum,
+        "prod": math.prod,
+        "min": min,
+        "max": max,
+        "and": all,
+        "or": any,
+    }[operation]
+    row_size = plan["rowSize"]
+    return [
+        float(value) if dtype == "float32" else value
+        for row in range(plan["workgroupCount"][1])
+        for value in [reduce(values[row * row_size : (row + 1) * row_size])]
+    ]
+
+
+def validate_large_pass(dispatch, count, plan, expected, dtype):
+    from demos.integrations.mlx.portable_host.runtime import BOOLEAN_GUARD, COPY_GUARD
+
+    target = dispatch.get("target")
+    if target not in {"metal", "opengl", "directx"}:
+        raise RuntimeError("Large reduction target is missing")
+    guard = (
+        (list(BOOLEAN_GUARD) if target == "metal" else list(map(int, BOOLEAN_GUARD)))
+        if dtype == "bool_"
+        else (
+            [struct.unpack("<f", struct.pack("<I", word))[0] for word in COPY_GUARD]
+            if dtype == "float32"
+            else COPY_GUARD
+        )
+    )
+    metadata = dispatch.get("reductionMetadata")
+    if (
+        not isinstance(metadata, dict)
+        or metadata != {"in_size": count, "row_size": plan["rowSize"]}
+        or any(type(value) is not int for value in metadata.values())
+        or dispatch.get("reductionGuardValues") != guard
+    ):
+        raise RuntimeError("Large reduction metadata or output guards changed")
+    actual = dispatch.get("reductionValues")
+    if not isinstance(actual, list) or len(actual) != len(expected):
+        raise RuntimeError("Large reduction intermediate readback is incomplete")
+    if dtype == "bool_" and target != "metal":
+        if any(type(value) is not int or value not in (0, 1) for value in actual):
+            raise RuntimeError("Large reduction Boolean storage is invalid")
+        actual = list(map(bool, actual))
+    if any(
+        not matches(value, reference, dtype)
+        for value, reference in zip(actual, expected)
+    ):
+        raise RuntimeError(
+            "Large reduction intermediate readback differs from reference"
+        )
+
+
 def collect(mx, widths=WIDTHS, *, observe=None, dispatch_count=None):
     records = []
     for case in cases(widths):
         start = dispatch_count() if dispatch_count is not None else None
-        source = mx.array(case["inputs"], dtype=getattr(mx, case["dtype"]))
+        offset = case.get("offset", 0)
+        source = mx.array(
+            [3] * offset + case["inputs"] + [3] * offset,
+            dtype=getattr(mx, case["dtype"]),
+        )
+        if offset:
+            source = source[offset : offset + case["count"]]
         if case.get("layout") == "reverse":
             source = source[::-1]
         elif case.get("layout") == "transpose":
@@ -225,11 +321,13 @@ def validate(records, widths=WIDTHS, *, trace=None):
             if dispatches[0].get("entry") != expected_copy:
                 raise RuntimeError("Noncontiguous reduction input was not materialized")
             dispatches = dispatches[1:]
-        counts = [case["count"]] + ([128] if case["count"] > 4096 else [])
+        rows = reduction_layout.stage(case["count"], case["dtype"])["workgroupCount"][1]
+        counts = [case["count"]] + ([rows] if rows > 1 else [])
         if len(dispatches) != len(counts):
             raise RuntimeError("Reduction did not execute every upstream pass")
+        partials = case["inputs"]
         for dispatch, count in zip(dispatches, counts):
-            plan = reduction_layout.stage(count)
+            plan = reduction_layout.stage(count, case["dtype"])
             if (
                 dispatch.get("entry") != case["entry"]
                 or dispatch.get("threads") != count
@@ -248,5 +346,10 @@ def validate(records, widths=WIDTHS, *, trace=None):
                 or "reductionGuardValues" not in dispatch
             ):
                 raise RuntimeError("Reduction dispatch does not match the source plan")
+            if case.get("offset"):
+                partials = partial_reference(
+                    partials, case["operation"], case["dtype"], plan
+                )
+                validate_large_pass(dispatch, count, plan, partials, case["dtype"])
     if trace is not None and previous_end != len(trace):
         raise RuntimeError("Native trace contains unaccounted reduction dispatches")
