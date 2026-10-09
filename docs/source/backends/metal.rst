@@ -98,6 +98,21 @@ offsets, single evaluation, unsigned wraparound, input preservation and output
 guards. Metal additionally compares the private-alias controls with the original
 source.
 
+Conditional resource parameters preserve both their native binding and the
+``function_constant(condition)`` annotation during Metal round trips. The
+condition is distinct from the numeric id on a global function constant.
+Project-configured and runtime-supplied Boolean combinations have native buffer
+controls on Metal and OpenGL; DirectX requires concrete project values before
+HLSL generation and executes those variants in its Windows job. The OpenGL
+runtime loads specialized GLSL compilation results as validated SPIR-V binaries
+without changing the packaged source identity.
+
+The execution controls supply every reflected buffer, including conditionally
+unused inputs. Omitting inactive bindings is not yet represented by the loader
+descriptor. Aggregate constant references have compilation coverage; their
+native execution still requires complete aggregate layout reflection and
+packing. Neither limitation is bypassed by fabricating scalar metadata.
+
 Explicit struct specializations compare primitive alias arguments by their
 resolved type before materializing the primary template. Static member lookup
 uses the same owner, including specialization declarations written through an

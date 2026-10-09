@@ -55,9 +55,11 @@ passes on a translated backend.
 The selected tiled GEMM entry at pin `9c3d3557` now passes explicit `auto*`
 deduction through the public project pipeline, without changing upstream
 sources or bypassing specialization analysis. It is not yet executable:
-strict Metal compilation still reports missing aggregate helpers and malformed
-conditional-resource declarations ([#2157](https://github.com/CrossGL/crosstl/issues/2157),
-[#2153](https://github.com/CrossGL/crosstl/issues/2153)). The pointer-deduction
+strict Metal compilation still reports missing aggregate helpers and unresolved
+constant-buffer types ([#2157](https://github.com/CrossGL/crosstl/issues/2157),
+[#2160](https://github.com/CrossGL/crosstl/issues/2160)).
+Conditional scalar-buffer parameters now retain their bindings and conditions
+([#2153](https://github.com/CrossGL/crosstl/issues/2153)). The pointer-deduction
 controls cover native Metal/OpenGL execution and strict HLSL compilation;
 Windows execution is a separate required CI check. Pointer-object qualifiers
 and foreign-target private aliases remain explicit diagnostics under
@@ -68,6 +70,18 @@ Mixed-access HLSL helper calls remain separately blocked by
 [#2158](https://github.com/CrossGL/crosstl/issues/2158): a read-only view of a
 writable buffer must preserve the physical resource class when passed to a
 helper. The passing execution controls do not cover that unresolved combination.
+
+Conditional-resource controls execute all four combinations of two Boolean
+constants on Metal and OpenGL, with sparse binding indices, scalar constant
+references and output guards. Metal results also match the original source.
+OpenGL execution includes the specialized binary load path tracked in
+[#2159](https://github.com/CrossGL/crosstl/issues/2159). Eight scalar/aggregate
+HLSL variants have separate strict DXC compilation checks; Windows numerical
+execution remains a required CI gate. These controls currently supply all
+reflected bindings, including inactive inputs. Conditional aggregate references
+compile, but aggregate native packing remains under
+[#1991](https://github.com/CrossGL/crosstl/issues/1991); no aggregate runtime
+pass or complete GEMM translation is claimed.
 
 Reduction reference review found an alias-specialization error
 ([#2100](https://github.com/CrossGL/crosstl/issues/2100)): `float16_t` selected

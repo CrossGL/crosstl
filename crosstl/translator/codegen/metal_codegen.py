@@ -4995,6 +4995,7 @@ class MetalCodeGen:
                 param_attr = self.parameter_attribute(
                     raw_param_type, semantic, shader_type, p
                 )
+            param_attr += self.metal_conditional_resource_attribute(p)
             declaration = self.format_parameter_declaration(
                 raw_param_type, param_type, p.name, p, shader_type
             )
@@ -15054,6 +15055,31 @@ class MetalCodeGen:
             return " [[stage_in]]"
         return ""
 
+    def metal_conditional_resource_attribute(self, node):
+        attributes = [
+            attr
+            for attr in getattr(node, "attributes", []) or []
+            if self.normalized_metal_abi_attribute_name(attr) == "function_constant"
+        ]
+        if not attributes:
+            return ""
+        name = getattr(node, "name", "<anonymous>")
+        if len(attributes) != 1:
+            raise ValueError(
+                f"Metal parameter '{name}' has multiple function constant conditions"
+            )
+        arguments = getattr(attributes[0], "arguments", []) or []
+        if len(arguments) != 1:
+            raise ValueError(
+                f"Metal parameter '{name}' requires one function constant condition"
+            )
+        condition = self.attribute_value_to_string(arguments[0])
+        if not condition:
+            raise ValueError(
+                f"Metal parameter '{name}' requires a function constant condition"
+            )
+        return f" [[function_constant({condition})]]"
+
     def parameter_resource_binding_metadata(self, raw_param_type, node=None):
         if node is None:
             return None
@@ -20937,6 +20963,7 @@ class MetalCodeGen:
                 or self.is_metal_address_space_attribute(attr)
                 or self.is_metal_declaration_qualifier_attribute(attr)
                 or self.is_metal_struct_member_abi_attribute(attr)
+                or self.normalized_metal_abi_attribute_name(attr) == "function_constant"
                 or self.metal_interpolation_attribute_name(attr) is not None
                 or self.is_precision_qualifier_attribute(attr)
             ):
