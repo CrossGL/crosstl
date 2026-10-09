@@ -5069,6 +5069,13 @@ members remain unsupported.
 OpenGL specializes the same private handles against concrete storage buffers;
 final subscripts require proven bounds or explicit allocation-derived range
 assertions. Unsupported aggregate escapes remain diagnostic on both targets.
+Bounds for integer members survive nested value construction, copies, assignments
+and straight-line by-value helper returns, including resource-handle rebasing.
+Storage specializations distinguish the member bounds at each call site;
+an unbounded call cannot reuse a proof from a bounded call. Unknown mutations,
+recursive or ambiguous constructors, unmodeled control flow and arithmetic
+outside the source integer domain do not establish a range. These proofs permit
+representable OpenGL indices, not arbitrary buffer-length or host-dispatch claims.
 Fixed workgroup arrays of 32-bit scalar integer or floating-point elements can
 also back these references. Their allocations retain distinct identities when
 source names are shadowed; copies, rebasing and helper calls preserve the shared

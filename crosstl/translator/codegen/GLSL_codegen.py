@@ -8820,6 +8820,16 @@ class GLSLCodeGen:
                     intervals[target_key] = component_interval
         return intervals
 
+    def glsl_declared_struct_member_interval_key(self, expression):
+        if not isinstance(expression, MemberAccessNode):
+            return None
+        owner_type = self.type_name_string(
+            self.glsl_source_expression_type(expression.object)
+        )
+        if str(expression.member) in self.glsl_struct_member_types(owner_type):
+            return expression_debug_name(expression)
+        return None
+
     def glsl_index_component_index(self, member):
         return {
             "x": 0,
@@ -9000,6 +9010,9 @@ class GLSLCodeGen:
                 expression._glsl_control_flow_intervals = dict(intervals)
 
         def target_interval_keys(target):
+            field_key = self.glsl_declared_struct_member_interval_key(target)
+            if field_key is not None:
+                return {field_key}
             if isinstance(target, ArrayAccessNode):
                 component_index = self.literal_int_value(target.index, constants)
                 if (
@@ -9203,7 +9216,7 @@ class GLSLCodeGen:
                 name = getattr(value, "name", None)
                 if name:
                     clear_interval_targets(intervals, {name})
-                    interval = self.glsl_private_pointer_interval(
+                    interval = self.glsl_checked_private_pointer_interval(
                         initial_value, intervals, constants
                     )
                     if interval is None:
@@ -9246,11 +9259,14 @@ class GLSLCodeGen:
                 target = getattr(value, "target", getattr(value, "left", None))
                 assigned = getattr(value, "value", getattr(value, "right", None))
                 visit(assigned, intervals)
+                assigned_members = self.glsl_simple_struct_constructor_member_intervals(
+                    assigned, intervals, constants
+                )
                 target_name = self.expression_name(target)
                 if target_name and isinstance(
                     target, (str, IdentifierNode, VariableNode)
                 ):
-                    assigned_interval = self.glsl_private_pointer_interval(
+                    assigned_interval = self.glsl_checked_private_pointer_interval(
                         assigned, intervals, constants
                     )
                     operator = self.map_operator(
@@ -9274,6 +9290,9 @@ class GLSLCodeGen:
                     clear_interval_targets(intervals, {target_name})
                     if replacement is not None:
                         intervals[target_name] = replacement
+                    if operator == "=":
+                        for member, interval in assigned_members.items():
+                            intervals[f"{target_name}.{member}"] = interval
                 elif isinstance(target, MemberAccessNode):
                     clear_interval_targets(
                         intervals,
@@ -9284,8 +9303,14 @@ class GLSLCodeGen:
                         target.object,
                         component_index,
                     )
+                    field_key = self.glsl_declared_struct_member_interval_key(target)
+                    if field_key is not None:
+                        key = field_key
+                        component_index = None
+                    if key is None:
+                        key = expression_debug_name(target)
                     if key is not None:
-                        assigned_interval = self.glsl_private_pointer_interval(
+                        assigned_interval = self.glsl_checked_private_pointer_interval(
                             assigned,
                             intervals,
                             constants,
@@ -9312,10 +9337,24 @@ class GLSLCodeGen:
                             )
                         else:
                             replacement = None
+                        if component_index is None and replacement is not None:
+                            domain = self.glsl_integer_type_domain(
+                                target, allow_wide=True
+                            )
+                            if domain is None or not (
+                                domain.minimum
+                                <= replacement[0]
+                                <= replacement[1]
+                                <= domain.maximum
+                            ):
+                                replacement = None
                         if replacement is None:
                             intervals.pop(key, None)
                         else:
                             intervals[key] = replacement
+                        if operator == "=":
+                            for member, interval in assigned_members.items():
+                                intervals[f"{key}.{member}"] = interval
                 elif isinstance(target, ArrayAccessNode):
                     clear_interval_targets(
                         intervals,
@@ -11536,19 +11575,48 @@ class GLSLCodeGen:
             )
         return binding
 
+    def glsl_checked_private_pointer_interval(
+        self, expression, intervals, constants, *, require_arithmetic_types=False
+    ):
+        """Do not use mathematical bounds that depend on source integer overflow."""
+        for node in self.walk_ast(expression):
+            if not isinstance(node, (BinaryOpNode, UnaryOpNode)):
+                continue
+            bounds = self.glsl_private_pointer_interval(node, intervals, constants)
+            domain = self.glsl_integer_type_domain(node, allow_wide=True)
+            if require_arithmetic_types and (bounds is None or domain is None):
+                return None
+            if (
+                bounds is not None
+                and domain is not None
+                and not (domain.minimum <= bounds[0] <= bounds[1] <= domain.maximum)
+            ):
+                return None
+        return self.glsl_private_pointer_interval(expression, intervals, constants)
+
     def glsl_simple_struct_constructor_member_intervals(
         self,
         expression,
         intervals,
         constants,
+        _active=None,
     ):
-        """Summarize integer fields returned by a straight-line constructor helper.
+        """Summarize fields copied or returned by straight-line value helpers.
 
-        Metal constructor lowering emits one local result, direct assignments to
-        its members, and a final return of that result.  Admit only that shape;
-        overload ambiguity, control flow, aliasing, compound assignment, or any
-        other statement fails closed.  Unknown members are omitted independently.
+        Only local/by-value objects may be updated. Ambiguous calls, references,
+        recursion, control flow and unmodeled effects cannot establish bounds.
         """
+
+        if isinstance(
+            expression, (str, IdentifierNode, VariableNode, MemberAccessNode)
+        ):
+            name = expression_debug_name(expression)
+            prefix = f"{name}."
+            return {
+                key[len(prefix) :]: interval
+                for key, interval in (intervals or {}).items()
+                if name and key.startswith(prefix)
+            }
 
         if not isinstance(expression, FunctionCallNode):
             return {}
@@ -11586,6 +11654,10 @@ class GLSLCodeGen:
         if len(unique_candidates) != 1:
             return {}
         constructor = next(iter(unique_candidates.values()))
+        active = set() if _active is None else _active
+        if id(constructor) in active:
+            return {}
+        active = active | {id(constructor)}
         parameters = list(
             getattr(
                 constructor,
@@ -11598,36 +11670,74 @@ class GLSLCodeGen:
             set(self.glsl_parameter_qualifiers(parameter)).intersection(
                 {"out", "inout"}
             )
+            or (
+                self.type_name_string(
+                    getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+                )
+                or ""
+            ).endswith(("*", "&"))
             for parameter in parameters
         ):
             return {}
 
         body = getattr(constructor, "body", None)
         statements = list(getattr(body, "statements", body) or [])
-        if len(statements) < 2 or not isinstance(statements[-1], ReturnNode):
-            return {}
-        declaration = statements[0]
-        if (
-            not isinstance(declaration, VariableNode)
-            or getattr(declaration, "initial_value", None) is not None
-        ):
-            return {}
-        result_name = getattr(declaration, "name", None)
-        if not result_name or self.expression_name(statements[-1].value) != result_name:
+        if not statements or not isinstance(statements[-1], ReturnNode):
             return {}
 
-        local_constants = dict(constants or {})
-        local_constants.update(self.initial_literal_int_constants(constructor))
+        local_constants = self.initial_literal_int_constants(constructor)
         local_intervals = {}
+        local_names = {parameter.name for parameter in parameters}
+        local_types = {
+            parameter.name: getattr(
+                parameter, "param_type", getattr(parameter, "vtype", None)
+            )
+            for parameter in parameters
+        }
+
+        def members(value, bounds, literals):
+            return self.glsl_simple_struct_constructor_member_intervals(
+                value, bounds, literals, active
+            )
+
+        def effect_free(value, bounds, literals):
+            return self.glsl_side_effect_free_expression(value) or (
+                isinstance(value, FunctionCallNode)
+                and bool(members(value, bounds, literals))
+            )
+
+        def scalar_interval(value, value_intervals, value_constants, value_types):
+            with self.glsl_lexical_source_type_scope(value_types):
+                return self.glsl_checked_private_pointer_interval(
+                    value,
+                    value_intervals,
+                    value_constants,
+                    require_arithmetic_types=True,
+                )
+
         for parameter, argument in zip(parameters, arguments):
             parameter_name = getattr(parameter, "name", None)
             if not parameter_name:
                 continue
-            interval = self.glsl_private_pointer_interval(
+            if not effect_free(argument, intervals, constants):
+                return {}
+            for member, interval in members(argument, intervals, constants).items():
+                local_intervals[f"{parameter_name}.{member}"] = interval
+            interval = scalar_interval(
                 argument,
                 intervals,
                 constants,
+                {},
             )
+            with self.glsl_lexical_source_type_scope(local_types):
+                domain = self.glsl_integer_type_domain(
+                    IdentifierNode(parameter_name), allow_wide=True
+                )
+            if interval is not None and (
+                domain is None
+                or not (domain.minimum <= interval[0] <= interval[1] <= domain.maximum)
+            ):
+                interval = None
             if interval is not None:
                 local_intervals[parameter_name] = interval
             parameter_type = getattr(
@@ -11651,53 +11761,90 @@ class GLSLCodeGen:
                 if key is not None:
                     local_intervals[key] = component_interval
 
-        result = {}
-        assigned_members = set()
-        for statement in statements[1:-1]:
+        for statement in statements[:-1]:
+            if isinstance(statement, VariableNode):
+                name = getattr(statement, "name", None)
+                if not name or name in local_names:
+                    return {}
+                local_names.add(name)
+                local_constants.pop(name, None)
+                variable_type = getattr(
+                    statement, "var_type", getattr(statement, "vtype", None)
+                )
+                if (self.type_name_string(variable_type) or "").endswith(("*", "&")):
+                    return {}
+                local_types[name] = variable_type
+                initial = getattr(statement, "initial_value", None)
+                if initial is not None:
+                    if not effect_free(initial, local_intervals, local_constants):
+                        return {}
+                    for member, interval in members(
+                        initial, local_intervals, local_constants
+                    ).items():
+                        local_intervals[f"{name}.{member}"] = interval
+                continue
             assignment = (
                 statement.expression
                 if isinstance(statement, ExpressionStatementNode)
-                else None
+                else statement
             )
             if not isinstance(assignment, AssignmentNode):
                 return {}
-            if (
-                self.map_operator(
-                    getattr(assignment, "operator", getattr(assignment, "op", "="))
-                )
-                != "="
-            ):
+            operator = self.map_operator(
+                getattr(assignment, "operator", getattr(assignment, "op", "="))
+            )
+            if operator not in {"=", "+=", "-="}:
                 return {}
             target = getattr(
                 assignment,
                 "target",
                 getattr(assignment, "left", None),
             )
+            key = expression_debug_name(target)
             if (
                 not isinstance(target, MemberAccessNode)
-                or self.expression_name(target.object) != result_name
+                or key.split(".")[0] not in local_names
             ):
                 return {}
-            member = str(target.member)
-            if member in assigned_members:
+            assigned = getattr(assignment, "value", getattr(assignment, "right", None))
+            if not effect_free(assigned, local_intervals, local_constants):
                 return {}
-            assigned_members.add(member)
-            interval = self.glsl_private_pointer_interval(
-                getattr(
-                    assignment,
-                    "value",
-                    getattr(assignment, "right", None),
-                ),
-                local_intervals,
-                local_constants,
+            interval = scalar_interval(
+                assigned, local_intervals, local_constants, local_types
             )
-            key = f"{result_name}.{member}"
-            if interval is None:
-                local_intervals.pop(key, None)
-            else:
+            fields = (
+                members(assigned, local_intervals, local_constants)
+                if operator == "="
+                else {}
+            )
+            previous = local_intervals.get(key)
+            if operator == "+=":
+                interval = (
+                    (previous[0] + interval[0], previous[1] + interval[1])
+                    if previous and interval
+                    else None
+                )
+            elif operator == "-=":
+                interval = (
+                    (previous[0] - interval[1], previous[1] - interval[0])
+                    if previous and interval
+                    else None
+                )
+            if interval is not None:
+                with self.glsl_lexical_source_type_scope(local_types):
+                    domain = self.glsl_integer_type_domain(target, allow_wide=True)
+                if domain is None or not (
+                    domain.minimum <= interval[0] <= interval[1] <= domain.maximum
+                ):
+                    interval = None
+            for old_key in list(local_intervals):
+                if old_key == key or old_key.startswith(f"{key}."):
+                    del local_intervals[old_key]
+            if interval is not None:
                 local_intervals[key] = interval
-                result[member] = interval
-        return result
+            for member, member_interval in fields.items():
+                local_intervals[f"{key}.{member}"] = member_interval
+        return members(statements[-1].value, local_intervals, local_constants)
 
     def glsl_workgroup_call_parameter_intervals(self, function, arguments):
         result = {}
@@ -11710,13 +11857,12 @@ class GLSLCodeGen:
             if not name or self.glsl_workgroup_pointer_element_type(parameter):
                 continue
             source_intervals = getattr(argument, "_glsl_control_flow_intervals", {})
-            argument_name = expression_debug_name(argument)
-            if argument_name:
-                prefix = f"{argument_name}."
-                for source_key, source_interval in source_intervals.items():
-                    if source_key.startswith(prefix):
-                        result[f"{name}.{source_key[len(prefix) :]}"] = source_interval
-            interval = self.glsl_private_pointer_interval(
+            member_intervals = self.glsl_simple_struct_constructor_member_intervals(
+                argument, source_intervals, constants
+            )
+            for member, interval in member_intervals.items():
+                result[f"{name}.{member}"] = interval
+            interval = self.glsl_checked_private_pointer_interval(
                 argument,
                 source_intervals,
                 constants,
@@ -11763,6 +11909,9 @@ class GLSLCodeGen:
     def glsl_interval_expression_keys(self, expression):
         """Return component-sensitive names that an interval depends on."""
 
+        field_key = self.glsl_declared_struct_member_interval_key(expression)
+        if field_key is not None:
+            return {field_key}
         if expression is None or isinstance(expression, (int, float, bool)):
             return set()
         if isinstance(expression, str):
@@ -11837,6 +11986,9 @@ class GLSLCodeGen:
     def glsl_interval_mutation_target_keys(self, target):
         """Return exact interval keys invalidated by an lvalue mutation."""
 
+        field_key = self.glsl_declared_struct_member_interval_key(target)
+        if field_key is not None:
+            return {field_key}
         if isinstance(target, (str, IdentifierNode, VariableNode)):
             name = self.expression_name(target)
             return {name} if name else set()
@@ -13825,7 +13977,7 @@ class GLSLCodeGen:
 
         if not bindings:
             return None, None
-        if any(
+        if any("." in name for name in workgroup_parameter_intervals) or any(
             binding.get("kind")
             in {
                 "workgroup-pointer",
@@ -37858,6 +38010,11 @@ complex64_t crossgl_complex64_mod_assign(
                 expression.object,
                 component_index,
             )
+            field_key = self.glsl_declared_struct_member_interval_key(expression)
+            if field_key is not None:
+                key = field_key
+            if key not in intervals:
+                key = expression_debug_name(expression)
         else:
             key = self.expression_name(expression)
         interval = intervals.get(key) if key is not None else None
@@ -46329,6 +46486,9 @@ complex64_t crossgl_complex64_mod_assign(
         return None
 
     def glsl_private_pointer_interval_key(self, expression, intervals, constants):
+        field_key = self.glsl_declared_struct_member_interval_key(expression)
+        if field_key is not None:
+            return field_key if field_key in intervals else None
         if isinstance(expression, MemberAccessNode):
             component_index = self.glsl_index_component_index(expression.member)
             key = self.glsl_index_component_interval_key(
