@@ -363,6 +363,15 @@ the four named block-format tests, not the complete upstream MLX suite.
 Dense and quantized matrix multiplication still reject before native dispatch;
 their host integration is tracked separately in
 [#2151](https://github.com/CrossGL/crosstl/issues/2151).
+The tiled GEMM translation work uses the unchanged source kernel, not repeated
+vector operations as a substitute. Recursive template-member lowering now
+preserves the surrounding struct aliases and overload context. Its required
+native regression covers explicit and inferred template calls, call operators,
+repeated mutations, integer wraparound and output guards; Metal also runs the
+original source as a control. These helper checks do not establish matrix
+execution. The selected `steel_gemm_fused` entry still fails on explicit
+`auto*` pointer deduction during source overload resolution, tracked in
+[#2152](https://github.com/CrossGL/crosstl/issues/2152).
 
 ## General Gather
 

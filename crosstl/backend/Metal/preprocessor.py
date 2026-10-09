@@ -16946,6 +16946,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                     template_methods_by_struct,
                     local_integral_constants,
                     local_constant_type_aliases,
+                    methods_by_struct=methods_by_struct,
+                    operator_call_structs=operator_call_structs,
+                    rewrite_structs_by_name=rewrite_structs_by_name,
                 )
                 if rewrite is not None:
                     end, replacement = rewrite
@@ -17321,6 +17324,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]],
         local_integral_constants: Dict[str, List[_MetalIntegralConstantBinding]],
         local_type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        *,
+        methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
+        operator_call_structs: Set[str],
+        rewrite_structs_by_name: Dict[str, _MetalStructDefinition],
     ) -> Optional[Tuple[int, str]]:
         # A receiver-less `name(args)` where `name` is a sibling member method
         # (template OR concrete) is lowered to its concrete free function with an
@@ -17360,6 +17367,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                     template_methods_by_struct,
                     local_integral_constants,
                     local_type_aliases,
+                    methods_by_struct=methods_by_struct,
+                    operator_call_structs=operator_call_structs,
+                    rewrite_structs_by_name=rewrite_structs_by_name,
                 )
             return None
 
@@ -17506,6 +17516,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             argument_type_aliases=local_type_aliases,
             argument_type_position=arg_open,
             argument_type_fallback_position=method.span[0],
+            methods_by_struct=methods_by_struct,
+            operator_call_structs=operator_call_structs,
+            rewrite_structs_by_name=rewrite_structs_by_name,
         )
         args = self._expanded_template_member_call_arguments(free_name, raw_args)
         if representative.is_static:
@@ -17589,6 +17602,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]],
         local_integral_constants: Dict[str, List[_MetalIntegralConstantBinding]],
         local_type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        *,
+        methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
+        operator_call_structs: Set[str],
+        rewrite_structs_by_name: Dict[str, _MetalStructDefinition],
     ) -> Optional[Tuple[int, str]]:
         # Lower an implicit-this `operator()(args)` call. `empty_paren_open` is the
         # `(` of the empty `()` after `operator`; the real argument list follows.
@@ -17690,6 +17707,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             argument_type_aliases=local_type_aliases,
             argument_type_position=arg_open,
             argument_type_fallback_position=method.span[0],
+            methods_by_struct=methods_by_struct,
+            operator_call_structs=operator_call_structs,
+            rewrite_structs_by_name=rewrite_structs_by_name,
         )
         args = self._expanded_template_member_call_arguments(free_name, raw_args)
         replacement = f"{free_name}(self, {args})" if args else f"{free_name}(self)"
