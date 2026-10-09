@@ -134,6 +134,15 @@ and argument evaluation are retained. Required native controls cover helpers,
 constructors, template deduction, tag arguments, overloads and identifier
 collisions, including discarded arguments with side effects.
 
+Primary struct-template forward declarations retain their parameter signatures
+and defaults for selecting a unique partial specialization. They do not invent
+a definition for an incomplete primary. Static calls through constructor and
+method aliases expose their concrete owner before member lowering; local alias
+shadowing, alias chains and constructor initializer lists retain their scopes.
+Ambiguous partial matches remain unresolved rather than selecting an arbitrary
+body. Native controls cover side effects, unsigned wraparound and output guards
+through project packages, with separate saved-intermediate compilation checks.
+
 Explicit struct specializations compare primitive alias arguments by their
 resolved type before materializing the primary template. Static member lookup
 uses the same owner, including specialization declarations written through an

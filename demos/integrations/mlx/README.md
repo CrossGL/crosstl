@@ -101,6 +101,15 @@ overload selection and output guards. Strict Metal compilation keeps unrelated
 unused-parameter warnings enabled. These controls do not resolve the remaining
 matrix helper materialization and host-dispatch requirements.
 
+Partial-specialization static-owner controls cover primary forward declarations,
+default arguments, scoped aliases, constructor initializers and method calls
+([#2157](https://github.com/CrossGL/crosstl/issues/2157)). Thirteen cases execute
+on Metal and OpenGL with exact readback, side-effect counts and output guards;
+Metal also executes the original sources. All thirteen HLSL variants compile
+with strict DXC checks, with Windows execution required separately. The real
+matrix kernel still encounters a nested member-lowering failure; these controls
+do not establish complete GEMM compilation or numerical matrix execution.
+
 Reduction reference review found an alias-specialization error
 ([#2100](https://github.com/CrossGL/crosstl/issues/2100)): `float16_t` selected
 the primary `Limits` template instead of the explicit `half` specialization.

@@ -1219,6 +1219,7 @@ jobs:
           CROSTL_REQUIRE_CONDITIONAL_RESOURCES: "1"
           CROSTL_REQUIRE_CONSTANT_AGGREGATE_POINTERS: "1"
           CROSTL_REQUIRE_UNNAMED_PARAMETERS: "1"
+          CROSTL_REQUIRE_PARTIAL_STATIC_OWNERS: "1"
           CROSTL_REQUIRE_WORKGROUP_RANGE_READBACKS: "1"
           CROSTL_REQUIRE_ENTRY_WORKGROUP_RULES: "1"
           CROSTL_REQUIRE_SUBGROUP_APPLICABILITY: "1"
@@ -1239,6 +1240,7 @@ jobs:
               tests/test_translator/test_conditional_resources.py \
               tests/test_translator/test_constant_aggregate_pointers.py \
               tests/test_translator/test_unnamed_parameters.py \
+              tests/test_translator/test_partial_static_owners.py \
               tests/test_translator/test_software_subgroup_workgroup_ranges.py \
               tests/test_translator/test_project_workgroup_rules.py::test_selected_entry_rules_execute \
               tests/test_translator/test_project_subgroup_applicability.py \

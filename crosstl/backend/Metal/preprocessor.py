@@ -319,6 +319,7 @@ class _MetalTemplateStruct:
     template_parameter_types: Dict[str, str] = field(default_factory=dict)
     template_type_traits: Dict[str, Dict[str, object]] = field(default_factory=dict)
     namespace: str = ""
+    is_forward_declaration: bool = False
 
 
 @dataclass(frozen=True)
@@ -2116,7 +2117,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         # loop unbounded.
         max_iterations = self.max_template_specializations + 1
         for _ in range(max_iterations):
-            templates = self._find_template_structs(working)
+            working = self._canonicalize_struct_static_alias_owners(working)
+            templates = self._find_template_structs(
+                working, include_forward_declarations=True
+            )
             if not templates:
                 return working
             primary_templates = [
@@ -2124,9 +2128,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                 for template in templates
                 if self._template_struct_specialization_arguments(template) is None
             ]
-            templates_by_name = {
-                template.name: template for template in primary_templates
-            }
+            templates_by_name = {}
+            for template in primary_templates:
+                if (
+                    template.name not in templates_by_name
+                    or not template.is_forward_declaration
+                ):
+                    templates_by_name[template.name] = template
             if not templates_by_name:
                 return working
             explicit_specialization_keys = (
@@ -4203,6 +4211,69 @@ class MetalPreprocessor(HLSLPreprocessor):
                     allow_unqualified_owner=owner_name_counts[struct.name] == 1,
                 )
         return rewritten
+
+    def _canonicalize_struct_static_alias_owners(self, code: str) -> str:
+        """Expose concrete template owners before lowering their static calls."""
+        if "::" not in code or not ("using" in code or "typedef" in code):
+            return code
+        structs = self._find_concrete_struct_definitions(code)
+        structs_by_name = {struct.name: struct for struct in structs}
+        replacements: List[Tuple[int, int, str]] = []
+        for struct in structs:
+            if not struct.type_aliases:
+                continue
+            aliases = "|".join(
+                re.escape(name)
+                for name in sorted(struct.type_aliases, key=len, reverse=True)
+            )
+            pattern = re.compile(rf"(?<![A-Za-z0-9_:.])(?P<alias>{aliases})(?=\s*::)")
+            members = [*struct.methods, *struct.template_methods, *struct.constructors]
+            constants = self._resolved_static_data_member_initializers(struct)
+            for member in members:
+                if member.span is None:
+                    continue
+                start, end = member.span
+                body = code[start:end]
+                ignored = self._find_comment_and_literal_spans(body)
+                local_aliases = self._local_type_alias_shadow_scopes(body)
+                local_bindings = self._collect_local_type_alias_bindings(
+                    body, [(0, len(body))]
+                )
+                parameter_names = set(
+                    getattr(
+                        member, "parameter_names", getattr(member, "param_names", [])
+                    )
+                )
+                for match in pattern.finditer(body):
+                    alias = match.group("alias")
+                    if (
+                        self._containing_span(match.start(), ignored) is not None
+                        or alias in parameter_names
+                    ):
+                        continue
+                    shadowed = self._shadowed_type_aliases_at(
+                        local_aliases, match.start()
+                    )
+                    target = self._canonicalize_type_aliases_at(
+                        alias, local_bindings, match.start()
+                    )
+                    if target is None:
+                        continue
+                    target = self._canonicalize_struct_scoped_type(
+                        target, struct, structs_by_name, excluded_aliases=shadowed
+                    )
+                    target = self._substitute_template_argument_static_constants(
+                        target, constants
+                    )
+                    if (
+                        target not in structs_by_name
+                        and self._exact_template_type_id(target) is None
+                    ):
+                        continue
+                    replacements.append(
+                        (start + match.start(), start + match.end(), target)
+                    )
+        return self._apply_text_replacements(code, replacements)
 
     def _canonicalize_qualified_struct_type_aliases(
         self,
@@ -22079,7 +22150,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             pos = body_end
         return templates
 
-    def _find_template_structs(self, code: str) -> List[_MetalTemplateStruct]:
+    def _find_template_structs(
+        self, code: str, *, include_forward_declarations: bool = False
+    ) -> List[_MetalTemplateStruct]:
         # Detect `template <...> struct/class Name { ... }` declarations, the
         # struct counterpart of _find_template_functions. Foundation for the
         # struct-template materializer (issue #1354): explicit specializations
@@ -22115,10 +22188,23 @@ class MetalPreprocessor(HLSLPreprocessor):
 
             body_start = self._find_next_top_level_char(code, declaration_start, "{")
             semicolon = self._find_next_top_level_char(code, declaration_start, ";")
-            if body_start is None or (semicolon is not None and semicolon < body_start):
+            forward = semicolon is not None and (
+                body_start is None or semicolon < body_start
+            )
+            if forward:
+                after_name = declaration_start + header_match.end()
+                if (
+                    not include_forward_declarations
+                    or code[after_name:semicolon].strip()
+                ):
+                    pos = semicolon + 1
+                    continue
+                body_end = semicolon + 1
+            elif body_start is None:
                 pos = declaration_start
                 continue
-            body_end = self._find_matching_brace(code, body_start)
+            else:
+                body_end = self._find_matching_brace(code, body_start)
             if body_end is None:
                 pos = body_start + 1
                 continue
@@ -22161,6 +22247,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     template_parameter_types=declared_types,
                     template_type_traits=template_type_traits,
                     namespace=self._namespace_at(namespace_spans, start),
+                    is_forward_declaration=forward,
                 )
             )
             pos = body_end
@@ -22425,9 +22512,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         # template parameters (type and non-type) to the concrete arguments,
         # substitute them through the struct body, and rename the declaration.
         # Foundation for the struct-template materializer (issue #1354).
-        if not self._template_arguments_satisfy_parameters(
-            template,
-            template_arguments,
+        if (
+            template.is_forward_declaration
+            or not self._template_arguments_satisfy_parameters(
+                template,
+                template_arguments,
+            )
         ):
             return ""
         substitutions, _variadic_bindings = self._template_argument_bindings(
