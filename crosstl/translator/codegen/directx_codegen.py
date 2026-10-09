@@ -22163,6 +22163,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         elif hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
             mapped_op = self.map_operator(op)
+            if mapped_op == ",":
+                left = self.generate_expression_with_expected(expr.left, None)
+                right = self.generate_expression_with_expected(expr.right, None)
+                sequence = f"({left}, {right})"
+                result_type = self.expression_result_type(expr.right)
+                if self.hlsl_struct_constructor_fields(result_type) is not None:
+                    # Explicit same-type construction distinguishes an aggregate
+                    # value sequence from a misplaced HLSL initializer list.
+                    return f"{self.map_type(result_type)}({sequence})"
+                return sequence
             if mapped_op in {"+", "-"}:
                 private_pointer_binding = self.hlsl_private_pointer_view_binding(expr)
                 if private_pointer_binding is not None and private_pointer_binding.get(

@@ -1573,7 +1573,39 @@ class _Lowering:
             ],
         )
 
-    def aggregate_value(self, type_name, arguments):
+    def initializer_requires_sequence(self, arguments):
+        for argument in arguments:
+            for node in argument.walk():
+                if isinstance(node, AssignmentNode) or (
+                    isinstance(node, UnaryOpNode) and node.operator in {"++", "--"}
+                ):
+                    return True
+                if isinstance(node, FunctionCallNode) and (
+                    _name(node.function) in self.functions
+                    or _numeric(NamedType(_name(node.function))) is None
+                ):
+                    return True
+                if not isinstance(
+                    node,
+                    (
+                        ArrayAccessNode,
+                        ArrayLiteralNode,
+                        BinaryOpNode,
+                        CastNode,
+                        FunctionCallNode,
+                        IdentifierNode,
+                        LiteralNode,
+                        MemberAccessNode,
+                        PointerReinterpretNode,
+                        TernaryOpNode,
+                        TypeNode,
+                        UnaryOpNode,
+                    ),
+                ):
+                    return True
+        return False
+
+    def aggregate_value(self, type_name, arguments, *, sequence=False):
         """Construct private values without target-specific struct expressions."""
         fields = self.fields[type_name]
         values = []
@@ -1611,9 +1643,25 @@ class _Lowering:
             self.generated.append(
                 FunctionNode(name, NamedType(type_name), parameters, BlockNode(body))
             )
-        return _call(
-            self.helpers[key], [argument for _path, _target, _type, argument in values]
-        )
+        arguments = [argument for _path, _target, _type, argument in values]
+        if not sequence or len(values) < 2:
+            return _call(self.helpers[key], arguments)
+        # Function arguments need not be evaluated in initializer-list order.
+        # Hoist only declarations; captures stay at the original expression,
+        # including conditional branches and repeatedly evaluated loop clauses.
+        captures = []
+        arguments = []
+        for _path, _target, type_, argument in values:
+            name = self.fresh("crosstl_initializer")
+            self.initializer_temporaries.append(
+                VariableNode(name, self.target_type(type_))
+            )
+            captures.append(AssignmentNode(_id(name), argument))
+            arguments.append(_id(name))
+        result = _call(self.helpers[key], arguments)
+        for capture in reversed(captures):
+            result = BinaryOpNode(capture, ",", result)
+        return result
 
     def expression(self, node, env, expected=None):
         if node is None:
@@ -1786,6 +1834,7 @@ class _Lowering:
                         self.expression(value, env, type_)
                         for value, type_ in zip(node.elements, types)
                     ],
+                    sequence=self.initializer_requires_sequence(node.elements),
                 )
             return ArrayLiteralNode(
                 [
@@ -1833,7 +1882,11 @@ class _Lowering:
                 for i, arg in enumerate(node.arguments)
             ]
             if callee is None and fields:
-                return self.aggregate_value(_name(node.function), args)
+                return self.aggregate_value(
+                    _name(node.function),
+                    args,
+                    sequence=self.initializer_requires_sequence(node.arguments),
+                )
             if callee is not None:
                 args.extend(self.resource_arguments())
             return FunctionCallNode(
@@ -2062,6 +2115,7 @@ class _Lowering:
                 if id(function) not in self.reachable:
                     continue
                 self.current = function
+                self.initializer_temporaries = []
                 types = self.parameter_types[id(function)]
                 env = dict(self.global_types)
                 env.update(
@@ -2083,6 +2137,8 @@ class _Lowering:
                             self.entry_handles[param.name],
                         )
                 function.body = self.statement(function.body, env)
+                if self.initializer_temporaries:
+                    function.body.statements[:0] = self.initializer_temporaries
                 if function is not self.entry:
                     for param, type_ in zip(function.parameters, types):
                         if isinstance(param.param_type, ReferenceType):

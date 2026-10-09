@@ -48,31 +48,46 @@ REQUIRE_ENV = "CROSTL_REQUIRE_RESOURCE_AGGREGATES"
 VECTOR_CASES = tuple(
     f"vector-{kind}-{lanes}" for kind in ("float", "int", "uint") for lanes in (2, 4)
 )
+ORDER_CASES = (
+    "effects-read-before",
+    "effects-read-after",
+    "effects-nested",
+    "effects-array",
+    "effects-call",
+    "effects-return",
+    "effects-conditional",
+    "effects-loop-update",
+    "effects-shadow",
+)
 CASES = (
-    "cursor",
-    "copy",
-    "nested",
-    "array",
-    "helper",
-    "rebase",
-    "constant",
-    "reference",
-    "returned",
-    "shadow",
-    "effects",
-    "selection",
-    "piecewise",
-    "template",
-    "multidimensional",
-    "const-slot",
-    "entry-rebase",
-    "alias-writeback",
-    "typedef",
-    "unused-null",
-    "forwarded-null",
-    "literal-null",
-    "unused-null-vector",
-) + VECTOR_CASES
+    (
+        "cursor",
+        "copy",
+        "nested",
+        "array",
+        "helper",
+        "rebase",
+        "constant",
+        "reference",
+        "returned",
+        "shadow",
+        "effects",
+        "selection",
+        "piecewise",
+        "template",
+        "multidimensional",
+        "const-slot",
+        "entry-rebase",
+        "alias-writeback",
+        "typedef",
+        "unused-null",
+        "forwarded-null",
+        "literal-null",
+        "unused-null-vector",
+    )
+    + VECTOR_CASES
+    + ORDER_CASES
+)
 
 
 def _source(case):
@@ -121,6 +136,33 @@ def _source(case):
         )
     elif case == "effects":
         setup = "uint offset = 1; Cursor cursor{left + offset++, first + offset++, 4};"
+    elif case == "effects-read-before":
+        setup = "uint offset = 1; Cursor cursor{left + offset, first + offset++, 4};"
+    elif case == "effects-read-after":
+        setup = "uint offset = 1; Cursor cursor{left + offset++, first + offset, 4};"
+    elif case == "effects-nested":
+        declarations += "struct Envelope { Cursor cursor; uint tag; };"
+        setup = "uint offset = 1; Envelope envelope{{left + offset++, first + offset++, 4}, offset++};"
+        read, write = (
+            "envelope.cursor.input[tid] + int(envelope.tag)",
+            "envelope.cursor.output[tid]",
+        )
+    elif case == "effects-array":
+        declarations = declarations.replace("uint count;", "uint count; uint order[2];")
+        setup = "uint offset = 1; Cursor cursor{left + offset++, first + offset++, 4, {offset++, offset++}};"
+        read += " + int(cursor.order[0] * 10u + cursor.order[1])"
+    elif case == "effects-call":
+        declarations += "uint next_offset(thread uint& offset) { return offset++; }"
+        setup = "uint offset = 1; Cursor cursor{left + next_offset(offset), first + next_offset(offset), 4};"
+    elif case == "effects-return":
+        declarations += "Cursor make_cursor(const device int* input, device int* output, thread uint& offset) { return {input + offset++, output + offset++, 4}; }"
+        setup = "uint offset = 1; Cursor cursor = make_cursor(left, first, offset);"
+    elif case == "effects-conditional":
+        setup = "uint offset = 1; Cursor cursor = (tid & 1u) != 0u ? Cursor{left + offset++, first + offset++, 4} : Cursor{left + 1, first + 2, offset++};"
+    elif case == "effects-loop-update":
+        setup = "uint offset = 0; Cursor cursor{left, first, 4}; for (uint round = 0; round < 2; cursor = Cursor{left + offset++, first + offset++, 4}) { ++round; }"
+    elif case == "effects-shadow":
+        setup = "uint crosstl_initializer = 9; uint offset = 1; Cursor cursor{left + offset++, first + offset++, 4}; offset += crosstl_initializer;"
     elif case == "selection":
         setup += "if ((tid & 1) != 0) { cursor.input = right + 2; cursor.output = second + 3; }"
     elif case == "piecewise":
@@ -183,7 +225,7 @@ def _source(case):
     body = f"{setup}\n    {write} = {read};"
     if case == "alias-writeback":
         body += "second[tid + 3] = cursor.input[tid] + 5;"
-    if case == "effects":
+    if case == "effects" or case in ORDER_CASES:
         body += "second[tid + 4] = int(offset);"
     if case == "shadow":
         body = f"if (tid < 4) {{ {body} }}"
@@ -260,6 +302,26 @@ def _workload(case):
             value, offset = left[tid + 3], 3
         elif case == "effects":
             second[tid + 4] = 3
+        elif case in ORDER_CASES:
+            second[tid + 4] = {
+                "effects-read-before": 2,
+                "effects-read-after": 2,
+                "effects-nested": 4,
+                "effects-array": 5,
+                "effects-call": 3,
+                "effects-return": 3,
+                "effects-conditional": 3 if tid & 1 else 2,
+                "effects-loop-update": 4,
+                "effects-shadow": 12,
+            }[case]
+            if case == "effects-read-before":
+                offset = 1
+            elif case == "effects-nested":
+                value += 3
+            elif case == "effects-array":
+                value += 34
+            elif case == "effects-loop-update":
+                value, offset = left[tid + 2], 3
         elif case == "alias-writeback":
             second[tid + 3] = value + 5
         elif case == "multidimensional":
@@ -429,9 +491,10 @@ def test_resource_aggregate_failure_is_reported_without_an_artifact(tmp_path):
     assert not list((tmp_path / "out").rglob("*.hlsl"))
 
 
-def test_resource_lowering_retains_source_ast_and_is_deterministic(tmp_path):
+@pytest.mark.parametrize("case", ("array", "effects", *ORDER_CASES))
+def test_resource_lowering_retains_source_ast_and_is_deterministic(tmp_path, case):
     path = tmp_path / "source.metal"
-    path.write_text(_source("array"))
+    path.write_text(_source(case))
     ast = parse(translate(str(path), backend="cgl", format_output=False))
     original = pickle.dumps(ast)
     lowered = lower_resource_aggregates(ast)

@@ -5056,6 +5056,9 @@ resource arguments are forwarded through helpers; loads and stores select a
 bound resource explicitly instead of creating arrays of HLSL resource objects.
 Nested aggregates, fixed pointer arrays, value copies, mutable reference parameters,
 rebasing and concrete template owners retain their backing buffers. Required
+initializer evaluation order is preserved when aggregate fields have side effects.
+Private captures evaluate each field once, at the original expression, including
+nested array fields, conditional branches and loop updates. Required
 Windows numerical controls use the same inputs and guarded outputs as the
 original/generated Metal controls. Unknown pointer escapes, incompatible access
 contracts, local reference aliases, reference returns, pointer identity operations,
