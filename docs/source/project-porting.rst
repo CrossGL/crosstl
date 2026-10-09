@@ -1916,6 +1916,20 @@ MLX host-runtime redirection, or MLX test-suite parity.
 OpenGL Pointer and Matrix Policies
 ----------------------------------
 
+DirectX and OpenGL share a lowering for non-escaping scalar views of fixed
+private vector arrays. Two- and four-component vectors with matching 32-bit
+scalar elements retain their original storage; reads and writes address the
+vector component rather than a copied array. This includes direct casts,
+single-return reference-receiver accessors, nested fields, local view aliases,
+and bounded scalar offsets. Array selections and offsets are captured when a
+local view is bound. Const views remain read-only.
+
+Scalar accesses require a proven in-bounds range. Literal indices, bounded
+unit-step loops, and bounded masks are supported; side-effecting indices,
+unresolved layouts, escaping views, and reference-argument copyout remain
+diagnostics. This lowering does not provide general local aggregate references
+or establish full-kernel numerical equivalence.
+
 Private pointer helpers lower to fixed array parameters with separate element
 offsets. Bounded cumulative pointer updates retain those offsets; proven-zero,
 side-effect-free updates may be omitted only when their result is discarded.

@@ -339,6 +339,7 @@ from .pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
 )
+from .private_vector_views import lower_private_vector_views
 from .resource_aggregates import lower_resource_aggregates
 from .resource_arrays import (
     collect_resource_array_size_hints,
@@ -7010,6 +7011,7 @@ class GLSLCodeGen:
             storage_pointer_parameters=True,
             workgroup_access_assertions=self.workgroup_access_assertions,
         )
+        ast = lower_private_vector_views(ast, "opengl")
         ast = self.with_glsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:
             ast = converge_subgroup_guarded_returns(

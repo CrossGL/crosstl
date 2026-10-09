@@ -339,6 +339,7 @@ from .pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
 )
+from .private_vector_views import lower_private_vector_views
 from .resource_aggregates import lower_resource_aggregates
 from .resource_arrays import (
     collect_resource_array_size_hints,
@@ -3064,6 +3065,7 @@ class HLSLCodeGen:
                 self, "workgroup_access_assertions", ()
             ),
         )
+        ast = lower_private_vector_views(ast, "directx")
         self.hlsl_type_aliases = {
             node.name: getattr(node, "var_type", None)
             for node in getattr(ast, "global_variables", []) or []
