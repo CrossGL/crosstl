@@ -3032,6 +3032,15 @@ artifacts also retain a one-thread workgroup, the source and output buffers, and
 the size constant in their reflected runtime interfaces. Deterministic artifact
 hashes and the pinned upstream source hash are checked before packaging.
 
+The HLSL Square loader reference and current-pin profiled bfloat Sigmoid
+reference include private placeholder fields in otherwise empty structs.
+Removing only those declarations reproduces each previously accepted checksum.
+Strict DXC compilation of the old and new sources produces byte-identical
+modules; computations, bindings and dispatch requirements are unchanged.
+Only these two reviewed references are updated. The required Windows numerical
+tests, including Sigmoid's 65,282 non-NaN inputs and output guards, remain
+unchanged; this comparison does not establish whole-corpus execution coverage.
+
 The selected OpenGL references include shared union storage and bit-preserving
 selection in the precise ArcCos helper. Both complete bodies were compared with
 hash-verified original references and passed their existing Linux/Mesa compiler

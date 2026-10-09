@@ -1542,7 +1542,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
       "schema_version": 2,
-      "sha256": "94538136695c3d6aa48c850e221ae65099ddff2a8096ea764bf76c05fbec344e",
+      "sha256": "1e679df1aea24c1f9c1cb0092ff8711ecfaf8bb38cdef4d2703ae2b9392951a9",
       "size_bytes": 319838,
       "entry_identity_fields": [
         "entryPoint",
@@ -1712,7 +1712,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 3774223,
+      "generated_size_bytes_total": 3775423,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "v_Absint32int32",

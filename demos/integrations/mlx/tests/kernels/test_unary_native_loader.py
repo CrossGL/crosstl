@@ -98,9 +98,9 @@ SQUARE_WORKLOAD = UnaryWorkload(
     generated_artifacts={
         "directx": {
             "sha256": (
-                "64540a89c95e39914a4d616aff9bec98b939a5209fa4caef5cc1425511abb4e5"
+                "a1c27f30b2c26c2f81456e46ac06b2920f18e02debecf86e10689f26a41f8f2b"
             ),
-            "sizeBytes": 2314,
+            "sizeBytes": 3514,
         },
         "metal": {
             "sha256": (

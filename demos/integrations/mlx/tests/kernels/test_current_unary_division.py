@@ -53,8 +53,8 @@ ARTIFACTS = {
         "sizeBytes": 10670,
     },
     "directx": {
-        "sha256": "26d709850bef007fc27f68de6f624120c4cb93b711ee9b649401d854cc272a0d",
-        "sizeBytes": 9914,
+        "sha256": "0e1c4ed41748cbd1a19c41b7dff1c6d466102a725ba17305f5f4aa7cada34fad",
+        "sizeBytes": 11114,
     },
 }
 # Original Metal 3.1, -fno-fast-math readbacks at MLX_COMMIT. These cover the
