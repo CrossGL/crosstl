@@ -14,6 +14,7 @@ from ...translator.cooperative_matrix import (
 from ...translator.division_math import binary32_division_support
 from ...translator.fused_math import FMA_HELPER_KEYS, binary32_fma_support
 from ...translator.precise_exp import binary32_exp_support
+from ...translator.precise_log2 import binary32_log2_support
 from ...translator.precise_power import binary32_power_support
 from ...translator.precise_trig import TRIG_HELPER_KEYS, binary32_trig_support
 from ...translator.remainder_math import binary32_remainder_support
@@ -1350,6 +1351,8 @@ class MetalToCrossGLConverter:
         binary32_multiplication_profile=None,
         binary32_atan2_profile=None,
         binary32_log_profile=None,
+        binary32_log2_operand_profile=None,
+        binary32_log2_accuracy_profile=None,
         binary32_sqrt_profile=None,
         binary32_rsqrt_profile=None,
         binary32_power_operand_profile=None,
@@ -1410,6 +1413,21 @@ class MetalToCrossGLConverter:
                 "'flush-subnormals', or None"
             )
         self.binary32_log_profile = binary32_log_profile
+        if binary32_log2_operand_profile not in (
+            None,
+            "preserve-subnormals",
+            "flush-subnormals",
+        ):
+            raise ValueError(
+                "binary32_log2_operand_profile must be 'preserve-subnormals', "
+                "'flush-subnormals', or None"
+            )
+        if binary32_log2_accuracy_profile not in (None, "portable-finite"):
+            raise ValueError(
+                "binary32_log2_accuracy_profile must be 'portable-finite' or None"
+            )
+        self.binary32_log2_operand_profile = binary32_log2_operand_profile
+        self.binary32_log2_accuracy_profile = binary32_log2_accuracy_profile
         if binary32_sqrt_profile not in (
             None,
             "preserve-subnormals",
@@ -1856,6 +1874,7 @@ class MetalToCrossGLConverter:
         self.required_metal_round_widths = set()
         self.required_metal_precise_exp_widths = set()
         self.required_metal_precise_log_widths = set()
+        self.required_metal_log2_widths = set()
         self.required_metal_precise_sqrt_widths = set()
         self.required_metal_precise_rsqrt_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
@@ -3059,6 +3078,7 @@ class MetalToCrossGLConverter:
         self.required_metal_round_widths = set()
         self.required_metal_precise_exp_widths = set()
         self.required_metal_precise_log_widths = set()
+        self.required_metal_log2_widths = set()
         self.required_metal_precise_sqrt_widths = set()
         self.required_metal_precise_rsqrt_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
@@ -11423,6 +11443,9 @@ class MetalToCrossGLConverter:
             power_call = self.generate_metal_power_call(expr, is_main)
             if power_call is not None:
                 return power_call
+            log2_call = self.generate_metal_log2_call(expr, is_main)
+            if log2_call is not None:
+                return log2_call
             round_call = self.generate_metal_round_call(expr, is_main)
             if round_call is not None:
                 return round_call
@@ -14634,6 +14657,97 @@ class MetalToCrossGLConverter:
         pad = "    " * indent
         return "".join(pad + line + "\n" for line in code.strip().splitlines())
 
+    def generate_metal_log2_call(self, expression, is_main=False):
+        if (
+            str(expression.name).rsplit("::", 1)[-1] != "log2"
+            or self.metal_math_builtin_namespace_mode(expression.name) == "fast"
+            or (
+                self.binary32_log2_operand_profile is None
+                and self.binary32_log2_accuracy_profile is None
+            )
+        ):
+            return None
+        selected = self.selected_metal_callable(expression)
+        bfloat_wrapper = self.is_materialized_metal_stdlib_wrapper(selected) and (
+            self.normalized_metal_type(
+                self.resolve_type_alias(
+                    self.selected_metal_callable_return_type(selected)
+                )
+            )
+            in self.metal_source_bfloat_types
+        )
+        if bfloat_wrapper:
+            result_type = "float"
+        elif (
+            self.resolve_metal_math_builtin_name(expression.name, expression.args)
+            == "log2"
+        ):
+            result_type = self.metal_math_builtin_result_type(expression)
+        else:
+            return None
+        info = self.metal_math_builtin_type_info(result_type)
+        if info is None:
+            return None
+        element = self.normalized_metal_type(
+            self.resolve_type_alias(info["element_type"])
+        )
+        width = info["width"]
+        if element not in {"float", "half"} or width not in {1, 2, 3, 4}:
+            raise MetalPreciseMathLoweringError(
+                "log2",
+                result_type,
+                "the selected profile requires binary32 computation",
+                getattr(expression, "source_location", None),
+            )
+        if self.current_function is None:
+            raise MetalPreciseMathLoweringError(
+                "log2",
+                result_type,
+                "global initializers cannot call the runtime logarithm helper",
+                getattr(expression, "source_location", None),
+            )
+        self.required_metal_log2_widths.add(width)
+        argument = expression.args[0]
+        value = self.generate_expression(argument, is_main)
+        parameter_type = (
+            self.metal_source_overload_parameter_type(selected.params[0])
+            if bfloat_wrapper
+            else result_type
+        )
+        if self.metal_source_overload_type_identity(
+            self.expression_metal_type(argument)
+        ) != self.metal_source_overload_type_identity(parameter_type):
+            value = f"{self.map_type(parameter_type)}({value})"
+        mapped = "float" if width == 1 else f"vec{width}"
+        result = f"{self.metal_log2_helper_name(width)}({mapped}({value}))"
+        return (
+            f"{self.map_type(result_type)}({result})" if element == "half" else result
+        )
+
+    def metal_log2_helper_name(self, width):
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            f"log2-float{suffix}", f"__crossgl_metal_log2_float{suffix}"
+        )
+
+    def generate_metal_log2_support_code(self, indent=0):
+        if not self.required_metal_log2_widths:
+            return ""
+        scalar = self.metal_log2_helper_name(1)
+        code = binary32_log2_support(
+            scalar,
+            self.binary32_log2_operand_profile,
+            self.binary32_log2_accuracy_profile,
+        )
+        for width in sorted(self.required_metal_log2_widths - {1}):
+            lanes = ", ".join(f"{scalar}(value.{lane})" for lane in "xyzw"[:width])
+            code += (
+                f"@precise\n@metal_static\nvec{width} {self.metal_log2_helper_name(width)}(vec{width} value) {{\n"
+                f"    return vec{width}({lanes});\n}}\n"
+            )
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
+
     def generate_metal_power_call(self, expression, is_main=False):
         if (
             self.metal_math_builtin_namespace_mode(expression.name) == "fast"
@@ -15617,6 +15731,7 @@ float {scalar}(float base, float exponent) {{
         independent_code += self.generate_metal_round_support_code(indent)
         independent_code += self.generate_metal_precise_exp_support_code(indent)
         independent_code += self.generate_metal_precise_log_support_code(indent)
+        independent_code += self.generate_metal_log2_support_code(indent)
         independent_code += self.generate_metal_precise_sqrt_support_code(indent)
         independent_code += self.generate_metal_precise_rsqrt_support_code(indent)
         widths = sorted(self.required_metal_precise_acos_widths)
@@ -16364,6 +16479,8 @@ float {scalar}(float value) {{
             rendered = self.generate_metal_remainder_call(expression, is_main)
         if rendered is None:
             rendered = self.generate_metal_power_call(expression, is_main)
+        if rendered is None:
+            rendered = self.generate_metal_log2_call(expression, is_main)
         if rendered is None:
             rendered = self.generate_metal_round_call(expression, is_main)
         if rendered is None:

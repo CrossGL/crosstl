@@ -226,8 +226,9 @@ are not replaced with field-wise copies. Passing packed and widened byte storage
 through the same pointer parameter remains a separate layout issue
 ([#2145](https://github.com/CrossGL/crosstl/issues/2145)). Concrete scale conversion
 is covered by source-level regressions
-([#1744](https://github.com/CrossGL/crosstl/issues/1744)); the all-zero MX scale
-boundary remains open ([#2143](https://github.com/CrossGL/crosstl/issues/2143)). A combined
+([#1744](https://github.com/CrossGL/crosstl/issues/1744)); explicit logarithm policies
+address the all-zero MX scale boundary
+([#2143](https://github.com/CrossGL/crosstl/issues/2143)). A combined
 quantize/dequantize kernel does not exercise the packed buffers and encoded scale
 storage exposed by the two public operations.
 
@@ -239,6 +240,18 @@ DXC; that compiler check is not Windows numerical execution. Default-profile
 subnormal differences remain tracked in
 [#2114](https://github.com/CrossGL/crosstl/issues/2114). These probes do not establish
 block-format host integration or a passing upstream quantization suite.
+
+Separate quantizer probes use `binary32_log2_operand_profile = "flush-subnormals"`
+and `binary32_log2_accuracy_profile = "portable-finite"`, alongside the explicit
+multiplication profile. All 12 declared entries match original Metal on generated
+Metal and OpenGL across 60 cases per target: signed values, halfway values, zero
+blocks and scale boundaries. Packed payloads and encoded scales are checked
+separately, with 32,304 computed values and 2,040 guards per target. These public
+source options replace experimental generated-shader edits; source kernels,
+input storage and comparisons are unchanged. The required generic logarithm
+regressions run in the existing native arithmetic CI step. These bounded probes
+are not permanent complete-family execution, Windows numerical evidence or
+block-format host routing. Default logarithm behavior is unchanged.
 
 Packed outputs are not universally bit-identical between the pinned upstream CPU
 and Metal kernels, including FP4 halfway cases, signed-zero encodings and the

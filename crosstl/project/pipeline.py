@@ -1847,6 +1847,8 @@ REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(
         "binary32MultiplicationProfile",
         "binary32Atan2Profile",
         "binary32LogProfile",
+        "binary32Log2OperandProfile",
+        "binary32Log2AccuracyProfile",
         "binary32SqrtProfile",
         "binary32RsqrtProfile",
         "binary32PowerOperandProfile",
@@ -28486,6 +28488,25 @@ def _translate_project_impl(
                                 "'flush-subnormals', or None"
                             )
                         artifact["provenance"]["binary32LogProfile"] = log_profile
+                    for option, field, allowed in (
+                        (
+                            "binary32_log2_operand_profile",
+                            "binary32Log2OperandProfile",
+                            ("preserve-subnormals", "flush-subnormals"),
+                        ),
+                        (
+                            "binary32_log2_accuracy_profile",
+                            "binary32Log2AccuracyProfile",
+                            ("portable-finite",),
+                        ),
+                    ):
+                        profile = source_options.get(option)
+                        if unit.source_backend == "metal" and profile is not None:
+                            if profile not in allowed:
+                                raise ValueError(
+                                    f"{option} must be one of {allowed} or None"
+                                )
+                            artifact["provenance"][field] = profile
                     sqrt_profile = source_options.get("binary32_sqrt_profile")
                     if unit.source_backend == "metal" and sqrt_profile is not None:
                         if sqrt_profile not in (
@@ -46620,6 +46641,15 @@ def _provenance_contract_reasons(
             reasons.append(
                 f"{prefix}.binary32LogProfile must be preserve-subnormals or flush-subnormals"
             )
+    for field, allowed in (
+        ("binary32Log2OperandProfile", ("preserve-subnormals", "flush-subnormals")),
+        ("binary32Log2AccuracyProfile", ("portable-finite",)),
+    ):
+        if field in provenance:
+            if artifact.get("sourceBackend") != "metal":
+                reasons.append(f"{prefix}.{field} requires a Metal source")
+            if provenance[field] not in allowed:
+                reasons.append(f"{prefix}.{field} must be one of {allowed}")
     if "binary32SqrtProfile" in provenance:
         if artifact.get("sourceBackend") != "metal":
             reasons.append(f"{prefix}.binary32SqrtProfile requires a Metal source")
@@ -46779,6 +46809,17 @@ def _provenance_contract_reasons(
             reasons.append(
                 f"{prefix}.binary32LogProfile must match the resolved project source options"
             )
+        for option, field in (
+            ("binary32_log2_operand_profile", "binary32Log2OperandProfile"),
+            ("binary32_log2_accuracy_profile", "binary32Log2AccuracyProfile"),
+        ):
+            expected = (
+                options.get(option) if artifact["sourceBackend"] == "metal" else None
+            )
+            if provenance.get(field) != expected:
+                reasons.append(
+                    f"{prefix}.{field} must match the resolved project source options"
+                )
         expected_sqrt_profile = (
             options.get("binary32_sqrt_profile")
             if artifact["sourceBackend"] == "metal"

@@ -1262,6 +1262,42 @@ CrossGL retains the implementation without requiring the option again. Native
 DirectX, OpenGL and Metal checks are part of the existing project-demo jobs.
 This is a logarithm contract, not proof of complete project numerical parity.
 
+Base-two logarithms
+~~~~~~~~~~~~~~~~~~~
+
+Metal ``log2`` and ``precise::log2`` have independent opt-in operand and
+finite-accuracy policies. Neither changes ``binary32_log_profile`` or natural
+logarithms. Explicit fast calls and source-owned overloads keep their existing
+behavior. With both options unset, generated code is unchanged.
+
+.. code-block:: toml
+
+   [project.source_options.metal]
+   binary32_log2_operand_profile = "flush-subnormals"
+   binary32_log2_accuracy_profile = "portable-finite"
+
+The operand option accepts ``preserve-subnormals`` or ``flush-subnormals``.
+Preservation normalizes positive subnormal inputs using integer storage;
+flushing treats either sign of a subnormal as signed zero, producing negative
+infinity. Stored input bits are unchanged. When the operand option is unset,
+subnormal inputs retain the target's native behavior, even if finite accuracy
+is selected. Operand-only profiles leave ordinary finite calculations native.
+
+``portable-finite`` uses integer normalization and a reduced odd-series
+approximation, avoiding the target logarithm's cancellation near one. Native
+regressions compare against independently rounded 120- and 180-digit decimal
+references with a four-ULP binary32 bound. This tested bound is not an exhaustive
+accuracy proof or a promise of bit identity with every source device. The
+original Metal control characterizes the tested compiler/device's flush policy.
+
+Scalar and two- to four-lane calls preserve the selected source overload's
+conversions, narrow result storage and single operand evaluation. Unsupported
+profiled types and runtime global initializers produce structured diagnostics.
+Reports, manifests and packages retain ``binary32Log2OperandProfile`` and
+``binary32Log2AccuracyProfile``; validation rejects values inconsistent with
+resolved project options. Saved CrossGL carries the implementation directly.
+Required numerical tests run in the existing three-platform project-demo jobs.
+
 Precise square roots
 ~~~~~~~~~~~~~~~~~~~~
 
