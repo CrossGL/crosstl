@@ -145,6 +145,26 @@ HALF_ARITHMETIC_ENTRIES = (
     *HALF_COMPARISON_ENTRIES,
     *HALF_ABSOLUTE_ENTRIES,
 )
+BFLOAT_COPY_ENTRY = "ggn2_dynamic_copybfloat16bfloat16"
+BFLOAT_CAST_ENTRIES = {
+    "v_copybfloat16float32": ("bfloat16", "float32"),
+    "v_copyfloat32bfloat16": ("float32", "bfloat16"),
+}
+BFLOAT_BINARY_ENTRIES = {
+    f"vv_{operation}bfloat16": "bfloat16" for operation in BINARY_OPERATIONS
+}
+BFLOAT_COMPARISON_ENTRIES = {
+    f"vv_{operation}bfloat16": "bfloat16"
+    for operation in (*COMPARISON_OPERATIONS, "NaNEqual")
+}
+BFLOAT_ABSOLUTE_ENTRIES = {"v_Absbfloat16bfloat16": "bfloat16"}
+BFLOAT_ENTRIES = (
+    BFLOAT_COPY_ENTRY,
+    *BFLOAT_CAST_ENTRIES,
+    *BFLOAT_BINARY_ENTRIES,
+    *BFLOAT_COMPARISON_ENTRIES,
+    *BFLOAT_ABSOLUTE_ENTRIES,
+)
 INTEGER64_COPY_ENTRIES = {
     f"ggn2_dynamic_copy{dtype}{dtype}": dtype for dtype in INTEGER64_TYPES
 }
@@ -226,6 +246,7 @@ def build_packages(root, output, target, *, family="base"):
         "integer64": INTEGER64_ENTRIES,
         "half": HALF_ENTRIES,
         "half-arithmetic": HALF_ARITHMETIC_ENTRIES,
+        "bfloat": BFLOAT_ENTRIES,
         "slice-update": SLICE_UPDATE_ENTRIES,
     }
     if family not in families:
@@ -256,6 +277,11 @@ def build_packages(root, output, target, *, family="base"):
         },
         "slice-update": {},
         "half": {COPY_SOURCE: HALF_ENTRIES},
+        "bfloat": {
+            COPY_SOURCE: (BFLOAT_COPY_ENTRY, *BFLOAT_CAST_ENTRIES),
+            BINARY_SOURCE: (*BFLOAT_BINARY_ENTRIES, *BFLOAT_COMPARISON_ENTRIES),
+            UNARY_SOURCE: tuple(BFLOAT_ABSOLUTE_ENTRIES),
+        },
         "half-arithmetic": {
             BINARY_SOURCE: (*HALF_BINARY_ENTRIES, *HALF_COMPARISON_ENTRIES),
             UNARY_SOURCE: tuple(HALF_ABSOLUTE_ENTRIES),
@@ -386,6 +412,7 @@ if __name__ == "__main__":
             "integer64",
             "half",
             "half-arithmetic",
+            "bfloat",
             "slice-update",
         ),
         default="base",

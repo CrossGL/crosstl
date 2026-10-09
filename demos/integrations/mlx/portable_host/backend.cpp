@@ -111,6 +111,7 @@ void dispatch_unary(
   const bool invert = std::string(operation) == "BitwiseInvert";
   const bool absolute = std::string(operation) == "Abs" && inputs.size() == 1 &&
       (inputs[0].dtype() == mlx::core::float16 ||
+       inputs[0].dtype() == mlx::core::bfloat16 ||
        inputs[0].dtype() == mlx::core::int32 ||
        inputs[0].dtype() == mlx::core::uint32 ||
        inputs[0].dtype() == mlx::core::int64 ||
@@ -127,7 +128,8 @@ void dispatch_unary(
   const auto type = (invert || absolute) ? inputs[0].dtype()
       : logical                         ? mlx::core::bool_
                                         : mlx::core::float32;
-  const char* dtype = type == mlx::core::float16 ? "float16" : storage_type(type);
+  const char* dtype = type == mlx::core::float16 ? "float16" :
+      type == mlx::core::bfloat16 ? "bfloat16" : storage_type(type);
   if (inputs.size() != 1 || inputs[0].dtype() != type || out.dtype() != type) {
     throw std::invalid_argument(
         "CrossTL unary dispatch requires float32 arrays, or bool for LogicalNot.");
@@ -184,10 +186,11 @@ void dispatch_copy_into(
   if (in.dtype() != out.dtype() ||
       (in.dtype() != mlx::core::float32 && in.dtype() != mlx::core::int32 &&
        in.dtype() != mlx::core::float16 &&
+       in.dtype() != mlx::core::bfloat16 &&
        in.dtype() != mlx::core::uint32 && in.dtype() != mlx::core::bool_ &&
        in.dtype() != mlx::core::int64 && in.dtype() != mlx::core::uint64)) {
     throw std::invalid_argument(
-        "CrossTL copying layouts require matching float16, float32, int32, uint32, int64, uint64 or bool arrays.");
+        "CrossTL copying layouts require matching float16, bfloat16, float32, int32, uint32, int64, uint64 or bool arrays.");
   }
   constexpr int64_t max_index = std::numeric_limits<int32_t>::max();
   if (in.size() > max_index || in.ndim() > 64 ||
@@ -262,6 +265,7 @@ void dispatch_copy_into(
   const bool boolean = in.dtype() == mlx::core::bool_;
   const bool wide = in.dtype() == mlx::core::int64 || in.dtype() == mlx::core::uint64;
   const char* dtype = in.dtype() == mlx::core::float16 ? "float16" :
+      in.dtype() == mlx::core::bfloat16 ? "bfloat16" :
       wide ? storage_type(in.dtype()) : boolean ? "bool_" : "uint32";
   CrosstlMlxBuffer buffers[] = {
       {"src", dtype, const_cast<uint8_t*>(in.data<uint8_t>() + low * item_size), uint64_t(span), 0},
@@ -742,11 +746,13 @@ void dispatch_cast(const std::vector<mlx::core::array>& inputs, mlx::core::array
     throw std::invalid_argument("CrossTL cast input must match output shape.");
   }
   const char* source_type = inputs[0].dtype() == mlx::core::float16 ?
-      "float16" : storage_type(inputs[0].dtype());
+      "float16" : inputs[0].dtype() == mlx::core::bfloat16 ?
+      "bfloat16" : storage_type(inputs[0].dtype());
   const char* destination_type = out.dtype() == mlx::core::float16 ?
-      "float16" : storage_type(out.dtype());
+      "float16" : out.dtype() == mlx::core::bfloat16 ?
+      "bfloat16" : storage_type(out.dtype());
   if (!source_type || !destination_type) {
-    throw std::invalid_argument("CrossTL casts require float16, float32, int32, uint32, int64, uint64 or bool arrays.");
+    throw std::invalid_argument("CrossTL casts require float16, bfloat16, float32, int32, uint32, int64, uint64 or bool arrays.");
   }
   if (inputs[0].dtype() == out.dtype()) {
     out.copy_shared_buffer(inputs[0]);
@@ -823,22 +829,23 @@ void dispatch_binary(
     throw std::invalid_argument("CrossTL binary inputs must match output shape and dtype.");
   }
   const char* dtype = inputs[0].dtype() == mlx::core::float16 ?
-      "float16" : storage_type(inputs[0].dtype());
+      "float16" : inputs[0].dtype() == mlx::core::bfloat16 ?
+      "bfloat16" : storage_type(inputs[0].dtype());
   if (!dtype || (!comparison && !bitwise && inputs[0].dtype() == mlx::core::bool_) ||
       (bitwise && inputs[0].dtype() != mlx::core::int32 &&
        inputs[0].dtype() != mlx::core::uint32 && inputs[0].dtype() != mlx::core::bool_)) {
     throw std::invalid_argument("CrossTL binary dispatch requires a supported dtype.");
   }
   if (std::string(operation) == "Divide" && out.dtype() != mlx::core::float32 &&
-      out.dtype() != mlx::core::float16) {
-    throw std::invalid_argument("CrossTL division requires float16 or float32 arrays.");
+      out.dtype() != mlx::core::float16 && out.dtype() != mlx::core::bfloat16) {
+    throw std::invalid_argument("CrossTL division requires float16, bfloat16 or float32 arrays.");
   }
   if ((std::string(operation) == "LogicalAnd" || std::string(operation) == "LogicalOr") &&
       inputs[0].dtype() != mlx::core::bool_) {
     throw std::invalid_argument("CrossTL logical operations require bool arrays.");
   }
   if (std::string(operation) == "NaNEqual" && inputs[0].dtype() != mlx::core::float32 &&
-      inputs[0].dtype() != mlx::core::float16) {
+      inputs[0].dtype() != mlx::core::float16 && inputs[0].dtype() != mlx::core::bfloat16) {
     operation = "Equal";
   }
   out.set_data(mlx::core::allocator::malloc(out.nbytes()));
@@ -1575,7 +1582,8 @@ void SliceUpdate::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   if (inputs.size() != 2 || inputs[0].shape() != out.shape() ||
       inputs[1].ndim() != out.ndim() || inputs[0].dtype() != out.dtype() ||
-      inputs[1].dtype() != out.dtype() || !storage_type(out.dtype()) ||
+      inputs[1].dtype() != out.dtype() ||
+      (!storage_type(out.dtype()) && !(out.dtype() == bfloat16 && reduce_type_ == None)) ||
       out.size() > max_slice_update_elements || out.ndim() > 64 ||
       start_indices_.size() != out.ndim() || end_indices_.size() != out.ndim() ||
       strides_.size() != out.ndim()) {

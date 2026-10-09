@@ -28,6 +28,7 @@ from crosstl.project.runtime_verification import (
 )
 from crosstl.translator.resource_storage import encoded_storage_dtype
 from demos.integrations.mlx.portable_host import (
+    bfloat_storage,
     column_reduction_layout,
     copy_layout,
     gather_dispatch,
@@ -48,6 +49,12 @@ from demos.integrations.mlx.portable_host.gather_packages import (
 from demos.integrations.mlx.portable_host.packages import (
     ABSOLUTE_ENTRIES,
     ARANGE_ENTRIES,
+    BFLOAT_ABSOLUTE_ENTRIES,
+    BFLOAT_BINARY_ENTRIES,
+    BFLOAT_CAST_ENTRIES,
+    BFLOAT_COMPARISON_ENTRIES,
+    BFLOAT_COPY_ENTRY,
+    BFLOAT_ENTRIES,
     BINARY_ENTRIES,
     BITWISE_ENTRIES,
     BITWISE_INVERT_ENTRIES,
@@ -159,6 +166,8 @@ TYPES = {
     "bool_": ctypes.c_uint8,
     "float32": ctypes.c_float,
     "float16": ctypes.c_uint16,
+    "bfloat16": ctypes.c_uint16,
+    "uint16": ctypes.c_uint16,
     "int32": ctypes.c_int32,
     "uint32": ctypes.c_uint32,
     "int64": ctypes.c_int64,
@@ -172,33 +181,40 @@ ALL_CAST_ENTRIES = {
     **BOOLEAN_CAST_ENTRIES,
     **INTEGER64_CAST_ENTRIES,
     **HALF_CAST_ENTRIES,
+    **BFLOAT_CAST_ENTRIES,
 }
 ALL_BINARY_ENTRIES = {
     **BINARY_ENTRIES,
     **BITWISE_ENTRIES,
     **INTEGER64_BINARY_ENTRIES,
     **HALF_BINARY_ENTRIES,
+    **BFLOAT_BINARY_ENTRIES,
 }
 ALL_COMPARISON_ENTRIES = {
     **COMPARISON_ENTRIES,
     **INTEGER64_COMPARISON_ENTRIES,
     **HALF_COMPARISON_ENTRIES,
+    **BFLOAT_COMPARISON_ENTRIES,
 }
 ALL_ABSOLUTE_ENTRIES = {
     **ABSOLUTE_ENTRIES,
     **INTEGER64_ABSOLUTE_ENTRIES,
     **HALF_ABSOLUTE_ENTRIES,
+    **BFLOAT_ABSOLUTE_ENTRIES,
 }
 ALL_HALF_ENTRIES = (*HALF_ENTRIES, *HALF_ARITHMETIC_ENTRIES)
 ALL_COPY_ENTRIES = {
     COPY_ENTRY: "uint32",
     BOOLEAN_COPY_ENTRY: "bool_",
     HALF_COPY_ENTRY: "float16",
+    BFLOAT_COPY_ENTRY: "bfloat16",
     **INTEGER64_COPY_ENTRIES,
 }
 
 
 def physical_dtype(dtype, target):
+    if dtype == "bfloat16":
+        return {"metal": "bfloat16", "directx": "uint16", "opengl": "float32"}[target]
     if dtype == "float16" and target == "opengl":
         return "float32"
     if dtype == "bool_":
@@ -235,6 +251,7 @@ class HostRuntime:
         random=None,
         half=None,
         half_arithmetic=None,
+        bfloat=None,
         retain_native_modules=False,
     ):
         if type(retain_native_modules) is not bool:
@@ -285,6 +302,7 @@ class HostRuntime:
             Path(slice_updates).resolve() if slice_updates is not None else None
         )
         self.half_directory = Path(half).resolve() if half is not None else None
+        self.bfloat_directory = Path(bfloat).resolve() if bfloat is not None else None
         self.half_arithmetic_directory = (
             Path(half_arithmetic).resolve() if half_arithmetic is not None else None
         )
@@ -295,6 +313,7 @@ class HostRuntime:
             ("integer64", self.integer64_directory, INTEGER64_ENTRIES),
             ("slice-update", self.slice_update_directory, SLICE_UPDATE_ENTRIES),
             ("half", self.half_directory, HALF_ENTRIES),
+            ("bfloat", self.bfloat_directory, BFLOAT_ENTRIES),
             (
                 "half-arithmetic",
                 self.half_arithmetic_directory,
@@ -508,28 +527,32 @@ class HostRuntime:
         elif not small_row:
             descriptor = self.descriptors[entry]
             package_directory = (
-                (
-                    self.half_directory
-                    if entry in HALF_ENTRIES
-                    else self.half_arithmetic_directory
-                )
-                if entry in ALL_HALF_ENTRIES
+                self.bfloat_directory
+                if entry in BFLOAT_ENTRIES
                 else (
-                    self.slice_update_directory
-                    if slice_update
+                    (
+                        self.half_directory
+                        if entry in HALF_ENTRIES
+                        else self.half_arithmetic_directory
+                    )
+                    if entry in ALL_HALF_ENTRIES
                     else (
-                        self.integer64_directory
-                        if entry in INTEGER64_ENTRIES
+                        self.slice_update_directory
+                        if slice_update
                         else (
-                            self.bitwise_directory
-                            if bitwise
+                            self.integer64_directory
+                            if entry in INTEGER64_ENTRIES
                             else (
-                                self.selection_directory
-                                if selection
+                                self.bitwise_directory
+                                if bitwise
                                 else (
-                                    self.absolute_directory
-                                    if absolute
-                                    else self.directory
+                                    self.selection_directory
+                                    if selection
+                                    else (
+                                        self.absolute_directory
+                                        if absolute
+                                        else self.directory
+                                    )
                                 )
                             )
                         )
@@ -739,11 +762,14 @@ class HostRuntime:
             or slice_update
         )
         output_dtype = supplied[output_name].dtype.decode("ascii")
-        bit_storage = (
-            slice_update and output_dtype == "float32"
-        ) or entry in HALF_CAST_ENTRIES
+        bit_storage = (slice_update and output_dtype == "float32") or entry in (
+            *HALF_CAST_ENTRIES,
+            *BFLOAT_CAST_ENTRIES,
+        )
         if output_dtype == "float16":
             guard = half_storage.pack(half_storage.GUARD, self.target)
+        if output_dtype == "bfloat16":
+            guard = bfloat_storage.pack(bfloat_storage.GUARD, self.target)
         if output_dtype == "bool_":
             guard = (
                 BOOLEAN_GUARD
@@ -795,15 +821,27 @@ class HostRuntime:
                 "elementStrideBytes"
             ] != (1 if storage == "bool" else ctypes.sizeof(TYPES[storage])):
                 raise ValueError("Native and reflected buffer layouts disagree")
+            if layout["elementSizeBytes"] != (
+                1 if storage == "bool" else ctypes.sizeof(TYPES[storage])
+            ):
+                raise ValueError("Native and reflected element sizes disagree")
             ctype = TYPES[dtype]
             view = ctypes.cast(
                 buffer.data, ctypes.POINTER(ctype * buffer.count)
             ).contents
-            if comparison and dtype == "float32" and self.target != "metal":
+            if (
+                comparison
+                and dtype in {"float32", "bfloat16"}
+                and self.target != "metal"
+            ):
+                word_type = ctypes.c_uint16 if dtype == "bfloat16" else ctypes.c_uint32
                 words = ctypes.cast(
-                    buffer.data, ctypes.POINTER(ctypes.c_uint32 * buffer.count)
+                    buffer.data, ctypes.POINTER(word_type * buffer.count)
                 ).contents
-                if any(0 < (word & 0x7FFFFFFF) < 0x00800000 for word in words):
+                mask, normal = (
+                    (0x7FFF, 0x80) if dtype == "bfloat16" else (0x7FFFFFFF, 0x00800000)
+                )
+                if any(0 < (word & mask) < normal for word in words):
                     raise ValueError(
                         "Subnormal float comparison parity is not established for "
                         f"{self.target}; see CrossGL/crosstl#2000"
@@ -829,7 +867,11 @@ class HostRuntime:
                     (
                         half_storage.GUARD[0]
                         if dtype == "float16"
-                        else 1 if dtype == "bool_" else COPY_GUARD[0]
+                        else (
+                            bfloat_storage.GUARD[0]
+                            if dtype == "bfloat16"
+                            else 1 if dtype == "bool_" else COPY_GUARD[0]
+                        )
                     )
                 ] * buffer.count
             if selection and buffer.output:
@@ -842,6 +884,8 @@ class HostRuntime:
                     values = [bool(value) for value in values]
             if dtype == "float16":
                 values = half_storage.pack(values, self.target)
+            if dtype == "bfloat16":
+                values = bfloat_storage.pack(values, self.target)
             value = {
                 "dtype": storage,
                 "shape": [buffer.count],
@@ -851,6 +895,8 @@ class HostRuntime:
                 value["encoding"] = FLOAT32_BITS
             elif dtype == "float16":
                 value["encoding"] = half_storage.encoding(self.target)
+            elif dtype == "bfloat16" and bfloat_storage.encoding(self.target):
+                value["encoding"] = bfloat_storage.encoding(self.target)
             if guarded and buffer.output:
                 value["shape"] = [buffer.count + len(guard)]
                 value["values"].extend(guard)
@@ -919,7 +965,8 @@ class HostRuntime:
             )
             result = (
                 gather_dispatch.execute(self, request)
-                if entry in ALL_HALF_ENTRIES or self.retain_native_modules
+                if entry in (*ALL_HALF_ENTRIES, *BFLOAT_ENTRIES)
+                or self.retain_native_modules
                 else self.executor.run(request)
             )
         if result.status != "ok" or set(result.outputs) != set(destinations):
@@ -934,7 +981,11 @@ class HostRuntime:
             expected_encoding = (
                 half_storage.encoding(self.target)
                 if dtype == "float16"
-                else FLOAT32_BITS if bit_storage else None
+                else (
+                    bfloat_storage.encoding(self.target)
+                    if dtype == "bfloat16"
+                    else FLOAT32_BITS if bit_storage else None
+                )
             )
             if output.get("encoding") != expected_encoding:
                 raise RuntimeError(
@@ -944,6 +995,8 @@ class HostRuntime:
                 raise RuntimeError("Native readback size does not match the output")
             if dtype == "float16":
                 half_storage.unpack(output["values"], self.target)
+            elif dtype == "bfloat16":
+                bfloat_storage.unpack(output["values"], self.target)
             elif dtype == "bool_":
                 boolean_values(output["values"], storage)
             elif (
@@ -999,6 +1052,8 @@ class HostRuntime:
             result_values = output["values"][: buffer.count]
             if dtype == "float16":
                 result_values = half_storage.unpack(result_values, self.target)
+            if dtype == "bfloat16":
+                result_values = bfloat_storage.unpack(result_values, self.target)
             values = (storage_type * buffer.count)(
                 *(
                     float(value) if storage_type is ctypes.c_float else value
@@ -1019,7 +1074,11 @@ class HostRuntime:
                         "details": result.details,
                         **(
                             {
-                                "halfStorage": {
+                                (
+                                    "bfloatStorage"
+                                    if entry in BFLOAT_ENTRIES
+                                    else "halfStorage"
+                                ): {
                                     "logicalType": output_dtype,
                                     "physicalType": storage,
                                     "encoding": expected_encoding,
@@ -1030,7 +1089,7 @@ class HostRuntime:
                                 "inputs": inputs,
                                 "packageRoot": str(package_directory),
                             }
-                            if entry in ALL_HALF_ENTRIES
+                            if entry in (*ALL_HALF_ENTRIES, *BFLOAT_ENTRIES)
                             else {}
                         ),
                         **(

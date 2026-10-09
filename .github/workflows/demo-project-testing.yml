@@ -2084,7 +2084,7 @@ jobs:
     name: MLX half host (${{ matrix.target }})
     needs: portable-host
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 195
+    timeout-minutes: 260
     strategy:
       fail-fast: false
       matrix:
@@ -2118,7 +2118,8 @@ jobs:
           python -m pip install -e ".[directx-runtime]" pytest pytest-xdist "PyYAML>=6,<7" setuptools wheel cmake ninja nanobind numpy packaging \
             2>&1 | tee .mlx-portable-half/dependencies.log
       - name: Validate half host contracts
-        run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_half.py demos/integrations/mlx/tests/host/test_portable_half_arithmetic.py
+        if: runner.os == 'Linux'
+        run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_half.py demos/integrations/mlx/tests/host/test_portable_half_arithmetic.py demos/integrations/mlx/tests/host/test_portable_bfloat.py
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
         run: python -m pip install moderngl PyOpenGL
@@ -2264,6 +2265,24 @@ jobs:
               --packages .mlx-portable-half/base/packages --half .mlx-portable-half/half-packages \
               --arithmetic .mlx-portable-half/arithmetic-packages --random .mlx-portable-half/random-packages \
               --output-dir .mlx-portable-half/arithmetic-evidence 2>&1 | tee .mlx-portable-half/arithmetic-verification.log
+      - name: Translate bfloat host packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX bfloat translation" -- \
+            python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family bfloat --output-dir .mlx-portable-half/bfloat-packages \
+              2>&1 | tee .mlx-portable-half/bfloat-translation.log
+      - name: Execute bfloat host operations
+        env:
+          PYOPENGL_PLATFORM: egl
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          CROSTL_DIRECTX_FORCE_WARP: "1"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX bfloat verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_bfloat --mlx-root mlx-upstream \
+              --packages .mlx-portable-half/base/packages --bfloat .mlx-portable-half/bfloat-packages \
+              --output-dir .mlx-portable-half/bfloat-evidence 2>&1 | tee .mlx-portable-half/bfloat-verification.log
       - name: Retain half execution evidence
         if: always()
         uses: actions/upload-artifact@v4

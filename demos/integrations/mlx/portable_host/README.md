@@ -326,8 +326,11 @@ The same verifier runs in the existing Metal, OpenGL and DirectX half-host CI
 jobs, without adding operating-system runners. This bounded API proof does not
 establish a passing upstream suite. General-gather batching now permits the large
 indexed inputs in these tests. With large slice assignments enabled, all four
-unchanged block-format tests reach bfloat16 cast/unary composition gaps
-([#2147](https://github.com/CrossGL/crosstl/issues/2147)) on OpenGL. Larger copy
+unchanged block-format tests can execute bfloat16 casts, arithmetic and copies
+with the optional bfloat family. Local OpenGL execution passes the unchanged
+MXFP4 and MXFP8 quantize/dequantize tests after supplying their Boolean reduction
+variants. The scale-error and NVFP4 tests still reach unsupported bfloat16
+reductions under [#2147](https://github.com/CrossGL/crosstl/issues/2147). Larger copy
 launches remain separate work under [#2148](https://github.com/CrossGL/crosstl/issues/2148). Those
 tests are not rewritten, skipped or given wider tolerances. Strided bfloat16 and
 encoded-scale copies remain subject to the existing copy-path restrictions.
@@ -1114,6 +1117,50 @@ native guards, source identity and retained compiler artifacts. Missing
 arithmetic packages must fail before dispatch. These checks do not establish
 all half transcendental operations, arbitrary allocation sizes or the complete
 random test module.
+
+## Bfloat16 Host Operations
+
+The optional `bfloat` package family contains 17 pinned source entries:
+float32/bfloat16 casts, strided copies, absolute value, six arithmetic operations
+and seven comparisons. `HostRuntime(..., bfloat=...)` preserves bfloat16 output
+allocations; it does not promote the computation graph or use CPU fallback.
+Full-array fills and replacement slice assignments use the same translated copy
+path. Reduction updates and bfloat16 reductions remain unsupported.
+Typed storage views remain separate work under
+[#2150](https://github.com/CrossGL/crosstl/issues/2150); they must not be
+substituted with numeric casts.
+
+Metal uses two-byte bfloat storage. DirectX uses two-byte unsigned integer
+carriers, while OpenGL carries each exact bfloat word in the upper 16 bits of a
+float32 storage word. Transport performs no numerical rounding. Mismatched
+reflection, inexact carriers, invalid readbacks and damaged guards are rejected
+before committing outputs. Non-Metal subnormal comparisons retain the explicit
+diagnostic tracked in [#2000](https://github.com/CrossGL/crosstl/issues/2000).
+
+```sh
+python -m demos.integrations.mlx.portable_host.packages \
+  --mlx-root mlx-upstream --target metal --family bfloat --output-dir bfloat-packages
+python -m demos.integrations.mlx.portable_host.verify_bfloat \
+  --mlx-root mlx-upstream --packages host-packages --bfloat bfloat-packages \
+  --output-dir bfloat-evidence
+```
+
+The required three-platform proof checks 145 public-API workloads against
+separate CPU execution and an independent bit-level rounding reference, with
+204 native dispatches per target. It covers empty/scalar arrays, strided,
+transposed and broadcast inputs, nearest-even conversion ties and 65,537-element
+batch boundaries. Every entry must compile strictly; every dispatch retains
+artifact identity, native module hashes and output guards. Missing packages
+must fail before dispatch. Unit tests additionally check lossless transport of
+all 65,536 bfloat storage words; that transport check is not an exhaustive
+native arithmetic proof.
+
+Local Metal and OpenGL runs pass this proof. All 17 HLSL entries compile with
+DXC; Windows execution remains a separate required CI result. These checks do
+not establish exceptional-value arithmetic, all bfloat operators, arbitrary
+copy grids or a passing complete upstream suite. The existing half-host jobs
+run the native checks without additional runners; shared Python contract tests
+run on Linux only. The job deadline accounts for the bounded commands and setup.
 
 ## Random Generation
 

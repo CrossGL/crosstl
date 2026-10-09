@@ -34,7 +34,7 @@ def validate(buffers, logical_size, *, dtype="uint32"):
         or not 0 < logical_size <= MAX_DESTINATION_ELEMENTS
     ):
         raise ValueError("Native copy logical size exceeds signed index bounds")
-    if dtype not in {"uint32", "bool_", "int64", "uint64", "float16"}:
+    if dtype not in {"uint32", "bool_", "int64", "uint64", "float16", "bfloat16"}:
         raise ValueError("Unsupported native copy storage dtype")
     rank = buffers["src_shape"].count
     if not 2 <= rank <= 64:
@@ -95,7 +95,9 @@ def validate(buffers, logical_size, *, dtype="uint32"):
         or sum(abs(extent) for extent in extents) >= MAX_DESTINATION_ELEMENTS
     ):
         raise ValueError("Native copy destination addresses exceed its allocation")
-    itemsize = {"bool_": 1, "float16": 2, "int64": 8, "uint64": 8}.get(dtype, 4)
+    itemsize = {"bool_": 1, "float16": 2, "bfloat16": 2, "int64": 8, "uint64": 8}.get(
+        dtype, 4
+    )
     source, destination = buffers["src"], buffers["dst"]
     if max(source.data, destination.data) < min(
         source.data + source.count * itemsize,

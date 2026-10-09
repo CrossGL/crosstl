@@ -306,7 +306,7 @@ def test_block_ci_requires_native_execution_in_existing_platform_jobs():
         "opengl",
         "directx",
     }
-    assert job["timeout-minutes"] == 195
+    assert job["timeout-minutes"] == 260
     steps = job["steps"]
     step = next(
         item

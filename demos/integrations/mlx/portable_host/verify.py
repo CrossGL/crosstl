@@ -90,17 +90,21 @@ NEGATIVE_CHECKS = {
     "unary-allocation": "exceeds its allocation",
     "unary-strided-allocation": "exceeds its allocation",
     "unary-large-allocation": "exceeds its allocation",
-    "copy-dtype": "matching float16, float32, int32, uint32, int64, uint64 or bool",
+    "copy-dtype": (
+        "matching float16, bfloat16, float32, int32, uint32, int64, uint64 or bool"
+    ),
     "copy-large-allocation": "exceeds its allocation",
     "copy-allocation": "exceeds its allocation",
     "binary-dtype": "supported dtype",
     "binary-large-allocation": "exceeds its allocation",
     "cast-dtype": (
-        "casts require float16, float32, int32, uint32, int64, uint64 or bool"
+        "casts require float16, bfloat16, float32, int32, uint32, int64, uint64 or bool"
     ),
     "cast-large-allocation": "exceeds its allocation",
     "cast-allocation": "exceeds its allocation",
-    "full-dtype": "matching float16, float32, int32, uint32, int64, uint64 or bool",
+    "full-dtype": (
+        "matching float16, bfloat16, float32, int32, uint32, int64, uint64 or bool"
+    ),
     "full-grid-limit": "65535 groups per axis",
     "full-allocation": "exceeds its allocation",
 }
