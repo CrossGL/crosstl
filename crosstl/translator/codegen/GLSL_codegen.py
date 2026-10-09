@@ -31749,6 +31749,8 @@ complex64_t crossgl_complex64_mod_assign(
             operator = self.map_operator(
                 getattr(expr, "op", getattr(expr, "operator", None))
             )
+            if operator == ",":
+                return self.expression_result_type(expr.right)
             if operator in self.GLSL_VECTOR_RELATIONAL_FUNCTIONS:
                 left_type = self.expression_result_type(expr.left)
                 right_type = self.expression_result_type(expr.right)
@@ -38914,6 +38916,8 @@ complex64_t crossgl_complex64_mod_assign(
             operator = self.map_operator(
                 getattr(expression, "op", getattr(expression, "operator", None))
             )
+            if operator == ",":
+                return self.glsl_source_expression_type(expression.right)
             if operator in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
                 left_type = self.glsl_source_expression_type(expression.left)
                 right_type = self.glsl_source_expression_type(expression.right)

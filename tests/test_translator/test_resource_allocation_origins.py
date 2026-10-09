@@ -24,12 +24,18 @@ CASES = [
         "pointer-reference",
         "array",
         "shadow",
+        "record-metadata",
     )
 ]
 
 
 def _source(kind, mode):
     declarations = "struct Holder { struct alignas(4) Bytes { uchar data[16]; }; };"
+    if mode == "record-metadata":
+        declarations = declarations.replace(
+            "uchar data[16];",
+            "static constant constexpr uint size = 16u; uchar data[16];",
+        )
     for name in ("LargeCursor", "SmallCursor"):
         constructor = (
             f"{name}(const device {kind}* s, threadgroup {kind}* d): src(s), dst(d) {{}}"

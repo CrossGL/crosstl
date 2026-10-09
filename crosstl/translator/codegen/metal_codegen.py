@@ -2193,6 +2193,9 @@ class MetalCodeGen:
         self.struct_member_types = collect_struct_member_types(
             structs, self.type_name_string
         )
+        for owner, names in self.metal_static_struct_members.items():
+            for name in names:
+                self.struct_member_types.get(owner, {}).pop(name, None)
         self.struct_member_address_spaces = self.collect_struct_member_address_spaces(
             structs
         )

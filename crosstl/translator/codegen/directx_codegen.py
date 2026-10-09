@@ -7122,6 +7122,8 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
             for member in getattr(node, "members", [])
             if not self.hlsl_static_struct_member(member)
         ]
+        if not members:
+            code += "    int _crossgl_empty;\n"
         default_member_semantics = self.hlsl_default_struct_member_semantics(node)
         for member in members:
             self.hlsl_reject_struct_pointer_member(
@@ -14447,6 +14449,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
             operator = str(getattr(expr, "operator", getattr(expr, "op", "")))
+            if operator == ",":
+                return right_type
             if operator in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
                 return self.hlsl_boolean_expression_result_type(left_type, right_type)
             if self.is_hlsl_complex64_type(left_type) or self.is_hlsl_complex64_type(
@@ -44260,6 +44264,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"{', '.join(unknown_names)}"
             )
 
+        if not fields:
+            return f"({self.map_type(type_name)})0"
         rendered_args = []
         for index, (field_name, field_type) in enumerate(fields):
             if index < len(positional_args):
@@ -44635,6 +44641,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 reason="element-count-mismatch",
                 expected_element_count=len(fields),
             )
+        if not fields:
+            return f"({mapped_type})0"
         rendered = [
             self.hlsl_contextual_initializer_element_expression(
                 element,
@@ -44899,6 +44907,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if struct_initializer is not None:
             type_name, _fields, rendered_args, _field_exprs = struct_initializer
+            if not _fields:
+                return f"({type_name})0"
             return format_struct_constructor_expression(self, type_name, rendered_args)
         vector_initializer = self.hlsl_vector_aggregate_initializer(expr, mapped_type)
         if vector_initializer is not None:

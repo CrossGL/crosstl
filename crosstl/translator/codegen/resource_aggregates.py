@@ -326,6 +326,57 @@ def _contains_storage_pointer(node):
     )
 
 
+def _static_member(member):
+    qualifiers = {
+        str(_name(q)).lower() for q in getattr(member, "qualifiers", ()) or ()
+    }
+    attributes = {str(_name(a)).lower() for a in member.attributes or ()}
+    return "static" in qualifiers or "static" in attributes
+
+
+def _literal_constant(node):
+    """Only inline constants whose meaning cannot depend on the use-site scope."""
+    if isinstance(node, LiteralNode):
+        return True
+    if isinstance(node, UnaryOpNode):
+        return node.operator in {"+", "-", "!", "~"} and _literal_constant(node.operand)
+    if isinstance(node, BinaryOpNode):
+        return (
+            node.operator in {
+                "+",
+                "-",
+                "*",
+                "/",
+                "%",
+                "<<",
+                ">>",
+                "&",
+                "|",
+                "^",
+                "&&",
+                "||",
+                "==",
+                "!=",
+                "<",
+                "<=",
+                ">",
+                ">=",
+            }
+            and _literal_constant(node.left)
+            and _literal_constant(node.right)
+        )
+    if isinstance(node, TernaryOpNode):
+        return all(
+            _literal_constant(value)
+            for value in (node.condition, node.true_expr, node.false_expr)
+        )
+    if isinstance(node, FunctionCallNode):
+        return _numeric(NamedType(_name(node.function))) is not None and all(
+            _literal_constant(argument) for argument in node.arguments
+        )
+    return False
+
+
 class _Lowering:
     def __init__(
         self,
@@ -362,9 +413,23 @@ class _Lowering:
             name: {
                 member.name: self.source_type(member.member_type, member)
                 for member in struct.members
+                if not _static_member(member)
             }
             for name, struct in self.structs.items()
         }
+        self.static_fields = {
+            name: {
+                member.name: self.source_type(member.member_type, member)
+                for member in struct.members
+                if _static_member(member)
+            }
+            for name, struct in self.structs.items()
+        }
+        for name, fields in self.static_fields.items():
+            if any(self.contains_reference(type_) for type_ in fields.values()):
+                raise ResourceAggregateError(
+                    "static-resource-reference", self.structs[name]
+                )
         self.resources = []
         for param in entry.parameters:
             pointer = _pointer_type(param.param_type, param)
@@ -894,7 +959,9 @@ class _Lowering:
                 and 1 <= len(node.member) <= 4
             ):
                 return _numeric_node(numeric, len(node.member))
-            return self.fields.get(_name(owner), {}).get(node.member)
+            return self.fields.get(_name(owner), {}).get(
+                node.member, self.static_fields.get(_name(owner), {}).get(node.member)
+            )
         if isinstance(node, ArrayAccessNode):
             owner = self.infer(node.array_expr, env)
             if isinstance(owner, tuple):
@@ -1287,14 +1354,19 @@ class _Lowering:
         if record_name != _name(source.target_type.pointee_type):
             raise ResourceAggregateError("record-copy-type-mismatch", node)
         record = self.structs.get(record_name)
+        members = (
+            [member for member in record.members if not _static_member(member)]
+            if record is not None
+            else []
+        )
         if (
             record is None
-            or len(record.members) != 1
+            or len(members) != 1
             or record.generic_params
             or record.inheritance
         ):
             raise ResourceAggregateError("record-copy-layout", node)
-        member = record.members[0]
+        member = members[0]
         array = member.member_type
         numeric = _numeric(array.element_type) if isinstance(array, ArrayType) else None
         extent = (
@@ -1501,6 +1573,48 @@ class _Lowering:
             ],
         )
 
+    def aggregate_value(self, type_name, arguments):
+        """Construct private values without target-specific struct expressions."""
+        fields = self.fields[type_name]
+        values = []
+
+        def flatten(type_, argument, path, target):
+            if isinstance(type_, tuple) and isinstance(argument, ArrayLiteralNode):
+                for index, element in enumerate(argument.elements):
+                    flatten(
+                        type_[0],
+                        element,
+                        (*path, index),
+                        ArrayAccessNode(target, _integer(index)),
+                    )
+            else:
+                values.append((path, target, type_, argument))
+
+        for (field, type_), argument in zip(fields.items(), arguments):
+            flatten(type_, argument, (field,), MemberAccessNode(_id("value"), field))
+        key = ("aggregate-value", type_name, tuple(path for path, *_ in values))
+        if key not in self.helpers:
+            name = self.fresh(f"crosstl_make_{type_name}")
+            self.helpers[key] = name
+            parameters = [
+                ParameterNode(f"field_{index}", self.target_type(type_))
+                for index, (_path, _target, type_, _argument) in enumerate(values)
+            ]
+            body = [VariableNode("value", NamedType(type_name))]
+            body.extend(
+                AssignmentNode(target, _id(parameter.name))
+                for (_path, target, _type, _argument), parameter in zip(
+                    values, parameters
+                )
+            )
+            body.append(ReturnNode(_id("value")))
+            self.generated.append(
+                FunctionNode(name, NamedType(type_name), parameters, BlockNode(body))
+            )
+        return _call(
+            self.helpers[key], [argument for _path, _target, _type, argument in values]
+        )
+
     def expression(self, node, env, expected=None):
         if node is None:
             return None
@@ -1605,6 +1719,39 @@ class _Lowering:
                 source_location=location,
             )
         if isinstance(node, MemberAccessNode):
+            owner_type = _name(self.infer(node.object_expr, env))
+            static_type = self.static_fields.get(owner_type, {}).get(node.member)
+            if static_type is not None:
+                member = next(
+                    member
+                    for member in self.structs[owner_type].members
+                    if member.name == node.member
+                )
+                qualifiers = {_name(q) for q in getattr(member, "qualifiers", ()) or ()}
+                qualifiers.update(_name(a) for a in member.attributes or ())
+                initializer = getattr(member, "default_value", None)
+                if (
+                    initializer is None
+                    or not _literal_constant(initializer)
+                    or not qualifiers & {"const", "constant", "constexpr"}
+                    or _numeric(static_type) is None
+                ):
+                    raise ResourceAggregateError(
+                        "static-member-value-unsupported", node
+                    )
+                # A static member has no instance slot, but evaluating its
+                # object expression can still have observable side effects.
+                return _call(
+                    _name(static_type),
+                    [
+                        BinaryOpNode(
+                            self.expression(node.object_expr, env),
+                            ",",
+                            self.expression(initializer, env, static_type),
+                            source_location=location,
+                        )
+                    ],
+                )
             return MemberAccessNode(
                 self.expression(node.object_expr, env),
                 node.member,
@@ -1632,6 +1779,14 @@ class _Lowering:
                 types = [None] * len(node.elements)
             if len(types) != len(node.elements):
                 raise ResourceAggregateError("aggregate-initialization-arity", node)
+            if fields:
+                return self.aggregate_value(
+                    _name(expected),
+                    [
+                        self.expression(value, env, type_)
+                        for value, type_ in zip(node.elements, types)
+                    ],
+                )
             return ArrayLiteralNode(
                 [
                     self.expression(value, env, type_)
@@ -1677,6 +1832,8 @@ class _Lowering:
                 self.expression(arg, env, types[i] if types is not None else None)
                 for i, arg in enumerate(node.arguments)
             ]
+            if callee is None and fields:
+                return self.aggregate_value(_name(node.function), args)
             if callee is not None:
                 args.extend(self.resource_arguments())
             return FunctionCallNode(
@@ -1880,6 +2037,8 @@ class _Lowering:
             ]
         for struct in self.structs.values():
             for member in struct.members:
+                if _static_member(member):
+                    continue
                 member.member_type = self.target_type(
                     self.fields[struct.name][member.name]
                 )

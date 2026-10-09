@@ -5099,6 +5099,12 @@ Metal-imported thread and threadgroup pointer returns preserve their address spa
 and pointee constness in the intermediate type and Metal round-trip output.
 This type preservation does not establish general private-pointer lowering for
 DirectX or OpenGL.
+Static constants do not contribute instance fields or initializer arguments,
+including in nested aggregates, arrays and byte-copy record layouts. Supported
+numeric static member reads preserve the constant's declared type and evaluate
+the object expression once, including calls and indexed receivers with side
+effects. Uninitialized or mutable static state and resource-bearing static
+members remain diagnostic; they are not replaced with default values.
 
 HLSL writable arguments capture nonliteral array indices at the call expression
 before copy-in and copy-out, including indexed aggregate receivers. The captured
