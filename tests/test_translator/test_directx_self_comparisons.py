@@ -112,6 +112,48 @@ def test_other_operand_types_remain_unchanged(kind):
     assert "(value != value)" in generated and "0x7fffffffu" not in generated
 
 
+@pytest.mark.parametrize("dtype", ["bfloat16", "Narrow"])
+@pytest.mark.parametrize("operator", ["==", "!="])
+def test_bfloat_self_comparisons_classify_logical_payload(dtype, operator):
+    source = f"""shader Classification {{
+        typedef bfloat16 Narrow;
+        bool classify({dtype} value) {{ return value {operator} value; }}
+    }}"""
+    generated = HLSLCodeGen().generate(parse(source))
+    comparison = ">" if operator == "!=" else "<="
+    assert f"((uint(value) & 0x7fffu) {comparison} 0x7f80u)" in generated
+    assert "__crossgl_bfloat16_to_float" not in generated
+
+
+@pytest.mark.parametrize("expression", ["values[0]", "next_value()"])
+def test_bfloat_self_comparison_preserves_repeated_evaluations(expression):
+    source = f"""shader Reads {{
+        RWStructuredBuffer<bfloat16> values @register(u0);
+        bfloat16 next_value() {{ return values[0]; }}
+        bool classify(bfloat16 value) {{ return {expression} != {expression}; }}
+    }}"""
+    generated = HLSLCodeGen().generate(parse(source))
+    assert "0x7f80u" not in generated
+    assert generated.count("__crossgl_bfloat16_to_float(uint(") >= 2
+
+
+def test_bfloat_postfix_self_comparison_remains_diagnostic():
+    source = """shader Mutation {
+        bool classify(bfloat16 value) { return value++ != value++; }
+    }"""
+    with pytest.raises(ValueError, match="cannot preserve postfix"):
+        HLSLCodeGen().generate(parse(source))
+
+
+def test_bfloat_global_storage_is_not_collapsed_to_one_read():
+    generated = HLSLCodeGen().generate(parse("""shader Shared {
+            groupshared bfloat16 value;
+            bool classify() { return value != value; }
+        }"""))
+    assert "0x7f80u" not in generated
+    assert generated.count("__crossgl_bfloat16_to_float(uint(value))") == 2
+
+
 @pytest.mark.parametrize("expression", ["values[0]", "next_value()", "value++"])
 @pytest.mark.parametrize("precision", ["float", "half"])
 def test_self_comparison_does_not_collapse_repeated_evaluations(expression, precision):
@@ -144,8 +186,8 @@ def _native_source(width, aggregate=False, precision="float"):
     boolean = "bool" + (str(width) if width > 1 and not aggregate else "")
     values = ", ".join(
         (
-            f"as_type<half>(ushort(inputWords[tid * {width}u + {i}u]))"
-            if precision == "half"
+            f"as_type<{precision}>(ushort(inputWords[tid * {width}u + {i}u]))"
+            if precision in {"half", "bfloat"}
             else f"as_type<float>(inputWords[tid * {width}u + {i}u])"
         )
         for i in range(width)
@@ -171,17 +213,29 @@ kernel void products(device uint* inputWords [[buffer(0)]],
 
 
 @pytest.mark.parametrize(
-    "width,aggregate",
-    [(1, False), (2, False), (3, False), (4, False), (2, True), (3, True), (4, True)],
+    "width,aggregate,precision",
+    [
+        (width, aggregate, precision)
+        for width, aggregate in (
+            (1, False),
+            (2, False),
+            (3, False),
+            (4, False),
+            (2, True),
+            (3, True),
+            (4, True),
+        )
+        for precision in ("float", "half")
+    ]
+    + [(1, False, "bfloat")],
 )
-@pytest.mark.parametrize("precision", ["float", "half"])
 def test_self_comparisons_execute_with_raw_float_payloads(
     tmp_path, width, aggregate, precision
 ):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required native floating classification")
     target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
-    group_size = 2 if precision == "half" else 1
+    group_size = 2 if precision in {"half", "bfloat"} else 1
     source, descriptor, package = _package(
         tmp_path,
         target,
@@ -209,10 +263,10 @@ def test_self_comparisons_execute_with_raw_float_payloads(
         0xFF7FFFFF,
     ] * 3
     mask, infinity = 0x7FFFFFFF, 0x7F800000
-    if precision == "half":
+    if precision in {"half", "bfloat"}:
         words = list(range(65536))
         words.extend(range(-len(words) % (width * group_size)))
-        mask, infinity = 0x7FFF, 0x7C00
+        mask, infinity = 0x7FFF, 0x7C00 if precision == "half" else 0x7F80
     wanted = []
     for word in words:
         nan = (word & mask) > infinity
