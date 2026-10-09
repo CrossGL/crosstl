@@ -420,11 +420,8 @@ def expected_evidence(target="metal", native=True):
                     if case["dtype"] == "bool_" and target != "metal"
                     else workloads.stored_values(case, expected)
                 )
-                if entry in packages.BITWISE_ENTRIES:
-                    event["bitwiseValues"] = event["bitwiseValues"][
-                        first : first + count
-                    ]
-                    first += count
+                event["bitwiseValues"] = event["bitwiseValues"][first : first + count]
+                first += count
             trace.append(event)
     return records, trace
 
@@ -478,10 +475,13 @@ def test_bitwise_evidence_is_exact(target, fault):
         workloads.validate(records, trace, native=True)
         cpu, empty_trace = expected_evidence(native=False)
         workloads.validate(cpu, empty_trace, native=False)
-        assert len(records) == 133
+        assert len(records) == 135
         assert all(record["layout"] != "batched" for record in records[:120])
-        assert {record["entry"] for record in records[120:]} == set(
+        assert {record["entry"] for record in records[120:133]} == set(
             packages.BITWISE_ENTRIES
+        )
+        assert {record["entry"] for record in records[133:]} == set(
+            packages.BITWISE_INVERT_ENTRIES
         )
         assert {
             record["entry"]

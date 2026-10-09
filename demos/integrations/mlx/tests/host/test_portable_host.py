@@ -913,8 +913,13 @@ def test_binary_extrema_preserve_second_operand_zero_sign(operation, index):
 
 
 @pytest.mark.parametrize("fault", [None, "size", "input-count", "dtype", "direction"])
-def test_unary_dispatch_contract(translated_packages, tmp_path, monkeypatch, fault):
-    host = runtime.HostRuntime(translated_packages, tmp_path / "trace")
+@pytest.mark.parametrize("retain_modules", [False, True])
+def test_unary_dispatch_contract(
+    translated_packages, tmp_path, monkeypatch, fault, retain_modules
+):
+    host = runtime.HostRuntime(
+        translated_packages, tmp_path / "trace", retain_native_modules=retain_modules
+    )
     buffers, memory = unary_buffers()
     if fault == "size":
         memory[2].value = 2
@@ -933,13 +938,30 @@ def test_unary_dispatch_contract(translated_packages, tmp_path, monkeypatch, fau
             for binding in host.descriptors["v_Absfloat32float32"]["bindings"]
             if binding["access"] == "read_write"
         )
+        guards = (
+            [
+                ctypes.c_float.from_buffer_copy(ctypes.c_uint32(word)).value
+                for word in runtime.COPY_GUARD
+            ]
+            if retain_modules
+            else []
+        )
         return SimpleNamespace(
             status="ok",
-            outputs={output: {"dtype": "float32", "shape": [3], "values": [2, 0, 3]}},
+            outputs={
+                output: {
+                    "dtype": "float32",
+                    "shape": [3 + len(guards)],
+                    "values": [2, 0, 3] + guards,
+                }
+            },
             details={},
         )
 
     monkeypatch.setattr(host.executor, "run", execute)
+    monkeypatch.setattr(
+        runtime.gather_dispatch, "execute", lambda _host, request: execute(request)
+    )
     if fault:
         with pytest.raises(ValueError):
             host.dispatch("v_Absfloat32float32", buffers, 3, 3)
@@ -947,6 +969,12 @@ def test_unary_dispatch_contract(translated_packages, tmp_path, monkeypatch, fau
     else:
         host.dispatch("v_Absfloat32float32", buffers, 3, 3)
         assert list(memory[1]) == [2, 0, 3] and len(calls) == 1
+        event = json.loads(host.trace.read_text())
+        assert ("inputs" in event) is retain_modules
+        assert ("packageRoot" in event) is retain_modules
+        if retain_modules:
+            assert event["unaryValues"] == [2, 0, 3]
+            assert len(event["unaryGuardValues"]) == len(runtime.COPY_GUARD)
 
 
 @pytest.mark.parametrize("donated", [False, True])
@@ -1152,7 +1180,15 @@ def test_unary_adapter_definitions_match_packages():
         if operation not in {"Log2", "Log10", "Rsqrt"}:
             assert f"CROSSTL_UNARY_GPU({operation})" in source
     assert "set_unary_output_data(in, out)" in source
-    assert "in.data_size() > 65535" in source
+    unary = source.split("void dispatch_unary(", 1)[1].split(
+        "void dispatch_copy_into(", 1
+    )[0]
+    assert "in.data_size() > 65535" not in unary
+    assert "first < in.data_size()" in unary
+    assert "first * in.itemsize()" in unary
+    assert "first * out.itemsize()" in unary
+    assert unary.index("exceeds its allocation") < unary.index("require_entry(entry)")
+    assert unary.index("require_entry(entry)") < unary.index("first < in.data_size()")
     assert "!in.flags().contiguous" in source
 
 
@@ -1708,6 +1744,7 @@ def test_full_references_require_exact_storage_and_broadcasts(fault):
         "cast-batches-failure",
         "large-copies-failure",
         "binary-batches-failure",
+        "unary-batches-failure",
     ],
 )
 def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
@@ -1914,6 +1951,15 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         return {"passed": True, "casesPerPath": 48, "dispatchCount": 102}
 
     monkeypatch.setattr(verify, "run_binary_batches", run_binary_batches)
+    unary_calls = []
+
+    def run_unary_batches(root, packages, output):
+        unary_calls.append((root, packages, output))
+        if fault == "unary-batches-failure":
+            raise RuntimeError("Batched unary verification failed")
+        return {"passed": True, "casesPerPath": 18, "dispatchCount": 36}
+
+    monkeypatch.setattr(verify, "run_unary_batches", run_unary_batches)
     args = SimpleNamespace(
         mlx_root=tmp_path / "mlx",
         packages=package_root,
@@ -1921,6 +1967,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         cast_batches=True,
         large_copies=True,
         binary_batches=True,
+        unary_batches=True,
     )
     if fault:
         with pytest.raises((RuntimeError, ValueError, AssertionError)):
@@ -1976,6 +2023,14 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         }
         assert binary_calls == [
             (args.mlx_root, args.packages, args.output_dir / "binary-batches")
+        ]
+        assert evidence["unaryBatches"] == {
+            "passed": True,
+            "casesPerPath": 18,
+            "dispatchCount": 36,
+        }
+        assert unary_calls == [
+            (args.mlx_root, args.packages, args.output_dir / "unary-batches")
         ]
         assert evidence["original"]["unary"] == unary_workloads.expected_records(
             cpu=True
@@ -2113,7 +2168,7 @@ def test_ci_limits_portable_contracts_without_removing_platform_abi_checks():
     assert contracts["if"] == "runner.os == 'Linux'"
     command = shlex.split(contracts["run"])
     assert command[:6] == ["python", "-m", "pytest", "-q", "-n", "auto"]
-    assert len(command[6:]) == 20
+    assert len(command[6:]) == 21
     assert set(command[6:]) == {
         "demos/integrations/mlx/tests/host/test_portable_host.py",
         "demos/integrations/mlx/tests/host/test_portable_reductions.py",
@@ -2135,6 +2190,7 @@ def test_ci_limits_portable_contracts_without_removing_platform_abi_checks():
         "demos/integrations/mlx/tests/host/test_cast_batches.py",
         "demos/integrations/mlx/tests/host/test_large_copies.py",
         "demos/integrations/mlx/tests/host/test_binary_batches.py",
+        "demos/integrations/mlx/tests/host/test_unary_batches.py",
     }
     abi = steps["Validate platform host ABI"]
     assert abi["if"] == "runner.os != 'Linux'"

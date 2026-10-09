@@ -25,7 +25,7 @@ NEGATIVE_CHECKS = {
     "over-limit": "at most 65535 elements",
     "absolute-missing": "No translated package for v_Absint32int32",
     "absolute-int16": "unary dispatch requires float32 arrays",
-    "absolute-over-limit": "at most 65535 stored elements",
+    "absolute-large-allocation": "exceeds its allocation",
 }
 
 
@@ -62,6 +62,8 @@ def worker(args):
         dtype = check if check in {"int64", "int16", "uint8", "float16"} else "int32"
         count = 65536 if check == "over-limit" else 3
         values = mx.array(np.arange(count).astype(dtype))
+        if args.worker == "absolute-large-allocation":
+            values = mx.as_strided(values, (65536,), (1,))
         condition = mx.array(np.ones(count, dtype="bool"))
         try:
             mx.eval(

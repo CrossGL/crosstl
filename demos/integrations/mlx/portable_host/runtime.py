@@ -715,6 +715,7 @@ class HostRuntime:
         guard = COPY_GUARD
         guarded = (
             copy
+            or (unary and self.retain_native_modules)
             or binary_operation
             or cast
             or logical_not
@@ -741,6 +742,7 @@ class HostRuntime:
             or (binary and ALL_BINARY_ENTRIES[entry] == "float32")
             or (cast and ALL_CAST_ENTRIES[entry][1] == "float32")
             or (selection and output_dtype == "float32")
+            or (unary and self.retain_native_modules and output_dtype == "float32")
         ):
             guard = [
                 ctypes.c_float.from_buffer_copy(ctypes.c_uint32(word)).value
@@ -1087,7 +1089,16 @@ class HostRuntime:
                         ),
                         **(
                             {"unaryGuardValues": output["values"][buffer.count :]}
-                            if invert or absolute
+                            if unary and guarded
+                            else {}
+                        ),
+                        **(
+                            {
+                                "unaryValues": output["values"][: buffer.count],
+                                "inputs": inputs,
+                                "packageRoot": str(package_directory),
+                            }
+                            if unary and self.retain_native_modules
                             else {}
                         ),
                         **(

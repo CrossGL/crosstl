@@ -92,9 +92,9 @@ must be float32. Stored-contiguous broadcasts and column-major views retain
 their metadata; noncontiguous inputs use translated copies before unary dispatch.
 Dispatch is synchronous and uses host staging buffers. Layout copies accept signed
 32-bit element counts and storage spans, with up to 64 axes and 65,535 workgroups
-per launch axis. Most other elementwise operations remain bounded to 65,535 stored
-elements; binary operations, casts and concatenation can produce larger outputs
-as described below.
+per launch axis. Unary operations also batch stored elements without changing
+their layout. Arange, selection and reductions retain their current size limits;
+binary operations, casts and concatenation can produce larger outputs as described below.
 Elementwise operations use one thread per workgroup; reductions
 preserve upstream launch widths and multipass planning. Empty elementwise arrays
 do not dispatch. This is a
@@ -149,8 +149,7 @@ first launch-axis limit; larger multidimensional arrays can fit. Invalid backing
 views, overlapping destinations and out-of-range signed indices are rejected
 before native submission. The adapter stages whole source/destination spans, so
 large sparse layouts can require substantial host and device memory. This removes
-the former 65,535-element copy limit, not the remaining size limits in unary or
-reduction operations.
+the former 65,535-element copy limit, not the remaining reduction size limits.
 
 ## Batched Binary Operations
 
@@ -173,6 +172,29 @@ exactly representable; the existing nonfinite and small-array tests remain in
 place. Half and 64-bit batch execution are not covered by these cases.
 
 These checks establish the batched operations, not full upstream-suite parity.
+
+## Batched Unary Operations
+
+The same required native verification step runs:
+
+```bash
+python -m demos.integrations.mlx.portable_host.verify_unary_batches \
+  --mlx-root mlx-upstream --packages host-packages --output-dir unary-batches
+```
+
+Unary dispatch batches physical stored elements, not the logical array size.
+It preserves MLX's contiguous strides and donation rules, checks the complete
+backing allocation, and requires the translated entry before the first unary
+submission. A large broadcast may therefore need fewer dispatches than a dense
+array with the same shape. Noncontiguous materialization retains the copy limits.
+
+The 18 cases exercise ten float32/Boolean operations at 65,535, 65,536 and
+131,075 elements, nonzero source offsets, column-major transposes, and row/scalar
+broadcasts. Each target requires 36 native dispatches, exact CPU/reference/native
+bytes, unchanged source storage, preserved output strides, complete uploaded
+buffers, output guards, and compiled-artifact receipts. These finite,
+exactly-representable inputs complement the existing small-array and nonfinite
+unary checks. They do not establish large half/64-bit execution or full-suite parity.
 
 ## Affine Quantization
 
@@ -1412,10 +1434,10 @@ inputs, and does not claim to fix the underlying translator contract.
 Native traces must start with the exact 919 nonempty workload dispatches, cover
 all 93 entries, and retain artifact identities and runtime/device details.
 Separate negative processes reject an unsupported primitive, oversized arange,
-a missing artifact, unary inputs with unsupported dtype or size, contiguous and
-strided unary inputs that exceed their allocations, and
+a missing artifact, unary inputs with unsupported dtype, contiguous and
+strided unary inputs that exceed their allocations (including a large view), and
 copies with unsupported dtype, excessive size or an invalid source allocation.
-Binary inputs with unsupported dtype or excessive size are also rejected, as
+Binary inputs with unsupported dtype or insufficient backing storage are also rejected, as
 are casts with unsupported types or invalid source spans, including a view
 larger than one dispatch whose backing allocation is too short.
 Full also rejects unsupported int16 storage, excessive output size and a source
@@ -1466,10 +1488,10 @@ python -m demos.integrations.mlx.portable_host.verify_bitwise \
 
 Use `directx` on Windows or `metal` on macOS when building the corresponding
 packages. The three-platform CI requires this proof after the base host test.
-It compares 133 workloads against separate MLX CPU execution, NumPy and an exact
+It compares 135 workloads against separate MLX CPU execution, NumPy and an exact
 Python integer reference. The original 120 cases are retained, followed by one
-65,536-element case for each of the 13 binary entries. Each native run requires
-198 dispatches, including
+65,536-element case for each of the 13 binary and two inversion entries. Each native run requires
+202 dispatches, including
 67 translated layout copies. Binary operations materialize transpose, broadcast
 and negative-stride inputs. Inversion preserves stored-contiguous transpose and
 broadcast layouts; negative-stride inputs still require a translated copy. Empty
@@ -1477,18 +1499,18 @@ inputs require no dispatch. The proof retains numerical readbacks before any
 comparison failure, validates compiler and native-dispatch identities, checks
 artifact hashes and output guards, and requires ten rejection controls.
 Inversion controls reject missing packages, int64 and uint8 storage, and inputs
-above the stored-element limit.
+whose large stored view exceeds its backing allocation.
 
 Unsigned shifts exercise all 32 bits and counts through 31; signed right shifts
 include negative operands. Signed left-shift cases use nonnegative values and
 representable results, without making a parity claim for undefined source
-overflow. Binary operations may span multiple 65,535-element batches; inversion
-retains its stored-element limit. A bad shift count at the final element of a
+overflow. Binary operations and inversion may span multiple 65,535-element
+batches. A bad shift count at the final element of a
 65,536-element input must fail before any binary dispatch. Other integer
 widths and Boolean shifts are not implemented by this family. Upstream maps
 Boolean inversion to the existing LogicalNot path.
 The complete upstream `test_bitwise_ops` also requires random generation and
-those missing widths and operations; the 133 workloads are not a substitute for
+those missing widths and operations; the 135 workloads are not a substitute for
 passing that unchanged test. No upstream kernel or test is patched.
 
 The workload layout helper reinterprets a NumPy base allocation using the view's
@@ -1549,7 +1571,7 @@ The optional `absolute` family contains three unchanged `v_Abs` entries from
 `unary.metal` for int32, uint32 and bool. These entries are also needed by MLX's
 unchanged `where` test, whose comparison helper computes integer absolute values.
 Stored-contiguous transposes and broadcasts retain their physical layout;
-reversed inputs use translated copies. The bound is 65,535 stored elements.
+reversed inputs use translated copies. Stored values use the unary batch path.
 The signed minimum follows the original Metal result, remaining `INT32_MIN`.
 Neither family changes the base 93-entry package contract.
 
@@ -1627,11 +1649,12 @@ python -m demos.integrations.mlx.portable_host.verify_integer64 \
 Use the matching Windows/DirectX or macOS/Metal target. Build the base,
 absolute-value and Boolean whole-reduction packages as described above.
 The verifier also requires five rejection controls for missing packages,
-unsupported int16 absolute value, oversized inputs, and unsupported 64-bit
+unsupported int16 absolute value, invalid large backing views, and unsupported 64-bit
 reductions and bitwise operations.
 
 This does not add 64-bit division, selection, concatenation or general unary
-operations. The 65,535-element bounds and synchronous host-staging model remain.
+operations. Other primitive limits and synchronous host staging remain; large
+64-bit absolute-value execution is not established by this proof.
 The two upstream tests are additional coverage, not full-suite parity.
 
 ### Padding and Slice Updates

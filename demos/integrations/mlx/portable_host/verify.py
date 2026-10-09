@@ -39,6 +39,9 @@ from demos.integrations.mlx.portable_host.verify_cast_batches import (
 from demos.integrations.mlx.portable_host.verify_large_copies import (
     run_bounded as run_large_copies,
 )
+from demos.integrations.mlx.portable_host.verify_unary_batches import (
+    run_bounded as run_unary_batches,
+)
 
 UPSTREAM_TESTS = (
     "test_ops.TestOps.test_arange_overload_dispatch",
@@ -85,7 +88,7 @@ NEGATIVE_CHECKS = {
     "unary-dtype": "float32",
     "unary-allocation": "exceeds its allocation",
     "unary-strided-allocation": "exceeds its allocation",
-    "unary-over-limit": "65535",
+    "unary-large-allocation": "exceeds its allocation",
     "copy-dtype": "matching float16, float32, int32, uint32, int64, uint64 or bool",
     "copy-large-allocation": "exceeds its allocation",
     "copy-allocation": "exceeds its allocation",
@@ -155,9 +158,10 @@ def worker(args):
             elif args.worker == "unary-strided-allocation":
                 source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (2,), (-1,))
                 value = mx.abs(source, stream=mx.gpu)
-            elif args.worker == "unary-over-limit":
+            elif args.worker == "unary-large-allocation":
                 value = mx.abs(
-                    mx.array(np.ones(65536, dtype=np.float32)), stream=mx.gpu
+                    mx.as_strided(mx.array([1.0, 2.0, 3.0]), (65536,), (1,)),
+                    stream=mx.gpu,
                 )
             elif args.worker == "copy-dtype":
                 source = mx.array(np.arange(12, dtype=np.int16).reshape(3, 4))
@@ -489,6 +493,11 @@ def verify(args):
         if getattr(args, "binary_batches", False)
         else None
     )
+    unary_batches = (
+        run_unary_batches(args.mlx_root, args.packages, output / "unary-batches")
+        if getattr(args, "unary_batches", False)
+        else None
+    )
     after = verify_prepared(args.mlx_root)
     save(output / "adaptation-after.json", after)
     if after != adaptation or upstream_test_sources(args.mlx_root) != test_sources:
@@ -514,6 +523,7 @@ def verify(args):
         **({"castBatches": cast_batches} if cast_batches is not None else {}),
         **({"largeCopies": large_copies} if large_copies is not None else {}),
         **({"binaryBatches": binary_batches} if binary_batches is not None else {}),
+        **({"unaryBatches": unary_batches} if unary_batches is not None else {}),
     }
     save(output / "evidence.json", evidence)
     return evidence
@@ -527,6 +537,7 @@ if __name__ == "__main__":
     parser.add_argument("--cast-batches", action="store_true")
     parser.add_argument("--large-copies", action="store_true")
     parser.add_argument("--binary-batches", action="store_true")
+    parser.add_argument("--unary-batches", action="store_true")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--worker",

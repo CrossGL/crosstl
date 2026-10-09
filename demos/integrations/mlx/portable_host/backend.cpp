@@ -144,31 +144,32 @@ void dispatch_unary(
     dispatch_copy(in, dense);
     in = std::move(dense);
   }
-  if (in.data_size() > 65535) {
-    throw std::invalid_argument(
-        "CrossTL unary dispatch supports at most 65535 stored elements.");
-  }
-  const uint64_t bytes = in.data_size() * in.itemsize();
   if (in.offset() < 0 || uint64_t(in.offset()) > in.buffer_size() ||
-      bytes > in.buffer_size() - uint64_t(in.offset())) {
+      in.data_size() >
+          (in.buffer_size() - uint64_t(in.offset())) / in.itemsize()) {
     throw std::invalid_argument("CrossTL unary input exceeds its allocation.");
   }
-  mlx::core::set_unary_output_data(in, out);
-  uint32_t size = static_cast<uint32_t>(in.data_size());
   std::string entry = std::string("v_") + operation + dtype + dtype;
-  CrosstlMlxBuffer buffers[] = {
-      {"in", dtype, in.data<void>(), size, 0},
-      {"out", dtype, out.data<void>(), size, 1},
-      {"size", "uint32", &size, 1, 0},
-  };
-  char error[2048] = {};
-  const auto launch = elementwise_launch(size);
-  int status = dispatch_callback.load()(
-      entry.c_str(), buffers, 3, size, &launch, error, sizeof(error));
-  error[sizeof(error) - 1] = '\0';
-  if (status != 0) {
-    throw std::runtime_error(
-        std::string("CrossTL native dispatch failed: ") + error);
+  require_entry(entry);
+  mlx::core::set_unary_output_data(in, out);
+  // Contiguous broadcasts and column-major arrays retain their stored layout.
+  for (uint64_t first = 0; first < in.data_size(); first += 65535) {
+    uint32_t size = static_cast<uint32_t>(
+        std::min<uint64_t>(65535, in.data_size() - first));
+    CrosstlMlxBuffer buffers[] = {
+        {"in", dtype, in.data<char>() + first * in.itemsize(), size, 0},
+        {"out", dtype, out.data<char>() + first * out.itemsize(), size, 1},
+        {"size", "uint32", &size, 1, 0},
+    };
+    char error[2048] = {};
+    const auto launch = elementwise_launch(size);
+    int status = dispatch_callback.load()(
+        entry.c_str(), buffers, 3, size, &launch, error, sizeof(error));
+    error[sizeof(error) - 1] = '\0';
+    if (status != 0) {
+      throw std::runtime_error(
+          std::string("CrossTL native dispatch failed: ") + error);
+    }
   }
 }
 

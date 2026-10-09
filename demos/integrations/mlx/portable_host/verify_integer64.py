@@ -20,7 +20,7 @@ UPSTREAM_TESTS = ("test_ops.TestOps.test_clip", "test_ops.TestOps.test_meshgrid"
 NEGATIVE_CHECKS = {
     "missing": "No translated package for v_Absint64int64",
     "int16": "unary dispatch requires float32 arrays",
-    "over-limit": "at most 65535 stored elements",
+    "large-allocation": "exceeds its allocation",
     "reduction": "matching float32/int32/uint32 numeric arrays",
     "bitwise": "supported dtype",
 }
@@ -53,9 +53,10 @@ def worker(args):
             host.descriptors.pop("v_Absint64int64")
         host.install()
     if args.worker in NEGATIVE_CHECKS:
-        count = 65536 if args.worker == "over-limit" else 3
         dtype = "int16" if args.worker == "int16" else "int64"
-        operand = mx.array(np.arange(count, dtype=dtype))
+        operand = mx.array(np.arange(3, dtype=dtype))
+        if args.worker == "large-allocation":
+            operand = mx.as_strided(operand, (65536,), (1,))
         try:
             result = (
                 mx.sum(operand)

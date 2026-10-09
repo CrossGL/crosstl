@@ -22,7 +22,7 @@ NEGATIVE_CHECKS = {
     "invert-missing": "No translated package for v_BitwiseInvertint32int32",
     "invert-int64": "requires matching int32 or uint32",
     "invert-uint8": "requires matching int32 or uint32",
-    "invert-over-limit": "at most 65535",
+    "invert-large-allocation": "exceeds its allocation",
 }
 
 
@@ -85,6 +85,8 @@ def worker(args):
         dtype = kind if kind in {"uint8", "int64"} else "int32"
         size = 65536 if kind in {"over-limit", "last-large-shift"} else 3
         a = mx.array(np.ones(size, dtype=dtype))
+        if args.worker == "invert-large-allocation":
+            a = mx.as_strided(a, (65536,), (1,))
         shifts = np.full(
             size,
             (
