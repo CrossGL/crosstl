@@ -209,6 +209,14 @@ removing native cases; affine logs and artifacts are retained with half-host evi
 and included kernel headers are unchanged. Group sizes 32, 64 and 128 and bit
 widths 2, 3, 4, 5, 6 and 8 have explicit layout contracts for float32, float16 and
 bfloat16. Non-affine quantization modes remain unsupported by this host route.
+Block-scaled MXFP4, MXFP8 and NVFP4 integration is tracked in
+[#2140](https://github.com/CrossGL/crosstl/issues/2140). Separate dequantization
+requires source-layout-preserving byte-wrapper loads
+([#2141](https://github.com/CrossGL/crosstl/issues/2141)); NVFP4 also needs
+conversion helpers selected from the concrete scale type
+([#1744](https://github.com/CrossGL/crosstl/issues/1744)). A combined
+quantize/dequantize kernel does not exercise the packed buffers and encoded scale
+storage exposed by the two public operations.
 
 The adaptation registers this multi-output primitive in the synchronous backend,
 allocates MLX's packed uint32, scale and bias arrays, and presents the packed data

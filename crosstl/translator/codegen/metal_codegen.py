@@ -567,6 +567,7 @@ class MetalCodeGen:
         "rsqrt",
         "saturate",
         "sign",
+        "signbit",
         "sin",
         "smoothstep",
         "sqrt",
