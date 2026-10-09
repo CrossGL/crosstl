@@ -30,6 +30,9 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
     load_index as load_reduction_index,
 )
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
+from demos.integrations.mlx.portable_host.verify_cast_batches import (
+    run_bounded as run_cast_batches,
+)
 
 UPSTREAM_TESTS = (
     "test_ops.TestOps.test_arange_overload_dispatch",
@@ -85,7 +88,7 @@ NEGATIVE_CHECKS = {
     "cast-dtype": (
         "casts require float16, float32, int32, uint32, int64, uint64 or bool"
     ),
-    "cast-limit": "65535",
+    "cast-large-allocation": "exceeds its allocation",
     "cast-allocation": "exceeds its allocation",
     "full-dtype": "matching float16, float32, int32, uint32, int64, uint64 or bool",
     "full-limit": "65535",
@@ -168,8 +171,11 @@ def worker(args):
                 value = mx.add(source, source, stream=mx.gpu)
             elif args.worker == "cast-dtype":
                 value = mx.array([1, 2], dtype=mx.int16).astype(mx.float32)
-            elif args.worker == "cast-limit":
-                value = mx.array(np.ones(65536, dtype=np.int32)).astype(mx.float32)
+            elif args.worker == "cast-large-allocation":
+                source = mx.as_strided(
+                    mx.array([1, 2, 3], dtype=mx.int32), (65536,), (1,), 2
+                )
+                value = source.astype(mx.float32)
             elif args.worker == "cast-allocation":
                 source = mx.as_strided(
                     mx.array([1, 2, 3], dtype=mx.int32), (2,), (1,), 2
@@ -460,6 +466,11 @@ def verify(args):
                 reduction_index["widths"],
                 trace=trace if mode == "native" else None,
             )
+    cast_batches = (
+        run_cast_batches(args.mlx_root, args.packages, output / "cast-batches")
+        if getattr(args, "cast_batches", False)
+        else None
+    )
     after = verify_prepared(args.mlx_root)
     save(output / "adaptation-after.json", after)
     if after != adaptation or upstream_test_sources(args.mlx_root) != test_sources:
@@ -482,6 +493,7 @@ def verify(args):
         "fullUpstreamSuite": False,
         "fullTranslatedBackend": False,
         **({"reductionWidths": reduction_index["widths"]} if reduction_index else {}),
+        **({"castBatches": cast_batches} if cast_batches is not None else {}),
     }
     save(output / "evidence.json", evidence)
     return evidence
@@ -492,6 +504,7 @@ if __name__ == "__main__":
     parser.add_argument("--mlx-root", type=Path, required=True)
     parser.add_argument("--packages", type=Path, required=True)
     parser.add_argument("--reductions", type=Path)
+    parser.add_argument("--cast-batches", action="store_true")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--worker",

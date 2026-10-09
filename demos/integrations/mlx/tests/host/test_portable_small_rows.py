@@ -243,6 +243,7 @@ def test_small_row_host_dispatch_checks_before_writeback(
 ):
     supplied, memory, logical = buffers()
     host = runtime.HostRuntime.__new__(runtime.HostRuntime)
+    host.retain_native_modules = False
     host.target, host.descriptors, host.trace = target, {}, tmp_path / "trace.jsonl"
     bindings = []
     for name, buffer in supplied.items():

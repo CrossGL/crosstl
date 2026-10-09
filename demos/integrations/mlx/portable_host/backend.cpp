@@ -689,9 +689,6 @@ void dispatch_cast(const std::vector<mlx::core::array>& inputs, mlx::core::array
   if (!source_type || !destination_type) {
     throw std::invalid_argument("CrossTL casts require float16, float32, int32, uint32, int64, uint64 or bool arrays.");
   }
-  if (out.size() > 65535) {
-    throw std::invalid_argument("CrossTL cast supports at most 65535 elements.");
-  }
   if (inputs[0].dtype() == out.dtype()) {
     out.copy_shared_buffer(inputs[0]);
     return;
@@ -701,20 +698,26 @@ void dispatch_cast(const std::vector<mlx::core::array>& inputs, mlx::core::array
     return;
   }
   auto in = dense_input(inputs[0]);
-  uint32_t size = static_cast<uint32_t>(out.size());
   std::string entry = std::string("v_copy") + source_type + destination_type;
-  CrosstlMlxBuffer buffers[] = {
-      {"src", source_type, in.data<void>(), size, 0},
-      {"dst", destination_type, out.data<void>(), size, 1},
-      {"size", "uint32", &size, 1, 0},
-  };
-  char error[2048] = {};
-  const auto launch = elementwise_launch(size);
-  int status = dispatch_callback.load()(
-      entry.c_str(), buffers, 3, size, &launch, error, sizeof(error));
-  error[sizeof(error) - 1] = '\0';
-  if (status != 0) {
-    throw std::runtime_error(std::string("CrossTL native cast failed: ") + error);
+  require_entry(entry);
+  // v_copy specializes one independent conversion per invocation.
+  for (uint64_t first = 0; first < out.size();) {
+    uint32_t size = static_cast<uint32_t>(
+        std::min<uint64_t>(out.size() - first, 65535));
+    CrosstlMlxBuffer buffers[] = {
+        {"src", source_type, in.data<uint8_t>() + first * in.itemsize(), size, 0},
+        {"dst", destination_type, out.data<uint8_t>() + first * out.itemsize(), size, 1},
+        {"size", "uint32", &size, 1, 0},
+    };
+    char error[2048] = {};
+    const auto launch = elementwise_launch(size);
+    int status = dispatch_callback.load()(
+        entry.c_str(), buffers, 3, size, &launch, error, sizeof(error));
+    error[sizeof(error) - 1] = '\0';
+    if (status != 0) {
+      throw std::runtime_error(std::string("CrossTL native cast failed: ") + error);
+    }
+    first += size;
   }
 }
 

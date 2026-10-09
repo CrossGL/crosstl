@@ -254,6 +254,7 @@ def test_column_runtime_checks_layout_and_guards(
 ):
     entry, supplied, count, execution, memory = _buffers(two_pass)
     host = runtime.HostRuntime.__new__(runtime.HostRuntime)
+    host.retain_native_modules = False
     host.target, host.descriptors = target, {}
     host.reduction_directories = {f"w256/{entry}": tmp_path}
     host.trace = tmp_path / "trace.jsonl"

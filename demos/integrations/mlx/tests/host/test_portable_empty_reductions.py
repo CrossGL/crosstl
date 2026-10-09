@@ -91,6 +91,7 @@ instantiate_init_reduce(or, bool_, bool, Or)
 def test_init_dispatch_contract(packages, tmp_path, entry, fault):
     directory, index = packages
     host = runtime.HostRuntime.__new__(runtime.HostRuntime)
+    host.retain_native_modules = False
     host.target = index["target"]
     host.descriptors = {}
     host.reduction_directories = {key: directory for key in index["descriptors"]}

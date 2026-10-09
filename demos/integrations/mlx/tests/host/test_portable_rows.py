@@ -436,6 +436,7 @@ def test_row_host_dispatch_checks_metadata_before_native_execution(
     entry, supplied, logical, execution, memory = _buffers(simple)
     buffers = (runtime.Buffer * len(supplied))(*supplied.values())
     host = runtime.HostRuntime.__new__(runtime.HostRuntime)
+    host.retain_native_modules = False
     host.target, host.descriptors = target, {}
     host.reduction_directories = {f"w32/{entry}": tmp_path}
     host.trace = tmp_path / "trace.jsonl"

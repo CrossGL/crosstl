@@ -67,6 +67,10 @@ binary entry executes. Casts between float32, int32 and uint32 use six unchanged
 Six additional casts convert between bool and those three numeric types.
 Strided cast inputs are materialized through translated copies. Optional integer64
 packages extend these casts, basic arithmetic and comparisons to int64 and uint64.
+Dense casts dispatch independent batches of at most 65,535 elements, advancing
+source and destination pointers by their respective storage widths. The array
+itself is not limited to one batch. Noncontiguous inputs still inherit the copy
+path's size restrictions. Identity casts share their input without dispatch.
 Casts involving other types still fail explicitly. Equal, not-equal and ordered comparisons
 support float32, int32, uint32 and bool inputs with bool outputs. Logical and,
 or and not use bool inputs, including upstream casts from numeric inputs.
@@ -95,6 +99,24 @@ dedicated GPU runners. The macOS path uses the same callback adapter with genera
 Metal packages, not MLX's original Metal backend. DirectX 10/11, Vulkan,
 asynchronous queues, persistent GPU allocations, automatic operation
 selection, and the complete MLX suite are not covered here.
+
+## Batched Casts
+
+The required batched-cast verifier also runs in each native host CI job:
+
+```bash
+python -m demos.integrations.mlx.portable_host.verify_cast_batches \
+  --mlx-root mlx-upstream --packages host-packages --output-dir cast-batches
+```
+
+Its eleven API cases compare CPU and translated results bit for bit across all
+six float32/int32/uint32 conversions, Boolean-to-float and float-to-Boolean
+conversion, and an identity cast. Offset views, the 65,535-element boundary,
+65,536 elements and a 131,075-element matrix cover pointer advancement and tails.
+The verifier retains complete binary input/output arrays and checks each native
+batch's uploaded values, output, guards, launch and compiled artifact identity.
+This is cast coverage, not a claim that large composed operations or the full
+upstream suite pass. Half and 64-bit batches are not part of these eleven cases.
 
 ## Affine Quantization
 
@@ -1324,7 +1346,8 @@ a missing artifact, unary inputs with unsupported dtype or size, contiguous and
 strided unary inputs that exceed their allocations, and
 copies with unsupported dtype, excessive size or an invalid source allocation.
 Binary inputs with unsupported dtype or excessive size are also rejected, as
-are casts with unsupported types, excessive size or an invalid source span.
+are casts with unsupported types or invalid source spans, including a view
+larger than one dispatch whose backing allocation is too short.
 Full also rejects unsupported int16 storage, excessive output size and a source
 view extending before its allocation.
 The native worker has a hard 900-second process-tree deadline; the CPU reference

@@ -623,6 +623,7 @@ def test_copy_workload_references_reject_incomplete_or_changed_words(fault):
 
 
 @pytest.mark.parametrize("entry", list(packages.CAST_ENTRIES))
+@pytest.mark.parametrize("retain_modules", [False, True])
 @pytest.mark.parametrize(
     "fault",
     [
@@ -637,9 +638,11 @@ def test_copy_workload_references_reject_incomplete_or_changed_words(fault):
     ],
 )
 def test_cast_dispatch_contract(
-    translated_packages, tmp_path, monkeypatch, entry, fault
+    translated_packages, tmp_path, monkeypatch, entry, fault, retain_modules
 ):
-    host = runtime.HostRuntime(translated_packages, tmp_path / "trace")
+    host = runtime.HostRuntime(
+        translated_packages, tmp_path / "trace", retain_native_modules=retain_modules
+    )
     source, destination = packages.CAST_ENTRIES[entry]
     memory = [
         (runtime.TYPES[source] * 3)(1, 2, 3),
@@ -707,6 +710,15 @@ def test_cast_dispatch_contract(
 
     monkeypatch.setattr(runtime, "build_native_loader_dispatch_request", build)
     monkeypatch.setattr(host.executor, "run", execute)
+    if retain_modules:
+        monkeypatch.setattr(
+            host.executor,
+            "run",
+            lambda request: pytest.fail("Native modules were not retained"),
+        )
+        monkeypatch.setattr(
+            runtime.gather_dispatch, "execute", lambda owner, request: execute(request)
+        )
     if fault == "guard":
         with pytest.raises(RuntimeError, match="buffer guard"):
             host.dispatch(entry, buffers, 3, 3)
@@ -1693,6 +1705,7 @@ def test_full_references_require_exact_storage_and_broadcasts(fault):
         "full-missing",
         "full-values",
         "upstream-failure",
+        "cast-batches-failure",
     ],
 )
 def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
@@ -1872,10 +1885,20 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         return SimpleNamespace(returncode=124 if timed_out else 0)
 
     monkeypatch.setattr(verify.subprocess, "run", run)
+    batch_calls = []
+
+    def run_cast_batches(root, packages, output):
+        batch_calls.append((root, packages, output))
+        if fault == "cast-batches-failure":
+            raise RuntimeError("Batched cast verification failed")
+        return {"passed": True, "casesPerPath": 11, "dispatchCount": 21}
+
+    monkeypatch.setattr(verify, "run_cast_batches", run_cast_batches)
     args = SimpleNamespace(
         mlx_root=tmp_path / "mlx",
         packages=package_root,
         output_dir=tmp_path / "evidence",
+        cast_batches=True,
     )
     if fault:
         with pytest.raises((RuntimeError, ValueError, AssertionError)):
@@ -1908,6 +1931,14 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         assert evidence["adaptation"]["files"] == {"adapter": "unchanged"}
         assert evidence["fullUpstreamSuite"] is False
         assert evidence["fullTranslatedBackend"] is False
+        assert evidence["castBatches"] == {
+            "passed": True,
+            "casesPerPath": 11,
+            "dispatchCount": 21,
+        }
+        assert batch_calls == [
+            (args.mlx_root, args.packages, args.output_dir / "cast-batches")
+        ]
         assert evidence["original"]["unary"] == unary_workloads.expected_records(
             cpu=True
         )

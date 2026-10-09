@@ -235,7 +235,11 @@ class HostRuntime:
         random=None,
         half=None,
         half_arithmetic=None,
+        retain_native_modules=False,
     ):
+        if type(retain_native_modules) is not bool:
+            raise ValueError("Native module retention must be a Boolean")
+        self.retain_native_modules = retain_native_modules
         self.directory = Path(directory).resolve()
         self.trace = Path(trace).resolve()
         index = json.loads((self.directory / "index.json").read_text(encoding="utf-8"))
@@ -898,7 +902,7 @@ class HostRuntime:
             )
             result = (
                 gather_dispatch.execute(self, request)
-                if entry in ALL_HALF_ENTRIES
+                if entry in ALL_HALF_ENTRIES or self.retain_native_modules
                 else self.executor.run(request)
             )
         if result.status != "ok" or set(result.outputs) != set(destinations):
@@ -1129,7 +1133,12 @@ class HostRuntime:
                             else {}
                         ),
                         **(
-                            {"castGuardValues": output["values"][buffer.count :]}
+                            {
+                                "castGuardValues": output["values"][buffer.count :],
+                                "castValues": output["values"][: buffer.count],
+                                "inputs": inputs,
+                                "packageRoot": str(package_directory),
+                            }
                             if cast
                             else {}
                         ),

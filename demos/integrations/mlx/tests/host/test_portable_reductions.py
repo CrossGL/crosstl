@@ -154,6 +154,7 @@ def test_reduction_dispatch_contract(packages, tmp_path, monkeypatch, fault):
     directory, index = packages
     entry = "all_reduce_sumfloat32"
     host = runtime.HostRuntime.__new__(runtime.HostRuntime)
+    host.retain_native_modules = False
     host.target = index["target"]
     host.descriptors = {}
     host.reduction_directories = {key: directory for key in index["descriptors"]}
