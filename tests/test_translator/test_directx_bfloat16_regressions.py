@@ -11,6 +11,68 @@ from crosstl.translator.codegen.directx_codegen import (
 )
 
 
+@pytest.mark.parametrize("dtype", ("bfloat16", "Narrow"))
+@pytest.mark.parametrize("context", ("constructor", "return", "argument"))
+@pytest.mark.parametrize("reverse", (False, True))
+def test_directx_mixed_bfloat_selection_decodes_before_selection(
+    dtype, context, reverse
+):
+    selection = "take ? fallback : value" if reverse else "take ? value : fallback"
+    expression = {
+        "constructor": f"float({dtype}({selection}))",
+        "return": selection,
+        "argument": f"consume({selection})",
+    }[context]
+    shader = f"""shader Selection {{
+        typedef bfloat16 Narrow;
+        float consume(float value) {{ return value; }}
+        float choose({dtype} value, float fallback, bool take) {{
+            return {expression};
+        }}
+    }}"""
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    decoded = "__crossgl_bfloat16_to_float(uint(value))"
+    wanted = (
+        f"(take ? fallback : {decoded})"
+        if reverse
+        else f"(take ? {decoded} : fallback)"
+    )
+    assert wanted in generated
+    assert selection not in generated
+    if context == "constructor":
+        assert f"__crossgl_bfloat16_from_float(float({wanted}))" in generated
+
+
+@pytest.mark.parametrize("dtype", ("bfloat16", "Narrow"))
+def test_directx_bfloat_selection_keeps_payload_until_outer_conversion(dtype):
+    shader = f"""shader Selection {{
+        typedef bfloat16 Narrow;
+        float choose({dtype} left, {dtype} right, bool take) {{
+            return take ? left : right;
+        }}
+    }}"""
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert (
+        "return __crossgl_bfloat16_to_float(uint((take ? left : right)));" in generated
+    )
+    assert "__crossgl_bfloat16_to_float(uint(left))" not in generated
+    assert "__crossgl_bfloat16_to_float(uint(right))" not in generated
+
+
+def test_directx_nested_bfloat_selection_keeps_single_evaluation():
+    shader = """shader Selection {
+        bfloat16 produce(inout uint calls) { calls++; return bfloat16(2.0); }
+        float choose(bool outer, bool inner, inout uint calls) {
+            return bfloat16(outer ? (inner ? produce(calls) : 123.0) : 17.0);
+        }
+    }"""
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert generated.count("produce(calls)") == 1
+    assert (
+        "inner ? __crossgl_bfloat16_to_float(uint(produce(calls))) : 123.0" in generated
+    )
+
+
 @pytest.mark.parametrize(
     "declarations",
     (
