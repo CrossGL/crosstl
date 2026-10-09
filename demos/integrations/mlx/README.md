@@ -52,6 +52,23 @@ The host adaptation documentation records upstream changes explicitly. A passing
 kernel or bounded host check is not a claim that the entire upstream MLX suite
 passes on a translated backend.
 
+The selected tiled GEMM entry at pin `9c3d3557` now passes explicit `auto*`
+deduction through the public project pipeline, without changing upstream
+sources or bypassing specialization analysis. It is not yet executable:
+strict Metal compilation still reports missing aggregate helpers and malformed
+conditional-resource declarations ([#2157](https://github.com/CrossGL/crosstl/issues/2157),
+[#2153](https://github.com/CrossGL/crosstl/issues/2153)). The pointer-deduction
+controls cover native Metal/OpenGL execution and strict HLSL compilation;
+Windows execution is a separate required CI check. Pointer-object qualifiers
+and foreign-target private aliases remain explicit diagnostics under
+[#2152](https://github.com/CrossGL/crosstl/issues/2152) and
+[#2055](https://github.com/CrossGL/crosstl/issues/2055). These results do not
+establish matrix host dispatch or complete upstream-suite parity.
+Mixed-access HLSL helper calls remain separately blocked by
+[#2158](https://github.com/CrossGL/crosstl/issues/2158): a read-only view of a
+writable buffer must preserve the physical resource class when passed to a
+helper. The passing execution controls do not cover that unresolved combination.
+
 Reduction reference review found an alias-specialization error
 ([#2100](https://github.com/CrossGL/crosstl/issues/2100)): `float16_t` selected
 the primary `Limits` template instead of the explicit `half` specialization.

@@ -4273,6 +4273,7 @@ class MetalParser:
         attributes.extend(self.parse_attributes())
         vtype, qualifiers = self.parse_type_specifier(attributes=attributes)
         base_vtype = self.base_type_for_remaining_declarators(vtype)
+        qualifier_contract = dict(self.last_type_specifier_qualifier_contract)
         name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
         vtype = self.apply_declarator_type_suffix(vtype, type_suffix)
         attributes.extend(self.parse_attributes())
@@ -4280,6 +4281,8 @@ class MetalParser:
         var_node = VariableNode(
             vtype, name, qualifiers=qualifiers, attributes=attributes
         )
+        var_node.pointee_qualifiers = list(qualifier_contract["pointee"])
+        var_node.indirection_qualifiers = list(qualifier_contract["indirection"])
         var_node.array_sizes = array_sizes
         self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
         var_node.alignas = alignas_specs

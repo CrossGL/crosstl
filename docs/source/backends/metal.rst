@@ -81,6 +81,23 @@ from local value names, so a variable shadow does not discard a required type.
 The native alias checks exercise device and constant references through packaged
 Metal, OpenGL and DirectX dispatches.
 
+Explicit ``auto*`` locals deduce their pointee type before source overload
+selection. Resource offsets, address expressions, one-dimensional local arrays,
+selected pointer-returning calls and pointer conditionals retain their source
+types and read-only qualifiers. Missing or incompatible initializers produce
+``project.translate.metal-auto-type-unresolved``. Qualifiers on the pointer
+object itself, such as ``device auto* const``, also produce this diagnostic
+until distinct pointer-level qualifiers can be represented; they are not moved
+onto the pointee.
+
+Deduction does not bypass target pointer restrictions. Non-escaping scalar and
+fixed-array local aliases round-trip through Metal; unsupported private aliases
+still produce the DirectX or OpenGL private-pointer diagnostic. Required native
+controls on all three platforms cover device and threadgroup aliases, nonzero
+offsets, single evaluation, unsigned wraparound, input preservation and output
+guards. Metal additionally compares the private-alias controls with the original
+source.
+
 Explicit struct specializations compare primitive alias arguments by their
 resolved type before materializing the primary template. Static member lookup
 uses the same owner, including specialization declarations written through an

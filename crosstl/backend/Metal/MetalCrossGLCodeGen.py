@@ -336,7 +336,7 @@ class MetalArithmeticTypeResolutionError(ValueError):
 
 
 class MetalAutoTypeInferenceError(ValueError):
-    """Raised when a selected Metal callable has no determinate value type."""
+    """Raised when a Metal auto initializer has no determinate value type."""
 
     project_diagnostic_code = "project.translate.metal-auto-type-unresolved"
     missing_capabilities = ("metal.auto-local-type-inference",)
@@ -356,9 +356,13 @@ class MetalAutoTypeInferenceError(ValueError):
         self.reason = reason
         self.source_location = source_location
         self.unresolved_parameters = tuple(unresolved_parameters)
+        origin = (
+            f"selected callable '{callable_name}' returning '{return_type}'"
+            if callable_name is not None
+            else f"initializer of type '{return_type}'"
+        )
         super().__init__(
-            f"Cannot infer Metal auto local '{variable_name}' from selected "
-            f"callable '{callable_name}' returning '{return_type}': {reason}"
+            f"Cannot infer Metal auto local '{variable_name}' from {origin}: {reason}"
         )
 
 
@@ -8464,13 +8468,13 @@ class MetalToCrossGLConverter:
         metal_type = self.resolved_struct_member_types.get(
             id(var), getattr(var, "vtype", None)
         )
-        if not self.is_plain_metal_auto_type(metal_type):
+        if not self.is_metal_auto_declaration_type(metal_type):
             return metal_type
         inferred_type = self.current_variable_types.get(
             getattr(var, "name", None),
             self.global_variable_types.get(getattr(var, "name", None)),
         )
-        if inferred_type is None or self.is_plain_metal_auto_type(inferred_type):
+        if inferred_type is None or self.is_metal_auto_declaration_type(inferred_type):
             return metal_type
         return inferred_type
 
@@ -8628,7 +8632,7 @@ class MetalToCrossGLConverter:
 
     def effective_declaration_qualifiers(self, var):
         qualifiers = self.resolved_declaration_qualifiers(var)
-        if self.is_plain_metal_auto_type(getattr(var, "vtype", None)):
+        if self.is_metal_auto_declaration_type(getattr(var, "vtype", None)):
             name = getattr(var, "name", None)
             inferred = self.current_variable_type_qualifiers.get(
                 name, self.global_variable_type_qualifiers.get(name, ())
@@ -8819,6 +8823,8 @@ class MetalToCrossGLConverter:
             self.resolved_struct_member_qualifiers.get(id(var), ())
         )
         pointee_qualifier_names.update(self.alias_pointer_pointee_qualifiers(var))
+        if self.is_metal_auto_declaration_type(getattr(var, "vtype", None)):
+            pointee_qualifier_names.update(qualifiers)
         const_pointer_pointee = bool(
             self.preserve_pointer_pointee_const
             and "const" in pointee_qualifier_names
@@ -9690,7 +9696,7 @@ class MetalToCrossGLConverter:
             if isinstance(stmt, VariableNode):
                 self.local_integral_constant_bindings.pop(stmt.name, None)
                 self.current_variable_types[stmt.name] = (
-                    self.metal_declaration_expression_type(stmt)
+                    self.inferred_metal_declaration_type(stmt)
                 )
                 self.current_variable_type_qualifiers[stmt.name] = (
                     self.metal_declaration_type_qualifiers(stmt)
@@ -19417,11 +19423,17 @@ float {scalar}(float value) {{
     ):
         qualifiers = set(self.metal_declaration_type_qualifiers(declaration))
         if (
-            self.is_plain_metal_auto_type(getattr(declaration, "vtype", None))
+            self.is_metal_auto_declaration_type(getattr(declaration, "vtype", None))
             and initializer is not None
             and self.metal_pointer_pointee_type_once(inferred_type) is not None
         ):
             qualifiers.update(self.expression_metal_type_qualifiers(initializer))
+            if self.metal_auto_pointer_depth(declaration.vtype):
+                return self.normalized_metal_address_qualifiers(
+                    qualifiers,
+                    getattr(declaration, "source_location", None),
+                    inferred_type,
+                )
         return tuple(
             qualifier
             for qualifier in self.metal_source_overload_type_qualifiers
@@ -19431,6 +19443,40 @@ float {scalar}(float value) {{
     @staticmethod
     def is_plain_metal_auto_type(metal_type):
         return str(metal_type or "").strip() == "auto"
+
+    @staticmethod
+    def is_metal_auto_declaration_type(metal_type):
+        return (
+            re.fullmatch(r"auto(?:\s*\*)*", str(metal_type or "").strip()) is not None
+        )
+
+    @staticmethod
+    def metal_auto_pointer_depth(metal_type):
+        text = str(metal_type or "").strip()
+        return text.count("*") if re.fullmatch(r"auto(?:\s*\*)+", text) else 0
+
+    def validate_auto_pointer_initializer(self, declaration, inferred_type):
+        depth = self.metal_auto_pointer_depth(declaration.vtype)
+        if not depth:
+            return
+        remaining = inferred_type
+        for _ in range(depth):
+            remaining = self.metal_pointer_pointee_type_once(remaining)
+        reason = None
+        if remaining is None:
+            reason = f"the initializer must provide at least {depth} pointer level(s)"
+        elif self.is_metal_auto_declaration_type(remaining):
+            reason = "the initializer pointee type remains auto"
+        elif getattr(declaration, "indirection_qualifiers", ()):
+            reason = "qualified auto pointer objects require distinct pointer-level qualifiers"
+        if reason is not None:
+            raise MetalAutoTypeInferenceError(
+                declaration.name,
+                None,
+                inferred_type or "<unknown>",
+                reason,
+                getattr(declaration, "source_location", None),
+            )
 
     def selected_metal_callable(self, expression):
         if not isinstance(expression, FunctionCallNode):
@@ -19548,7 +19594,10 @@ float {scalar}(float value) {{
 
     def inferred_metal_declaration_type(self, declaration, initializer=None):
         declared_type = self.metal_declaration_expression_type(declaration)
-        if not self.is_plain_metal_auto_type(declared_type) or initializer is None:
+        if not self.is_metal_auto_declaration_type(declared_type):
+            return declared_type
+        if initializer is None:
+            self.validate_auto_pointer_initializer(declaration, None)
             return declared_type
         selected_callable = self.selected_metal_callable(initializer)
         return_type = (
@@ -19557,6 +19606,11 @@ float {scalar}(float value) {{
             else self.expression_metal_type(initializer)
         )
         inferred_type = self.metal_source_overload_value_type(return_type)
+        if self.metal_auto_pointer_depth(declared_type):
+            array_element = self.split_outer_metal_declarator_array_type(inferred_type)
+            if array_element is not None and "[" not in array_element:
+                inferred_type = f"{array_element}*"
+            self.validate_auto_pointer_initializer(declaration, inferred_type)
         if selected_callable is not None:
             self.validate_selected_auto_return_type(
                 declaration,
@@ -20500,6 +20554,39 @@ float {scalar}(float value) {{
         return ()
 
     def expression_metal_type_qualifiers(self, expr):
+        if isinstance(expr, FunctionCallNode):
+            selected = self.selected_metal_callable(expr)
+            if selected is not None:
+                return_type = self.selected_metal_callable_return_type(selected)
+                if self.metal_pointer_pointee_type_once(return_type) is not None:
+                    declaration = VariableNode(
+                        selected.return_type,
+                        "",
+                        qualifiers=getattr(selected, "return_qualifiers", ()) or (),
+                    )
+                    qualifiers = set(self.resolved_declaration_qualifiers(declaration))
+                    binding = self.scalar_alias_binding(
+                        selected.return_type, context=selected
+                    )
+                    if binding is not None:
+                        qualifiers.update(binding[1])
+                    for token in str(return_type).split():
+                        if token not in self.metal_source_overload_type_qualifiers:
+                            break
+                        qualifiers.add(token)
+                    return self.normalized_metal_address_qualifiers(
+                        qualifiers, getattr(expr, "source_location", None), return_type
+                    )
+        if isinstance(expr, TernaryOpNode):
+            result_type = self.expression_metal_type(expr)
+            if self.metal_pointer_pointee_type_once(result_type) is not None:
+                qualifiers = set(self.expression_metal_type_qualifiers(expr.true_expr))
+                qualifiers.update(
+                    self.expression_metal_type_qualifiers(expr.false_expr)
+                )
+                return self.normalized_metal_address_qualifiers(
+                    qualifiers, getattr(expr, "source_location", None), result_type
+                )
         if isinstance(expr, CastNode):
             target_type = self.resolve_type_alias(expr.target_type)
             if self.metal_pointer_pointee_type_once(target_type) is not None:
@@ -20837,7 +20924,7 @@ float {scalar}(float value) {{
             if not name:
                 return None
             if getattr(expr, "vtype", None):
-                if self.is_plain_metal_auto_type(expr.vtype):
+                if self.is_metal_auto_declaration_type(expr.vtype):
                     inferred_type = self.current_variable_types.get(
                         name, self.global_variable_types.get(name)
                     )
