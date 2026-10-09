@@ -21879,7 +21879,6 @@ def _project_template_materialization_for_artifact(
 
     base_preprocessor_kwargs: dict[str, Any] = {
         "include_paths": list(include_paths),
-        "group_non_type_template_substitutions": target == "opengl",
     }
     if "strict_preprocessor" in source_options:
         base_preprocessor_kwargs["strict"] = bool(source_options["strict_preprocessor"])

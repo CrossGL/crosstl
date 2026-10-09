@@ -11699,6 +11699,29 @@ def test_parameter_split_preserves_nested_comments_and_literals(text, expected):
     assert MetalPreprocessor()._split_top_level_commas(text) == expected
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["1 << 5", "(32 >> 1)", "128"],
+        ["(1 << 5)", "(1 << 4)", "128"],
+        ["Box<(1 << 2), Pair<int, uint>>", "Tail<float>"],
+        ["invoke(Box<int, uint>(), x < y)", "next"],
+        ["data[(x < y) ? 0 : 1]", "last"],
+        ["Thing{1 < 2, 3}", "last"],
+        ['"text << , >"', "end"],
+        ["1 << /* <, > */ 5", "16", "128"],
+    ],
+)
+def test_template_delimiters_preserve_expression_operators(arguments):
+    preprocessor = MetalPreprocessor()
+    text = ", ".join(arguments)
+    assert preprocessor._split_top_level_commas(text) == arguments
+    template = f"Outer<{text}>"
+    assert preprocessor._find_matching_angle(template + " trailing", 5) == (
+        len(template) - 1
+    )
+
+
 def test_constrained_call_infers_parameters_after_line_comments():
     source = """
     template <typename T, enable_if_t<is_same_v<T, uint>, bool> = true>

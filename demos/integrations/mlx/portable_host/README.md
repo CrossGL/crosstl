@@ -372,6 +372,16 @@ original source as a control. These helper checks do not establish matrix
 execution. The selected `steel_gemm_fused` entry still fails on explicit
 `auto*` pointer deduction during source overload resolution, tracked in
 [#2152](https://github.com/CrossGL/crosstl/issues/2152).
+Project materialization also retains non-type argument grouping on every target.
+Its native regression uses dependent aliases and default arguments with
+conditional, additive and shift expressions. Automatically
+discovered and explicitly selected entries must preserve both specializations,
+integer wraparound and output guards; the Metal job compares the original
+template kernel. This addresses the arithmetic corruption in
+[#2155](https://github.com/CrossGL/crosstl/issues/2155), not full GEMM execution.
+Template argument scanning distinguishes left shifts from nested template
+delimiters, including expressions inside parentheses, brackets and braces
+([#2156](https://github.com/CrossGL/crosstl/issues/2156)).
 
 ## General Gather
 

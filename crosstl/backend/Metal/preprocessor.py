@@ -27479,6 +27479,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
 
             ch = text[i]
+            if text.startswith("<<", i):
+                current += "<<"
+                i += 2
+                continue
             if ch == "(":
                 paren_depth += 1
             elif ch == ")":
@@ -27491,9 +27495,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                 brace_depth += 1
             elif ch == "}":
                 brace_depth = max(0, brace_depth - 1)
-            elif ch == "<":
+            elif ch == "<" and not (paren_depth or bracket_depth or brace_depth):
                 angle_depth += 1
-            elif ch == ">":
+            elif ch == ">" and not (paren_depth or bracket_depth or brace_depth):
                 angle_depth = max(0, angle_depth - 1)
             elif (
                 ch == ","
@@ -27657,6 +27661,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
 
             character = code[index]
+            if code.startswith("<<", index):
+                index += 2
+                continue
             context = (paren_depth, bracket_depth, brace_depth)
             if character == "(":
                 paren_depth += 1

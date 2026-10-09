@@ -17530,12 +17530,8 @@ def test_metal_project_materialization_propagates_local_constexpr_extents(
     assert not re.search(r"values\s*\[\s*values_per_thread\s*\]", materialized.text)
     grouped_stride = "i += (128 /(32 /((32*32)/(128))))"
     ungrouped_stride = "i += 128 / 32 /(32*32)/(128)"
-    if target == "opengl":
-        assert grouped_stride in materialized.text
-        assert ungrouped_stride not in materialized.text
-    else:
-        assert ungrouped_stride in materialized.text
-        assert grouped_stride not in materialized.text
+    assert grouped_stride in materialized.text
+    assert ungrouped_stride not in materialized.text
 
 
 def test_translate_project_materializes_helper_arguments_from_local_type_aliases(
