@@ -34,8 +34,8 @@ def test_scatter_retains_existing_workloads_and_adds_product_layouts():
     assert digest.hexdigest() == (
         "0866069c11124bfa9d5295f6e67beda7ebb8adabada57aa27021950801836021"
     )
-    products = cases[112:]
-    assert len(cases) == len({case["id"] for case in cases}) == 144
+    products = cases[112:144]
+    assert len(cases) == len({case["id"] for case in cases}) == 146
     assert all(case["operation"] == "prod" for case in products)
     assert {(case["dtype"], case["layout"]) for case in products} == {
         (dtype, layout)
@@ -48,6 +48,14 @@ def test_scatter_retains_existing_workloads_and_adds_product_layouts():
         "int64",
         "uint64",
     }
+    assert {case["dtype"] for case in cases[144:]} == {"int32", "uint32"}
+    for case in cases[144:]:
+        source, indices, updates, expected = workloads.reference(np, case)
+        assert source.size == expected.size == layout.MAX_ELEMENTS == 65535
+        assert indices[0].tolist() == [65534, -1, 0]
+        assert updates.tolist() == [123, 123, 321]
+        assert expected[0] == 321 and expected[-1] == 123
+        np.testing.assert_array_equal(expected[1:-1], source[1:-1])
 
 
 @pytest.mark.parametrize(

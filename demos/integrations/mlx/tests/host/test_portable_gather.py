@@ -547,10 +547,38 @@ def test_gather_host_writeback_requires_valid_native_readback(
         assert words == [0x7FC01234, 0x80000000, 0, 1, 2, 3]
         assert host.dispatch_count == 1 and calls == [(ENTRY, 11)]
         assert json.loads(host.trace.read_text())["gatherValues"] == words
+        output = bytes(memory["out"])
+        trace = host.trace.read_bytes()
+        for invalid in (4, -5):
+            memory["idx0"][0] = invalid
+            with pytest.raises(ValueError, match="index"):
+                gather_dispatch.dispatch(
+                    host,
+                    ENTRY,
+                    table,
+                    len(table),
+                    6,
+                    runtime.Launch((2, 1, 3), (1, 1, 1)),
+                )
+            assert calls == [(ENTRY, 11)] and host.dispatch_count == 1
+            assert bytes(memory["out"]) == output
+            assert host.trace.read_bytes() == trace
 
 
-def test_gather_cache_separates_ranges_and_rechecks_source(tmp_path, monkeypatch):
-    cache = gather_packages.GatherPackageCache(tmp_path, tmp_path / "cache", "opengl")
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+@pytest.mark.parametrize(
+    "entry",
+    (
+        ENTRY,
+        "gather_axisfloat32int32_intcc",
+        "scatterint32int64_none_1_updc_true_nwork1_int",
+        "scatter_axisuint32int64_sum_intncc",
+    ),
+)
+def test_gather_cache_reuses_covering_range_and_rechecks_source(
+    tmp_path, monkeypatch, target, entry
+):
+    cache = gather_packages.GatherPackageCache(tmp_path, tmp_path / "cache", target)
     calls = []
     monkeypatch.setattr(cache, "_require_source", lambda: None)
     monkeypatch.setattr(
@@ -570,16 +598,68 @@ def test_gather_cache_separates_ranges_and_rechecks_source(tmp_path, monkeypatch
             directory,
         ),
     )
-    first = cache.get(ENTRY, 11)
-    assert cache.get(ENTRY, 11) == first and len(calls) == 1
-    assert cache.get(ENTRY, 19)[1] != first[1] and len(calls) == 2
+    first = cache.get(entry, 11)
+    for bound in (0, 11, 14, 19, 65534):
+        assert cache.get(entry, bound) == first and len(calls) == 1
+    assert calls[0]["maximumIndex"] == gather_packages.MAX_ELEMENTS - 1 == 65534
+    assert calls[0]["entry"] == entry and calls[0]["target"] == target
+    for invalid in (-1, 65535, True, 1.0, None):
+        with pytest.raises(ValueError, match="index bound"):
+            cache.get(entry, invalid)
+    assert len(calls) == 1
+    monkeypatch.setattr(
+        gather_packages, "translation_implementation_hash", lambda: "b" * 64
+    )
+    assert cache.get(entry, 11)[1] != first[1] and len(calls) == 2
 
     def reject():
         raise ValueError("Source changed")
 
     monkeypatch.setattr(cache, "_require_source", reject)
     with pytest.raises(ValueError, match="Source changed"):
-        cache.get(ENTRY, 11)
+        cache.get(entry, 11)
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+@pytest.mark.parametrize(
+    "entry, expression",
+    (
+        (ENTRY, "reference.offset + index"),
+        ("gather_axisfloat32int32_intcc", None),
+        ("scatterint32int64_none_1_updc_true_nwork1_int", "reference.offset + index"),
+        ("scatter_axisuint32int64_sum_intncc", "offset"),
+    ),
+)
+def test_gather_covering_assertion_matches_validated_host_capacity(
+    tmp_path, monkeypatch, target, entry, expression
+):
+    cache = gather_packages.GatherPackageCache(tmp_path, tmp_path / "cache", target)
+    monkeypatch.setattr(gather_packages, "source", lambda root, entry: "wrapper")
+    configurations = []
+
+    def translate(config, **kwargs):
+        configurations.append(config)
+        raise RuntimeError("configuration captured")
+
+    monkeypatch.setattr(gather_packages, "translate_project", translate)
+    with pytest.raises(RuntimeError, match="configuration captured"):
+        cache._build(
+            entry,
+            tmp_path / "package",
+            {"maximumIndex": gather_packages.MAX_ELEMENTS - 1},
+        )
+    (config,) = configurations
+    assert config.entry_points == {config.include_patterns[0]: (entry,)}
+    if target == "opengl" and expression:
+        (assertion,) = config.index_range_assertions
+        assert assertion.source == config.include_patterns[0]
+        assert assertion.expression == expression and assertion.function is None
+        assert assertion.value_range.minimum == 0
+        assert assertion.value_range.maximum == 65534
+        assert assertion.value_range.status == "asserted"
+        assert assertion.value_range.provenance == "project-config"
+    else:
+        assert config.index_range_assertions == ()
 
 
 def test_gather_cache_does_not_publish_mixed_implementation(tmp_path, monkeypatch):

@@ -45,11 +45,15 @@ def test_float_scatter_case_inventory():
     }
 
 
-def test_float_scatter_preserves_all_integer_workload_bytes():
+def test_float_scatter_preserves_original_integer_workload_bytes():
     digest = hashlib.sha256()
     cases = list(workloads.cases())
-    assert len(cases) == 144
-    for case in cases:
+    assert len(cases) == 146
+    assert [case["id"] for case in cases[144:]] == [
+        "int32-none-capacity",
+        "uint32-none-capacity",
+    ]
+    for case in cases[:144]:
         digest.update(case["id"].encode())
         source, indices, updates, expected = workloads.reference(np, case)
         for array in (source, *indices, updates, expected):

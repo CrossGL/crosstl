@@ -158,8 +158,13 @@ The adapter implements MLX's `Gather::eval_gpu` using the unchanged pinned JIT
 wrapper and `indexing/gather.h`. `HostRuntime(..., mlx_root=...)` enables on-demand
 translation and packaging for the selected target. Cache identity includes the
 upstream revision, translator implementation, packaging recipe, entry point and
-validated index bound. Changed kernels or JIT definitions are rejected, including
-when loading an existing cached package.
+validated index bound. The package uses the shared host upper bound of 65,534,
+so workloads with different array sizes reuse one translation of an entry.
+Every dispatch still validates its actual allocations, indices and launch before
+loading the package; a cache hit does not bypass those checks. OpenGL packages
+carry the covering range assertion where required, while Metal and DirectX do
+not need that narrowing assertion. Changed kernels or JIT definitions are
+rejected, including when loading an existing cached package.
 
 Supported source storage is float32, int32, uint32, int64, uint64 and bool;
 indices may be signed or unsigned 32-bit or 64-bit integers. The current contract
@@ -253,7 +258,7 @@ python -m demos.integrations.mlx.portable_host.verify_scatter \
   --integer64 integer64-packages --output-dir scatter-evidence
 ```
 
-The verifier runs 144 workloads and unchanged upstream
+The verifier runs 146 workloads and unchanged upstream
 `test_array.TestArray.test_setitem_with_list` in separate CPU and generated-backend
 processes. Retained evidence includes initial output storage, update and index
 uploads, metadata, launch geometry, native compilation, readbacks and 32 trailing
@@ -266,6 +271,9 @@ zero and negative factors, repeated destinations, source/update aliases and
 partial chunks. Factors keep every intermediate product representable regardless
 of update order. The independent audit hashes raw storage words so negative
 signed results retain their exact bit patterns.
+Two more cases exercise the 65,535-element storage limit, including a write to
+index 65,534 and its negative-index equivalent. They check every unchanged
+interior element as well as the endpoints and guard storage.
 A separate three-OS CI job requires this proof without extending the existing
 indexing job's execution budget.
 

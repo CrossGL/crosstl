@@ -185,7 +185,9 @@ class GatherPackageCache:
                 "revision": COMMIT,
                 "target": self.target,
                 "entry": entry,
-                "maximumIndex": maximum_index,
+                # Dispatch validation bounds every storage span by MAX_ELEMENTS.
+                # Share the covering contract instead of rebuilding for each size.
+                "maximumIndex": MAX_ELEMENTS - 1,
                 "implementationHash": implementation,
                 "recipeHash": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             }

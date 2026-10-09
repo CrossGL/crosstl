@@ -46,6 +46,15 @@ def cases():
                 "index_dtype": ("int32", "uint32", "int64", "uint64")[i % 4],
             }
 
+    for dtype in ("int32", "uint32"):
+        yield {
+            "id": f"{dtype}-none-capacity",
+            "dtype": dtype,
+            "operation": "none",
+            "layout": "capacity",
+            "index_dtype": "int64",
+        }
+
 
 def float_cases():
     for operation in ("none", "sum", "prod", "min", "max"):
@@ -69,12 +78,20 @@ def float_cases():
 def arrays(xp, np, case):
     layout = case["layout"]
     shape = (2, 2) if layout.startswith("work") else (3, 4)
+    if layout == "capacity":
+        shape = (65535,)
     raw_source = np.arange(np.prod(shape)).reshape(shape)
     if case["dtype"] == "float32":
         raw_source = (raw_source + 1) * np.where(raw_source % 2, -0.5, 0.5)
     else:
         raw_source = raw_source + 10
     source = xp.array(raw_source.astype(case["dtype"]))
+    if layout == "capacity":
+        return (
+            source,
+            [xp.array(np.array([65534, -1, 0], dtype=np.int64))],
+            xp.array(np.array([123, 123, 321], dtype=case["dtype"])),
+        )
     if layout == "payloads":
         payloads = (
             np.array(
