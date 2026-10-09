@@ -1706,6 +1706,7 @@ def test_full_references_require_exact_storage_and_broadcasts(fault):
         "full-values",
         "upstream-failure",
         "cast-batches-failure",
+        "large-copies-failure",
     ],
 )
 def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
@@ -1894,11 +1895,21 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         return {"passed": True, "casesPerPath": 11, "dispatchCount": 21}
 
     monkeypatch.setattr(verify, "run_cast_batches", run_cast_batches)
+    copy_calls = []
+
+    def run_large_copies(root, packages, output):
+        copy_calls.append((root, packages, output))
+        if fault == "large-copies-failure":
+            raise RuntimeError("Large copy verification failed")
+        return {"passed": True, "casesPerPath": 35, "dispatchCount": 35}
+
+    monkeypatch.setattr(verify, "run_large_copies", run_large_copies)
     args = SimpleNamespace(
         mlx_root=tmp_path / "mlx",
         packages=package_root,
         output_dir=tmp_path / "evidence",
         cast_batches=True,
+        large_copies=True,
     )
     if fault:
         with pytest.raises((RuntimeError, ValueError, AssertionError)):
@@ -1938,6 +1949,14 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         }
         assert batch_calls == [
             (args.mlx_root, args.packages, args.output_dir / "cast-batches")
+        ]
+        assert evidence["largeCopies"] == {
+            "passed": True,
+            "casesPerPath": 35,
+            "dispatchCount": 35,
+        }
+        assert copy_calls == [
+            (args.mlx_root, args.packages, args.output_dir / "large-copies")
         ]
         assert evidence["original"]["unary"] == unary_workloads.expected_records(
             cpu=True

@@ -475,7 +475,9 @@ class HostRuntime:
                 )
             )
             or not buffers
-            or not 0 < threads <= 65535
+            or not 0
+            < threads
+            <= (copy_layout.MAX_DESTINATION_ELEMENTS if copy else 65535)
         ):
             raise ValueError("Invalid or unsupported native dispatch dimensions")
         execution = launch.execution() if launch is not None else None
@@ -1123,6 +1125,14 @@ class HostRuntime:
                                 "copyGuardWords": output["values"][buffer.count :],
                                 "copyMetadata": copy_metadata,
                                 "copyValues": output["values"][: buffer.count],
+                                **(
+                                    {
+                                        "inputs": inputs,
+                                        "packageRoot": str(package_directory),
+                                    }
+                                    if self.retain_native_modules
+                                    else {}
+                                ),
                             }
                             if copy
                             else {}

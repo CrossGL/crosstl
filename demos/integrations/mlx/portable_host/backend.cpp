@@ -187,11 +187,12 @@ void dispatch_copy_into(
     throw std::invalid_argument(
         "CrossTL copying layouts require matching float16, float32, int32, uint32, int64, uint64 or bool arrays.");
   }
-  if (in.size() > 65535 || in.ndim() > 64 ||
+  constexpr int64_t max_index = std::numeric_limits<int32_t>::max();
+  if (in.size() > max_index || in.ndim() > 64 ||
       dst_strides.size() != in.ndim() ||
-      out.size() > std::numeric_limits<int32_t>::max()) {
+      out.size() > max_index) {
     throw std::invalid_argument(
-        "CrossTL copy supports up to 65535 input elements and 64 axes.");
+        "CrossTL copy requires signed 32-bit element counts and at most 64 axes.");
   }
   if (in.size() == 0) {
     return;
@@ -203,21 +204,25 @@ void dispatch_copy_into(
     src_strides.insert(src_strides.begin(), 0);
     dst_strides.insert(dst_strides.begin(), 0);
   }
-  int64_t low = 0, high = 0;
+  int64_t low = 0, high = 0, source_extent = 0;
   for (size_t axis = 0; axis < shape.size(); ++axis) {
     if (shape[axis] == 1) {
       src_strides[axis] = 0;
     }
-    if (src_strides[axis] < -65535 || src_strides[axis] > 65535) {
-      throw std::invalid_argument("CrossTL copy source stride exceeds 65535.");
+    if (src_strides[axis] < -max_index || src_strides[axis] > max_index) {
+      throw std::invalid_argument("CrossTL copy source stride exceeds signed index bounds.");
     }
     const int64_t extent = (int64_t(shape[axis]) - 1) * src_strides[axis];
+    if (std::abs(extent) > max_index - 1 - source_extent) {
+      throw std::invalid_argument("CrossTL copy source span exceeds signed index bounds.");
+    }
+    source_extent += std::abs(extent);
     low += std::min<int64_t>(extent, 0);
     high += std::max<int64_t>(extent, 0);
   }
   const int64_t span = high - low + 1;
   const int64_t item_size = in.itemsize();
-  if (span > 65535 || in.offset() < 0 || in.offset() % item_size != 0) {
+  if (in.offset() < 0 || in.offset() % item_size != 0) {
     throw std::invalid_argument("CrossTL copy source span exceeds its bounds.");
   }
   const uint64_t origin = in.offset() / item_size;
@@ -227,12 +232,20 @@ void dispatch_copy_into(
     throw std::invalid_argument("CrossTL copy source view exceeds its allocation.");
   }
   int64_t destination_low = dst_offset, destination_high = dst_offset;
+  int64_t destination_extent = 0;
+  if (dst_offset < 0 || dst_offset > max_index) {
+    throw std::invalid_argument("CrossTL copy destination offset exceeds signed index bounds.");
+  }
   for (size_t axis = 0; axis < shape.size(); ++axis) {
     if (dst_strides[axis] < -int64_t(std::numeric_limits<int32_t>::max()) ||
         dst_strides[axis] > std::numeric_limits<int32_t>::max()) {
       throw std::invalid_argument("CrossTL copy destination stride is invalid.");
     }
     const int64_t extent = (int64_t(shape[axis]) - 1) * dst_strides[axis];
+    if (std::abs(extent) > max_index - 1 - destination_extent) {
+      throw std::invalid_argument("CrossTL copy destination span exceeds signed index bounds.");
+    }
+    destination_extent += std::abs(extent);
     destination_low += std::min<int64_t>(extent, 0);
     destination_high += std::max<int64_t>(extent, 0);
   }
@@ -260,13 +273,18 @@ void dispatch_copy_into(
       {"dst_offset", "int64", &dst_offset, 1, 0},
   };
   char error[2048] = {};
-  uint32_t slices = 1;
+  uint64_t slices = 1;
   for (size_t axis = 0; axis + 2 < shape.size(); ++axis) {
     slices *= static_cast<uint32_t>(shape[axis]);
   }
+  const uint64_t columns = (uint64_t(shape.back()) + 1) / 2;
+  const uint64_t rows = shape[shape.size() - 2];
+  if (columns > 65535 || rows > 65535 || slices > 65535) {
+    throw std::invalid_argument("CrossTL copy launch exceeds 65535 groups per axis.");
+  }
   const CrosstlMlxLaunch launch{
-      {static_cast<uint32_t>((shape.back() + 1) / 2),
-       static_cast<uint32_t>(shape[shape.size() - 2]), slices},
+      {static_cast<uint32_t>(columns), static_cast<uint32_t>(rows),
+       static_cast<uint32_t>(slices)},
       {1, 1, 1}};
   const std::string entry = std::string("ggn2_dynamic_copy") + dtype + dtype;
   int status = dispatch_callback.load()(

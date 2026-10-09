@@ -33,6 +33,9 @@ from demos.integrations.mlx.portable_host.runtime import HostRuntime
 from demos.integrations.mlx.portable_host.verify_cast_batches import (
     run_bounded as run_cast_batches,
 )
+from demos.integrations.mlx.portable_host.verify_large_copies import (
+    run_bounded as run_large_copies,
+)
 
 UPSTREAM_TESTS = (
     "test_ops.TestOps.test_arange_overload_dispatch",
@@ -81,7 +84,7 @@ NEGATIVE_CHECKS = {
     "unary-strided-allocation": "exceeds its allocation",
     "unary-over-limit": "65535",
     "copy-dtype": "matching float16, float32, int32, uint32, int64, uint64 or bool",
-    "copy-limit": "65535",
+    "copy-large-allocation": "exceeds its allocation",
     "copy-allocation": "exceeds its allocation",
     "binary-dtype": "supported dtype",
     "binary-limit": "65535",
@@ -91,7 +94,7 @@ NEGATIVE_CHECKS = {
     "cast-large-allocation": "exceeds its allocation",
     "cast-allocation": "exceeds its allocation",
     "full-dtype": "matching float16, float32, int32, uint32, int64, uint64 or bool",
-    "full-limit": "65535",
+    "full-grid-limit": "65535 groups per axis",
     "full-allocation": "exceeds its allocation",
 }
 REDUCTION_NEGATIVE_CHECKS = {
@@ -156,9 +159,11 @@ def worker(args):
             elif args.worker == "copy-dtype":
                 source = mx.array(np.arange(12, dtype=np.int16).reshape(3, 4))
                 value = mx.reshape(mx.transpose(source), (12,), stream=mx.gpu)
-            elif args.worker == "copy-limit":
-                source = mx.array(np.arange(65792, dtype=np.float32).reshape(257, 256))
-                value = mx.contiguous(mx.transpose(source), stream=mx.gpu)
+            elif args.worker == "copy-large-allocation":
+                source = mx.as_strided(
+                    mx.array([1, 2, 3], dtype=mx.uint32), (256, 257), (1, 256), 2
+                )
+                value = mx.contiguous(source, stream=mx.gpu)
             elif args.worker == "copy-allocation":
                 source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (2,), (-1,))
                 value = mx.contiguous(source, stream=mx.gpu)
@@ -183,8 +188,8 @@ def worker(args):
                 value = source.astype(mx.float32)
             elif args.worker == "full-dtype":
                 value = mx.full((3, 5), mx.array(1, dtype=mx.int16))
-            elif args.worker == "full-limit":
-                value = mx.ones((65536,), dtype=mx.float32)
+            elif args.worker == "full-grid-limit":
+                value = mx.ones((131072,), dtype=mx.float32)
             elif args.worker == "full-allocation":
                 source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (2,), (-1,))
                 value = mx.full((3, 2), source)
@@ -471,6 +476,11 @@ def verify(args):
         if getattr(args, "cast_batches", False)
         else None
     )
+    large_copies = (
+        run_large_copies(args.mlx_root, args.packages, output / "large-copies")
+        if getattr(args, "large_copies", False)
+        else None
+    )
     after = verify_prepared(args.mlx_root)
     save(output / "adaptation-after.json", after)
     if after != adaptation or upstream_test_sources(args.mlx_root) != test_sources:
@@ -494,6 +504,7 @@ def verify(args):
         "fullTranslatedBackend": False,
         **({"reductionWidths": reduction_index["widths"]} if reduction_index else {}),
         **({"castBatches": cast_batches} if cast_batches is not None else {}),
+        **({"largeCopies": large_copies} if large_copies is not None else {}),
     }
     save(output / "evidence.json", evidence)
     return evidence
@@ -505,6 +516,7 @@ if __name__ == "__main__":
     parser.add_argument("--packages", type=Path, required=True)
     parser.add_argument("--reductions", type=Path)
     parser.add_argument("--cast-batches", action="store_true")
+    parser.add_argument("--large-copies", action="store_true")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--worker",

@@ -85,9 +85,11 @@ float32, int32, uint32 or bool values. Optional absolute-value packages extend
 unsupported-GPU errors. Other unary inputs except Abs, LogicalNot and BitwiseInvert
 must be float32. Stored-contiguous broadcasts and column-major views retain
 their metadata; noncontiguous inputs use translated copies before unary dispatch.
-Dispatch is synchronous and uses host staging buffers. Individual copy inputs and
-most elementwise operations remain bounded to 65,535 stored elements; concatenation
-can produce larger outputs as described below. Elementwise operations use one thread per workgroup; reductions
+Dispatch is synchronous and uses host staging buffers. Layout copies accept signed
+32-bit element counts and storage spans, with up to 64 axes and 65,535 workgroups
+per launch axis. Most other elementwise operations remain bounded to 65,535 stored
+elements; casts and concatenation can produce larger outputs as described below.
+Elementwise operations use one thread per workgroup; reductions
 preserve upstream launch widths and multipass planning. Empty elementwise arrays
 do not dispatch. This is a
 host integration proof, not a complete MLX backend or a performance benchmark.
@@ -117,6 +119,32 @@ The verifier retains complete binary input/output arrays and checks each native
 batch's uploaded values, output, guards, launch and compiled artifact identity.
 This is cast coverage, not a claim that large composed operations or the full
 upstream suite pass. Half and 64-bit batches are not part of these eleven cases.
+
+## Larger Layout Copies
+
+The required native host jobs also run the large-copy verifier:
+
+```bash
+python -m demos.integrations.mlx.portable_host.verify_large_copies \
+  --mlx-root mlx-upstream --packages host-packages --output-dir large-copies
+```
+
+Its 35 API cases compare CPU and generated results bit for bit for float32, int32,
+uint32 and Boolean storage. They cover negative strides, transposes, permutations,
+broadcasts, nonzero source offsets, source spans larger than the logical array and
+each exact launch-axis limit. Saved evidence includes source/result arrays,
+uploaded buffers, layout metadata, destination guards and compiled native artifacts.
+Original source arrays must remain unchanged. Half and 64-bit large copies are not
+part of these cases.
+
+Copies use the unchanged two-elements-per-thread dynamic copy kernel and its
+three-dimensional launch. A flat copy above 131,070 elements still exceeds the
+first launch-axis limit; larger multidimensional arrays can fit. Invalid backing
+views, overlapping destinations and out-of-range signed indices are rejected
+before native submission. The adapter stages whole source/destination spans, so
+large sparse layouts can require substantial host and device memory. This removes
+the former 65,535-element copy limit, not the remaining size limits in binary,
+unary or reduction operations.
 
 ## Affine Quantization
 
