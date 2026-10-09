@@ -3481,6 +3481,7 @@ jobs:
               --basetemp="scalar-alias-results/pytest" \
               --junitxml="scalar-alias-results/results.xml" \
               tests/test_translator/test_scalar_aliases.py \
+              tests/test_translator/test_metal_conversion_operators.py \
               tests/test_translator/test_metal_buffer_references.py
 
       - name: Upload scalar alias evidence

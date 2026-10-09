@@ -16077,6 +16077,34 @@ def test_codegen_requires_proven_conditional_branch_for_constructor_selection():
     assert converter.resolve_conditional_type(conditional) == "OtherScale"
 
 
+@pytest.mark.parametrize(
+    "condition,expected",
+    [
+        ("true", "float"),
+        ("false", "int"),
+        ("true && !false", "float"),
+        ("false || false", "int"),
+    ],
+)
+@pytest.mark.parametrize(
+    "alias",
+    [
+        "conditional_t<{condition}, float, int>",
+        "conditional<{condition}, float, int>::type",
+    ],
+)
+def test_codegen_resolves_boolean_conditional_alias_literals(
+    condition, expected, alias
+):
+    converter = MetalToCrossGLConverter()
+    assert (
+        converter.resolve_conditional_type(
+            alias.format(condition=condition), require_concrete=True
+        )
+        == expected
+    )
+
+
 def test_codegen_resolves_conditional_alias_before_constructor_selection():
     code = """
     #include <metal_stdlib>

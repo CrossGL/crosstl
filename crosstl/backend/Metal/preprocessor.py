@@ -12956,6 +12956,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             buffer_element_types,
             local_variable_types,
             field_structs_by_name,
+            type_aliases=self._source_type_alias_bindings,
+            local_integral_constants=local_integral_constants,
         )
         replacements: List[Tuple[int, int, str]] = []
         i = 0
@@ -13060,6 +13062,64 @@ class MetalPreprocessor(HLSLPreprocessor):
             return None
         return f"{element}{width}"
 
+    def _aliased_constructor_type_at(
+        self,
+        expression: str,
+        position: int,
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        local_integral_constants: Dict[str, List[_MetalIntegralConstantBinding]],
+    ) -> Optional[str]:
+        constructor = re.match(r"(?P<name>[A-Za-z_]\w*)\s*([({])", expression)
+        if constructor is None:
+            return None
+        opening = constructor.end() - 1
+        delimiter = expression[opening]
+        closing = self._find_matching_delimiter(
+            expression, opening, delimiter, ")" if delimiter == "(" else "}"
+        )
+        if closing != len(expression) - 1:
+            return None
+        source_type = self._canonicalize_type_aliases_at(
+            constructor.group("name"), type_aliases, position
+        )
+        conditional = re.sub(r"^typename\s+", "", str(source_type or "").strip())
+        type_accessor = conditional.endswith("::type")
+        if type_accessor:
+            conditional = conditional[: -len("::type")].strip()
+        angle_open = conditional.find("<")
+        angle_close = (
+            self._find_matching_angle(conditional, angle_open)
+            if angle_open >= 0
+            else None
+        )
+        conditional_name = re.sub(
+            r"^(?:::)?(?:metal::)?", "", conditional[:angle_open]
+        ).strip()
+        if (
+            angle_open > 0
+            and angle_close == len(conditional) - 1
+            and conditional_name in {"conditional_t", "conditional"}
+            and (conditional_name == "conditional_t" or type_accessor)
+        ):
+            arguments = self._split_top_level_commas(
+                conditional[angle_open + 1 : angle_close]
+            )
+            if len(arguments) == 3:
+                visible_constants = self._local_integral_constants_at(
+                    local_integral_constants,
+                    position,
+                    names=set(IDENTIFIER_RE.findall(arguments[0])),
+                )
+                condition = self._substitute_template_argument_static_constants(
+                    arguments[0], visible_constants
+                )
+                folded, value = self._evaluate_static_integral_expression(condition)
+                if folded and value is not None:
+                    return self._canonicalize_type_aliases_at(
+                        arguments[1 if value else 2], type_aliases, position
+                    )
+        return source_type
+
     def _try_rewrite_implicit_conversion_call(
         self,
         code: str,
@@ -13106,61 +13166,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             field_structs_by_name,
         )
         if source_type is None and type_aliases:
-            constructor = re.match(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(", argument)
-            if constructor is not None:
-                constructor_open = argument.find("(", constructor.end("name"))
-                constructor_close = self._find_matching_delimiter(
-                    argument, constructor_open, "(", ")"
-                )
-                if constructor_close == len(argument) - 1:
-                    source_type = self._canonicalize_type_aliases_at(
-                        constructor.group("name"),
-                        type_aliases,
-                        arg_open,
-                    )
-                    conditional = str(source_type or "").strip()
-                    type_accessor = conditional.endswith("::type")
-                    if type_accessor:
-                        conditional = conditional[: -len("::type")].strip()
-                    angle_open = conditional.find("<")
-                    angle_close = (
-                        self._find_matching_angle(conditional, angle_open)
-                        if angle_open >= 0
-                        else None
-                    )
-                    conditional_name = re.sub(
-                        r"^(?:::)?(?:metal::)?", "", conditional[:angle_open]
-                    ).strip()
-                    if (
-                        angle_open > 0
-                        and angle_close == len(conditional) - 1
-                        and conditional_name in {"conditional_t", "conditional"}
-                        and (conditional_name == "conditional_t" or type_accessor)
-                    ):
-                        conditional_args = self._split_top_level_commas(
-                            conditional[angle_open + 1 : angle_close]
-                        )
-                        if len(conditional_args) == 3:
-                            visible_constants = self._local_integral_constants_at(
-                                local_integral_constants or {},
-                                arg_open,
-                                names=set(IDENTIFIER_RE.findall(conditional_args[0])),
-                            )
-                            condition = (
-                                self._substitute_template_argument_static_constants(
-                                    conditional_args[0], visible_constants
-                                )
-                            )
-                            folded, value = self._evaluate_static_integral_expression(
-                                condition
-                            )
-                            if folded and value is not None:
-                                selected = conditional_args[1 if value else 2]
-                                source_type = self._canonicalize_type_aliases_at(
-                                    selected,
-                                    type_aliases,
-                                    arg_open,
-                                )
+            source_type = self._aliased_constructor_type_at(
+                argument, arg_open, type_aliases, local_integral_constants or {}
+            )
         if source_type is None and IDENTIFIER_RE.fullmatch(receiver_expression):
             declaration = self._visible_receiver_declaration_at(
                 code, receiver_expression, ident_start
@@ -19834,8 +19842,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         name: str,
         position: int,
     ) -> Optional[_DeclaredTypeT]:
-        # Resolve a name to the type of its NEAREST declaration appearing at or
-        # before `position`. A later declaration cannot type an earlier use;
+        # Resolve the nearest preceding binding whose recorded scope is active.
+        # A later declaration cannot type an earlier use;
         # accepting it can leak a same-named parameter from another function
         # into template deduction. Deterministic regardless of hash seed.
         entries = declarations.get(name)
@@ -19844,6 +19852,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         best: Optional[_DeclaredTypeT] = None
         for decl_position, declared_type in entries:
             if decl_position <= position:
+                if (
+                    isinstance(declared_type, _MetalAddressableValueType)
+                    and declared_type.scope is not None
+                    and not declared_type.scope[0] <= position < declared_type.scope[1]
+                ):
+                    continue
                 best = declared_type
             else:
                 break
@@ -20179,6 +20193,11 @@ class MetalPreprocessor(HLSLPreprocessor):
         buffer_element_types: _MetalPositionedBufferTypes,
         local_variable_types: Dict[str, List[Tuple[int, str]]],
         structs_by_name: Optional[Dict[str, "_MetalStructDefinition"]],
+        *,
+        type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
+        local_integral_constants: Optional[
+            Dict[str, List[_MetalIntegralConstantBinding]]
+        ] = None,
     ) -> None:
         # Type `auto name = <initializer>;` locals from the inferred type of their
         # initializer, so a later call argument that uses such a local resolves.
@@ -20187,8 +20206,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         # scalar/aggregate scanner cannot type because the declarator names no
         # type. Declarations are processed in source order and each inferred
         # binding is recorded immediately, so one `auto` local may depend on an
-        # earlier one. Conservative: only records a binding when the initializer
-        # infers to a concrete type; `auto&` / `auto*` declarators are skipped.
+        # earlier one. An unresolved initializer still shadows older bindings;
+        # `auto&` / `auto*` declarators are skipped.
+        lexical_scopes = self._find_lexical_brace_scopes(code)
         pattern = re.compile(
             r"(?:(?<=[;{}()])|^)\s*auto\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)",
             re.MULTILINE,
@@ -20216,13 +20236,25 @@ class MetalPreprocessor(HLSLPreprocessor):
                 struct_field_types,
                 structs_by_name,
             )
-            if inferred is None:
-                continue
-            normalized = self._normalize_inferred_expression_type(inferred)
-            if normalized is None:
-                continue
+            if inferred is None and type_aliases:
+                inferred = self._aliased_constructor_type_at(
+                    initializer,
+                    position,
+                    type_aliases,
+                    local_integral_constants or {},
+                )
+                if inferred not in (structs_by_name or {}) and not (
+                    self._is_metal_scalar_or_vector_type(inferred or "")
+                ):
+                    inferred = None
+            normalized = self._normalize_inferred_expression_type(inferred or "")
             entries = local_variable_types.setdefault(match.group("name"), [])
-            entries.append((position, normalized))
+            scope = self._innermost_lexical_scope(
+                lexical_scopes, match.start("name"), len(code)
+            )
+            entries.append(
+                (position, _MetalAddressableValueType(normalized or "", scope=scope))
+            )
             entries.sort(key=lambda item: item[0])
 
     def _pointer_or_array_parameter_element_type(self, parameter: str) -> Optional[str]:
@@ -24792,6 +24824,14 @@ class MetalPreprocessor(HLSLPreprocessor):
             buffer_element_types,
             local_variable_types,
             structs_by_name,
+            type_aliases=source_type_aliases,
+            local_integral_constants=self._collect_local_integral_constant_bindings(
+                code,
+                [(0, len(code))],
+                source_type_aliases,
+                self._active_static_constexpr_functions,
+                include_file_scope=True,
+            ),
         )
         return _MetalReachabilityTypeContext(
             buffer_element_types=buffer_element_types,

@@ -17679,7 +17679,9 @@ float {scalar}(float value) {{
             honor_shadowing=False,
         )
         condition = self.substitute_local_integral_constant_text(condition)
-        condition_value = self.evaluate_value_template_constant_expression(condition)
+        condition_value = self.evaluate_value_template_constant_expression(
+            condition, constants={"true": 1, "false": 0}
+        )
         if condition_value is None and require_concrete:
             return None
         selected_branch = (

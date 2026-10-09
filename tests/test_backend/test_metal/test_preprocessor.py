@@ -6531,6 +6531,81 @@ def test_preprocessor_rewrites_readonly_conditional_alias_temporary_conversion()
     assert "return Scale__operator_float(ScaleType(x));" in output
 
 
+@pytest.mark.parametrize("choice,owner", [("true", "First"), ("false", "Second")])
+@pytest.mark.parametrize(
+    "alias",
+    [
+        "metal::conditional_t<choice, First, Second>",
+        "typename metal::conditional<choice, First, Second>::type",
+    ],
+)
+@pytest.mark.parametrize("initializer", ["Value(x)", "Value{x}"])
+def test_conversion_of_auto_alias_uses_concrete_lexical_type(
+    choice, owner, alias, initializer
+):
+    code = f"""
+    struct First {{ float value; operator float() const {{ return value + 1; }} }};
+    struct Second {{ float value; operator float() const {{ return value + 2; }} }};
+    float helper(float x) {{ auto item = First(x); return float(item); }}
+    template<bool choice> float select(float x) {{
+        using Base = {alias};
+        using Value = Base;
+        auto item = {initializer};
+        auto copied = item;
+        return float(copied);
+    }}
+    float run(float x) {{ return select<{choice}>(x) + helper(x); }}
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert f"return {owner}__operator_float(copied);" in output
+    assert "return First__operator_float(item);" in output
+
+
+def test_conversion_restores_auto_type_after_inner_scope():
+    output = MetalPreprocessor().preprocess("""
+    struct First { float value; operator float() const { return value + 1; } };
+    struct Second { float value; operator float() const { return value + 2; } };
+    float convert(float x) {
+        auto item = First(x);
+        float result = float(item);
+        { auto item = Second(x); result += float(item); }
+        return result + float(item);
+    }
+    """)
+    assert "float result = First__operator_float(item);" in output
+    assert "result += Second__operator_float(item);" in output
+    assert "return result + First__operator_float(item);" in output
+
+
+def test_unresolved_auto_initializer_shadows_an_older_conversion_binding():
+    output = MetalPreprocessor().preprocess("""
+    struct First { float value; operator float() const { return value; } };
+    float first(float x) { auto item = First(x); return float(item); }
+    float second() { auto item = unresolved(); return float(item); }
+    """)
+    assert output.count("return First__operator_float(item);") == 1
+    assert "auto item = unresolved(); return float(item);" in output
+
+
+def test_auto_value_type_does_not_escape_its_function_scope():
+    code = "float first() { auto item = 1; return item; } float second() { return 0; }"
+    preprocessor = MetalPreprocessor()
+    declarations = {}
+    preprocessor._collect_auto_local_variable_types(code, [], {}, declarations, {})
+    assert (
+        preprocessor._resolve_declared_type_at(
+            declarations, "item", code.index("return item")
+        )
+        == "int"
+    )
+    assert (
+        preprocessor._resolve_declared_type_at(
+            declarations, "item", code.index("return 0")
+        )
+        is None
+    )
+
+
 @pytest.mark.parametrize(
     "body",
     [

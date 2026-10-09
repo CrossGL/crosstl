@@ -749,7 +749,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2455
+        "test_count": 2460
       },
       "translator_codegen": {
         "exists": true,

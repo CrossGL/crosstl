@@ -212,11 +212,19 @@ bfloat16. Non-affine quantization modes remain unsupported by this host route.
 Block-scaled MXFP4, MXFP8 and NVFP4 integration is tracked in
 [#2140](https://github.com/CrossGL/crosstl/issues/2140). Separate dequantization
 requires source-layout-preserving byte-wrapper loads
-([#2141](https://github.com/CrossGL/crosstl/issues/2141)); NVFP4 also needs
-conversion helpers selected from the concrete scale type
-([#1744](https://github.com/CrossGL/crosstl/issues/1744)). A combined
+([#2141](https://github.com/CrossGL/crosstl/issues/2141)). Concrete scale conversion
+is covered by source-level regressions
+([#1744](https://github.com/CrossGL/crosstl/issues/1744)); the all-zero MX scale
+boundary remains open ([#2143](https://github.com/CrossGL/crosstl/issues/2143)). A combined
 quantize/dequantize kernel does not exercise the packed buffers and encoded scale
 storage exposed by the two public operations.
+
+Packed outputs are not universally bit-identical between the pinned upstream CPU
+and Metal kernels, including FP4 halfway cases, signed-zero encodings and the
+scale chosen for all-zero MX blocks. These upstream differences are not
+translator defects. Port validation must retain original Metal controls and
+check the upstream operation's numerical expectations; CPU byte identity alone
+is not a sufficient acceptance contract.
 
 The adaptation registers this multi-output primitive in the synchronous backend,
 allocates MLX's packed uint32, scale and bias arrays, and presents the packed data
