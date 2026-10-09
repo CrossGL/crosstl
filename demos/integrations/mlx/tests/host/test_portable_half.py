@@ -607,5 +607,7 @@ def test_half_ci_requires_every_target_and_retained_evidence():
         1200,
         900,
         1800,
+        900,
+        2100,
     ]
     assert sum(deadlines) + 900 < job["timeout-minutes"] * 60

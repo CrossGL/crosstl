@@ -2084,7 +2084,7 @@ jobs:
     name: MLX half host (${{ matrix.target }})
     needs: portable-host
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 305
+    timeout-minutes: 355
     strategy:
       fail-fast: false
       matrix:
@@ -2119,7 +2119,7 @@ jobs:
             2>&1 | tee .mlx-portable-half/dependencies.log
       - name: Validate half host contracts
         if: runner.os == 'Linux'
-        run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_half.py demos/integrations/mlx/tests/host/test_portable_half_arithmetic.py demos/integrations/mlx/tests/host/test_portable_bfloat.py demos/integrations/mlx/tests/host/test_portable_bfloat_reductions.py
+        run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_half.py demos/integrations/mlx/tests/host/test_portable_half_arithmetic.py demos/integrations/mlx/tests/host/test_portable_bfloat.py demos/integrations/mlx/tests/host/test_portable_bfloat_reductions.py demos/integrations/mlx/tests/host/test_upstream_blocks.py
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
         run: python -m pip install moderngl PyOpenGL
@@ -2303,6 +2303,30 @@ jobs:
               --packages .mlx-portable-half/base/packages --bfloat .mlx-portable-half/bfloat-packages \
               --reductions .mlx-portable-half/bfloat-reductions --output-dir .mlx-portable-half/bfloat-reductions-evidence \
               2>&1 | tee .mlx-portable-half/bfloat-reductions-verification.log
+      - name: Translate upstream block assertion packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "Block assertion translation" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --width 32 --width 128 --width 256 \
+              --entry all_reduce_andbool_ --entry all_reduce_maxfloat32 \
+              --output-dir .mlx-portable-half/block-assertion-reductions \
+              2>&1 | tee .mlx-portable-half/block-assertion-translation.log
+      - name: Execute unchanged upstream block tests
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          CROSTL_DIRECTX_FORCE_WARP: "1"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 2100 --label "Upstream block tests" -- \
+            python -m demos.integrations.mlx.portable_host.verify_upstream_blocks --mlx-root mlx-upstream \
+              --packages .mlx-portable-half/base/packages --random .mlx-portable-half/random-packages \
+              --bfloat .mlx-portable-half/bfloat-packages --reductions .mlx-portable-half/bfloat-reductions \
+              --reductions .mlx-portable-half/block-assertion-reductions \
+              --output-dir .mlx-portable-half/upstream-blocks \
+              2>&1 | tee .mlx-portable-half/upstream-blocks.log
       - name: Retain half execution evidence
         if: always()
         uses: actions/upload-artifact@v4

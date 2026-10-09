@@ -338,6 +338,32 @@ launches remain separate work under [#2148](https://github.com/CrossGL/crosstl/i
 tests are not rewritten, skipped or given wider tolerances. Strided bfloat16 and
 encoded-scale copies remain subject to the existing copy-path restrictions.
 
+The unchanged upstream tests also have a separate required CI step in those same
+three jobs. It reuses the existing host build, base, random and bfloat packages;
+only the six Boolean/float32 assertion-reduction variants are added. Each test
+runs once in a CPU control process and once on the generated backend. The runner
+rejects skips and expected failures, checks per-test dispatch accounting, and
+audits retained modules against the translated package identities. Source hashes
+are checked before and after execution. No upstream assertions, tolerances or
+test bodies are modified.
+
+```sh
+python -m demos.integrations.mlx.portable_host.reduction_packages \
+  --mlx-root mlx-upstream --target opengl --width 32 --width 128 --width 256 \
+  --entry all_reduce_andbool_ --entry all_reduce_maxfloat32 \
+  --output-dir block-assertion-reductions
+python -m demos.integrations.mlx.portable_host.verify_upstream_blocks \
+  --mlx-root mlx-upstream --packages host-packages --random random-packages \
+  --bfloat bfloat-packages --reductions bfloat-reductions \
+  --reductions block-assertion-reductions --output-dir upstream-blocks
+```
+
+The same commands accept packages generated for Metal or DirectX. This proves
+the four named block-format tests, not the complete upstream MLX suite.
+Dense and quantized matrix multiplication still reject before native dispatch;
+their host integration is tracked separately in
+[#2151](https://github.com/CrossGL/crosstl/issues/2151).
+
 ## General Gather
 
 The adapter implements MLX's `Gather::eval_gpu` using the unchanged pinned JIT
