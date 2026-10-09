@@ -264,6 +264,11 @@ upstream metallib and independent integer indices across 64 cases, including
 extrema, ties, constant rows, tails and strided inputs. These cases supplement,
 but do not expand, the required float32 CI runtime subset.
 
+A subsequent unused-parameter annotation update changes all 24 Metal source
+hashes without changing their compiled libraries. The review reproduces every
+previous source identity and checks unchanged source, specialization and
+workgroup contracts before accepting the updated references.
+
 The DirectX identities have a separate complete-body review and strict DXC
 compilation for all 24 entries. Changes preserve source-width index arithmetic,
 byte conversions at aggregate and call boundaries, the negative-infinity
