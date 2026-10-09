@@ -6065,13 +6065,15 @@ def test_preprocessor_leaves_unknown_struct_member_calls_unchanged():
                 thread int& element() { return value; }
             };
             struct Holder { Leaf leaf; };
-            void assign(thread Holder& holder) { holder.leaf.element() = 1; }
+            void assign(thread Holder& holder) {
+                thread int& escaped = holder.leaf.element();
+            }
             """,
             "Leaf",
             "element",
             "Leaf::element()",
             "thread int&",
-            id="nested-receiver",
+            id="nested-reference-escape",
         ),
         pytest.param(
             """

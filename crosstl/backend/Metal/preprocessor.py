@@ -14083,7 +14083,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if (
                     reference_methods
                     and explicit_template_arguments is None
-                    and receiver == ident
+                    and re.fullmatch(r"[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*", receiver)
                     and access == "."
                 ):
                     method = self._select_direct_reference_method(
@@ -16972,12 +16972,29 @@ class MetalPreprocessor(HLSLPreprocessor):
             self._active_static_constexpr_functions,
             method.span[0],
         )
-        instantiated_body = self._rewrite_const_reference_alias_bindings(
+        reference_body = self._rewrite_local_reference_alias_bindings(
             instantiated_body,
             positioned_local_types,
             rewrite_structs_by_name,
             const_receivers={"self"} if method.is_const else set(),
+            implicit_receiver_contract=self._method_body_receiver_contract(
+                struct, method
+            ),
         )
+        if reference_body != instantiated_body:
+            # Captured indices add declarations and change lexical offsets.
+            # Rebuild the positioned type/alias views before resolving calls.
+            return self._lower_internal_template_member_calls(
+                struct,
+                method,
+                instantiated_parameters,
+                reference_body,
+                instantiated_template_functions,
+                template_methods_by_struct,
+                methods_by_struct,
+                operator_call_structs,
+                rewrite_structs_by_name,
+            )
         instantiated_body = self._rewrite_internal_direct_reference_accessor_calls(
             struct,
             method,
@@ -17978,15 +17995,16 @@ class MetalPreprocessor(HLSLPreprocessor):
             return None
         return contract.is_readonly
 
-    def _rewrite_const_reference_alias_bindings(
+    def _rewrite_local_reference_alias_bindings(
         self,
         code: str,
         variable_types: Dict[str, List[Tuple[int, str]]],
         structs_by_name: Dict[str, _MetalStructDefinition],
         *,
         const_receivers: Set[str],
+        implicit_receiver_contract: Optional[_MetalReceiverContract] = None,
     ) -> str:
-        """Inline proven local const-reference aliases without making a copy."""
+        """Replace proven local aliases with their captured storage locations."""
         if "auto" not in code or "&" not in code:
             return code
         pattern = re.compile(
@@ -18009,8 +18027,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             rewrites: List[Tuple[int, int, str]] = []
             for binding in bindings:
                 qualifiers = binding.group("qualifiers").split()
-                if qualifiers.count("const") != 1 or qualifiers.count("thread") > 1:
+                if qualifiers.count("const") > 1 or qualifiers.count("thread") > 1:
                     continue
+                mutable_alias = "const" not in qualifiers
                 boundary = max(
                     masked.rfind(token, 0, binding.start()) for token in (";", "{", "}")
                 )
@@ -18029,11 +18048,17 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if len(receiver_parts) < 2:
                     continue
 
-                receiver_type = self._resolve_declared_type_at(
-                    variable_types,
+                receiver_declaration, receiver_type = self._receiver_struct_type_at(
+                    working,
                     receiver_parts[0],
                     binding.start(),
+                    set(structs_by_name),
+                    None,
                 )
+                if receiver_declaration is None:
+                    receiver_type = self._resolve_declared_type_at(
+                        variable_types, receiver_parts[0], binding.start()
+                    )
                 receiver_info = self._nested_member_receiver_info(
                     receiver_type,
                     structs_by_name,
@@ -18043,14 +18068,22 @@ class MetalPreprocessor(HLSLPreprocessor):
                 current_struct = structs_by_name.get(receiver_info[0])
                 if current_struct is None:
                     continue
-                if receiver_parts[0] not in const_receivers:
-                    receiver_is_const = self._simple_receiver_constness(
-                        working,
-                        current_struct.name,
-                        receiver_parts[0],
-                        binding.start(),
+                receiver_contract = (
+                    implicit_receiver_contract
+                    if receiver_parts[0] == "self"
+                    else self._receiver_contract_for_named_value(
+                        working, current_struct.name, receiver_parts[0], binding.start()
                     )
-                    if receiver_is_const is not True:
+                )
+                if receiver_contract is None:
+                    continue
+                if (
+                    receiver_contract.address_spaces != ("thread",)
+                    or receiver_contract.is_volatile
+                ):
+                    continue
+                if not mutable_alias and receiver_parts[0] not in const_receivers:
+                    if not receiver_contract.is_readonly:
                         continue
 
                 value_chain_is_valid = True
@@ -18072,11 +18105,16 @@ class MetalPreprocessor(HLSLPreprocessor):
                         value_chain_is_valid = False
                         break
                     member_type = self._normalize_inferred_type(member.type_text)
+                    receiver_contract = self._member_receiver_contract(
+                        receiver_contract, current_struct, member_name, member_type
+                    )
                     current_struct = structs_by_name.get(member_type)
                     if current_struct is None:
                         value_chain_is_valid = False
                         break
                 if not value_chain_is_valid:
+                    continue
+                if receiver_contract is None or receiver_contract.is_volatile:
                     continue
 
                 reference_methods = self._concrete_reference_methods(
@@ -18090,15 +18128,29 @@ class MetalPreprocessor(HLSLPreprocessor):
                     current_struct,
                     reference_methods,
                     arg_open,
-                    receiver_is_const=True,
+                    receiver_is_const=receiver_contract.is_readonly,
                 )
-                _call_end, storage = self._direct_reference_accessor_rewrite(
-                    working,
-                    current_struct,
-                    method,
-                    receiver=".".join(receiver_parts),
-                    arg_open=arg_open,
-                )
+                declarations = ""
+                if mutable_alias:
+                    captured = self._capture_reference_accessor_storage(
+                        working,
+                        current_struct,
+                        method,
+                        ".".join(receiver_parts),
+                        arg_open,
+                        structs_by_name,
+                    )
+                    if captured is None:
+                        continue
+                    declarations, storage = captured
+                else:
+                    _call_end, storage = self._direct_reference_accessor_rewrite(
+                        working,
+                        current_struct,
+                        method,
+                        receiver=".".join(receiver_parts),
+                        arg_open=arg_open,
+                    )
 
                 scope_start, scope_end = self._innermost_lexical_scope(
                     scopes,
@@ -18107,17 +18159,27 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
                 if not (scope_start <= binding.start() < statement_end <= scope_end):
                     continue
-                alias_replacements = self._const_reference_alias_use_replacements(
+                alias_replacements = self._reference_alias_use_replacements(
                     working,
                     masked,
                     binding.group("alias"),
                     statement_end,
                     scope_end,
                     storage,
+                    allow_writes=mutable_alias and not receiver_contract.is_readonly,
                 )
-                if (
-                    alias_replacements is None
-                    or not self._reference_alias_capture_is_stable(
+                if mutable_alias:
+                    captured_names = {receiver_parts[0]}
+                    if any(
+                        self._declared_local_name(statement) in captured_names
+                        for statement in self._iter_simple_declarations(
+                            working[statement_end:scope_end]
+                        )
+                    ):
+                        continue
+                if alias_replacements is None or (
+                    not mutable_alias
+                    and not self._reference_alias_capture_is_stable(
                         working,
                         masked,
                         call_argument_spans,
@@ -18144,10 +18206,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
                 rewrites.extend(
                     [
-                        (binding.start(), statement_end, erased_binding),
+                        (binding.start(), statement_end, declarations + erased_binding),
                         *alias_replacements,
                     ]
                 )
+                # Process one binding at a time; a later alias may use this one.
+                break
             if not rewrites:
                 return working
             working = self._apply_text_replacements(working, rewrites)
@@ -18190,7 +18254,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             return None
         return parts[:-1], parts[-1], arg_open, arg_close, statement_end + 1
 
-    def _const_reference_alias_use_replacements(
+    def _reference_alias_use_replacements(
         self,
         code: str,
         masked: str,
@@ -18198,6 +18262,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         lifetime_start: int,
         lifetime_end: int,
         storage: str,
+        *,
+        allow_writes: bool = False,
     ) -> Optional[List[Tuple[int, int, str]]]:
         lifetime = code[lifetime_start:lifetime_end]
         if any(
@@ -18227,6 +18293,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                 previous -= 1
             if previous >= lifetime_start and masked[previous] == "&":
                 return None
+            if not allow_writes and masked[
+                max(lifetime_start, previous - 1) : previous + 1
+            ] in {"++", "--"}:
+                return None
             statement_boundary = max(
                 masked.rfind(token, lifetime_start, match.start())
                 for token in (";", "{", "}")
@@ -18234,13 +18304,87 @@ class MetalPreprocessor(HLSLPreprocessor):
             prefix = masked[statement_boundary + 1 : match.start()]
             if re.search(r"&\s*[A-Za-z_]\w*\s*=\s*$", prefix):
                 return None
-            if re.match(
+            if not allow_writes and re.match(
                 r"(?:\+\+|--|(?:(?:<<|>>|[+\-*/%&|^])?=(?!=)))",
                 masked[cursor:],
             ):
                 return None
             replacements.append((match.start(), match.end(), storage))
         return replacements or None
+
+    def _capture_reference_accessor_storage(
+        self,
+        code: str,
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+        receiver: str,
+        arg_open: int,
+        structs_by_name: Dict[str, _MetalStructDefinition],
+    ) -> Optional[Tuple[str, str]]:
+        """Capture parameter conversions and index evaluation at the binding."""
+        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+        if arg_close is None:
+            return None
+        arguments = self._split_top_level_commas(code[arg_open + 1 : arg_close])
+        parameters = self._split_top_level_commas(method.parameters)
+        if not code[arg_open + 1 : arg_close].strip():
+            arguments = []
+        if not method.parameters.strip():
+            parameters = []
+        if len(arguments) != len(parameters):
+            return None
+        names = set(IDENTIFIER_RE.findall(code))
+        declarations = []
+
+        def fresh_name(kind: str) -> str:
+            index = 0
+            while f"crosstl_reference_{kind}_{index}" in names:
+                index += 1
+            name = f"crosstl_reference_{kind}_{index}"
+            names.add(name)
+            return name
+
+        captured_arguments = []
+        for parameter, argument in zip(parameters, arguments):
+            if "*" in parameter or "&" in parameter or "[" in parameter:
+                return None
+            value_type = self._function_parameter_value_type(parameter)
+            if value_type is None:
+                return None
+            value_type = self._canonicalize_struct_scoped_type(
+                value_type, struct, structs_by_name
+            )
+            scalar = self._scalar_and_width(value_type)
+            if (
+                scalar is None
+                or scalar[1] != 1
+                or self._is_integral_concrete_type(value_type) is not True
+            ):
+                return None
+            name = fresh_name("argument")
+            declarations.append(f"{value_type} {name} = ({argument});")
+            captured_arguments.append(name)
+        _, storage = self._direct_reference_accessor_rewrite(
+            code,
+            struct,
+            method,
+            receiver=receiver,
+            arg_open=arg_open,
+            argument_values=captured_arguments,
+        )
+        replacements = []
+        cursor = storage.find("[")
+        while cursor >= 0:
+            end = self._find_matching_delimiter(storage, cursor, "[", "]")
+            if end is None:
+                return None
+            name = fresh_name("index")
+            declarations.append(f"const auto {name} = ({storage[cursor + 1:end]});")
+            replacements.append((cursor + 1, end, name))
+            cursor = storage.find("[", end + 1)
+        return "\n".join(declarations) + "\n", self._apply_text_replacements(
+            storage, replacements
+        )
 
     def _reference_alias_capture_is_stable(
         self,
@@ -18418,6 +18562,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         *,
         receiver: str,
         arg_open: int,
+        argument_values: Optional[List[str]] = None,
     ) -> Tuple[int, str]:
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:
@@ -18478,6 +18623,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             for argument in self._split_top_level_commas(code[arg_open + 1 : arg_close])
             if argument.strip()
         ]
+        if argument_values is not None:
+            raw_arguments = argument_values
         if len(raw_arguments) != len(method.parameter_names):
             self._reject_reference_returning_method_call(
                 code, struct, method, arg_open, arg_close

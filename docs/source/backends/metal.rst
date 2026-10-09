@@ -154,6 +154,15 @@ structured diagnostics instead of abandoning the member-lowering pass.
 Reference-returning accessors still require identity-preserving lowering;
 unsupported aliases are diagnosed rather than copied into temporary values.
 
+Local ``thread auto&`` bindings to proven aggregate accessors capture each
+integral argument with its declared parameter type and capture the resulting
+storage indices at the binding. Later index changes do not redirect the alias,
+and writes through multiple aliases remain visible in their original storage.
+Nested value fields, per-iteration bindings, index side effects and narrow
+parameter conversions have native controls. Deduced constness is retained.
+Reference escapes, unsupported receiver storage and unproven alias uses remain
+diagnostics; no value-copy fallback is used.
+
 Explicit struct specializations compare primitive alias arguments by their
 resolved type before materializing the primary template. Static member lookup
 uses the same owner, including specialization declarations written through an

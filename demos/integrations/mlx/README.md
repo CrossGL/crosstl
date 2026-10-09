@@ -54,11 +54,12 @@ passes on a translated backend.
 
 The selected tiled GEMM entry at pin `9c3d3557` now passes explicit `auto*`
 deduction through the public project pipeline, without changing upstream
-sources or bypassing specialization analysis. It is not yet executable:
-member lowering now reaches a structured `struct.reference-return` diagnostic
-for `MMATile::frag_at(i, j)`, instead of abandoning the pass with unresolved
-aggregate, loader and matrix calls. Its mutable result must retain the original
-storage identity; substituting a value copy would change the computation. The constant
+sources or bypassing specialization analysis. It now produces a Metal artifact:
+`MMATile::frag_at(i, j)` aliases retain their original storage and binding-time
+indices, including writes through `accum[k]`. Strict native compilation still
+fails on unused parameters introduced or exposed by specialization
+([#2164](https://github.com/CrossGL/crosstl/issues/2164)), so this entry is not yet
+counted as compiled or numerically validated. The constant
 `GEMMParams` and `GEMMAddMMParams` pointers now retain their indirection, address
 space and bindings ([#2160](https://github.com/CrossGL/crosstl/issues/2160)).
 Conditional scalar-buffer parameters now retain their bindings and conditions
@@ -118,9 +119,16 @@ and multidimensional arrays
 Metal and OpenGL, including read-only receivers, argument/index side effects,
 wraparound and output guards; Metal also executes the unchanged source controls.
 All thirteen HLSL variants compile with strict DXC checks. Windows execution
-remains a separate required gate in the existing native job. The selected real
-GEMM entry still requires reference-return identity preservation before it can
-produce an executable artifact.
+remains a separate required gate in the existing native job.
+
+Reference-capture controls cover mutable accessor aliases over nested value
+fields ([#2163](https://github.com/CrossGL/crosstl/issues/2163)). Thirteen cases
+execute on Metal and OpenGL, including changed indices, index side effects,
+shared aliases, loop-local bindings, narrow parameter conversions, deduced
+constness and output guards. Generated Metal matches the original sources, and
+all thirteen HLSL variants compile with strict DXC checks; Windows execution
+remains required separately. Unsupported escapes and alias uses are diagnosed.
+These controls do not establish complete GEMM execution or upstream-suite parity.
 
 Reduction reference review found an alias-specialization error
 ([#2100](https://github.com/CrossGL/crosstl/issues/2100)): `float16_t` selected
