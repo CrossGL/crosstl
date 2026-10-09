@@ -30,6 +30,9 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
     load_index as load_reduction_index,
 )
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
+from demos.integrations.mlx.portable_host.verify_binary_batches import (
+    run_bounded as run_binary_batches,
+)
 from demos.integrations.mlx.portable_host.verify_cast_batches import (
     run_bounded as run_cast_batches,
 )
@@ -87,7 +90,7 @@ NEGATIVE_CHECKS = {
     "copy-large-allocation": "exceeds its allocation",
     "copy-allocation": "exceeds its allocation",
     "binary-dtype": "supported dtype",
-    "binary-limit": "65535",
+    "binary-large-allocation": "exceeds its allocation",
     "cast-dtype": (
         "casts require float16, float32, int32, uint32, int64, uint64 or bool"
     ),
@@ -171,8 +174,8 @@ def worker(args):
                 value = mx.add(
                     mx.array([1, 2], dtype=mx.int16), mx.array([2, 3], dtype=mx.int16)
                 )
-            elif args.worker == "binary-limit":
-                source = mx.array(np.ones(65536, dtype=np.float32))
+            elif args.worker == "binary-large-allocation":
+                source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (65536,), (1,), 2)
                 value = mx.add(source, source, stream=mx.gpu)
             elif args.worker == "cast-dtype":
                 value = mx.array([1, 2], dtype=mx.int16).astype(mx.float32)
@@ -481,6 +484,11 @@ def verify(args):
         if getattr(args, "large_copies", False)
         else None
     )
+    binary_batches = (
+        run_binary_batches(args.mlx_root, args.packages, output / "binary-batches")
+        if getattr(args, "binary_batches", False)
+        else None
+    )
     after = verify_prepared(args.mlx_root)
     save(output / "adaptation-after.json", after)
     if after != adaptation or upstream_test_sources(args.mlx_root) != test_sources:
@@ -505,6 +513,7 @@ def verify(args):
         **({"reductionWidths": reduction_index["widths"]} if reduction_index else {}),
         **({"castBatches": cast_batches} if cast_batches is not None else {}),
         **({"largeCopies": large_copies} if large_copies is not None else {}),
+        **({"binaryBatches": binary_batches} if binary_batches is not None else {}),
     }
     save(output / "evidence.json", evidence)
     return evidence
@@ -517,6 +526,7 @@ if __name__ == "__main__":
     parser.add_argument("--reductions", type=Path)
     parser.add_argument("--cast-batches", action="store_true")
     parser.add_argument("--large-copies", action="store_true")
+    parser.add_argument("--binary-batches", action="store_true")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--worker",

@@ -78,6 +78,11 @@ The NaN-equality entry supports float32; the maintained host workloads exercise
 scalar `array_equal(equal_nan=True)`. General array equality additionally needs
 the reduction packages described below. The optional bitwise package family supports
 Boolean operator overloads and 32-bit integer AND, OR, XOR, shifts and inversion.
+Binary arithmetic, comparisons, logical AND/OR and bitwise binary operations use
+independent batches of at most 65,535 elements. Both source pointers and the
+destination pointer advance by their own storage widths, including Boolean
+comparison outputs. Shift counts are checked across the complete input before
+the first binary dispatch. Input materialization still inherits the copy limits.
 Concatenate supports float32, int32, uint32 and bool inputs through destination-strided copies.
 Optional selection packages support `where` with Boolean conditions and
 float32, int32, uint32 or bool values. Optional absolute-value packages extend
@@ -88,7 +93,8 @@ their metadata; noncontiguous inputs use translated copies before unary dispatch
 Dispatch is synchronous and uses host staging buffers. Layout copies accept signed
 32-bit element counts and storage spans, with up to 64 axes and 65,535 workgroups
 per launch axis. Most other elementwise operations remain bounded to 65,535 stored
-elements; casts and concatenation can produce larger outputs as described below.
+elements; binary operations, casts and concatenation can produce larger outputs
+as described below.
 Elementwise operations use one thread per workgroup; reductions
 preserve upstream launch widths and multipass planning. Empty elementwise arrays
 do not dispatch. This is a
@@ -143,10 +149,38 @@ first launch-axis limit; larger multidimensional arrays can fit. Invalid backing
 views, overlapping destinations and out-of-range signed indices are rejected
 before native submission. The adapter stages whole source/destination spans, so
 large sparse layouts can require substantial host and device memory. This removes
-the former 65,535-element copy limit, not the remaining size limits in binary,
-unary or reduction operations.
+the former 65,535-element copy limit, not the remaining size limits in unary or
+reduction operations.
+
+## Batched Binary Operations
+
+The required native host jobs run this verifier inside their existing bounded
+verification step, without adding runner jobs:
+
+```bash
+python -m demos.integrations.mlx.portable_host.verify_binary_batches \
+  --mlx-root mlx-upstream --packages host-packages --output-dir binary-batches
+```
+
+Its 48 API cases cover every base arithmetic, comparison and logical binary entry
+except NaN-equality, whose large-array API additionally needs reduction support.
+They include 65,535, 65,536 and 131,075 elements, distinct input offsets, a large
+transpose, a reversed input and row/column broadcasts. The 98 binary batches and
+four materializing copies require exact CPU/reference/native bytes, unchanged
+source storage, physical Boolean widths, uploaded inputs, destination guards,
+launch geometry and retained compiled artifacts. Float operands are finite and
+exactly representable; the existing nonfinite and small-array tests remain in
+place. Half and 64-bit batch execution are not covered by these cases.
+
+These checks establish the batched operations, not full upstream-suite parity.
 
 ## Affine Quantization
+
+Affine host verification runs in the existing three-platform half-host jobs,
+using the same-run base packages and a rebuilt host at the same upstream pin.
+Its 1,800-second command deadline is unchanged. Moving it out of the base host
+job keeps both jobs within their declared budgets without adding runners or
+removing native cases; affine logs and artifacts are retained with half-host evidence.
 
 `HostRuntime(..., mlx_root=...)` routes MLX's `Quantize::eval_gpu` to the pinned
 `affine_quantize` and `affine_dequantize` entries in `quantized.metal`. The source
@@ -1432,8 +1466,10 @@ python -m demos.integrations.mlx.portable_host.verify_bitwise \
 
 Use `directx` on Windows or `metal` on macOS when building the corresponding
 packages. The three-platform CI requires this proof after the base host test.
-It compares 120 workloads against separate MLX CPU execution, NumPy and an exact
-Python integer reference. Each native run requires 172 dispatches, including
+It compares 133 workloads against separate MLX CPU execution, NumPy and an exact
+Python integer reference. The original 120 cases are retained, followed by one
+65,536-element case for each of the 13 binary entries. Each native run requires
+198 dispatches, including
 67 translated layout copies. Binary operations materialize transpose, broadcast
 and negative-stride inputs. Inversion preserves stored-contiguous transpose and
 broadcast layouts; negative-stride inputs still require a translated copy. Empty
@@ -1446,11 +1482,13 @@ above the stored-element limit.
 Unsigned shifts exercise all 32 bits and counts through 31; signed right shifts
 include negative operands. Signed left-shift cases use nonnegative values and
 representable results, without making a parity claim for undefined source
-overflow. Inputs and outputs remain bounded to 65,535 elements. Other integer
+overflow. Binary operations may span multiple 65,535-element batches; inversion
+retains its stored-element limit. A bad shift count at the final element of a
+65,536-element input must fail before any binary dispatch. Other integer
 widths and Boolean shifts are not implemented by this family. Upstream maps
 Boolean inversion to the existing LogicalNot path.
 The complete upstream `test_bitwise_ops` also requires random generation and
-those missing widths and operations; the 120 workloads are not a substitute for
+those missing widths and operations; the 133 workloads are not a substitute for
 passing that unchanged test. No upstream kernel or test is patched.
 
 The workload layout helper reinterprets a NumPy base allocation using the view's

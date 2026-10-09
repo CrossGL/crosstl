@@ -1147,7 +1147,7 @@ jobs:
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Validate portable host contracts
         if: runner.os == 'Linux'
-        run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_host.py demos/integrations/mlx/tests/host/test_portable_reductions.py demos/integrations/mlx/tests/host/test_portable_rows.py demos/integrations/mlx/tests/host/test_portable_reduction_shards.py demos/integrations/mlx/tests/host/test_portable_mixed_reductions.py demos/integrations/mlx/tests/host/test_portable_columns.py demos/integrations/mlx/tests/host/test_portable_small_rows.py demos/integrations/mlx/tests/host/test_portable_empty_reductions.py demos/integrations/mlx/tests/host/test_portable_bitwise.py demos/integrations/mlx/tests/host/test_portable_concatenate.py demos/integrations/mlx/tests/host/test_portable_selection.py demos/integrations/mlx/tests/host/test_portable_integer64.py demos/integrations/mlx/tests/host/test_portable_padding.py demos/integrations/mlx/tests/host/test_portable_slice_updates.py demos/integrations/mlx/tests/host/test_portable_slice_update_workloads.py demos/integrations/mlx/tests/test_random_audit.py demos/integrations/mlx/tests/host/test_portable_random.py
+        run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_host.py demos/integrations/mlx/tests/host/test_portable_reductions.py demos/integrations/mlx/tests/host/test_portable_rows.py demos/integrations/mlx/tests/host/test_portable_reduction_shards.py demos/integrations/mlx/tests/host/test_portable_mixed_reductions.py demos/integrations/mlx/tests/host/test_portable_columns.py demos/integrations/mlx/tests/host/test_portable_small_rows.py demos/integrations/mlx/tests/host/test_portable_empty_reductions.py demos/integrations/mlx/tests/host/test_portable_bitwise.py demos/integrations/mlx/tests/host/test_portable_concatenate.py demos/integrations/mlx/tests/host/test_portable_selection.py demos/integrations/mlx/tests/host/test_portable_integer64.py demos/integrations/mlx/tests/host/test_portable_padding.py demos/integrations/mlx/tests/host/test_portable_slice_updates.py demos/integrations/mlx/tests/host/test_portable_slice_update_workloads.py demos/integrations/mlx/tests/test_random_audit.py demos/integrations/mlx/tests/host/test_portable_random.py demos/integrations/mlx/tests/host/test_cast_batches.py demos/integrations/mlx/tests/host/test_large_copies.py demos/integrations/mlx/tests/host/test_binary_batches.py
       - name: Validate platform host ABI
         if: runner.os != 'Linux'
         run: |
@@ -1797,20 +1797,6 @@ jobs:
           python tools/run_bounded_command.py --timeout-seconds 2400 --label "MLX host package translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
               --target ${{ matrix.target }} --output-dir .mlx-portable-host/packages 2>&1 | tee .mlx-portable-host/translation.log
-      - name: Execute affine quantization through MLX
-        env:
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-        run: |
-          set -euo pipefail
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_quantization.py -k 'not native_host'
-          fi
-          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX affine host verification" -- \
-            python -m demos.integrations.mlx.portable_host.verify_quantization --mlx-root mlx-upstream \
-              --packages .mlx-portable-host/packages --output-dir .mlx-portable-host/affine \
-              2>&1 | tee .mlx-portable-host/affine.log
       - name: Execute upstream tests on the translated backend
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -1818,7 +1804,7 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 4000 --label "MLX portable host verification" -- \
             python -m demos.integrations.mlx.portable_host.verify --mlx-root mlx-upstream \
-              --packages .mlx-portable-host/packages --cast-batches --large-copies --output-dir .mlx-portable-host/evidence 2>&1 | tee .mlx-portable-host/verification.log
+              --packages .mlx-portable-host/packages --cast-batches --large-copies --binary-batches --output-dir .mlx-portable-host/evidence 2>&1 | tee .mlx-portable-host/verification.log
       - name: Retain native execution evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -2094,7 +2080,7 @@ jobs:
     name: MLX half host (${{ matrix.target }})
     needs: portable-host
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 165
+    timeout-minutes: 195
     strategy:
       fail-fast: false
       matrix:
@@ -2201,6 +2187,20 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX half host build" -- \
             python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-half/build.log
+      - name: Execute affine quantization through MLX
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_quantization.py -k 'not native_host'
+          fi
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX affine host verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_quantization --mlx-root mlx-upstream \
+              --packages .mlx-portable-half/base/packages --output-dir .mlx-portable-half/affine \
+              2>&1 | tee .mlx-portable-half/affine.log
       - name: Translate half host packages
         run: |
           set -euo pipefail

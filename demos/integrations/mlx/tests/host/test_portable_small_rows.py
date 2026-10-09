@@ -757,19 +757,13 @@ def test_small_row_worker_retains_failed_readbacks(tmp_path, monkeypatch, fault)
         assert record["resultShape"] == [1, expected.size]
 
 
-def test_native_host_ci_replaces_only_superseded_pull_request_execution():
+def test_native_host_ci_preserves_active_jobs_and_replaces_only_pending_jobs():
     import yaml
 
     workflow = yaml.safe_load(
         Path(".github/workflows/demo-project-testing.yml").read_text()
     )
-    assert workflow["concurrency"] == {
-        "group": (
-            "ci-${{ github.workflow }}-${{ github.event_name }}-"
-            "${{ github.event.pull_request.number || github.run_id }}"
-        ),
-        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
-    }
+    assert "concurrency" not in workflow
     concurrency = workflow["jobs"]["small-row-reductions"]["concurrency"]
     assert concurrency["group"] == (
         "${{ github.workflow }}-${{ github.ref }}-small-row-reductions-"

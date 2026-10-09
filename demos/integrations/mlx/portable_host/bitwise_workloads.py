@@ -37,6 +37,13 @@ def cases():
                 ),
                 "layout": layout,
             }
+    for entry, dtype in BITWISE_ENTRIES.items():
+        yield {
+            "entry": entry,
+            "dtype": dtype,
+            "operation": entry[3 : -len(dtype)],
+            "layout": "batched",
+        }
 
 
 def operands(np, case):
@@ -49,6 +56,7 @@ def operands(np, case):
         "transpose": 15,
         "broadcast": 15,
         "reverse": 17,
+        "batched": 65536,
     }[case["layout"]]
     size = max(count, 36)
     words = [
@@ -136,7 +144,10 @@ def dispatches(np, case):
         if not value.flags.c_contiguous:
             shape = (1, *value.shape) if value.ndim == 1 else value.shape
             result.append((copy, value.size, [(shape[-1] + 1) // 2, shape[-2], 1]))
-    return result + [(case["entry"], a.size, [a.size, 1, 1])]
+    return result + [
+        (case["entry"], min(65535, a.size - first), [min(65535, a.size - first), 1, 1])
+        for first in range(0, a.size, 65535)
+    ]
 
 
 def stored_values(case, expected):
@@ -220,6 +231,7 @@ def validate(records, trace, *, native):
             raise ValueError(
                 "Bitwise readbacks must preserve integer and Boolean types"
             )
+        first = 0
         for entry, count, grid in calls:
             if cursor >= len(trace):
                 raise ValueError("Bitwise native trace is incomplete")
@@ -259,11 +271,16 @@ def validate(records, trace, *, native):
                 raise ValueError("Bitwise native output guard differs")
             if entry in BITWISE_PACKAGE_ENTRIES:
                 values = stored_values(case, expected)
+                if entry in BITWISE_ENTRIES:
+                    values = values[first : first + count]
+                    first += count
                 if case["dtype"] == "bool_" and event["target"] != "metal":
                     values = [int(value) for value in values]
                 if event.get("bitwiseValues") != values:
                     raise ValueError(
                         "Bitwise native values differ from the MLX readback"
                     )
+        if native and case["entry"] in BITWISE_ENTRIES and first != expected.size:
+            raise ValueError("Bitwise native batches do not cover the output")
     if cursor != len(trace):
         raise ValueError("Bitwise trace contains unexpected dispatches")

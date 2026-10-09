@@ -293,7 +293,14 @@ def test_affine_ci_uses_existing_platform_jobs_and_retains_evidence():
     workflow = yaml.safe_load(
         (root / ".github/workflows/demo-project-testing.yml").read_text()
     )
-    job = workflow["jobs"]["portable-host"]
+    jobs = workflow["jobs"]
+    job = jobs["half-host"]
+    assert job["needs"] == "portable-host"
+    assert job["env"]["MLX_COMMIT"] == jobs["portable-host"]["env"]["MLX_COMMIT"]
+    assert not any(
+        item.get("name") == "Execute affine quantization through MLX"
+        for item in jobs["portable-host"]["steps"]
+    )
     assert {item["target"] for item in job["strategy"]["matrix"]["include"]} == {
         "metal",
         "opengl",
@@ -308,11 +315,18 @@ def test_affine_ci_uses_existing_platform_jobs_and_retains_evidence():
     assert "portable_host.verify_quantization" in step["run"]
     assert "--timeout-seconds 1800" in step["run"]
     assert "test_portable_quantization.py" in step["run"]
+    assert "--packages .mlx-portable-half/base/packages" in step["run"]
+    assert "--output-dir .mlx-portable-half/affine" in step["run"]
+    assert "tee .mlx-portable-half/affine.log" in step["run"]
+    assert "continue-on-error" not in step
+    names = [item.get("name") for item in job["steps"]]
+    assert names.index("Build adapted upstream MLX") < names.index(step["name"])
     upload = next(
         item
         for item in job["steps"]
-        if item.get("name") == "Retain native execution evidence"
+        if item.get("name") == "Retain half execution evidence"
     )
+    assert upload["with"]["path"] == ".mlx-portable-half"
     assert upload["if"] == "always()"
     assert upload["with"]["include-hidden-files"] is True
     assert upload["with"]["if-no-files-found"] == "error"

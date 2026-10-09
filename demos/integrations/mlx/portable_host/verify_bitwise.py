@@ -16,7 +16,7 @@ NEGATIVE_CHECKS = {
     "missing": "No translated package for vv_BitwiseAndint32",
     "int64": "supported dtype",
     "uint8": "supported dtype",
-    "over-limit": "at most 65535",
+    "last-large-shift": "counts in [0, 31]",
     "negative-shift": "counts in [0, 31]",
     "large-shift": "counts in [0, 31]",
     "invert-missing": "No translated package for v_BitwiseInvertint32int32",
@@ -83,19 +83,20 @@ def worker(args):
     if args.worker in NEGATIVE_CHECKS:
         kind = args.worker.removeprefix("invert-")
         dtype = kind if kind in {"uint8", "int64"} else "int32"
-        size = 65536 if kind == "over-limit" else 3
+        size = 65536 if kind in {"over-limit", "last-large-shift"} else 3
         a = mx.array(np.ones(size, dtype=dtype))
-        b = mx.array(
-            np.full(
-                size,
-                (
-                    -1
-                    if args.worker == "negative-shift"
-                    else 32 if args.worker == "large-shift" else 1
-                ),
-                dtype=dtype,
-            )
+        shifts = np.full(
+            size,
+            (
+                -1
+                if args.worker == "negative-shift"
+                else 32 if args.worker == "large-shift" else 1
+            ),
+            dtype=dtype,
         )
+        if args.worker == "last-large-shift":
+            shifts[-1] = 32
+        b = mx.array(shifts)
         operation = mx.left_shift if args.worker.endswith("shift") else mx.bitwise_and
         try:
             mx.eval(

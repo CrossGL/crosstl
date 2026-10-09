@@ -800,9 +800,6 @@ void dispatch_binary(
       inputs[0].dtype() != mlx::core::float16) {
     operation = "Equal";
   }
-  if (out.size() > 65535) {
-    throw std::invalid_argument("CrossTL binary dispatch supports at most 65535 elements.");
-  }
   out.set_data(mlx::core::allocator::malloc(out.nbytes()));
   if (out.size() == 0) {
     return;
@@ -818,21 +815,27 @@ void dispatch_binary(
       }
     }
   }
-  uint32_t size = static_cast<uint32_t>(out.size());
   std::string entry = std::string("vv_") + operation + dtype;
-  CrosstlMlxBuffer buffers[] = {
-      {"a", dtype, a.data<void>(), size, 0},
-      {"b", dtype, b.data<void>(), size, 0},
-      {"c", comparison ? "bool_" : dtype, out.data<void>(), size, 1},
-      {"size", "uint32", &size, 1, 0},
-  };
-  char error[2048] = {};
-  const auto launch = elementwise_launch(size);
-  int status = dispatch_callback.load()(
-      entry.c_str(), buffers, 4, size, &launch, error, sizeof(error));
-  error[sizeof(error) - 1] = '\0';
-  if (status != 0) {
-    throw std::runtime_error(std::string("CrossTL native binary failed: ") + error);
+  require_entry(entry);
+  // vv_ specializes one independent element per invocation, including comparisons.
+  for (uint64_t first = 0; first < out.size();) {
+    uint32_t size = static_cast<uint32_t>(
+        std::min<uint64_t>(out.size() - first, 65535));
+    CrosstlMlxBuffer buffers[] = {
+        {"a", dtype, a.data<uint8_t>() + first * a.itemsize(), size, 0},
+        {"b", dtype, b.data<uint8_t>() + first * b.itemsize(), size, 0},
+        {"c", comparison ? "bool_" : dtype, out.data<uint8_t>() + first * out.itemsize(), size, 1},
+        {"size", "uint32", &size, 1, 0},
+    };
+    char error[2048] = {};
+    const auto launch = elementwise_launch(size);
+    int status = dispatch_callback.load()(
+        entry.c_str(), buffers, 4, size, &launch, error, sizeof(error));
+    error[sizeof(error) - 1] = '\0';
+    if (status != 0) {
+      throw std::runtime_error(std::string("CrossTL native binary failed: ") + error);
+    }
+    first += size;
   }
 }
 } // namespace

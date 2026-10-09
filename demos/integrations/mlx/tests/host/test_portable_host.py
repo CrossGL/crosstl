@@ -1707,6 +1707,7 @@ def test_full_references_require_exact_storage_and_broadcasts(fault):
         "upstream-failure",
         "cast-batches-failure",
         "large-copies-failure",
+        "binary-batches-failure",
     ],
 )
 def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
@@ -1904,12 +1905,22 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         return {"passed": True, "casesPerPath": 35, "dispatchCount": 35}
 
     monkeypatch.setattr(verify, "run_large_copies", run_large_copies)
+    binary_calls = []
+
+    def run_binary_batches(root, packages, output):
+        binary_calls.append((root, packages, output))
+        if fault == "binary-batches-failure":
+            raise RuntimeError("Batched binary verification failed")
+        return {"passed": True, "casesPerPath": 48, "dispatchCount": 102}
+
+    monkeypatch.setattr(verify, "run_binary_batches", run_binary_batches)
     args = SimpleNamespace(
         mlx_root=tmp_path / "mlx",
         packages=package_root,
         output_dir=tmp_path / "evidence",
         cast_batches=True,
         large_copies=True,
+        binary_batches=True,
     )
     if fault:
         with pytest.raises((RuntimeError, ValueError, AssertionError)):
@@ -1957,6 +1968,14 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         }
         assert copy_calls == [
             (args.mlx_root, args.packages, args.output_dir / "large-copies")
+        ]
+        assert evidence["binaryBatches"] == {
+            "passed": True,
+            "casesPerPath": 48,
+            "dispatchCount": 102,
+        }
+        assert binary_calls == [
+            (args.mlx_root, args.packages, args.output_dir / "binary-batches")
         ]
         assert evidence["original"]["unary"] == unary_workloads.expected_records(
             cpu=True
@@ -2094,7 +2113,7 @@ def test_ci_limits_portable_contracts_without_removing_platform_abi_checks():
     assert contracts["if"] == "runner.os == 'Linux'"
     command = shlex.split(contracts["run"])
     assert command[:6] == ["python", "-m", "pytest", "-q", "-n", "auto"]
-    assert len(command[6:]) == 17
+    assert len(command[6:]) == 20
     assert set(command[6:]) == {
         "demos/integrations/mlx/tests/host/test_portable_host.py",
         "demos/integrations/mlx/tests/host/test_portable_reductions.py",
@@ -2113,6 +2132,9 @@ def test_ci_limits_portable_contracts_without_removing_platform_abi_checks():
         "demos/integrations/mlx/tests/host/test_portable_slice_update_workloads.py",
         "demos/integrations/mlx/tests/test_random_audit.py",
         "demos/integrations/mlx/tests/host/test_portable_random.py",
+        "demos/integrations/mlx/tests/host/test_cast_batches.py",
+        "demos/integrations/mlx/tests/host/test_large_copies.py",
+        "demos/integrations/mlx/tests/host/test_binary_batches.py",
     }
     abi = steps["Validate platform host ABI"]
     assert abi["if"] == "runner.os != 'Linux'"

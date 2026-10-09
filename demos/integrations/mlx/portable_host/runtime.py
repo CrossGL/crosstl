@@ -1139,7 +1139,16 @@ class HostRuntime:
                         ),
                         **(
                             {"binaryGuardValues": output["values"][buffer.count :]}
-                            if binary
+                            if binary_operation
+                            else {}
+                        ),
+                        **(
+                            {
+                                "binaryValues": output["values"][: buffer.count],
+                                "inputs": inputs,
+                                "packageRoot": str(package_directory),
+                            }
+                            if binary_operation and self.retain_native_modules
                             else {}
                         ),
                         **(
