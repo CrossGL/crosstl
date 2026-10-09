@@ -14242,29 +14242,29 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "c25bb1bb9d47cbec9d94c732caf88b8e6ae1e7501744ce87f5371e1e63f29eb7"
+                "ff64661e8c32779e3f397436b33f9effd042ea413678c7c1214d9ede7e656f81"
             ),
-            "size_bytes": 9183,
+            "size_bytes": 9816,
             "workgroup_size": [32, 1, 1],
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
             "compiler_profile": "cs_6_6",
             "compiler_arguments": ["-enable-16bit-types", "-WX"],
-            "compiled_artifact_size_bytes": 4736,
+            "compiled_artifact_size_bytes": 4836,
             "compiler_validation_status": "passed",
         },
         "opengl": {
             "target_entry_point": "main",
             "sha256": (
-                "dc23d056d38464ba0fa1a25ef712789e47063532dfd78a2be41433fb83218886"
+                "fa30bdc9d3983644c94683aa2556b6f896f730f1ae32e72ff0b7082f0e1bea3b"
             ),
-            "size_bytes": 10686,
+            "size_bytes": 11346,
             "workgroup_size": [32, 1, 1],
             "subgroup_enforcement": "explicit-32-lane-software-subgroup",
             "compiler": "glslangValidator",
             "compiler_target": "OpenGL/SPIR-V 1.3",
             "validator": "spirv-val",
-            "compiled_artifact_size_bytes": 14076,
+            "compiled_artifact_size_bytes": 15296,
             "control_barrier_instruction_count": 3,
             "group_non_uniform_instruction_count": 0,
             "compiler_validation_status": "passed",
@@ -14280,6 +14280,7 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
     assert status["semantic_contracts"] == {
         "scale_constructor": "fp8_e8m0 source constructor factory",
         "scale_conversion": "selected sibling float conversion operator",
+        "scale_rounding": "metal-halfway-away-from-zero",
         "finite_test": "single-evaluation IEEE-754 float32 exponent mask",
         "sign_test": "exact IEEE-754 float32 sign bit",
         "private_scalar_struct_view": "read-only exact one-member layout",
@@ -14368,9 +14369,9 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         },
         "corrected_dxil_contract": {
             "artifact_sha256": (
-                "c25bb1bb9d47cbec9d94c732caf88b8e6ae1e7501744ce87f5371e1e63f29eb7"
+                "ff64661e8c32779e3f397436b33f9effd042ea413678c7c1214d9ede7e656f81"
             ),
-            "artifact_size_bytes": 9183,
+            "artifact_size_bytes": 9816,
             "source_bitcast": "integer-ieee754-binary16-to-float32",
             "subnormal_decode": "integer-ieee754-binary16-to-float32",
             "arithmetic": "fmul-float",

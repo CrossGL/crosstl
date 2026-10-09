@@ -2024,11 +2024,11 @@ and
 
 Entry-scoped translation materializes only the selected specialization with
 `T=float`, `group_size=32`, `bits=4`, and `has_global_scale=false`. The
-9,183-byte HLSL has SHA-256
-`c25bb1bb9d47cbec9d94c732caf88b8e6ae1e7501744ce87f5371e1e63f29eb7`,
+9,816-byte HLSL has SHA-256
+`ff64661e8c32779e3f397436b33f9effd042ea413678c7c1214d9ede7e656f81`,
 retains `[numthreads(32, 1, 1)]` and `[WaveSize(32)]`, and passes DXC under
 `cs_6_6`, `-enable-16bit-types`, and warnings as errors. Its compiled DXIL is
-4,736 bytes. This artifact explicitly enables the DirectX-only
+4,836 bytes. This artifact explicitly enables the DirectX-only
 `project.source_options.metal.target_options.directx.widen_native_float16`
 mode. Source `as_type<float16_t>(uint16_t)` reconstructs its exact payload as
 float32 with integer IEEE-754 masks, and logical `float16_t` locals, function
@@ -2064,10 +2064,10 @@ masked with `0xffff`. The corrected HLSL emits
 `int(uint16_t(bits)) << 23`; DXIL now shifts the 32-bit value by 23 before
 `asfloat`, while retaining zero native-half instructions.
 
-The 10,686-byte GLSL has SHA-256
-`dc23d056d38464ba0fa1a25ef712789e47063532dfd78a2be41433fb83218886`,
+The 11,346-byte GLSL has SHA-256
+`fa30bdc9d3983644c94683aa2556b6f896f730f1ae32e72ff0b7082f0e1bea3b`,
 uses one explicit 32-lane software subgroup for `WaveActiveMax(float)`, and
-passes `glslangValidator` and `spirv-val`. Its 14,076-byte SPIR-V has three
+passes `glslangValidator` and `spirv-val`. Its 15,296-byte SPIR-V has three
 control barriers, no group-nonuniform instruction, and local size
 `[32, 1, 1]`. Because GLSL widens source binary16 values to float32, the same
 source bitcast preserves the low 16-bit payload through `unpackHalf2x16` rather
@@ -2097,10 +2097,25 @@ recompilation confirm unchanged reflected interfaces and byte-identical DXIL
 and SPIR-V. The selected specialization, workload, dispatch and numerical
 assertions are unchanged; native execution remains required in the existing jobs.
 
+The current references also include Metal-compatible halfway-away-from-zero
+rounding. Compared with the preceding HLSL identity
+`c25bb1bb9d47cbec9d94c732caf88b8e6ae1e7501744ce87f5371e1e63f29eb7`
+and GLSL identity
+`dc23d056d38464ba0fa1a25ef712789e47063532dfd78a2be41433fb83218886`,
+the complete change adds the integer-bit rounding helper and replaces the scale
+constructor's single `round(le)` call. All other generated source, reflected
+bindings, dispatch geometry and template materialization are unchanged. Strict
+compilation passes for all four old/current artifacts; compiled binaries differ
+because this is a rounding correction, not a formatting change. Independent
+rounding regressions compare generated Metal and OpenGL with the original Metal
+source and a decimal oracle, including halfway neighbors and narrow inputs.
+The native-loader workload and its zero-tolerance assertions are unchanged.
+
 The scale conversion invokes the source `fp8_e8m0(float)` constructor factory
 before the selected sibling float conversion operator; aggregate field
 initialization would encode the scale incorrectly. Qualified `metal::round`
-lowers to the portable floating intrinsic. OpenGL lowers `metal::isfinite` to
+lowers to a helper preserving Metal halfway-away-from-zero rounding instead of
+the target's native rounding rule. OpenGL lowers `metal::isfinite` to
 a single-evaluation IEEE-754 float32 exponent-mask test and `signbit` to the
 exact sign bit. The private `fp8_e4m3` scalar view is admitted only as a
 read-only, exact one-member-layout projection. Unresolved constructor branches,

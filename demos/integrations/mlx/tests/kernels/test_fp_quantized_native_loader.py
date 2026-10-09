@@ -62,12 +62,12 @@ MLX_MXFP4_VARIANT_ID = (
 )
 MLX_MXFP4_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "c25bb1bb9d47cbec9d94c732caf88b8e6ae1e7501744ce87f5371e1e63f29eb7",
-        "sizeBytes": 9183,
+        "sha256": "ff64661e8c32779e3f397436b33f9effd042ea413678c7c1214d9ede7e656f81",
+        "sizeBytes": 9816,
     },
     "opengl": {
-        "sha256": "dc23d056d38464ba0fa1a25ef712789e47063532dfd78a2be41433fb83218886",
-        "sizeBytes": 10686,
+        "sha256": "fa30bdc9d3983644c94683aa2556b6f896f730f1ae32e72ff0b7082f0e1bea3b",
+        "sizeBytes": 11346,
     },
 }
 REQUIRE_DIRECTX_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_MXFP4_DIRECTX_NATIVE_LOADER"
@@ -441,6 +441,13 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
     generated_path = mlx_root / artifact["path"]
     generated = generated_path.read_text(encoding="utf-8")
     assert "integral_constant_res_t_res" not in generated
+    round_helper = (
+        "__crossgl_metal_round_float"
+        if target == "directx"
+        else "crossgl_metal_round_float"
+    )
+    assert generated.count(f"int n = int({round_helper}(float(le)));") == 1
+    assert "int n = int(round(le));" not in generated
     global_scale_lines = [
         line for line in generated.splitlines() if "global_scale" in line
     ]
@@ -466,7 +473,6 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "float16_t converted" not in generated
         assert "f16tof32(" not in generated
         assert "converted *= 16384.0;" in generated
-        assert "int n = int(round(le));" in generated
         assert "metal_u3a_u3a" not in generated
         assert "__crossgl_physical_subgroup" not in generated
         _assert_directx_compiles(generated_path)
