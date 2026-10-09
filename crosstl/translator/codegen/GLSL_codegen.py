@@ -47884,6 +47884,8 @@ complex64_t crossgl_complex64_mod_assign(
             if not isinstance(operand, ArrayAccessNode):
                 return None
             binding = self.glsl_private_pointer_view_binding(operand.array)
+            if binding is None:
+                return None
             delta_expression = operand.index
             operator = "+"
         elif isinstance(expression, BinaryOpNode) and expression.op in {"+", "-"}:

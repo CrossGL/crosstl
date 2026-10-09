@@ -5052,6 +5052,13 @@ so target type erasure cannot change the call. Native controls cover scalar and
 aggregate arguments, pointer access modes, loop-local shadows and single argument
 evaluation. This does not establish support for arbitrary pointer reinterpretation
 inside aggregate helpers or for a complete matrix kernel.
+Direct storage-buffer vector views in OpenGL also accept indexed addresses such
+as ``reinterpret_cast<const device uint2*>(&input[base])[index]``. The scalar
+base offset and subsequent vector index retain their distinct byte strides.
+Native controls check two- and four-lane 32-bit integer and floating-point views
+at nonzero offsets against exact output words and allocation guards. This does
+not extend vector reinterpretation through aggregate-held pointers or the Metal
+round-trip target.
 
 HLSL writable arguments capture nonliteral array indices at the call expression
 before copy-in and copy-out, including indexed aggregate receivers. The captured
