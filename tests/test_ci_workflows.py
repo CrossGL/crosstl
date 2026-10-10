@@ -373,7 +373,12 @@ def _assert_grouped_native_python_policy(workflow_text, component_key):
         for runner in ("windows-latest", "macOS-latest")
     ]
     assert "all" not in matrix[component_key]
-    assert job["runs-on"] == "${{ matrix.OS }}"
+    expected_runner = (
+        "${{ matrix.OS == 'macOS-latest' && 'xcode-27' || matrix.OS }}"
+        if component_key == "component"
+        else "${{ matrix.OS }}"
+    )
+    assert job["runs-on"] == expected_runner
     assert job["env"]["PYTEST_XDIST_AUTO_NUM_WORKERS"] == "2"
     assert job["strategy"]["fail-fast"] is False
     assert "continue-on-error" not in job and "if" not in job
@@ -381,6 +386,36 @@ def _assert_grouped_native_python_policy(workflow_text, component_key):
         step for step in job["steps"] if step.get("name") == "Install dependencies"
     )
     assert "pip install -r requirements.txt pytest-xdist" in install["run"]
+
+
+def test_metal_fence_jobs_require_a_compatible_toolchain_without_extra_jobs():
+    translator = yaml.safe_load((WORKFLOW_DIR / "translator-tests.yml").read_text())[
+        "jobs"
+    ]["test"]
+    demo = yaml.safe_load((WORKFLOW_DIR / "demo-project-testing.yml").read_text())[
+        "jobs"
+    ]["portable-host"]
+    for job, name in (
+        (translator, "Verify Metal 4.1 toolchain"),
+        (demo, "Verify macOS Metal toolchain"),
+    ):
+        step = next(step for step in job["steps"] if step.get("name") == name)
+        assert step["if"] == "runner.os == 'macOS'"
+        assert step["timeout-minutes"] == 10
+        assert "continue-on-error" not in step
+        command = step["run"]
+        assert "set -euo pipefail" in command
+        assert (
+            "export DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer"
+            in command
+        )
+        assert 'test -d "$DEVELOPER_DIR"' in command
+        assert 'echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"' in command
+        assert "metal -std=metal4.1 -x metal -fsyntax-only /dev/null" in command
+    assert len(demo["strategy"]["matrix"]["include"]) == 3
+    assert {"os": "xcode-27", "target": "metal"} in demo["strategy"]["matrix"][
+        "include"
+    ]
 
 
 @pytest.mark.parametrize("exit_code", (0, 7))

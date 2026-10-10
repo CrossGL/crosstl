@@ -1114,7 +1114,7 @@ jobs:
             target: opengl
           - os: windows-2025
             target: directx
-          - os: macos-26
+          - os: xcode-27
             target: metal
     defaults:
       run:
@@ -1145,10 +1145,15 @@ jobs:
         timeout-minutes: 10
         run: |
           set -euo pipefail
+          export DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer
+          test -d "$DEVELOPER_DIR"
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          xcodebuild -version | tee .mlx-portable-host/xcode-version.txt
           if ! xcrun --sdk macosx metal --version; then
             xcodebuild -downloadComponent MetalToolchain
           fi
           xcrun --sdk macosx metal --version | tee .mlx-portable-host/metal-version.txt
+          xcrun --sdk macosx metal -std=metal4.1 -x metal -fsyntax-only /dev/null
           xcrun --sdk macosx swiftc --version | tee .mlx-portable-host/swift-version.txt
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'

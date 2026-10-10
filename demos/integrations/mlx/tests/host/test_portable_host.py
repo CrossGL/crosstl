@@ -2110,7 +2110,7 @@ def test_ci_requires_all_native_platforms_and_retains_evidence():
         prepare.COMMIT,
         "ubuntu-24.04",
         "windows-2025",
-        "macos-26",
+        "xcode-27",
         'python-version: "3.12"',
         "Initialize execution evidence",
         "tee .mlx-portable-host/dependencies.log",
@@ -2161,7 +2161,7 @@ def test_ci_limits_portable_contracts_without_removing_platform_abi_checks():
     assert job["strategy"]["matrix"]["include"] == [
         {"os": "ubuntu-24.04", "target": "opengl"},
         {"os": "windows-2025", "target": "directx"},
-        {"os": "macos-26", "target": "metal"},
+        {"os": "xcode-27", "target": "metal"},
     ]
     steps = {step.get("name"): step for step in job["steps"]}
     contracts = steps["Validate portable host contracts"]

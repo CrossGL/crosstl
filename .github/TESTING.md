@@ -61,6 +61,14 @@ grouping native-platform unit suites removes another 38 runner setups per
 revision without removing a test suite. Failure reports retain individual
 test names in JUnit even when suites share a runner.
 
+The macOS translator and portable-host jobs use the `xcode-27` image and
+explicitly select Xcode 27.1. Acquire/release atomic fences require Metal 4.1;
+the default Xcode 26 toolchain on `macos-latest` cannot compile that language
+mode. Both jobs check the selected compiler before running tests. This replaces
+two existing runners, not additional matrix jobs, and does not change the
+source fence order, numerical assertions or execution requirements. Other
+macOS jobs retain their existing images and language requirements.
+
 The open-source porting demo runs its portable tests and all-target reference
 comparison once on Ubuntu, using two pytest workers. Windows and macOS retain
 every target-specific regeneration, comparison and compiler check, without
