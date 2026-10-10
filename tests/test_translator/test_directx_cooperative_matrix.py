@@ -220,7 +220,7 @@ def test_matrix_native_gates_are_required_without_extra_jobs():
     comparison = next(
         step
         for step in steps
-        if step.get("name") == "Compare legacy Direct3D shader arithmetic"
+        if step.get("name") == "Compare WARP arithmetic across codegen revisions"
     )
     assert (
         comparison["if"]

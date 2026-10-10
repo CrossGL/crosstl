@@ -1344,37 +1344,78 @@ jobs:
               tests/test_translator/test_project_workgroup_rules.py::test_selected_entry_rules_execute \
               tests/test_translator/test_project_subgroup_applicability.py \
               2>&1 | tee .mlx-portable-host/resource-values.log
-      - name: Compare legacy Direct3D shader arithmetic
+      - name: Compare WARP arithmetic across codegen revisions
         if: failure() && runner.os == 'Windows' && steps.collective-helpers.outcome == 'failure'
         shell: pwsh
         timeout-minutes: 5
         env:
-          CROSTL_REQUIRE_DIRECTX_FXC_COMPARISON: "1"
+          CROSTL_REQUIRE_DIRECTX_COOPERATIVE_MATRIX: "1"
         run: |
           $ErrorActionPreference = "Stop"
-          $evidence = ".mlx-portable-host/fxc-comparison"
+          $ProgressPreference = "SilentlyContinue"
+          $PSNativeCommandUseErrorActionPreference = $false
+          $evidence = ".mlx-portable-host/warp-codegen-comparison"
           New-Item -ItemType Directory -Force $evidence | Out-Null
-          $kits = Join-Path ${env:ProgramFiles(x86)} "Windows Kits/10/bin"
-          $compiler = Get-ChildItem $kits -Directory |
-            Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
-            Sort-Object { [version]$_.Name } -Descending |
-            ForEach-Object { Join-Path $_.FullName "x64/fxc.exe" } |
-            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-            Select-Object -First 1
-          if (-not $compiler) {
-            throw "The Windows SDK FXC compiler is required for the comparison."
+          $cases = @(
+            @{ version = "1.0.13"; archiveSHA256 = "63231c48b0573ba4c078f69cd10a4059a0fee3427107b8219e5e80ab75bd304b"; dllSHA256 = "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638" },
+            @{ version = "1.0.14"; archiveSHA256 = "e92bec51753869a41fea53a56803de9e8de8c6033becdcd2cfaaedb9ebf82f9f"; dllSHA256 = "a23ab97d709f076a11d2ef503bc788349d1cbff81d67469cbba577cba3f86988" }
+          )
+          foreach ($case in $cases) {
+            $version = $case.version
+            $archive = Join-Path $env:RUNNER_TEMP "warp-$version.zip"
+            $root = Join-Path $env:RUNNER_TEMP "warp-$version"
+            Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/$version/microsoft.direct3d.warp.$version.nupkg" -OutFile $archive -TimeoutSec 30
+            if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $case.archiveSHA256) {
+              throw "Comparison WARP archive checksum mismatch: $version"
+            }
+            Expand-Archive $archive -DestinationPath $root -Force
+            $case.dll = Join-Path $root "build/native/bin/x64/d3d10warp.dll"
+            if ((Get-FileHash $case.dll -Algorithm SHA256).Hash.ToLowerInvariant() -ne $case.dllSHA256) {
+              throw "Comparison WARP library checksum mismatch: $version"
+            }
           }
-          $env:CROSTL_FXC_EXECUTABLE = $compiler
-          @{
-            compilerPath = $compiler
-            compilerVersion = (Get-Item $compiler).VersionInfo.FileVersion
-            compilerSHA256 = (Get-FileHash $compiler -Algorithm SHA256).Hash.ToLowerInvariant()
-            shaderProfile = "cs_5_1"
-            warpSHA256 = (Get-FileHash (Join-Path $env:pythonLocation "d3d10warp.dll") -Algorithm SHA256).Hash.ToLowerInvariant()
-            replacesRequiredGate = $false
-          } | ConvertTo-Json | Set-Content "$evidence/compiler-selection.json"
-          python tools/run_bounded_command.py --timeout-seconds 180 --label "Legacy Direct3D shader arithmetic comparison" -- python -m pytest -q -n auto --basetemp="$evidence/pytest" --junitxml="$evidence/results.xml" tests/test_translator/test_directx_cooperative_matrix.py -k "fxc_comparison_executes"
-          exit $LASTEXITCODE
+          $installed = Join-Path $env:pythonLocation "d3d10warp.dll"
+          $backup = Join-Path $env:RUNNER_TEMP "warp-required-backup.dll"
+          $originalDigest = (Get-FileHash $installed -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($originalDigest -ne "e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3") {
+            throw "Required WARP 1.0.21 library identity does not match."
+          }
+          Copy-Item $installed $backup -Force
+          $result = 0
+          $outcomes = @()
+          $clock = [System.Diagnostics.Stopwatch]::StartNew()
+          try {
+            foreach ($case in $cases) {
+              $caseEvidence = Join-Path $evidence $case.version
+              New-Item -ItemType Directory -Force $caseEvidence | Out-Null
+              Copy-Item $case.dll $installed -Force
+              $selectedDigest = (Get-FileHash $installed -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($selectedDigest -ne $case.dllSHA256) { throw "Comparison WARP selection failed." }
+              @{
+                comparisonVersion = $case.version
+                archiveSHA256 = $case.archiveSHA256
+                originalDLLSHA256 = $originalDigest
+                comparisonDLLSHA256 = $selectedDigest
+                replacesRequiredGate = $false
+              } | ConvertTo-Json | Set-Content "$caseEvidence/runtime-selection.json"
+              $remaining = 180 - [int][Math]::Ceiling($clock.Elapsed.TotalSeconds)
+              if ($remaining -le 0) { throw "WARP comparison exhausted its shared deadline." }
+              python tools/run_bounded_command.py --timeout-seconds $remaining --label "WARP $($case.version) arithmetic comparison" -- python -m pytest -q -n auto --basetemp="$caseEvidence/pytest" --junitxml="$caseEvidence/results.xml" tests/test_translator/test_directx_cooperative_matrix.py -k "precise_scalar_control_executes or software_matrix_executes"
+              $caseResult = $LASTEXITCODE
+              $outcomes += @{ version = $case.version; exitCode = $caseResult; timeoutSeconds = $remaining }
+              if ($caseResult -ne 0) { $result = $caseResult }
+            }
+          } finally {
+            Copy-Item $backup $installed -Force
+            $restoredDigest = (Get-FileHash $installed -Algorithm SHA256).Hash.ToLowerInvariant()
+            @{
+              originalDLLSHA256 = $originalDigest
+              restoredDLLSHA256 = $restoredDigest
+              comparisons = $outcomes
+            } | ConvertTo-Json -Depth 4 | Set-Content "$evidence/restoration.json"
+            if ($restoredDigest -ne $originalDigest) { throw "Required WARP runtime was not restored." }
+          }
+          exit $result
       - name: Validate exact partial subgroup execution
         env:
           CROSTL_REQUIRE_PARTIAL_SUBGROUP_READBACKS: "1"

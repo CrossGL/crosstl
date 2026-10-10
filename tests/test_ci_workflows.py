@@ -3296,6 +3296,50 @@ def test_project_native_job_deadlines_fit_runner_limit(job, overhead):
     assert max(paths) + overhead < definition["timeout-minutes"] * 60 <= 360 * 60
 
 
+def test_directx_runtime_comparison_preserves_required_runtime_and_workload():
+    workflow = yaml.safe_load((WORKFLOW_DIR / "demo-project-testing.yml").read_text())
+    steps = workflow["jobs"]["portable-host"]["steps"]
+    comparison = next(step for step in steps if "failure()" in step.get("if", ""))
+    assert comparison["timeout-minutes"] == 5
+    assert comparison["shell"] == "pwsh"
+    assert comparison["env"] == {"CROSTL_REQUIRE_DIRECTX_COOPERATIVE_MATRIX": "1"}
+    assert not comparison.get("continue-on-error")
+    script = comparison["run"]
+    for value in (
+        'version = "1.0.13"',
+        'version = "1.0.14"',
+        "63231c48b0573ba4c078f69cd10a4059a0fee3427107b8219e5e80ab75bd304b",
+        "e92bec51753869a41fea53a56803de9e8de8c6033becdcd2cfaaedb9ebf82f9f",
+        "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638",
+        "a23ab97d709f076a11d2ef503bc788349d1cbff81d67469cbba577cba3f86988",
+        "$remaining = 180 - [int][Math]::Ceiling($clock.Elapsed.TotalSeconds)",
+        "--timeout-seconds $remaining",
+        "python -m pytest -q -n auto",
+        '-k "precise_scalar_control_executes or software_matrix_executes"',
+        "$PSNativeCommandUseErrorActionPreference = $false",
+        "$caseResult = $LASTEXITCODE",
+        "if ($caseResult -ne 0) { $result = $caseResult }",
+        "replacesRequiredGate = $false",
+        "exit $result",
+    ):
+        assert value in script
+    assert script.index("archive checksum mismatch") < script.index(
+        "Copy-Item $installed $backup"
+    )
+    assert script.index("library checksum mismatch") < script.index(
+        "Copy-Item $installed $backup"
+    )
+    restoration = script.split("} finally {", 1)[1]
+    assert "Copy-Item $backup $installed -Force" in restoration
+    assert "$restoredDigest -ne $originalDigest" in restoration
+    assert "restoration.json" in restoration
+    required = next(
+        step for step in steps if step.get("name") == "Install pinned DirectX tools"
+    )
+    assert "microsoft.direct3d.warp/1.0.21/" in required["run"]
+    assert "e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3" in script
+
+
 def test_native_arithmetic_selection_retains_every_device_test():
     from tools import ci_coverage
 

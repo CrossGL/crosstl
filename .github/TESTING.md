@@ -83,18 +83,21 @@ checksum and does not fall back to another release. These jobs do not execute
 Direct3D; WARP numerical execution and Windows host integration remain required.
 
 If the required Windows collective/resource gate fails, its existing runner
-also compiles the unchanged precise scalar control with the installed Windows
-SDK's x64 FXC compiler and executes its Shader Model 5.1 bytecode through the
-same isolated buffer-view worker. Ordinary, IEEE-strict and unoptimized modes
-retain the same inputs, zero-valued oracle, allocation offsets and output guards.
-Compiler path, version and digest, disassembly, loaded runtime identities,
-compiled modules and readbacks are retained in the portable-host artifact.
-The compiler listing must retain separate multiplication and addition.
-WARP 1.0.21 and the system Direct3D core remain unchanged. This replaces the
-completed SDK comparison, which reproduced the discrepancy with Agility 1.619.6
-and positively verified the selected core. It retains a 180-second command
-deadline, adds no runner, and cannot replace or excuse the required DXC gate's
-failure. Compiler comparison is diagnostic evidence, not an alternative backend.
+compares the unchanged DXC scalar and software-matrix controls on WARP 1.0.13
+and 1.0.14. Microsoft's release notes identify 1.0.14 as the introduction of
+x86 fused multiply-add code generation. Both archives and x64 libraries are
+checksum-pinned; preparation verifies both before changing the installed DLL.
+The executions share a 180-second budget and retain the same inputs, numerical
+oracles, allocation offsets and output guards. A failing first comparison does
+not prevent the second from running within the remaining budget. Shader bytes,
+compiled modules, readbacks and child runtime identities remain in the evidence.
+The required WARP 1.0.21 DLL is restored in a finally block, with its identity
+verified and recorded even when a comparison fails. The system Direct3D core
+and DXC version are not changed. This replaces the completed FXC experiment,
+which reproduced the discrepancy in legacy bytecode with explicit precise
+multiply/add instructions. The comparison adds no runner and cannot replace or
+excuse the required current-runtime gate's failure; neither historical runtime
+is adopted as a supported default by this diagnostic.
 Metal corpus compilation stays on macOS because it requires Apple's toolchain.
 
 The complete unary, binary, copy, reduction and quantized Metal corpora separate portable translation
