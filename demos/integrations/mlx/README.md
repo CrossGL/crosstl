@@ -2774,8 +2774,8 @@ Materialization emits the forward entry plus `initialize_buffer<1>` and
 `threadgroup_sum<1>` from six reachable specializations while pruning 194
 candidates.
 
-The generated HLSL artifact is 7,274 bytes with SHA-256
-`2750fea6d568a99f11f62768a60fc8aac91911ecfe83180148248116c58b8147`.
+The generated HLSL artifact is 7,586 bytes with SHA-256
+`33852efe1e1c48a45ec3e25e4c9d271142e2ac8aecfbd01ae4dd0c5704464a5c`.
 It retains `[WaveSize(32)]`, two `WaveActiveSum` calls, and compiles as
 `cs_6_6` with `-enable-16bit-types`; Windows CI requires Direct3D 12 WARP
 execution. The generated GLSL artifact is 8,403 bytes with SHA-256
@@ -2787,6 +2787,12 @@ interfaces. All eight artifacts passed strict compiler checks at that revision.
 Linux OpenGL execution and an independent 100-digit calculation checked all 256
 returned values within unchanged tolerances, with maximum absolute error below
 `1.36e-7`. Windows execution remains required separately.
+
+The latest HLSL reference adds thirteen unused placeholder fields in helper
+structs. Removing those declarations reproduces the previous accepted source
+hash, and both complete shaders compile to byte-identical DXIL with warnings
+fatal. The numerical test, resource layout and dispatch requirements are
+unchanged; no other normalization reference is updated by this review.
 
 The forward LayerNorm references now retain the source's explicit precise
 reciprocal-square-root helper. Complete body review found only that helper, its
@@ -2927,6 +2933,14 @@ Both workgroup variants compile to byte-identical DXIL before and after these
 source changes with the pinned DXC release and warnings fatal. Windows native
 execution remains required; matching compiled modules is not a new execution
 result or a full upstream-suite claim.
+
+A subsequent review of these two historical `846d1762` HLSL references adds
+thirteen private placeholder fields in otherwise empty helper structs. Removing
+only those declarations reproduces both previously accepted source hashes.
+The accepted and current sources again compile to byte-identical DXIL with
+warnings fatal; entry points, resources and dispatch contracts are unchanged.
+This review does not update other corpus references or change the required
+Windows numerical test.
 
 Both revision-specific contracts produce the same two dispatch variants as
 standalone OpenGL artifacts.

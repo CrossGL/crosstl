@@ -6848,8 +6848,8 @@
     "artifacts": {
       "directx": {
         "target_entry_point": "CSMain",
-        "sha256": "2750fea6d568a99f11f62768a60fc8aac91911ecfe83180148248116c58b8147",
-        "size_bytes": 7274,
+        "sha256": "33852efe1e1c48a45ec3e25e4c9d271142e2ac8aecfbd01ae4dd0c5704464a5c",
+        "size_bytes": 7586,
         "subgroup_enforcement": "hlsl-wave-size-attribute",
         "compiler": "dxc",
         "compiler_profile": "cs_6_6",

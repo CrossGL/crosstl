@@ -11023,9 +11023,9 @@ def test_layer_norm_native_runtime_evidence_records_bounded_cross_target_proof()
         },
     }
     assert status["artifacts"]["directx"]["sha256"] == (
-        "2750fea6d568a99f11f62768a60fc8aac91911ecfe83180148248116c58b8147"
+        "33852efe1e1c48a45ec3e25e4c9d271142e2ac8aecfbd01ae4dd0c5704464a5c"
     )
-    assert status["artifacts"]["directx"]["size_bytes"] == 7274
+    assert status["artifacts"]["directx"]["size_bytes"] == 7586
     assert status["artifacts"]["directx"]["wave_active_sum_call_count"] == 2
     assert status["artifacts"]["directx"]["native_runtime"]["status"] == (
         "required-on-ci"

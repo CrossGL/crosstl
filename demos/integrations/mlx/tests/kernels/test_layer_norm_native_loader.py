@@ -59,8 +59,8 @@ MLX_LAYER_NORM_DISPATCH_CONTRACT = (
 )
 MLX_LAYER_NORM_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "2750fea6d568a99f11f62768a60fc8aac91911ecfe83180148248116c58b8147",
-        "sizeBytes": 7274,
+        "sha256": "33852efe1e1c48a45ec3e25e4c9d271142e2ac8aecfbd01ae4dd0c5704464a5c",
+        "sizeBytes": 7586,
     },
     "opengl": {
         "sha256": "8baa04a8c4125c96f1c8f0ad42f86bfc7b2497ba5a59178d199a1a3fbe3d110e",
