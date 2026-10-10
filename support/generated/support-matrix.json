@@ -172,7 +172,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 2076
+        "test_count": 2080
       },
       "translator_codegen": {
         "exists": true,
@@ -347,7 +347,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 2314
+        "test_count": 2318
       },
       "translator_codegen": {
         "exists": true,
@@ -764,7 +764,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2507
+        "test_count": 2511
       },
       "translator_codegen": {
         "exists": true,
@@ -1895,6 +1895,10 @@
             "tests/test_translator/test_wide_integer_arithmetic.py::def test_hlsl_compound_shift_retains_independent_count_type",
             "tests/test_translator/test_wide_integer_arithmetic.py::def test_hlsl_compound_shift_rejects_incompatible_count_shapes",
             "tests/test_translator/test_wide_integer_arithmetic.py::def test_wide_shift_counts_execute_with_original_metal",
+            "tests/test_translator/test_integer_literals.py::def test_hlsl_literal_shift_operands_have_independent_types",
+            "tests/test_translator/test_integer_literals.py::def test_hlsl_shift_result_keeps_left_signedness_in_wider_arithmetic",
+            "tests/test_translator/test_integer_literals.py::def test_literal_shifts_compile_with_runtime_counts",
+            "tests/test_translator/test_integer_literals.py::def test_literal_shifts_execute_with_source_signedness",
             "tests/test_translator/test_metal_vector_scalar_arithmetic.py::def test_vector_scalar_conversions_execute_before_arithmetic",
             "tests/test_translator/test_metal_vector_scalar_arithmetic.py::def test_vector_scalar_conversions_survive_saved_crossgl",
             "tests/test_backend/test_metal/test_codegen.py::def test_integer_vector_scalar_operands_convert_before_operation",

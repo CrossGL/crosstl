@@ -2990,6 +2990,11 @@ value does not become unsigned merely because it exceeds the signed 32-bit
 range. Invalid suffixes and values outside the supported 64-bit types are
 rejected. Native controls cover original/generated Metal and generated
 DirectX/OpenGL arithmetic; they do not establish complete MLX runtime coverage.
+DirectX emits an explicit signed type for 32-bit literal shift operands,
+including literal-only arithmetic and conditional expressions. The promoted
+left operand determines the shift result type independently of the shift count
+and enclosing expression. Runtime controls cover signed right shifts, 32/64-bit
+counts, subsequent wide arithmetic and single evaluation of count updates.
 In particular, direct ``bfloat(9259400833873739777ul)`` retains payload ``0x5f01``,
 while an explicit float32 intermediate retains the distinct payload ``0x5f00``.
 

@@ -14678,6 +14678,39 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return f"bool{rows}x{columns}"
         return "bool"
 
+    def hlsl_untyped_int_expression(self, expr):
+        """Identify expressions DXC can keep in its legacy literal-int type."""
+        if isinstance(expr, LiteralNode):
+            return (
+                isinstance(expr.value, int)
+                and not isinstance(expr.value, bool)
+                and self.hlsl_literal_result_type(expr) == "int"
+            )
+        if isinstance(expr, UnaryOpNode):
+            return self.map_operator(expr.op) in {"+", "-", "~"} and (
+                self.hlsl_untyped_int_expression(expr.operand)
+            )
+        if isinstance(expr, BinaryOpNode):
+            return self.map_operator(expr.op) in {
+                "+",
+                "-",
+                "*",
+                "/",
+                "%",
+                "&",
+                "|",
+                "^",
+            } and all(
+                self.hlsl_untyped_int_expression(operand)
+                for operand in (expr.left, expr.right)
+            )
+        if isinstance(expr, TernaryOpNode):
+            return all(
+                self.hlsl_untyped_int_expression(operand)
+                for operand in (expr.true_expr, expr.false_expr)
+            )
+        return False
+
     def hlsl_literal_result_type(self, expr):
         literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
         value = getattr(expr, "value", None)
@@ -14767,6 +14800,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if wide_integer_contract is not None:
                 return wide_integer_contract["operation_type"]
+            if mapped_operator in {"<<", ">>"}:
+                left_integer = self.hlsl_integer_arithmetic_type_info(left_type)
+                right_integer = self.hlsl_integer_arithmetic_type_info(right_type)
+                if (
+                    left_integer is not None
+                    and right_integer is not None
+                    and left_integer["width"] == right_integer["width"] == 1
+                ):
+                    return self.hlsl_promoted_integer_arithmetic_base_type(left_integer)
             if mapped_operator in {"/", "%"}:
                 integer_contract = (
                     self.hlsl_minimum_precision_integer_operation_contract(
@@ -22637,7 +22679,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         reason="bare-pointer-expression",
                         source_location=getattr(expr, "source_location", None),
                     )
-            if mapped_op in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
+            if mapped_op in {"==", "!=", "<", "<=", ">", ">=", "&&", "||", "<<", ">>"}:
                 previous_expected_type = self.current_expression_expected_type
                 self.current_expression_expected_type = None
                 try:
@@ -22648,6 +22690,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             else:
                 left = self.generate_expression(getattr(expr, "left", ""))
                 right = self.generate_expression(getattr(expr, "right", ""))
+            if mapped_op in {"<<", ">>"} and self.hlsl_untyped_int_expression(
+                expr.left
+            ):
+                # Fix the source operand type before shifting; the count and
+                # enclosing expression must not choose its width or signedness.
+                left = f"int({left})"
             option_none_comparison = self.generate_hlsl_builtin_option_none_comparison(
                 getattr(expr, "left", ""),
                 mapped_op,
