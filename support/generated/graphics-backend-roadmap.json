@@ -1901,7 +1901,11 @@
             "tests/test_translator/test_subgroup_uniform_returns.py::def test_generated_resource_load_helpers_execute",
             "tests/test_translator/test_collective_loop_strides.py::def test_fixed_stride_collectives_compile",
             "tests/test_translator/test_collective_loop_strides.py::def test_unproved_or_overflowing_induction_is_rejected",
-            "tests/test_translator/test_collective_loop_strides.py::def test_fixed_stride_helpers_execute"
+            "tests/test_translator/test_collective_loop_strides.py::def test_fixed_stride_helpers_execute",
+            "tests/test_translator/test_collective_reference_effects.py::def test_selected_reference_writes_preserve_uniform_indices",
+            "tests/test_translator/test_collective_reference_effects.py::def test_reference_effects_retain_control_mutations",
+            "tests/test_translator/test_collective_reference_effects.py::def test_entry_exit_facts_retain_writes_and_unknown_calls",
+            "tests/test_translator/test_collective_reference_effects.py::def test_indexed_reference_helpers_execute"
           ],
           "notes": "WaveOpNode calls lower to native HLSL Wave* intrinsics or equivalent helpers across lane queries, votes, reductions, scans, ballots, shuffle-and-fill, WaveMatch, WaveMultiPrefix*, quad reads, and arity/type diagnostics. Optional DXC validation covers compute wave shaders when dxc is installed. Explicit logical-width-32 software mode also supports cooperative float 8x8 multiply-accumulate under the declared tile_4x4_row_pair mapping, with two lane elements, complete subgroups and statically uniform barrier schedules through helpers. It uses separately rounded binary32 products and sums in increasing inner-dimension order, not an implicit elementwise substitute or a promise of arbitrary-input bitwise Metal parity. Other matrix arithmetic contracts remain diagnostic.",
           "status": "supported"
@@ -1940,6 +1944,10 @@
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_software_subgroup_rejects_masked_shuffle",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_software_subgroup_accepts_helper_calls_in_uniform_halving_loop",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_software_subgroup_halving_helper_loop_fails_closed",
+            "tests/test_translator/test_collective_reference_effects.py::def test_selected_reference_writes_preserve_uniform_indices",
+            "tests/test_translator/test_collective_reference_effects.py::def test_reference_effects_retain_control_mutations",
+            "tests/test_translator/test_collective_reference_effects.py::def test_entry_exit_facts_retain_writes_and_unknown_calls",
+            "tests/test_translator/test_collective_reference_effects.py::def test_indexed_reference_helpers_execute",
             "demos/integrations/mlx/tests/kernels/test_gemv_native_loader.py::def test_current_mlx_gemv_executes_with_opengl_software_subgroups",
             "demos/integrations/mlx/tests/kernels/test_softmax_native_loader.py::def test_pinned_mlx_softmax_translates_to_software_subgroup_opengl",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_wave_intrinsics_compute_validates_with_glslang"

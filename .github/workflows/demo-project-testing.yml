@@ -1246,6 +1246,7 @@ jobs:
           CROSTL_REQUIRE_SUBGROUP_UNIFORM_ARGUMENTS: "1"
           CROSTL_REQUIRE_UNIFORM_RETURN_RUNTIME: "1"
           CROSTL_REQUIRE_COLLECTIVE_STRIDE_RUNTIME: "1"
+          CROSTL_REQUIRE_COLLECTIVE_REFERENCE_RUNTIME: "1"
           CROSTL_REQUIRE_METAL_NESTED_MEMBERS: "1"
           CROSTL_REQUIRE_REFERENCE_CAPTURE: "1"
           CROSTL_REQUIRE_PARAMETER_USAGE: "1"
@@ -1290,6 +1291,7 @@ jobs:
               tests/test_translator/test_subgroup_uniform_arguments.py \
               tests/test_translator/test_subgroup_uniform_returns.py \
               tests/test_translator/test_collective_loop_strides.py \
+              tests/test_translator/test_collective_reference_effects.py \
               tests/test_translator/test_metal_nested_member_context.py \
               tests/test_translator/test_reference_capture.py \
               tests/test_translator/test_parameter_usage.py \

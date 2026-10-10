@@ -5491,6 +5491,7 @@ class HLSLCodeGen:
                 else None
             )
             pure_call = id(node) in self.hlsl_software_subgroup_uniform_calls
+            written_roots = set()
             if (
                 self.hlsl_software_subgroup_uniform_returns.dependencies(node)
                 is not None
@@ -5498,16 +5499,22 @@ class HLSLCodeGen:
                 mutations = []
             elif callee is not None:
                 parameters = getattr(callee, "parameters", []) or []
-                mutations = [
-                    argument
-                    for index, argument in enumerate(arguments)
-                    if index >= len(parameters)
-                    or isinstance(
-                        parameters[index].param_type, (PointerType, ReferenceType)
-                    )
-                    or set(self.hlsl_parameter_qualifiers(parameters[index]))
-                    & {"out", "inout"}
-                ]
+                mutations = []
+                for index, argument in enumerate(arguments):
+                    if index >= len(parameters) or isinstance(
+                        parameters[index].param_type, PointerType
+                    ):
+                        mutations.append(argument)
+                    elif isinstance(parameters[index].param_type, ReferenceType) or set(
+                        self.hlsl_parameter_qualifiers(parameters[index])
+                    ) & {"out", "inout"}:
+                        # A reference writes its selected lvalue, not its indices.
+                        # Argument evaluation effects are visited independently.
+                        root = self.hlsl_texture_offset_write_root_name(argument)
+                        if root is None:
+                            mutations.append(argument)
+                        else:
+                            written_roots.add(root)
             elif builtin_writes is not None:
                 mutations = [arguments[index] for index in builtin_writes]
             elif call_name not in functions_by_name and (
@@ -5518,7 +5525,7 @@ class HLSLCodeGen:
                 mutations = []
             else:
                 mutations = arguments
-            call_mutations[id(node)] = set().union(
+            call_mutations[id(node)] = written_roots.union(
                 *(
                     self.hlsl_software_subgroup_expression_identifier_names(argument)
                     for argument in mutations

@@ -2022,6 +2022,17 @@ control values, induction aliases and divergent exits remain diagnostics. Native
 controls compare original and generated Metal kernels and require DirectX
 execution on Windows; this does not extend the OpenGL convergence analysis.
 
+Both DirectX and OpenGL distinguish writable reference destinations from their
+value-only array indices and member selectors in resolved helper calls. Passing
+``values[index]`` to an ``out`` or ``inout`` parameter invalidates ``values``,
+not ``index``. Selector increments, nested writes, aliases and unknown calls
+remain conservative. OpenGL entry-exit checks use the resolved effects instead
+of discarding uniform arguments merely because they were passed by value.
+Required native controls cover nested reference forwarding, private arrays and
+record members, repeated collectives, uniform early returns and untouched guards
+on each target's existing operating-system job. These controls do not establish
+full-kernel or upstream-suite parity.
+
 The DirectX fallback accumulates in increasing inner-dimension order using
 separately rounded binary32 products and sums; ``precise`` prevents contraction
 and reassociation. Metal does not specify a bitwise accumulation order for its

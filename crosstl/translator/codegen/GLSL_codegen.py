@@ -4443,6 +4443,7 @@ class GLSLCodeGen:
         entry_function,
         helper_records,
         workgroup_size,
+        target_stage=None,
     ):
         self.glsl_software_subgroup_helper_function_names = set()
         self.glsl_software_subgroup_helper_function_ids = set()
@@ -4602,18 +4603,28 @@ class GLSLCodeGen:
                 )
                 if pure:
                     self.glsl_software_subgroup_uniform_call_ids.add(id(call))
+                written_roots = set()
                 if target is not None:
                     parameters = target.parameters or []
-                    mutations = [
-                        argument
-                        for index, argument in enumerate(arguments)
-                        if index >= len(parameters)
-                        or isinstance(
-                            parameters[index].param_type, (PointerType, ReferenceType)
-                        )
-                        or set(self.glsl_parameter_qualifiers(parameters[index]))
-                        & {"out", "inout"}
-                    ]
+                    mutations = []
+                    for index, argument in enumerate(arguments):
+                        if index >= len(parameters) or isinstance(
+                            parameters[index].param_type, PointerType
+                        ):
+                            mutations.append(argument)
+                        elif isinstance(
+                            parameters[index].param_type, ReferenceType
+                        ) or set(self.glsl_parameter_qualifiers(parameters[index])) & {
+                            "out",
+                            "inout",
+                        }:
+                            # Retain destination writes, not value-only selectors.
+                            # Nested argument effects remain separate call records.
+                            roots = self.glsl_mutation_target_names(argument)
+                            if roots:
+                                written_roots.update(roots)
+                            else:
+                                mutations.append(argument)
                 elif builtin_writes is not None:
                     mutations = [arguments[index] for index in builtin_writes]
                 elif pure or (
@@ -4625,11 +4636,17 @@ class GLSLCodeGen:
                 else:
                     mutations = arguments
                 self.glsl_software_subgroup_call_mutations[id(call)] = (
-                    self.glsl_software_subgroup_expression_identifier_names(mutations)
+                    written_roots
+                    | self.glsl_software_subgroup_expression_identifier_names(mutations)
                 )
 
         entry_seeds = self.glsl_software_subgroup_uniform_seed_names(
-            ast, entry_function
+            ast, entry_function, target_stage
+        )
+        self.glsl_software_subgroup_immutable_uniform_names = (
+            self.glsl_software_subgroup_immutable_entry_names(
+                entry_function, entry_seeds
+            )
         )
         entry_arguments = self.glsl_software_subgroup_uniform_arguments(
             entry_function, entry_seeds, entry=True
@@ -5293,7 +5310,51 @@ class GLSLCodeGen:
             entry_function,
             target_stage,
         )
-        immutable_names = set(uniform_names)
+        self.glsl_software_subgroup_immutable_uniform_names = (
+            self.glsl_software_subgroup_immutable_entry_names(
+                entry_function, uniform_names
+            )
+        )
+        self.prepare_glsl_software_subgroup_strided_for_plans(
+            entry_function,
+            uniform_names,
+        )
+        self.glsl_software_subgroup_analyze_uniform_statements(
+            getattr(entry_function, "body", None),
+            uniform_names,
+        )
+        self.validate_glsl_software_subgroup_helpers(
+            ast,
+            entry_function,
+            helper_records,
+            tuple(concrete_workgroup_size),
+            target_stage=target_stage,
+        )
+        for function in self.glsl_software_subgroup_functions(ast):
+            if (
+                function is entry_function
+                or id(function) in self.glsl_software_subgroup_helper_function_ids
+            ):
+                self.validate_glsl_software_subgroup_exits(
+                    getattr(function, "body", None),
+                    operation=all_records[0][0],
+                    **self.glsl_software_subgroup_exit_facts(
+                        function,
+                        (
+                            self.glsl_software_subgroup_immutable_uniform_names
+                            if function is entry_function
+                            else self.glsl_software_subgroup_function_uniform_seeds.get(
+                                id(function), set()
+                            )
+                        ),
+                        function is entry_function,
+                    ),
+                )
+
+    def glsl_software_subgroup_immutable_entry_names(self, entry_function, seeds):
+        # Resolve call effects before the final convergence checks. Earlier
+        # planning passes remain conservative while the call table is empty.
+        immutable_names = set(seeds)
         uniform_builtins = set(self.GLSL_SOFTWARE_SUBGROUP_WORKGROUP_UNIFORM_BUILTINS)
         if self.glsl_software_subgroup_count == 1:
             uniform_builtins.add("gl_SubgroupID")
@@ -5335,46 +5396,16 @@ class GLSLCodeGen:
             elif isinstance(
                 node, FunctionCallNode
             ) and not self.glsl_software_subgroup_exit_constructor(node):
+                mutations = self.glsl_software_subgroup_call_mutations.get(id(node))
+                if mutations is not None:
+                    immutable_names.difference_update(mutations)
+                    continue
                 invalidated = getattr(node, "arguments", [])
             if invalidated is not None:
                 immutable_names.difference_update(
                     self.glsl_software_subgroup_expression_identifier_names(invalidated)
                 )
-        self.glsl_software_subgroup_immutable_uniform_names = immutable_names
-        self.prepare_glsl_software_subgroup_strided_for_plans(
-            entry_function,
-            uniform_names,
-        )
-        self.glsl_software_subgroup_analyze_uniform_statements(
-            getattr(entry_function, "body", None),
-            uniform_names,
-        )
-        self.validate_glsl_software_subgroup_helpers(
-            ast,
-            entry_function,
-            helper_records,
-            tuple(concrete_workgroup_size),
-        )
-        for function in self.glsl_software_subgroup_functions(ast):
-            if (
-                function is entry_function
-                or id(function) in self.glsl_software_subgroup_helper_function_ids
-            ):
-                self.validate_glsl_software_subgroup_exits(
-                    getattr(function, "body", None),
-                    operation=all_records[0][0],
-                    **self.glsl_software_subgroup_exit_facts(
-                        function,
-                        (
-                            immutable_names
-                            if function is entry_function
-                            else self.glsl_software_subgroup_function_uniform_seeds.get(
-                                id(function), set()
-                            )
-                        ),
-                        function is entry_function,
-                    ),
-                )
+        return immutable_names
 
     def glsl_software_subgroup_exit_constructor(self, node):
         if not isinstance(node, FunctionCallNode):
