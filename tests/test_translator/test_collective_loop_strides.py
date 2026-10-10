@@ -9,13 +9,31 @@ import pytest
 from crosstl.project import build_native_loader_dispatch_request
 from crosstl.translator import parse
 from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
-from tests.test_translator.test_boolean_buffer_runtime import _bound_values
+from crosstl.translator.codegen.GLSL_codegen import (
+    GLSLCodeGen,
+    OpenGLSoftwareSubgroupError,
+)
 from tests.test_translator.test_directx_software_reductions import _codegen, _source
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_software_subgroup_product import _package
 
 REQUIRE_ENV = "CROSTL_REQUIRE_COLLECTIVE_STRIDE_RUNTIME"
+
+
+@pytest.fixture(params=["directx", "opengl"])
+def stride_target(request):
+    return request.param
+
+
+def _generator(target):
+    return (
+        _codegen() if target == "directx" else GLSLCodeGen(software_subgroup_width=32)
+    )
+
+
+STRIDE_ERRORS = (DirectXSoftwareSubgroupError, OpenGLSoftwareSubgroupError)
+
 CASES = {
     "ascending": ("short step = 0; step < 16; step += 8", (0, 8)),
     "descending": ("short step = 16; step >= 0; step -= 8", (16, 8, 0)),
@@ -27,6 +45,8 @@ CASES = {
         "short step = 32750; step < 32766; step += 8",
         (32750, 32758),
     ),
+    "unit-boundary": ("short step = 32765; step < 32767; ++step", (32765, 32766)),
+    "unit-descending": ("ushort step = 3; step > 0; --step", (3, 2, 1)),
 }
 
 
@@ -39,14 +59,18 @@ def _canonical(header, body="", helpers=""):
 
 
 @pytest.mark.parametrize("case", CASES)
-def test_fixed_stride_collectives_compile(tmp_path, case):
-    generator = _codegen()
+def test_fixed_stride_collectives_compile(tmp_path, case, stride_target):
+    generator = _generator(stride_target)
     ast = parse(_canonical(CASES[case][0]))
     generated = generator.generate_stage(ast, "compute")
     assert generated == generator.generate_stage(ast, "compute")
-    assert "GroupMemoryBarrierWithGroupSync" in generated
+    assert (
+        "GroupMemoryBarrierWithGroupSync"
+        if stride_target == "directx"
+        else "barrier();"
+    ) in generated
     assert "WaveActiveSum(" not in generated
-    _compile(generated, "directx", tmp_path)
+    _compile(generated, stride_target, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -71,9 +95,9 @@ def test_fixed_stride_collectives_compile(tmp_path, case):
         "int step = 0; step < 16; step += ((-2147483647 - 1) % -1) + 8",
     ],
 )
-def test_unproved_or_overflowing_induction_is_rejected(header):
-    with pytest.raises(DirectXSoftwareSubgroupError):
-        _codegen().generate_stage(parse(_canonical(header)), "compute")
+def test_unproved_or_overflowing_induction_is_rejected(header, stride_target):
+    with pytest.raises(STRIDE_ERRORS):
+        _generator(stride_target).generate_stage(parse(_canonical(header)), "compute")
 
 
 @pytest.mark.parametrize(
@@ -90,20 +114,80 @@ def test_unproved_or_overflowing_induction_is_rejected(header):
         "if (invocation == 0u) { return; }",
     ],
 )
-def test_fixed_stride_proof_retains_mutation_and_exit_checks(body):
-    with pytest.raises(DirectXSoftwareSubgroupError):
-        _codegen().generate_stage(
+def test_fixed_stride_proof_retains_mutation_and_exit_checks(body, stride_target):
+    with pytest.raises(STRIDE_ERRORS):
+        _generator(stride_target).generate_stage(
             parse(_canonical("int step = 0; step < 16; step += 8", body)),
             "compute",
         )
 
 
-def test_constant_expression_stride_compiles(tmp_path):
-    generated = _codegen().generate_stage(
+def test_constant_expression_stride_compiles(tmp_path, stride_target):
+    generated = _generator(stride_target).generate_stage(
         parse(_canonical("int step = 0; step < 4 * 4; step += 2 * 4")),
         "compute",
     )
-    _compile(generated, "directx", tmp_path)
+    _compile(generated, stride_target, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "index", ["index", "index + 4u", "group.x * 128u + invocation"]
+)
+def test_collective_store_value_compiles(tmp_path, index):
+    helper = "uint collect(uint value) { return WaveActiveSum(value); }"
+    generated = _generator("opengl").generate_stage(
+        parse(
+            _source(
+                "uint",
+                f"buffer_store(outputWords, {index}, collect(invocation));",
+                helper,
+            )
+        ),
+        "compute",
+    )
+    _compile(generated, "opengl", tmp_path)
+
+
+@pytest.mark.parametrize(
+    "body,extra",
+    [
+        ("buffer_store(outputWords, index++, collect(invocation));", ""),
+        ("buffer_store(outputWords, unknown(index), collect(invocation));", ""),
+        (
+            "buffer_store(outputWords, index, invocation == 0u ? collect(invocation) : 0u);",
+            "",
+        ),
+        (
+            "if (invocation == 0u) { buffer_store(outputWords, index, collect(invocation)); }",
+            "",
+        ),
+        (
+            "buffer_store(outputWords, index, collect(invocation));",
+            "void buffer_store(RWStructuredBuffer<uint> data, uint offset, uint value) { data[offset] = value; }",
+        ),
+    ],
+)
+def test_collective_store_proof_rejects_unchecked_evaluation(body, extra):
+    helper = "uint collect(uint value) { return WaveActiveSum(value); } " + extra
+    with pytest.raises(OpenGLSoftwareSubgroupError):
+        _generator("opengl").generate_stage(
+            parse(_source("uint", body, helper)), "compute"
+        )
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "short step = 32760; step <= 32767; ++step",
+        "ushort step = 65530; step <= 65535; ++step",
+        "short step = -32760; step >= -32768; --step",
+    ],
+)
+def test_narrow_unit_loops_require_a_representable_terminating_update(
+    header, stride_target
+):
+    with pytest.raises(STRIDE_ERRORS):
+        _generator(stride_target).generate_stage(parse(_canonical(header)), "compute")
 
 
 def _metal_source(case):
@@ -139,13 +223,14 @@ def _request(root, target, case):
             )
             & 0xFFFFFFFF
         )
-    inputs = {"output": {"dtype": "uint32", "shape": [201], "values": [guard] * 201}}
-    outputs = {"output": {"dtype": "uint32", "shape": [201], "values": expected}}
-    outputs = _bound_values(descriptor, outputs)
+    assert len(descriptor["bindings"]) == 1
+    name = descriptor["bindings"][0]["name"]
+    inputs = {name: {"dtype": "uint32", "shape": [201], "values": [guard] * 201}}
+    outputs = {name: {"dtype": "uint32", "shape": [201], "values": expected}}
     request = build_native_loader_dispatch_request(
         descriptor,
         package,
-        _bound_values(descriptor, inputs),
+        inputs,
         outputs,
         {"workgroupCount": [3, 1, 1], "workgroupSize": [32, 2, 1]},
         expected_target=target,
@@ -154,7 +239,7 @@ def _request(root, target, case):
     return source, request, outputs
 
 
-@pytest.mark.parametrize("target", ["metal", "directx"])
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
 @pytest.mark.parametrize("case", CASES)
 def test_fixed_stride_helpers_translate_and_compile(tmp_path, target, case):
     _, request, _ = _request(tmp_path, target, case)
@@ -165,9 +250,7 @@ def test_fixed_stride_helpers_translate_and_compile(tmp_path, target, case):
 def test_fixed_stride_helpers_execute(tmp_path, case):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required fixed-stride execution")
-    if sys.platform not in {"darwin", "win32"}:
-        pytest.skip("This execution control covers Metal and DirectX")
-    target = "metal" if sys.platform == "darwin" else "directx"
+    target = {"darwin": "metal", "win32": "directx"}.get(sys.platform, "opengl")
     source, request, outputs = _request(tmp_path, target, case)
     _execute(
         request,

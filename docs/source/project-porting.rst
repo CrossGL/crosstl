@@ -2030,14 +2030,16 @@ the helper return is uniform. Aggregate constant-reference helpers have compiler
 coverage, not a complete constant-buffer upload contract. These proofs do not
 establish convergence for every collective loop form or complete MLX translation.
 
-Fixed additive collective loops in DirectX also accept ``+=`` and ``-=`` when
+Fixed additive collective loops in DirectX and OpenGL accept ``+=`` and ``-=`` when
 the initial value, bound and stride are checked integer constants. The proof
 uses the source induction width and signedness and includes the update after
 the last executed iteration. Positive and negative strides, reversed comparisons
 and zero-trip loops are covered. Overflow, unsigned wraparound, unknown or varying
 control values, induction aliases and divergent exits remain diagnostics. Native
 controls compare original and generated Metal kernels and require DirectX
-execution on Windows; this does not extend the OpenGL convergence analysis.
+execution on Windows and OpenGL execution on Linux. Canonical buffer stores
+preserve unconditional collective-helper value evaluation when their index is
+free of calls and side effects; source-owned functions do not inherit this rule.
 
 Both DirectX and OpenGL distinguish writable reference destinations from their
 value-only array indices and member selectors in resolved helper calls. Passing

@@ -329,6 +329,7 @@ from .index_range_contracts import (
     decide_index_narrowing,
     parse_index_range_assertions,
 )
+from .loop_induction import fixed_stride_loop_terminates
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -4412,6 +4413,33 @@ class GLSLCodeGen:
                 getattr(expression, "right", None),
             )
         if isinstance(expression, FunctionCallNode):
+            # Canonical stores eagerly evaluate their value once, just like
+            # assignment RHSs. Do not extend this rule to source-owned calls.
+            if (
+                isinstance(expression.function, (str, IdentifierNode))
+                and self.function_call_name(expression) == "buffer_store"
+                and "buffer_store" not in self.function_return_types
+                and len(expression.arguments) == 3
+                and isinstance(expression.arguments[0], IdentifierNode)
+                and isinstance(expression.arguments[2], FunctionCallNode)
+                and all(
+                    isinstance(
+                        node,
+                        (
+                            IdentifierNode,
+                            LiteralNode,
+                            BinaryOpNode,
+                            MemberAccessNode,
+                            SwizzleNode,
+                            PrimitiveType,
+                        ),
+                    )
+                    or isinstance(node, UnaryOpNode)
+                    and node.operator in {"+", "-", "!", "~"}
+                    for node in self.walk_ast(expression.arguments[1])
+                )
+            ):
+                return expression.arguments[2]
             return expression
         return None
 
@@ -6145,9 +6173,16 @@ class GLSLCodeGen:
             return False
         loop_name = getattr(initializer, "name", None)
         loop_type = self.map_type(getattr(initializer, "var_type", None))
-        if not loop_name or loop_type not in {"int", "uint"}:
+        if not loop_name or loop_type not in {"int", "uint", "int16_t", "uint16_t"}:
             return False
         constants = self.glsl_active_literal_int_constants()
+        constants.pop(loop_name, None)
+        if uniform_names is not None:
+            constants = {
+                name: value
+                for name, value in constants.items()
+                if name in uniform_names
+            }
         initial_expression = getattr(initializer, "initial_value", None)
         initial_value = evaluate_literal_int_expression(initial_expression, constants)
         if initial_value is None and (
@@ -6189,6 +6224,7 @@ class GLSLCodeGen:
 
         update = getattr(node, "update", None)
         halving_update = False
+        additive_update = False
         if isinstance(update, UnaryOpNode):
             update_operator = self.map_operator(
                 getattr(update, "op", getattr(update, "operator", None))
@@ -6203,7 +6239,7 @@ class GLSLCodeGen:
                 getattr(update, "op", getattr(update, "operator", None))
             )
             if (
-                update_operator not in {"/=", ">>="}
+                update_operator not in {"/=", ">>=", "+=", "-="}
                 or self.glsl_software_subgroup_assignment_target_name(update)
                 != loop_name
             ):
@@ -6213,14 +6249,22 @@ class GLSLCodeGen:
                 update_value,
                 constants,
             )
-            if (
-                concrete_update_value is None
-                or (update_operator == "/=" and concrete_update_value < 2)
-                or (update_operator == ">>=" and concrete_update_value < 1)
-            ):
+            if concrete_update_value is None:
                 return False
-            increasing = False
-            halving_update = True
+            if update_operator in {"+=", "-="}:
+                step = concrete_update_value * (1 if update_operator == "+=" else -1)
+                increasing = step > 0
+                additive_update = True
+            else:
+                if (
+                    update_operator == "/="
+                    and concrete_update_value < 2
+                    or update_operator == ">>="
+                    and concrete_update_value < 1
+                ):
+                    return False
+                increasing = False
+                halving_update = True
         else:
             return False
         normalized_operator = (
@@ -6249,9 +6293,33 @@ class GLSLCodeGen:
                 return False
         elif increasing != (normalized_operator in {"<", "<="}):
             return False
+        if additive_update or (
+            isinstance(update, UnaryOpNode)
+            and narrow_integer_shape(self.type_name_string(initializer.var_type))
+            is not None
+        ):
+            if any(
+                self.glsl_software_subgroup_uniform_returns._qualified(
+                    value, {"volatile"}
+                )
+                for value in (initializer, initializer.var_type)
+            ) or not fixed_stride_loop_terminates(
+                self.type_name_string(initializer.var_type),
+                initial_expression,
+                bound,
+                update,
+                constants,
+                normalized_operator,
+            ):
+                return False
 
         bound_names = self.glsl_software_subgroup_expression_identifier_names(bound)
-        control_names = bound_names | {loop_name}
+        stride_names = (
+            self.glsl_software_subgroup_expression_identifier_names(update.value)
+            if additive_update
+            else set()
+        )
+        control_names = bound_names | stride_names | {loop_name}
         for child in self.walk_ast(getattr(node, "body", None)):
             if isinstance(child, (BreakNode, ContinueNode, ReturnNode)):
                 return False
@@ -6259,7 +6327,7 @@ class GLSLCodeGen:
                 if child.name in control_names:
                     return False
                 if (
-                    isinstance(child.var_type, ReferenceType)
+                    isinstance(child.var_type, (PointerType, ReferenceType))
                     and self.glsl_software_subgroup_expression_identifier_names(
                         child.initial_value
                     )
@@ -6268,13 +6336,13 @@ class GLSLCodeGen:
                     return False
             if isinstance(child, AssignmentNode):
                 target_name = self.glsl_software_subgroup_assignment_target_name(child)
-                if target_name == loop_name or target_name in bound_names:
+                if target_name in control_names:
                     return False
             if isinstance(child, UnaryOpNode) and self.map_operator(
                 getattr(child, "op", getattr(child, "operator", None))
             ) in {"++", "--", "&"}:
                 target_name = self.expression_name(getattr(child, "operand", None))
-                if target_name == loop_name or target_name in bound_names:
+                if target_name in control_names:
                     return False
             if isinstance(child, FunctionCallNode):
                 observed = self.glsl_software_subgroup_call_mutations.get(
