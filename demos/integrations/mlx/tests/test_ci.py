@@ -92,6 +92,43 @@ def test_pinned_binary_step_selects_every_native_case_without_portable_duplicate
     )
 
 
+def test_full_gemm_uses_existing_metal_job_and_retains_native_evidence():
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    job = yaml.safe_load(workflow)["jobs"]["mlx-metal-porting"]
+    step = next(
+        s
+        for s in job["steps"]
+        if s.get("name") == "Prove current MLX GEMM Metal round-trip"
+    )
+    path = "demos/integrations/mlx/tests/kernels/test_current_gemm.py"
+    assert workflow.count(path) == 1
+    assert path in step["run"]
+    assert step["if"] == "runner.os == 'macOS'"
+    assert step["env"]["CROSTL_REQUIRE_MLX_CURRENT_GEMM"] == "1"
+    assert step["env"]["PYTEST_XDIST_AUTO_NUM_WORKERS"] == "2"
+    assert step["env"]["CROSTL_MLX_CURRENT_ROOT"].endswith("/mlx-current-tree-upstream")
+    assert "--timeout-seconds 600" in step["run"]
+    assert (
+        "-n auto" in step["run"] and "--basetemp=mlx-gemm-results/pytest" in step["run"]
+    )
+    assert "--junitxml=mlx-gemm-results/results.xml" in step["run"]
+    assert "continue-on-error" not in step
+    upload = next(
+        s
+        for s in job["steps"]
+        if s.get("name") == "Upload current MLX GEMM Metal evidence"
+    )
+    assert upload["if"] == "always() && runner.os == 'macOS'"
+    assert upload["with"]["path"] == "mlx-gemm-results"
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert upload["with"]["include-hidden-files"] is True
+    assert (
+        job["env"]["MLX_CURRENT_TREE_COMMIT"]
+        == "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+    )
+    _assert_workflow_triggers(workflow, path)
+
+
 def test_precise_atan2_uses_existing_native_arctangent_gate():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     job = yaml.safe_load(workflow)["jobs"]["portable-host"]

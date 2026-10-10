@@ -48,6 +48,49 @@ checks. A previous revision's successful proof does not satisfy the current
 revision's required checks.
 Core and demo tests also remain part of the complete test suite.
 
+### Full-Entry GEMM Round-Trip
+
+`tests/kernels/test_current_gemm.py` translates the unchanged
+`steel_gemm_fused_nn_float32_float32_bm32_bn32_bk16_wm2_wn2` entry at commit
+`9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8` through the project API, package
+verification and native Metal loader. It compares generated execution with the
+independently compiled upstream kernel and an exact matrix-product reference.
+The test covers scalar, partial-tile, aligned-tile and multi-tile matrices,
+contiguous batches, padded rows and batch strides, and extra workgroups. Output
+padding and eight trailing guard values must remain unchanged.
+
+The six Boolean function constants are explicitly frozen to false. The test
+uses the source-backed fragment mapping documented in
+`contracts/cooperative-matrix-fragment-mapping.json`, a 32-by-2-by-2 workgroup,
+and reflected parameter layouts. It does not edit upstream or generated kernels,
+substitute a reference shader, or supply unchecked index or workgroup bounds.
+The original source is compiled with Metal 3.2 and the C++17/C++20 extension
+warning exceptions from upstream's kernel build. Both original and generated
+compilation disable fast math and treat remaining warnings as errors.
+
+The existing macOS project-porting job runs this required check and retains
+translation reports, packages, compiler logs, input records, compiled modules,
+readbacks and per-case parity results. Run it locally against a clean checkout
+of the pinned kernel tree:
+
+```sh
+mkdir -p gemm-results
+CROSTL_MLX_CURRENT_ROOT=/path/to/mlx \
+CROSTL_REQUIRE_MLX_CURRENT_GEMM=1 \
+python -m pytest -q -n auto \
+  --basetemp=gemm-results/pytest --junitxml=gemm-results/results.xml \
+  demos/integrations/mlx/tests/kernels/test_current_gemm.py
+```
+
+This proves one float32 NN entry and one function-constant configuration, not
+the complete GEMM family or the upstream MLX suite. Broadcast batch metadata,
+transposed operands and fused output-source variants are not covered. DirectX
+cooperative multiply-accumulate and OpenGL live-offset bounds remain separate
+translation gaps tracked by #1602 and #2179. This check does not establish host
+runtime redirection for those backends.
+
+### Resource-Index Controls
+
 Guarded resource-index controls execute on original/generated Metal and on
 Mesa 25.0.7 llvmpipe with exact results and output guards; the same 31 HLSL
 artifacts compile with strict DXC settings. The local ARM64 Mesa 22.3.6 driver
