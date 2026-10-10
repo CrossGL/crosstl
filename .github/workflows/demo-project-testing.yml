@@ -4003,10 +4003,16 @@ jobs:
           esac
           if [[ "$RUNNER_OS" == Windows ]]; then
             mkdir -p mlx-current-results
+            runtime_entries=(
+              argmin_float32 argmax_float32
+              argmin_uint16 argmax_uint16 argmin_int16 argmax_int16
+              argmin_uint32 argmax_uint32 argmin_int32 argmax_int32
+            )
+            runtime_filter=$(printf ' or %s' "${runtime_entries[@]}")
             python -m pytest -q -n auto \
               demos/integrations/mlx/tests/kernels/test_current_arg_reduce.py \
-              -k "not argmin_float32 and not argmax_float32"
-            for entry in argmin_float32 argmax_float32; do
+              -k "not (${runtime_filter# or })"
+            for entry in "${runtime_entries[@]}"; do
               python tools/run_bounded_command.py \
                 --label "current MLX $entry WARP runtime" \
                 --timeout-seconds 900 \

@@ -607,9 +607,20 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         "demos/integrations/mlx/tests/kernels/test_current_arg_reduce.py \\"
         in current_arg_reduce
     )
-    assert '-k "not argmin_float32 and not argmax_float32"' in current_arg_reduce
+    from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
+        RUNTIME_ENTRIES_BY_TARGET,
+    )
+
+    runtime_entries = re.search(r"runtime_entries=\((.*?)\)", current_arg_reduce, re.S)
+    assert runtime_entries is not None
+    assert shlex.split(runtime_entries.group(1)) == RUNTIME_ENTRIES_BY_TARGET["directx"]
+    assert (
+        """runtime_filter=$(printf ' or %s' "${runtime_entries[@]}")"""
+        in current_arg_reduce
+    )
+    assert '-k "not (${runtime_filter# or })"' in current_arg_reduce
     assert 'PYTHONUNBUFFERED: "1"' in current_arg_reduce
-    assert "for entry in argmin_float32 argmax_float32; do" in current_arg_reduce
+    assert 'for entry in "${runtime_entries[@]}"; do' in current_arg_reduce
     assert "python tools/run_bounded_command.py \\" in current_arg_reduce
     assert '--label "current MLX $entry WARP runtime" \\' in current_arg_reduce
     assert "--timeout-seconds 900 \\" in current_arg_reduce

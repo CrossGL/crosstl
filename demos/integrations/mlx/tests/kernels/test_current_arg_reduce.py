@@ -70,157 +70,168 @@ ENTRIES = [
     "argmax_bfloat16",
 ]
 RUNTIME_ENTRIES = ["argmin_float32", "argmax_float32"]
-METAL_INTEGER_RUNTIME_ENTRIES = [
+INTEGER_RUNTIME_ENTRIES = [
     f"{operation}_{dtype}{width}"
     for width in (16, 32, 64)
     for dtype in ("uint", "int")
     for operation in ("argmin", "argmax")
 ]
+RUNTIME_ENTRIES_BY_TARGET = {
+    target: (
+        RUNTIME_ENTRIES
+        + [
+            entry
+            for entry in INTEGER_RUNTIME_ENTRIES
+            if target != "directx" or not entry.endswith("64")
+        ]
+    )
+    for target in ("metal", "opengl", "directx")
+}
 ARTIFACTS = {
     "directx": {
         "argmin_bool_": {
             "sha256": (
-                "6df0716e13739d023f72a1b4da4e9a3e64b4734d565cfc2e5acc78baa53e5ae4"
+                "841b0bfa5028ae03e6d49dda5a8c37bab402fcea0d6df060dea2b1628b4260fe"
             ),
-            "sizeBytes": 8947,
+            "sizeBytes": 9283,
         },
         "argmax_bool_": {
             "sha256": (
-                "a08dcaf5d8ed5be980cb394df0af21ee19a713ac80af33349034b5dc505f7a89"
+                "219a8f36e0cc935e94f0530d65b6c6c710549296a8333f21c887c3fe54485f1c"
             ),
-            "sizeBytes": 8949,
+            "sizeBytes": 9285,
         },
         "argmin_uint8": {
             "sha256": (
-                "37be693aa42c3bc31c2f97a8d3d7b1cbb6ec4d07e4703ad2186da7451a7a1d8c"
+                "09f4b5a349fdc5ad7d20432e9088bc8913fc1fe55753fc13dff8c62a6e20df44"
             ),
-            "sizeBytes": 6982,
+            "sizeBytes": 7318,
         },
         "argmax_uint8": {
             "sha256": (
-                "532099709a78d7909ae2b15c73b5ef1ceb36725c015fcc193bd163385563ee56"
+                "23f97e600842f4046235ad8ef1b5181f4a88ca858ba4ecd6826acb5f62c143e1"
             ),
-            "sizeBytes": 6978,
+            "sizeBytes": 7314,
         },
         "argmin_uint16": {
             "sha256": (
-                "9fcfeea59e66bdab7dca9ddc702cefc8bd27d29d204871797c4477f147634a19"
+                "a8655583f8e495fc2566c2f5f997c125dada67676564a53ff017a123bc9a15fe"
             ),
-            "sizeBytes": 7264,
+            "sizeBytes": 8386,
         },
         "argmax_uint16": {
             "sha256": (
-                "f9a8a23afc0a3fbbdcf41c6411f392100d0bd6db78120f2d518b6d1d4781fe94"
+                "5e4d14c8ccbc89a0097b5b693fa76771c3ffaf05c1286979c63a11d087d9356b"
             ),
-            "sizeBytes": 7256,
+            "sizeBytes": 8378,
         },
         "argmin_uint32": {
             "sha256": (
-                "4bf79acd3dc0af91e660813ec4cb7993c5b3e1375bc3ffe32a6c24e8849522ed"
+                "a62eb4a8277f007dad94727b2beb69d290db48b22323401d4bcd85405e32e901"
             ),
-            "sizeBytes": 6847,
+            "sizeBytes": 7667,
         },
         "argmax_uint32": {
             "sha256": (
-                "8158bcd57be461b5ac0c9ff50c4a8b4e48eb799e2fda8aa0e057cbc6a3196be0"
+                "9dc8f951ddaf8b4e061814f23bff0a01f18bdcde264b9b7f7f520ba6832a9cc0"
             ),
-            "sizeBytes": 6827,
+            "sizeBytes": 7645,
         },
         "argmin_uint64": {
             "sha256": (
-                "33d0d3f48c58af51087960ce21affb1288e081b0fa6c3c67535ac23af9b5e859"
+                "541674bb99e7413677a6c97abc92eab72323f0269e247ba7ca9ef31bdc71bafe"
             ),
-            "sizeBytes": 9240,
+            "sizeBytes": 9576,
         },
         "argmax_uint64": {
             "sha256": (
-                "1a34328a13989ed141ce2b22ef5a4f2729b1952a9523d9c79d49b17b44b92c70"
+                "8993fbc819b2aad66661073c9d1b2e69fef90676e303870f278e81a15ba513da"
             ),
-            "sizeBytes": 9196,
+            "sizeBytes": 9538,
         },
         "argmin_int8": {
             "sha256": (
-                "2c08e3a540b8bced73590416fe038ac8fc038ad77acebc4aa237d8d1e37453b5"
+                "6f2896511701eefe8a64da9944ff5fd108354ba74fd421330a6992b1affd461a"
             ),
-            "sizeBytes": 7401,
+            "sizeBytes": 7737,
         },
         "argmax_int8": {
             "sha256": (
-                "6daa7dfd9c2e57c82d9aac2aa948f5f355403172cbf2e6c9ad120d6a64b9cd47"
+                "1467653d714af86b6133ba813b2493e57af24f8e5af205591dd135ae8841093d"
             ),
-            "sizeBytes": 7403,
+            "sizeBytes": 7739,
         },
         "argmin_int16": {
             "sha256": (
-                "f95b8aa3d4278e3a4312798c1509f9cb139719041cd52ca2fdb5cde0d9d55375"
+                "30ca101381a6682d6796444c283cc34e2d3f3cad1042a558a90a00bb99c69ddf"
             ),
-            "sizeBytes": 7190,
+            "sizeBytes": 8308,
         },
         "argmax_int16": {
             "sha256": (
-                "1bcd634cf0620d624d81ed79635704685d409627d78c7b3bf65d9c9d54c97777"
+                "278b4e0ab4529d6964f8c932e489eedb1423713bb36d197f74859b4c89e026d0"
             ),
-            "sizeBytes": 7192,
+            "sizeBytes": 8310,
         },
         "argmin_int32": {
             "sha256": (
-                "f7466ec7e236feb83d090833f92267cd4c257d71c0aa9aacd1b353d1a0b98689"
+                "89f10ac366b7a3c44781c536b14c517e40f05b9cbda963836661d02661383222"
             ),
-            "sizeBytes": 7110,
+            "sizeBytes": 8212,
         },
         "argmax_int32": {
             "sha256": (
-                "2ff2e564dba1f07732822bac00ed6258c4bf9982e411171683cb4e2210c3ef5e"
+                "dbba01fabdffb80dd2c2d201e719d471b323926e8136fc98a293872ec88939e8"
             ),
-            "sizeBytes": 7114,
+            "sizeBytes": 8218,
         },
         "argmin_int64": {
             "sha256": (
-                "82c01862a14364dddc58e1046873d57e160915bb8724c7774844bdeee830874d"
+                "77f8c2f519dd29d252b47286092c07e254a37bfcfa7a696b12538171f8753db7"
             ),
-            "sizeBytes": 9169,
+            "sizeBytes": 9503,
         },
         "argmax_int64": {
             "sha256": (
-                "75903394a8cd0c5a3f40b6cbb9179df4a0cd7192cd04231ed791700136d3c136"
+                "14d48e2b15de0e4214ed6b873b253c46b4eb033a7858ede9eb64c32776302f2d"
             ),
-            "sizeBytes": 9171,
+            "sizeBytes": 9521,
         },
         "argmin_float16": {
             "sha256": (
-                "7737e8f5556b4a131897b59c8239123f73ab66eb172c671cafec997e82ad4537"
+                "f450ae20b34ecae3aa4986ac7349cc4deea1b248d481f973d5a215197d730889"
             ),
-            "sizeBytes": 8227,
+            "sizeBytes": 8563,
         },
         "argmax_float16": {
             "sha256": (
-                "fb37a9243920e9357b56450a53fdbc61227f1c2be3b397cb2c9c6d06083f5285"
+                "497e53dee2432797fbde734e107fe534ad4d68822f2bc21e62d97a69de4f9eaa"
             ),
-            "sizeBytes": 8229,
+            "sizeBytes": 8565,
         },
         "argmin_float32": {
             "sha256": (
-                "c1b0a153d30da43f310a489390ee6d59846052116a9f4415fdf0b2a832f9640e"
+                "d4da45e9e0230bf1e20dee667e4b833426bda99a60008cf16b02e9a844176dee"
             ),
-            "sizeBytes": 7725,
+            "sizeBytes": 8061,
         },
         "argmax_float32": {
             "sha256": (
-                "90795a457c45e9574d5c297befb90470f0741b0e331b28d4425011a43954ca7a"
+                "098fe7de24162b565aba5881dc5e9b22e0973c3bb1be6fcbb4ed25679f769136"
             ),
-            "sizeBytes": 7787,
+            "sizeBytes": 8123,
         },
         "argmin_bfloat16": {
             "sha256": (
-                "aa81e68f71228d084bc1e141e0af085b4d769cfcfecf0cae4a1a709f4738eb94"
+                "575c1b77726e489029c503ff5d5b6597e17a6c90159371cb0c265afeebbe0394"
             ),
-            "sizeBytes": 8282,
+            "sizeBytes": 8618,
         },
         "argmax_bfloat16": {
             "sha256": (
-                "299b998df17cf0103686a39f12bacc9ef01be986449e588283ad70962677fa27"
+                "1d3d3738d96944a13fa36057d211295a66f29aeaf71e54c4008400172c207eb9"
             ),
-            "sizeBytes": 8342,
+            "sizeBytes": 8678,
         },
     },
     "opengl": {
@@ -262,7 +273,7 @@ ARTIFACTS = {
         },
         "argmin_uint32": {
             "sha256": (
-                "4aa11f68ed12396aab0409916fc6e1b8e11e26b32079e02624e0223fc94b557b"
+                "dd9e06cfbba49b79290e55236ff92c9579c92ea265639033135f67eb90960ea3"
             ),
             "sizeBytes": 7907,
         },
@@ -280,9 +291,9 @@ ARTIFACTS = {
         },
         "argmax_uint64": {
             "sha256": (
-                "6536c1e9d1894e958e445f24b0580597cc2ad57c05f7d58e079fad89d3458e98"
+                "f4aa718f30c19b068654def06046565d454691f79dca37388f314618d643df2c"
             ),
-            "sizeBytes": 8628,
+            "sizeBytes": 8632,
         },
         "argmin_int8": {
             "sha256": (
@@ -316,21 +327,21 @@ ARTIFACTS = {
         },
         "argmax_int32": {
             "sha256": (
-                "28fdbc744e1677e1139ead434251fc94b774b4758bda88b14b7ada0cf4551735"
+                "00dffeedf4a376c29f0d93e81cb671702383b96468b5da049bd7d0e29c603415"
             ),
             "sizeBytes": 8356,
         },
         "argmin_int64": {
             "sha256": (
-                "2e28adafe28d7a8362eb285f667ab34e279d70699c308897e303c47b8cea198a"
+                "f51a15a010783855b489cf11f6d2181bcb192b4bee3311ea1d52211a0eb78957"
             ),
-            "sizeBytes": 8615,
+            "sizeBytes": 8613,
         },
         "argmax_int64": {
             "sha256": (
-                "f8abfe97178a36e1483829b9815aa359272819d2adec49a8fd99b6a2367910b8"
+                "eb41ff4f6fe29eb78ed9c40af9ab9b2f1a4b5f4c6fb88023a79d8cbdebf4ca64"
             ),
-            "sizeBytes": 8621,
+            "sizeBytes": 8633,
         },
         "argmin_float16": {
             "sha256": (
@@ -556,9 +567,7 @@ def test_current_mlx_arg_reduce_contract_is_exact():
         for target in validation["targets"].values()
     )
     for name, target in validation["targets"].items():
-        assert target["runtimeEntries"] == RUNTIME_ENTRIES + (
-            METAL_INTEGER_RUNTIME_ENTRIES if name == "metal" else []
-        )
+        assert target["runtimeEntries"] == RUNTIME_ENTRIES_BY_TARGET[name]
     assert all(
         target["compilerValidationRequiredInCi"] is True
         for target in validation["targets"].values()
@@ -566,13 +575,17 @@ def test_current_mlx_arg_reduce_contract_is_exact():
     runtime = contract["runtimeMatrix"]
     assert runtime["scope"] == "representative-float32-numerical-parity"
     assert runtime["entries"] == RUNTIME_ENTRIES
-    assert runtime["metalIntegerCases"] == {
-        "entries": METAL_INTEGER_RUNTIME_ENTRIES,
+    assert runtime["integerCases"] == {
+        "entries": INTEGER_RUNTIME_ENTRIES,
         "axisSizes": [31, 32, 33, 129],
         "axisStrides": [1, 2],
-        "caseCount": 96,
+        "entriesByTarget": {
+            target: [entry for entry in entries if entry in INTEGER_RUNTIME_ENTRIES]
+            for target, entries in RUNTIME_ENTRIES_BY_TARGET.items()
+        },
+        "caseCountByTarget": {"metal": 96, "opengl": 96, "directx": 64},
         "extremaAndLowestIndexTies": True,
-        "upstreamMetallibParity": True,
+        "upstreamMetallibParityTargets": ["metal"],
     }
     assert all(
         target["runtimeRequiredInCi"] is True
@@ -580,8 +593,8 @@ def test_current_mlx_arg_reduce_contract_is_exact():
     )
     assert contract["scope"] == {
         "coveredEntryCount": 24,
-        "runtimeCoveredEntryCount": 2,
-        "runtimeCoveredEntryCountByTarget": {"metal": 14, "opengl": 2, "directx": 2},
+        "runtimeCoveredEntryCount": 10,
+        "runtimeCoveredEntryCountByTarget": {"metal": 14, "opengl": 14, "directx": 10},
         "completeCorpusEntryCount": 17832,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
@@ -698,7 +711,7 @@ max_template_materialization_work = 8192
 [project.source_options.metal.target_options.directx]
 relative_wave_shuffle_out_of_range = "self"
 """
-        if entry in RUNTIME_ENTRIES:
+        if entry in RUNTIME_ENTRIES_BY_TARGET[target]:
             source_options += "software_subgroup_width = 32\n"
     elif target == "opengl":
         source_options += """
@@ -884,7 +897,7 @@ def _integer_cases(entry):
             )
 
 
-@pytest.mark.parametrize("entry", METAL_INTEGER_RUNTIME_ENTRIES)
+@pytest.mark.parametrize("entry", INTEGER_RUNTIME_ENTRIES)
 def test_integer_arg_reduce_case_encoding(entry):
     cases = list(_integer_cases(entry))
     assert len(cases) == 8
@@ -949,6 +962,24 @@ def _runtime_binding_names(target, entry):
     }
 
 
+def _runtime_input_type(target, entry):
+    dtype = entry.split("_", 1)[1]
+    if target == "opengl" and dtype in {"int16", "uint16"}:
+        return "int32" if dtype == "int16" else "uint32"
+    return dtype
+
+
+@pytest.mark.parametrize("target", ["metal", "opengl", "directx"])
+@pytest.mark.parametrize(
+    "dtype", ["float32", "int16", "uint16", "int32", "uint32", "int64", "uint64"]
+)
+def test_arg_reduce_runtime_input_matches_physical_storage(target, dtype):
+    expected = dtype
+    if target == "opengl" and dtype.endswith("16"):
+        expected = "int32" if dtype == "int16" else "uint32"
+    assert _runtime_input_type(target, f"argmin_{dtype}") == expected
+
+
 def _runtime_descriptor(translation, work, target, entry):
     report_path = work / "portability-report.json"
     translation.write_json(report_path)
@@ -975,7 +1006,7 @@ def _runtime_descriptor(translation, work, target, entry):
     )
     names = _runtime_binding_names(target, entry)
     expected_types = {
-        names["input"]: "float32",
+        names["input"]: _runtime_input_type(target, entry),
         names["output"]: "uint32",
         names["shape"]: "int32",
         names["inStrides"]: "int64",
@@ -1084,7 +1115,7 @@ def _runtime_dispatch_request(
         package_dir,
         {
             names["input"]: {
-                "dtype": "float32",
+                "dtype": _runtime_input_type(target, entry),
                 "shape": [len(storage)],
                 "values": encoded_storage,
             },
@@ -1151,7 +1182,8 @@ def _run_runtime_parity(translation, work, target, entry):
     _write_json(work / "native-loader-abi.json", descriptor)
     executor = _runtime_executor(target, work)
     evidence = []
-    for name, request, rows, storage in _cases():
+    cases = _integer_cases(entry) if entry in INTEGER_RUNTIME_ENTRIES else _cases()
+    for name, request, rows, storage in cases:
         expected = _expected_indices(entry, rows)
         _write_json(work / f"{name}-input.json", {**request, "expected": expected})
         dispatch, output_name = _runtime_dispatch_request(
@@ -1242,7 +1274,7 @@ def test_current_mlx_arg_reduce_native_validation(
             if entry in {"argmin_uint8", "argmax_uint8", "argmin_int8", "argmax_int8"}:
                 assert "in_[uint(current_in_offset)]" in generated_text
                 assert "(current_in_offset) / 4" not in generated_text
-            if entry in RUNTIME_ENTRIES:
+            if entry in RUNTIME_ENTRIES_BY_TARGET[target]:
                 assert "WaveReadLaneAt" not in generated_text
                 assert "WaveGetLane" not in generated_text
                 assert "__crossgl_software_subgroup_invocation =" in generated_text
@@ -1264,7 +1296,7 @@ def test_current_mlx_arg_reduce_native_validation(
                 tmp_path,
                 "dxc",
             )
-            if entry in RUNTIME_ENTRIES:
+            if entry in RUNTIME_ENTRIES_BY_TARGET[target]:
                 evidence = _run_runtime_parity(translation, tmp_path, target, entry)
                 if evidence:
                     _write_json(
@@ -1299,7 +1331,7 @@ def test_current_mlx_arg_reduce_native_validation(
                 tmp_path,
                 "spirv-val",
             )
-            if entry in RUNTIME_ENTRIES:
+            if entry in RUNTIME_ENTRIES_BY_TARGET[target]:
                 evidence = _run_runtime_parity(translation, tmp_path, target, entry)
                 if evidence:
                     _write_json(
@@ -1315,14 +1347,12 @@ def test_current_mlx_arg_reduce_native_validation(
             assert "current_in += axis_stride;" in generated_text
             assert "isnan_float" not in generated_text
             library = _metal_library(output, tmp_path / "translated.metallib", root)
-            if entry not in RUNTIME_ENTRIES + METAL_INTEGER_RUNTIME_ENTRIES:
+            if entry not in RUNTIME_ENTRIES_BY_TARGET[target]:
                 return
             runner, original = metal_reference
             evidence = []
             cases = (
-                _integer_cases(entry)
-                if entry in METAL_INTEGER_RUNTIME_ENTRIES
-                else _cases()
+                _integer_cases(entry) if entry in INTEGER_RUNTIME_ENTRIES else _cases()
             )
             for name, request, rows, _storage in cases:
                 request_path = tmp_path / f"{name}.json"
