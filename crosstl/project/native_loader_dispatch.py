@@ -230,6 +230,8 @@ def build_native_loader_dispatch_request(
     provide values only under the exact reflected binding names and numeric
     specialization ids. Reflected execution inputs are derived from validated
     dispatch geometry rather than supplied as ordinary fixture values.
+    Buffer payloads are copied before validation so subsequent caller mutations
+    cannot change the values retained by this request.
     """
 
     normalized = _validated_descriptor(descriptor)
@@ -714,6 +716,7 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             path=f"{path}.kind",
             details={"name": runtime_value.name, "kind": runtime_value.kind},
         )
+    runtime_value = replace(runtime_value, values=copy.deepcopy(runtime_value.values))
     metadata = runtime_value.metadata
     if not isinstance(metadata, Mapping):
         raise NativeLoaderDispatchError(

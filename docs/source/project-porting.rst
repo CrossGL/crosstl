@@ -4161,6 +4161,14 @@ cannot replace the expected identity used at execution. The record pins
 identity metadata only; it does not freeze other artifact metadata or the file
 at the artifact path.
 
+Request construction copies input and expected-output buffer payloads before
+validating them, including nested values and exact-bit storage encodings.
+Subsequent changes to the caller's lists cannot alter an existing request or
+its prepared resource bindings. Construct a new request to submit new values.
+This ownership guarantee does not make the returned request's nested objects
+immutable, enforce caller-trusted index-range assertions, or validate metadata
+produced or modified by a preceding GPU dispatch.
+
 An exact binding name may appear in both ``input_values`` and ``output_values``
 only when the descriptor reflects that resource as ``read_write``. In the
 example above, the input payload initializes one native allocation and the

@@ -240,6 +240,70 @@ def test_native_loader_preserves_explicit_allocation_views(tmp_path, target):
         assert resource.allocation == expected[resource.binding.name].allocation
 
 
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize("typed", (False, True))
+@pytest.mark.parametrize("nested", (False, True))
+@pytest.mark.parametrize("encoded", (False, True))
+def test_native_loader_owns_caller_payloads(tmp_path, target, typed, nested, encoded):
+    words = [0, 0x80000000, 0x7FC12345, 0x7F800000] if encoded else [1.0, 2.0, 3.0, 4.0]
+    payload = [words[:2], words[2:]] if nested else words[:]
+    original = copy.deepcopy(payload)
+    specification = {
+        "dtype": "float32",
+        "shape": [2, 2] if nested else [4],
+        "values": payload,
+    }
+    if encoded:
+        specification["encoding"] = "ieee754-binary32"
+    inputs = {
+        "input_values": (
+            RuntimeValue(name="input_values", **specification)
+            if typed
+            else specification
+        )
+    }
+    outputs = {
+        "output_values": (
+            RuntimeValue(name="output_values", **specification)
+            if typed
+            else specification
+        )
+    }
+    first = _build(tmp_path, target, input_values=inputs, output_values=outputs)
+    if nested:
+        payload[0][0] = 9
+    else:
+        payload[0] = 9
+    for value in (*first.fixture.inputs, *first.fixture.expected_outputs):
+        assert value.values == original
+        assert value.values is not payload
+    for resource in first.execution_plan.resource_bindings:
+        assert resource.value.values == original
+    directory = tmp_path / "second"
+    directory.mkdir()
+    second = _build(directory, target, input_values=inputs, output_values=outputs)
+    assert second.fixture.inputs[0].values == payload
+    assert first.fixture.inputs[0].values == original
+
+
+def test_native_loader_validates_the_owned_payload(tmp_path, monkeypatch):
+    from crosstl.project import native_loader_dispatch
+
+    inputs = _inputs()
+    original = copy.deepcopy(inputs["input_values"]["values"])
+    validate = native_loader_dispatch._validate_buffer_values
+
+    def observe(values, **kwargs):
+        if kwargs["role"] == "input":
+            inputs["input_values"]["values"][0] = "changed during validation"
+        return validate(values, **kwargs)
+
+    monkeypatch.setattr(native_loader_dispatch, "_validate_buffer_values", observe)
+    request = _build(tmp_path, input_values=inputs)
+    assert request.fixture.inputs[0].values == original
+    assert request.execution_plan.resource_bindings[0].value.values == original
+
+
 @pytest.mark.parametrize("allocation", ({}, 0, "buffer"))
 def test_native_loader_rejects_invalid_allocation_objects(tmp_path, allocation):
     inputs = {
