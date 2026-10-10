@@ -2002,7 +2002,7 @@ of the hardware wave width. Workgroup dimensions must be concrete and all
 barriers, including those reached through helpers, must have proven uniform
 control flow. Divergent calls and incomplete subgroups are rejected.
 
-DirectX software-subgroup control-flow analysis follows resolved read-only
+DirectX and OpenGL software-subgroup control-flow analysis follows resolved read-only
 helper returns through scalar values, value-only aggregate fields, immutable
 locals and nested helpers. Straight-line private aggregate construction is
 supported when every field is initialized exactly once before the value is used.
@@ -2017,12 +2017,18 @@ storage. The application must preserve the source address-space and non-aliasing
 contracts; the analysis does not establish numeric bounds or authorize index
 narrowing. Mutation, reference escapes, volatile fields, recursion, unknown calls
 and unproven storage reads remain diagnostics.
+Read-only storage parameters are checked against their bodies and resolved
+forwarding calls; qualifiers alone do not exempt calls from mutation analysis.
+OpenGL resource specializations retain convergence facts for the exact source
+nodes that were proved, rather than inferring safety from helper names.
 
-Native controls cover scalar constant references and constant buffers accessed
-through generated resource handles, early returns, zero-trip loops and guarded
-output. Aggregate constant-reference helpers have compiler coverage, not a
-complete constant-buffer upload contract. This does not remove the corresponding
-OpenGL limitation or establish convergence for every collective loop form.
+Native controls on all three targets cover scalar constant references, constant
+buffer reads, nested collective helpers, early returns, zero-trip loops and
+guarded output. DirectX and Metal additionally execute the generated
+resource-handle control; OpenGL rejects its unproven wide output index even when
+the helper return is uniform. Aggregate constant-reference helpers have compiler
+coverage, not a complete constant-buffer upload contract. These proofs do not
+establish convergence for every collective loop form or complete MLX translation.
 
 Fixed additive collective loops in DirectX also accept ``+=`` and ``-=`` when
 the initial value, bound and stride are checked integer constants. The proof

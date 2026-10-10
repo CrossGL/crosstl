@@ -5513,6 +5513,10 @@ class HLSLCodeGen:
                 parameters = getattr(callee, "parameters", []) or []
                 mutations = []
                 for index, argument in enumerate(arguments):
+                    if self.hlsl_software_subgroup_uniform_returns.read_only_resource_parameter(
+                        callee, index
+                    ):
+                        continue
                     if index >= len(parameters) or isinstance(
                         parameters[index].param_type, PointerType
                     ):
@@ -5590,7 +5594,7 @@ class HLSLCodeGen:
                 parameter.name
                 for index, parameter in enumerate(parameters)
                 if index in uniform_parameters.get(function_id, set())
-                and not isinstance(parameter.param_type, (PointerType, ReferenceType))
+                and not isinstance(parameter.param_type, ReferenceType)
                 and not set(self.hlsl_parameter_qualifiers(parameter))
                 & {"out", "inout"}
                 and (

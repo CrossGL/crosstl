@@ -51,6 +51,127 @@ class UniformReturnAnalysis:
         self.structs = structs or {}
         self.summaries = {}
         self.visiting = set()
+        self.resource_effects = {}
+        self.resource_visiting = set()
+
+    def read_only_resource_parameter(self, function, index):
+        """Check each use of a storage parameter, including forwarding calls.
+
+        A read-only type is necessary, not sufficient: casts, reference escapes,
+        aliases, unknown calls and recursion cannot establish this proof.
+        """
+        key = (id(function), index)
+        if key in self.resource_visiting:
+            return False
+        if key in self.resource_effects:
+            return self.resource_effects[key]
+        if function.body is None or index >= len(function.parameters):
+            return False
+        parameter = function.parameters[index]
+        if not self.resource_type(parameter.param_type, parameter) or self._qualified(
+            parameter, {"out", "inout"}
+        ):
+            return False
+        self.resource_visiting.add(key)
+        try:
+            result = self._resource_uses_are_reads(function, parameter)
+            self.resource_effects[key] = result
+            return result
+        finally:
+            self.resource_visiting.remove(key)
+
+    def _resource_uses_are_reads(self, function, parameter):
+        parents = {}
+        roots = function.body if isinstance(function.body, list) else [function.body]
+        if any(not hasattr(root, "walk") for root in roots):
+            return False
+        nodes = [node for root in roots for node in root.walk()]
+        for node in nodes:
+            if isinstance(node, VariableNode) and node.name == parameter.name:
+                return False
+            for child in node.child_nodes():
+                parents.setdefault(id(child), []).append(node)
+
+        def call_argument_is_read(call, child, resource):
+            indices = [
+                i for i, argument in enumerate(call.arguments) if argument is child
+            ]
+            if not indices:
+                return False
+            callee = self.resolved_calls.get(id(call))
+            if callee is None:
+                return not resource and id(call) in self.pure_builtin_calls
+            for index in indices:
+                if index >= len(callee.parameters):
+                    return False
+                if resource:
+                    if not self.read_only_resource_parameter(callee, index):
+                        return False
+                else:
+                    formal = callee.parameters[index]
+                    if not self.value_type(formal.param_type) or self._qualified(
+                        formal, {"out", "inout"}
+                    ):
+                        return False
+            return True
+
+        def read_use(child, resource):
+            owners = parents.get(id(child), [])
+            if not owners:
+                return False
+            for owner in owners:
+                if isinstance(owner, FunctionCallNode):
+                    if not call_argument_is_read(owner, child, resource):
+                        return False
+                elif resource:
+                    if not (
+                        isinstance(owner, ArrayAccessNode)
+                        and owner.array_expr is child
+                        and read_use(owner, False)
+                    ):
+                        return False
+                elif isinstance(
+                    owner, (MemberAccessNode, SwizzleNode, BinaryOpNode, TernaryOpNode)
+                ):
+                    if not read_use(owner, False):
+                        return False
+                elif isinstance(owner, UnaryOpNode) and owner.operator in {
+                    "+",
+                    "-",
+                    "!",
+                    "~",
+                }:
+                    if not read_use(owner, False):
+                        return False
+                elif isinstance(owner, CastNode) and self.value_type(owner.target_type):
+                    if not read_use(owner, False):
+                        return False
+                elif isinstance(owner, VariableNode):
+                    if owner.initial_value is not child or not self.value_type(
+                        owner.var_type
+                    ):
+                        return False
+                elif isinstance(owner, AssignmentNode):
+                    if owner.value is not child:
+                        return False
+                elif isinstance(owner, ReturnNode):
+                    if not self.value_type(function.return_type):
+                        return False
+                elif isinstance(owner, IfNode):
+                    if (
+                        child is not owner.condition
+                        and child not in owner.else_if_conditions
+                    ):
+                        return False
+                else:
+                    return False
+            return True
+
+        return all(
+            read_use(node, True)
+            for node in nodes
+            if isinstance(node, IdentifierNode) and node.name == parameter.name
+        )
 
     @staticmethod
     def _qualified(node, excluded):
@@ -107,6 +228,21 @@ class UniformReturnAnalysis:
         return [call.arguments[index] for index in sorted(required)]
 
     def resource_type(self, type_, owner=None, *, read_only=True):
+        if isinstance(type_, PointerType):
+            source_read_only = type_.address_space == "constant" or any(
+                self._qualified(node, {"const", "readonly", "constant"})
+                for node in (type_, owner)
+            )
+            access = type_.access_mode or ("read" if source_read_only else "read_write")
+            return (
+                type_.address_space in {"constant", "device", "global", "storage"}
+                and access in ({"read"} if read_only else {"read", "read_write"})
+                and (not read_only or source_read_only or not type_.is_mutable)
+                and self.value_type(type_.pointee_type)
+                and not self._qualified(type_, {"volatile", "coherent", "writeonly"})
+                and not self._qualified(owner, {"volatile", "coherent", "writeonly"})
+                and not getattr(owner, "resource_qualifiers", None)
+            )
         return (
             isinstance(type_, NamedType)
             and type_.name in (

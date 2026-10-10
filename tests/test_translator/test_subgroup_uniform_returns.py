@@ -12,8 +12,18 @@ from crosstl.project import (
     translate_project,
 )
 from crosstl.translator import parse
-from crosstl.translator.ast import FunctionCallNode, IdentifierNode, NamedType
+from crosstl.translator.ast import (
+    FunctionCallNode,
+    IdentifierNode,
+    NamedType,
+    PointerType,
+    PrimitiveType,
+)
 from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
+from crosstl.translator.codegen.GLSL_codegen import (
+    GLSLCodeGen,
+    OpenGLSoftwareSubgroupError,
+)
 from crosstl.translator.codegen.uniform_returns import UniformReturnAnalysis
 from tests.runtime_helpers import _prepare_native_package
 from tests.test_translator.test_directx_software_reductions import _codegen, _source
@@ -21,6 +31,20 @@ from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
 
 REQUIRE_ENV = "CROSTL_REQUIRE_UNIFORM_RETURN_RUNTIME"
+
+
+@pytest.fixture(params=["directx", "opengl"])
+def return_target(request):
+    return request.param
+
+
+def _return_codegen(target):
+    return (
+        _codegen() if target == "directx" else GLSLCodeGen(software_subgroup_width=32)
+    )
+
+
+RETURN_ERRORS = (DirectXSoftwareSubgroupError, OpenGLSoftwareSubgroupError)
 
 
 def _body(expression):
@@ -47,14 +71,18 @@ def _body(expression):
         "uint bound(uint value) { return value > 2u ? 2u : value; }",
     ],
 )
-def test_read_only_return_bounds_compile(tmp_path, expression, helper):
+def test_read_only_return_bounds_compile(tmp_path, expression, helper, return_target):
     source = parse(_source("uint", _body(expression), helper))
-    generator = _codegen()
+    generator = _return_codegen(return_target)
     generated = generator.generate_stage(source, "compute")
     assert generator.generate_stage(source, "compute") == generated
     assert "WaveActiveSum" not in generated
-    assert "GroupMemoryBarrierWithGroupSync" in generated
-    _compile(generated, "directx", tmp_path)
+    assert (
+        "GroupMemoryBarrierWithGroupSync"
+        if return_target == "directx"
+        else "barrier();"
+    ) in generated
+    _compile(generated, return_target, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -115,39 +143,43 @@ def test_read_only_return_bounds_compile(tmp_path, expression, helper):
         ),
     ],
 )
-def test_return_proofs_reject_unsafe_or_varying_helpers(expression, helper):
-    with pytest.raises(DirectXSoftwareSubgroupError):
-        _codegen().generate_stage(
+def test_return_proofs_reject_unsafe_or_varying_helpers(
+    expression, helper, return_target
+):
+    with pytest.raises(RETURN_ERRORS):
+        _return_codegen(return_target).generate_stage(
             parse(_source("uint", _body(expression), helper)), "compute"
         )
 
 
-def test_unused_lane_value_does_not_make_the_return_vary(tmp_path):
+def test_unused_lane_value_does_not_make_the_return_vary(tmp_path, return_target):
     helper = "uint bound(uint value, uint ignored) { return value + 1u; }"
-    generated = _codegen().generate_stage(
+    generated = _return_codegen(return_target).generate_stage(
         parse(_source("uint", _body("bound(group.x, invocation)"), helper)), "compute"
     )
-    _compile(generated, "directx", tmp_path)
+    _compile(generated, return_target, tmp_path)
 
 
-def test_uniform_return_facts_are_not_shared_between_callers():
+def test_uniform_return_facts_are_not_shared_between_callers(return_target):
     helper = "uint bound(uint value) { return value + 1u; }"
     body = "uint good = bound(group.x); outputWords[index] = good;" + _body(
         "bound(invocation)"
     )
-    with pytest.raises(DirectXSoftwareSubgroupError):
-        _codegen().generate_stage(parse(_source("uint", body, helper)), "compute")
+    with pytest.raises(RETURN_ERRORS):
+        _return_codegen(return_target).generate_stage(
+            parse(_source("uint", body, helper)), "compute"
+        )
 
 
-def test_return_proofs_use_the_resolved_source_overload(tmp_path):
+def test_return_proofs_use_the_resolved_source_overload(tmp_path, return_target):
     helper = """uint bound(uint value) { return value + 1u; }
         uint bound(float value) { return inputWords[uint(value)]; }"""
-    generated = _codegen().generate_stage(
+    generated = _return_codegen(return_target).generate_stage(
         parse(_source("uint", _body("bound(group.x)"), helper)), "compute"
     )
-    _compile(generated, "directx", tmp_path)
-    with pytest.raises(DirectXSoftwareSubgroupError):
-        _codegen().generate_stage(
+    _compile(generated, return_target, tmp_path)
+    with pytest.raises(RETURN_ERRORS):
+        _return_codegen(return_target).generate_stage(
             parse(_source("uint", _body("bound(float(group.x))"), helper)), "compute"
         )
 
@@ -204,7 +236,7 @@ kernel void accumulate(constant uint& group_limit [[buffer(0)]],
 """
 
 
-def _report(root, target, source):
+def _report(root, target, source, *, diagnostic=None):
     (root / "kernel.metal").write_text(source)
     options = (
         {
@@ -219,6 +251,8 @@ def _report(root, target, source):
         else {}
     )
     options["preserve_resource_origins"] = True
+    if target == "opengl":
+        options["target_options"] = {"opengl": {"software_subgroup_width": 32}}
     report = translate_project(
         ProjectConfig(
             root=root,
@@ -231,7 +265,9 @@ def _report(root, target, source):
         format_output=False,
     )
     report.write_json(root / "report.json")
-    assert report.to_json()["diagnostics"] == [], report.to_json()
+    assert [item["code"] for item in report.to_json()["diagnostics"]] == (
+        [] if diagnostic is None else [diagnostic]
+    ), report.to_json()
     return report
 
 
@@ -280,14 +316,14 @@ def _buffer_request(root, target, source, iterations):
     return request, outputs
 
 
-@pytest.mark.parametrize("target", ["metal", "directx"])
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
 def test_aggregate_metadata_helpers_translate_and_compile(tmp_path, target):
     report = _report(tmp_path, target, SOURCE)
     artifact = report.to_json()["artifacts"][0]
     _compile((tmp_path / artifact["path"]).read_text(), target, tmp_path)
 
 
-@pytest.mark.parametrize("target", ["metal", "directx"])
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
 def test_constant_reference_helpers_package_and_compile(tmp_path, target):
     request, _ = _request(tmp_path, target)
     _compile(request.artifact_path.read_text(), target, tmp_path)
@@ -297,9 +333,7 @@ def test_constant_reference_helpers_package_and_compile(tmp_path, target):
 def test_constant_reference_helpers_execute(tmp_path, iterations):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required helper-return execution")
-    if sys.platform not in {"darwin", "win32"}:
-        pytest.skip("This execution control covers Metal and DirectX")
-    target = "metal" if sys.platform == "darwin" else "directx"
+    target = {"darwin": "metal", "win32": "directx"}.get(sys.platform, "opengl")
     request, expected = _request(tmp_path, target, iterations)
     _execute(
         request,
@@ -363,14 +397,23 @@ def _storage_source(expression, helpers="", *, qualifier="@constant", prefix="")
     ],
 )
 def test_constant_storage_return_dependencies_compile(
-    tmp_path, expression, helpers, prefix
+    tmp_path, expression, helpers, prefix, return_target
 ):
-    generator = _codegen()
-    ast = parse(_storage_source(expression, helpers, prefix=prefix))
+    generator = _return_codegen(return_target)
+    source = _storage_source(expression, helpers, prefix=prefix)
+    if return_target == "opengl":
+        source = source.replace(
+            "StructuredBuffer<uint> values", "constant uint* values"
+        ).replace("StructuredBuffer<uint> alias", "constant uint* alias")
+    ast = parse(source)
     generated = generator.generate_stage(ast, "compute")
     assert generator.generate_stage(ast, "compute") == generated
-    assert "GroupMemoryBarrierWithGroupSync" in generated
-    _compile(generated, "directx", tmp_path)
+    assert (
+        "GroupMemoryBarrierWithGroupSync"
+        if return_target == "directx"
+        else "barrier();"
+    ) in generated
+    _compile(generated, return_target, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -402,14 +445,14 @@ def test_constant_storage_return_dependencies_compile(
     ],
 )
 def test_storage_dependencies_do_not_infer_immutability_or_uniform_indices(
-    expression, qualifier, prefix, helper
+    expression, qualifier, prefix, helper, return_target
 ):
     helper = (
         helper
         or "uint load(StructuredBuffer<uint> values, uint offset) { return values[offset]; }"
     )
-    with pytest.raises(DirectXSoftwareSubgroupError):
-        _codegen().generate_stage(
+    with pytest.raises(RETURN_ERRORS):
+        _return_codegen(return_target).generate_stage(
             parse(
                 _storage_source(expression, helper, qualifier=qualifier, prefix=prefix)
             ),
@@ -430,12 +473,14 @@ def _record_source(initializer, expression="metadata.count", prefix=""):
     )
 
 
-def test_fully_initialized_private_aggregate_returns_compile(tmp_path):
+def test_fully_initialized_private_aggregate_returns_compile(tmp_path, return_target):
     initializer = (
         "Metadata result; result.offset = 0u; result.count = count; return result;"
     )
-    generated = _codegen().generate_stage(parse(_record_source(initializer)), "compute")
-    _compile(generated, "directx", tmp_path)
+    generated = _return_codegen(return_target).generate_stage(
+        parse(_record_source(initializer)), "compute"
+    )
+    _compile(generated, return_target, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -451,14 +496,18 @@ def test_fully_initialized_private_aggregate_returns_compile(tmp_path):
         "Metadata result; if (count > 0u) { result.count = count; } result.offset = 0u; return result;",
     ],
 )
-def test_partial_escaped_or_mutated_aggregate_returns_remain_unproven(initializer):
-    with pytest.raises(DirectXSoftwareSubgroupError):
-        _codegen().generate_stage(parse(_record_source(initializer)), "compute")
+def test_partial_escaped_or_mutated_aggregate_returns_remain_unproven(
+    initializer, return_target
+):
+    with pytest.raises(RETURN_ERRORS):
+        _return_codegen(return_target).generate_stage(
+            parse(_record_source(initializer)), "compute"
+        )
 
 
-def test_private_aggregate_writes_in_the_caller_invalidate_uniformity():
-    with pytest.raises(DirectXSoftwareSubgroupError):
-        _codegen().generate_stage(
+def test_private_aggregate_writes_in_the_caller_invalidate_uniformity(return_target):
+    with pytest.raises(RETURN_ERRORS):
+        _return_codegen(return_target).generate_stage(
             parse(
                 _record_source(
                     "Metadata result; result.count = count; result.offset = 0u; return result;",
@@ -478,13 +527,13 @@ def test_record_storage_dependencies_preserve_wide_source_types(tmp_path, wide_t
     _compile(_codegen().generate_stage(parse(source), "compute"), "directx", tmp_path)
 
 
-def test_resource_return_proof_requires_every_callers_immutable_binding():
+def test_resource_return_proof_requires_every_callers_immutable_binding(return_target):
     helper = "uint load(StructuredBuffer<uint> values, uint offset) { return values[offset]; }"
     source = _storage_source(
         "load(other, group.x)", helper, prefix="uint good = load(counts, group.x);"
     ).replace("void main(", "void main(StructuredBuffer<uint> other @buffer(2), ")
-    with pytest.raises(DirectXSoftwareSubgroupError):
-        _codegen().generate_stage(parse(source), "compute")
+    with pytest.raises(RETURN_ERRORS):
+        _return_codegen(return_target).generate_stage(parse(source), "compute")
 
 
 @pytest.mark.parametrize("name", ["uint&", "volatile uint", "custom::uint", "uint*"])
@@ -497,7 +546,9 @@ def test_minimum_precision_integer_locals_remain_value_types(name):
     assert UniformReturnAnalysis({}, set()).value_type(NamedType(name))
 
 
-def test_collective_helper_receives_checked_resource_and_record_facts(tmp_path):
+def test_collective_helper_receives_checked_resource_and_record_facts(
+    tmp_path, return_target
+):
     helper = """struct Bounds { uint count; };
         Bounds make_bounds(uint count) { Bounds result; result.count = count; return result; }
         uint load(StructuredBuffer<uint> values, uint offset) { return values[offset]; }
@@ -512,7 +563,15 @@ def test_collective_helper_receives_checked_resource_and_record_facts(tmp_path):
         _body("1u"),
         "Bounds bounds = make_bounds(group.x); outputWords[index] = reduce(counts, bounds, invocation);",
     )
-    _compile(_codegen().generate_stage(parse(source), "compute"), "directx", tmp_path)
+    if return_target == "opengl":
+        source = source.replace(
+            "StructuredBuffer<uint> values", "constant uint* values"
+        )
+    _compile(
+        _return_codegen(return_target).generate_stage(parse(source), "compute"),
+        return_target,
+        tmp_path,
+    )
 
 
 STORAGE_SOURCE = """#include <metal_stdlib>
@@ -550,8 +609,8 @@ def test_generated_resource_load_helpers_execute(tmp_path, iterations):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required helper-return execution")
     if sys.platform not in {"darwin", "win32"}:
-        pytest.skip("This execution control covers Metal and DirectX")
-    target = "metal" if sys.platform == "darwin" else "directx"
+        pytest.skip("Generated handle indices still require an OpenGL range proof")
+    target = {"darwin": "metal", "win32": "directx"}.get(sys.platform, "opengl")
     request, expected = _buffer_request(tmp_path, target, STORAGE_SOURCE, iterations)
     _execute(
         request,
@@ -560,3 +619,230 @@ def test_generated_resource_load_helpers_execute(tmp_path, iterations):
         original_source=STORAGE_SOURCE if target == "metal" else None,
         original_entry="accumulate",
     )
+
+
+def test_generated_handle_uniformity_does_not_authorize_index_narrowing(tmp_path):
+    report = _report(
+        tmp_path,
+        "opengl",
+        STORAGE_SOURCE,
+        diagnostic="project.translate.opengl-index-type-unsupported",
+    ).to_json()
+    assert report["summary"]["translatedCount"] == 0
+    assert (
+        report["diagnostics"][0]["details"]["indexConversion"]["reason"]
+        == "index-range-unproven"
+    )
+
+
+BUFFER_SOURCE = (
+    STORAGE_SOURCE.replace("struct Destination { device uint* data; };", "")
+    .replace("    Destination destination;\n    destination.data = output;\n", "")
+    .replace("destination.data[", "output[")
+)
+
+_ACCUMULATION = """uint result = 0u;
+    for (uint step = 0u; step < read_count(counts, 1u); ++step) {
+        result += simd_sum(lane + step);
+    }"""
+COLLECTIVE_SOURCE = BUFFER_SOURCE.replace(
+    "kernel void accumulate(",
+    "uint accumulate_values(constant uint* counts, uint lane) { "
+    "if (read_count(counts, 1u) == 0u) { return 0u; } "
+    + _ACCUMULATION
+    + " return result; }\nkernel void accumulate(",
+).replace(
+    "    " + _ACCUMULATION,
+    "    uint result = accumulate_values(counts, lane);",
+)
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
+@pytest.mark.parametrize(
+    "source", [BUFFER_SOURCE, COLLECTIVE_SOURCE], ids=["entry", "helper"]
+)
+def test_constant_storage_helpers_package_and_compile(tmp_path, target, source):
+    request, _ = _buffer_request(tmp_path, target, source, 3)
+    _compile(request.artifact_path.read_text(), target, tmp_path)
+
+
+@pytest.mark.parametrize("iterations", [0, 1, 3])
+@pytest.mark.parametrize(
+    "source", [BUFFER_SOURCE, COLLECTIVE_SOURCE], ids=["entry", "helper"]
+)
+def test_constant_storage_helpers_execute(tmp_path, iterations, source):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required helper-return execution")
+    target = {"darwin": "metal", "win32": "directx"}.get(sys.platform, "opengl")
+    request, expected = _buffer_request(tmp_path, target, source, iterations)
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source if target == "metal" else None,
+        original_entry="accumulate",
+    )
+
+
+@pytest.mark.parametrize(
+    "body,helpers,expected",
+    [
+        ("return 1u;", "", True),
+        ("return values[0];", "", True),
+        ("uint value = values[0]; outputWords[0] = value; return value;", "", True),
+        ("outputWords[0] = values[0]; return 1u;", "", True),
+        (
+            "return read(values);",
+            "uint read(StructuredBuffer<uint> data) { return data[0]; }",
+            True,
+        ),
+        ("return copy(values[0]);", "uint copy(uint value) { return value; }", True),
+        ("values[0] = 1u; return 1u;", "", False),
+        ("values[0]++; return 1u;", "", False),
+        ("unknown(values); return 1u;", "", False),
+        ("unknown(values[0]); return 1u;", "", False),
+        ("uint& alias = values[0]; return alias;", "", False),
+        ("StructuredBuffer<uint> alias = values; return alias[0];", "", False),
+        (
+            "return read(values);",
+            "uint read(StructuredBuffer<uint> data) { data[0] = 1u; return data[0]; }",
+            False,
+        ),
+        (
+            "return read(values);",
+            "uint read(StructuredBuffer<uint> data) { return inspect(data); }",
+            False,
+        ),
+        (
+            "return copy(values[0]);",
+            "uint copy(inout uint value) { value++; return value; }",
+            False,
+        ),
+    ],
+)
+@pytest.mark.parametrize("pointer", [False, True])
+def test_read_only_resource_effects_follow_bodies(body, helpers, expected, pointer):
+    ast = parse(
+        "shader Effect { RWStructuredBuffer<uint> outputWords; "
+        + helpers
+        + " uint inspect(StructuredBuffer<uint> values) { "
+        + body
+        + " } }"
+    )
+    functions = {function.name: function for function in ast.functions}
+    if pointer:
+        for function in functions.values():
+            for parameter in function.parameters:
+                if getattr(parameter.param_type, "name", None) == "StructuredBuffer":
+                    parameter.param_type = PointerType(
+                        PrimitiveType("uint"),
+                        is_mutable=False,
+                        address_space="constant",
+                        access_mode="read",
+                    )
+    calls = {
+        id(node): functions[node.function.name]
+        for node in ast.walk()
+        if isinstance(node, FunctionCallNode) and node.function.name in functions
+    }
+    analysis = UniformReturnAnalysis(calls, set())
+    for _ in range(2):
+        assert (
+            analysis.read_only_resource_parameter(functions["inspect"], 0) is expected
+        )
+
+
+@pytest.mark.parametrize(
+    "space,access,mutable,expected",
+    [
+        ("constant", "read", False, True),
+        ("constant", None, True, True),
+        ("constant", "write", True, False),
+        ("device", "read", False, True),
+        ("storage", "read", False, True),
+        ("threadgroup", "read", False, False),
+        ("thread", "read", False, False),
+        (None, "read", False, False),
+        ("device", "read_write", False, False),
+        ("device", "write", False, False),
+        ("device", "read", True, False),
+    ],
+)
+def test_storage_pointer_proofs_preserve_access_contract(
+    space, access, mutable, expected
+):
+    type_ = PointerType(
+        PrimitiveType("uint"),
+        is_mutable=mutable,
+        address_space=space,
+        access_mode=access,
+    )
+    assert UniformReturnAnalysis({}, set()).resource_type(type_) is expected
+
+
+@pytest.mark.parametrize("qualifier", ["volatile", "coherent", "writeonly"])
+def test_storage_pointer_proofs_reject_memory_qualifiers(qualifier):
+    type_ = PointerType(
+        PrimitiveType("uint"),
+        is_mutable=False,
+        address_space="constant",
+        access_mode="read",
+    )
+    type_.qualifiers = [qualifier]
+    assert not UniformReturnAnalysis({}, set()).resource_type(type_)
+
+
+@pytest.mark.parametrize("qualifier", ["out", "inout"])
+def test_resource_output_parameters_do_not_preserve_caller_facts(qualifier):
+    function = parse(
+        "shader Effect { uint inspect(StructuredBuffer<uint> values) { return 1u; } }"
+    ).functions[0]
+    function.parameters[0].qualifiers = [qualifier]
+    assert not UniformReturnAnalysis({}, set()).read_only_resource_parameter(
+        function, 0
+    )
+
+
+@pytest.mark.parametrize(
+    "body,expected",
+    [("return values[0];", True), ("values[0] = 1u; return 1u;", False)],
+)
+def test_resource_effects_accept_statement_list_bodies(body, expected):
+    function = parse(
+        "shader Effect { uint inspect(StructuredBuffer<uint> values) { " + body + " } }"
+    ).functions[0]
+    function.body = function.body.statements
+    assert (
+        UniformReturnAnalysis({}, set()).read_only_resource_parameter(function, 0)
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        ("constant uint*", "const device uint*"),
+        ("read_count(counts, 1u)", "read_count(counts, lane)"),
+        ("return words[offset];", "return unknown(words, offset);"),
+    ],
+)
+def test_source_storage_returns_require_immutable_uniform_inputs(tmp_path, replacement):
+    report = _report(
+        tmp_path,
+        "opengl",
+        BUFFER_SOURCE.replace(*replacement),
+        diagnostic="project.translate.opengl-software-subgroup-invalid",
+    ).to_json()
+    assert report["summary"]["translatedCount"] == 0
+
+
+def test_return_analysis_resets_between_programs(return_target):
+    generator = _return_codegen(return_target)
+    helper = "uint bound(uint value) { return value + 1u; }"
+    safe = parse(_source("uint", _body("bound(group.x)"), helper))
+    expected = generator.generate_stage(safe, "compute")
+    with pytest.raises(RETURN_ERRORS):
+        generator.generate_stage(
+            parse(_source("uint", _body("bound(invocation)"), helper)), "compute"
+        )
+    assert generator.generate_stage(safe, "compute") == expected
