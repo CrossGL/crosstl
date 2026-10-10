@@ -1993,15 +1993,25 @@ control flow. Divergent calls and incomplete subgroups are rejected.
 
 DirectX software-subgroup control-flow analysis follows resolved read-only
 helper returns through scalar values, value-only aggregate fields, immutable
-locals and nested helpers. Return and branch dependencies are checked against
-each caller's workgroup-uniform arguments; one uniform call does not establish
-a fact for other calls. Mutation, reference escapes, volatile fields, recursion,
-unknown calls and storage loads remain unproven. Read-only resource views alone
-do not establish immutable backing storage. Native controls cover scalar
-constant-reference bounds, early returns, zero-trip loops and guarded output;
-aggregate-field helpers have compiler coverage, not a complete constant-buffer
-upload contract. This analysis does not yet propagate generated resource-load
-provenance or remove the corresponding OpenGL limitation.
+locals and nested helpers. Straight-line private aggregate construction is
+supported when every field is initialized exactly once before the value is used.
+Return and branch dependencies are checked against each caller's workgroup-uniform
+arguments; one uniform call does not establish a fact for other calls.
+
+Storage reads require both an immutable binding derived from the entry's explicit
+constant-storage contract and a workgroup-uniform index, including any generated
+handle offset. Typed local aliases and resolved helper arguments retain those
+dependencies. A read-only resource view alone does not establish immutable backing
+storage. The application must preserve the source address-space and non-aliasing
+contracts; the analysis does not establish numeric bounds or authorize index
+narrowing. Mutation, reference escapes, volatile fields, recursion, unknown calls
+and unproven storage reads remain diagnostics.
+
+Native controls cover scalar constant references and constant buffers accessed
+through generated resource handles, early returns, zero-trip loops and guarded
+output. Aggregate constant-reference helpers have compiler coverage, not a
+complete constant-buffer upload contract. This does not remove the corresponding
+OpenGL limitation or establish convergence for every collective loop form.
 
 The DirectX fallback accumulates in increasing inner-dimension order using
 separately rounded binary32 products and sums; ``precise`` prevents contraction

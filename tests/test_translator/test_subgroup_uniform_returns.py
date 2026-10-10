@@ -12,7 +12,7 @@ from crosstl.project import (
     translate_project,
 )
 from crosstl.translator import parse
-from crosstl.translator.ast import FunctionCallNode, IdentifierNode
+from crosstl.translator.ast import FunctionCallNode, IdentifierNode, NamedType
 from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
 from crosstl.translator.codegen.uniform_returns import UniformReturnAnalysis
 from tests.runtime_helpers import _prepare_native_package
@@ -236,7 +236,11 @@ def _report(root, target, source):
 
 
 def _request(root, target, iterations=3):
-    report = _report(root, target, SCALAR_SOURCE)
+    return _buffer_request(root, target, SCALAR_SOURCE, iterations)
+
+
+def _buffer_request(root, target, source, iterations):
+    report = _report(root, target, source)
     descriptor, package = _prepare_native_package(report, root)
     names = {
         binding["provenance"]["sourceResource"]["parameter"]: binding["name"]
@@ -257,10 +261,13 @@ def _request(root, target, iterations=3):
 
     outputs = {names["output"]: value(wanted + guard)}
     inputs = {
-        names["group_limit"]: value([2]),
-        names["iterations"]: value([iterations]),
         names["output"]: value([0xDEADBEEF] * 128 + guard),
     }
+    if "counts" in names:
+        inputs[names["counts"]] = value([2, iterations])
+    else:
+        inputs[names["group_limit"]] = value([2])
+        inputs[names["iterations"]] = value([iterations])
     request = build_native_loader_dispatch_request(
         descriptor,
         package,
@@ -316,3 +323,240 @@ def test_uniform_return_execution_is_required_in_existing_ci_job():
     assert 'CROSTL_REQUIRE_UNIFORM_RETURN_RUNTIME: "1"' in step
     assert "tests/test_translator/test_subgroup_uniform_returns.py" in step
     assert "-n auto" in step and "continue-on-error" not in step
+
+
+def _storage_source(expression, helpers="", *, qualifier="@constant", prefix=""):
+    return (
+        _source("uint", prefix + _body(expression), helpers)
+        .replace("StructuredBuffer<uint> inputWords @register(t0);", "")
+        .replace(
+            "void main(uint invocation",
+            f"void main(StructuredBuffer<uint> counts {qualifier} @buffer(0), uint invocation",
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "expression,helpers,prefix",
+    [
+        ("counts[group.x]", "", ""),
+        (
+            "load(counts, group.x)",
+            "uint load(StructuredBuffer<uint> values, uint offset) { return values[offset]; }",
+            "",
+        ),
+        (
+            "load(alias, group.x)",
+            "uint load(StructuredBuffer<uint> values, uint offset) { return values[offset]; }",
+            "StructuredBuffer<uint> alias = counts;",
+        ),
+        (
+            "load(counts, group.x)",
+            "uint inner(StructuredBuffer<uint> values, uint offset) { return values[offset]; } uint load(StructuredBuffer<uint> values, uint offset) { return inner(values, offset); }",
+            "",
+        ),
+        (
+            "load(group.x, counts)",
+            "uint load(uint offset, StructuredBuffer<uint> values) { StructuredBuffer<uint> alias = values; return alias[offset]; }",
+            "",
+        ),
+    ],
+)
+def test_constant_storage_return_dependencies_compile(
+    tmp_path, expression, helpers, prefix
+):
+    generator = _codegen()
+    ast = parse(_storage_source(expression, helpers, prefix=prefix))
+    generated = generator.generate_stage(ast, "compute")
+    assert generator.generate_stage(ast, "compute") == generated
+    assert "GroupMemoryBarrierWithGroupSync" in generated
+    _compile(generated, "directx", tmp_path)
+
+
+@pytest.mark.parametrize(
+    "expression,qualifier,prefix,helper",
+    [
+        ("load(counts, group.x)", "", "", ""),
+        ("load(counts, group.x)", "@readonly", "", ""),
+        ("load(counts, invocation)", "@constant", "", ""),
+        ("counts[invocation]", "@constant", "", ""),
+        ("load(counts, group.x)", "@constant", "unknown(counts);", ""),
+        (
+            "load(alias, group.x)",
+            "@constant",
+            "StructuredBuffer<uint> alias = counts; alias = unknown();",
+            "",
+        ),
+        (
+            "load(counts, group.x)",
+            "@constant",
+            "",
+            "uint load(StructuredBuffer<uint> values, uint offset) { values[0] = offset; return values[offset]; }",
+        ),
+        (
+            "load(counts, group.x)",
+            "@constant",
+            "",
+            "uint load(StructuredBuffer<uint> values, uint offset) { return values[gl_LocalInvocationIndex]; }",
+        ),
+    ],
+)
+def test_storage_dependencies_do_not_infer_immutability_or_uniform_indices(
+    expression, qualifier, prefix, helper
+):
+    helper = (
+        helper
+        or "uint load(StructuredBuffer<uint> values, uint offset) { return values[offset]; }"
+    )
+    with pytest.raises(DirectXSoftwareSubgroupError):
+        _codegen().generate_stage(
+            parse(
+                _storage_source(expression, helper, qualifier=qualifier, prefix=prefix)
+            ),
+            "compute",
+        )
+
+
+def _record_source(initializer, expression="metadata.count", prefix=""):
+    helpers = (
+        "struct Metadata { uint count; uint offset; }; Metadata build(uint count) { "
+        + initializer
+        + " }"
+    )
+    return _source(
+        "uint",
+        "Metadata metadata = build(group.x + 1u);" + prefix + _body(expression),
+        helpers,
+    )
+
+
+def test_fully_initialized_private_aggregate_returns_compile(tmp_path):
+    initializer = (
+        "Metadata result; result.offset = 0u; result.count = count; return result;"
+    )
+    generated = _codegen().generate_stage(parse(_record_source(initializer)), "compute")
+    _compile(generated, "directx", tmp_path)
+
+
+@pytest.mark.parametrize(
+    "initializer",
+    [
+        "Metadata result; result.count = count; return result;",
+        "Metadata result; result.count = result.offset; result.offset = 0u; return result;",
+        "Metadata result; result.count = count; result.count = 1u; result.offset = 0u; return result;",
+        "Metadata result; result.count = count; result.offset = 0u; result.offset = 1u; return result;",
+        "Metadata result; result.count = count; unknown(result); result.offset = 0u; return result;",
+        "Metadata result; result.count = count; Metadata& alias = result; result.offset = 0u; return result;",
+        "Metadata result; result.count = count; result.offset += 1u; return result;",
+        "Metadata result; if (count > 0u) { result.count = count; } result.offset = 0u; return result;",
+    ],
+)
+def test_partial_escaped_or_mutated_aggregate_returns_remain_unproven(initializer):
+    with pytest.raises(DirectXSoftwareSubgroupError):
+        _codegen().generate_stage(parse(_record_source(initializer)), "compute")
+
+
+def test_private_aggregate_writes_in_the_caller_invalidate_uniformity():
+    with pytest.raises(DirectXSoftwareSubgroupError):
+        _codegen().generate_stage(
+            parse(
+                _record_source(
+                    "Metadata result; result.count = count; result.offset = 0u; return result;",
+                    prefix="metadata.count = invocation;",
+                )
+            ),
+            "compute",
+        )
+
+
+@pytest.mark.parametrize("wide_type", ["int64", "uint64", "int64_t", "uint64_t"])
+def test_record_storage_dependencies_preserve_wide_source_types(tmp_path, wide_type):
+    helper = f"struct Bounds {{ uint count; {wide_type} stride; }}; uint load(StructuredBuffer<Bounds> values, uint offset) {{ return values[offset].count; }}"
+    source = _storage_source("load(counts, group.x)", helper).replace(
+        "StructuredBuffer<uint> counts", "StructuredBuffer<Bounds> counts"
+    )
+    _compile(_codegen().generate_stage(parse(source), "compute"), "directx", tmp_path)
+
+
+def test_resource_return_proof_requires_every_callers_immutable_binding():
+    helper = "uint load(StructuredBuffer<uint> values, uint offset) { return values[offset]; }"
+    source = _storage_source(
+        "load(other, group.x)", helper, prefix="uint good = load(counts, group.x);"
+    ).replace("void main(", "void main(StructuredBuffer<uint> other @buffer(2), ")
+    with pytest.raises(DirectXSoftwareSubgroupError):
+        _codegen().generate_stage(parse(source), "compute")
+
+
+@pytest.mark.parametrize("name", ["uint&", "volatile uint", "custom::uint", "uint*"])
+def test_source_integer_aliases_do_not_erase_indirection_or_qualifiers(name):
+    assert not UniformReturnAnalysis({}, set()).value_type(NamedType(name))
+
+
+@pytest.mark.parametrize("name", ["min16int", "min16uint"])
+def test_minimum_precision_integer_locals_remain_value_types(name):
+    assert UniformReturnAnalysis({}, set()).value_type(NamedType(name))
+
+
+def test_collective_helper_receives_checked_resource_and_record_facts(tmp_path):
+    helper = """struct Bounds { uint count; };
+        Bounds make_bounds(uint count) { Bounds result; result.count = count; return result; }
+        uint load(StructuredBuffer<uint> values, uint offset) { return values[offset]; }
+        uint reduce(StructuredBuffer<uint> values, Bounds bounds, uint lane) {
+            uint result = 0u;
+            for (uint step = 0u; step < load(values, bounds.count); ++step) {
+                result += WaveActiveSum(lane + step);
+            }
+            return result;
+        }"""
+    source = _storage_source("1u", helper).replace(
+        _body("1u"),
+        "Bounds bounds = make_bounds(group.x); outputWords[index] = reduce(counts, bounds, invocation);",
+    )
+    _compile(_codegen().generate_stage(parse(source), "compute"), "directx", tmp_path)
+
+
+STORAGE_SOURCE = """#include <metal_stdlib>
+using namespace metal;
+struct Destination { device uint* data; };
+uint read_count(constant uint* words, uint offset) { return words[offset]; }
+kernel void accumulate(constant uint* counts [[buffer(0)]],
+                       device uint* output [[buffer(1)]],
+                       uint lane [[thread_index_in_threadgroup]],
+                       uint3 group [[threadgroup_position_in_grid]]) {
+    Destination destination;
+    destination.data = output;
+    if (group.x >= read_count(counts, 0u)) { return; }
+    uint result = 0u;
+    for (uint step = 0u; step < read_count(counts, 1u); ++step) {
+        result += simd_sum(lane + step);
+    }
+    destination.data[group.x * 64u + lane] = result;
+}
+"""
+
+
+@pytest.mark.parametrize("target", ["metal", "directx"])
+def test_generated_resource_load_helpers_package_and_compile(tmp_path, target):
+    request, _ = _buffer_request(tmp_path, target, STORAGE_SOURCE, 3)
+    source = request.artifact_path.read_text()
+    if target == "directx":
+        assert "crosstl_resource_load" in source
+        assert "GroupMemoryBarrierWithGroupSync" in source
+    _compile(source, target, tmp_path)
+
+
+@pytest.mark.parametrize("iterations", [0, 1, 3])
+def test_generated_resource_load_helpers_execute(tmp_path, iterations):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required helper-return execution")
+    if sys.platform not in {"darwin", "win32"}:
+        pytest.skip("This execution control covers Metal and DirectX")
+    target = "metal" if sys.platform == "darwin" else "directx"
+    request, expected = _buffer_request(tmp_path, target, STORAGE_SOURCE, iterations)
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=STORAGE_SOURCE if target == "metal" else None,
+        original_entry="accumulate",
+    )

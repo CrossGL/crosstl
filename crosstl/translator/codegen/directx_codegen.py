@@ -4707,7 +4707,15 @@ class HLSLCodeGen:
             return True
         if isinstance(expression, IdentifierNode):
             return expression.name in uniform_names
-        if isinstance(expression, (MemberAccessNode, SwizzleNode)):
+        if isinstance(expression, ArrayAccessNode):
+            base = expression.array_expr
+            if (
+                not isinstance(base, IdentifierNode)
+                or base.name not in self.hlsl_software_subgroup_resource_names
+            ):
+                return False
+            children = [base, expression.index_expr]
+        elif isinstance(expression, (MemberAccessNode, SwizzleNode)):
             base = (
                 expression.object_expr
                 if isinstance(expression, MemberAccessNode)
@@ -4732,7 +4740,7 @@ class HLSLCodeGen:
             children = [base]
         elif isinstance(expression, FunctionCallNode):
             children = self.hlsl_software_subgroup_uniform_returns.uniform_arguments(
-                expression
+                expression, self.hlsl_software_subgroup_resource_names
             )
             if children is None:
                 return False
@@ -4932,16 +4940,13 @@ class HLSLCodeGen:
                     components.pop(statement.name, None)
                     if (
                         statement.name not in mutable_names
-                        and self.map_type(statement.var_type)
-                        in {
-                            "bool",
-                            "int",
-                            "uint",
-                            "int16_t",
-                            "uint16_t",
-                            "min16int",
-                            "min16uint",
-                        }
+                        and (
+                            self.hlsl_software_subgroup_uniform_returns.value_type(
+                                statement.var_type
+                            )
+                            or statement.name
+                            in self.hlsl_software_subgroup_resource_names
+                        )
                         and self.hlsl_software_subgroup_uniform_expression(
                             statement.initial_value, names, components
                         )
@@ -5099,6 +5104,7 @@ class HLSLCodeGen:
         self.hlsl_software_subgroup_invocation_expressions = {}
         self.hlsl_software_subgroup_invocation_variable = None
         self.hlsl_software_subgroup_uniform_calls = set()
+        self.hlsl_software_subgroup_resource_names = set()
         self.hlsl_software_subgroup_uniform_returns = UniformReturnAnalysis({}, set())
         if self.software_subgroup_width is None:
             return
@@ -5415,6 +5421,31 @@ class HLSLCodeGen:
         for function_id in ordered_ids:
             function = functions_by_id[function_id]
             parameters = getattr(function, "parameters", []) or []
+            analysis = self.hlsl_software_subgroup_uniform_returns
+            declarations = [
+                *parameters,
+                *(
+                    node
+                    for node in self.walk_ast(function.body)
+                    if isinstance(node, VariableNode)
+                ),
+            ]
+            counts = {}
+            for declaration in declarations:
+                counts[declaration.name] = counts.get(declaration.name, 0) + 1
+            self.hlsl_software_subgroup_resource_names = {
+                declaration.name
+                for declaration in declarations
+                if counts[declaration.name] == 1
+                and analysis.resource_type(
+                    getattr(
+                        declaration,
+                        "param_type",
+                        getattr(declaration, "var_type", None),
+                    ),
+                    declaration,
+                )
+            }
             uniform_names = set(self.literal_int_constants) - {
                 parameter.name for parameter in parameters
             }
@@ -5425,8 +5456,10 @@ class HLSLCodeGen:
                 and not isinstance(parameter.param_type, (PointerType, ReferenceType))
                 and not set(self.hlsl_parameter_qualifiers(parameter))
                 & {"out", "inout"}
-                and self.map_type(parameter.param_type)
-                in {"bool", "int", "uint", "float", "int16_t", "uint16_t"}
+                and (
+                    analysis.value_type(parameter.param_type)
+                    or parameter.name in self.hlsl_software_subgroup_resource_names
+                )
             )
             uniform_components = {}
             if function is entry_function:
@@ -5447,6 +5480,10 @@ class HLSLCodeGen:
                     if self.semantic_from_node(parameter) in uniform_semantics
                     or set(getattr(parameter, "qualifiers", []) or [])
                     & {"uniform", "constant"}
+                    or (
+                        parameter.name in self.hlsl_software_subgroup_resource_names
+                        and analysis._qualified(parameter, {"constant"})
+                    )
                 )
             # A name alone is not a uniformity proof after writes, shadowing,
             # or a call that could receive it through an output parameter.
