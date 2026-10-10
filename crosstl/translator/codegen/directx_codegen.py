@@ -364,6 +364,7 @@ from .stage_utils import (
     stage_matches,
 )
 from .subgroup_control_flow import converge_subgroup_guarded_returns
+from .uniform_returns import UniformReturnAnalysis
 from .union_layout import UnionLayoutCollector
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
@@ -4730,9 +4731,11 @@ class HLSLCodeGen:
                 )
             children = [base]
         elif isinstance(expression, FunctionCallNode):
-            if id(expression) not in self.hlsl_software_subgroup_uniform_calls:
+            children = self.hlsl_software_subgroup_uniform_returns.uniform_arguments(
+                expression
+            )
+            if children is None:
                 return False
-            children = expression.arguments
         elif isinstance(expression, ConstructorNode):
             children = [*expression.arguments, *expression.named_arguments.values()]
         elif isinstance(expression, CastNode):
@@ -5096,6 +5099,7 @@ class HLSLCodeGen:
         self.hlsl_software_subgroup_invocation_expressions = {}
         self.hlsl_software_subgroup_invocation_variable = None
         self.hlsl_software_subgroup_uniform_calls = set()
+        self.hlsl_software_subgroup_uniform_returns = UniformReturnAnalysis({}, set())
         if self.software_subgroup_width is None:
             return
 
@@ -5331,10 +5335,28 @@ class HLSLCodeGen:
                 functions_by_id[function_id].name
             ] = variable
 
+        calls = [
+            node for node in self.walk_ast(ast) if isinstance(node, FunctionCallNode)
+        ]
+        for node in calls:
+            name = self.function_call_name(node)
+            if (
+                name not in functions_by_name
+                and isinstance(node.function, (str, IdentifierNode))
+                and (
+                    (name in {"min", "max"} and len(node.arguments) == 2)
+                    or (name == "clamp" and len(node.arguments) == 3)
+                    or self.directx_compile_time_constructor_type(name) is not None
+                )
+            ):
+                self.hlsl_software_subgroup_uniform_calls.add(id(node))
+        self.hlsl_software_subgroup_uniform_returns = UniformReturnAnalysis(
+            resolved_calls,
+            self.hlsl_software_subgroup_uniform_calls,
+            self.structs_by_name,
+        )
         call_mutations = {}
-        for node in self.walk_ast(ast):
-            if not isinstance(node, FunctionCallNode):
-                continue
+        for node in calls:
             call_name = self.function_call_name(node)
             arguments = list(getattr(node, "arguments", []) or [])
             callee = resolved_calls.get(id(node))
@@ -5344,18 +5366,13 @@ class HLSLCodeGen:
                 and isinstance(node.function, (str, IdentifierNode))
                 else None
             )
-            pure_call = (
-                call_name not in functions_by_name
-                and isinstance(node.function, (str, IdentifierNode))
-                and (
-                    (call_name in {"min", "max"} and len(arguments) == 2)
-                    or (call_name == "clamp" and len(arguments) == 3)
-                    or self.directx_compile_time_constructor_type(call_name) is not None
-                )
-            )
-            if pure_call:
-                self.hlsl_software_subgroup_uniform_calls.add(id(node))
-            if callee is not None:
+            pure_call = id(node) in self.hlsl_software_subgroup_uniform_calls
+            if (
+                self.hlsl_software_subgroup_uniform_returns.dependencies(node)
+                is not None
+            ):
+                mutations = []
+            elif callee is not None:
                 parameters = getattr(callee, "parameters", []) or []
                 mutations = [
                     argument

@@ -6631,7 +6631,11 @@
             "tests/test_translator/test_directx_cooperative_matrix.py::def test_software_matrix_compiles_without_native_waves",
             "tests/test_translator/test_directx_cooperative_matrix.py::def test_software_matrix_checks_callee_control_flow",
             "tests/test_translator/test_directx_cooperative_matrix.py::def test_software_matrix_executes",
-            "tests/test_translator/test_directx_cooperative_matrix.py::def test_project_matrix_native_parity"
+            "tests/test_translator/test_directx_cooperative_matrix.py::def test_project_matrix_native_parity",
+            "tests/test_translator/test_subgroup_uniform_returns.py::def test_read_only_return_bounds_compile",
+            "tests/test_translator/test_subgroup_uniform_returns.py::def test_return_proofs_reject_unsafe_or_varying_helpers",
+            "tests/test_translator/test_subgroup_uniform_returns.py::def test_aggregate_metadata_helpers_translate_and_compile",
+            "tests/test_translator/test_subgroup_uniform_returns.py::def test_constant_reference_helpers_execute"
           ],
           "notes": "WaveOpNode calls lower to native HLSL Wave* intrinsics or equivalent helpers across lane queries, votes, reductions, scans, ballots, shuffle-and-fill, WaveMatch, WaveMultiPrefix*, quad reads, and arity/type diagnostics. Optional DXC validation covers compute wave shaders when dxc is installed. Explicit logical-width-32 software mode also supports cooperative float 8x8 multiply-accumulate under the declared tile_4x4_row_pair mapping, with two lane elements, complete subgroups and statically uniform barrier schedules through helpers. It uses separately rounded binary32 products and sums in increasing inner-dimension order, not an implicit elementwise substitute or a promise of arbitrary-input bitwise Metal parity. Other matrix arithmetic contracts remain diagnostic.",
           "status": "supported"

@@ -1991,6 +1991,18 @@ of the hardware wave width. Workgroup dimensions must be concrete and all
 barriers, including those reached through helpers, must have proven uniform
 control flow. Divergent calls and incomplete subgroups are rejected.
 
+DirectX software-subgroup control-flow analysis follows resolved read-only
+helper returns through scalar values, value-only aggregate fields, immutable
+locals and nested helpers. Return and branch dependencies are checked against
+each caller's workgroup-uniform arguments; one uniform call does not establish
+a fact for other calls. Mutation, reference escapes, volatile fields, recursion,
+unknown calls and storage loads remain unproven. Read-only resource views alone
+do not establish immutable backing storage. Native controls cover scalar
+constant-reference bounds, early returns, zero-trip loops and guarded output;
+aggregate-field helpers have compiler coverage, not a complete constant-buffer
+upload contract. This analysis does not yet propagate generated resource-load
+provenance or remove the corresponding OpenGL limitation.
+
 The DirectX fallback accumulates in increasing inner-dimension order using
 separately rounded binary32 products and sums; ``precise`` prevents contraction
 and reassociation. Metal does not specify a bitwise accumulation order for its
