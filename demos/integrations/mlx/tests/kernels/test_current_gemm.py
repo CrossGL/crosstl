@@ -48,6 +48,14 @@ CASES = (
     (33, 35, 17, 2, 0, 0),
     (33, 35, 17, 2, 3, 1),
 )
+CASES_BY_VARIANT = {
+    "plain": CASES,
+    "add": ((4, 5, 7, 1, 0, 0), (33, 35, 17, 2, 3, 1)),
+    "axpby": ((4, 5, 7, 1, 0, 0), (33, 35, 17, 2, 3, 1)),
+    "broadcast": ((4, 5, 7, 4, 0, 0), (33, 35, 17, 4, 3, 1)),
+    "broadcast-axpby": ((4, 5, 7, 4, 0, 0), (33, 35, 17, 4, 3, 1)),
+    "aligned": ((32, 32, 16, 1, 0, 0), (64, 64, 32, 2, 3, 1)),
+}
 ORIGINAL_FLAGS = (
     "-std=metal3.2",
     "-fno-fast-math",
@@ -86,6 +94,18 @@ def _config(root, output):
             }
         },
     )
+
+
+def _frozen_values(variant):
+    assert variant in CASES_BY_VARIANT
+    return {
+        "has_batch": variant in {"broadcast", "broadcast-axpby"},
+        "use_out_source": variant in {"add", "axpby", "broadcast-axpby"},
+        "do_axpby": variant in {"axpby", "broadcast-axpby"},
+        "align_M": variant == "aligned",
+        "align_N": variant == "aligned",
+        "align_K": variant == "aligned",
+    }
 
 
 def _case_data(case):
@@ -143,31 +163,109 @@ def _case_data(case):
     return a, b, expected, params, geometry
 
 
-def _dispatch_values(bindings, case):
+def _variant_data(case, variant):
     a, b, expected, params, geometry = _case_data(case)
+    m, n, k, batches, padding, _ = case
+    constants = _frozen_values(variant)
+    if constants["align_M"]:
+        assert m % 32 == n % 32 == k % 16 == 0
+    broadcast = constants["has_batch"]
+    batch_shape, batch_strides = [1], [0]
+    if broadcast:
+        assert batches == 4
+        # A broadcasts along the first batch axis, B along the second.
+        a = a[: 2 * params["batch_stride_a"]] + [GUARD] * 8
+        b = b[: 2 * params["batch_stride_b"]] + [GUARD] * 8
+        params["batch_ndim"] = 2
+        batch_shape = [2, 2]
+        batch_strides = [0, params["batch_stride_a"], params["batch_stride_b"], 0]
+        for batch in range(batches):
+            for row in range(m):
+                for col in range(n):
+                    expected[
+                        batch * params["batch_stride_d"] + row * params["ldd"] + col
+                    ] = sum(
+                        a[
+                            (batch % 2) * params["batch_stride_a"]
+                            + row * params["lda"]
+                            + inner
+                        ]
+                        * b[
+                            (batch // 2) * params["batch_stride_b"]
+                            + inner * params["ldb"]
+                            + col
+                        ]
+                        for inner in range(k)
+                    )
+    ldc = 2 * n + padding
+    stride_c = m * ldc + padding
     addmm = dict(
-        ldc=params["N"],
-        fdc=1,
-        batch_stride_c=params["M"] * params["N"],
-        alpha=1.0,
-        beta=0.0,
+        ldc=ldc,
+        fdc=2,
+        batch_stride_c=stride_c,
+        alpha=0.5,
+        beta=-0.25,
     )
-    values = {
-        "A": ("float32", a),
-        "B": ("float32", b),
-        "C": ("float32", [0.0]),
-        "D": ("float32", [GUARD] * len(expected)),
-        "params": (
-            "uint32",
-            pack_storage_records(bindings["params"]["scalarLayout"], [params]),
-        ),
-        "addmm_params": (
-            "uint32",
-            pack_storage_records(bindings["addmm_params"]["scalarLayout"], [addmm]),
-        ),
-        "batch_shape": ("int32", [1]),
-        "batch_strides": ("int64", [0]),
-    }
+    c = [0.0]
+    if constants["use_out_source"]:
+        c_batches = 1 if broadcast else batches
+        c = [GUARD] * (c_batches * stride_c + 8)
+        for batch in range(c_batches):
+            for row in range(m):
+                for col in range(n):
+                    logical = (batch * m + row) * n + col
+                    c[batch * stride_c + row * ldc + col * 2] = (
+                        (logical * 5) % 7 - 3
+                    ) / 4
+        if broadcast:
+            batch_strides.extend([0, 0])
+        for batch in range(batches):
+            for row in range(m):
+                for col in range(n):
+                    out = batch * params["batch_stride_d"] + row * params["ldd"] + col
+                    value = c[
+                        (0 if broadcast else batch) * stride_c + row * ldc + col * 2
+                    ]
+                    expected[out] = (
+                        addmm["alpha"] * expected[out] + addmm["beta"] * value
+                        if constants["do_axpby"]
+                        else expected[out] + value
+                    )
+    resources = dict(
+        A=a,
+        B=b,
+        C=c,
+        D=[GUARD] * len(expected),
+        params=params,
+        addmm_params=addmm,
+        batch_shape=batch_shape,
+        batch_strides=batch_strides,
+    )
+    return resources, expected, geometry
+
+
+def _dispatch_values(bindings, case, variant):
+    resources, expected, geometry = _variant_data(case, variant)
+    values = {name: ("float32", resources[name]) for name in ("A", "B", "C", "D")}
+    values.update(
+        {
+            "params": (
+                "uint32",
+                pack_storage_records(
+                    bindings["params"]["scalarLayout"], [resources["params"]]
+                ),
+            ),
+            "addmm_params": (
+                "uint32",
+                pack_storage_records(
+                    bindings["addmm_params"]["scalarLayout"],
+                    [resources["addmm_params"]],
+                ),
+            ),
+            "batch_shape": ("int32", resources["batch_shape"]),
+            "batch_strides": ("int64", resources["batch_strides"]),
+        }
+    )
     inputs = {
         bindings[name]["name"]: {"dtype": dtype, "shape": [len(items)], "values": items}
         for name, (dtype, items) in values.items()
@@ -182,7 +280,7 @@ def _dispatch_values(bindings, case):
     return inputs, outputs, geometry
 
 
-def _original_outputs(request, source, module, work):
+def _original_outputs(request, source, module, work, specializations):
     executor = _executor("metal")
     state = RuntimeExecutionState(request=request, plan=request.execution_plan)
     try:
@@ -196,10 +294,10 @@ def _original_outputs(request, source, module, work):
                     name=name,
                     constant_id=identifier,
                     dtype="bool",
-                    value=False,
+                    value=specializations[name],
                     kind="function-constant",
                 ),
-                value=False,
+                value=specializations[name],
                 source="original-source-specialization",
             )
             for name, identifier in CONSTANT_IDS.items()
@@ -262,16 +360,86 @@ def test_gemm_case_shapes_and_guards(case):
     assert params["gemm_k_iterations_aligned"] == k // 16
 
 
+@pytest.mark.parametrize(
+    "variant,case",
+    [(variant, case) for variant, cases in CASES_BY_VARIANT.items() for case in cases],
+)
+def test_gemm_variant_metadata_and_guards(variant, case):
+    resources, expected, geometry = _variant_data(case, variant)
+    m, n, k, batches, padding, _ = case
+    constants = _frozen_values(variant)
+    params = resources["params"]
+    assert set(constants) == set(CONSTANT_IDS)
+    assert all(type(value) is bool for value in constants.values())
+    assert sum(value != GUARD for value in expected) == m * n * batches
+    assert resources["D"] == [GUARD] * len(expected)
+    for batch in range(batches):
+        start = batch * params["batch_stride_d"]
+        for row in range(m):
+            gap = start + row * params["ldd"] + n
+            assert expected[gap : gap + padding] == [GUARD] * padding
+        gap = start + m * params["ldd"]
+        assert expected[gap : gap + padding] == [GUARD] * padding
+    assert expected[-8:] == [GUARD] * 8
+    assert geometry["workgroupCount"][2] == batches
+    if constants["has_batch"]:
+        assert resources["batch_shape"] == [2, 2]
+        assert resources["batch_strides"][:4] == [
+            0,
+            params["batch_stride_a"],
+            params["batch_stride_b"],
+            0,
+        ]
+        assert params["batch_ndim"] == 2
+        assert len(resources["A"]) == 2 * params["batch_stride_a"] + 8
+        assert len(resources["B"]) == 2 * params["batch_stride_b"] + 8
+        assert resources["batch_strides"][4:] == (
+            [0, 0] if constants["use_out_source"] else []
+        )
+    if constants["use_out_source"]:
+        addmm = resources["addmm_params"]
+        assert addmm["fdc"] == 2 and addmm["ldc"] == 2 * n + padding
+        assert addmm["alpha"] == 0.5 and addmm["beta"] == -0.25
+        assert resources["C"][-8:] == [GUARD] * 8
+    if variant == "aligned":
+        assert constants["align_M"] and constants["align_N"] and constants["align_K"]
+        assert m % 32 == n % 32 == k % 16 == 0
+
+
+@pytest.mark.parametrize(
+    "variant,reference", [("plain", 1.0), ("add", 0.25), ("axpby", 0.6875)]
+)
+def test_gemm_epilogue_scalar_reference(variant, reference):
+    resources, expected, _ = _variant_data((1, 1, 1, 1, 0, 0), variant)
+    assert resources["A"][0] == resources["B"][0] == -1.0
+    assert expected == [reference] + [GUARD] * 8
+
+
+@pytest.mark.parametrize(
+    "variant,reference",
+    [
+        ("broadcast", [1.0, 0.25, -0.75, -0.1875]),
+        ("broadcast-axpby", [0.6875, 0.3125, -0.1875, 0.09375]),
+    ],
+)
+def test_gemm_broadcast_scalar_reference(variant, reference):
+    resources, expected, _ = _variant_data((1, 1, 1, 4, 0, 0), variant)
+    assert resources["batch_shape"] == [2, 2]
+    assert expected == reference + [GUARD] * 8
+
+
 def test_gemm_scalar_reference():
     a, b, expected, _, _ = _case_data(CASES[0])
     assert a[0] == -1.0 and b[0] == -1.0
     assert expected == [1.0] + [GUARD] * 8
 
 
-def test_current_gemm_metal_roundtrip(tmp_path):
+@pytest.fixture(scope="module")
+def gemm_source(tmp_path_factory):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for the pinned GEMM native gate")
     assert sys.platform == "darwin" and shutil.which("xcrun")
+    tmp_path = tmp_path_factory.mktemp("gemm-original")
     root = Path(os.environ["CROSTL_MLX_CURRENT_ROOT"]).resolve()
     assert (
         subprocess.check_output(
@@ -297,10 +465,21 @@ def test_current_gemm_metal_roundtrip(tmp_path):
     assert hashlib.sha256(source.read_bytes()).hexdigest() == SOURCE_SHA256
     run(["xcrun", "--sdk", "macosx", "metal", "--version"], tmp_path, "metal-version")
     original = compile_metal(source, root, tmp_path / "original", flags=ORIGINAL_FLAGS)
+    return root, original
+
+
+@pytest.mark.parametrize("variant", CASES_BY_VARIANT)
+def test_current_gemm_metal_roundtrip(tmp_path, gemm_source, variant):
+    root, original = gemm_source
+    source = root / SOURCE
+    specializations = _frozen_values(variant)
     with tempfile.TemporaryDirectory(prefix=".current-gemm-", dir=root) as directory:
         work = Path(directory)
         try:
-            report = translate_project(_config(root, work.name), format_output=False)
+            config = replace(
+                _config(root, work.name), specialization_constants=specializations
+            )
+            report = translate_project(config, format_output=False)
             report.write_json(tmp_path / "report.json")
             payload = report.to_json()
             assert payload["summary"]["translatedCount"] == 1, payload["diagnostics"]
@@ -313,7 +492,9 @@ def test_current_gemm_metal_roundtrip(tmp_path):
             assert len(constants) == len(CONSTANT_IDS)
             assert {item["name"]: item["id"] for item in constants} == CONSTANT_IDS
             assert all(
-                item["frozen"] is True and item["value"] is False for item in constants
+                item["frozen"] is True
+                and item["value"] is specializations[item["name"]]
+                for item in constants
             )
             bindings = {
                 item["provenance"]["sourceResource"]["parameter"]: item
@@ -334,10 +515,10 @@ def test_current_gemm_metal_roundtrip(tmp_path):
             assert len(bindings["params"]["scalarLayout"]["structMembers"]) == 14
             assert bindings["addmm_params"]["scalarLayout"]["elementStrideBytes"] == 24
             results = []
-            for case in CASES:
+            for case in CASES_BY_VARIANT[variant]:
                 case_work = tmp_path / ("case-" + "-".join(map(str, case)))
                 case_work.mkdir()
-                inputs, outputs, geometry = _dispatch_values(bindings, case)
+                inputs, outputs, geometry = _dispatch_values(bindings, case, variant)
                 _write_json(
                     case_work / "inputs.json",
                     {"inputs": inputs, "outputs": outputs, "geometry": geometry},
@@ -364,7 +545,7 @@ def test_current_gemm_metal_roundtrip(tmp_path):
                     ),
                 )
                 original_outputs = _original_outputs(
-                    request, source, original, case_work
+                    request, source, original, case_work, specializations
                 )
                 generated = json.loads((case_work / "evidence.json").read_text())
                 record = generated["records"]["generated"]
@@ -394,11 +575,13 @@ def test_current_gemm_metal_roundtrip(tmp_path):
                     {
                         "sourceCommit": MLX_COMMIT,
                         "entryPoint": ENTRY,
+                        "variant": variant,
+                        "specializations": specializations,
                         "sourceSha256": SOURCE_SHA256,
                         "cases": results,
-                        "complete": len(results) == len(CASES),
+                        "complete": len(results) == len(CASES_BY_VARIANT[variant]),
                         "scope": (
-                            "One float32 NN entry with six frozen false constants; not the upstream suite or full GEMM family."
+                            "One float32 NN entry with explicit frozen constants; not the upstream suite or full GEMM family."
                         ),
                     },
                 )

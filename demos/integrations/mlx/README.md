@@ -55,12 +55,19 @@ Core and demo tests also remain part of the complete test suite.
 `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8` through the project API, package
 verification and native Metal loader. It compares generated execution with the
 independently compiled upstream kernel and an exact matrix-product reference.
-The test covers scalar, partial-tile, aligned-tile and multi-tile matrices,
-contiguous batches, padded rows and batch strides, and extra workgroups. Output
-padding and eight trailing guard values must remain unchanged.
+Fifteen cases cover scalar, partial-tile, aligned-tile and multi-tile matrices,
+contiguous and two-dimensional broadcast batches, padded rows and batch strides,
+and extra workgroups. Output padding and eight trailing guard values must remain
+unchanged.
 
-The six Boolean function constants are explicitly frozen to false. The test
-uses the source-backed fragment mapping documented in
+The six Boolean function constants are explicitly frozen for each of six
+configurations: plain multiplication, addition of an output source, scaled
+fused output, broadcast batches, broadcast batches with scaled fused output,
+and fully aligned dimensions. The output-source cases use noncontiguous columns
+and padded rows; the scaled cases use alpha 0.5 and beta -0.25. Broadcast inputs
+use different batch axes for A and B, and a shared C for the fused variant.
+The original Metal kernel receives matching native function constants.
+The test uses the source-backed fragment mapping documented in
 `contracts/cooperative-matrix-fragment-mapping.json`, a 32-by-2-by-2 workgroup,
 and reflected parameter layouts. It does not edit upstream or generated kernels,
 substitute a reference shader, or supply unchecked index or workgroup bounds.
@@ -82,9 +89,9 @@ python -m pytest -q -n auto \
   demos/integrations/mlx/tests/kernels/test_current_gemm.py
 ```
 
-This proves one float32 NN entry and one function-constant configuration, not
-the complete GEMM family or the upstream MLX suite. Broadcast batch metadata,
-transposed operands and fused output-source variants are not covered. DirectX
+This proves one float32 NN entry and six function-constant configurations, not
+the complete GEMM family or the upstream MLX suite. Transposed operands, other
+element types and every mixed alignment combination are not covered. DirectX
 cooperative multiply-accumulate and OpenGL live-offset bounds remain separate
 translation gaps tracked by #1602 and #2179. This check does not establish host
 runtime redirection for those backends.
