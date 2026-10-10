@@ -1,13 +1,17 @@
+import hashlib
 import json
 import math
 import os
+import subprocess
 import sys
+import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from demos.integrations.mlx import run_metal_host as host
+from demos.integrations.mlx import unittest_evidence
 from tests.ci_helpers import assert_paths_covered
 
 
@@ -41,6 +45,127 @@ def workload_records(dataset):
 
 def workload_dispatches():
     return [{"entry": f"{shape}_Powercomplex64"} for shape in host.HOST_LAYOUTS]
+
+
+@pytest.mark.parametrize(
+    "mode,receipts", [("pass", 0), ("failure", 1), ("error", 1), ("subtest", 2)]
+)
+def test_upstream_failure_evidence_preserves_unittest_results(tmp_path, mode, receipts):
+    source = tmp_path / "upstream.py"
+    source.write_text(textwrap.dedent(f"""
+        import unittest
+        import numpy as np
+
+        class Upstream(unittest.TestCase):
+            def test_operation(self):
+                inputs = np.array([[1.0, -0.0], [float('nan'), float('inf')]], dtype=np.float32)
+                actual = np.array([complex(1, 2)], dtype=np.complex64)
+                oversized = np.ones(16385, dtype=np.float32)
+                mode = {mode!r}
+                if mode == 'failure':
+                    self.assertTrue(False, 'retained numerical failure')
+                if mode == 'error':
+                    raise RuntimeError('retained runtime error')
+                if mode == 'subtest':
+                    for case in range(2):
+                        with self.subTest(case=case):
+                            self.fail('retained subtest failure')
+
+            def test_success(self):
+                self.assertEqual(2 + 2, 4)
+
+            @unittest.skip('original upstream skip')
+            def test_skip(self):
+                self.fail('not executed')
+    """))
+    original = source.read_bytes()
+    output = tmp_path / "evidence"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(host.HERE / "unittest_evidence.py"),
+            "--evidence-dir",
+            str(output),
+            "upstream",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == (1 if receipts else 0), result.stderr
+    assert "Ran 3 tests" in result.stderr and "skipped=1" in result.stderr
+    assert source.read_bytes() == original
+    captured = sorted(output.glob("*.json"))
+    assert len(captured) == receipts
+    for path in captured:
+        payload = json.loads(path.read_text())
+        assert payload["schemaVersion"] == 1 and payload["capturedElements"] == 5
+        frame = next(
+            item for item in payload["frames"] if item["function"] == "test_operation"
+        )
+        assert frame["sourceSHA256"] == hashlib.sha256(original).hexdigest()
+        assert frame["source"] == "upstream.py"
+        values = frame["locals"]
+        assert values["inputs"]["shape"] == [2, 2]
+        assert values["inputs"]["dtype"] == "float32"
+        assert values["inputs"]["values"] == [
+            [1.0, -0.0],
+            [{"float": "nan"}, {"float": "inf"}],
+        ]
+        assert math.copysign(1, values["inputs"]["values"][0][1]) == -1
+        assert values["actual"]["values"] == [{"real": 1.0, "imag": 2.0}]
+        assert values["oversized"]["omitted"] == "array-size"
+        assert "values" not in values["oversized"]
+
+
+def test_upstream_failure_capture_bounds_values_and_preserves_inputs():
+    import numpy as np
+
+    value = np.arange(8, dtype=np.float32)
+    before = value.copy()
+    budget = [10]
+    assert unittest_evidence.capture_value(value, budget)["values"] == list(range(8))
+    assert budget == [2]
+    assert unittest_evidence.capture_value(value, budget)["omitted"] == "array-size"
+    assert budget == [2] and np.array_equal(value, before)
+    empty = unittest_evidence.capture_value(np.empty((1000000, 0)), budget)
+    assert empty["shape"] == [1000000, 0] and empty["values"] == []
+    assert budget == [2]
+    unavailable = unittest_evidence.capture_value(np.array([object()]), budget)
+    assert "captureError" in unavailable and "values" not in unavailable
+    assert budget == [2]
+    assert unittest_evidence.capture_value(1 << 257, budget) == {
+        "omitted": "integer-size"
+    }
+    captured = unittest_evidence.capture_value("a" * 4096, budget)
+    assert captured == {"text": "a" * 2048, "truncated": True}
+
+
+def test_upstream_failure_capture_errors_do_not_change_test_failure(
+    tmp_path, monkeypatch
+):
+    import io
+    import unittest
+
+    class Failing(unittest.TestCase):
+        def runTest(self):
+            self.fail("original failure")
+
+    def unavailable(*args):
+        raise OSError("evidence storage unavailable")
+
+    monkeypatch.setattr(unittest_evidence, "capture_failure", unavailable)
+    runner = unittest.TextTestRunner(stream=io.StringIO())
+    result = unittest_evidence.EvidenceResult(
+        runner.stream, True, 1, output=tmp_path, source_root=tmp_path
+    )
+    Failing().run(result)
+    assert result.testsRun == 1 and len(result.failures) == 1
+    assert not result.wasSuccessful()
+    assert "original failure" in result.failures[0][1]
+    assert "evidence storage unavailable" in runner.stream.getvalue()
+    assert list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.parametrize("dataset", host.HOST_DATASETS)
@@ -600,6 +725,14 @@ def test_host_evidence_requires_complete_command_and_numerical_records(
                 },
             )
         if name.startswith("upstream-"):
+            assert list(map(str, command)) == [
+                sys.executable,
+                str(host.HERE / "unittest_evidence.py"),
+                "--evidence-dir",
+                str(directory / f"{name}-failures"),
+                "test_ops",
+            ]
+            assert kwargs["timeout"] == 1800
             (directory / f"{name}.stderr").write_text("Ran 163 tests in 1.0s\nOK\n")
         if name == "upstream-translated" or name.startswith("execute-host-workloads-"):
             assert env["CROSTL_METAL_LIBRARY_OVERRIDES"] == str(

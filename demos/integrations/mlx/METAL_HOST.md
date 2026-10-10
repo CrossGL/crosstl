@@ -107,6 +107,17 @@ on any unsuccessful run; no retry, skip or known-failure allowance is built into
 the verifier. Its ordinary upstream invocations are not seeded, so their random
 inputs need not match between processes.
 
+Both upstream invocations use `unittest_evidence.py`, which preserves the full
+module, unittest outcomes, skips and existing deadlines. On a failure or error,
+it records local scalar values and NumPy/MLX arrays from upstream traceback
+frames under `upstream-original-failures/` or `upstream-translated-failures/`.
+Each record includes the test identity, source hash, line, array dtype and shape.
+Capture is limited to 16,384 elements per array and 65,536 elements per failure;
+larger arrays and unavailable values are explicitly marked. Complex values and
+non-finite floats have JSON-safe representations, preserving signed zeros.
+No seed, test input, assertion, tolerance or expected result is changed. Evidence
+capture errors cannot convert an upstream failure into a passing test.
+
 The pinned original Metal backend also has a half-precision `divmod` boundary
 error. The macOS run at translator commit `78f86906` failed
 `TestOps.test_divmod` for a float16 vector/scalar input. A deterministic local

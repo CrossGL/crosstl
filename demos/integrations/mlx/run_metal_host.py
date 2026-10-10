@@ -378,9 +378,16 @@ def verify(root, python, output):
         or root not in Path(identity["module"]).resolve().parents
     ):
         raise ValueError("MLX runtime is not the adapted checkout on a Metal device")
-    tests = [str(python), "-m", "unittest", "test_ops"]
+    tests = [str(python), str(HERE / "unittest_evidence.py"), "--evidence-dir"]
     cwd = root / "python/tests"
-    run(tests, output, "upstream-original", cwd=cwd, env=env, timeout=1800)
+    run(
+        [*tests, output / "upstream-original-failures", "test_ops"],
+        output,
+        "upstream-original",
+        cwd=cwd,
+        env=env,
+        timeout=1800,
+    )
     baseline = unittest_counts(output / "upstream-original.stderr")
     trace = output / "translated-dispatch.tsv"
     trace.touch(exist_ok=False)
@@ -388,7 +395,14 @@ def verify(root, python, output):
         CROSTL_METAL_LIBRARY_OVERRIDES=str(libraries),
         CROSTL_METAL_LIBRARY_TRACE=str(trace),
     )
-    run(tests, output, "upstream-translated", cwd=cwd, env=env, timeout=1800)
+    run(
+        [*tests, output / "upstream-translated-failures", "test_ops"],
+        output,
+        "upstream-translated",
+        cwd=cwd,
+        env=env,
+        timeout=1800,
+    )
     translated = unittest_counts(output / "upstream-translated.stderr")
     if baseline != translated:
         raise ValueError("Upstream test or skip accounting changed with translation")
