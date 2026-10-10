@@ -2550,17 +2550,18 @@ def test_ci_requires_native_math_before_building_mlx():
         in scalar
     )
     half = ci_coverage.workflow_job_step_section(
-        workflow, "portable-host", "Validate OpenGL half conversions"
+        workflow, "opengl", "Validate OpenGL half conversions"
     )
-    assert "if: runner.os == 'Linux'" in half
+    assert "if:" not in half
+    assert 'PYTEST_XDIST_AUTO_NUM_WORKERS: "2"' in half
     assert "continue-on-error" not in half
     assert 'CROSTL_REQUIRE_HALF_CONVERSION_RUNTIME: "1"' in half
     assert "CROSTL_HALF_CONVERSION_TARGET: opengl" in half
     assert "--timeout-seconds 180" in half
     assert "pytest -q -n auto" in half
-    assert "--basetemp=.mlx-portable-host/half-conversions/pytest" in half
-    assert "--junitxml=.mlx-portable-host/half-conversions/results.xml" in half
-    assert "tee .mlx-portable-host/half-conversions.log" in half
+    assert "--basetemp=.mlx-gather-opengl/half-conversions/pytest" in half
+    assert "--junitxml=.mlx-gather-opengl/half-conversions/results.xml" in half
+    assert "tee .mlx-gather-opengl/half-conversions.log" in half
     for event in ("pull_request", "push"):
         assert_paths_covered(
             ci_coverage.workflow_event_path_filters(workflow, event),
@@ -2569,8 +2570,9 @@ def test_ci_requires_native_math_before_building_mlx():
     directx_half = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Validate DirectX half conversions"
     )
-    for name, directory, flag, module, seconds in (
+    for job, name, directory, flag, module, seconds in (
         (
+            "opengl",
             "Validate OpenGL uniform blocks",
             "uniform-blocks",
             "CROSTL_REQUIRE_UNIFORM_BLOCK_RUNTIME",
@@ -2578,6 +2580,7 @@ def test_ci_requires_native_math_before_building_mlx():
             180,
         ),
         (
+            "portable-host",
             "Execute pinned OpenGL attention derivatives",
             "attention-ds",
             "CROSTL_REQUIRE_MLX_ATTENTION_DS_OPENGL",
@@ -2585,8 +2588,12 @@ def test_ci_requires_native_math_before_building_mlx():
             600,
         ),
     ):
-        step = ci_coverage.workflow_job_step_section(workflow, "portable-host", name)
-        assert "if: runner.os == 'Linux'" in step
+        step = ci_coverage.workflow_job_step_section(workflow, job, name)
+        if job == "opengl":
+            assert "if:" not in step
+            assert 'PYTEST_XDIST_AUTO_NUM_WORKERS: "2"' in step
+        else:
+            assert "if: runner.os == 'Linux'" in step
         assert "continue-on-error" not in step
         assert f'{flag}: "1"' in step
         assert "EGL_PLATFORM: surfaceless" in step
@@ -2594,9 +2601,10 @@ def test_ci_requires_native_math_before_building_mlx():
         assert "set -euo pipefail" in step
         assert "pytest -q -n auto" in step
         assert f"--timeout-seconds {seconds}" in step
-        assert f"--basetemp=.mlx-portable-host/{directory}/pytest" in step
-        assert f"--junitxml=.mlx-portable-host/{directory}/results.xml" in step
-        assert f"tee .mlx-portable-host/{directory}.log" in step
+        evidence = ".mlx-gather-opengl" if job == "opengl" else ".mlx-portable-host"
+        assert f"--basetemp={evidence}/{directory}/pytest" in step
+        assert f"--junitxml={evidence}/{directory}/results.xml" in step
+        assert f"tee {evidence}/{directory}.log" in step
         assert module in step
         for event in ("pull_request", "push"):
             assert_paths_covered(

@@ -8994,7 +8994,64 @@ class GLSLCodeGen:
 
     def annotate_glsl_control_flow_intervals(self, function):
         constants = self.initial_literal_int_constants(function)
-        mutated_interval_names = self.glsl_function_mutated_interval_names(function)
+        lexical = self.glsl_scalar_array_view_lexical_bindings(function)
+        escaped_names = set()
+        for node in self.walk_ast(getattr(function, "body", [])):
+            if isinstance(node, UnaryOpNode) and self.map_operator(node.op) == "&":
+                escaped_names.update(self.glsl_interval_dependency_names(node.operand))
+            elif isinstance(node, VariableNode) and (
+                self.type_name_string(getattr(node, "var_type", None)) or ""
+            ).endswith("&"):
+                escaped_names.update(
+                    self.glsl_interval_dependency_names(node.initial_value)
+                )
+
+        def refine_guard(condition, intervals, expected):
+            source_types = {}
+            identifiers = []
+            cast_names = {
+                id(node.function)
+                for node in self.walk_ast(condition)
+                if isinstance(node, FunctionCallNode)
+                and self.glsl_integer_scalar_cast_call(node) is not None
+            }
+            for node in self.walk_ast(condition):
+                if not isinstance(node, IdentifierNode) or id(node) in cast_names:
+                    continue
+                binding = lexical["declarations"].get(
+                    lexical["reference_bindings"].get(id(node))
+                )
+                if binding is None or binding["source_type"] is None:
+                    return dict(intervals)
+                source_types[node.name] = binding["source_type"]
+                identifiers.append(node)
+            with self.glsl_lexical_source_type_scope(source_types):
+                guarded = dict(intervals)
+                seeded_domains = {}
+                for node in identifiers:
+                    if node.name in escaped_names:
+                        continue
+                    domain = self.glsl_integer_type_domain(node, allow_wide=True)
+                    if domain is not None:
+                        current = guarded.get(node.name)
+                        if current is None or not (
+                            domain.minimum <= current[0] <= current[1] <= domain.maximum
+                        ):
+                            guarded[node.name] = (domain.minimum, domain.maximum)
+                            seeded_domains[node.name] = guarded[node.name]
+                refined = self.glsl_private_pointer_refined_condition_intervals(
+                    condition,
+                    guarded,
+                    constants,
+                    expected,
+                    excluded_names=escaped_names,
+                    check_source_types=True,
+                )
+                if refined is not None:
+                    for name, domain in seeded_domains.items():
+                        if refined.get(name) == domain:
+                            refined.pop(name, None)
+                return refined
 
         def merge_intervals(left, right):
             return {
@@ -9455,24 +9512,18 @@ class GLSLCodeGen:
                     visit_sequence(static_body, intervals)
                     return
                 branch_intervals = []
-                then_intervals = self.glsl_private_pointer_refined_condition_intervals(
+                then_intervals = refine_guard(
                     condition,
                     intervals,
-                    constants,
                     True,
-                    excluded_names=mutated_interval_names,
                 )
                 if then_intervals is not None:
                     visit_sequence(value.if_body, then_intervals)
                     branch_intervals.append(then_intervals)
-                fallthrough_intervals = (
-                    self.glsl_private_pointer_refined_condition_intervals(
-                        condition,
-                        intervals,
-                        constants,
-                        False,
-                        excluded_names=mutated_interval_names,
-                    )
+                fallthrough_intervals = refine_guard(
+                    condition,
+                    intervals,
+                    False,
                 )
                 for else_if_condition, else_if_body in zip(
                     getattr(value, "else_if_conditions", []) or [],
@@ -9481,24 +9532,18 @@ class GLSLCodeGen:
                     if fallthrough_intervals is None:
                         break
                     visit(else_if_condition, fallthrough_intervals)
-                    candidate = self.glsl_private_pointer_refined_condition_intervals(
+                    candidate = refine_guard(
                         else_if_condition,
                         fallthrough_intervals,
-                        constants,
                         True,
-                        excluded_names=mutated_interval_names,
                     )
                     if candidate is not None:
                         visit_sequence(else_if_body, candidate)
                         branch_intervals.append(candidate)
-                    fallthrough_intervals = (
-                        self.glsl_private_pointer_refined_condition_intervals(
-                            else_if_condition,
-                            fallthrough_intervals,
-                            constants,
-                            False,
-                            excluded_names=mutated_interval_names,
-                        )
+                    fallthrough_intervals = refine_guard(
+                        else_if_condition,
+                        fallthrough_intervals,
+                        False,
                     )
                 if fallthrough_intervals is not None:
                     else_intervals = dict(fallthrough_intervals)
@@ -9557,8 +9602,10 @@ class GLSLCodeGen:
                     else:
                         loop_intervals[loop_name] = loop_interval
                 visit(getattr(value, "condition", None), loop_intervals)
-                visit_sequence(getattr(value, "body", None), loop_intervals)
-                visit(getattr(value, "update", None), loop_intervals)
+                guarded = refine_guard(value.condition, loop_intervals, True)
+                if guarded is not None:
+                    visit_sequence(getattr(value, "body", None), guarded)
+                    visit(getattr(value, "update", None), guarded)
                 clear_interval_targets(intervals, mutated)
                 return
             if isinstance(value, ForInNode):
@@ -9603,7 +9650,9 @@ class GLSLCodeGen:
                     visit(getattr(value, "condition", None), loop_intervals)
                 elif isinstance(value, WhileNode):
                     visit(getattr(value, "condition", None), loop_intervals)
-                    visit_sequence(getattr(value, "body", None), loop_intervals)
+                    guarded = refine_guard(value.condition, loop_intervals, True)
+                    if guarded is not None:
+                        visit_sequence(getattr(value, "body", None), guarded)
                 else:
                     visit_sequence(getattr(value, "body", None), loop_intervals)
                 clear_interval_targets(intervals, mutated)
@@ -45833,6 +45882,7 @@ complex64_t crossgl_complex64_mod_assign(
         expected,
         *,
         excluded_names=None,
+        check_source_types=False,
     ):
         refined = dict(intervals)
         if self.glsl_private_pointer_expression_has_side_effects(expression):
@@ -45858,6 +45908,7 @@ complex64_t crossgl_complex64_mod_assign(
                 constants,
                 not expected,
                 excluded_names=excluded_names,
+                check_source_types=check_source_types,
             )
 
         if not isinstance(expression, BinaryOpNode):
@@ -45877,6 +45928,7 @@ complex64_t crossgl_complex64_mod_assign(
                         constants,
                         False,
                         excluded_names=excluded_names,
+                        check_source_types=check_source_types,
                     )
                 right = self.glsl_private_pointer_condition_value(
                     expression.right,
@@ -45890,6 +45942,7 @@ complex64_t crossgl_complex64_mod_assign(
                         constants,
                         False,
                         excluded_names=excluded_names,
+                        check_source_types=check_source_types,
                     )
                 return refined
             refined = self.glsl_private_pointer_refined_condition_intervals(
@@ -45898,6 +45951,7 @@ complex64_t crossgl_complex64_mod_assign(
                 constants,
                 True,
                 excluded_names=excluded_names,
+                check_source_types=check_source_types,
             )
             if refined is None:
                 return None
@@ -45907,6 +45961,7 @@ complex64_t crossgl_complex64_mod_assign(
                 constants,
                 True,
                 excluded_names=excluded_names,
+                check_source_types=check_source_types,
             )
         if operator in {"||", "or"}:
             if expected:
@@ -45922,6 +45977,7 @@ complex64_t crossgl_complex64_mod_assign(
                         constants,
                         True,
                         excluded_names=excluded_names,
+                        check_source_types=check_source_types,
                     )
                 right = self.glsl_private_pointer_condition_value(
                     expression.right,
@@ -45935,6 +45991,7 @@ complex64_t crossgl_complex64_mod_assign(
                         constants,
                         True,
                         excluded_names=excluded_names,
+                        check_source_types=check_source_types,
                     )
                 return refined
             refined = self.glsl_private_pointer_refined_condition_intervals(
@@ -45943,6 +46000,7 @@ complex64_t crossgl_complex64_mod_assign(
                 constants,
                 False,
                 excluded_names=excluded_names,
+                check_source_types=check_source_types,
             )
             if refined is None:
                 return None
@@ -45952,6 +46010,7 @@ complex64_t crossgl_complex64_mod_assign(
                 constants,
                 False,
                 excluded_names=excluded_names,
+                check_source_types=check_source_types,
             )
         if operator not in {"==", "!=", "<", "<=", ">", ">="}:
             return refined
@@ -45979,6 +46038,40 @@ complex64_t crossgl_complex64_mod_assign(
         )
         if left is None or right is None:
             return refined
+
+        if check_source_types:
+            plan = self.glsl_arithmetic_conversion_plan(
+                self.glsl_source_expression_type(left_expression),
+                self.glsl_source_expression_type(right_expression),
+                operator,
+            )
+            if plan is None:
+                return refined
+            # Mathematical comparison bounds are valid only when the source
+            # promotions preserve both operands, including intermediate values.
+            for operand, bounds, promoted in (
+                (left_expression, left, plan.left_target_type),
+                (right_expression, right, plan.right_target_type),
+            ):
+                checked = self.glsl_checked_private_pointer_interval(
+                    operand, refined, constants, require_arithmetic_types=True
+                )
+                info = target_arithmetic_type(promoted)
+                if (
+                    checked != bounds
+                    or info is None
+                    or info.lanes != 1
+                    or info.kind not in {
+                        ArithmeticScalarKind.SIGNED_INTEGER,
+                        ArithmeticScalarKind.UNSIGNED_INTEGER,
+                    }
+                ):
+                    return refined
+                signed = info.kind == ArithmeticScalarKind.SIGNED_INTEGER
+                minimum = -(1 << (info.bits - 1)) if signed else 0
+                maximum = (1 << (info.bits - int(signed))) - 1
+                if not minimum <= bounds[0] <= bounds[1] <= maximum:
+                    return refined
 
         def narrow(candidate, lower, upper):
             name = self.glsl_private_pointer_interval_key(candidate, refined, constants)

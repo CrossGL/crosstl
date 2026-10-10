@@ -3221,6 +3221,19 @@ def test_windows_validator_install_retries_and_uses_direct_lunarg_fallback():
     assert "$global:LASTEXITCODE = 0" not in full_suite
 
 
+@pytest.mark.parametrize("job,overhead", [("opengl", 300), ("portable-host", 1800)])
+def test_project_native_job_deadlines_fit_runner_limit(job, overhead):
+    workflow = yaml.safe_load((WORKFLOW_DIR / "demo-project-testing.yml").read_text())
+    definition = workflow["jobs"][job]
+    deadlines = [
+        int(value)
+        for step in definition["steps"]
+        for value in re.findall(r"--timeout-seconds (\d+)", step.get("run", ""))
+    ]
+    assert deadlines
+    assert sum(deadlines) + overhead < definition["timeout-minutes"] * 60 <= 360 * 60
+
+
 def test_native_arithmetic_selection_retains_every_device_test():
     from tools import ci_coverage
 

@@ -48,6 +48,13 @@ checks. A previous revision's successful proof does not satisfy the current
 revision's required checks.
 Core and demo tests also remain part of the complete test suite.
 
+Guarded resource-index controls execute on original/generated Metal and on
+Mesa 25.0.7 llvmpipe with exact results and output guards; the same eleven HLSL
+artifacts compile with strict DXC settings. The local ARM64 Mesa 22.3.6 driver
+returned incorrect results for a signed 64-bit conditional comparison. Updating
+the validation environment resolves that case without changing generated GLSL.
+This driver result is not evidence of complete MLX runtime coverage.
+
 The host adaptation documentation records upstream changes explicitly. A passing
 kernel or bounded host check is not a claim that the entire upstream MLX suite
 passes on a translated backend.

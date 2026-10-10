@@ -5076,6 +5076,14 @@ an unbounded call cannot reuse a proof from a bounded call. Unknown mutations,
 recursive or ambiguous constructors, unmodeled control flow and arithmetic
 outside the source integer domain do not establish a range. These proofs permit
 representable OpenGL indices, not arbitrary buffer-length or host-dispatch claims.
+Scalar source guards also establish bounds inside conditional branches and the
+bodies of preconditioned loops. Comparison promotions and intermediate arithmetic
+must preserve the source values; mixed signed/unsigned comparisons cannot imply
+nonnegativity when they wrap negative operands. Each loop iteration uses its
+condition, not just its initializer. Mutation invalidates earlier bounds, escaped
+locals do not acquire new guard proofs, and a do-while condition does not constrain
+the first iteration. These checks establish index representability, not the
+length of a runtime allocation.
 Fixed workgroup arrays of 32-bit scalar integer or floating-point elements can
 also back these references. Their allocations retain distinct identities when
 source names are shadowed; copies, rebasing and helper calls preserve the shared
