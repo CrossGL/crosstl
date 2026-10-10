@@ -24,6 +24,7 @@ from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen,
 )
 from tests.test_translator.test_directx_float_atomics import _compile
+from tools.run_directx_diagnostics import _loaded_runtime_libraries
 
 REQUIRE_ENV = "CROSTL_REQUIRE_DIRECTX_SOFTWARE_REDUCTIONS"
 
@@ -287,8 +288,9 @@ def _execute_words(
     value_type="uint",
     workgroup_size=(32, 4, 1),
     workgroup_count=(3, 1, 1),
+    compile_flags=(),
 ):
-    artifact, module = _compile(generated, tmp_path)
+    artifact, module = _compile(generated, tmp_path, flags=compile_flags)
     guard = [0x6A15BEEF] * 32
     inputs = {
         "inputWords": words + guard,
@@ -331,26 +333,90 @@ def _execute_words(
     (tmp_path / "inputs.json").write_text(json.dumps(inputs))
     (tmp_path / "expected.json").write_text(json.dumps(expected))
     state = SimpleNamespace(details={})
-    outputs = DirectXComputeRuntime().dispatch(None, state, request)
-    (tmp_path / "readback.json").write_text(json.dumps(outputs))
-    (tmp_path / "evidence.json").write_text(
-        json.dumps(
-            {
-                "type": value_type,
-                "logicalWidth": 32,
-                "workgroupSize": list(workgroup_size),
-                "workgroupCount": list(workgroup_count),
-                "runtime": state.details,
-                "artifactSha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
-                "moduleSha256": hashlib.sha256(module.read_bytes()).hexdigest(),
-            },
-            indent=2,
-        )
-    )
+    runtime = DirectXComputeRuntime()
+    available = runtime.is_available(None, request)
+    evidence = {
+        "type": value_type,
+        "logicalWidth": 32,
+        "workgroupSize": list(workgroup_size),
+        "workgroupCount": list(workgroup_count),
+        "availability": {
+            "available": available.available,
+            "reason": available.reason,
+            "details": dict(available.details),
+        },
+        "artifactSha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        "moduleSha256": hashlib.sha256(module.read_bytes()).hexdigest(),
+    }
+
+    def retain_runtime():
+        evidence["runtime"] = state.details
+        try:
+            evidence["runtimeLibraries"] = _loaded_runtime_libraries()
+        except Exception as error:
+            evidence["runtimeLibraryError"] = str(error)
+        (tmp_path / "evidence.json").write_text(json.dumps(evidence, indent=2))
+
+    retain_runtime()
+    assert available.available, available
+    try:
+        outputs = runtime.dispatch(None, state, request)
+        (tmp_path / "readback.json").write_text(json.dumps(outputs))
+    finally:
+        # Device creation can load additional DLLs. Retain identity on failures too.
+        retain_runtime()
     actual = outputs["outputWords"]["values"]
     assert actual[len(expected) :] == guard
     assert len(actual) == len(expected) + len(guard)
     return actual[: len(expected)]
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_word_executor_retains_runtime_identity(tmp_path, monkeypatch, failure):
+    module = sys.modules[__name__]
+    artifact = tmp_path / "translated.hlsl"
+    artifact.write_text("source")
+    binary = tmp_path / "translated.dxil"
+    binary.write_bytes(b"compiled")
+    flags = []
+
+    def compile_source(source, work, **options):
+        assert source == "source" and work == tmp_path
+        flags.append(options["flags"])
+        return artifact, binary
+
+    class Runtime:
+        def is_available(self, adapter, request):
+            return SimpleNamespace(
+                available=True,
+                reason=None,
+                details={"device": "Test device", "isHardware": False},
+            )
+
+        def dispatch(self, adapter, state, request):
+            before = json.loads((tmp_path / "evidence.json").read_text())
+            assert before["availability"]["details"]["device"] == "Test device"
+            state.details["dispatched"] = True
+            if failure:
+                raise RuntimeError("dispatch failed")
+            return {"outputWords": {"values": [7] + [0x6A15BEEF] * 32}}
+
+    monkeypatch.setattr(module, "_compile", compile_source)
+    monkeypatch.setattr(module, "DirectXComputeRuntime", Runtime)
+    libraries = [{"name": "d3d10warp.dll", "loaded": True, "sha256": "digest"}]
+    monkeypatch.setattr(module, "_loaded_runtime_libraries", lambda: libraries)
+    if failure:
+        with pytest.raises(RuntimeError, match="dispatch failed"):
+            _execute_words(tmp_path, "source", [1], [7], compile_flags=("-Gis",))
+    else:
+        assert _execute_words(
+            tmp_path, "source", [1], [7], compile_flags=("-Gis",)
+        ) == [7]
+    evidence = json.loads((tmp_path / "evidence.json").read_text())
+    assert evidence["runtimeLibraries"] == libraries
+    assert evidence["runtime"]["dispatched"] is True
+    assert evidence["moduleSha256"] == hashlib.sha256(b"compiled").hexdigest()
+    assert flags == [("-Gis",)]
 
 
 def test_software_reduction_oracle_checks_special_values():

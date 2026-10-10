@@ -306,6 +306,53 @@ def test_software_matrix_executes(tmp_path, monkeypatch, shape, rounding):
     assert actual == expected
 
 
+PRECISE_SCALAR = """
+StructuredBuffer<uint> inputWords : register(t0);
+RWStructuredBuffer<uint> outputWords : register(u1);
+[numthreads(32, 1, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID) {
+    precise float product = asfloat(inputWords[id.x * 3u]) *
+                            asfloat(inputWords[id.x * 3u + 1u]);
+    precise float result = product + asfloat(inputWords[id.x * 3u + 2u]);
+    outputWords[id.x] = asuint(result);
+}
+"""
+PRECISE_OPERANDS = [0x3F800001, 0x3F7FFFFE, 0xBF800000]
+
+
+def test_precise_scalar_control_distinguishes_contraction():
+    left, right, addend = map(_float, PRECISE_OPERANDS)
+    assert _word(_float(_word(left * right)) + addend) == 0
+    assert _word(left * right + addend) == 0xA8800000
+
+
+@pytest.mark.parametrize("flags", [(), ("-Gis",)], ids=["precise", "strict"])
+def test_precise_scalar_control_compiles(tmp_path, flags):
+    _compile(PRECISE_SCALAR, tmp_path, flags=flags)
+
+
+@pytest.mark.parametrize("flags", [(), ("-Gis",)], ids=["precise", "strict"])
+def test_precise_scalar_control_executes(tmp_path, monkeypatch, flags):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for DirectX precise arithmetic execution")
+    assert sys.platform == "win32", "DirectX precise arithmetic requires Windows"
+    monkeypatch.setenv("CROSTL_REQUIRE_DIRECTX_FLOAT_ATOMICS", "1")
+    # (1 + 2^-23) * (1 - 2^-23) rounds to 1 before subtraction of 1.
+    # Contracting the operations instead returns -2^-46, a normal float32 value.
+    words = PRECISE_OPERANDS * 32
+    expected = [0] * 32
+    actual = _execute_words(
+        tmp_path,
+        PRECISE_SCALAR,
+        words,
+        expected,
+        workgroup_size=(32, 1, 1),
+        workgroup_count=(1, 1, 1),
+        compile_flags=flags,
+    )
+    assert actual == expected
+
+
 def _metal_source():
     loads = "\n".join(
         f"metal::simdgroup_matrix<float, 8, 8> {name};\n"

@@ -242,6 +242,14 @@ three workgroups with four logical subgroups each, integer overflow,
 cancellation, NaNs, infinities and signed zeros. It retains compiler output,
 shader and module hashes, input words and full output readbacks. This explicit
 software path does not replace native-wave generation when the option is absent.
+The word-level execution receipts also retain the selected device and loaded
+Direct3D runtime library paths and hashes, including after dispatch failures.
+The cooperative-matrix gate includes a scalar ``precise`` multiply/add control
+under ordinary and ``-Gis`` compilation. Its cancellation case distinguishes
+separate rounding from contraction without subnormal operands or outputs.
+Compiler success alone does not establish this runtime arithmetic contract;
+the scalar controls supplement, rather than replace, the complete matrix
+numerical comparison.
 
 Scalar products also support float32, int32 and uint32 in software mode. They
 combine adjacent lane pairs with strides 1, 2, 4, 8 and 16, rather than using
