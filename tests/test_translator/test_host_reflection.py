@@ -576,7 +576,7 @@ def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts(tmp_path
     hlsl = _reflect_hlsl(
         tmp_path,
         """
-        struct Pair { uint first; float second; };
+        struct Pair { uint first; float second[2]; };
         cbuffer Multiple : register(b0) {
             uint first;
             uint second;

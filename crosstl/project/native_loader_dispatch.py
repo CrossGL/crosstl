@@ -35,6 +35,7 @@ from crosstl.project.runtime_verification import (
     RuntimeValue,
     prepare_runtime_execution,
 )
+from crosstl.project.storage_record_layout import validate_storage_record_layout
 from crosstl.project.uniform_layout import validate_std140_block_layout
 from crosstl.translator.dispatch_regions import DispatchRegion
 from crosstl.translator.resource_storage import encoded_storage_dtype
@@ -1310,6 +1311,34 @@ def _validated_scalar_layout(
         path=path,
     )
     if "structMembers" in layout or "componentCount" in layout:
+        if "payloadEncoding" in layout or layout.get("elementType") == "record":
+            try:
+                stride = validate_storage_record_layout(layout)
+            except ValueError as exc:
+                raise NativeLoaderDispatchError(
+                    "resource-layout-invalid",
+                    str(exc),
+                    path=path,
+                    details={"binding": runtime_value.name},
+                ) from exc
+            if (
+                resource_kind != "buffer"
+                or layout["storageLayout"]
+                != _TARGET_STORAGE_LAYOUTS[target][resource_kind]
+                or runtime_value.dtype != "uint32"
+                or runtime_value.encoding is not None
+                or math.prod(runtime_value.shape) * 4 % stride
+            ):
+                raise NativeLoaderDispatchError(
+                    "resource-layout-mismatch",
+                    "Mixed storage records require complete reflected elements as uint32 words, including padding.",
+                    path=path,
+                    details={
+                        "binding": runtime_value.name,
+                        "elementStrideBytes": stride,
+                    },
+                )
+            return copy.deepcopy(dict(layout))
         return _validated_struct_layout(
             layout,
             runtime_value=runtime_value,

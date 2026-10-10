@@ -18,6 +18,7 @@ from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
 )
+from crosstl.project.storage_record_layout import storage_record_layout
 from crosstl.project.uniform_layout import std140_block_layout
 from crosstl.translator.resource_storage import (
     apply_resource_storage,
@@ -560,7 +561,7 @@ def _reflect_metal_source(
     stage: str | None,
 ) -> dict[str, Any]:
     source = _strip_comments(_read_text(artifact_path))
-    struct_declarations = _homogeneous_struct_declarations(source)
+    struct_declarations = _scalar_struct_declarations(source)
     entry_points = []
     resources = []
     stage_names = {
@@ -654,7 +655,7 @@ def _metal_buffer_layout(
     )
     if scalar is None:
         return (
-            _homogeneous_struct_buffer_layout(
+            _struct_buffer_layout(
                 type_name, struct_declarations, storage_layout="metal-buffer"
             )
             if pointer
@@ -1020,7 +1021,7 @@ def _reflect_hlsl_source(
             ),
         )
     source = _strip_comments(raw_source)
-    struct_declarations = _homogeneous_struct_declarations(source)
+    struct_declarations = _scalar_struct_declarations(source)
     entry_points = []
     for name, attributes in _iter_hlsl_function_declarations(source):
         reflected_stage = _hlsl_entry_stage(name, attributes, stage)
@@ -1081,7 +1082,7 @@ def _reflect_hlsl_source(
                 r"(?:RW)?StructuredBuffer\s*<\s*([A-Za-z_]\w*)\s*>", type_name
             )
             if struct_match is not None:
-                scalar_layout = _homogeneous_struct_buffer_layout(
+                scalar_layout = _struct_buffer_layout(
                     struct_match.group(1),
                     struct_declarations,
                     storage_layout="hlsl-structured-buffer",
@@ -1240,7 +1241,7 @@ def _hlsl_value_block_layout(
     )
 
 
-def _homogeneous_struct_declarations(source: str) -> dict[str, list[tuple[str, str]]]:
+def _scalar_struct_declarations(source: str) -> dict[str, list[tuple[str, str]]]:
     declarations = {}
     seen = set()
     for match in re.finditer(r"\bstruct\s+([A-Za-z_]\w*)\s*\{", source):
@@ -1265,7 +1266,7 @@ def _homogeneous_struct_declarations(source: str) -> dict[str, list[tuple[str, s
             continue
         types = {member[0] for member in members}
         names = {member[1] for member in members}
-        if len(types) != 1 or not types <= SCALAR_PHYSICAL_TYPES.keys():
+        if not types <= SCALAR_PHYSICAL_TYPES.keys():
             continue
         if len(names) != len(members):
             continue
@@ -1273,7 +1274,7 @@ def _homogeneous_struct_declarations(source: str) -> dict[str, list[tuple[str, s
     return declarations
 
 
-def _homogeneous_struct_buffer_layout(
+def _struct_buffer_layout(
     type_name: str,
     declarations: Mapping[str, list[tuple[str, str]]],
     *,
@@ -1283,6 +1284,16 @@ def _homogeneous_struct_buffer_layout(
     members = declarations.get(type_name)
     if members is None:
         return None
+    if len({base for base, _ in members}) != 1:
+        try:
+            layout = storage_record_layout(
+                type_name, members, storage_layout=storage_layout
+            )
+        except ValueError:
+            return None
+        if member_name is not None:
+            layout["memberName"] = member_name
+        return layout
     scalar_type = members[0][0]
     if (
         scalar_type in {"char", "uchar", "bfloat", "short", "ushort"}
@@ -1423,7 +1434,7 @@ def _reflect_glsl_source(
         raw_source, artifact_path
     )
     source = _strip_comments(raw_source)
-    struct_declarations = _homogeneous_struct_declarations(source)
+    struct_declarations = _scalar_struct_declarations(source)
     execution_config = {}
     local_size_match = GLSL_LOCAL_SIZE_RE.search(source)
     if local_size_match:
@@ -1508,7 +1519,7 @@ def _reflect_glsl_source(
                 and set(layout) <= {"binding", "set", "descriptor_set"}
                 and not source[: match.start()].rstrip().endswith(")")
             ):
-                scalar_layout = _homogeneous_struct_buffer_layout(
+                scalar_layout = _struct_buffer_layout(
                     member.group("type"),
                     struct_declarations,
                     storage_layout="std430",

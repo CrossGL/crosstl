@@ -24,6 +24,7 @@ from .runtime_verification import (
     RuntimeExecutorAvailability,
     RuntimeExecutorUnavailable,
 )
+from .storage_record_layout import validate_storage_record_layout
 from .uniform_layout import validate_std140_block_layout
 
 
@@ -2953,6 +2954,13 @@ def _prepare_directx_buffers(
                 ) from exc
 
         stride = _directx_buffer_stride(binding, namespace, dtype, payload_size)
+        _native_storage_record_alignment(
+            binding,
+            target="directx",
+            dtype=dtype,
+            payload_size=payload_size,
+            stride=stride,
+        )
         (
             allocation_id,
             byte_offset,
@@ -4175,7 +4183,10 @@ def _prepare_opengl_buffers(
             binding,
             payload_size=payload_size,
             target="opengl",
-            alignment=_dtype_size(dtype),
+            alignment=_native_storage_record_alignment(
+                binding, target="opengl", dtype=dtype, payload_size=payload_size
+            )
+            or _dtype_size(dtype),
             allow_padding=namespace == "uniform",
         )
         if namespace == "uniform":
@@ -4236,6 +4247,41 @@ def _prepare_opengl_buffers(
             ),
         )
     )
+
+
+def _native_storage_record_alignment(
+    binding: NativeRuntimeBufferBinding,
+    *,
+    target: str,
+    dtype: str,
+    payload_size: int,
+    stride: int | None = None,
+) -> int | None:
+    layout = binding.binding.metadata.get("scalarLayout")
+    if not isinstance(layout, Mapping) or "structMembers" not in layout:
+        return None
+    if "payloadEncoding" not in layout and layout.get("elementType") != "record":
+        return None
+    try:
+        expected_stride = validate_storage_record_layout(layout)
+        if (
+            binding.binding.kind not in {"buffer", "storage-buffer"}
+            or layout["storageLayout"]
+            != {"directx": "hlsl-structured-buffer", "opengl": "std430"}[target]
+            or dtype != "uint32"
+            or binding.encoding is not None
+            or payload_size <= 0
+            or payload_size % expected_stride
+            or (stride is not None and stride != expected_stride)
+        ):
+            raise ValueError(
+                "Mixed storage payload or view does not match its reflected record layout."
+            )
+    except ValueError as exc:
+        raise _scalar_block_error(
+            target, str(exc), "storage-record-layout-invalid", resource=binding.name
+        ) from exc
+    return layout["alignmentBytes"]
 
 
 def _scalar_block_size(

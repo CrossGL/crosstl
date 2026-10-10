@@ -750,6 +750,7 @@ def test_project_package_exposes_public_api_surface():
         "native_runtime_parity_adapter",
         "native_runtime_parity_adapters",
         "native_loader_target_adapter_targets",
+        "pack_storage_records",
         "parse_runtime_execution_graph",
         "parse_runtime_verification_fixtures",
         "parse_runtime_test_manifest",

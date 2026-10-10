@@ -106,7 +106,6 @@ def test_struct_reflection_retains_exact_members(
     "body",
     [
         "",
-        "float first; int second;",
         "float first[2];",
         "float2 first;",
         "Sample nested;",

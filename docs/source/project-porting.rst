@@ -4145,12 +4145,12 @@ native parity adapters:
        expected_target="directx",
    )
 
-``build_native_loader_dispatch_request`` supports compute-stage DirectX HLSL
-and OpenGL GLSL artifacts. It validates the descriptor, requires exact
+``build_native_loader_dispatch_request`` supports compute-stage Metal, DirectX
+HLSL and OpenGL GLSL artifacts. It validates the descriptor, requires exact
 reflected binding names, verifies the artifact size and SHA-256 digest inside
 the package root, validates specialization values and dispatch geometry, and
 returns a preflighted ``RuntimeExecutionRequest``. Buffer bindings require a
-complete, tightly packed 32-bit scalar layout; missing or ambiguous physical
+complete supported scalar, vector or storage-record layout; missing or ambiguous physical
 layout metadata is a structured error rather than an inferred ABI.
 
 The returned request also carries a frozen ``RuntimeArtifactIdentity`` copied
@@ -4168,6 +4168,25 @@ its prepared resource bindings. Construct a new request to submit new values.
 This ownership guarantee does not make the returned request's nested objects
 immutable, enforce caller-trusted index-range assertions, or validate metadata
 produced or modified by a preceding GPU dispatch.
+
+Flat mixed-scalar storage records retain each field's name, physical type, byte
+offset, size and alignment, together with the padded record stride. This
+contract applies to Metal pointer buffers, HLSL structured buffers and OpenGL
+std430 storage arrays containing 32-bit floats or signed/unsigned 32/64-bit
+integers. It does not use uniform-block packing or describe a mixed record as a
+homogeneous vector.
+
+``pack_storage_records(layout, records)`` packs named field mappings into
+little-endian ``uint32`` transport words and zeroes padding. Pass the returned
+words with ``dtype="uint32"`` and shape
+``(len(records), layout["elementStrideBytes"] // 4)``. The reflected
+``elementType="record"`` and ``payloadEncoding="uint32-le-words"`` distinguish
+physical transport from shader field types. Explicit physical words can retain
+particular floating-point bit patterns, including NaN payloads. Request
+construction rejects incomplete records, contradictory layouts and invalid
+allocation views; native preparation revalidates the record contract.
+Nested records, member arrays, pointer fields, vectors and mixed narrow-scalar
+records remain unsupported rather than receiving guessed layouts.
 
 An exact binding name may appear in both ``input_values`` and ``output_values``
 only when the descriptor reflects that resource as ``read_write``. In the

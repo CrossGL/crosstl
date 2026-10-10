@@ -250,6 +250,7 @@ from .runtime_verification import (
     write_runtime_test_report,
     write_runtime_verification_report,
 )
+from .storage_record_layout import pack_storage_records
 from .test_runner import (
     PROJECT_TEST_RUNNER_INSPECTION_KIND,
     PROJECT_TEST_RUNNER_PLAN_KIND,
@@ -403,6 +404,7 @@ __all__ = [
     "RuntimeTestManifest",
     "RuntimeTolerance",
     "RuntimeValue",
+    "pack_storage_records",
     "RuntimeValidationHook",
     "RuntimeVariantDispatchError",
     "RuntimeVerificationError",

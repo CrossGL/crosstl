@@ -23,6 +23,7 @@ from crosstl.project.directx_toolchain import (
     dxc_profile_for_source,
 )
 from crosstl.project.runtime_value_encoding import validate_value_encoding
+from crosstl.project.storage_record_layout import validate_storage_record_layout
 from crosstl.translator.codegen import normalize_backend_name
 
 RUNTIME_VERIFICATION_FIXTURES_KIND = "crosstl-runtime-verification-fixtures"
@@ -6444,6 +6445,17 @@ def _runtime_value_physical_byte_length(
     if not layout:
         layout = _runtime_scalar_layout_signature(binding.metadata)
     struct_members = layout.get("structMembers")
+    if "structMembers" in layout and "payloadEncoding" in layout:
+        try:
+            stride = validate_storage_record_layout(layout)
+        except ValueError:
+            return None
+        if (
+            _runtime_compatible_dtype(value.dtype) != "uint32"
+            or element_count * 4 % stride
+        ):
+            return None
+        return element_count * 4
     is_struct = "structMembers" in layout or "componentCount" in layout
     vector_width = (
         layout.get("componentCount") if is_struct else layout.get("vectorWidth", 1)
