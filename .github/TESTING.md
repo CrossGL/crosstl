@@ -81,6 +81,15 @@ on Ubuntu. They retain every entry, strict compiler flags, artifact identity
 checks and the same DXC release. Pinned installation verifies the Linux archive
 checksum and does not fall back to another release. These jobs do not execute
 Direct3D; WARP numerical execution and Windows host integration remain required.
+
+If the required Windows collective/resource gate fails, its existing runner
+also compares unchanged precise scalar and matrix workloads against the pinned
+Agility SDK 1.619.6 (SDK 619). Archive and core checksums are verified before use;
+the isolated dispatch process must report the selected core's digest. WARP
+1.0.21 remains installed. The comparison retains a 180-second command deadline,
+adds no runner, and cannot replace or excuse the required gate's failure.
+Requested and observed runtime identities, compiled modules, inputs, expected
+values and readbacks are retained in the portable-host evidence artifact.
 Metal corpus compilation stays on macOS because it requires Apple's toolchain.
 
 The complete unary, binary, copy, reduction and quantized Metal corpora separate portable translation

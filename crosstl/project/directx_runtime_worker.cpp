@@ -147,6 +147,13 @@ Request read_request(std::istream& input) {
 #include <cstdlib>
 #include <sstream>
 
+#ifdef CROSSTL_D3D12_SDK_VERSION
+extern "C" {
+__declspec(dllexport) extern const UINT D3D12SDKVersion = CROSSTL_D3D12_SDK_VERSION;
+__declspec(dllexport) const char* D3D12SDKPath = ".\\D3D12\\";
+}
+#endif
+
 namespace {
 using Microsoft::WRL::ComPtr;
 void check(HRESULT status, const char* operation) {

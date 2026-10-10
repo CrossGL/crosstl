@@ -293,8 +293,26 @@ def test_worker_runtime_identity_keeps_observed_paths_and_disk_hashes(tmp_path):
         _runtime_packet()[:12] + struct.pack("<III", 1, 0, 1) + b"\x00\xd8",
         bytes(256 * 1024 + 1),
     ],
+    ids=[
+        "empty",
+        "truncated",
+        "trailing",
+        "bad-magic",
+        "no-process",
+        "wrong-library-count",
+        "invalid-loaded-flag",
+        "unloaded-with-error",
+        "unloaded-with-path",
+        "loaded-without-path",
+        "error-with-path",
+        "nul-path",
+        "path-size-limit",
+        "invalid-utf16",
+        "receipt-size-limit",
+    ],
 )
-def test_worker_runtime_identity_rejects_malformed_receipts(tmp_path, payload):
+def test_worker_runtime_identity_rejects_malformed_receipts(tmp_path, payload, request):
+    assert len(request.node.nodeid) < 256
     receipt = tmp_path / "receipt.bin"
     receipt.write_bytes(payload)
     with pytest.raises(RuntimeAdapterSetupError) as caught:
@@ -863,6 +881,140 @@ def test_worker_cache_retries_failed_compilation(tmp_path, monkeypatch):
         directory.cleanup()
 
 
+@pytest.mark.parametrize("version", [None, True, False, 0, -1, 2**32, "619", 619.0])
+def test_sdk_selection_rejects_invalid_versions(tmp_path, version):
+    with pytest.raises(RuntimeAdapterSetupError) as caught:
+        directx_runtime._sdk_snapshot(tmp_path, version)
+    assert caught.value.details["reasonKind"] == "sdk-selection-invalid"
+
+
+def test_sdk_selection_requires_both_fields():
+    assert directx_runtime._sdk_snapshot(None, None) is None
+    with pytest.raises(RuntimeAdapterSetupError) as caught:
+        directx_runtime._sdk_snapshot(None, 619)
+    assert caught.value.details["reasonKind"] == "sdk-selection-invalid"
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory", "empty", "oversized"])
+def test_sdk_selection_rejects_invalid_core(tmp_path, monkeypatch, kind):
+    core = tmp_path / "D3D12Core.dll"
+    monkeypatch.setattr(directx_runtime, "_MAX_SDK_BYTES", 8)
+    if kind == "directory":
+        core.mkdir()
+    elif kind != "missing":
+        core.write_bytes(b"" if kind == "empty" else b"x" * 9)
+    with pytest.raises(RuntimeAdapterSetupError) as caught:
+        directx_runtime._sdk_snapshot(tmp_path, 619)
+    assert caught.value.details["reasonKind"] == (
+        "sdk-core-unavailable"
+        if kind in ("missing", "directory")
+        else "sdk-core-size-invalid"
+    )
+
+
+def test_sdk_worker_cache_uses_version_and_snapshotted_core(tmp_path, monkeypatch):
+    compiler = tmp_path / "cl.exe"
+    compiler.touch()
+    core = tmp_path / "D3D12Core.dll"
+    core.write_bytes(b"first core")
+    first = directx_runtime._sdk_snapshot(tmp_path, 619)
+    core.write_bytes(b"second core")
+    second = directx_runtime._sdk_snapshot(tmp_path, 619)
+    next_version = directx_runtime._sdk_snapshot(tmp_path, 620)
+    monkeypatch.setattr(
+        directx_runtime,
+        "sys",
+        SimpleNamespace(platform="win32", executable=str(tmp_path / "python.exe")),
+    )
+    monkeypatch.setattr(
+        directx_runtime, "_compiler_environment", lambda: (str(compiler), {})
+    )
+    monkeypatch.setattr(directx_runtime, "_WORKERS", {})
+    commands = []
+
+    def compile_worker(command, **kwargs):
+        output = Path(next(arg[3:] for arg in command if arg.startswith("/Fe")))
+        commands.append(command)
+        output.write_bytes(b"test worker")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(directx_runtime, "_run", compile_worker)
+    try:
+        workers = [
+            directx_runtime._worker(sdk=sdk)
+            for sdk in (first, first, second, next_version, None)
+        ]
+        assert workers[0] == workers[1] and len(set(workers)) == 4
+        assert (workers[0].parent / "D3D12/D3D12Core.dll").read_bytes() == b"first core"
+        assert (
+            workers[2].parent / "D3D12/D3D12Core.dll"
+        ).read_bytes() == b"second core"
+        assert not (workers[-1].parent / "D3D12").exists()
+        assert first.sha256 == hashlib.sha256(b"first core").hexdigest()
+        assert [
+            [arg for arg in command if arg.startswith("/DCROSSTL_D3D12_SDK_VERSION=")]
+            for command in commands
+        ] == [
+            ["/DCROSSTL_D3D12_SDK_VERSION=619"],
+            ["/DCROSSTL_D3D12_SDK_VERSION=619"],
+            ["/DCROSSTL_D3D12_SDK_VERSION=620"],
+            [],
+        ]
+    finally:
+        for directory, _ in directx_runtime._WORKERS.values():
+            directory.cleanup()
+
+
+@pytest.mark.parametrize(
+    "kind", ["matching", "different", "unloaded", "unreadable", "no-receipt", "failed"]
+)
+def test_sdk_execution_requires_observed_core_identity(tmp_path, monkeypatch, kind):
+    nodes, allocations, keys = _plan((_request(tmp_path),))
+    core = tmp_path / "D3D12Core.dll"
+    core.write_bytes(b"selected core")
+    sdk = directx_runtime._sdk_snapshot(tmp_path, 619)
+    observed = tmp_path / "loaded-core.dll"
+    if kind != "unreadable":
+        observed.write_bytes(b"other core" if kind == "different" else sdk.payload)
+
+    def worker(**kwargs):
+        assert kwargs == {"sdk": sdk}
+        return Path("worker.exe")
+
+    def execute(command, **kwargs):
+        Path(command[2]).write_bytes(_response(allocations))
+        entries = [(0, 0, ""), (1, 0, str(observed)), (0, 0, "")]
+        if kind == "unloaded":
+            entries[1] = (0, 0, "")
+        if kind != "no-receipt":
+            Path(command[2] + ".runtime").write_bytes(_runtime_packet(entries))
+        return subprocess.CompletedProcess(command, int(kind == "failed"), b"", b"")
+
+    monkeypatch.setattr(directx_runtime, "_worker", worker)
+    monkeypatch.setattr(directx_runtime, "_run", execute)
+    state = SimpleNamespace(details={})
+    kwargs = {"device": _device(), "sdk_directory": tmp_path, "sdk_version": 619}
+    if kind == "matching":
+        directx_runtime.execute_buffer_views(nodes, allocations, keys, state, **kwargs)
+    else:
+        error_type = (
+            RuntimeAdapterDispatchError
+            if kind == "failed"
+            else RuntimeAdapterSetupError
+        )
+        with pytest.raises(error_type) as caught:
+            directx_runtime.execute_buffer_views(
+                nodes, allocations, keys, state, **kwargs
+            )
+        assert caught.value.details["reasonKind"] == {
+            "failed": "native-buffer-view-failed",
+            "no-receipt": "worker-output-invalid",
+        }.get(kind, "sdk-selection-mismatch")
+        if kind != "no-receipt":
+            assert caught.value.details["requestedSDK"] == sdk.identity()
+    assert state.details["directxRuntime"]["requestedSDK"] == sdk.identity()
+
+
 def test_required_native_view_gate_keeps_existing_windows_runner():
     import yaml
 
@@ -890,7 +1042,7 @@ def test_required_native_view_gate_keeps_existing_windows_runner():
     assert upload["with"]["if-no-files-found"] == "error"
 
 
-def test_warp_comparison_does_not_replace_required_native_gate():
+def test_sdk_comparison_does_not_replace_required_native_gate():
     import yaml
 
     root = Path(__file__).resolve().parents[2]
@@ -907,7 +1059,7 @@ def test_warp_comparison_does_not_replace_required_native_gate():
     comparison = next(
         item
         for item in steps
-        if item.get("name") == "Compare previous WARP precise arithmetic"
+        if item.get("name") == "Compare explicit Direct3D SDK arithmetic"
     )
     assert required["id"] == "collective-helpers"
     assert not required.get("continue-on-error") and not comparison.get(
@@ -918,12 +1070,16 @@ def test_warp_comparison_does_not_replace_required_native_gate():
         comparison["if"]
         == "failure() && runner.os == 'Windows' && steps.collective-helpers.outcome == 'failure'"
     )
-    assert comparison["env"]["CROSTL_REQUIRE_DIRECTX_COOPERATIVE_MATRIX"] == "1"
+    assert comparison["env"]["CROSTL_REQUIRE_DIRECTX_SDK_COMPARISON"] == "1"
+    assert comparison["env"]["CROSTL_DIRECTX_SDK_VERSION"] == "619"
     assert comparison["timeout-minutes"] == 5
     command = comparison["run"]
     assert "--timeout-seconds 180" in command and "-n auto" in command
-    assert "precise_scalar_control_executes or software_matrix_executes" in command
-    assert "e5fe5de661ce98b58ef9cfb736e73c0a7a2623d3bbf5f14839b2d55566d87e40" in command
-    assert "finally {" in command and "Copy-Item $backup $installed -Force" in command
-    assert "-ne $originalDigest" in command and "exit $result" in command
+    assert '-k "sdk_comparison_executes"' in command
+    assert "08f0489281401aa430fc37322d6c3fc98a8025175aacd714c10d562f4963f1e9" in command
+    assert "37fa14281a58cc834076971873006feb8a8d25cddc908d1a345bda1b149ffc7d" in command
+    assert "CROSTL_DIRECTX_SDK_DIRECTORY" in command
+    assert "Copy-Item" not in command and "Remove-Item" not in command
+    assert "warpSHA256" in command and "exit $LASTEXITCODE" in command
+    assert "replacesRequiredGate = $false" in command
     assert steps.index(required) < steps.index(comparison)

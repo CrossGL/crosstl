@@ -215,7 +215,7 @@ def test_matrix_native_gates_are_required_without_extra_jobs():
     comparison = next(
         step
         for step in steps
-        if step.get("name") == "Compare previous WARP precise arithmetic"
+        if step.get("name") == "Compare explicit Direct3D SDK arithmetic"
     )
     assert (
         comparison["if"]
@@ -372,6 +372,70 @@ def test_precise_scalar_control_executes(
         workgroup_count=(1, 1, 1),
         compile_flags=flags,
         buffer_byte_offset=buffer_byte_offset,
+    )
+    assert actual == expected
+
+
+@pytest.fixture
+def sdk_executor(monkeypatch):
+    required = "CROSTL_REQUIRE_DIRECTX_SDK_COMPARISON"
+    if os.environ.get(required) != "1":
+        pytest.skip(f"set {required}=1 for explicit DirectX SDK comparison")
+    assert sys.platform == "win32", "DirectX SDK comparison requires Windows"
+    monkeypatch.setenv("CROSTL_REQUIRE_DIRECTX_FLOAT_ATOMICS", "1")
+    directory = os.environ["CROSTL_DIRECTX_SDK_DIRECTORY"]
+    version = int(os.environ["CROSTL_DIRECTX_SDK_VERSION"])
+
+    def execute(*args):
+        import compushady
+
+        from crosstl.project.directx_runtime import execute_buffer_views
+
+        return execute_buffer_views(
+            *args,
+            device=compushady.get_current_device(),
+            sdk_directory=directory,
+            sdk_version=version,
+        )
+
+    return execute
+
+
+@pytest.mark.parametrize(
+    "flags", [(), ("-Gis",), ("-Gis", "-Od")], ids=["precise", "strict", "unoptimized"]
+)
+def test_precise_scalar_sdk_comparison_executes(tmp_path, sdk_executor, flags):
+    expected = [0] * 32
+    actual = _execute_words(
+        tmp_path,
+        PRECISE_SCALAR,
+        PRECISE_OPERANDS * 32,
+        expected,
+        workgroup_size=(32, 1, 1),
+        workgroup_count=(1, 1, 1),
+        compile_flags=flags,
+        buffer_byte_offset=16,
+        buffer_view_executor=sdk_executor,
+    )
+    assert actual == expected
+
+
+@pytest.mark.parametrize("shape,rounding", [((32, 4, 1), False), ((16, 8, 1), True)])
+def test_software_matrix_sdk_comparison_executes(
+    tmp_path, sdk_executor, shape, rounding
+):
+    generated = _codegen().generate_stage(
+        parse(_source(width=shape[0], height=shape[1])), "compute"
+    )
+    words, expected = _case(rounding=rounding)
+    actual = _execute_words(
+        tmp_path,
+        generated,
+        words,
+        expected,
+        workgroup_size=shape,
+        buffer_byte_offset=16,
+        buffer_view_executor=sdk_executor,
     )
     assert actual == expected
 

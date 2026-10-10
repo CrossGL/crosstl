@@ -1344,47 +1344,42 @@ jobs:
               tests/test_translator/test_project_workgroup_rules.py::test_selected_entry_rules_execute \
               tests/test_translator/test_project_subgroup_applicability.py \
               2>&1 | tee .mlx-portable-host/resource-values.log
-      - name: Compare previous WARP precise arithmetic
+      - name: Compare explicit Direct3D SDK arithmetic
         if: failure() && runner.os == 'Windows' && steps.collective-helpers.outcome == 'failure'
         shell: pwsh
         timeout-minutes: 5
         env:
-          CROSTL_REQUIRE_DIRECTX_COOPERATIVE_MATRIX: "1"
+          CROSTL_REQUIRE_DIRECTX_SDK_COMPARISON: "1"
+          CROSTL_DIRECTX_SDK_VERSION: "619"
         run: |
           $ErrorActionPreference = "Stop"
           $ProgressPreference = "SilentlyContinue"
-          $archive = Join-Path $env:RUNNER_TEMP "warp-1.0.20.zip"
-          $root = Join-Path $env:RUNNER_TEMP "warp-1.0.20"
-          $evidence = ".mlx-portable-host/warp-comparison"
+          $archive = Join-Path $env:RUNNER_TEMP "agility-1.619.6.zip"
+          $root = Join-Path $env:RUNNER_TEMP "agility-1.619.6"
+          $evidence = ".mlx-portable-host/sdk-comparison"
           New-Item -ItemType Directory -Force $evidence | Out-Null
-          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.20/microsoft.direct3d.warp.1.0.20.nupkg" -OutFile $archive
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.d3d12/1.619.6/microsoft.direct3d.d3d12.1.619.6.nupkg" -OutFile $archive
           $digest = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($digest -ne "e5fe5de661ce98b58ef9cfb736e73c0a7a2623d3bbf5f14839b2d55566d87e40") {
-            throw "Comparison WARP archive checksum mismatch."
+          if ($digest -ne "08f0489281401aa430fc37322d6c3fc98a8025175aacd714c10d562f4963f1e9") {
+            throw "Comparison Direct3D SDK archive checksum mismatch."
           }
           Expand-Archive $archive -DestinationPath $root -Force
-          $installed = Join-Path $env:pythonLocation "d3d10warp.dll"
-          $backup = Join-Path $env:RUNNER_TEMP "warp-required-backup.dll"
-          $originalDigest = (Get-FileHash $installed -Algorithm SHA256).Hash.ToLowerInvariant()
-          Copy-Item $installed $backup -Force
-          try {
-            Copy-Item "$root/build/native/bin/x64/d3d10warp.dll" $installed -Force
-            @{
-              comparisonVersion = "1.0.20"
-              archiveSHA256 = $digest
-              originalDLLSHA256 = $originalDigest
-              comparisonDLLSHA256 = (Get-FileHash $installed -Algorithm SHA256).Hash.ToLowerInvariant()
-              replacesRequiredGate = $false
-            } | ConvertTo-Json | Set-Content "$evidence/runtime-selection.json"
-            python tools/run_bounded_command.py --timeout-seconds 180 --label "Previous WARP arithmetic comparison" -- python -m pytest -q -n auto --basetemp="$evidence/pytest" --junitxml="$evidence/results.xml" tests/test_translator/test_directx_cooperative_matrix.py -k "precise_scalar_control_executes or software_matrix_executes"
-            $result = $LASTEXITCODE
-          } finally {
-            Copy-Item $backup $installed -Force
-            if ((Get-FileHash $installed -Algorithm SHA256).Hash.ToLowerInvariant() -ne $originalDigest) {
-              throw "Required WARP runtime was not restored."
-            }
+          $env:CROSTL_DIRECTX_SDK_DIRECTORY = Join-Path $root "build/native/bin/x64"
+          $core = Join-Path $env:CROSTL_DIRECTX_SDK_DIRECTORY "D3D12Core.dll"
+          $coreDigest = (Get-FileHash $core -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($coreDigest -ne "37fa14281a58cc834076971873006feb8a8d25cddc908d1a345bda1b149ffc7d") {
+            throw "Comparison Direct3D SDK core checksum mismatch."
           }
-          exit $result
+          @{
+            comparisonVersion = "1.619.6"
+            sdkVersion = 619
+            archiveSHA256 = $digest
+            requestedCoreSHA256 = $coreDigest
+            warpSHA256 = (Get-FileHash (Join-Path $env:pythonLocation "d3d10warp.dll") -Algorithm SHA256).Hash.ToLowerInvariant()
+            replacesRequiredGate = $false
+          } | ConvertTo-Json | Set-Content "$evidence/runtime-selection.json"
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Explicit Direct3D SDK arithmetic comparison" -- python -m pytest -q -n auto --basetemp="$evidence/pytest" --junitxml="$evidence/results.xml" tests/test_translator/test_directx_cooperative_matrix.py -k "sdk_comparison_executes"
+          exit $LASTEXITCODE
       - name: Validate exact partial subgroup execution
         env:
           CROSTL_REQUIRE_PARTIAL_SUBGROUP_READBACKS: "1"

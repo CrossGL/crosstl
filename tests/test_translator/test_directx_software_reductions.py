@@ -291,6 +291,7 @@ def _execute_words(
     workgroup_count=(3, 1, 1),
     compile_flags=(),
     buffer_byte_offset=None,
+    buffer_view_executor=None,
 ):
     artifact, module = _compile(generated, tmp_path, flags=compile_flags)
     guard = [0x6A15BEEF] * 32
@@ -345,7 +346,13 @@ def _execute_words(
     (tmp_path / "inputs.json").write_text(json.dumps(inputs))
     (tmp_path / "expected.json").write_text(json.dumps(expected))
     state = SimpleNamespace(details={})
-    runtime = DirectXComputeRuntime()
+    runtime = DirectXComputeRuntime(
+        **(
+            {"buffer_view_executor": buffer_view_executor}
+            if buffer_view_executor is not None
+            else {}
+        )
+    )
     available = runtime.is_available(None, request)
     evidence = {
         "type": value_type,
@@ -395,8 +402,9 @@ def _execute_words(
 
 @pytest.mark.parametrize("failure", [False, True])
 @pytest.mark.parametrize("buffer_byte_offset", [None, 16])
+@pytest.mark.parametrize("injected", [False, True])
 def test_word_executor_retains_runtime_identity(
-    tmp_path, monkeypatch, failure, buffer_byte_offset
+    tmp_path, monkeypatch, failure, buffer_byte_offset, injected
 ):
     module = sys.modules[__name__]
     artifact = tmp_path / "translated.hlsl"
@@ -411,6 +419,9 @@ def test_word_executor_retains_runtime_identity(
         return artifact, binary
 
     class Runtime:
+        def __init__(self, **kwargs):
+            assert kwargs == ({"buffer_view_executor": executor} if injected else {})
+
         def is_available(self, adapter, request):
             return SimpleNamespace(
                 available=True,
@@ -443,6 +454,9 @@ def test_word_executor_retains_runtime_identity(
     libraries = [{"name": "d3d10warp.dll", "loaded": True, "sha256": "digest"}]
     monkeypatch.setattr(module, "_loaded_runtime_libraries", lambda: libraries)
     options = {"compile_flags": ("-Gis",), "buffer_byte_offset": buffer_byte_offset}
+    executor = object()
+    if injected:
+        options["buffer_view_executor"] = executor
     if failure:
         with pytest.raises(RuntimeError, match="dispatch failed"):
             _execute_words(tmp_path, "source", [1], [7], **options)

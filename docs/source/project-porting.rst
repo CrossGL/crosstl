@@ -3283,6 +3283,22 @@ The receipt is retained when a later dispatch returns an error; failures before
 device creation can have no receipt. Successful worker execution requires a
 well-formed receipt. Numerical readbacks and guards remain independent checks.
 
+For controlled runtime comparisons, ``execute_buffer_views`` accepts an explicit
+``sdk_directory`` containing ``D3D12Core.dll`` and an integer ``sdk_version``.
+Both are required together. The worker exports the Agility SDK selection symbols
+and loads a private snapshot of the supplied core; the version and core digest
+are part of its build-cache key. This does not change the Python launcher's SDK
+or replace its WARP library. Only use a trusted, architecture-compatible SDK:
+this option loads native executable code, not project data. No SDK is downloaded
+or selected implicitly.
+
+``directxRuntime.requestedSDK`` records the requested version, source path and
+SHA-256. A successful dispatch must report a loaded core with the same digest;
+an OS fallback, unreadable core or different loaded library fails with
+``sdk-selection-mismatch`` rather than counting as a valid comparison. The
+worker still uses the same DXIL, adapter selection, descriptors and numerical
+checks. SDK selection alone does not establish arithmetic correctness.
+
 Ranged execution supports shared read-only views, disjoint UAV views and
 cross-dispatch read/write reuse. Simultaneous SRV/CBV reads and UAV writes to one
 allocation within a dispatch remain unsupported by the worker's classic

@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 from .runtime_verification import RuntimeAdapterDispatchError, RuntimeAdapterSetupError
@@ -19,6 +20,49 @@ from .runtime_verification import RuntimeAdapterDispatchError, RuntimeAdapterSet
 _BUILD_LOCK = threading.Lock()
 _WORKERS = {}
 _MAX_BUFFER_BYTES = 256 * 1024 * 1024
+_MAX_SDK_BYTES = 64 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class _SDK:
+    version: int
+    path: Path
+    sha256: str
+    payload: bytes
+
+    def identity(self):
+        return {
+            "version": self.version,
+            "path": str(self.path),
+            "sha256": self.sha256,
+        }
+
+
+def _sdk_snapshot(directory, version):
+    if directory is None and version is None:
+        return None
+    if directory is None or type(version) is not int or not 0 < version < 2**32:
+        raise _error(
+            "DirectX SDK selection requires a directory and a positive UINT version.",
+            "sdk-selection-invalid",
+        )
+    try:
+        path = (Path(directory) / "D3D12Core.dll").resolve()
+        if not path.is_file():
+            raise OSError("D3D12Core.dll is not a regular file")
+        with path.open("rb") as source:
+            payload = source.read(_MAX_SDK_BYTES + 1)
+    except (OSError, TypeError, ValueError) as exc:
+        raise _error(
+            "The selected DirectX SDK core cannot be read.", "sdk-core-unavailable"
+        ) from exc
+    if not payload or len(payload) > _MAX_SDK_BYTES:
+        raise _error(
+            "The selected DirectX SDK core exceeds its size bounds.",
+            "sdk-core-size-invalid",
+            maxBytes=_MAX_SDK_BYTES,
+        )
+    return _SDK(version, path, hashlib.sha256(payload).hexdigest(), payload)
 
 
 def _error(message, reason, **details):
@@ -101,7 +145,7 @@ def _compiler_environment():
     return compiler, environment
 
 
-def _worker():
+def _worker(*, sdk=None):
     if sys.platform != "win32":
         raise _error("Direct3D buffer views require Windows.", "platform-unavailable")
     source = Path(__file__).with_name("directx_runtime_worker.cpp")
@@ -114,6 +158,7 @@ def _worker():
         environment.get("INCLUDE"),
         environment.get("LIB"),
         hashlib.sha256(warp.read_bytes()).hexdigest() if warp.is_file() else None,
+        (sdk.version, sdk.sha256) if sdk else None,
     )
     with _BUILD_LOCK:
         if key in _WORKERS:
@@ -121,6 +166,12 @@ def _worker():
         directory = tempfile.TemporaryDirectory(prefix="crosstl-directx-worker-")
         executable = Path(directory.name) / "directx-runtime.exe"
         try:
+            defines = []
+            if sdk:
+                runtime_directory = Path(directory.name) / "D3D12"
+                runtime_directory.mkdir()
+                (runtime_directory / "D3D12Core.dll").write_bytes(sdk.payload)
+                defines.append(f"/DCROSSTL_D3D12_SDK_VERSION={sdk.version}")
             result = _run(
                 [
                     compiler,
@@ -130,6 +181,7 @@ def _worker():
                     "/W4",
                     "/WX",
                     "/O2",
+                    *defines,
                     str(source),
                     f"/Fe{executable}",
                     f"/Fo{Path(directory.name) / 'worker.obj'}",
@@ -372,13 +424,23 @@ def _device_identity(device):
     return identity
 
 
-def execute_buffer_views(dispatches, allocations, view_keys, state, *, device):
+def execute_buffer_views(
+    dispatches,
+    allocations,
+    view_keys,
+    state,
+    *,
+    device,
+    sdk_directory=None,
+    sdk_version=None,
+):
     """Run unchanged DXIL using native CBV/SRV/UAV descriptors and shared buffers."""
     from .native_runtime_drivers import _buffer_readback
 
     payload, descriptions = encode_dispatches(dispatches, allocations, view_keys)
     identity = _device_identity(device)
-    executable = _worker()
+    sdk = _sdk_snapshot(sdk_directory, sdk_version)
+    executable = _worker(sdk=sdk) if sdk else _worker()
     with tempfile.TemporaryDirectory(prefix="crosstl-directx-dispatch-") as directory:
         request = Path(directory) / "request.bin"
         output = Path(directory) / "readbacks.bin"
@@ -409,6 +471,8 @@ def execute_buffer_views(dispatches, allocations, view_keys, state, *, device):
             "requestSHA256": hashlib.sha256(payload).hexdigest(),
             "workerRuntime": runtime_identity,
         }
+        if sdk:
+            runtime_details["requestedSDK"] = sdk.identity()
         if isinstance(getattr(state, "details", None), dict):
             state.details["directxRuntime"] = runtime_details
         if result.returncode or not output.is_file():
@@ -421,12 +485,25 @@ def execute_buffer_views(dispatches, allocations, view_keys, state, *, device):
                     "returnCode": result.returncode,
                     "adapterIdentity": identity,
                     "workerRuntime": runtime_identity,
+                    **({"requestedSDK": sdk.identity()} if sdk else {}),
                 },
             )
         if runtime_identity is None:
             raise _error(
                 "DirectX worker did not report its runtime identity.",
                 "worker-output-invalid",
+            )
+        if sdk and not any(
+            item["name"] == "D3D12Core.dll"
+            and item["loaded"]
+            and item.get("sha256") == sdk.sha256
+            for item in runtime_identity["libraries"]
+        ):
+            raise _error(
+                "DirectX worker did not load the selected SDK core.",
+                "sdk-selection-mismatch",
+                requestedSDK=sdk.identity(),
+                workerRuntime=runtime_identity,
             )
         readbacks, addresses = decode_readbacks(output.read_bytes(), allocations)
     indices = {allocation.key: index for index, allocation in enumerate(allocations)}
