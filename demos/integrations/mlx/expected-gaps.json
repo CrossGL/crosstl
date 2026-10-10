@@ -2748,7 +2748,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/reduce.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "90e4fba68a23927e73298d68033b01b3de3e672859f202f9cabbf81e1a6ffde4",
+      "sha256": "8bcfe81a5b123c875147ada2d326f12e2fae8f57d21170e9bedc109fc660dee4",
       "size_bytes": 1477021,
       "entry_identity_fields": [
         "entryPoint",
@@ -2833,7 +2833,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 20752413,
+      "generated_size_bytes_total": 20785038,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "init_reduce_andbool_",
@@ -3599,7 +3599,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/copy.directx-translation.json",
       "schema_version": 2,
-      "sha256": "55c08781a7a883275c1c47eac13169a738c34d1b3727c97cbde970b9c0fe8b92",
+      "sha256": "b2193b870dd8156bd0cc9c89e853363fd5435a1b695bbcde2f94ee68d00db48b",
       "size_bytes": 876810,
       "entry_identity_fields": [
         "entryPoint",
@@ -3753,15 +3753,15 @@
       "dispatch_metadata_shape_count": 8
     },
     "artifacts": {
-      "generated_size_bytes_total": 4859340,
+      "generated_size_bytes_total": 5652430,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "s_copybool_bool_",
-          "sizeBytes": 1201
+          "sizeBytes": 1513
         },
         "maximum": {
           "entryPoint": "gn2_copyfloat16complex64",
-          "sizeBytes": 4544
+          "sizeBytes": 4856
         }
       }
     },

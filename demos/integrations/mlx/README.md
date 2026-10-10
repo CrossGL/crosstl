@@ -850,13 +850,14 @@ The current harness verifies:
   requiring 2,496 non-empty DXIL modules. Together with the Metal and OpenGL
   proofs this closes complete copy translation, reflection, and native
   compiler coverage on all three targets, not numerical execution or MLX host
-  runtime redirection. A subsequent 104-entry reference review reconstructs
-  every previously accepted source and verifies identical strict DXIL and
-  reflected interfaces, preserving 273 materializations and 415 resources.
-  The differences are unused structure fields and, in one bfloat-to-bool
-  helper, a signed/unsigned cast of a nonnegative 16-bit value before masking.
-  The other 2,392 references remain unchanged. This scoped compiler review
-  does not establish current-pin numerical or full upstream-suite parity;
+  runtime redirection. A subsequent full-family reference review reconstructs
+  every previously accepted source and verifies byte-identical strict DXIL
+  and reflected interfaces for all 2,496 pairs, preserving 6,566
+  materializations and 10,036 resources. The changes are unused structure
+  fields and signed/unsigned casts of nonnegative 16-bit values before
+  masking in bfloat-to-bool helpers. The review retains the historical source
+  pin and all launch contracts. Compiler equivalence does not establish
+  current-pin numerical execution or full upstream-suite parity;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 4,122
   discovered current-pinned binary entries from ``binary.metal``. The complete
   contract spans 18 shapes and 11 concrete kernel templates, 24 operators, and
