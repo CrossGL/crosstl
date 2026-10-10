@@ -207,8 +207,21 @@ def test_matrix_native_gates_are_required_without_extra_jobs():
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
     assert (
-        workflow.count("tests/test_translator/test_directx_cooperative_matrix.py") == 1
+        workflow.count("tests/test_translator/test_directx_cooperative_matrix.py") == 2
     )
+    import yaml
+
+    steps = yaml.safe_load(workflow)["jobs"]["portable-host"]["steps"]
+    comparison = next(
+        step
+        for step in steps
+        if step.get("name") == "Compare previous WARP precise arithmetic"
+    )
+    assert (
+        comparison["if"]
+        == "failure() && runner.os == 'Windows' && steps.collective-helpers.outcome == 'failure'"
+    )
+    assert not comparison.get("continue-on-error")
     assert 'CROSTL_REQUIRE_COOPERATIVE_MATRIX_RUNTIME: "1"' in workflow
     assert (
         "CROSTL_REQUIRE_DIRECTX_COOPERATIVE_MATRIX: ${{ runner.os == 'Windows' && '1' || '0' }}"

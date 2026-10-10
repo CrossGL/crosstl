@@ -3273,6 +3273,16 @@ in runtime evidence. Execution is bounded to 120 seconds, with a 256 MiB limit
 per allocation and 512 MiB per request. No shader rewriting, host evaluation or
 independent zero-offset copies substitute for ranged binding.
 
+The worker records its own process ID and loaded ``d3d12.dll``,
+``D3D12Core.dll`` and ``d3d10warp.dll`` paths immediately after device creation.
+``directxRuntime.workerRuntime`` retains this observation separately from the
+launcher's runtime information. The launcher hashes the files at those observed
+paths; these are disk-file identities, not hashes of mapped executable memory.
+Unloaded libraries, path-inspection errors and unreadable files remain explicit.
+The receipt is retained when a later dispatch returns an error; failures before
+device creation can have no receipt. Successful worker execution requires a
+well-formed receipt. Numerical readbacks and guards remain independent checks.
+
 Ranged execution supports shared read-only views, disjoint UAV views and
 cross-dispatch read/write reuse. Simultaneous SRV/CBV reads and UAV writes to one
 allocation within a dispatch remain unsupported by the worker's classic

@@ -237,7 +237,73 @@ def test_view_readback_rejects_invalid_allocations(tmp_path, corruption):
     assert error.value.details["reasonKind"] == "worker-output-invalid"
 
 
-def test_view_executor_reads_the_requested_output_slice(tmp_path, monkeypatch):
+def _runtime_packet(entries=None):
+    if entries is None:
+        entries = [(0, 0, "")] * 3
+    return struct.pack("<III", 0x314C5844, 123, 3) + b"".join(
+        struct.pack("<III", loaded, error, len(path.encode("utf-16-le")) // 2)
+        + path.encode("utf-16-le")
+        for loaded, error, path in entries
+    )
+
+
+def test_worker_runtime_identity_keeps_observed_paths_and_disk_hashes(tmp_path):
+    library = tmp_path / "runtime-\u03b1.dll"
+    library.write_bytes(b"loaded runtime")
+    receipt = tmp_path / "receipt.bin"
+    receipt.write_bytes(
+        _runtime_packet([(1, 0, str(library)), (0, 0, ""), (1, 122, "")])
+    )
+    identity = directx_runtime._worker_runtime_identity(receipt)
+    assert identity == {
+        "processId": 123,
+        "observedAt": "device-created",
+        "libraries": [
+            {
+                "name": "d3d12.dll",
+                "loaded": True,
+                "path": str(library),
+                "sha256": hashlib.sha256(b"loaded runtime").hexdigest(),
+            },
+            {"name": "D3D12Core.dll", "loaded": False},
+            {"name": "d3d10warp.dll", "loaded": True, "pathErrorCode": 122},
+        ],
+    }
+    library.unlink()
+    missing = directx_runtime._worker_runtime_identity(receipt)["libraries"][0]
+    assert missing["loaded"] and "hashError" in missing and "sha256" not in missing
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"",
+        _runtime_packet()[:-1],
+        _runtime_packet() + b"x",
+        b"BAD!" + _runtime_packet()[4:],
+        _runtime_packet()[:4] + bytes(4) + _runtime_packet()[8:],
+        _runtime_packet()[:8] + struct.pack("<I", 4) + _runtime_packet()[12:],
+        _runtime_packet([(2, 0, ""), (0, 0, ""), (0, 0, "")]),
+        _runtime_packet([(0, 1, ""), (0, 0, ""), (0, 0, "")]),
+        _runtime_packet([(0, 0, "path"), (0, 0, ""), (0, 0, "")]),
+        _runtime_packet([(1, 0, ""), (0, 0, ""), (0, 0, "")]),
+        _runtime_packet([(1, 1, "path"), (0, 0, ""), (0, 0, "")]),
+        _runtime_packet([(1, 0, "a\0b"), (0, 0, ""), (0, 0, "")]),
+        _runtime_packet()[:12] + struct.pack("<III", 1, 0, 32768),
+        _runtime_packet()[:12] + struct.pack("<III", 1, 0, 1) + b"\x00\xd8",
+        bytes(256 * 1024 + 1),
+    ],
+)
+def test_worker_runtime_identity_rejects_malformed_receipts(tmp_path, payload):
+    receipt = tmp_path / "receipt.bin"
+    receipt.write_bytes(payload)
+    with pytest.raises(RuntimeAdapterSetupError) as caught:
+        directx_runtime._worker_runtime_identity(receipt)
+    assert caught.value.details["reasonKind"] == "worker-output-invalid"
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_view_executor_reads_the_requested_output_slice(tmp_path, monkeypatch, failure):
     nodes, allocations, keys = _plan((_request(tmp_path),))
     monkeypatch.setattr(directx_runtime, "_worker", lambda: Path("worker.exe"))
 
@@ -251,14 +317,26 @@ def test_view_executor_reads_the_requested_output_slice(tmp_path, monkeypatch):
                 payload[offset + 16 + 12 : offset + 16 + 20] = struct.pack("<2f", 3, 6)
             offset += 16 + size
         Path(command[2]).write_bytes(payload)
-        return subprocess.CompletedProcess(command, 0, b"", b"")
+        Path(command[2] + ".runtime").write_bytes(_runtime_packet())
+        return subprocess.CompletedProcess(
+            command, int(failure), b"", b"dispatch failed" if failure else b""
+        )
 
     monkeypatch.setattr(directx_runtime, "_run", execute)
     state = SimpleNamespace(details={})
+    if failure:
+        with pytest.raises(RuntimeAdapterDispatchError) as caught:
+            directx_runtime.execute_buffer_views(
+                nodes, allocations, keys, state, device=_device()
+            )
+        assert caught.value.details["workerRuntime"]["processId"] == 123
+        assert state.details["directxRuntime"]["workerRuntime"]["processId"] == 123
+        return
     result = directx_runtime.execute_buffer_views(
         nodes, allocations, keys, state, device=_device()
     )
     assert result["result"]["values"] == [3.0, 6.0]
+    assert state.details["directxRuntime"]["workerRuntime"]["processId"] == 123
     assert len(state.details["directxRuntime"]["allocations"]) == 3
     assert state.details["directxRuntime"][
         "adapterIdentity"
@@ -404,6 +482,22 @@ def test_adapter_selection_failures_retain_requested_identity(tmp_path, monkeypa
     )
     assert caught.value.details["stderr"] == "adapter identity is ambiguous\n"
     assert caught.value.details["returnCode"] == 1
+    assert caught.value.details["workerRuntime"] is None
+
+
+def test_successful_worker_requires_runtime_identity(tmp_path, monkeypatch):
+    nodes, allocations, keys = _plan((_request(tmp_path),))
+    monkeypatch.setattr(directx_runtime, "_worker", lambda: Path("worker.exe"))
+
+    def execute(command, **kwargs):
+        Path(command[2]).write_bytes(_response(allocations))
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(directx_runtime, "_run", execute)
+    with pytest.raises(RuntimeAdapterSetupError, match="did not report"):
+        directx_runtime.execute_buffer_views(
+            nodes, allocations, keys, None, device=_device()
+        )
 
 
 SOURCE = """cbuffer Params : register(b0) { uint multiplier; };
@@ -430,6 +524,15 @@ def test_directx_buffer_views_execute(tmp_path, constant_offset, retain_native_p
         for item in state.details["directxRuntime"]["allocations"]
     }
     assert by_id["params"]["views"][0]["byteOffset"] == constant_offset
+    identity = state.details["directxRuntime"]["workerRuntime"]
+    assert identity["processId"] != os.getpid()
+    assert identity["observedAt"] == "device-created"
+    libraries = {item["name"]: item for item in identity["libraries"]}
+    assert libraries["d3d12.dll"]["loaded"]
+    assert len(libraries["d3d12.dll"]["sha256"]) == 64
+    if "Basic Render Driver" in state.details["directxRuntime"]["device"]:
+        assert libraries["d3d10warp.dll"]["loaded"]
+        assert len(libraries["d3d10warp.dll"]["sha256"]) == 64
 
 
 @pytest.fixture
@@ -785,3 +888,42 @@ def test_required_native_view_gate_keeps_existing_windows_runner():
     )
     assert upload["if"] == "always() && runner.os == 'Windows'"
     assert upload["with"]["if-no-files-found"] == "error"
+
+
+def test_warp_comparison_does_not_replace_required_native_gate():
+    import yaml
+
+    root = Path(__file__).resolve().parents[2]
+    workflow = yaml.safe_load(
+        (root / ".github/workflows/demo-project-testing.yml").read_text()
+    )
+    job = workflow["jobs"]["portable-host"]
+    steps = job["steps"]
+    required = next(
+        item
+        for item in steps
+        if item.get("name") == "Validate collective helper arguments"
+    )
+    comparison = next(
+        item
+        for item in steps
+        if item.get("name") == "Compare previous WARP precise arithmetic"
+    )
+    assert required["id"] == "collective-helpers"
+    assert not required.get("continue-on-error") and not comparison.get(
+        "continue-on-error"
+    )
+    assert "test_directx_cooperative_matrix.py" in required["run"]
+    assert (
+        comparison["if"]
+        == "failure() && runner.os == 'Windows' && steps.collective-helpers.outcome == 'failure'"
+    )
+    assert comparison["env"]["CROSTL_REQUIRE_DIRECTX_COOPERATIVE_MATRIX"] == "1"
+    assert comparison["timeout-minutes"] == 5
+    command = comparison["run"]
+    assert "--timeout-seconds 180" in command and "-n auto" in command
+    assert "precise_scalar_control_executes or software_matrix_executes" in command
+    assert "e5fe5de661ce98b58ef9cfb736e73c0a7a2623d3bbf5f14839b2d55566d87e40" in command
+    assert "finally {" in command and "Copy-Item $backup $installed -Force" in command
+    assert "-ne $originalDigest" in command and "exit $result" in command
+    assert steps.index(required) < steps.index(comparison)

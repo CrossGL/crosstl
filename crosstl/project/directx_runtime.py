@@ -270,6 +270,77 @@ def decode_readbacks(payload, allocations):
     return results, addresses
 
 
+def _worker_runtime_identity(path):
+    """Decode paths observed by the dispatch process and hash their disk files."""
+    names = ("d3d12.dll", "D3D12Core.dll", "d3d10warp.dll")
+    with path.open("rb") as source:
+        payload = source.read(256 * 1024 + 1)
+    if len(payload) > 256 * 1024:
+        raise _error(
+            "DirectX runtime identity exceeds its size limit.", "worker-output-invalid"
+        )
+    stream = io.BytesIO(payload)
+
+    def read(size):
+        value = stream.read(size)
+        if len(value) != size:
+            raise _error(
+                "DirectX runtime identity is truncated.", "worker-output-invalid"
+            )
+        return value
+
+    version, process_id, count = struct.unpack("<III", read(12))
+    if version != 0x314C5844 or not process_id or count != len(names):
+        raise _error(
+            "DirectX runtime identity is incompatible.", "worker-output-invalid"
+        )
+    libraries = []
+    for name in names:
+        loaded, error, length = struct.unpack("<III", read(12))
+        if (
+            loaded not in (0, 1)
+            or length >= 32768
+            or (not loaded and (error or length))
+            or (loaded and not error and not length)
+            or (error and length)
+        ):
+            raise _error(
+                "DirectX runtime library identity is invalid.", "worker-output-invalid"
+            )
+        record = {"name": name, "loaded": bool(loaded)}
+        if error:
+            record["pathErrorCode"] = error
+        if length:
+            try:
+                filename = read(2 * length).decode("utf-16-le")
+            except UnicodeError as exc:
+                raise _error(
+                    "DirectX runtime library path is invalid.", "worker-output-invalid"
+                ) from exc
+            if "\0" in filename:
+                raise _error(
+                    "DirectX runtime library path contains NUL.",
+                    "worker-output-invalid",
+                )
+            record["path"] = filename
+            try:
+                record["sha256"] = hashlib.sha256(
+                    Path(filename).read_bytes()
+                ).hexdigest()
+            except OSError as exc:
+                record["hashError"] = str(exc)
+        libraries.append(record)
+    if stream.read(1):
+        raise _error(
+            "DirectX runtime identity has trailing data.", "worker-output-invalid"
+        )
+    return {
+        "processId": process_id,
+        "observedAt": "device-created",
+        "libraries": libraries,
+    }
+
+
 def _device_identity(device):
     name = getattr(device, "name", None)
     hardware = getattr(device, "is_hardware", None)
@@ -311,6 +382,7 @@ def execute_buffer_views(dispatches, allocations, view_keys, state, *, device):
     with tempfile.TemporaryDirectory(prefix="crosstl-directx-dispatch-") as directory:
         request = Path(directory) / "request.bin"
         output = Path(directory) / "readbacks.bin"
+        runtime_path = output.with_name(output.name + ".runtime")
         request.write_bytes(payload)
         result = _run(
             [
@@ -326,6 +398,19 @@ def execute_buffer_views(dispatches, allocations, view_keys, state, *, device):
             ],
             timeout=120,
         )
+        runtime_identity = (
+            _worker_runtime_identity(runtime_path) if runtime_path.is_file() else None
+        )
+        runtime_details = {
+            "runtime": "native-buffer-views",
+            "timeoutSeconds": 120,
+            "device": identity["name"],
+            "adapterIdentity": identity,
+            "requestSHA256": hashlib.sha256(payload).hexdigest(),
+            "workerRuntime": runtime_identity,
+        }
+        if isinstance(getattr(state, "details", None), dict):
+            state.details["directxRuntime"] = runtime_details
         if result.returncode or not output.is_file():
             raise RuntimeAdapterDispatchError(
                 "DirectX buffer-view execution failed.",
@@ -335,7 +420,13 @@ def execute_buffer_views(dispatches, allocations, view_keys, state, *, device):
                     "stderr": result.stderr.decode(errors="replace"),
                     "returnCode": result.returncode,
                     "adapterIdentity": identity,
+                    "workerRuntime": runtime_identity,
                 },
+            )
+        if runtime_identity is None:
+            raise _error(
+                "DirectX worker did not report its runtime identity.",
+                "worker-output-invalid",
             )
         readbacks, addresses = decode_readbacks(output.read_bytes(), allocations)
     indices = {allocation.key: index for index, allocation in enumerate(allocations)}
@@ -353,21 +444,12 @@ def execute_buffer_views(dispatches, allocations, view_keys, state, *, device):
                     encoding=view.readback_encoding,
                 )
     if isinstance(getattr(state, "details", None), dict):
-        state.details["directxRuntime"] = {
-            "runtime": "native-buffer-views",
-            "timeoutSeconds": 120,
-            "device": identity["name"],
-            "adapterIdentity": identity,
-            "requestSHA256": hashlib.sha256(payload).hexdigest(),
-            "allocations": [
-                {
-                    **description,
-                    "gpuVirtualAddress": address,
-                    "readbackSHA256": hashlib.sha256(data).hexdigest(),
-                }
-                for description, address, data in zip(
-                    descriptions, addresses, readbacks
-                )
-            ],
-        }
+        runtime_details["allocations"] = [
+            {
+                **description,
+                "gpuVirtualAddress": address,
+                "readbackSHA256": hashlib.sha256(data).hexdigest(),
+            }
+            for description, address, data in zip(descriptions, addresses, readbacks)
+        ]
     return results

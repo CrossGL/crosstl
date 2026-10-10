@@ -287,9 +287,12 @@ def test_gather_native_gate_is_required():
             "demos/integrations/mlx/tests/kernels/test_current_gather.py",
         )
     job = yaml.safe_load(workflow)["jobs"]["portable-host"]
+    # The failure-only runtime comparison cannot run on the successful gather path.
+    # tests/test_ci_workflows.py separately checks both complete path budgets.
     deadlines = [
         int(value)
         for item in job["steps"]
+        if "failure()" not in item.get("if", "")
         for value in re.findall(r"--timeout-seconds (\d+)", item.get("run", ""))
     ]
     assert sum(deadlines) + 1800 < job["timeout-minutes"] * 60 <= 360 * 60

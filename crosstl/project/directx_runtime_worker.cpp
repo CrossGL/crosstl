@@ -156,6 +156,34 @@ void check(HRESULT status, const char* operation) {
         throw std::runtime_error(message.str());
     }
 }
+void write_runtime_libraries(const std::filesystem::path& path) {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output) throw std::runtime_error("cannot open runtime identity output");
+    write_integer(output, 0x314c5844u, 4);
+    write_integer(output, GetCurrentProcessId(), 4);
+    write_integer(output, 3, 4);
+    for (const auto* name : {L"d3d12.dll", L"D3D12Core.dll", L"d3d10warp.dll"}) {
+        HMODULE module = GetModuleHandleW(name);
+        std::vector<wchar_t> filename(32768);
+        DWORD length = 0, error = 0;
+        if (module) {
+            length = GetModuleFileNameW(module, filename.data(),
+                                        static_cast<DWORD>(filename.size()));
+            if (!length || length >= filename.size()) {
+                error = GetLastError();
+                if (!error) error = ERROR_INSUFFICIENT_BUFFER;
+                length = 0;
+            }
+        }
+        write_integer(output, module ? 1 : 0, 4);
+        write_integer(output, error, 4);
+        write_integer(output, length, 4);
+        for (DWORD index = 0; index < length; ++index)
+            write_integer(output, static_cast<uint16_t>(filename[index]), 2);
+    }
+    output.close();
+    if (!output) throw std::runtime_error("cannot write runtime identity output");
+}
 struct Device {
     ComPtr<ID3D12Device> device;
     ComPtr<ID3D12CommandQueue> queue;
@@ -263,8 +291,11 @@ struct Device {
     }
 };
 
-void execute(const Request& request, std::ostream& output, const AdapterIdentity& identity) {
+void execute(const Request& request, std::ostream& output, const AdapterIdentity& identity,
+             const std::filesystem::path& runtime_path) {
     Device runtime(identity);
+    // Inspect this process after device creation, not the Python launcher.
+    write_runtime_libraries(runtime_path);
     std::vector<ComPtr<ID3D12Resource>> buffers, uploads;
     std::vector<D3D12_RESOURCE_STATES> states(request.allocations.size(), D3D12_RESOURCE_STATE_COPY_DEST);
     for (const auto& payload : request.allocations) {
@@ -428,7 +459,9 @@ int main(int argc, char** argv) {
             adapter_number(argv[6]), adapter_number(argv[7]), adapter_number(argv[8])};
         std::ofstream output(std::filesystem::path(argv[2]), std::ios::binary | std::ios::trunc);
         if (!output) throw std::runtime_error("cannot open output");
-        execute(request, output, identity);
+        auto runtime_path = std::filesystem::path(argv[2]);
+        runtime_path += ".runtime";
+        execute(request, output, identity, runtime_path);
         if (!output) throw std::runtime_error("cannot write output");
 #else
         throw std::runtime_error("Direct3D 12 execution requires Windows");

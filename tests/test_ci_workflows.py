@@ -3226,13 +3226,39 @@ def test_windows_validator_install_retries_and_uses_direct_lunarg_fallback():
 def test_project_native_job_deadlines_fit_runner_limit(job, overhead):
     workflow = yaml.safe_load((WORKFLOW_DIR / "demo-project-testing.yml").read_text())
     definition = workflow["jobs"][job]
-    deadlines = [
-        int(value)
-        for step in definition["steps"]
-        for value in re.findall(r"--timeout-seconds (\d+)", step.get("run", ""))
-    ]
-    assert deadlines
-    assert sum(deadlines) + overhead < definition["timeout-minutes"] * 60 <= 360 * 60
+
+    def deadline(step):
+        return sum(
+            int(value)
+            for value in re.findall(r"--timeout-seconds (\d+)", step.get("run", ""))
+        )
+
+    steps = definition["steps"]
+    failure_steps = [step for step in steps if "failure()" in step.get("if", "")]
+    normal_deadline = sum(deadline(step) for step in steps if step not in failure_steps)
+    paths = [normal_deadline]
+    if job == "portable-host":
+        assert len(failure_steps) == 1
+        comparison = failure_steps[0]
+        assert (
+            comparison["if"]
+            == "failure() && runner.os == 'Windows' && steps.collective-helpers.outcome == 'failure'"
+        )
+        failed_index = next(
+            index
+            for index, step in enumerate(steps)
+            if step.get("id") == "collective-helpers"
+        )
+        assert steps.index(comparison) > failed_index
+        # Later success-only tests cannot run on this diagnostic failure path.
+        paths.append(
+            sum(deadline(step) for step in steps[: failed_index + 1])
+            + comparison["timeout-minutes"] * 60
+        )
+    else:
+        assert not failure_steps
+    assert normal_deadline
+    assert max(paths) + overhead < definition["timeout-minutes"] * 60 <= 360 * 60
 
 
 def test_native_arithmetic_selection_retains_every_device_test():
