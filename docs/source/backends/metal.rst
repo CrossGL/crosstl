@@ -185,13 +185,13 @@ Native controls cover default, fast and precise wrappers and single evaluation
 of arguments. The Metal target identifies whole-expression constructors from
 the syntax tree before omitting a redundant expected-type conversion.
 
-Byte-valued struct initializers convert expression carriers back to the declared
-``char`` or ``uchar`` storage type. The same rule covers byte vectors, aliases,
-materialized generic fields, nested aggregates and fixed arrays; omitted byte
+Narrow integer struct initializers convert expression carriers back to the declared
+``char``, ``uchar``, ``short`` or ``ushort`` storage type. The same rule covers
+vectors, aliases, materialized generic fields, nested aggregates and fixed arrays; omitted
 fields are zero-initialized. It does not widen aggregate storage or change
 arithmetic promotion. Native controls compare original and generated Metal over
-all byte input values, checking signedness, field sizes, zero initialization,
-single evaluation and guarded outputs.
+all byte input values and 16-bit boundary and truncation cases, checking signedness,
+field sizes, zero initialization, single evaluation and guarded outputs.
 
 Member-template deduction retains the primary argument list of materialized
 structs, including when an enabled partial specialization supplies the body.

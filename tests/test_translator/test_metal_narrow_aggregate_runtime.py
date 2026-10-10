@@ -116,9 +116,9 @@ def test_narrow_aggregate_storage_executes_original_and_generated(
     )
 
 
-@pytest.mark.parametrize("scalar", ["char", "uchar"])
+@pytest.mark.parametrize("scalar", TYPES)
 @pytest.mark.parametrize("form", ["call", "positional", "named", "default"])
-def test_byte_struct_constructor_fields_use_native_storage(scalar, form):
+def test_narrow_struct_constructor_fields_use_native_storage(scalar, form):
     initializer = {
         "call": "Pair(index, value)",
         "positional": "Pair { index, value }",
@@ -188,16 +188,30 @@ kernel void aggregate_initializers(const device uint* inputs [[buffer(0)]],
 """
 
 
+def _initializer_inputs(scalar):
+    if scalar in {"char", "uchar"}:
+        return list(range(256))
+    return [0, 1, 32767, 32768, 65535, 65536, 65538, 65539, 4294967295]
+
+
+def _narrow_value(value, scalar):
+    bits = 8 if scalar in {"char", "uchar"} else 16
+    value &= (1 << bits) - 1
+    if scalar in {"char", "short"} and value >= (1 << (bits - 1)):
+        value -= 1 << bits
+    return value
+
+
 def _initializer_case(root, scalar, width, form):
     source = _initializer_source(scalar, width, form)
     _, descriptor, package = _package(root, "metal", "uint", (1, 1, 1), source=source)
-    values = list(range(256))
+    values = _initializer_inputs(scalar)
     expected = [-123456] * 4
     for tid, raw in enumerate(values):
         for lane in range(width):
-            byte = (raw + lane * 37) & 255
-            expected.append(byte - 256 if scalar == "char" and byte >= 128 else byte)
-        expected.extend([tid, tid + 1, 0, 8])
+            expected.append(_narrow_value(raw + lane * 37, scalar))
+        size = 16 if scalar in {"short", "ushort"} and width > 2 else 8
+        expected.extend([tid, tid + 1, 0, size])
     expected.extend([-123456] * 4)
     inputs = {
         "inputs": {"dtype": "uint32", "shape": [len(values)], "values": values},
@@ -217,7 +231,7 @@ def _initializer_case(root, scalar, width, form):
     )
 
 
-@pytest.mark.parametrize("scalar", ["char", "uchar"])
+@pytest.mark.parametrize("scalar", TYPES)
 @pytest.mark.parametrize("width", [1, 2, 3, 4])
 @pytest.mark.parametrize("form", ["plain", "alias", "generic", "nested"])
 def test_narrow_initializers_compile_through_public_and_saved_crossgl(
@@ -240,7 +254,7 @@ def test_narrow_initializers_compile_through_public_and_saved_crossgl(
         _compile(text, "metal", directory)
 
 
-@pytest.mark.parametrize("scalar", ["char", "uchar"])
+@pytest.mark.parametrize("scalar", TYPES)
 @pytest.mark.parametrize("width", [1, 2, 3, 4])
 @pytest.mark.parametrize("form", ["plain", "alias", "generic", "nested"])
 def test_narrow_initializers_execute_original_and_generated(
@@ -316,13 +330,13 @@ kernel void aggregate_array_initializers(const device uint* inputs [[buffer(0)]]
 }}
 """
     _, descriptor, package = _package(root, "metal", "uint", (1, 1, 1), source=source)
-    values = list(range(256))
+    values = _initializer_inputs(scalar)
     expected = [-123456] * 4
     for tid, raw in enumerate(values):
         for lane in range(4):
-            byte = (raw + lane * 37) & 255
-            expected.append(byte - 256 if scalar == "char" and byte >= 128 else byte)
-        expected.extend([0, 0, 0, 0, tid, tid + 1, 8])
+            expected.append(_narrow_value(raw + lane * 37, scalar))
+        size = 12 if scalar in {"short", "ushort"} else 8
+        expected.extend([0, 0, 0, 0, tid, tid + 1, size])
     expected.extend([-123456] * 4)
     inputs = {
         "inputs": {"dtype": "uint32", "shape": [len(values)], "values": values},
@@ -342,9 +356,11 @@ kernel void aggregate_array_initializers(const device uint* inputs [[buffer(0)]]
     )
 
 
-@pytest.mark.parametrize("scalar", ["char", "uchar"])
+@pytest.mark.parametrize("scalar", TYPES)
 @pytest.mark.parametrize("form", ["array", "matrix", "vector-array", "vector-braces"])
-def test_byte_array_initializers_execute_original_and_generated(tmp_path, scalar, form):
+def test_narrow_array_initializers_execute_original_and_generated(
+    tmp_path, scalar, form
+):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required native aggregate initialization")
     assert sys.platform == "darwin", "aggregate initialization requires Metal"
@@ -358,9 +374,9 @@ def test_byte_array_initializers_execute_original_and_generated(tmp_path, scalar
     )
 
 
-@pytest.mark.parametrize("scalar", ["char", "uchar"])
+@pytest.mark.parametrize("scalar", TYPES)
 @pytest.mark.parametrize("form", ["array", "matrix", "vector-array", "vector-braces"])
-def test_byte_array_initializers_translate_and_compile(tmp_path, scalar, form):
+def test_narrow_array_initializers_translate_and_compile(tmp_path, scalar, form):
     source, request, _ = _array_initializer_case(tmp_path, scalar, form)
     for name, text in (
         ("original", source),
@@ -371,8 +387,8 @@ def test_byte_array_initializers_translate_and_compile(tmp_path, scalar, form):
         _compile(text, "metal", directory)
 
 
-@pytest.mark.parametrize("scalar", ["char", "uchar"])
-def test_byte_field_initializer_executes_once(tmp_path, scalar):
+@pytest.mark.parametrize("scalar", TYPES)
+def test_narrow_field_initializer_executes_once(tmp_path, scalar):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required native aggregate initialization")
     assert sys.platform == "darwin", "aggregate initialization requires Metal"

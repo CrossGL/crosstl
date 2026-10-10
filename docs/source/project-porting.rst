@@ -5076,8 +5076,12 @@ an unbounded call cannot reuse a proof from a bounded call. Unknown mutations,
 recursive or ambiguous constructors, unmodeled control flow and arithmetic
 outside the source integer domain do not establish a range. These proofs permit
 representable OpenGL indices, not arbitrary buffer-length or host-dispatch claims.
-Scalar source guards also establish bounds inside conditional branches and the
-bodies of preconditioned loops. Comparison promotions and intermediate arithmetic
+Source guards also establish bounds for scalars and integer fields of local or
+by-value records, including nested records, inside conditional branches and the
+bodies of preconditioned loops. Field proofs retain their owning record: writes
+to unrelated fields preserve them, while writes to the field or its parent
+invalidate them. Pointer-backed, reference and escaped records do not acquire
+new field guard proofs. Comparison promotions and intermediate arithmetic
 must preserve the source values; mixed signed/unsigned comparisons cannot imply
 nonnegativity when they wrap negative operands. Each loop iteration uses its
 condition, not just its initializer. Mutation invalidates earlier bounds, escaped

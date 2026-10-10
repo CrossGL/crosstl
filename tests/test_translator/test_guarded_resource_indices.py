@@ -85,7 +85,111 @@ REJECTED = {
 }
 
 
+RECORD_CASES = (
+    "record-member",
+    "record-nested",
+    "record-copy",
+    "record-helper",
+    "record-loop",
+    "record-while",
+    "record-wide",
+    "record-unsigned",
+    "record-narrow",
+    "record-unsigned-narrow",
+    "record-sibling",
+    "record-else",
+    "record-swizzle",
+)
+RECORD_REJECTED = (
+    "record-mutation",
+    "record-parent-mutation",
+    "record-call-mutation",
+    "record-nested-mutation",
+    "record-shadow",
+    "record-unsigned-promotion",
+    "record-wide-unbounded",
+    "record-after-loop",
+    "record-other-field",
+    "record-loop-mutation",
+)
+
+
+def _record_source(case):
+    dtype = {
+        "record-wide": "long",
+        "record-wide-unbounded": "long",
+        "record-unsigned": "uint",
+        "record-narrow": "short",
+        "record-unsigned-narrow": "ushort",
+    }.get(case, "int")
+    member = "r" if case == "record-swizzle" else "count"
+    declarations = f"""
+struct Metadata {{ {dtype} {member}; int x; }};
+struct Envelope {{ Metadata meta; }};
+struct Cursor {{ constant uint* values; }};
+uint load_value(Cursor cursor) {{ return cursor.values[0]; }}
+"""
+    init = f"Metadata info{{{dtype}(counts[tid & 3u]), counts[(tid + 1u) & 3u]}};"
+    field = f"info.{member}"
+    if case in {"record-nested", "record-nested-mutation"}:
+        init = "Envelope info{Metadata{counts[tid & 3u], 0}};"
+        field = "info.meta.count"
+    elif case == "record-copy":
+        init += "Metadata copied = info;"
+        field = "copied.count"
+    guard = f"{field} >= 0 && {field} < 4"
+    if case in {"record-unsigned", "record-unsigned-narrow"}:
+        guard = f"{field} < 4u"
+    elif case == "record-unsigned-promotion":
+        guard = f"{field} >= 0u"
+    elif case == "record-wide-unbounded":
+        guard = f"{field} >= 0"
+    access = f"Cursor cursor{{values + {field}}}; result = load_value(cursor);"
+    before = {
+        "record-mutation": "info.count = -1;",
+        "record-parent-mutation": "info = Metadata{-1, 0};",
+        "record-nested-mutation": "info.meta = Metadata{-1, 0};",
+        "record-shadow": "Metadata info{-1, 0};",
+        "record-sibling": "info.x = -1;",
+        "record-call-mutation": "change(info);",
+    }.get(case, "")
+    if case == "record-call-mutation":
+        declarations += "void change(thread Metadata& info) { info.count = -1; }"
+    elif case == "record-other-field":
+        access = "Cursor cursor{values + info.x}; result = load_value(cursor);"
+    body = f"uint result = 7; if ({guard}) {{ {before} {access} }}"
+    if case in {"record-loop", "record-while", "record-loop-mutation"}:
+        access = f"Cursor cursor{{values + {field}}}; result += load_value(cursor);"
+        if case == "record-loop-mutation":
+            access = f"{field} = -1; " + access
+        loop = f"for (; {guard}; --{field}) {{ {access} }}"
+        if case == "record-while":
+            loop = f"while ({guard}) {{ {access} --{field}; }}"
+        body = "uint result = 0; " + loop
+    elif case == "record-after-loop":
+        body = f"uint result = 0; while ({guard}) {{ --{field}; }} {access}"
+    elif case == "record-else":
+        body = f"uint result = 7; if ({field} < 0 || {field} >= 4) {{ result = 7; }} else {{ {access} }}"
+    elif case == "record-helper":
+        declarations += f"uint guarded_value(constant uint* values, Metadata info) {{ {body} return result; }}"
+        body = "uint result = guarded_value(values, info);"
+    return f"""#include <metal_stdlib>
+using namespace metal;
+{declarations}
+kernel void guarded(constant uint* values [[buffer(0)]],
+                    constant int* counts [[buffer(1)]],
+                    device uint* results [[buffer(2)]],
+                    uint tid [[thread_position_in_grid]]) {{
+    {init}
+    {body}
+    results[4u + (tid & 3u)] = result;
+}}
+"""
+
+
 def _source(case):
+    if case.startswith("record-"):
+        return _record_source(case)
     body = BODIES.get(case, REJECTED.get(case))
     helper = (
         "void change(thread int& value) { value = -1; }"
@@ -112,16 +216,25 @@ def _request(root, target, case):
         root, target, "uint", (1, 1, 1), source=_source(case), software_subgroups=False
     )
     guard = 0x5A1B2C3D
-    words = [0, 3, 19, 36] if "loop" in case or case == "while" else [7, 3, 11, 17]
+    words = (
+        [0, 3, 19, 36] if "loop" in case or case.endswith("while") else [7, 3, 11, 17]
+    )
 
     def value(words, dtype="uint32"):
         return {"dtype": dtype, "shape": [len(words)], "values": words}
 
+    indices = (
+        [65535, 65536, 65538, 65539]
+        if case in {"record-narrow", "record-unsigned-narrow"}
+        else [-1, 0, 2, 3]
+    )
     inputs = _bound_values(
         descriptor,
         {
             "values": value([3, 5, 11, 17]),
-            "indices": value([-1, 0, 2, 3], "int32"),
+            ("counts" if case.startswith("record-") else "indices"): value(
+                indices, "int32"
+            ),
             "results": value([guard] * 4 + [0] * 4 + [guard] * 4),
         },
     )
@@ -140,14 +253,14 @@ def _request(root, target, case):
     return request, expected
 
 
-@pytest.mark.parametrize("case", BODIES)
+@pytest.mark.parametrize("case", [*BODIES, *RECORD_CASES])
 @pytest.mark.parametrize("target", ["opengl", "directx", "metal"])
 def test_guarded_resource_indices_compile(tmp_path, target, case):
     request, _ = _request(tmp_path, target, case)
     _compile(request.artifact_path.read_text(), target, tmp_path)
 
 
-@pytest.mark.parametrize("case", BODIES)
+@pytest.mark.parametrize("case", [*BODIES, *RECORD_CASES])
 def test_guarded_resource_indices_execute(tmp_path, case):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required guarded index execution")
@@ -163,7 +276,7 @@ def test_guarded_resource_indices_execute(tmp_path, case):
     _execute(request, expected, tmp_path, **options)
 
 
-@pytest.mark.parametrize("case", REJECTED)
+@pytest.mark.parametrize("case", [*REJECTED, *RECORD_REJECTED])
 def test_guarded_resource_indices_reject_unproven_access(tmp_path, case):
     (tmp_path / "source.metal").write_text(_source(case))
     report = translate_project(
@@ -235,6 +348,110 @@ def test_guard_bounds_use_lexical_types_not_caller_types():
         "void check(int index) { if (index >= 0) { observe(index); } }",
         {"index": "uint64_t"},
     ) == [(0, 2147483647)]
+
+
+@pytest.mark.parametrize(
+    "source,field,expected",
+    [
+        (
+            "void check(Metadata item) { if (item.count >= 0 && item.count < 4) { observe(item.count); } }",
+            "item.count",
+            (0, 3),
+        ),
+        (
+            "void check(Envelope item) { if (item.meta.count >= 0 && item.meta.count < 4) { observe(item.meta.count); } }",
+            "item.meta.count",
+            (0, 3),
+        ),
+        (
+            "void check(Wide item) { if (item.count < 4u) { observe(item.count); } }",
+            "item.count",
+            (0, 3),
+        ),
+        (
+            "void check(Metadata item) { if (item.count >= 0u) { observe(item.count); } }",
+            "item.count",
+            None,
+        ),
+        (
+            "void check(Metadata item) { if (item.count >= 0 && item.count < 4) { item.x = -1; observe(item.count); } }",
+            "item.count",
+            (0, 3),
+        ),
+        (
+            "void check(Metadata item) { if (item.count >= 0 && item.count < 4) { item.count = -1; observe(item.count); } }",
+            "item.count",
+            (-1, -1),
+        ),
+        (
+            "void check(inout Metadata item) { if (item.count >= 0 && item.count < 4) { observe(item.count); } }",
+            "item.count",
+            None,
+        ),
+        (
+            "void check(Metadata& item) { if (item.count >= 0 && item.count < 4) { observe(item.count); } }",
+            "item.count",
+            None,
+        ),
+        (
+            "void check(Metadata item) { int* alias = &item.count; if (item.count >= 0 && item.count < 4) { *alias = -1; observe(item.count); } }",
+            "item.count",
+            None,
+        ),
+        (
+            "void check(Metadata item) { int& alias = item.count; if (item.count >= 0 && item.count < 4) { alias = -1; observe(item.count); } }",
+            "item.count",
+            None,
+        ),
+        (
+            "void check(Metadata item) { Metadata& alias = item; if (item.count >= 0 && item.count < 4) { alias.count = -1; observe(item.count); } }",
+            "item.count",
+            None,
+        ),
+    ],
+)
+def test_record_guard_domains_preserve_field_ownership(source, field, expected):
+    generator = GLSLCodeGen()
+    generator.struct_member_types = {
+        "Metadata": {"count": "int", "x": "int"},
+        "Envelope": {"meta": "Metadata"},
+        "Wide": {"count": "uint64_t"},
+    }
+    ast = parse("shader Guards { " + source + " }")
+    function = generator.collect_functions(ast)[0]
+    parameter = function.parameters[0]
+    generator.local_variable_source_types = {"item": parameter.param_type}
+    generator.annotate_glsl_control_flow_intervals(function)
+    observations = [
+        getattr(node.arguments[0], "_glsl_control_flow_intervals", {}).get(field)
+        for node in generator.walk_ast(function.body)
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.function, IdentifierNode)
+        and node.function.name == "observe"
+    ]
+    assert observations == [expected]
+
+
+def test_record_guard_domains_ignore_shadowed_caller_types():
+    generator = GLSLCodeGen()
+    generator.struct_member_types = {
+        "Metadata": {"count": "int"},
+        "Wide": {"count": "uint64_t"},
+    }
+    generator.local_variable_source_types = {"item": "Wide"}
+    ast = parse(
+        "shader Guards { void check(Metadata item) { "
+        "if (item.count >= 0 && item.count < 4) { observe(item.count); } } }"
+    )
+    generator.annotate_glsl_control_flow_intervals(generator.collect_functions(ast)[0])
+    observation = next(
+        node
+        for node in generator.walk_ast(ast)
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.function, IdentifierNode)
+        and node.function.name == "observe"
+    )
+    assert observation.arguments[0]._glsl_control_flow_intervals["item.count"] == (0, 3)
 
 
 def test_guarded_resource_indices_ci_contract():

@@ -4030,11 +4030,11 @@ class MetalCodeGen:
         )
 
     def generate_struct_constructor_argument(self, expr, field_type):
-        """Convert promoted byte values back to the aggregate's physical field type."""
+        """Convert promoted narrow values back to the aggregate's physical field type."""
         raw_type = self.resolve_metal_type_alias(self.type_name_string(field_type))
         base_type, array_suffix = split_array_type_suffix(raw_type)
         native = self.metal_native_narrow_bitcast_storage_type(base_type)
-        if native is None or not re.fullmatch(r"u?char[234]?", native):
+        if native is None or not re.fullmatch(r"(?:u?char|u?short)[234]?", native):
             return None
         if expr is None:
             return "{}" if array_suffix else f"{native}(0)"

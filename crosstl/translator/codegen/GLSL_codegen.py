@@ -9008,7 +9008,7 @@ class GLSLCodeGen:
 
         def refine_guard(condition, intervals, expected):
             source_types = {}
-            identifiers = []
+            expressions = []
             cast_names = {
                 id(node.function)
                 for node in self.walk_ast(condition)
@@ -9016,6 +9016,9 @@ class GLSLCodeGen:
                 and self.glsl_integer_scalar_cast_call(node) is not None
             }
             for node in self.walk_ast(condition):
+                if isinstance(node, MemberAccessNode):
+                    expressions.append(node)
+                    continue
                 if not isinstance(node, IdentifierNode) or id(node) in cast_names:
                     continue
                 binding = lexical["declarations"].get(
@@ -9024,21 +9027,44 @@ class GLSLCodeGen:
                 if binding is None or binding["source_type"] is None:
                     return dict(intervals)
                 source_types[node.name] = binding["source_type"]
-                identifiers.append(node)
+                expressions.append(node)
             with self.glsl_lexical_source_type_scope(source_types):
                 guarded = dict(intervals)
                 seeded_domains = {}
-                for node in identifiers:
-                    if node.name in escaped_names:
+                for node in expressions:
+                    owner = node
+                    while isinstance(owner, MemberAccessNode):
+                        if self.glsl_declared_struct_member_interval_key(owner) is None:
+                            break
+                        owner = owner.object
+                    if not isinstance(owner, IdentifierNode):
                         continue
+                    if owner.name in escaped_names:
+                        continue
+                    if isinstance(node, MemberAccessNode):
+                        binding = lexical["declarations"][
+                            lexical["reference_bindings"][id(owner)]
+                        ]
+                        owner_type = self.type_name_string(binding["source_type"]) or ""
+                        if (
+                            "*" in owner_type
+                            or "&" in owner_type
+                            or set(
+                                self.glsl_parameter_qualifiers(binding["node"])
+                            ).intersection({"out", "inout"})
+                        ):
+                            continue
+                        name = self.glsl_declared_struct_member_interval_key(node)
+                    else:
+                        name = node.name
                     domain = self.glsl_integer_type_domain(node, allow_wide=True)
                     if domain is not None:
-                        current = guarded.get(node.name)
+                        current = guarded.get(name)
                         if current is None or not (
                             domain.minimum <= current[0] <= current[1] <= domain.maximum
                         ):
-                            guarded[node.name] = (domain.minimum, domain.maximum)
-                            seeded_domains[node.name] = guarded[node.name]
+                            guarded[name] = (domain.minimum, domain.maximum)
+                            seeded_domains[name] = guarded[name]
                 refined = self.glsl_private_pointer_refined_condition_intervals(
                     condition,
                     guarded,
