@@ -11679,8 +11679,8 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     }
     assert arccos["artifacts"]["directx"] == {
         "target_entry_point": "CSMain",
-        "sha256": "4562332ad4fb951478ca419180ccdf3589f74b9e0956226badc6de877d343239",
-        "size_bytes": 4175,
+        "sha256": "650f82a01efe37a49d223a4ba2ccf3f5f595c80e8ec14619ad1ff0fb3406b05d",
+        "size_bytes": 5630,
         "native_runtime": {
             "platform": "windows-latest",
             "runtime": "direct3d-12-warp",
@@ -11694,8 +11694,8 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     }
     assert arccos["artifacts"]["metal"] == {
         "target_entry_point": "v_ArcCosfloat32float32",
-        "sha256": "89f3c54496eb122be45dd67963b51e7cef4f1111151dbe2b7d6a923d32f0c1ba",
-        "size_bytes": 3107,
+        "sha256": "b1aef8dc745343835414e8a0fe98a463bc4ca5b6de3212f82a6f1e8f5a9d1351",
+        "size_bytes": 3131,
         "host_dispatch_workgroup_size": [1, 1, 1],
         "native_roundtrip": {
             "platform": "macos-latest",
@@ -11710,8 +11710,8 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     }
     assert arccos["artifacts"]["opengl"] == {
         "target_entry_point": "main",
-        "sha256": "280864c39e88198cd5e660127db453877349fadb090cb37f022bcc46300660b3",
-        "size_bytes": 5965,
+        "sha256": "bc420d338b5c995e110dea0f98c9ffd3aa0ae8c77f1ea4bbe13df5acd4462b9e",
+        "size_bytes": 6450,
         "native_runtime": {
             "platform": "ubuntu-latest",
             "runtime": "mesa-opengl-4.3",
@@ -11756,7 +11756,7 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     assert "preserving SPIR-V `NoContraction`" in readme
     assert "target intrinsic's unspecified accuracy" in readme
     assert "The Square and ArcCos entries now also round-trip through Metal" in readme
-    assert "3,107-byte artifact" in readme
+    assert f'{arccos["artifacts"]["metal"]["size_bytes"]:,}-byte artifact' in readme
     assert "Both exact artifacts compile with ``xcrun -sdk macosx metal -c``" in (
         readme
     )
@@ -11813,7 +11813,7 @@ def test_unary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "7355f1cd1879cfd9d5cba1082316392a1268829c51432a12cc1c6f357c82be1e",
+        "sha256": "77c5b7edacaf5f6a28b72dde68967ad4e14332330b042caca355b6a90052085a",
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12222,7 +12222,7 @@ def test_unary_directx_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
         "schema_version": 2,
-        "sha256": "1e679df1aea24c1f9c1cb0092ff8711ecfaf8bb38cdef4d2703ae2b9392951a9",
+        "sha256": "00cff2227ccd883b32fb4bd1160a68847baeb04e84eb6a6ae14ab4d4c22b48c0",
         "size_bytes": 319838,
         "entry_identity_fields": [
             "entryPoint",
@@ -12339,7 +12339,7 @@ def test_unary_directx_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 3775423,
+        "generated_size_bytes_total": 3776623,
         "generated_size_range": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 2262},
             "maximum": {

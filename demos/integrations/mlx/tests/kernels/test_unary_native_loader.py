@@ -57,13 +57,13 @@ SCALAR_UNARY_METAL_CONTRACT_PATH = (
     / "unary.scalar-metal-roundtrip.json"
 )
 SCALAR_UNARY_METAL_CONTRACT_SHA256 = (
-    "38c80c1458c57b44989f9ff6a4ac972a5d7cc047e4971dd5945deea4e79b0f4d"
+    "53cd4a5c74d79951930e372173cc05456af1c4107db64a84ba20bb1b43b8ca0d"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "7355f1cd1879cfd9d5cba1082316392a1268829c51432a12cc1c6f357c82be1e"
+    "77c5b7edacaf5f6a28b72dde68967ad4e14332330b042caca355b6a90052085a"
 )
 
 
@@ -136,15 +136,15 @@ ARCCOS_WORKLOAD = UnaryWorkload(
     generated_artifacts={
         "directx": {
             "sha256": (
-                "656cb5ddadb5f710e360ff14ceac70892c7168ff23ab6ac065067693962836bd"
+                "650f82a01efe37a49d223a4ba2ccf3f5f595c80e8ec14619ad1ff0fb3406b05d"
             ),
-            "sizeBytes": 4430,
+            "sizeBytes": 5630,
         },
         "metal": {
             "sha256": (
-                "89f3c54496eb122be45dd67963b51e7cef4f1111151dbe2b7d6a923d32f0c1ba"
+                "b1aef8dc745343835414e8a0fe98a463bc4ca5b6de3212f82a6f1e8f5a9d1351"
             ),
-            "sizeBytes": 3107,
+            "sizeBytes": 3131,
         },
         "opengl": {
             "sha256": (
@@ -211,22 +211,36 @@ def test_scalar_metal_references_match_complete_family(entry):
     assert {key: complete[key] for key in entry} == entry
 
 
-def test_scalar_arccos_metal_reference_metadata_matches_workload():
-    identity = ARCCOS_WORKLOAD.generated_artifacts["metal"]
-    for entries in (
-        SCALAR_UNARY_METAL_ARTIFACT_IDENTITIES,
-        UNARY_METAL_ARTIFACT_IDENTITIES,
-    ):
-        entry = entries[ARCCOS_WORKLOAD.entry_point]
-        assert {key: entry[key] for key in identity} == identity
+@pytest.mark.parametrize("target", ["directx", "metal", "opengl"])
+def test_scalar_arccos_reference_metadata_matches_workload(target):
+    identity = ARCCOS_WORKLOAD.generated_artifacts[target]
     demo_root = ROOT / "demos" / "integrations" / "mlx"
+    contract_name = (
+        "unary.metal-roundtrip.json"
+        if target == "metal"
+        else f"unary.{target}-translation.json"
+    )
+    contract = json.loads(
+        (demo_root / "contracts" / contract_name).read_text(encoding="utf-8")
+    )
+    entries = [
+        entry
+        for entry in contract["entries"]
+        if entry["entryPoint"] == ARCCOS_WORKLOAD.entry_point
+    ]
+    assert len(entries) == 1
+    assert {key: entries[0][key] for key in identity} == identity
+    if target == "metal":
+        scalar = SCALAR_UNARY_METAL_ARTIFACT_IDENTITIES[ARCCOS_WORKLOAD.entry_point]
+        assert {key: scalar[key] for key in identity} == identity
     gaps = json.loads((demo_root / "expected-gaps.json").read_text(encoding="utf-8"))
-    artifact = gaps["unary_arccos_native_runtime_status"]["artifacts"]["metal"]
+    artifact = gaps["unary_arccos_native_runtime_status"]["artifacts"][target]
     assert artifact["sha256"] == identity["sha256"]
     assert artifact["size_bytes"] == identity["sizeBytes"]
-    readme = (demo_root / "README.md").read_text(encoding="utf-8")
-    assert identity["sha256"] in readme
-    assert f'{identity["sizeBytes"]:,}-byte artifact' in readme
+    if target == "metal":
+        readme = (demo_root / "README.md").read_text(encoding="utf-8")
+        assert identity["sha256"] in readme
+        assert f'{identity["sizeBytes"]:,}-byte artifact' in readme
 
 
 def _metal_roundtrip_workload(entry: dict) -> UnaryWorkload:
@@ -752,7 +766,7 @@ def test_current_mlx_unary_metal_contract_is_complete_and_classified():
         "intermediate": "crossgl",
         "hostInterfaceStatus": "ready",
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 1796713,
+        "generatedSizeBytesTotal": 1804791,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absfloat16float16", "sizeBytes": 1052},
             "maximum": {
@@ -768,6 +782,9 @@ def test_current_mlx_unary_metal_contract_is_complete_and_classified():
     assert contract["artifactContract"] == expected_artifact_contract
 
     entries = UNARY_METAL_ENTRIES
+    assert sum(entry["sizeBytes"] for entry in entries) == (
+        contract["artifactContract"]["generatedSizeBytesTotal"]
+    )
     assert len(entries) == 877
     assert len({entry["entryPoint"] for entry in entries}) == 877
     assert [entry["entryPoint"] for entry in entries] == sorted(

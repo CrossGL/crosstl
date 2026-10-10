@@ -3065,12 +3065,12 @@ artifacts also retain a one-thread workgroup, the source and output buffers, and
 the size constant in their reflected runtime interfaces. Deterministic artifact
 hashes and the pinned upstream source hash are checked before packaging.
 
-The HLSL Square loader reference and current-pin profiled bfloat Sigmoid
-reference include private placeholder fields in otherwise empty structs.
+The HLSL Square and ArcCos loader references and current-pin profiled bfloat
+Sigmoid reference include private placeholder fields in otherwise empty structs.
 Removing only those declarations reproduces each previously accepted checksum.
 Strict DXC compilation of the old and new sources produces byte-identical
 modules; computations, bindings and dispatch requirements are unchanged.
-Only these two reviewed references are updated. The required Windows numerical
+Only these reviewed references are updated. The required Windows numerical
 tests, including Sigmoid's 65,282 non-NaN inputs and output guards, remain
 unchanged; this comparison does not establish whole-corpus execution coverage.
 
@@ -3084,8 +3084,8 @@ proof is separate from the complete historical OpenGL corpus review in
 The Square and ArcCos entries now also round-trip through Metal. Square is one
 1,015-byte artifact with SHA-256
 ``244e34b7aa58b7abe7c3ff09f3f51f3aa283a42bf7585bf88200590767032495``;
-ArcCos is one 3,107-byte artifact with SHA-256
-``89f3c54496eb122be45dd67963b51e7cef4f1111151dbe2b7d6a923d32f0c1ba``.
+ArcCos is one 3,131-byte artifact with SHA-256
+``b1aef8dc745343835414e8a0fe98a463bc4ca5b6de3212f82a6f1e8f5a9d1351``.
 Entry reachability retains only the selected ``struct Square`` or ``struct
 ArcCos`` and its call helpers, with no unrelated unary struct, complex ArcCos
 body, or illegal ``[[static]]`` member. The ArcCos artifact retains the
@@ -3107,6 +3107,16 @@ upstream kernel passes the same inputs within the existing absolute ``1e-6`` and
 relative ``1e-5`` tolerances; its finite results differ by at most two ULPs.
 This review changes only ``v_ArcCosfloat32float32``. It does not accept other
 unary fingerprints or establish complex ArcCos equivalence.
+
+The scalar ArcCos Metal reference also includes an unused-parameter annotation
+on the stateless operator's ``self`` argument. Removing only that annotation
+reproduces the previously accepted source checksum. Both versions compile with
+warnings treated as errors to identical Metal libraries, retain identical
+resource interfaces, and produce identical results for the same 8,211 inputs
+and eight guards. The legacy unary manifest's byte total is calculated from
+its recorded entry sizes; changing that total does not accept additional
+artifact fingerprints. These controls use legacy revision ``846d1762`` and do
+not replace validation of the active MLX revision or the full runtime port.
 
 The five unsigned-32-bit Sign references were reviewed separately across ``v_``,
 ``v2_``, ``vn_``, ``gn1_`` and ``gn4large_`` dispatch shapes. Their only historical
