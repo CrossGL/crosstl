@@ -4791,6 +4791,30 @@ Configured values are checked against the declaration's scalar source type. If
 both selectors address the same declaration, their values must agree; a
 name/id conflict fails the artifact instead of choosing one silently.
 
+Set ``[project].freeze_specialization_constants = true`` (or
+``ProjectConfig(freeze_specialization_constants=True, ...)``) to make configured
+Boolean specialization values immutable for a Metal, DirectX or OpenGL artifact.
+The default is false. Source declarations without configured values retain their
+existing deferred/default behavior. Non-Boolean frozen values and other targets
+are rejected explicitly.
+
+Frozen values are materialized before target capability checks. The shared pass
+discards only branches proven inactive by Boolean literals, frozen names, logical
+operators and Boolean equality; it preserves lexical blocks and leaves general
+arithmetic and unknown conditions intact. A same-named local disables that name's
+folding for the enclosing function. Entry selection then removes helpers that are
+no longer reachable. This is not authorization to narrow a live wide index.
+
+The generated source contains a versioned frozen-value header. Reflection,
+package inspection and native-loader descriptors retain it; package inspection
+rejects conflicting or missing metadata. The verified native dispatch API rejects
+conflicting overrides and does not send frozen values to a backend specialization
+API. Executable C callback generation currently rejects these descriptors because
+those callbacks do not yet enforce immutable specialization values. Ordinary
+descriptor declarations and the verified Python native dispatch path remain
+available. A frozen variant proves only its selected configuration, not every
+runtime specialization of the original source.
+
 Repository-wide numeric IDs and source names do not need to be unique. Use
 ``[project.source_specialization_constants."<repo-relative-pattern>"]`` to
 override specialization selectors only for matching translation units. For

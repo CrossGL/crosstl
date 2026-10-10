@@ -969,6 +969,12 @@ def _execution_specialization_descriptors(
     result = []
     for index, constant in enumerate(values):
         path = f"$.specializationConstants[{index}]"
+        if "frozen" in constant:
+            raise NativeLoaderABIError(
+                "execution-frozen-specialization-unsupported",
+                "Frozen specializations require the verified native dispatch API; C execution callbacks do not yet enforce this contract.",
+                path=path,
+            )
         constant_id = constant.get("id", constant.get("constantId"))
         name = constant.get("name")
         if constant_id is None and not isinstance(name, str):

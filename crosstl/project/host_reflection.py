@@ -20,6 +20,7 @@ from crosstl.project.integral_literals import (
 )
 from crosstl.project.storage_record_layout import storage_record_layout
 from crosstl.project.uniform_layout import std140_block_layout
+from crosstl.translator.frozen_specializations import parse_frozen_specializations
 from crosstl.translator.resource_identity import (
     apply_resource_identities,
     parse_resource_identities,
@@ -249,6 +250,31 @@ def _reflect_resource_identities(artifact_path, record):
                     f"Resource identity reflection failed: {exc}",
                     severity="error",
                     details={"contract": "source-resource-identity"},
+                ),
+            ),
+        )
+    try:
+        frozen = parse_frozen_specializations(artifact_path.read_text(encoding="utf-8"))
+        live = record["specializationConstants"]
+        if any(
+            item["id"] == other.get("id") or item["name"] == other.get("name")
+            for item in frozen
+            for other in live
+        ):
+            raise ValueError("A frozen specialization remains runtime-specializable.")
+        record["specializationConstants"] = [*live, *frozen]
+        record["specializationConstantCount"] = len(live) + len(frozen)
+    except ValueError as exc:
+        return empty_host_interface_record(
+            "failed",
+            parser=record["parser"],
+            artifact_format=record["artifactFormat"],
+            diagnostics=(
+                ReflectionDiagnostic(
+                    REFLECTION_PARSE_FAILED,
+                    f"Frozen specialization reflection failed: {exc}",
+                    severity="error",
+                    details={"contract": "frozen-specialization"},
                 ),
             ),
         )

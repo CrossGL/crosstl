@@ -276,7 +276,9 @@ def test_formatter_preserves_resource_metadata_comments(monkeypatch):
     )
     assert style == {
         "BasedOnStyle": "Microsoft",
-        "CommentPragmas": "^ (IWYU pragma:|crosstl-resource-origin:)",
+        "CommentPragmas": (
+            "^ (IWYU pragma:|crosstl-resource-origin:|crosstl-frozen-specializations:)"
+        ),
     }
 
 

@@ -38,6 +38,11 @@ from crosstl.project.runtime_verification import (
 from crosstl.project.storage_record_layout import validate_storage_record_layout
 from crosstl.project.uniform_layout import validate_std140_block_layout
 from crosstl.translator.dispatch_regions import DispatchRegion
+from crosstl.translator.frozen_specializations import (
+    FROZEN_SPECIALIZATION_PREFIX,
+    frozen_specializations,
+    parse_frozen_specializations,
+)
 from crosstl.translator.resource_storage import encoded_storage_dtype
 
 _ERROR_PREFIX = "project.native-loader-dispatch"
@@ -241,6 +246,25 @@ def build_native_loader_dispatch_request(
     artifact_path, package_root = _verified_artifact(
         normalized["artifact"], runtime_package_root
     )
+    try:
+        declared_frozen = frozen_specializations(normalized["specializationConstants"])
+        with artifact_path.open("rb") as artifact_file:
+            first_line = artifact_file.readline(65537)
+        reflected_frozen = (
+            parse_frozen_specializations(first_line.decode("utf-8"))
+            if first_line.startswith(FROZEN_SPECIALIZATION_PREFIX.encode("ascii"))
+            else []
+        )
+        if declared_frozen != reflected_frozen:
+            raise ValueError(
+                "Descriptor frozen values differ from the artifact header."
+            )
+    except (ValueError, UnicodeError) as exc:
+        raise NativeLoaderDispatchError(
+            "frozen-specialization-invalid",
+            str(exc),
+            path="$.specializationConstants",
+        ) from exc
 
     inputs = _typed_values(input_values, role="input")
     outputs = _typed_values(output_values, role="output")
@@ -320,6 +344,7 @@ def build_native_loader_dispatch_request(
             },
             "scalarLayout": _ordered_scalar_layout(normalized["scalarLayout"]),
             "provenance": copy.deepcopy(normalized["provenance"]),
+            **({"frozenSpecializations": declared_frozen} if declared_frozen else {}),
         },
     )
     artifact = _runtime_artifact(normalized)
@@ -1818,6 +1843,30 @@ def _specialization_constants(
                     },
                 )
 
+        if "frozen" in constant:
+            if (
+                constant["frozen"] is not True
+                or not has_descriptor_value
+                or dtype != "bool"
+            ):
+                raise NativeLoaderDispatchError(
+                    "frozen-specialization-invalid",
+                    "Frozen specialization metadata is invalid.",
+                    path=path,
+                )
+            if has_explicit and explicit_values[constant_id] != constant["value"]:
+                raise NativeLoaderDispatchError(
+                    "frozen-specialization-override",
+                    "A frozen specialization cannot be changed at dispatch.",
+                    path=f"$.specializationValues[{constant_id}]",
+                    details={
+                        "id": constant_id,
+                        "name": constant.get("name"),
+                        "frozenValue": constant["value"],
+                        "suppliedValue": explicit_values[constant_id],
+                    },
+                )
+            continue
         if has_explicit:
             resolved_value = explicit_values[constant_id]
             source = "explicit"

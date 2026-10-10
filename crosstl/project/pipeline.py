@@ -121,6 +121,11 @@ from crosstl.translator.entry_discovery import (
     SourceEntryDiscoveryDiagnostic,
     SourceEntryLocation,
 )
+from crosstl.translator.frozen_specializations import (
+    fold_frozen_specialization_branches,
+    frozen_specialization_header,
+    frozen_specializations,
+)
 from crosstl.translator.plugin_loader import discover_backend_plugins
 from crosstl.translator.source_registry import (
     SOURCE_REGISTRY,
@@ -1516,6 +1521,7 @@ REPORT_PROJECT_FIELDS = frozenset(
         "variantDefineCounts",
         "specializationConstants",
         "specializationConstantCount",
+        "freezeSpecializationConstants",
         "sourceSpecializationConstants",
         "sourceSpecializationPatternCount",
         "sourceSpecializationConstantCounts",
@@ -7603,6 +7609,7 @@ class ProjectConfig:
     source_options: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     variants: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     specialization_constants: Mapping[str, Any] = field(default_factory=dict)
+    freeze_specialization_constants: bool = False
     source_specialization_constants: Mapping[str, Mapping[str, Any]] = field(
         default_factory=dict
     )
@@ -7803,6 +7810,10 @@ class ProjectConfig:
                 field_name=f"ProjectConfig.variants.{name}",
             )
         object.__setattr__(self, "variants", variants)
+        if type(self.freeze_specialization_constants) is not bool:
+            raise ValueError(
+                "ProjectConfig.freeze_specialization_constants must be a boolean"
+            )
         object.__setattr__(
             self,
             "specialization_constants",
@@ -8917,6 +8928,9 @@ class ProjectPortabilityReport:
                 "specializationConstantCount": len(
                     self.config.specialization_constants
                 ),
+                "freezeSpecializationConstants": (
+                    self.config.freeze_specialization_constants
+                ),
                 "sourceSpecializationConstants": {
                     pattern: dict(sorted(values.items()))
                     for pattern, values in sorted(
@@ -9222,6 +9236,9 @@ def load_project_config(
         variants=_variant_defines(variants),
         specialization_constants=specialization_constants,
         source_specialization_constants=source_specialization_constants,
+        freeze_specialization_constants=project.get(
+            "freeze_specialization_constants", False
+        ),
         variant_specialization_constants=_variant_specialization_constants(variants),
         workgroup_size=workgroup_size,
         variant_workgroup_sizes=_variant_workgroup_sizes(variants),
@@ -26140,6 +26157,25 @@ def _resolved_project_specialization_constants(
             record["value"] = concrete_value
             record["status"] = "override"
             record["valueProvenance"] = dict(provenance)
+            if config.freeze_specialization_constants:
+                if (
+                    declaration.source_type != "bool"
+                    or type(concrete_value) is not bool
+                    or target not in {"metal", "opengl", "directx"}
+                ):
+                    diagnostics.append(
+                        _specialization_diagnostic(
+                            declaration,
+                            unit,
+                            target,
+                            variant,
+                            code="project.translate.frozen-specialization-unsupported",
+                            message="Frozen specializations require Boolean constants and Metal, DirectX or OpenGL targets.",
+                        )
+                    )
+                else:
+                    record["frozen"] = True
+                    record["deferred"] = False
         elif not deferred and declaration.has_default:
             valid, concrete_value, reason = _specialization_value_for_type(
                 declaration.default_value, declaration.source_type
@@ -26219,6 +26255,13 @@ def _resolved_project_specialization_constants(
         "concreteCount": sum("concreteValue" in record for record in records),
         "source": "shared-crossgl-specialization",
     }
+    if any(record.get("frozen") for record in records):
+        metadata["mode"] = "concrete-crossgl-variant"
+        if status != "failed" and not any(record["deferred"] for record in records):
+            metadata["status"] = "concrete"
+        metadata["frozenCount"] = sum(
+            record.get("frozen") is True for record in records
+        )
     return records, metadata, diagnostics
 
 
@@ -26665,7 +26708,7 @@ def _scope_artifact_specialization_metadata_for_entry(
     scoped_constants = [
         dict(constant)
         for constant in constants
-        if constant.get("name") in reachable_names
+        if constant.get("name") in reachable_names or constant.get("frozen") is True
     ]
     if not scoped_constants:
         artifact.pop("specializationConstants", None)
@@ -26810,6 +26853,7 @@ def _crossgl_ast_for_project_target(
     defines: Mapping[str, str],
     source_options: Mapping[str, Any],
     source_is_materialized: bool = False,
+    frozen_constants: Sequence[Mapping[str, Any]] = (),
 ) -> Any:
     register_default_sources()
     source_spec = SOURCE_REGISTRY.get(source_backend)
@@ -26864,7 +26908,7 @@ def _crossgl_ast_for_project_target(
     ast.annotations["dispatch_region_intermediate_hash"] = hashlib.sha256(
         intermediate.encode("utf-8")
     ).hexdigest()
-    return ast
+    return fold_frozen_specialization_branches(ast, frozen_constants)
 
 
 def _project_workgroup_execution_metadata(
@@ -27918,6 +27962,10 @@ def _finalize_project_generated_artifact(
     report_output_path: Path | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
     report_output_path = report_output_path or output_path
+    header = frozen_specialization_header(artifact.get("specializationConstants", []))
+    if header:
+        generated_source = header + generated_source
+        output_path.write_text(generated_source, encoding="utf-8")
     mojo_diagnostics = _mojo_unresolved_target_construct_diagnostics(
         artifact, generated_source
     )
@@ -28187,6 +28235,7 @@ def _translate_project_impl(
             source_options=config.source_options,
             variants=config.variants,
             specialization_constants=config.specialization_constants,
+            freeze_specialization_constants=config.freeze_specialization_constants,
             source_specialization_constants=(config.source_specialization_constants),
             variant_specialization_constants=(config.variant_specialization_constants),
             workgroup_size=config.workgroup_size,
@@ -28939,6 +28988,7 @@ def _translate_project_impl(
                             source_is_materialized=(
                                 template_materialization is not None
                             ),
+                            frozen_constants=specialization_constants,
                         )
                         workgroup_execution = _project_workgroup_execution_metadata(
                             ast=crossgl_ast,
@@ -29217,6 +29267,9 @@ def _translate_project_impl(
                                 )
                     if generated_source is None and (
                         index_range_assertions
+                        or any(
+                            record.get("frozen") for record in specialization_constants
+                        )
                         or workgroup_access_assertions
                         or software_subgroup_width is not None
                         or cooperative_matrix_software_lowering is not None
@@ -29236,6 +29289,7 @@ def _translate_project_impl(
                             source_is_materialized=(
                                 template_materialization is not None
                             ),
+                            frozen_constants=specialization_constants,
                         )
                         if dispatch_region is not None:
                             _validate_project_dispatch_region_execution(
@@ -35830,6 +35884,42 @@ def _runtime_package_inspection_binding(
             package_path, artifact, host_interface
         )
     )
+    frozen_mismatch = False
+    try:
+        declared_frozen = frozen_specializations(
+            _record_sequence(artifact.get("specializationConstants"))
+        )
+        reflected_frozen = frozen_specializations(
+            _record_sequence(host_interface.get("specializationConstants"))
+        )
+        declared_interface = artifact.get("hostInterface")
+        interface_frozen = (
+            frozen_specializations(
+                _record_sequence(declared_interface.get("specializationConstants"))
+            )
+            if isinstance(declared_interface, Mapping)
+            else []
+        )
+        frozen_mismatch = (
+            declared_frozen != reflected_frozen or interface_frozen != reflected_frozen
+        )
+    except ValueError:
+        frozen_mismatch = True
+    frozen_errors = [
+        record
+        for record in host_interface.get("diagnosticRecords", [])
+        if record.get("details", {}).get("contract") == "frozen-specialization"
+    ]
+    if frozen_mismatch or frozen_errors:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-package-inspection.frozen-specialization-invalid",
+                message="Frozen specialization declarations differ from the packaged artifact.",
+                location=SourceLocation(file=str(package_path)),
+                check_kind="runtime-package-inspection",
+            )
+        )
     return {
         "id": _runtime_package_inspection_binding_id(artifact),
         "status": "ready" if not diagnostics else "failed",
@@ -47434,6 +47524,9 @@ def _project_config_for_scan_validation(
         },
         variants=variants,
         specialization_constants=dict(specialization_constants),
+        freeze_specialization_constants=project.get(
+            "freezeSpecializationConstants", False
+        ),
         source_specialization_constants={
             str(pattern): dict(values)
             for pattern, values in source_specialization_constants.items()
@@ -50726,6 +50819,9 @@ def _project_config_for_include_validation(
         defines=dict(defines),
         variants=variants,
         specialization_constants=dict(specialization_constants),
+        freeze_specialization_constants=project.get(
+            "freezeSpecializationConstants", False
+        ),
         source_specialization_constants={
             str(pattern): dict(values)
             for pattern, values in source_specialization_constants.items()
@@ -53358,6 +53454,8 @@ def _project_metadata_contract_reasons(
 
     specialization_constants = project.get("specializationConstants")
     specialization_constants_are_mapping = isinstance(specialization_constants, Mapping)
+    if type(project.get("freezeSpecializationConstants", False)) is not bool:
+        reasons.append("project.freezeSpecializationConstants must be a boolean")
     if _optional_project_field(
         project, "specializationConstants", required=require_full_metadata
     ):
