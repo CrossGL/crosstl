@@ -224,7 +224,7 @@ def test_matrix_native_gates_are_required_without_extra_jobs():
     )
     assert (
         comparison["if"]
-        == "failure() && runner.os == 'Windows' && steps.collective-helpers.outcome == 'failure'"
+        == "failure() && runner.os == 'Windows' && !matrix.warp_qualification && steps.collective-helpers.outcome == 'failure'"
     )
     assert not comparison.get("continue-on-error")
     assert 'CROSTL_REQUIRE_COOPERATIVE_MATRIX_RUNTIME: "1"' in workflow
