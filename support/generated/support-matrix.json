@@ -121,6 +121,7 @@
       "tests": {
         "paths": [
           "tests/test_translator/test_codegen/test_directx_codegen.py",
+          "tests/test_translator/test_directx_subgroup_overloads.py",
           "tests/test_translator/test_integer_subgroup_shuffles.py",
           "tests/test_translator/test_integer_literals.py",
           "tests/test_translator/test_directx_toolchain_paths.py",
@@ -169,7 +170,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 2055
+        "test_count": 2063
       },
       "translator_codegen": {
         "exists": true,
@@ -290,6 +291,7 @@
         "paths": [
           "tests/test_translator/test_arithmetic_conversions.py",
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
+          "tests/test_translator/test_directx_subgroup_overloads.py",
           "tests/test_translator/test_integer_subgroup_shuffles.py",
           "tests/test_translator/test_integer_literals.py",
           "tests/test_translator/test_wide_integer_bfloat.py",
@@ -341,7 +343,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 2293
+        "test_count": 2301
       },
       "translator_codegen": {
         "exists": true,
@@ -710,6 +712,7 @@
       "tests": {
         "paths": [
           "tests/test_translator/test_codegen/test_metal_codegen.py",
+          "tests/test_translator/test_directx_subgroup_overloads.py",
           "tests/test_translator/test_integer_subgroup_shuffles.py",
           "tests/test_translator/test_integer_literals.py",
           "tests/test_translator/test_narrow_integer_conversions.py",
@@ -755,7 +758,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2486
+        "test_count": 2494
       },
       "translator_codegen": {
         "exists": true,

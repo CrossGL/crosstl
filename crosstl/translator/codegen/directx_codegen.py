@@ -2068,6 +2068,7 @@ class HLSLCodeGen:
     )
     HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES = frozenset({"float", "int", "uint"})
     HLSL_SOFTWARE_SUBGROUP_SHUFFLE_TYPES = HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES | {
+        "uint2",
         "int16_t",
         "uint16_t",
         "int64_t",
@@ -4881,19 +4882,18 @@ class HLSLCodeGen:
                     return False
         return True
 
-    def hlsl_software_subgroup_contains_work(self, root, dependent_names):
+    def hlsl_software_subgroup_contains_work(self, root, dependent_calls):
         if self.hlsl_software_subgroup_operation_records(root):
             return True
         return any(
-            isinstance(node, FunctionCallNode)
-            and self.function_call_name(node) in dependent_names
+            isinstance(node, FunctionCallNode) and id(node) in dependent_calls
             for node in self.walk_ast(root)
         )
 
     def validate_hlsl_software_subgroup_control_flow(
         self,
         function,
-        dependent_names,
+        dependent_calls,
         uniform_names,
         call_mutations,
         mutable_names,
@@ -4937,7 +4937,7 @@ class HLSLCodeGen:
                     isinstance(node, ReturnNode) for node in self.walk_ast(statement)
                 )
                 has_work = self.hlsl_software_subgroup_contains_work(
-                    statement, dependent_names
+                    statement, dependent_calls
                 )
                 if not has_return and not has_work:
                     continue
@@ -5027,7 +5027,7 @@ class HLSLCodeGen:
                 if any(
                     isinstance(child, TernaryOpNode)
                     and self.hlsl_software_subgroup_contains_work(
-                        child, dependent_names
+                        child, dependent_calls
                     )
                     for child in self.walk_ast(statement)
                 ):
@@ -5046,7 +5046,7 @@ class HLSLCodeGen:
                     )
                     in {"&&", "||"}
                     and self.hlsl_software_subgroup_contains_work(
-                        child, dependent_names
+                        child, dependent_calls
                     )
                     for child in self.walk_ast(statement)
                 ):
@@ -5063,7 +5063,7 @@ class HLSLCodeGen:
                     for call in self.walk_ast(statement):
                         if (
                             isinstance(call, FunctionCallNode)
-                            and self.function_call_name(call) in dependent_names
+                            and id(call) in dependent_calls
                         ):
                             uniform_call_arguments[id(call)] = {
                                 index
@@ -5178,48 +5178,82 @@ class HLSLCodeGen:
                 )
 
         functions = self.collect_functions(ast)
-        functions_by_name = {}
-        duplicate_names = set()
+        definitions = {}
         for function in functions:
             name = getattr(function, "name", None)
             if not name:
                 continue
-            if name in functions_by_name:
-                duplicate_names.add(name)
-            else:
-                functions_by_name[name] = function
-        direct_names = {
-            name
-            for name, function in functions_by_name.items()
+            key = (name, self.hlsl_source_function_signature(function))
+            if key not in definitions or getattr(function, "body", None) is not None:
+                definitions[key] = function
+        functions = list(definitions.values())
+        functions_by_id = {id(function): function for function in functions}
+        functions_by_name = {}
+        for function in functions:
+            functions_by_name.setdefault(function.name, []).append(function)
+        direct_ids = {
+            id(function)
+            for function in functions
             if self.hlsl_software_subgroup_operation_records(
                 getattr(function, "body", None)
             )
         }
-        dependent_names = set(direct_names)
+        resolved_calls = {}
+        unresolved_calls = []
+        edges = {id(function): [] for function in functions}
+        for function in functions:
+            lexical = self.hlsl_function_lexical_type_bindings(function)
+            for call in self.walk_ast(getattr(function, "body", None)):
+                if not isinstance(call, FunctionCallNode):
+                    continue
+                name = self.function_call_name(call)
+                if name not in functions_by_name:
+                    continue
+                previous_source_types = self.local_variable_source_types
+                previous_types = self.local_variable_types
+                source_types = lexical["call_source_types"].get(id(call), {})
+                self.local_variable_source_types = source_types
+                self.local_variable_types = source_types
+                try:
+                    callee = self.resolve_hlsl_function_overload(
+                        name, call.arguments, call_node=call
+                    )
+                except DirectXMappedOverloadError:
+                    callee = None
+                finally:
+                    self.local_variable_source_types = previous_source_types
+                    self.local_variable_types = previous_types
+                if callee is None:
+                    unresolved_calls.append((function, call))
+                    continue
+                key = (callee.name, self.hlsl_source_function_signature(callee))
+                callee = definitions[key]
+                resolved_calls[id(call)] = callee
+                edges[id(function)].append((call, id(callee)))
+
+        dependent_ids = set(direct_ids)
         changed = True
         while changed:
             changed = False
-            for name, function in functions_by_name.items():
-                if name in dependent_names:
+            for function_id, calls in edges.items():
+                if function_id in dependent_ids:
                     continue
-                if any(
-                    isinstance(node, FunctionCallNode)
-                    and self.function_call_name(node) in dependent_names
-                    for node in self.walk_ast(getattr(function, "body", None))
-                ):
-                    dependent_names.add(name)
+                if any(target in dependent_ids for _call, target in calls):
+                    dependent_ids.add(function_id)
                     changed = True
-        if duplicate_names & dependent_names:
-            ambiguous = sorted(duplicate_names & dependent_names)[0]
-            raise self.hlsl_software_subgroup_error(
-                "DirectX software subgroup lowering cannot prove the overloaded "
-                f"helper '{ambiguous}'",
-                workgroup_size=concrete_workgroup_size,
-                reason="helper-identity-ambiguous",
-                source_location=getattr(entry_function, "source_location", None),
-            )
-        entry_name = getattr(entry_function, "name", None)
-        if entry_name not in dependent_names:
+        for _function, call in unresolved_calls:
+            name = self.function_call_name(call)
+            if any(
+                id(candidate) in dependent_ids for candidate in functions_by_name[name]
+            ):
+                raise self.hlsl_software_subgroup_error(
+                    "DirectX software subgroup lowering cannot resolve one source "
+                    f"overload for helper '{name}'",
+                    workgroup_size=concrete_workgroup_size,
+                    reason="helper-identity-ambiguous",
+                    source_location=getattr(call, "source_location", None),
+                )
+        if id(entry_function) not in dependent_ids:
             raise self.hlsl_software_subgroup_error(
                 "DirectX software subgroup operations are not reached from the "
                 "compute entry point",
@@ -5231,27 +5265,27 @@ class HLSLCodeGen:
         # Process callers before callees, intersecting facts from every call.
         # Recursive collective graphs cannot establish a finite barrier schedule.
         call_edges = {}
-        incoming = {name: 0 for name in dependent_names}
-        for name in sorted(dependent_names):
-            call_edges[name] = [
-                node
-                for node in self.walk_ast(functions_by_name[name].body)
-                if isinstance(node, FunctionCallNode)
-                and self.function_call_name(node) in dependent_names
+        incoming = {function_id: 0 for function_id in dependent_ids}
+        for function_id in functions_by_id:
+            if function_id not in dependent_ids:
+                continue
+            call_edges[function_id] = [
+                (call, target)
+                for call, target in edges[function_id]
+                if target in dependent_ids
             ]
-            for call in call_edges[name]:
-                incoming[self.function_call_name(call)] += 1
-        pending = sorted(name for name, count in incoming.items() if count == 0)
-        ordered_names = []
+            for _call, target in call_edges[function_id]:
+                incoming[target] += 1
+        pending = [key for key in functions_by_id if incoming.get(key) == 0]
+        ordered_ids = []
         while pending:
-            name = pending.pop(0)
-            ordered_names.append(name)
-            for call in call_edges[name]:
-                target = self.function_call_name(call)
+            function_id = pending.pop(0)
+            ordered_ids.append(function_id)
+            for _call, target in call_edges[function_id]:
                 incoming[target] -= 1
                 if incoming[target] == 0:
                     pending.append(target)
-        if len(ordered_names) != len(dependent_names):
+        if len(ordered_ids) != len(dependent_ids):
             raise self.hlsl_software_subgroup_error(
                 "DirectX software subgroup helpers cannot use recursive calls",
                 workgroup_size=concrete_workgroup_size,
@@ -5259,15 +5293,22 @@ class HLSLCodeGen:
                 source_location=getattr(entry_function, "source_location", None),
             )
 
-        self.hlsl_software_subgroup_function_names = dependent_names
+        dependent_calls = {
+            id(call) for calls in call_edges.values() for call, _target in calls
+        }
+        self.hlsl_software_subgroup_function_names = {
+            functions_by_id[key].name for key in dependent_ids
+        }
         reserved_names = self.hlsl_helper_reserved_names(functions)
         self.hlsl_software_subgroup_reserved_names = reserved_names
         variable = "__crossgl_software_subgroup_invocation"
         while variable in reserved_names:
             variable += "_"
         self.hlsl_software_subgroup_invocation_variable = variable
-        for name in direct_names:
-            self.hlsl_software_subgroup_invocation_expressions[name] = variable
+        for function_id in direct_ids:
+            self.hlsl_software_subgroup_invocation_expressions[
+                functions_by_id[function_id].name
+            ] = variable
 
         call_mutations = {}
         for node in self.walk_ast(ast):
@@ -5275,14 +5316,15 @@ class HLSLCodeGen:
                 continue
             call_name = self.function_call_name(node)
             arguments = list(getattr(node, "arguments", []) or [])
-            callee = functions_by_name.get(call_name)
+            callee = resolved_calls.get(id(node))
             builtin_writes = (
                 builtin_argument_write_indices(call_name, len(arguments))
-                if callee is None and isinstance(node.function, (str, IdentifierNode))
+                if call_name not in functions_by_name
+                and isinstance(node.function, (str, IdentifierNode))
                 else None
             )
             pure_call = (
-                callee is None
+                call_name not in functions_by_name
                 and isinstance(node.function, (str, IdentifierNode))
                 and (
                     (call_name in {"min", "max"} and len(arguments) == 2)
@@ -5292,18 +5334,21 @@ class HLSLCodeGen:
             )
             if pure_call:
                 self.hlsl_software_subgroup_uniform_calls.add(id(node))
-            if callee is not None and call_name not in duplicate_names:
+            if callee is not None:
                 parameters = getattr(callee, "parameters", []) or []
                 mutations = [
                     argument
                     for index, argument in enumerate(arguments)
                     if index >= len(parameters)
+                    or isinstance(
+                        parameters[index].param_type, (PointerType, ReferenceType)
+                    )
                     or set(self.hlsl_parameter_qualifiers(parameters[index]))
                     & {"out", "inout"}
                 ]
             elif builtin_writes is not None:
                 mutations = [arguments[index] for index in builtin_writes]
-            elif callee is None and (
+            elif call_name not in functions_by_name and (
                 call_name in self.HLSL_WAVE_INTRINSIC_ARITIES
                 or self.hlsl_metal_simd_shuffle_name(call_name) is not None
                 or pure_call
@@ -5329,8 +5374,8 @@ class HLSLCodeGen:
         if invocation_count <= self.software_subgroup_width:
             uniform_semantics.add("gl_SubgroupID")
         uniform_parameters = {}
-        for name in ordered_names:
-            function = functions_by_name[name]
+        for function_id in ordered_ids:
+            function = functions_by_id[function_id]
             parameters = getattr(function, "parameters", []) or []
             uniform_names = set(self.literal_int_constants) - {
                 parameter.name for parameter in parameters
@@ -5338,7 +5383,7 @@ class HLSLCodeGen:
             uniform_names.update(
                 parameter.name
                 for index, parameter in enumerate(parameters)
-                if index in uniform_parameters.get(name, set())
+                if index in uniform_parameters.get(function_id, set())
                 and not isinstance(parameter.param_type, (PointerType, ReferenceType))
                 and not set(self.hlsl_parameter_qualifiers(parameter))
                 & {"out", "inout"}
@@ -5398,15 +5443,14 @@ class HLSLCodeGen:
             uniform_call_arguments = {}
             self.validate_hlsl_software_subgroup_control_flow(
                 function,
-                dependent_names,
+                dependent_calls,
                 uniform_names,
                 call_mutations,
                 mutable_names,
                 uniform_components,
                 uniform_call_arguments,
             )
-            for call in call_edges[name]:
-                target = self.function_call_name(call)
+            for call, target in call_edges[function_id]:
                 facts = uniform_call_arguments.get(id(call), set())
                 if target not in uniform_parameters:
                     uniform_parameters[target] = set(facts)
@@ -5468,7 +5512,8 @@ class HLSLCodeGen:
             raise self.hlsl_software_subgroup_error(
                 "DirectX software subgroup votes require scalar bool payloads; "
                 "arithmetic supports only 32-bit float, int, and uint; "
-                "shuffles also support signed and unsigned 16-bit and 64-bit integers",
+                "shuffles also support signed and unsigned 16-bit and 64-bit "
+                "integers and two-word uint2 payloads",
                 workgroup_size=self.hlsl_software_subgroup_workgroup_size,
                 operation=operation,
                 reason="value-type-unsupported",

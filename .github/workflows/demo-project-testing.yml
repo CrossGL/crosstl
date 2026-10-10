@@ -1318,6 +1318,7 @@ jobs:
         env:
           CROSTL_REQUIRE_PARTIAL_SUBGROUP_READBACKS: "1"
           CROSTL_REQUIRE_INTEGER_SHUFFLE_RUNTIME: "1"
+          CROSTL_REQUIRE_SUBGROUP_OVERLOAD_RUNTIME: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
@@ -1330,6 +1331,7 @@ jobs:
               --junitxml=.mlx-portable-host/subgroup-partial/results.xml \
               tests/test_translator/test_software_subgroup_partial.py \
               tests/test_translator/test_integer_subgroup_shuffles.py \
+              tests/test_translator/test_directx_subgroup_overloads.py \
               2>&1 | tee .mlx-portable-host/subgroup-partial.log
       - name: Validate source wave argument conversions
         env:
@@ -4007,6 +4009,7 @@ jobs:
               argmin_float32 argmax_float32
               argmin_uint16 argmax_uint16 argmin_int16 argmax_int16
               argmin_uint32 argmax_uint32 argmin_int32 argmax_int32
+              argmin_uint64 argmax_uint64 argmin_int64 argmax_int64
             )
             runtime_filter=$(printf ' or %s' "${runtime_entries[@]}")
             python -m pytest -q -n auto \

@@ -149,6 +149,7 @@ unproven divergent control flow remains a structured translation error.
 
 Software shuffles preserve signed and unsigned 16-bit and 64-bit integer
 payloads in typed groupshared storage, as well as 32-bit integers and floats.
+Two-word ``uint2`` payloads preserve both halves of source 64-bit wrappers.
 The wider shuffle support does not enable wider arithmetic reductions.
 Partial logical groups use only active invocations; offset checks precede
 lane addition, and repeated calls synchronize before reusing scratch storage.
@@ -169,7 +170,12 @@ aliases, address escapes and possibly mutating calls invalidate these facts.
 Lane-dependent bounds and unproven early exits remain translation errors.
 
 Resolved, nonrecursive collective helpers can receive workgroup-uniform scalar
-arguments through multiple call levels. A parameter is considered uniform only
+arguments through overloaded source functions. The analysis uses each call's
+lexically visible types and selected source signature, including shadowed locals
+and forward declarations. Uniformity facts remain separate for each overload;
+ambiguous calls and recursive collective graphs remain diagnostic.
+
+The same proof propagates through multiple call levels. A parameter is uniform only
 when every call supplies a proven-uniform expression. Different workgroups and
 different call sites may supply different values. Mutation, reference or output
 parameters, shadowing and lane-dependent arguments invalidate the proof;

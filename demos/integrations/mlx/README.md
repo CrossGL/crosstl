@@ -260,17 +260,15 @@ validator. The common numerical subset is float32:
 `argmin_float32` and `argmax_float32` run on Metal, Mesa EGL, and Direct3D 12
 WARP over axis sizes 32 and 129, strides 1 and 2, ordinary values, and
 NaN/Infinity inputs; macOS additionally compares against the upstream metallib.
-Metal and OpenGL also require all twelve signed/unsigned 16/32/64-bit arg-reduce
+All three backends also require all twelve signed/unsigned 16/32/64-bit arg-reduce
 entries across 96 integer cases: axis sizes 31, 32, 33 and 129, both strides,
 extrema, lowest-index ties and partial groups. Metal compares unchanged upstream
-and generated kernels. DirectX requires the eight 16/32-bit entries across 64
-integer cases using exact-width software shuffles. Its four 64-bit entries
-remain compiler-validated only until overloaded subgroup helper identities
-are resolved ([#2182](https://github.com/CrossGL/crosstl/issues/2182)).
+and generated kernels. DirectX uses exact-width software shuffles, including
+resolved signed and unsigned overloads around two-word 64-bit payloads.
 OpenGL widens 16-bit buffer elements to 32-bit storage; DirectX retains native
 16-bit storage. Runtime inputs are checked against each reflected ABI.
 This is a 24/17,832 deterministic translation and native-compiler increment with
-10/17,832 common required numerical entries (14/17,832 on Metal and OpenGL), not full-tree
+14/17,832 common required numerical entries, not full-tree
 coverage, upstream MLX test-suite execution, or MLX host-runtime redirection.
 
 The current OpenGL identities include explicit signed 64-bit remainder,

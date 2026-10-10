@@ -77,14 +77,7 @@ INTEGER_RUNTIME_ENTRIES = [
     for operation in ("argmin", "argmax")
 ]
 RUNTIME_ENTRIES_BY_TARGET = {
-    target: (
-        RUNTIME_ENTRIES
-        + [
-            entry
-            for entry in INTEGER_RUNTIME_ENTRIES
-            if target != "directx" or not entry.endswith("64")
-        ]
-    )
+    target: RUNTIME_ENTRIES + INTEGER_RUNTIME_ENTRIES
     for target in ("metal", "opengl", "directx")
 }
 ARTIFACTS = {
@@ -139,15 +132,15 @@ ARTIFACTS = {
         },
         "argmin_uint64": {
             "sha256": (
-                "541674bb99e7413677a6c97abc92eab72323f0269e247ba7ca9ef31bdc71bafe"
+                "467fdaa9fb5938d63b89b1af650694a7f6f86b0ddaf3d2d899aead47457d6916"
             ),
-            "sizeBytes": 9576,
+            "sizeBytes": 10858,
         },
         "argmax_uint64": {
             "sha256": (
-                "8993fbc819b2aad66661073c9d1b2e69fef90676e303870f278e81a15ba513da"
+                "4684f22295e0ce54e1895158a9c64031140d86bb08fcee2bd2b7b835eb51277b"
             ),
-            "sizeBytes": 9538,
+            "sizeBytes": 10820,
         },
         "argmin_int8": {
             "sha256": (
@@ -187,15 +180,15 @@ ARTIFACTS = {
         },
         "argmin_int64": {
             "sha256": (
-                "77f8c2f519dd29d252b47286092c07e254a37bfcfa7a696b12538171f8753db7"
+                "4c336568e1c2bd3b225597d126f9b05192b7334df5f604db13669df6ef317560"
             ),
-            "sizeBytes": 9503,
+            "sizeBytes": 10785,
         },
         "argmax_int64": {
             "sha256": (
-                "14d48e2b15de0e4214ed6b873b253c46b4eb033a7858ede9eb64c32776302f2d"
+                "2e52421b697eb52d85341dec94a7a964a4903b8bbec38e1ecc9872f7b3ffb4dc"
             ),
-            "sizeBytes": 9521,
+            "sizeBytes": 10803,
         },
         "argmin_float16": {
             "sha256": (
@@ -583,7 +576,7 @@ def test_current_mlx_arg_reduce_contract_is_exact():
             target: [entry for entry in entries if entry in INTEGER_RUNTIME_ENTRIES]
             for target, entries in RUNTIME_ENTRIES_BY_TARGET.items()
         },
-        "caseCountByTarget": {"metal": 96, "opengl": 96, "directx": 64},
+        "caseCountByTarget": {"metal": 96, "opengl": 96, "directx": 96},
         "extremaAndLowestIndexTies": True,
         "upstreamMetallibParityTargets": ["metal"],
     }
@@ -593,8 +586,8 @@ def test_current_mlx_arg_reduce_contract_is_exact():
     )
     assert contract["scope"] == {
         "coveredEntryCount": 24,
-        "runtimeCoveredEntryCount": 10,
-        "runtimeCoveredEntryCountByTarget": {"metal": 14, "opengl": 14, "directx": 10},
+        "runtimeCoveredEntryCount": 14,
+        "runtimeCoveredEntryCountByTarget": {"metal": 14, "opengl": 14, "directx": 14},
         "completeCorpusEntryCount": 17832,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,

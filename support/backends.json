@@ -24,6 +24,7 @@
       "native_backend": "crosstl/backend/DirectX",
       "tests": [
         "tests/test_translator/test_codegen/test_directx_codegen.py",
+        "tests/test_translator/test_directx_subgroup_overloads.py",
         "tests/test_translator/test_integer_subgroup_shuffles.py",
         "tests/test_translator/test_integer_literals.py",
         "tests/test_translator/test_directx_toolchain_paths.py",
@@ -97,6 +98,7 @@
       "tests": [
         "tests/test_translator/test_arithmetic_conversions.py",
         "tests/test_translator/test_codegen/test_GLSL_codegen.py",
+        "tests/test_translator/test_directx_subgroup_overloads.py",
         "tests/test_translator/test_integer_subgroup_shuffles.py",
         "tests/test_translator/test_integer_literals.py",
         "tests/test_translator/test_wide_integer_bfloat.py",
@@ -221,6 +223,7 @@
       "native_backend": "crosstl/backend/Metal",
       "tests": [
         "tests/test_translator/test_codegen/test_metal_codegen.py",
+        "tests/test_translator/test_directx_subgroup_overloads.py",
         "tests/test_translator/test_integer_subgroup_shuffles.py",
         "tests/test_translator/test_integer_literals.py",
         "tests/test_translator/test_narrow_integer_conversions.py",
