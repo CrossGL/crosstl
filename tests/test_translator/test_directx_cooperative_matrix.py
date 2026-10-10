@@ -332,7 +332,12 @@ def test_precise_scalar_control_compiles(tmp_path, flags):
 
 
 @pytest.mark.parametrize("flags", [(), ("-Gis",)], ids=["precise", "strict"])
-def test_precise_scalar_control_executes(tmp_path, monkeypatch, flags):
+@pytest.mark.parametrize(
+    "buffer_byte_offset", [None, 16], ids=["direct", "native-views"]
+)
+def test_precise_scalar_control_executes(
+    tmp_path, monkeypatch, flags, buffer_byte_offset
+):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for DirectX precise arithmetic execution")
     assert sys.platform == "win32", "DirectX precise arithmetic requires Windows"
@@ -349,6 +354,7 @@ def test_precise_scalar_control_executes(tmp_path, monkeypatch, flags):
         workgroup_size=(32, 1, 1),
         workgroup_count=(1, 1, 1),
         compile_flags=flags,
+        buffer_byte_offset=buffer_byte_offset,
     )
     assert actual == expected
 

@@ -15,6 +15,7 @@ from crosstl.project.native_runtime_drivers import DirectXComputeRuntime
 from crosstl.project.runtime_verification import (
     NativeRuntimeBufferBinding,
     NativeRuntimeDispatchRequest,
+    RuntimeAllocationView,
     RuntimeDispatchGeometry,
     RuntimeResourceBinding,
 )
@@ -289,6 +290,7 @@ def _execute_words(
     workgroup_size=(32, 4, 1),
     workgroup_count=(3, 1, 1),
     compile_flags=(),
+    buffer_byte_offset=None,
 ):
     artifact, module = _compile(generated, tmp_path, flags=compile_flags)
     guard = [0x6A15BEEF] * 32
@@ -312,6 +314,16 @@ def _execute_words(
             dtype="uint32",
             shape=(len(values),),
             value=values,
+            allocation=(
+                RuntimeAllocationView(
+                    allocation_id=name,
+                    byte_offset=buffer_byte_offset,
+                    byte_length=len(values) * 4,
+                    allocation_byte_length=buffer_byte_offset + len(values) * 4 + 16,
+                )
+                if buffer_byte_offset is not None
+                else None
+            ),
         )
         for slot, (name, values) in enumerate(inputs.items())
     }
@@ -340,6 +352,7 @@ def _execute_words(
         "logicalWidth": 32,
         "workgroupSize": list(workgroup_size),
         "workgroupCount": list(workgroup_count),
+        "bufferByteOffset": buffer_byte_offset,
         "availability": {
             "available": available.available,
             "reason": available.reason,
@@ -362,9 +375,18 @@ def _execute_words(
     try:
         outputs = runtime.dispatch(None, state, request)
         (tmp_path / "readback.json").write_text(json.dumps(outputs))
+    except Exception as error:
+        evidence["dispatchError"] = {
+            "type": type(error).__name__,
+            "message": str(error),
+            "details": getattr(error, "details", {}),
+        }
+        raise
     finally:
         # Device creation can load additional DLLs. Retain identity on failures too.
         retain_runtime()
+    if buffer_byte_offset is not None:
+        assert state.details["directxRuntime"]["runtime"] == "native-buffer-views"
     actual = outputs["outputWords"]["values"]
     assert actual[len(expected) :] == guard
     assert len(actual) == len(expected) + len(guard)
@@ -372,7 +394,10 @@ def _execute_words(
 
 
 @pytest.mark.parametrize("failure", [False, True])
-def test_word_executor_retains_runtime_identity(tmp_path, monkeypatch, failure):
+@pytest.mark.parametrize("buffer_byte_offset", [None, 16])
+def test_word_executor_retains_runtime_identity(
+    tmp_path, monkeypatch, failure, buffer_byte_offset
+):
     module = sys.modules[__name__]
     artifact = tmp_path / "translated.hlsl"
     artifact.write_text("source")
@@ -397,6 +422,18 @@ def test_word_executor_retains_runtime_identity(tmp_path, monkeypatch, failure):
             before = json.loads((tmp_path / "evidence.json").read_text())
             assert before["availability"]["details"]["device"] == "Test device"
             state.details["dispatched"] = True
+            assert request.loaded_artifact == b"compiled"
+            for binding in request.buffers.values():
+                if buffer_byte_offset is None:
+                    assert binding.allocation is None
+                else:
+                    assert binding.allocation.byte_offset == buffer_byte_offset
+                    assert binding.allocation.byte_length == len(binding.value) * 4
+                    assert binding.allocation.allocation_byte_length == (
+                        buffer_byte_offset + len(binding.value) * 4 + 16
+                    )
+            if buffer_byte_offset is not None:
+                state.details["directxRuntime"] = {"runtime": "native-buffer-views"}
             if failure:
                 raise RuntimeError("dispatch failed")
             return {"outputWords": {"values": [7] + [0x6A15BEEF] * 32}}
@@ -405,16 +442,24 @@ def test_word_executor_retains_runtime_identity(tmp_path, monkeypatch, failure):
     monkeypatch.setattr(module, "DirectXComputeRuntime", Runtime)
     libraries = [{"name": "d3d10warp.dll", "loaded": True, "sha256": "digest"}]
     monkeypatch.setattr(module, "_loaded_runtime_libraries", lambda: libraries)
+    options = {"compile_flags": ("-Gis",), "buffer_byte_offset": buffer_byte_offset}
     if failure:
         with pytest.raises(RuntimeError, match="dispatch failed"):
-            _execute_words(tmp_path, "source", [1], [7], compile_flags=("-Gis",))
+            _execute_words(tmp_path, "source", [1], [7], **options)
     else:
-        assert _execute_words(
-            tmp_path, "source", [1], [7], compile_flags=("-Gis",)
-        ) == [7]
+        assert _execute_words(tmp_path, "source", [1], [7], **options) == [7]
     evidence = json.loads((tmp_path / "evidence.json").read_text())
     assert evidence["runtimeLibraries"] == libraries
     assert evidence["runtime"]["dispatched"] is True
+    assert evidence["bufferByteOffset"] == buffer_byte_offset
+    if failure:
+        assert evidence["dispatchError"] == {
+            "type": "RuntimeError",
+            "message": "dispatch failed",
+            "details": {},
+        }
+    else:
+        assert "dispatchError" not in evidence
     assert evidence["moduleSha256"] == hashlib.sha256(b"compiled").hexdigest()
     assert flags == [("-Gis",)]
 
