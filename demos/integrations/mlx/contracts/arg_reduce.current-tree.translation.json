@@ -253,28 +253,28 @@
         "sizeBytes": 4497
       },
       "argmin_uint16": {
-        "sha256": "2542fa350d847bdb5978cc03293761443f8844890e64253726823e03f56b439f",
-        "sizeBytes": 4373
+        "sha256": "98f89ddbf72abea643e49af14976c61a29f447e933d573b0fe99a7604c2573f1",
+        "sizeBytes": 4389
       },
       "argmax_uint16": {
-        "sha256": "c48e5ee97b5cfd38dc115cc3d2e8862d14975c4a8d5be115836dbc8595c8f7e8",
-        "sizeBytes": 4365
+        "sha256": "0a3f61769d847ec708b02636ca735ced1dc1917a3bcf1b55db3a8f014c08e643",
+        "sizeBytes": 4381
       },
       "argmin_uint32": {
-        "sha256": "5a533ed6f39af2cf4eb9d0e81cd7b58847e2732bb6b39e7579de3160aa81aca5",
-        "sizeBytes": 4373
+        "sha256": "a21fd3ef30a8dd605121620aa87c712f7c8b96e2589a05599ef4f862d8810025",
+        "sizeBytes": 4375
       },
       "argmax_uint32": {
         "sha256": "d4a48982d8e56ace8e8c2a86ffe39d1b8770a47551a932b0ffb3d97e3fd6c589",
         "sizeBytes": 4355
       },
       "argmin_uint64": {
-        "sha256": "cb2dca892e7761effd6bda34238d852c66158e8f039c9d045740198008dae319",
-        "sizeBytes": 5420
+        "sha256": "dad0c1b529c7af9dac0cdafbb49699103ecc9c9e7ef77963b11f1f01a0d87426",
+        "sizeBytes": 5424
       },
       "argmax_uint64": {
-        "sha256": "c32856e58f1d8cddb0a37bbd05c8d27bb87aa8f5d2c90cde4885c80053ee167f",
-        "sizeBytes": 5382
+        "sha256": "d7cd2df32a90e555823da11443a0932348f3d87721b99e7de427172c3277840c",
+        "sizeBytes": 5386
       },
       "argmin_int8": {
         "sha256": "2fb9fcb77481baaa8daa16f96230c62d031b0677d7373a55efbff3761532ac9c",
@@ -285,28 +285,28 @@
         "sizeBytes": 4435
       },
       "argmin_int16": {
-        "sha256": "4b6e10db94592995fc7423f265d96eb2b01e6d0e741a27629502fbb069098e97",
-        "sizeBytes": 4331
+        "sha256": "d48ca4d9e54fc3ae297ab0753469e30e9c6361fd1815381316c76d03dc8a483b",
+        "sizeBytes": 4345
       },
       "argmax_int16": {
-        "sha256": "028dae506dbcc3284ea7986e1bcf3aab696c5a164fa36f2fdde3816293f791e9",
-        "sizeBytes": 4333
+        "sha256": "545c1d0bf96dad0b32e90caef805982e57a52161d07193f5354f9d41831ebeb8",
+        "sizeBytes": 4347
       },
       "argmin_int32": {
         "sha256": "fe22c75c073af75f4a5ac49b2825f826258c46d68e32f050fd0e359878e58bd5",
         "sizeBytes": 4331
       },
       "argmax_int32": {
-        "sha256": "81c0896a6e6bbdaaec9e016115b9aaeadf54689c4f11f7acbc3f69b7c83ca223",
-        "sizeBytes": 4333
+        "sha256": "b222dc6326e8860d075754094401b3e12d7ee7e9d4a11758593f5bb6fba0a6b7",
+        "sizeBytes": 4335
       },
       "argmin_int64": {
-        "sha256": "36dc3dc8b1a5d18008d10000f1f91b35d73080f37dd439ecd0d7f26fc58d1d72",
-        "sizeBytes": 5376
+        "sha256": "bb08aee274e4173b74b7e54b274f29b880fd0ee0aa26ccb6be16d0d538b02a84",
+        "sizeBytes": 5378
       },
       "argmax_int64": {
-        "sha256": "c3e131fc8453059f436f159392a30999bb02db6ace2e3f194bd0489bc6e4bd93",
-        "sizeBytes": 5394
+        "sha256": "fb5e266fe010b8c25a2152203b874831cc37251001028f8f8b212f5087b51ccd",
+        "sizeBytes": 5390
       },
       "argmin_float16": {
         "sha256": "f2d793f603a7c2fa3d43d331adf5c3177662e6093b1d90da534b6cfe605a01fc",
@@ -460,7 +460,19 @@
         ],
         "runtimeEntries": [
           "argmin_float32",
-          "argmax_float32"
+          "argmax_float32",
+          "argmin_uint16",
+          "argmax_uint16",
+          "argmin_int16",
+          "argmax_int16",
+          "argmin_uint32",
+          "argmax_uint32",
+          "argmin_int32",
+          "argmax_int32",
+          "argmin_uint64",
+          "argmax_uint64",
+          "argmin_int64",
+          "argmax_int64"
         ]
       }
     }
@@ -472,11 +484,45 @@
       "argmax_float32"
     ],
     "caseCount": 16,
-    "note": "All 24 entries require deterministic translation and native compiler validation; numerical runtime parity remains the two float32 entries."
+    "metalIntegerCases": {
+      "entries": [
+        "argmin_uint16",
+        "argmax_uint16",
+        "argmin_int16",
+        "argmax_int16",
+        "argmin_uint32",
+        "argmax_uint32",
+        "argmin_int32",
+        "argmax_int32",
+        "argmin_uint64",
+        "argmax_uint64",
+        "argmin_int64",
+        "argmax_int64"
+      ],
+      "axisSizes": [
+        31,
+        32,
+        33,
+        129
+      ],
+      "axisStrides": [
+        1,
+        2
+      ],
+      "caseCount": 96,
+      "extremaAndLowestIndexTies": true,
+      "upstreamMetallibParity": true
+    },
+    "note": "All 24 entries require deterministic translation and native compiler validation. All three targets require the two float32 numerical entries; Metal additionally requires twelve signed and unsigned 16/32/64-bit integer entries."
   },
   "scope": {
     "coveredEntryCount": 24,
     "runtimeCoveredEntryCount": 2,
+    "runtimeCoveredEntryCountByTarget": {
+      "metal": 14,
+      "opengl": 2,
+      "directx": 2
+    },
     "completeCorpusEntryCount": 17832,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false

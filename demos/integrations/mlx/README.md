@@ -256,13 +256,16 @@ is 49 Metal units, 17,832 entries, and zero discovery diagnostics. The compact
 `contracts/arg_reduce.current-tree.translation.json` contract pins all 24
 entries from `arg_reduce.metal` and all 72 deterministic Metal, OpenGL, and
 DirectX artifacts. Required CI compiles every entry with the applicable native
-validator. Numerical execution remains an explicit float32 subset:
+validator. The common numerical subset is float32:
 `argmin_float32` and `argmax_float32` run on Metal, Mesa EGL, and Direct3D 12
 WARP over axis sizes 32 and 129, strides 1 and 2, ordinary values, and
 NaN/Infinity inputs; macOS additionally compares against the upstream metallib.
+Metal also requires all twelve signed/unsigned 16/32/64-bit arg-reduce entries across
+96 cases: axis sizes 31, 32, 33 and 129, both strides, extrema, lowest-index
+ties and partial groups. These compare unchanged upstream and generated kernels.
 This is a 24/17,832 deterministic translation and native-compiler increment with
-2/17,832 numerical runtime coverage, not full-tree coverage, upstream MLX
-test-suite execution, or MLX host-runtime redirection.
+2/17,832 common numerical runtime coverage (14/17,832 on Metal), not full-tree
+coverage, upstream MLX test-suite execution, or MLX host-runtime redirection.
 
 The current OpenGL identities include explicit signed 64-bit remainder,
 source-typed half loads, and bfloat rounding at shuffle and sentinel boundaries.
@@ -281,6 +284,14 @@ A local execution review compares the four byte entries against the unchanged
 upstream metallib and independent integer indices across 64 cases, including
 extrema, ties, constant rows, tails and strided inputs. These cases supplement,
 but do not expand, the required float32 CI runtime subset.
+
+The four 16-bit Metal references additionally retain explicit `short`/`ushort`
+conversions at aggregate construction. Removing only the two field conversions
+in each entry reproduces its prior accepted source hash. The reviewed 32/64-bit
+changes preserve typed extrema; recreating the preceding translator revision
+reproduces every prior accepted hash. The 96 required integer cases above
+validate these bodies against the unchanged upstream metallib, including
+64-bit inputs above the 32-bit range. No upstream source adaptation is applied.
 
 A subsequent unused-parameter annotation update changes all 24 Metal source
 hashes without changing their compiled libraries. The review reproduces every

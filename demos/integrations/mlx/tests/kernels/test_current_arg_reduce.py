@@ -70,6 +70,12 @@ ENTRIES = [
     "argmax_bfloat16",
 ]
 RUNTIME_ENTRIES = ["argmin_float32", "argmax_float32"]
+METAL_INTEGER_RUNTIME_ENTRIES = [
+    f"{operation}_{dtype}{width}"
+    for width in (16, 32, 64)
+    for dtype in ("uint", "int")
+    for operation in ("argmin", "argmax")
+]
 ARTIFACTS = {
     "directx": {
         "argmin_bool_": {
@@ -390,21 +396,21 @@ ARTIFACTS = {
         },
         "argmin_uint16": {
             "sha256": (
-                "2542fa350d847bdb5978cc03293761443f8844890e64253726823e03f56b439f"
+                "98f89ddbf72abea643e49af14976c61a29f447e933d573b0fe99a7604c2573f1"
             ),
-            "sizeBytes": 4373,
+            "sizeBytes": 4389,
         },
         "argmax_uint16": {
             "sha256": (
-                "c48e5ee97b5cfd38dc115cc3d2e8862d14975c4a8d5be115836dbc8595c8f7e8"
+                "0a3f61769d847ec708b02636ca735ced1dc1917a3bcf1b55db3a8f014c08e643"
             ),
-            "sizeBytes": 4365,
+            "sizeBytes": 4381,
         },
         "argmin_uint32": {
             "sha256": (
-                "5a533ed6f39af2cf4eb9d0e81cd7b58847e2732bb6b39e7579de3160aa81aca5"
+                "a21fd3ef30a8dd605121620aa87c712f7c8b96e2589a05599ef4f862d8810025"
             ),
-            "sizeBytes": 4373,
+            "sizeBytes": 4375,
         },
         "argmax_uint32": {
             "sha256": (
@@ -414,15 +420,15 @@ ARTIFACTS = {
         },
         "argmin_uint64": {
             "sha256": (
-                "cb2dca892e7761effd6bda34238d852c66158e8f039c9d045740198008dae319"
+                "dad0c1b529c7af9dac0cdafbb49699103ecc9c9e7ef77963b11f1f01a0d87426"
             ),
-            "sizeBytes": 5420,
+            "sizeBytes": 5424,
         },
         "argmax_uint64": {
             "sha256": (
-                "c32856e58f1d8cddb0a37bbd05c8d27bb87aa8f5d2c90cde4885c80053ee167f"
+                "d7cd2df32a90e555823da11443a0932348f3d87721b99e7de427172c3277840c"
             ),
-            "sizeBytes": 5382,
+            "sizeBytes": 5386,
         },
         "argmin_int8": {
             "sha256": (
@@ -438,15 +444,15 @@ ARTIFACTS = {
         },
         "argmin_int16": {
             "sha256": (
-                "4b6e10db94592995fc7423f265d96eb2b01e6d0e741a27629502fbb069098e97"
+                "d48ca4d9e54fc3ae297ab0753469e30e9c6361fd1815381316c76d03dc8a483b"
             ),
-            "sizeBytes": 4331,
+            "sizeBytes": 4345,
         },
         "argmax_int16": {
             "sha256": (
-                "028dae506dbcc3284ea7986e1bcf3aab696c5a164fa36f2fdde3816293f791e9"
+                "545c1d0bf96dad0b32e90caef805982e57a52161d07193f5354f9d41831ebeb8"
             ),
-            "sizeBytes": 4333,
+            "sizeBytes": 4347,
         },
         "argmin_int32": {
             "sha256": (
@@ -456,21 +462,21 @@ ARTIFACTS = {
         },
         "argmax_int32": {
             "sha256": (
-                "81c0896a6e6bbdaaec9e016115b9aaeadf54689c4f11f7acbc3f69b7c83ca223"
+                "b222dc6326e8860d075754094401b3e12d7ee7e9d4a11758593f5bb6fba0a6b7"
             ),
-            "sizeBytes": 4333,
+            "sizeBytes": 4335,
         },
         "argmin_int64": {
             "sha256": (
-                "36dc3dc8b1a5d18008d10000f1f91b35d73080f37dd439ecd0d7f26fc58d1d72"
+                "bb08aee274e4173b74b7e54b274f29b880fd0ee0aa26ccb6be16d0d538b02a84"
             ),
-            "sizeBytes": 5376,
+            "sizeBytes": 5378,
         },
         "argmax_int64": {
             "sha256": (
-                "c3e131fc8453059f436f159392a30999bb02db6ace2e3f194bd0489bc6e4bd93"
+                "fb5e266fe010b8c25a2152203b874831cc37251001028f8f8b212f5087b51ccd"
             ),
-            "sizeBytes": 5394,
+            "sizeBytes": 5390,
         },
         "argmin_float16": {
             "sha256": (
@@ -549,10 +555,10 @@ def test_current_mlx_arg_reduce_contract_is_exact():
         target["compilerEntries"] == ENTRIES
         for target in validation["targets"].values()
     )
-    assert all(
-        target["runtimeEntries"] == RUNTIME_ENTRIES
-        for target in validation["targets"].values()
-    )
+    for name, target in validation["targets"].items():
+        assert target["runtimeEntries"] == RUNTIME_ENTRIES + (
+            METAL_INTEGER_RUNTIME_ENTRIES if name == "metal" else []
+        )
     assert all(
         target["compilerValidationRequiredInCi"] is True
         for target in validation["targets"].values()
@@ -560,6 +566,14 @@ def test_current_mlx_arg_reduce_contract_is_exact():
     runtime = contract["runtimeMatrix"]
     assert runtime["scope"] == "representative-float32-numerical-parity"
     assert runtime["entries"] == RUNTIME_ENTRIES
+    assert runtime["metalIntegerCases"] == {
+        "entries": METAL_INTEGER_RUNTIME_ENTRIES,
+        "axisSizes": [31, 32, 33, 129],
+        "axisStrides": [1, 2],
+        "caseCount": 96,
+        "extremaAndLowestIndexTies": True,
+        "upstreamMetallibParity": True,
+    }
     assert all(
         target["runtimeRequiredInCi"] is True
         for target in validation["targets"].values()
@@ -567,6 +581,7 @@ def test_current_mlx_arg_reduce_contract_is_exact():
     assert contract["scope"] == {
         "coveredEntryCount": 24,
         "runtimeCoveredEntryCount": 2,
+        "runtimeCoveredEntryCountByTarget": {"metal": 14, "opengl": 2, "directx": 2},
         "completeCorpusEntryCount": 17832,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
@@ -820,6 +835,81 @@ def _cases():
                     rows,
                     storage,
                 )
+
+
+def _integer_cases(entry):
+    dtype = entry.split("_", 1)[1]
+    signed = dtype.startswith("int")
+    width = int(dtype[3:] if signed else dtype[4:])
+    low, high = (
+        (-(2 ** (width - 1)), 2 ** (width - 1) - 1) if signed else (0, 2**width - 1)
+    )
+    base = 2**40 if width == 64 else 0
+    element_format = {
+        "int16": "h",
+        "uint16": "H",
+        "int32": "i",
+        "uint32": "I",
+        "int64": "q",
+        "uint64": "Q",
+    }[dtype]
+    for size in (31, 32, 33, 129):
+        for stride in (1, 2):
+            rows = [
+                [base + (index * 1973 + row * 13) % 30000 + 1 for index in range(size)]
+                for row in range(2)
+            ]
+            for values in rows:
+                values[3] = values[-1] = high
+                values[5] = values[-2] = low
+            padding = high if entry.startswith("argmax") else low
+            storage = [padding] * (2 * size * stride)
+            for row, values in enumerate(rows):
+                for index, value in enumerate(values):
+                    storage[row * size * stride + index * stride] = value
+            payload = struct.pack("<" + element_format * len(storage), *storage)
+            # The runner uploads raw words without converting the integer payload.
+            words = struct.unpack("<" + "I" * (len(payload) // 4), payload)
+            yield (
+                f"size-{size}-stride-{stride}",
+                {
+                    "inputBits": list(words),
+                    "rows": 2,
+                    "axisSize": size,
+                    "axisStride": stride,
+                    "rowStride": size * stride,
+                },
+                rows,
+                storage,
+            )
+
+
+@pytest.mark.parametrize("entry", METAL_INTEGER_RUNTIME_ENTRIES)
+def test_integer_arg_reduce_case_encoding(entry):
+    cases = list(_integer_cases(entry))
+    assert len(cases) == 8
+    for _name, request, rows, storage in cases:
+        payload = struct.pack(
+            "<" + "I" * len(request["inputBits"]), *request["inputBits"]
+        )
+        element_format = {
+            "int16": "h",
+            "uint16": "H",
+            "int32": "i",
+            "uint32": "I",
+            "int64": "q",
+            "uint64": "Q",
+        }[entry.split("_", 1)[1]]
+        assert (
+            list(struct.unpack("<" + element_format * len(storage), payload)) == storage
+        )
+        assert len(storage) == request["rows"] * request["rowStride"]
+        for row, values in enumerate(rows):
+            start = row * request["rowStride"]
+            stop = start + request["rowStride"]
+            assert storage[start : stop : request["axisStride"]] == values
+        expected_index = 5 if entry.startswith("argmin") else 3
+        assert _expected_indices(entry, rows) == [expected_index, expected_index]
 
 
 def _expected_indices(entry, rows):
@@ -1225,11 +1315,16 @@ def test_current_mlx_arg_reduce_native_validation(
             assert "current_in += axis_stride;" in generated_text
             assert "isnan_float" not in generated_text
             library = _metal_library(output, tmp_path / "translated.metallib", root)
-            if entry not in RUNTIME_ENTRIES:
+            if entry not in RUNTIME_ENTRIES + METAL_INTEGER_RUNTIME_ENTRIES:
                 return
             runner, original = metal_reference
             evidence = []
-            for name, request, rows, _storage in _cases():
+            cases = (
+                _integer_cases(entry)
+                if entry in METAL_INTEGER_RUNTIME_ENTRIES
+                else _cases()
+            )
+            for name, request, rows, _storage in cases:
                 request_path = tmp_path / f"{name}.json"
                 _write_json(request_path, request)
                 expected = _expected_indices(entry, rows)
