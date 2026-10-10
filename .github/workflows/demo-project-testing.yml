@@ -1291,6 +1291,7 @@ jobs:
       - name: Validate collective helper arguments
         id: collective-helpers
         env:
+          CROSTL_REQUIRE_DIRECTX_NARROW_BUFFERS: "1"
           CROSTL_REQUIRE_SUBGROUP_UNIFORM_ARGUMENTS: "1"
           CROSTL_REQUIRE_UNIFORM_RETURN_RUNTIME: "1"
           CROSTL_REQUIRE_COLLECTIVE_STRIDE_RUNTIME: "1"
@@ -1338,6 +1339,7 @@ jobs:
             python -m pytest -q -n auto \
               --basetemp=.mlx-portable-host/subgroup-arguments/pytest \
               --junitxml=.mlx-portable-host/subgroup-arguments/results.xml \
+              tests/test_translator/test_directx_narrow_buffer_extents.py::test_narrow_buffer_extent_execute \
               tests/test_translator/test_subgroup_uniform_arguments.py \
               tests/test_translator/test_subgroup_uniform_returns.py \
               tests/test_translator/test_collective_loop_strides.py \
@@ -1387,6 +1389,7 @@ jobs:
         shell: pwsh
         timeout-minutes: 8
         env:
+          CROSTL_REQUIRE_DIRECTX_NARROW_BUFFERS: "1"
           CROSTL_REQUIRE_SUBGROUP_UNIFORM_ARGUMENTS: "1"
           CROSTL_REQUIRE_UNIFORM_RETURN_RUNTIME: "1"
           CROSTL_REQUIRE_COLLECTIVE_STRIDE_RUNTIME: "1"

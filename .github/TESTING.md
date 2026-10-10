@@ -315,6 +315,17 @@ builtins. macOS additionally executes the unchanged source control. The two
 explicit subnormal policies are tested independently of native Boolean casts
 and other arithmetic profiles, without adding a runner or extending the bound.
 
+The existing Windows host jobs also retain direct 16-bit buffer-load controls
+for 105- and 106-element inputs. They run in the existing 360-second collective
+batch on both required and qualification runtimes, before the currently failing
+resource and partial-subgroup steps. They compare exact views, exact views in
+larger allocations, and explicitly
+extended views without changing the original subgroup tests. Device-input
+readbacks, shader outputs, guards, source and module identities are retained.
+An extended-view pass does not qualify a failing exact view. These controls add
+no runner or deadline and do not repeat the module's compiler-only tests on
+Windows.
+
 Binary32 division source profiles run once per native target inside the existing
 arithmetic step. Exact checks cover source operators, precise builtins, compound
 writeback, narrow intermediates and guards. The project's Sigmoid boundary
