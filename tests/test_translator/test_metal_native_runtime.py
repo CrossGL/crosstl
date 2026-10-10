@@ -285,6 +285,11 @@ def test_metal_alias_views_share_storage_and_reject_conflicting_uploads(
         buffers["result"],
         allocation=view,
         value=buffers["result"].value if conflicting else buffers["input"].value,
+        upload_snapshot=(
+            buffers["result"].upload_snapshot
+            if conflicting
+            else buffers["input"].upload_snapshot
+        ),
     )
     native = replace(native, buffers=buffers)
     if conflicting:

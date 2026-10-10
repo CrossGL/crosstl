@@ -25,8 +25,8 @@ from .native_runtime_drivers import (
     _buffer_readback,
     _buffer_readback_encoding,
     _dtype_size,
+    _native_buffer_payload,
     _normalize_dtype,
-    _pack_values,
     _runtime_value_name,
 )
 from .runtime_verification import (
@@ -562,12 +562,11 @@ class MetalComputeRuntime:
                     "allocation-size-conflict",
                 )
             if binding.value is not None:
-                data = _pack_values(
-                    binding.value,
+                data = _native_buffer_payload(
+                    binding,
                     dtype,
                     expected_count=math.prod(shape),
                     target="Metal",
-                    encoding=binding.encoding,
                 )
                 for previous_offset, previous in upload_ranges.get(allocation_id, ()):
                     start = max(offset, previous_offset)

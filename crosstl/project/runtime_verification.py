@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -604,6 +605,25 @@ class RuntimeExecutionPlan:
 
 
 @dataclass(frozen=True)
+class _NativeRuntimeUploadSnapshot:
+    dtype: str
+    shape: tuple[int, ...]
+    encoding: str | None
+    element_count: int
+    payload: bytes
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "dtype": self.dtype,
+            "shape": list(self.shape),
+            "encoding": self.encoding,
+            "elementCount": self.element_count,
+            "sizeBytes": len(self.payload),
+            "sha256": hashlib.sha256(self.payload).hexdigest(),
+        }
+
+
+@dataclass(frozen=True)
 class NativeRuntimeBufferBinding:
     """Prepared native runtime buffer/image binding derived from fixture data."""
 
@@ -617,6 +637,7 @@ class NativeRuntimeBufferBinding:
     expected_output: RuntimeValue | None = None
     allocation: RuntimeAllocationView | None = None
     encoding: str | None = None
+    upload_snapshot: _NativeRuntimeUploadSnapshot | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -637,6 +658,8 @@ class NativeRuntimeBufferBinding:
             payload["expectedOutput"] = _runtime_value_reference(self.expected_output)
         if self.allocation is not None:
             payload["allocation"] = self.allocation.to_json()
+        if self.upload_snapshot is not None:
+            payload["uploadSnapshot"] = self.upload_snapshot.to_json()
         return payload
 
 
@@ -1570,6 +1593,8 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
     def _native_buffer_bindings(
         self, state: RuntimeExecutionState
     ) -> dict[str, NativeRuntimeBufferBinding]:
+        from .native_runtime_drivers import _snapshot_native_buffer_binding
+
         bindings: dict[str, NativeRuntimeBufferBinding] = {}
         for resource in state.plan.resource_bindings:
             binding = resource.binding
@@ -1583,14 +1608,14 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
             allocation_value = upload_value or expected_output or resource.value
             bindings[key] = NativeRuntimeBufferBinding(
                 name=key,
-                binding=binding,
+                binding=replace(binding, metadata=copy.deepcopy(binding.metadata)),
                 value=upload_value.values if upload_value is not None else None,
                 source=resource.source,
                 dtype=allocation_value.dtype if allocation_value is not None else None,
                 shape=allocation_value.shape if allocation_value is not None else (),
                 metadata=(
                     {
-                        **dict(allocation_value.metadata),
+                        **copy.deepcopy(dict(allocation_value.metadata)),
                         "runtimeValueName": allocation_value.name,
                     }
                     if allocation_value is not None
@@ -1602,6 +1627,10 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                     allocation_value.encoding if allocation_value is not None else None
                 ),
             )
+            if self.target in {"metal", "directx", "opengl", "vulkan"}:
+                bindings[key] = _snapshot_native_buffer_binding(
+                    bindings[key], target=self.target
+                )
         return bindings
 
     def _native_constant_bindings(

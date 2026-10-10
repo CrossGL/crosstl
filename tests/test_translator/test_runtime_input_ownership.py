@@ -12,6 +12,7 @@ from crosstl.project import (
     RuntimeValue,
     build_native_loader_dispatch_request,
 )
+from crosstl.project.runtime_verification import NativeRuntimeParityAdapter
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
@@ -149,6 +150,44 @@ def test_owned_project_inputs_execute(tmp_path, case, typed):
         else {}
     )
     _execute(request, expected, tmp_path, **options)
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_prepared_uploads_ignore_late_input_mutation(tmp_path, case, monkeypatch):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required upload snapshot execution")
+    target = {"linux": "opengl", "darwin": "metal", "win32": "directx"}[sys.platform]
+    request, expected = _request(tmp_path, target, case, False)
+    dispatch = NativeRuntimeParityAdapter.dispatch
+    observed = []
+
+    def mutate_after_prepare(adapter, state, native):
+        retained = []
+        for binding in native.buffers.values():
+            if isinstance(binding.value, list):
+                assert binding.upload_snapshot is not None
+                retained.append((binding.value, copy.deepcopy(binding.value)))
+                binding.value[:] = [99] * len(binding.value)
+                observed.append(binding.to_json()["uploadSnapshot"])
+        try:
+            return dispatch(adapter, state, native)
+        finally:
+            for values, original in retained:
+                values[:] = original
+
+    monkeypatch.setattr(NativeRuntimeParityAdapter, "dispatch", mutate_after_prepare)
+    options = (
+        {
+            "original_source": _source(case),
+            "original_entry": "owned_inputs",
+            "metal_compile_flags": ("-Wall", "-Wextra", "-Werror"),
+        }
+        if target == "metal"
+        else {}
+    )
+    _execute(request, expected, tmp_path, **options)
+    assert len(observed) == 3
+    assert all(item["sizeBytes"] > 0 and len(item["sha256"]) == 64 for item in observed)
 
 
 def test_input_ownership_is_required_in_native_ci():

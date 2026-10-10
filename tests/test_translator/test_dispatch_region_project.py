@@ -335,6 +335,7 @@ def test_region_preparation_retains_explicit_allocation_views(tmp_path):
             for name, buffer in request.buffers.items():
                 assert buffer.allocation == allocations[name]
                 assert (buffer.value is not None) == (index == 0)
+                assert (buffer.upload_snapshot is not None) == (index == 0)
 
 
 def _values(descriptor, inputs, initial, expected):

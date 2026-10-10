@@ -139,6 +139,9 @@ def prepare_native_loader_dispatch_regions(
                 name: replace(
                     buffer,
                     value=buffer.value if index == 0 or name in local else None,
+                    upload_snapshot=(
+                        buffer.upload_snapshot if index == 0 or name in local else None
+                    ),
                     source=buffer.source if index == 0 or name in local else None,
                     allocation=(
                         replace(

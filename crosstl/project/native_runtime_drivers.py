@@ -23,6 +23,7 @@ from .runtime_verification import (
     RuntimeExecutionRequest,
     RuntimeExecutorAvailability,
     RuntimeExecutorUnavailable,
+    _NativeRuntimeUploadSnapshot,
 )
 from .storage_record_layout import validate_storage_record_layout
 from .uniform_layout import validate_std140_block_layout
@@ -2922,9 +2923,7 @@ def _prepare_directx_buffers(
                 resource=name,
                 shape=list(shape),
             )
-        element_count = (
-            math.prod(shape) if shape else len(_flatten_values(binding.value))
-        )
+        element_count = _native_buffer_element_count(binding)
         if element_count <= 0:
             raise _directx_setup_error(
                 f"DirectX runtime buffer {name!r} has no addressable elements.",
@@ -2937,12 +2936,11 @@ def _prepare_directx_buffers(
             payload = b""
         else:
             try:
-                payload = _pack_values(
-                    binding.value,
+                payload = _native_buffer_payload(
+                    binding,
                     dtype,
                     expected_count=element_count,
                     target="DirectX",
-                    encoding=binding.encoding,
                 )
             except (RuntimeExecutorUnavailable, struct.error) as exc:
                 raise _directx_setup_error(
@@ -4065,18 +4063,15 @@ def _prepare_vulkan_buffers(
         dtype = _normalize_dtype(binding.dtype, target="Vulkan")
         readback_encoding = _buffer_readback_encoding(binding, dtype)
         shape = tuple(int(value) for value in binding.shape)
-        element_count = (
-            math.prod(shape) if shape else len(_flatten_values(binding.value))
-        )
+        element_count = _native_buffer_element_count(binding)
         if binding.value is None and readback:
             payload = b"\x00" * (element_count * _dtype_size(dtype))
         else:
-            payload = _pack_values(
-                binding.value,
+            payload = _native_buffer_payload(
+                binding,
                 dtype,
                 expected_count=element_count,
                 target="Vulkan",
-                encoding=binding.encoding,
             )
         prepared.append(
             _PreparedVulkanBuffer(
@@ -4160,19 +4155,16 @@ def _prepare_opengl_buffers(
         dtype = _normalize_dtype(binding.dtype, target="OpenGL")
         readback_encoding = _buffer_readback_encoding(binding, dtype)
         shape = tuple(int(value) for value in binding.shape)
-        element_count = (
-            math.prod(shape) if shape else len(_flatten_values(binding.value))
-        )
+        element_count = _native_buffer_element_count(binding)
         payload_size = element_count * _dtype_size(dtype)
         if binding.value is None:
             payload = b""
         else:
-            payload = _pack_values(
-                binding.value,
+            payload = _native_buffer_payload(
+                binding,
                 dtype,
                 expected_count=element_count,
                 target="OpenGL",
-                encoding=binding.encoding,
             )
         (
             allocation_id,
@@ -4928,6 +4920,84 @@ def _flatten_values(value: Any) -> list[Any]:
             flattened.extend(_flatten_values(item))
         return flattened
     return [value]
+
+
+def _native_buffer_element_count(binding: NativeRuntimeBufferBinding) -> int:
+    if binding.shape:
+        return math.prod(int(value) for value in binding.shape)
+    if binding.upload_snapshot is not None:
+        return binding.upload_snapshot.element_count
+    return len(_flatten_values(binding.value))
+
+
+def _snapshot_native_buffer_binding(
+    binding: NativeRuntimeBufferBinding, *, target: str
+) -> NativeRuntimeBufferBinding:
+    if binding.value is None or binding.binding.kind not in {
+        None,
+        "buffer",
+        "storage-buffer",
+        "constant-buffer",
+        "uniform",
+    }:
+        return binding
+    dtype = _normalize_dtype(binding.dtype, target=target)
+    count = _native_buffer_element_count(binding)
+    if binding.upload_snapshot is not None:
+        _native_buffer_payload(binding, dtype, expected_count=count, target=target)
+        return binding
+    payload = _pack_values(
+        binding.value,
+        dtype,
+        expected_count=count,
+        target=target,
+        encoding=binding.encoding,
+    )
+    return replace(
+        binding,
+        upload_snapshot=_NativeRuntimeUploadSnapshot(
+            dtype=dtype,
+            shape=tuple(binding.shape),
+            encoding=binding.encoding,
+            element_count=count,
+            payload=payload,
+        ),
+    )
+
+
+def _native_buffer_payload(
+    binding: NativeRuntimeBufferBinding,
+    dtype: str,
+    *,
+    expected_count: int,
+    target: str,
+) -> bytes:
+    snapshot = binding.upload_snapshot
+    if snapshot is None:
+        return _pack_values(
+            binding.value,
+            dtype,
+            expected_count=expected_count,
+            target=target,
+            encoding=binding.encoding,
+        )
+    if (
+        snapshot.dtype != dtype
+        or snapshot.shape != tuple(binding.shape)
+        or snapshot.encoding != binding.encoding
+        or snapshot.element_count != expected_count
+        or type(snapshot.payload) is not bytes
+        or len(snapshot.payload) != expected_count * _dtype_size(dtype)
+    ):
+        raise RuntimeAdapterSetupError(
+            "Native buffer upload snapshot does not match its binding.",
+            details={
+                "target": target,
+                "resource": binding.name,
+                "reasonKind": "upload-snapshot-mismatch",
+            },
+        )
+    return snapshot.payload
 
 
 def _pack_values(

@@ -24,6 +24,7 @@
       "native_backend": "crosstl/backend/DirectX",
       "tests": [
         "tests/test_translator/test_codegen/test_directx_codegen.py",
+        "tests/test_translator/test_native_upload_snapshots.py",
         "tests/test_translator/test_scalar_bitcast_widths.py",
         "tests/test_translator/test_directx_subgroup_overloads.py",
         "tests/test_translator/test_integer_subgroup_shuffles.py",
@@ -99,6 +100,7 @@
       "tests": [
         "tests/test_translator/test_arithmetic_conversions.py",
         "tests/test_translator/test_codegen/test_GLSL_codegen.py",
+        "tests/test_translator/test_native_upload_snapshots.py",
         "tests/test_translator/test_scalar_bitcast_widths.py",
         "tests/test_translator/test_directx_subgroup_overloads.py",
         "tests/test_translator/test_integer_subgroup_shuffles.py",
@@ -225,6 +227,7 @@
       "native_backend": "crosstl/backend/Metal",
       "tests": [
         "tests/test_translator/test_codegen/test_metal_codegen.py",
+        "tests/test_translator/test_native_upload_snapshots.py",
         "tests/test_translator/test_directx_subgroup_overloads.py",
         "tests/test_translator/test_integer_subgroup_shuffles.py",
         "tests/test_translator/test_integer_literals.py",
@@ -299,6 +302,7 @@
       "native_backend": "crosstl/backend/SPIRV",
       "tests": [
         "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
+        "tests/test_translator/test_native_upload_snapshots.py",
         "tests/test_backend/test_SPIRV"
       ],
       "docs": [

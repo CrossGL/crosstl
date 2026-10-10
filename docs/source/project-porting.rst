@@ -4179,6 +4179,23 @@ This ownership guarantee does not make the returned request's nested objects
 immutable, enforce caller-trusted index-range assertions, or validate metadata
 produced or modified by a preceding GPU dispatch.
 
+Native adapter preparation additionally encodes each initialized buffer once
+into an immutable upload snapshot. The built-in Metal, DirectX, OpenGL and
+Vulkan drivers consume those exact bytes, not the request's mutable value lists.
+Prepared binding reports retain the payload hash, byte size, dtype, shape and
+encoding without embedding buffer contents. Later changes to a prepared
+binding's shape, dtype or encoding are rejected if they conflict with its
+snapshot. Uninitialized outputs and later dispatch-region graph nodes do not
+acquire a spurious upload.
+
+Snapshots pin bytes at native binding preparation, not at initial request
+construction, and do not freeze GPU memory after upload. This is the data
+foundation for checked host metadata, not an authorization to narrow indices:
+source-resource identities, value preconditions and mutable allocation aliases
+still require a separate checked contract. Custom runtime drivers must consume
+the snapshot to provide the same upload guarantee. Construct a new request or
+a fresh low-level binding when supplying different data.
+
 Flat mixed-scalar storage records retain each field's name, physical type, byte
 offset, size and alignment, together with the padded record stride. This
 contract applies to Metal pointer buffers, HLSL structured buffers and OpenGL

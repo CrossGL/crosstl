@@ -121,6 +121,7 @@
       "tests": {
         "paths": [
           "tests/test_translator/test_codegen/test_directx_codegen.py",
+          "tests/test_translator/test_native_upload_snapshots.py",
           "tests/test_translator/test_scalar_bitcast_widths.py",
           "tests/test_translator/test_directx_subgroup_overloads.py",
           "tests/test_translator/test_integer_subgroup_shuffles.py",
@@ -171,7 +172,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 2070
+        "test_count": 2076
       },
       "translator_codegen": {
         "exists": true,
@@ -292,6 +293,7 @@
         "paths": [
           "tests/test_translator/test_arithmetic_conversions.py",
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
+          "tests/test_translator/test_native_upload_snapshots.py",
           "tests/test_translator/test_scalar_bitcast_widths.py",
           "tests/test_translator/test_directx_subgroup_overloads.py",
           "tests/test_translator/test_integer_subgroup_shuffles.py",
@@ -345,7 +347,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 2308
+        "test_count": 2314
       },
       "translator_codegen": {
         "exists": true,
@@ -714,6 +716,7 @@
       "tests": {
         "paths": [
           "tests/test_translator/test_codegen/test_metal_codegen.py",
+          "tests/test_translator/test_native_upload_snapshots.py",
           "tests/test_translator/test_directx_subgroup_overloads.py",
           "tests/test_translator/test_integer_subgroup_shuffles.py",
           "tests/test_translator/test_integer_literals.py",
@@ -761,7 +764,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2501
+        "test_count": 2507
       },
       "translator_codegen": {
         "exists": true,
@@ -887,9 +890,10 @@
       "tests": {
         "paths": [
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
+          "tests/test_translator/test_native_upload_snapshots.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 1235
+        "test_count": 1241
       },
       "translator_codegen": {
         "exists": true,
