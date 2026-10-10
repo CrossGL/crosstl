@@ -12733,7 +12733,7 @@ def test_hlsl_metal_inferred_or_aliased_private_local_fails_closed(
 @pytest.mark.parametrize(
     "declaration",
     (
-        "thread decltype(value) copy = value;",
+        "decltype(value) copy = value;",
         "thread decltype((value + 1.0f)) copy = value + 1.0f;",
     ),
     ids=("unparenthesized-identifier", "parenthesized-rvalue"),
