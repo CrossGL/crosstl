@@ -417,7 +417,7 @@ def test_ci_requires_mixed_entry_execution():
         workflow, "portable-host", "Validate collective helper arguments"
     )
     selector = "tests/test_translator/test_project_subgroup_applicability.py"
-    assert workflow.count(selector) == 1 and selector in step
+    assert step.count(selector) == 1
     assert 'CROSTL_REQUIRE_SUBGROUP_APPLICABILITY: "1"' in step
     assert "--timeout-seconds 360" in step
     assert "continue-on-error" not in step and "if:" not in step

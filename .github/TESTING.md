@@ -83,21 +83,22 @@ checksum and does not fall back to another release. These jobs do not execute
 Direct3D; WARP numerical execution and Windows host integration remain required.
 
 If the required Windows collective/resource gate fails, its existing runner
-compares the unchanged DXC scalar and software-matrix controls on WARP 1.0.13
-and 1.0.14. Microsoft's release notes identify 1.0.14 as the introduction of
-x86 fused multiply-add code generation. Both archives and x64 libraries are
-checksum-pinned; preparation verifies both before changing the installed DLL.
-The executions share a 180-second budget and retain the same inputs, numerical
-oracles, allocation offsets and output guards. A failing first comparison does
-not prevent the second from running within the remaining budget. Shader bytes,
-compiled modules, readbacks and child runtime identities remain in the evidence.
+replays the complete 23-selection resource/project batch on WARP 1.0.13.
+The diagnostic retains every test and required-runtime setting from that batch;
+there is no expression-based test filter. The archive and x64 DLL are checked
+before selection. Execution has the same 360-second bound as the required batch,
+inside an eight-minute preparation/execution/restoration step. Required test
+deadlines are unchanged, and no runner is added.
+
 The required WARP 1.0.21 DLL is restored in a finally block, with its identity
-verified and recorded even when a comparison fails. The system Direct3D core
-and DXC version are not changed. This replaces the completed FXC experiment,
-which reproduced the discrepancy in legacy bytecode with explicit precise
-multiply/add instructions. The comparison adds no runner and cannot replace or
-excuse the required current-runtime gate's failure; neither historical runtime
-is adopted as a supported default by this diagnostic.
+verified and recorded even when the comparison fails. The system Direct3D core,
+DXC version, shaders, inputs, numerical oracles and guards are unchanged.
+Earlier eight-case controls pass on 1.0.13 but fail on 1.0.14 and 1.0.21;
+independent scalar and matrix readback audits confirm the discrepancy
+([runtime investigation](https://github.com/CrossGL/crosstl/issues/2193)).
+The expanded diagnostic tests broader compatibility; it cannot replace or
+excuse the required 1.0.21 gate's failure. No historical runtime is adopted as
+a supported default, and passing this batch does not establish full MLX parity.
 Metal corpus compilation stays on macOS because it requires Apple's toolchain.
 
 The complete unary, binary, copy, reduction and quantized Metal corpora separate portable translation

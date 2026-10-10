@@ -3300,22 +3300,24 @@ def test_directx_runtime_comparison_preserves_required_runtime_and_workload():
     workflow = yaml.safe_load((WORKFLOW_DIR / "demo-project-testing.yml").read_text())
     steps = workflow["jobs"]["portable-host"]["steps"]
     comparison = next(step for step in steps if "failure()" in step.get("if", ""))
-    assert comparison["timeout-minutes"] == 5
+    assert comparison["timeout-minutes"] == 8
     assert comparison["shell"] == "pwsh"
-    assert comparison["env"] == {"CROSTL_REQUIRE_DIRECTX_COOPERATIVE_MATRIX": "1"}
+    required_gate = next(
+        step for step in steps if step.get("id") == "collective-helpers"
+    )
+    expected_env = dict(required_gate["env"])
+    expected_env["CROSTL_REQUIRE_DIRECTX_COOPERATIVE_MATRIX"] = "1"
+    assert comparison["env"] == expected_env
     assert not comparison.get("continue-on-error")
     script = comparison["run"]
     for value in (
         'version = "1.0.13"',
-        'version = "1.0.14"',
         "63231c48b0573ba4c078f69cd10a4059a0fee3427107b8219e5e80ab75bd304b",
-        "e92bec51753869a41fea53a56803de9e8de8c6033becdcd2cfaaedb9ebf82f9f",
         "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638",
-        "a23ab97d709f076a11d2ef503bc788349d1cbff81d67469cbba577cba3f86988",
-        "$remaining = 180 - [int][Math]::Ceiling($clock.Elapsed.TotalSeconds)",
+        "$remaining = 360 - [int][Math]::Ceiling($clock.Elapsed.TotalSeconds)",
         "--timeout-seconds $remaining",
         "python -m pytest -q -n auto",
-        '-k "precise_scalar_control_executes or software_matrix_executes"',
+        "@tests",
         "$PSNativeCommandUseErrorActionPreference = $false",
         "$caseResult = $LASTEXITCODE",
         "if ($caseResult -ne 0) { $result = $caseResult }",
@@ -3323,6 +3325,19 @@ def test_directx_runtime_comparison_preserves_required_runtime_and_workload():
         "exit $result",
     ):
         assert value in script
+    resource_command = required_gate["run"].split(
+        '--label "Resource values and project execution"', 1
+    )[1]
+    required_tests = re.findall(r"tests/[^\s\\]+", resource_command)
+    compared_tests = re.findall(r'"(tests/[^"\s]+)"', script)
+    assert len(required_tests) == 23
+    assert compared_tests == required_tests
+    pytest_arguments = script.split("-- python -m pytest", 1)[1].splitlines()[0]
+    assert not re.search(
+        r"(?:^|\s)(?:-k|-m|--keyword|--markexpr)(?:\s|=|$)", pytest_arguments
+    )
+    assert re.findall(r'@\{ version = "([^"]+)"', script) == ["1.0.13"]
+    assert 'version = "1.0.14"' not in script
     assert script.index("archive checksum mismatch") < script.index(
         "Copy-Item $installed $backup"
     )

@@ -1347,18 +1347,81 @@ jobs:
       - name: Compare WARP arithmetic across codegen revisions
         if: failure() && runner.os == 'Windows' && steps.collective-helpers.outcome == 'failure'
         shell: pwsh
-        timeout-minutes: 5
+        timeout-minutes: 8
         env:
+          CROSTL_REQUIRE_SUBGROUP_UNIFORM_ARGUMENTS: "1"
+          CROSTL_REQUIRE_UNIFORM_RETURN_RUNTIME: "1"
+          CROSTL_REQUIRE_COLLECTIVE_STRIDE_RUNTIME: "1"
+          CROSTL_REQUIRE_COLLECTIVE_REFERENCE_RUNTIME: "1"
+          CROSTL_REQUIRE_METAL_NESTED_MEMBERS: "1"
+          CROSTL_REQUIRE_REFERENCE_CAPTURE: "1"
+          CROSTL_REQUIRE_REFERENCE_ALIASES: "1"
+          CROSTL_REQUIRE_PARAMETER_USAGE: "1"
+          CROSTL_REQUIRE_RESOURCE_OVERLOADS: "1"
+          CROSTL_REQUIRE_STORAGE_VECTOR_VIEWS: "1"
+          CROSTL_REQUIRE_WORKGROUP_RECORD_TRANSFERS: "1"
+          CROSTL_REQUIRE_WORKGROUP_RESOURCE_AGGREGATES: "1"
+          CROSTL_REQUIRE_AGGREGATE_RECORD_TRANSFERS: "1"
+          CROSTL_REQUIRE_RESOURCE_ALLOCATION_ORIGINS: "1"
+          CROSTL_REQUIRE_STATIC_RESOURCE_AGGREGATES: "1"
+          CROSTL_REQUIRE_PRIVATE_VECTOR_VIEWS: "1"
+          CROSTL_REQUIRE_PROJECT_MATRIX_FRAGMENTS: "1"
+          CROSTL_REQUIRE_COOPERATIVE_MATRIX_RUNTIME: "1"
+          CROSTL_REQUIRE_RESOURCE_MEMBER_BOUNDS: "1"
+          CROSTL_REQUIRE_GUARDED_RESOURCE_INDICES: "1"
+          CROSTL_REQUIRE_RUNTIME_INPUT_OWNERSHIP: "1"
+          CROSTL_REQUIRE_RESOURCE_IDENTITY: "1"
+          CROSTL_REQUIRE_FROZEN_SPECIALIZATION: "1"
+          CROSTL_REQUIRE_STORAGE_RECORD_RUNTIME: "1"
+          CROSTL_REQUIRE_INTEGER_LITERAL_RUNTIME: "1"
+          CROSTL_REQUIRE_SUBGROUP_EXECUTION_RUNTIME: "1"
+          CROSTL_REQUIRE_SCALAR_BITCAST_RUNTIME: "1"
+          CROSTL_REQUIRE_PROJECT_TEMPLATE_GROUPING: "1"
+          CROSTL_REQUIRE_METAL_AUTO_POINTER: "1"
+          CROSTL_REQUIRE_CONDITIONAL_RESOURCES: "1"
+          CROSTL_REQUIRE_CONSTANT_AGGREGATE_POINTERS: "1"
+          CROSTL_REQUIRE_UNNAMED_PARAMETERS: "1"
+          CROSTL_REQUIRE_PARTIAL_STATIC_OWNERS: "1"
+          CROSTL_REQUIRE_WORKGROUP_RANGE_READBACKS: "1"
+          CROSTL_REQUIRE_ENTRY_WORKGROUP_RULES: "1"
+          CROSTL_REQUIRE_SUBGROUP_APPLICABILITY: "1"
+          EGL_PLATFORM: "surfaceless"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: "egl"
           CROSTL_REQUIRE_DIRECTX_COOPERATIVE_MATRIX: "1"
         run: |
           $ErrorActionPreference = "Stop"
           $ProgressPreference = "SilentlyContinue"
           $PSNativeCommandUseErrorActionPreference = $false
+          $tests = @(
+            "tests/test_translator/test_static_resource_aggregates.py",
+            "tests/test_translator/test_private_vector_views.py",
+            "tests/test_translator/test_project_matrix_fragments.py",
+            "tests/test_translator/test_directx_cooperative_matrix.py",
+            "tests/test_translator/test_opengl_cooperative_matrix.py",
+            "tests/test_translator/test_resource_member_bounds.py",
+            "tests/test_translator/test_guarded_resource_indices.py",
+            "tests/test_translator/test_runtime_input_ownership.py",
+            "tests/test_translator/test_resource_identity.py",
+            "tests/test_translator/test_frozen_specializations.py",
+            "tests/test_translator/test_storage_record_runtime.py",
+            "tests/test_translator/test_integer_literals.py",
+            "tests/test_translator/test_subgroup_execution_barriers.py",
+            "tests/test_translator/test_scalar_bitcast_widths.py",
+            "tests/test_translator/test_project_template_grouping.py",
+            "tests/test_translator/test_metal_auto_pointer.py",
+            "tests/test_translator/test_conditional_resources.py",
+            "tests/test_translator/test_constant_aggregate_pointers.py",
+            "tests/test_translator/test_unnamed_parameters.py",
+            "tests/test_translator/test_partial_static_owners.py",
+            "tests/test_translator/test_software_subgroup_workgroup_ranges.py",
+            "tests/test_translator/test_project_workgroup_rules.py::test_selected_entry_rules_execute",
+            "tests/test_translator/test_project_subgroup_applicability.py"
+          )
           $evidence = ".mlx-portable-host/warp-codegen-comparison"
           New-Item -ItemType Directory -Force $evidence | Out-Null
           $cases = @(
-            @{ version = "1.0.13"; archiveSHA256 = "63231c48b0573ba4c078f69cd10a4059a0fee3427107b8219e5e80ab75bd304b"; dllSHA256 = "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638" },
-            @{ version = "1.0.14"; archiveSHA256 = "e92bec51753869a41fea53a56803de9e8de8c6033becdcd2cfaaedb9ebf82f9f"; dllSHA256 = "a23ab97d709f076a11d2ef503bc788349d1cbff81d67469cbba577cba3f86988" }
+            @{ version = "1.0.13"; archiveSHA256 = "63231c48b0573ba4c078f69cd10a4059a0fee3427107b8219e5e80ab75bd304b"; dllSHA256 = "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638" }
           )
           foreach ($case in $cases) {
             $version = $case.version
@@ -1398,9 +1461,9 @@ jobs:
                 comparisonDLLSHA256 = $selectedDigest
                 replacesRequiredGate = $false
               } | ConvertTo-Json | Set-Content "$caseEvidence/runtime-selection.json"
-              $remaining = 180 - [int][Math]::Ceiling($clock.Elapsed.TotalSeconds)
+              $remaining = 360 - [int][Math]::Ceiling($clock.Elapsed.TotalSeconds)
               if ($remaining -le 0) { throw "WARP comparison exhausted its shared deadline." }
-              python tools/run_bounded_command.py --timeout-seconds $remaining --label "WARP $($case.version) arithmetic comparison" -- python -m pytest -q -n auto --basetemp="$caseEvidence/pytest" --junitxml="$caseEvidence/results.xml" tests/test_translator/test_directx_cooperative_matrix.py -k "precise_scalar_control_executes or software_matrix_executes"
+              python tools/run_bounded_command.py --timeout-seconds $remaining --label "WARP $($case.version) resource comparison" -- python -m pytest -q -n auto --basetemp="$caseEvidence/pytest" --junitxml="$caseEvidence/results.xml" @tests
               $caseResult = $LASTEXITCODE
               $outcomes += @{ version = $case.version; exitCode = $caseResult; timeoutSeconds = $remaining }
               if ($caseResult -ne 0) { $result = $caseResult }

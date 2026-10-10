@@ -1071,14 +1071,15 @@ def test_runtime_comparison_does_not_replace_required_native_gate():
         == "failure() && runner.os == 'Windows' && steps.collective-helpers.outcome == 'failure'"
     )
     assert comparison["env"]["CROSTL_REQUIRE_DIRECTX_COOPERATIVE_MATRIX"] == "1"
-    assert comparison["timeout-minutes"] == 5
+    assert comparison["timeout-minutes"] == 8
     command = comparison["run"]
     assert "--timeout-seconds $remaining" in command and "-n auto" in command
     assert (
-        "$remaining = 180 - [int][Math]::Ceiling($clock.Elapsed.TotalSeconds)"
+        "$remaining = 360 - [int][Math]::Ceiling($clock.Elapsed.TotalSeconds)"
         in command
     )
-    assert '-k "precise_scalar_control_executes or software_matrix_executes"' in command
+    assert "@tests" in command and " -k " not in command
+    assert '"tests/test_translator/test_directx_cooperative_matrix.py"' in command
     assert "CROSTL_FXC_EXECUTABLE" not in command
     assert "originalDLLSHA256" in command and "comparisonDLLSHA256" in command
     assert "} finally {" in command
