@@ -5329,6 +5329,13 @@ layouts. The copy retains the record's byte extent, captures the addresses once,
 and proves the full destination span through helper forwarding and bounded
 loops. Required native controls cover integer and floating-point backing words,
 nonzero offsets, pointer rebasing, and allocation guards.
+OpenGL direct byte-record copies prove the complete source span before narrowing
+to signed target indices, including the last expanded element. Bounded offsets
+are retained through pointer-helper specialization; mixed calling contexts get
+distinct specializations, and pointer mutation invalidates affected bounds.
+Unproven or overflowing spans are diagnostic. A shared destination's extent does
+not prove a source-buffer range. Native controls include guarded source offsets,
+64-bit offset expressions and an extra workgroup that must leave outputs intact.
 Immediate byte-record copies through aggregate-held pointers are supported on
 DirectX and OpenGL with explicit ``workgroup_access_assertions``. The assertion
 selects the source entry, function and destination member path (for example

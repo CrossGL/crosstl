@@ -88,6 +88,10 @@
           "notes": "OpenGL target output applies deterministic, collision-free GLSL identifier remapping to user and generated symbols, including target-reserved gl_ and consecutive-underscore spellings, while preserving declared builtin interface names and source provenance, with warning-fatal glslang and SPIR-V validation coverage. Canonical Metal floating math and eager Boolean selection have typed lowering, explicit min/max NaN handling, source-helper ownership checks, and required bounded Linux numerical execution; this is not whole-repository runtime coverage.",
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_",
+            "tests/test_translator/test_workgroup_record_transfers.py::def test_record_transfer_checks_complete_source_span",
+            "tests/test_translator/test_workgroup_record_transfers.py::def test_record_transfer_proves_dynamic_source_spans",
+            "tests/test_translator/test_workgroup_record_transfers.py::def test_record_transfer_invalidates_source_offset_proofs",
+            "tests/test_translator/test_workgroup_record_transfers.py::def test_record_transfer_executes",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_reserved_identifiers_are_sanitized_consistently",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_reserved_identifier_mapping_preserves_scope_and_source_names",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_builtin_interface_block_members_preserve_builtin_names",

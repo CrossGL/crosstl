@@ -9364,6 +9364,12 @@ class GLSLCodeGen:
         def clear_interval_targets(active_intervals, target_keys):
             if not target_keys:
                 return
+            target_keys = set(target_keys)
+            for name, binding in getattr(
+                function, "_glsl_storage_pointer_aliases", {}
+            ).items():
+                if name in target_keys and isinstance(binding.get("offset"), str):
+                    target_keys.add(binding["offset"])
             for interval_key in list(active_intervals):
                 if self.glsl_interval_key_sets_overlap(
                     {interval_key},
@@ -14182,6 +14188,14 @@ class GLSLCodeGen:
                     "required_access": required_access,
                     "offset_direction": offset_direction,
                 }
+                with self.glsl_lexical_source_type_scope(lexical_source_types):
+                    offset_range = self.glsl_storage_pointer_offset_range(binding, arg)
+                binding["source_offset_interval"] = (
+                    (offset_range.minimum, offset_range.maximum)
+                    if offset_range is not None
+                    and 0 <= offset_range.minimum <= offset_range.maximum < (1 << 31)
+                    else None
+                )
                 bindings[index] = (param_name, binding)
                 key_parts.append(
                     (
@@ -14191,6 +14205,7 @@ class GLSLCodeGen:
                         storage_element_type,
                         required_access,
                         offset_direction,
+                        binding.get("source_offset_interval"),
                         self.glsl_storage_pointer_specialization_view_key(binding),
                     )
                 )
@@ -14442,6 +14457,10 @@ class GLSLCodeGen:
             )
             remaining_param_names.add(offset_name)
             offset_direction = binding.get("offset_direction")
+            if binding.get("source_offset_interval") is not None:
+                proof_parameter_intervals[offset_name] = binding[
+                    "source_offset_interval"
+                ]
             clone.parameters.append(
                 SimpleNamespace(
                     name=offset_name,
@@ -25167,6 +25186,41 @@ class GLSLCodeGen:
                 )
 
         word_count = layout["byte_extent"] // destination_layout.byte_width
+        source_range = self.glsl_storage_pointer_offset_range(
+            source_binding, source.expression
+        )
+        source_span = (
+            IntegerRange(
+                source_range.minimum,
+                source_range.maximum + word_count - 1,
+                source_range.status,
+                source_range.provenance,
+            )
+            if source_range is not None
+            else None
+        )
+        # Every expanded access is emitted in signed target-index arithmetic.
+        # The destination extent cannot establish a range for the source buffer.
+        accepted_span = IntegerRange(0, (1 << 31) - 1)
+        if source_span is None or not source_span.is_within(accepted_span):
+            self.glsl_index_type_error(
+                source_offset_node,
+                source.expression,
+                self.glsl_source_expression_type(source_offset_node),
+                "int",
+                (
+                    "index-range-unproven"
+                    if source_span is None
+                    else (
+                        "constant-index-out-of-range"
+                        if source_range.is_exact
+                        else "index-range-out-of-target-range"
+                    )
+                ),
+                range_status=("unproven" if source_span is None else "out-of-range"),
+                source_range=source_span,
+                accepted_range=accepted_span,
+            )
         proven_interval = destination_binding.get(
             "_glsl_validated_workgroup_access_interval"
         )
@@ -25219,6 +25273,16 @@ class GLSLCodeGen:
             "source_offset": source_offset,
             "word_count": word_count,
         }
+
+    def glsl_storage_pointer_offset_range(self, binding, expression):
+        assertion = binding.get("index_assertion_expression")
+        if assertion is not None:
+            asserted = self.glsl_index_asserted_range(assertion)
+            if asserted is not None:
+                return asserted
+        offset = binding.get("offset", 0)
+        intervals = getattr(expression, "_glsl_control_flow_intervals", {})
+        return self.glsl_index_value_range(offset, intervals=intervals)
 
     @staticmethod
     def glsl_storage_to_workgroup_copy_index(offset, index):
@@ -38453,8 +38517,9 @@ complex64_t crossgl_complex64_mod_assign(
             f"source type {self.type_name_string(value_type)}",
         )
 
-    def glsl_index_flow_range(self, expression):
-        intervals = getattr(expression, "_glsl_control_flow_intervals", None)
+    def glsl_index_flow_range(self, expression, intervals=None):
+        if intervals is None:
+            intervals = getattr(expression, "_glsl_control_flow_intervals", None)
         if not intervals:
             return None
 
@@ -38484,7 +38549,7 @@ complex64_t crossgl_complex64_mod_assign(
         domain = self.glsl_integer_type_domain(expression, allow_wide=True)
         return candidate if domain is None or candidate.is_within(domain) else None
 
-    def glsl_index_value_range(self, expression, _active=None):
+    def glsl_index_value_range(self, expression, _active=None, *, intervals=None):
         if expression is None:
             return None
         active = set() if _active is None else _active
@@ -38507,7 +38572,7 @@ complex64_t crossgl_complex64_mod_assign(
             if asserted is not None:
                 return asserted
 
-            flow_range = self.glsl_index_flow_range(expression)
+            flow_range = self.glsl_index_flow_range(expression, intervals)
             if flow_range is not None:
                 return flow_range
 
@@ -38526,7 +38591,9 @@ complex64_t crossgl_complex64_mod_assign(
 
             if isinstance(expression, UnaryOpNode):
                 operator_name = self.map_operator(expression.op)
-                operand_range = self.glsl_index_value_range(expression.operand, active)
+                operand_range = self.glsl_index_value_range(
+                    expression.operand, active, intervals=intervals
+                )
                 if operator_name == "+":
                     return operand_range
                 if operator_name == "-" and operand_range is not None:
@@ -38553,8 +38620,12 @@ complex64_t crossgl_complex64_mod_assign(
 
             if isinstance(expression, BinaryOpNode):
                 operator_name = self.map_operator(expression.op)
-                left = self.glsl_index_value_range(expression.left, active)
-                right = self.glsl_index_value_range(expression.right, active)
+                left = self.glsl_index_value_range(
+                    expression.left, active, intervals=intervals
+                )
+                right = self.glsl_index_value_range(
+                    expression.right, active, intervals=intervals
+                )
                 if (
                     operator_name == "%"
                     and right is not None
@@ -38636,8 +38707,12 @@ complex64_t crossgl_complex64_mod_assign(
                 )
 
             if isinstance(expression, TernaryOpNode):
-                true_range = self.glsl_index_value_range(expression.true_expr, active)
-                false_range = self.glsl_index_value_range(expression.false_expr, active)
+                true_range = self.glsl_index_value_range(
+                    expression.true_expr, active, intervals=intervals
+                )
+                false_range = self.glsl_index_value_range(
+                    expression.false_expr, active, intervals=intervals
+                )
                 if true_range is None or false_range is None:
                     return None
                 return IntegerRange(
@@ -38656,10 +38731,10 @@ complex64_t crossgl_complex64_mod_assign(
                     arguments = list(expression.arguments or [])
                 if function_name in {"min", "max"} and len(arguments) == 2:
                     left = self.glsl_index_value_range(
-                        arguments[0], active
+                        arguments[0], active, intervals=intervals
                     ) or self.glsl_integer_type_domain(arguments[0], allow_wide=True)
                     right = self.glsl_index_value_range(
-                        arguments[1], active
+                        arguments[1], active, intervals=intervals
                     ) or self.glsl_integer_type_domain(arguments[1], allow_wide=True)
                     if left is not None and right is not None:
                         if function_name == "min":
@@ -38678,8 +38753,12 @@ complex64_t crossgl_complex64_mod_assign(
                             expression_debug_name(expression),
                         )
                 if function_name == "clamp" and len(arguments) == 3:
-                    lower = self.glsl_index_value_range(arguments[1], active)
-                    upper = self.glsl_index_value_range(arguments[2], active)
+                    lower = self.glsl_index_value_range(
+                        arguments[1], active, intervals=intervals
+                    )
+                    upper = self.glsl_index_value_range(
+                        arguments[2], active, intervals=intervals
+                    )
                     if (
                         lower is not None
                         and lower.is_exact
@@ -38699,7 +38778,9 @@ complex64_t crossgl_complex64_mod_assign(
                     and destination["width"] == 1
                     and len(arguments) == 1
                 ):
-                    argument_range = self.glsl_index_value_range(arguments[0], active)
+                    argument_range = self.glsl_index_value_range(
+                        arguments[0], active, intervals=intervals
+                    )
                     if argument_range is None:
                         return None
                     bits = (

@@ -21,7 +21,17 @@ REQUIRE_ENV = "CROSTL_REQUIRE_WORKGROUP_RECORD_TRANSFERS"
 CASES = [
     (kind, mode)
     for kind in ("uint", "int", "float")
-    for mode in ("direct", "offset", "helper", "forward", "small", "loop", "alias")
+    for mode in (
+        "direct",
+        "offset",
+        "helper",
+        "forward",
+        "small",
+        "loop",
+        "alias",
+        "wide-direct",
+        "wide-forward",
+    )
 ]
 GUARD = 0x5A1B2C3D
 WORDS = [
@@ -37,6 +47,9 @@ WORDS = [
 
 
 def _source(kind, mode):
+    wide = mode.startswith("wide-")
+    if wide:
+        mode = mode[len("wide-") :]
     count = 1 if mode == "small" else 8 if mode == "loop" else 4
     record_words = min(count, 4)
     alignment = 1 if mode == "small" else 4
@@ -47,6 +60,7 @@ def _source(kind, mode):
         f"*((const device Holder::Bytes*)({source}));"
     )
     helper = ""
+    setup = ""
     if mode in {"helper", "forward"}:
         helper = (
             f"void transfer(threadgroup {kind}* destination, "
@@ -67,11 +81,9 @@ def _source(kind, mode):
         )
         transfer = f"for (uint j = 0u; j < 8u; j += 4u) {{ {transfer} }}"
     if mode == "alias":
-        transfer = (
-            f"threadgroup {kind}* destination = tile; destination += 2; "
-            + transfer.replace("&tile[2]", "destination")
-        )
-    return f"""#include <metal_stdlib>
+        setup = f"threadgroup {kind}* destination = tile; destination += 2;"
+        transfer = transfer.replace("&tile[2]", "destination")
+    text = f"""#include <metal_stdlib>
 using namespace metal;
 struct Holder {{ struct alignas({alignment}) Bytes {{ uchar data[{record_words * 4}]; }}; }};
 {helper}
@@ -79,14 +91,169 @@ kernel void record_transfer(const device {kind}* inputs [[buffer(0)]],
                             device uint* results [[buffer(1)]],
                             uint tid [[thread_position_in_grid]]) {{
     threadgroup {kind} tile[{count + 4}];
-    uint base = 4u + {count}u * tid;
-    for (uint i = 0u; i < {count + 4}u; ++i) {{ tile[i] = as_type<{kind}>(0x5A1B2C3Du); }}
-    {transfer}
-    for (uint i = 0u; i < {count + 4}u; ++i) {{
-        results[4u + {count + 4}u * tid + i] = as_type<uint>(tile[i]);
+    {setup}
+    if (tid < 5u) {{
+        uint base = 4u + {count}u * tid;
+        for (uint i = 0u; i < {count + 4}u; ++i) {{ tile[i] = as_type<{kind}>(0x5A1B2C3Du); }}
+        {transfer}
+        for (uint i = 0u; i < {count + 4}u; ++i) {{
+            results[4u + {count + 4}u * tid + i] = as_type<uint>(tile[i]);
+        }}
     }}
 }}
 """
+    if wide:
+        text = text.replace(
+            f"uint base = 4u + {count}u * tid;",
+            f"ulong base = 4ul + {count}ul * ulong(tid);",
+        )
+    return text
+
+
+def _source_span_report(root, expression, words=2, *, guard=None, helper=False):
+    transfer = "*((threadgroup Bytes*)tile) = *((const device Bytes*)source);"
+    declaration = ""
+    if helper:
+        declaration = (
+            "void copy_words(threadgroup uint* tile, const device uint* source) { "
+            + transfer
+            + " }"
+        )
+        transfer = f"copy_words(tile, inputs + ({expression}));"
+    else:
+        transfer = transfer.replace("*)source)", f"*)(inputs + ({expression})))")
+    transfer += " results[0] = tile[0];"
+    if guard:
+        transfer = f"if ({guard}) {{ {transfer} }}"
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+struct alignas(4) Bytes {{ uchar bytes[{words * 4}]; }};
+{declaration}
+kernel void copy_span(const device uint* inputs [[buffer(0)]],
+                      device uint* results [[buffer(1)]],
+                      constant ulong& offset [[buffer(2)]]) {{
+    threadgroup uint tile[{words}];
+    {transfer}
+}}
+"""
+    (root / "copy.metal").write_text(source)
+    report = translate_project(
+        ProjectConfig(
+            root=root,
+            include_patterns=("copy.metal",),
+            targets=("opengl",),
+            output_dir="out",
+            workgroup_size=(1, 1, 1),
+        ),
+        format_output=False,
+    )
+    report.write_json(root / "report.json")
+    return report.to_json()
+
+
+@pytest.mark.parametrize("words", [1, 2, 4, 8])
+@pytest.mark.parametrize("suffix", ["", "u", "l", "ul"])
+@pytest.mark.parametrize("overflow", [False, True])
+def test_record_transfer_checks_complete_source_span(tmp_path, words, suffix, overflow):
+    start = (1 << 31) - words + int(overflow)
+    report = _source_span_report(tmp_path, f"{start}{suffix}", words)
+    if overflow:
+        assert report["summary"]["translatedCount"] == 0
+        diagnostic = next(
+            item for item in report["diagnostics"] if item["severity"] == "error"
+        )
+        assert diagnostic["code"] == "project.translate.opengl-index-type-unsupported"
+        details = diagnostic["details"]["indexConversion"]
+        assert details["reason"] == "constant-index-out-of-range"
+        assert details["sourceRange"]["maximum"] == 1 << 31
+        assert details["acceptedRange"]["maximum"] == (1 << 31) - 1
+        assert diagnostic["location"]["file"] == "copy.metal"
+    else:
+        assert report["summary"]["translatedCount"] == 1, report["diagnostics"]
+        artifact = next(
+            item for item in report["artifacts"] if item["status"] == "translated"
+        )
+        _compile((tmp_path / artifact["path"]).read_text(), "opengl", tmp_path)
+
+
+@pytest.mark.parametrize("helper", [False, True])
+@pytest.mark.parametrize(
+    "expression,guard,accepted",
+    [
+        ("offset & 15ul", None, True),
+        ("offset % 16ul", None, True),
+        (
+            "(offset + 18446744073709551615ul) / 18446744073709551615ul",
+            "offset <= 3ul",
+            False,
+        ),
+        ("offset", "offset <= 2147483646ul", True),
+        ("offset", "offset <= 2147483647ul", False),
+        ("offset", None, False),
+        ("uint(offset)", None, False),
+        ("4294967296ul", None, False),
+        ("18446744073709551615ul", None, False),
+        ("-1l", None, False),
+    ],
+)
+def test_record_transfer_proves_dynamic_source_spans(
+    tmp_path, expression, guard, accepted, helper
+):
+    report = _source_span_report(tmp_path, expression, guard=guard, helper=helper)
+    if accepted:
+        assert report["summary"]["translatedCount"] == 1, report["diagnostics"]
+        artifact = next(
+            item for item in report["artifacts"] if item["status"] == "translated"
+        )
+        _compile((tmp_path / artifact["path"]).read_text(), "opengl", tmp_path)
+    else:
+        assert report["summary"]["translatedCount"] == 0
+        assert any(
+            item["code"] == "project.translate.opengl-index-type-unsupported"
+            for item in report["diagnostics"]
+        )
+
+
+@pytest.mark.parametrize("mode", ["mixed-call", "update", "unknown-update", "shadow"])
+def test_record_transfer_invalidates_source_offset_proofs(tmp_path, mode):
+    source = _source("uint", "helper")
+    if mode == "mixed-call":
+        source = source.replace(
+            "transfer(&tile[2], &inputs[base]);",
+            "transfer(&tile[2], &inputs[base]); transfer(&tile[2], &inputs[inputs[0]]);",
+        )
+    else:
+        prefix = {
+            "update": "source += 2147483647; ",
+            "unknown-update": "source += source[0]; ",
+            "shadow": (
+                "const device uint* saved = source; { const device uint* source = saved + 2147483647; "
+            ),
+        }[mode]
+        start = source.index("*((threadgroup Holder::Bytes*)")
+        end = source.index(";", start) + 1
+        source = (
+            source[:start]
+            + prefix
+            + source[start:end]
+            + (" }" if mode == "shadow" else "")
+            + source[end:]
+        )
+    (tmp_path / "copy.metal").write_text(source)
+    report = translate_project(
+        ProjectConfig(
+            root=tmp_path,
+            include_patterns=("copy.metal",),
+            targets=("opengl",),
+            workgroup_size=(1, 1, 1),
+        ),
+        format_output=False,
+    ).to_json()
+    assert report["summary"]["translatedCount"] == 0, report
+    assert any(
+        item["code"] == "project.translate.opengl-index-type-unsupported"
+        for item in report["diagnostics"]
+    )
 
 
 def _request(
@@ -153,7 +320,7 @@ def _request(
         package,
         inputs,
         expected,
-        {"workgroupCount": [5, 1, 1], "workgroupSize": [1, 1, 1]},
+        {"workgroupCount": [6, 1, 1], "workgroupSize": [1, 1, 1]},
         expected_target=target,
     )
     assert not request.execution_plan.diagnostics
