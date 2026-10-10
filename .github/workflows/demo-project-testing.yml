@@ -1312,6 +1312,7 @@ jobs:
               tests/test_translator/test_private_vector_views.py \
               tests/test_translator/test_project_matrix_fragments.py \
               tests/test_translator/test_directx_cooperative_matrix.py \
+              tests/test_translator/test_opengl_cooperative_matrix.py \
               tests/test_translator/test_resource_member_bounds.py \
               tests/test_translator/test_guarded_resource_indices.py \
               tests/test_translator/test_runtime_input_ownership.py \

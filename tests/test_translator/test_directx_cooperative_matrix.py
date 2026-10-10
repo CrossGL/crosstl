@@ -378,28 +378,32 @@ kernel void matrix_products(const device uint* inputWords [[buffer(0)]],
 """
 
 
-def _project_request(root, target):
+def _project_request(root, target, *, shape=(32, 4, 1), rounding=False):
     source = _metal_source()
     (root / "matrix.metal").write_text(source)
     options = {
         "cooperative_matrix_fragment_mapping": "tile_4x4_row_pair",
         "cooperative_matrix_fragment_mapping_provenance": "declared_row_pair_mapping",
     }
-    if target == "directx":
+    if target in {"directx", "opengl"}:
         options["target_options"] = {
             target: {
                 "cooperative_matrix_software_lowering": True,
                 "software_subgroup_width": 32,
-                "relative_wave_shuffle_out_of_range": "self",
+                "software_subgroup_applicability": "when-used",
             }
         }
+        if target == "directx":
+            options["target_options"][target][
+                "relative_wave_shuffle_out_of_range"
+            ] = "self"
     report = translate_project(
         ProjectConfig(
             root=root,
             include_patterns=("matrix.metal",),
             targets=(target,),
             output_dir="out",
-            workgroup_size=(32, 4, 1),
+            workgroup_size=shape,
             source_options={"metal": options},
         ),
         format_output=False,
@@ -407,7 +411,7 @@ def _project_request(root, target):
     report.write_json(root / "report.json")
     assert not report.to_json()["diagnostics"], report.to_json()
     descriptor, package = _prepare_native_package(report, root)
-    words, expected = _case()
+    words, expected = _case(rounding=rounding)
     guard = [0x6A15BEEF] * 32
 
     def value(values):
@@ -425,7 +429,7 @@ def _project_request(root, target):
             },
         ),
         outputs,
-        {"workgroupCount": [3, 1, 1], "workgroupSize": [32, 4, 1]},
+        {"workgroupCount": [3, 1, 1], "workgroupSize": list(shape)},
         expected_target=target,
     )
     assert not request.execution_plan.diagnostics

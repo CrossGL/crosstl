@@ -2002,6 +2002,18 @@ of the hardware wave width. Workgroup dimensions must be concrete and all
 barriers, including those reached through helpers, must have proven uniform
 control flow. Divergent calls and incomplete subgroups are rejected.
 
+OpenGL supports the same float 8-by-8 mapping with
+``cooperative_matrix_software_lowering = true`` and
+``software_subgroup_width = 32``. Matrix operands are exchanged through bounded
+workgroup memory partitioned by logical subgroup, without native subgroup
+intrinsics or a hardware-width requirement. The software applicability policy
+records matrix products even when no other subgroup operation is present.
+Products and sums are separately rounded binary32 operations in increasing
+inner-dimension order. This is not a promise of arbitrary-input bitwise Metal
+parity. Linux execution controls check both fragment elements, multiple logical
+subgroups, repeated products, nonzero accumulators, rounding-sensitive inputs
+and output guards. These controls do not establish complete MLX GEMM execution.
+
 DirectX and OpenGL software-subgroup control-flow analysis follows resolved read-only
 helper returns through scalar values, value-only aggregate fields, immutable
 locals and nested helpers. Straight-line private aggregate construction is

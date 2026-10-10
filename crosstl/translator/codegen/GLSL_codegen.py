@@ -1841,6 +1841,7 @@ class GLSLCodeGen:
             "WaveActiveMax",
             "WaveShuffleDown",
             "subgroupExecutionBarrier",
+            "CooperativeMatrixMultiplyAccumulate",
             *GLSL_SOFTWARE_SUBGROUP_VOTES,
         }
     )
@@ -4315,6 +4316,13 @@ class GLSLCodeGen:
             discover_zero_trip=discover_zero_trip,
         ):
             operation = None
+            if (
+                self.cooperative_matrix_software_lowering
+                and isinstance(node, CooperativeMatrixOpNode)
+                and node.operation == "multiply_accumulate"
+            ):
+                records.append(("CooperativeMatrixMultiplyAccumulate", node))
+                continue
             if isinstance(node, WaveOpNode):
                 operation = node.operation
             elif isinstance(node, FunctionCallNode):
@@ -5322,6 +5330,17 @@ class GLSLCodeGen:
                 source_location=getattr(entry_function, "source_location", None),
             )
         for operation, node in all_records:
+            if (
+                operation == "CooperativeMatrixMultiplyAccumulate"
+                and invocation_count % self.software_subgroup_width
+            ):
+                raise self.glsl_software_subgroup_error(
+                    "OpenGL matrix products require complete logical subgroups",
+                    workgroup_size=concrete_workgroup_size,
+                    operation=operation,
+                    reason="incomplete-matrix-subgroup",
+                    source_location=getattr(node, "source_location", None),
+                )
             if operation not in self.GLSL_SOFTWARE_SUBGROUP_OPERATIONS:
                 raise self.glsl_software_subgroup_error(
                     f"OpenGL software subgroup lowering does not support '{operation}'",
@@ -6378,11 +6397,6 @@ class GLSLCodeGen:
             )
         )
         if self.software_subgroup_width is not None:
-            if uses_matrix_multiply_accumulate:
-                return [
-                    self.GLSL_SUBGROUP_BASIC_EXTENSION_LINE,
-                    "#extension GL_KHR_shader_subgroup_shuffle : require",
-                ]
             return []
         operations = self.glsl_wave_operations(ast, target_stage)
         lines = []
@@ -29477,7 +29491,12 @@ class GLSLCodeGen:
                 matrix_type=result_contract["matrix_type"],
             )
 
-        if self.current_glsl_exact_subgroup_width != 32:
+        if self.software_subgroup_width == 32:
+            self.validate_glsl_software_subgroup_function(
+                "CooperativeMatrixMultiplyAccumulate",
+                source_location=getattr(node, "source_location", None),
+            )
+        elif self.current_glsl_exact_subgroup_width != 32:
             actual_width = self.current_glsl_exact_subgroup_width
             actual = "unspecified" if actual_width is None else str(actual_width)
             self.glsl_cooperative_matrix_operation_error(
@@ -29672,6 +29691,14 @@ class GLSLCodeGen:
         right_contract,
         accumulator_contract,
     ):
+        if self.software_subgroup_width == 32:
+            return self.generate_glsl_software_matrix_multiply_accumulate_helper(
+                helper_name,
+                result_contract,
+                left_contract,
+                right_contract,
+                accumulator_contract,
+            )
         mapping = result_contract["fragment_mapping_contract"]
         owner_lanes = []
         owner_elements = []
@@ -29769,6 +29796,77 @@ class GLSLCodeGen:
                     ]
                 )
         lines.extend(["    return result;", "}"])
+        return "\n".join(lines) + "\n"
+
+    def generate_glsl_software_matrix_multiply_accumulate_helper(
+        self,
+        helper_name,
+        result_contract,
+        left_contract,
+        right_contract,
+        accumulator_contract,
+    ):
+        mapping = result_contract["fragment_mapping_contract"]
+        scratch = [
+            self.glsl_generated_module_identifier(
+                ("cooperative-matrix-scratch", helper_name, operand),
+                f"{helper_name}_{operand}",
+            )
+            for operand in ("left", "right")
+        ]
+        count = self.glsl_software_subgroup_workgroup_invocation_count
+        lines = [f"shared vec2 {name}[{count}];" for name in scratch]
+        lines.extend(
+            [
+                f"{result_contract['type_name']} {helper_name}(",
+                f"    {left_contract['type_name']} left, {right_contract['type_name']} right,",
+                f"    {accumulator_contract['type_name']} accumulator) {{",
+                "    uint invocation = gl_LocalInvocationIndex;",
+                "    uint lane = invocation % 32u;",
+                "    uint subgroupBase = invocation - lane;",
+                f"    {scratch[0]}[invocation] = vec2(left.elements[0], left.elements[1]);",
+                f"    {scratch[1]}[invocation] = vec2(right.elements[0], right.elements[1]);",
+                "    barrier();",
+                f"    {result_contract['type_name']} result = accumulator;",
+            ]
+        )
+        # Registered source ownership is independent of the driver's subgroup layout.
+        owners = [mapping.owner(row, column) for row in range(8) for column in range(8)]
+        tables = {
+            "ownerLanes": [owner[0] for owner in owners],
+            "ownerElements": [owner[1] for owner in owners],
+        }
+        for element in range(2):
+            tables[f"coordinates{element}"] = [
+                row * 8 + column
+                for lane in range(32)
+                for row, column in [mapping.coordinate(lane, element)]
+            ]
+        for name, values in tables.items():
+            lines.append(self.glsl_cooperative_matrix_uint_array(name, values))
+        for element in range(2):
+            lines.extend(
+                [
+                    f"    uint row{element} = coordinates{element}[lane] / 8u;",
+                    f"    uint column{element} = coordinates{element}[lane] % 8u;",
+                    f"    precise float sum{element} = accumulator.elements[{element}];",
+                ]
+            )
+            for inner in range(8):
+                prefix = f"term{element}_{inner}"
+                lines.extend(
+                    [
+                        f"    uint {prefix}A = row{element} * 8u + {inner}u;",
+                        f"    uint {prefix}B = {inner}u * 8u + column{element};",
+                        f"    precise float {prefix} = "
+                        f"{scratch[0]}[subgroupBase + ownerLanes[{prefix}A]][ownerElements[{prefix}A]] * "
+                        f"{scratch[1]}[subgroupBase + ownerLanes[{prefix}B]][ownerElements[{prefix}B]];",
+                        f"    sum{element} = sum{element} + {prefix};",
+                    ]
+                )
+            lines.append(f"    result.elements[{element}] = sum{element};")
+        # Every invocation finishes reading before a subsequent call reuses storage.
+        lines.extend(["    barrier();", "    return result;", "}"])
         return "\n".join(lines) + "\n"
 
     def generate_glsl_cooperative_matrix_software_support(self):
@@ -37505,20 +37603,9 @@ complex64_t crossgl_complex64_mod_assign(
         code += f"{indent_str}}}\n"
         return code
 
-    def generate_glsl_software_subgroup_operation(
-        self,
-        operation,
-        arguments,
-        *,
-        source_location=None,
+    def validate_glsl_software_subgroup_function(
+        self, operation, *, source_location=None
     ):
-        if operation not in self.GLSL_SOFTWARE_SUBGROUP_OPERATIONS:
-            raise self.glsl_software_subgroup_error(
-                f"OpenGL software subgroup lowering does not support '{operation}'",
-                operation=operation,
-                reason="operation-unsupported",
-                source_location=source_location,
-            )
         current_function_name = self.current_glsl_source_function_name
         current_function_id = self.current_glsl_source_function_id
         approved_function_ids = self.glsl_software_subgroup_helper_function_ids
@@ -37548,6 +37635,23 @@ complex64_t crossgl_complex64_mod_assign(
                 source_location=source_location,
             )
 
+    def generate_glsl_software_subgroup_operation(
+        self,
+        operation,
+        arguments,
+        *,
+        source_location=None,
+    ):
+        if operation not in self.GLSL_SOFTWARE_SUBGROUP_OPERATIONS:
+            raise self.glsl_software_subgroup_error(
+                f"OpenGL software subgroup lowering does not support '{operation}'",
+                operation=operation,
+                reason="operation-unsupported",
+                source_location=source_location,
+            )
+        self.validate_glsl_software_subgroup_function(
+            operation, source_location=source_location
+        )
         expected_arity = (
             0
             if operation == "subgroupExecutionBarrier"
