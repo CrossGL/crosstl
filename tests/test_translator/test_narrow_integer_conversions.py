@@ -378,7 +378,9 @@ def test_hlsl_writable_overloads_keep_lvalues(tmp_path, direction, width, signed
 @pytest.mark.parametrize("kind", ("char", "uchar"))
 @pytest.mark.parametrize("readonly", (False, True))
 @pytest.mark.parametrize("indexed", (False, True))
-def test_hlsl_rejects_byte_reference_aliases(tmp_path, kind, readonly, indexed):
+def test_hlsl_preserves_exact_byte_aliases_and_rejects_unknown_overlap(
+    tmp_path, kind, readonly, indexed
+):
     second = "const thread" if readonly else "thread"
     declaration = f"{kind} value = {kind}(1);"
     arguments = "value, value"
@@ -394,6 +396,11 @@ def test_hlsl_rejects_byte_reference_aliases(tmp_path, kind, readonly, indexed):
         "kernel void aliases(device uint* outputs [[buffer(0)]]) {\n"
         f"{declaration} change({arguments}); outputs[0] = uint({result});\n}}\n"
     )
-    with pytest.raises(DirectXContextualConversionError) as error:
-        translate(str(source), backend="directx", format_output=False)
-    assert error.value.reason == "byte-reference-alias-unsupported"
+    if indexed:
+        with pytest.raises(DirectXContextualConversionError) as error:
+            translate(str(source), backend="directx", format_output=False)
+        assert error.value.reason == "byte-reference-alias-unsupported"
+    else:
+        generated = translate(str(source), backend="directx", format_output=False)
+        assert "change_shared_references" in generated
+        _compile(generated, "directx", tmp_path)

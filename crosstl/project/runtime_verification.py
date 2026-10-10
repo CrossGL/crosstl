@@ -1900,9 +1900,17 @@ class MetalRuntimeParityAdapter(NativeRuntimeParityAdapter):
     required_tools = ("xcrun",)
     supported_platforms = ("darwin",)
 
-    def __init__(self, runtime=None, *, timeout_seconds=120, **kwargs):
+    def __init__(
+        self, runtime=None, *, timeout_seconds=120, language_version=None, **kwargs
+    ):
         from .metal_runtime import MetalComputeRuntime, run_metal_command
 
+        if language_version is not None and (
+            not isinstance(language_version, str)
+            or re.fullmatch(r"[1-9][0-9]*\.[0-9]+", language_version) is None
+        ):
+            raise ValueError("Metal language version must be a major.minor string.")
+        self.language_version = language_version
         if (
             isinstance(timeout_seconds, bool)
             or not isinstance(timeout_seconds, (int, float))
@@ -1938,6 +1946,11 @@ class MetalRuntimeParityAdapter(NativeRuntimeParityAdapter):
                     "metal",
                     "-Werror",
                     "-fno-fast-math",
+                    *(
+                        (f"-std=metal{self.language_version}",)
+                        if self.language_version is not None
+                        else ()
+                    ),
                     "-c",
                     str(artifact_path),
                     "-o",

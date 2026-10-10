@@ -1,5 +1,6 @@
 """Canonical CrossGL abstract syntax tree node definitions."""
 
+from copy import deepcopy
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
@@ -572,6 +573,13 @@ class StageMap(dict):
 
     def copy(self):
         return StageMap(self)
+
+    def __deepcopy__(self, memo):
+        result = StageMap()
+        memo[id(self)] = result
+        for key, stage in self.items():
+            result.append(deepcopy(key, memo), deepcopy(stage, memo))
+        return result
 
 
 class ImportNode(ASTNode):

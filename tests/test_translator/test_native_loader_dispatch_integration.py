@@ -182,11 +182,13 @@ def _build_request(tmp_path: Path, target: str):
     return request, descriptor, artifact_path
 
 
-def _executor(target: str) -> RuntimeParityExecutor:
+def _executor(target: str, *, metal_language_version=None) -> RuntimeParityExecutor:
     if target == "metal":
         from crosstl.project import MetalRuntimeParityAdapter
 
-        runtime_adapter = MetalRuntimeParityAdapter()
+        runtime_adapter = MetalRuntimeParityAdapter(
+            language_version=metal_language_version
+        )
     elif target == "directx":
         runtime_adapter = DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime())
     else:

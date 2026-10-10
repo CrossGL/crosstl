@@ -126,13 +126,19 @@ def _execute(
     original_source=None,
     original_entry=None,
     metal_compile_flags=(),
+    metal_language_version=None,
     validate=None,
     compare_with_original=False,
 ):
     target = request.artifact["target"]
     if compare_with_original:
         assert target == "metal" and original_source is not None
-    executor = _executor(target)
+    executor = _executor(target, metal_language_version=metal_language_version)
+    language_flags = (
+        (f"-std=metal{metal_language_version}",)
+        if metal_language_version is not None
+        else ()
+    )
     state = RuntimeExecutionState(request=request, plan=request.execution_plan)
     records = {}
     try:
@@ -141,7 +147,12 @@ def _execute(
         validation = work / "validation"
         validation.mkdir()
         if validate is None:
-            _, module = _compile(request.artifact_path.read_text(), target, validation)
+            _, module = _compile(
+                request.artifact_path.read_text(),
+                target,
+                validation,
+                metal_compile_flags=language_flags,
+            )
         else:
             module = validate(request.artifact_path, validation, target)
         assert module.is_file() and module.stat().st_size
@@ -169,7 +180,11 @@ def _execute(
                 original_source,
                 "metal",
                 original,
-                metal_compile_flags=("-fno-fast-math", *metal_compile_flags),
+                metal_compile_flags=(
+                    "-fno-fast-math",
+                    *language_flags,
+                    *metal_compile_flags,
+                ),
             )
             control = replace(
                 native,
@@ -181,7 +196,11 @@ def _execute(
             outputs = executor.runtime_adapter.runtime.dispatch(None, state, control)
             records["originalMetal"] = {
                 "outputs": outputs,
-                "compileFlags": ["-fno-fast-math", *metal_compile_flags],
+                "compileFlags": [
+                    "-fno-fast-math",
+                    *language_flags,
+                    *metal_compile_flags,
+                ],
                 "moduleFile": str(library.relative_to(work)),
                 "sourceFile": str(source.relative_to(work)),
                 "sourceSha256": hashlib.sha256(source.read_bytes()).hexdigest(),

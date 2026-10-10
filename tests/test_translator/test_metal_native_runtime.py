@@ -234,6 +234,37 @@ def _native_request(request):
     return state, native
 
 
+@pytest.mark.parametrize("version", [None, "3.2", "4.1"])
+def test_metal_runtime_language_version_is_explicit(tmp_path, version):
+    adapter = MetalRuntimeParityAdapter(
+        runtime=SimpleNamespace(), language_version=version
+    )
+    commands = adapter.validation_commands(
+        None, tmp_path / "kernel.metal", temp_dir=tmp_path
+    )
+    flags = [arg for arg in commands[0].command if arg.startswith("-std=")]
+    assert flags == ([] if version is None else [f"-std=metal{version}"])
+    assert "-Werror" in commands[0].command
+    assert "-fno-fast-math" in commands[0].command
+    assert commands[0].module_path == tmp_path / "kernel.air"
+    assert commands[1].module_path == tmp_path / "kernel.metallib"
+    assert not any(arg.startswith("-std=") for arg in commands[1].command)
+    assert (
+        adapter.validation_commands(
+            None, tmp_path / "existing.metallib", temp_dir=tmp_path
+        )
+        == ()
+    )
+
+
+@pytest.mark.parametrize(
+    "version", [True, 4.1, 4, "", "4", "metal4.1", "4.1 -O3", "4.1\n", []]
+)
+def test_metal_runtime_rejects_malformed_language_version(version):
+    with pytest.raises(ValueError, match="major.minor"):
+        MetalRuntimeParityAdapter(runtime=SimpleNamespace(), language_version=version)
+
+
 def test_metal_package_preserves_layouts_and_single_buffer_namespace(tmp_path):
     request, descriptor, _, _, _ = _request(tmp_path)
     assert {b["namespace"] for b in descriptor["bindings"]} == {"buffer"}

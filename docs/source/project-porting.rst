@@ -3473,6 +3473,12 @@ APIs on macOS 13 or newer. They require Xcode's Metal and Swift tools and an
 available Metal device. No additional Python GPU binding is required. The
 runtime compiles an identity-checked source snapshot with warnings fatal and
 fast math disabled, links a Metal library, and runs a shipped Swift worker.
+``MetalRuntimeParityAdapter(language_version="4.1")`` selects an explicit
+Metal language version when the source requires newer features, such as
+acquire/release atomic fences. The default leaves version selection to the
+installed compiler. The compile command includes the requested version; an
+unsupported version fails compilation without a fallback. An
+existing ``.metallib`` is not recompiled or relabeled by this option.
 
 Requests require explicit or reflected ``workgroupSize`` and
 ``workgroupCount``; the runtime does not guess a group size from a maximum-thread
@@ -5368,9 +5374,15 @@ members remain diagnostic; they are not replaced with default values.
 HLSL writable arguments capture nonliteral array indices at the call expression
 before copy-in and copy-out, including indexed aggregate receivers. The captured
 location is reused for writeback; index side effects are not repeated, and captures
-remain inside their original conditional or loop evaluation. This does not solve
-overlapping source references whose writes must be visible through another
-parameter within the callee.
+remain inside their original conditional or loop evaluation. DirectX and OpenGL
+specialize uniquely resolved helpers when multiple source reference arguments
+denote the same stable location. The specialized helper uses one shared parameter,
+including nested helper calls, so reads observe preceding writes through any alias.
+Readonly aliases may share a writable reference; ordinary by-value and target
+value-result parameters retain their original semantics. Calls requiring this
+specialization reject side-effecting sibling arguments rather than changing their
+evaluation. This does not establish general alias analysis for different index
+expressions, overlapping aggregate/component views or unresolved overloads.
 Two- and four-component vectors of 32-bit floating-point, signed integer and
 unsigned integer elements retain their component types and widths in these
 private references. Offsets count complete vectors, not scalar components;

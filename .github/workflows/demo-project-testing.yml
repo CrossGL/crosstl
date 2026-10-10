@@ -1253,6 +1253,7 @@ jobs:
           CROSTL_REQUIRE_COLLECTIVE_REFERENCE_RUNTIME: "1"
           CROSTL_REQUIRE_METAL_NESTED_MEMBERS: "1"
           CROSTL_REQUIRE_REFERENCE_CAPTURE: "1"
+          CROSTL_REQUIRE_REFERENCE_ALIASES: "1"
           CROSTL_REQUIRE_PARAMETER_USAGE: "1"
           CROSTL_REQUIRE_RESOURCE_OVERLOADS: "1"
           CROSTL_REQUIRE_STORAGE_VECTOR_VIEWS: "1"
@@ -1299,6 +1300,7 @@ jobs:
               tests/test_translator/test_collective_reference_effects.py \
               tests/test_translator/test_metal_nested_member_context.py \
               tests/test_translator/test_reference_capture.py \
+              tests/test_translator/test_reference_aliases.py \
               tests/test_translator/test_parameter_usage.py \
               tests/test_translator/test_resource_overloads.py \
               tests/test_translator/test_storage_vector_views.py \

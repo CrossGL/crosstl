@@ -294,7 +294,8 @@ def test_fenced_execution_barriers_package_and_compile(tmp_path, target, nested)
             if target == "directx"
             else "memoryBarrierShared();" in generated
         )
-    _compile(generated, target, tmp_path)
+    # Acquire/release fence orders are available starting with Metal 4.1.
+    _compile(generated, target, tmp_path, metal_compile_flags=("-std=metal4.1",))
 
 
 @pytest.mark.parametrize("nested", [False, True])
@@ -312,6 +313,7 @@ def test_fenced_execution_barriers_execute_with_scratch_reuse(
         tmp_path,
         original_source=source if target == "metal" else None,
         original_entry="exchange",
+        metal_language_version="4.1",
     )
 
 
