@@ -75,6 +75,7 @@ from ..cooperative_matrix import (
     get_cooperative_matrix_fragment_mapping,
     has_cooperative_matrix_fragment_mapping,
 )
+from ..resource_identity import RESOURCE_IDENTITY_ATTRIBUTE, resource_identity_marker
 from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
 from ..structure_conversions import (
@@ -8034,6 +8035,7 @@ class GLSLCodeGen:
                     var_name,
                     resource_binding,
                     array_suffix,
+                    node=node,
                 )
                 self.advance_resource_binding(
                     resource_binding_cursors,
@@ -8150,6 +8152,7 @@ class GLSLCodeGen:
                     var_name,
                     resource_binding,
                     array_suffix,
+                    node=node,
                 )
                 self.advance_resource_binding(
                     resource_binding_cursors,
@@ -15488,7 +15491,11 @@ class GLSLCodeGen:
                 parameter_name = getattr(parameter, "name", None)
                 if not parameter_name:
                     continue
-                attributes = []
+                attributes = [
+                    deepcopy(attr)
+                    for attr in getattr(parameter, "attributes", []) or []
+                    if getattr(attr, "name", None) == RESOURCE_IDENTITY_ATTRIBUTE
+                ]
                 if binding is not None:
                     attributes.append(
                         AttributeNode(
@@ -15765,6 +15772,7 @@ class GLSLCodeGen:
                 "std140", binding=resource_binding
             )
             block_name = self.glsl_module_identifier_name(node.name)
+            code += resource_identity_marker(node, block_name)
             if isinstance(node, StructNode):
                 code += f"{layout} uniform {block_name} {{\n"
                 members = getattr(node, "members", [])
@@ -49042,6 +49050,9 @@ complex64_t crossgl_complex64_mod_assign(
             ("structured-buffer-block", name),
             f"{name}Buffer",
         )
+        definitions += resource_identity_marker(
+            node, name if array_size is not None else block_name
+        )
         if array_size is not None:
             instance_member = "data"
             self.structured_buffer_instance_members[name] = instance_member
@@ -49446,7 +49457,7 @@ complex64_t crossgl_complex64_mod_assign(
         )
 
     def glsl_constant_buffer_block_declaration(
-        self, vtype, var_name, binding, array_suffix=""
+        self, vtype, var_name, binding, array_suffix="", node=None
     ):
         struct_name = self.constant_buffer_element_type(vtype)
         if struct_name not in self.structs_by_name:
@@ -49456,10 +49467,11 @@ complex64_t crossgl_complex64_mod_assign(
             var_name,
             binding,
             array_suffix,
+            node=node,
         )
 
     def glsl_struct_uniform_block_declaration(
-        self, vtype, var_name, binding, array_suffix=""
+        self, vtype, var_name, binding, array_suffix="", node=None
     ):
         struct_name = str(self.resource_base_type(vtype))
         self.union_storage.validate_buffer(struct_name)
@@ -49468,7 +49480,8 @@ complex64_t crossgl_complex64_mod_assign(
             "uniform", struct_name, var_name
         )
         layout = self.glsl_resource_layout_prefix("std140", binding=binding)
-        code = f"{layout} uniform {block_name} {{\n"
+        code = resource_identity_marker(node, var_name)
+        code += f"{layout} uniform {block_name} {{\n"
         for member in getattr(struct, "members", []) or []:
             code += self.generate_struct_member_declaration(
                 member,
@@ -50944,7 +50957,8 @@ complex64_t crossgl_complex64_mod_assign(
                 continue
             if (
                 self.is_glsl_stage_io_metadata_attribute(attr)
-                or str(getattr(attr, "name", "")).lower() == "maybe_unused"
+                or str(getattr(attr, "name", "")).lower()
+                in {"maybe_unused", "source_resource"}
                 or is_image_format_attribute(attr)
                 or self.is_resource_binding_attribute(attr)
                 or is_resource_access_attribute(attr)

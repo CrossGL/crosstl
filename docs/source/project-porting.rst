@@ -1029,6 +1029,39 @@ executes the unchanged source as a control. OpenGL retains its existing
 parenthesized expressions. These checks do not establish full application
 parity or change the separate narrow-float and complex lowering rules.
 
+**Source resource identities.**
+
+Metal buffer parameters can retain their original entry-point name, parameter
+name and parameter index through saved CrossGL, HLSL, GLSL and Metal output:
+
+.. code-block:: toml
+
+   [project.source_options.metal]
+   preserve_resource_origins = true
+
+The single-file API accepts the same boolean in ``source_options``. The option
+is disabled by default. It applies to device and constant buffer pointers,
+references and one-dimensional array parameters, not textures or samplers.
+CrossGL stores ``@source_resource`` attributes; target declarations carry
+versioned ``crosstl-resource-origin`` comments identifying the actual emitted
+resource, including its entry point for Metal. Reflection rejects malformed,
+duplicate, ambiguous and unmatched records. Package inspection also rejects
+differences between declared identities and packaged shader metadata.
+
+Reflected resources expose the identity at
+``metadata.provenance.sourceResource``. Native loader bindings expose it at
+``provenance.sourceResource``, allowing callers to select resources without
+guessing generated names. The surrounding artifact supplies source path and
+content hashes; parameter identities are not globally unique. These records
+do not prove buffer bounds, authorize integer narrowing, validate uploaded
+metadata, or establish that a resource remains immutable during execution.
+Those checks require separate runtime contracts. Existing layout and native
+runtime limitations still apply.
+
+The existing three-platform native resource job compiles and executes a
+record-buffer gather with a scalar constant, choosing all uploads by source
+identity and checking exact integer results and untouched output guards.
+
 **Fused arithmetic profiles.**
 
 ``crosstl.translator.fused_math`` provides an internal binary32 fused

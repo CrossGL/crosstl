@@ -20,6 +20,10 @@ from crosstl.project.integral_literals import (
 )
 from crosstl.project.storage_record_layout import storage_record_layout
 from crosstl.project.uniform_layout import std140_block_layout
+from crosstl.translator.resource_identity import (
+    apply_resource_identities,
+    parse_resource_identities,
+)
 from crosstl.translator.resource_storage import (
     apply_resource_storage,
     parse_resource_storage_header,
@@ -171,27 +175,36 @@ def reflect_target_host_interface(
                         ),
                     ),
                 )
-            return _reflect_hlsl_source(
+            return _reflect_resource_identities(
                 artifact_path,
-                artifact_format=artifact_format or "HLSL source",
-                stage=stage,
+                _reflect_hlsl_source(
+                    artifact_path,
+                    artifact_format=artifact_format or "HLSL source",
+                    stage=stage,
+                ),
             )
         if normalized_target in {"opengl", "glsl", "webgl"}:
-            return _reflect_glsl_source(
+            return _reflect_resource_identities(
                 artifact_path,
-                parser=(
-                    "webgl-reflection"
-                    if normalized_target == "webgl"
-                    else "opengl-reflection"
+                _reflect_glsl_source(
+                    artifact_path,
+                    parser=(
+                        "webgl-reflection"
+                        if normalized_target == "webgl"
+                        else "opengl-reflection"
+                    ),
+                    artifact_format=artifact_format or "GLSL source",
+                    stage=stage,
                 ),
-                artifact_format=artifact_format or "GLSL source",
-                stage=stage,
             )
         if normalized_target in {"metal", "msl"}:
-            return _reflect_metal_source(
+            return _reflect_resource_identities(
                 artifact_path,
-                artifact_format=artifact_format or "Metal source",
-                stage=stage,
+                _reflect_metal_source(
+                    artifact_path,
+                    artifact_format=artifact_format or "Metal source",
+                    stage=stage,
+                ),
             )
         if normalized_target in {"vulkan", "spirv", "spv"}:
             return _reflect_spirv_artifact(
@@ -215,6 +228,31 @@ def reflect_target_host_interface(
             ),
         )
     return None
+
+
+def _reflect_resource_identities(artifact_path, record):
+    try:
+        identities = parse_resource_identities(
+            artifact_path.read_text(encoding="utf-8")
+        )
+        apply_resource_identities(
+            record["resources"], identities, record["entryPoints"]
+        )
+    except ValueError as exc:
+        return empty_host_interface_record(
+            "failed",
+            parser=record["parser"],
+            artifact_format=record["artifactFormat"],
+            diagnostics=(
+                ReflectionDiagnostic(
+                    REFLECTION_PARSE_FAILED,
+                    f"Resource identity reflection failed: {exc}",
+                    severity="error",
+                    details={"contract": "source-resource-identity"},
+                ),
+            ),
+        )
+    return record
 
 
 def _diagnostic_record(

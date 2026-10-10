@@ -35825,6 +35825,11 @@ def _runtime_package_inspection_binding(
         artifact_diagnostics=artifact_diagnostics,
     )
     diagnostics = [*artifact_diagnostics, *source_remap_diagnostics]
+    diagnostics.extend(
+        _runtime_package_resource_identity_diagnostics(
+            package_path, artifact, host_interface
+        )
+    )
     return {
         "id": _runtime_package_inspection_binding_id(artifact),
         "status": "ready" if not diagnostics else "failed",
@@ -35875,6 +35880,60 @@ def _runtime_package_inspection_binding(
         "hostInterface": host_interface,
         "diagnostics": [diagnostic.code for diagnostic in diagnostics],
     }, diagnostics
+
+
+def _runtime_package_resource_identity_diagnostics(package_path, artifact, reflected):
+    errors = [
+        record
+        for record in _record_sequence(reflected.get("diagnosticRecords"))
+        if isinstance(record, Mapping)
+        and isinstance(record.get("details"), Mapping)
+        and record["details"].get("contract") == "source-resource-identity"
+        and record.get("severity") == "error"
+    ]
+    declared = artifact.get("hostInterface")
+
+    def identities(interface):
+        result = []
+        for resource in _record_sequence(interface.get("resources")):
+            if not isinstance(resource, Mapping):
+                continue
+            metadata = resource.get("metadata")
+            if not isinstance(metadata, Mapping):
+                continue
+            provenance = metadata.get("provenance")
+            if (
+                not isinstance(provenance, Mapping)
+                or "sourceResource" not in provenance
+            ):
+                continue
+            result.append(
+                {
+                    "name": resource.get("name"),
+                    "entryPoint": metadata.get("entryPoint"),
+                    "sourceResource": provenance["sourceResource"],
+                }
+            )
+        return sorted(result, key=lambda item: json.dumps(item, sort_keys=True))
+
+    mismatch = isinstance(declared, Mapping) and identities(declared) != identities(
+        reflected
+    )
+    if not errors and not mismatch:
+        return []
+    return [
+        ProjectDiagnostic(
+            severity="error",
+            code="project.runtime-package-inspection.resource-identity-invalid",
+            message=(
+                errors[0]["message"]
+                if errors
+                else "Declared source resource identities differ from the packaged artifact."
+            ),
+            location=SourceLocation(file=str(package_path)),
+            check_kind="runtime-package-inspection",
+        )
+    ]
 
 
 def _runtime_package_inspection_target(

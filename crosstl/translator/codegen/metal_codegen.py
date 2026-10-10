@@ -50,6 +50,7 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
 )
+from ..resource_identity import resource_identity_marker
 from ..source_licenses import source_license_comments
 from ..structure_conversions import (
     StructureConversionKind,
@@ -3281,6 +3282,7 @@ class MetalCodeGen:
             "constexpr",
             "inline",
             "maybe_unused",
+            "source_resource",
             "mutable",
             "static",
             "volatile",
@@ -5633,6 +5635,15 @@ class MetalCodeGen:
             code += (
                 f"{self.metal_function_linkage_prefix(func)}"
                 f"{return_type} {function_name}({params_str}){semantic_attr} {{\n"
+            )
+
+        if shader_type is not None:
+            code = (
+                "".join(
+                    resource_identity_marker(p, p.name, entry_point=function_name)
+                    for p in param_list
+                )
+                + code
             )
 
         if precise_arithmetic:

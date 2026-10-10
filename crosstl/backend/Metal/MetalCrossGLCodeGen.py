@@ -19,6 +19,7 @@ from ...translator.precise_log2 import binary32_log2_support
 from ...translator.precise_power import binary32_power_support
 from ...translator.precise_trig import TRIG_HELPER_KEYS, binary32_trig_support
 from ...translator.remainder_math import binary32_remainder_support
+from ...translator.resource_identity import source_resource_attribute
 from ...translator.standard_constants import standard_math_constant
 from .MetalAst import *
 from .MetalLexer import *
@@ -1355,7 +1356,11 @@ class MetalToCrossGLConverter:
         binary32_rsqrt_profile=None,
         binary32_power_operand_profile=None,
         binary32_power_accuracy_profile=None,
+        preserve_resource_origins=False,
     ):
+        if type(preserve_resource_origins) is not bool:
+            raise ValueError("preserve_resource_origins must be a boolean")
+        self.preserve_resource_origins = preserve_resource_origins
         if binary32_power_accuracy_profile not in (None, "portable-finite"):
             raise ValueError(
                 "binary32_power_accuracy_profile must be 'portable-finite' or None"
@@ -9183,6 +9188,18 @@ class MetalToCrossGLConverter:
                 for index, p in enumerate(func.params)
             ]
             parameter_names = [self.render_identifier(p.name) for p in func.params]
+            if stage_entry and self.preserve_resource_origins:
+                for index, parameter in enumerate(func.params):
+                    if self.is_stage_entry_buffer_resource_parameter(parameter):
+                        parameter_declarations[index] = (
+                            source_resource_attribute(
+                                "metal",
+                                output_name or self.function_output_name(func),
+                                parameter.name,
+                                index,
+                            )
+                            + parameter_declarations[index]
+                        )
             if out_of_line_replacement is not None:
                 for definition_name, helper_name in out_of_line_replacement[
                     "parameter_aliases"

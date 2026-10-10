@@ -59,6 +59,7 @@ from ..ast import (
     WhileNode,
 )
 from ..cooperative_matrix import get_cooperative_matrix_fragment_mapping
+from ..resource_identity import resource_identity_marker
 from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
 from ..structure_conversions import (
@@ -4176,6 +4177,7 @@ class HLSLCodeGen:
                 qualifier = self.local_variable_qualifier(node)
                 if "thread" in (getattr(node, "qualifiers", []) or []):
                     qualifier = "static " + qualifier
+            code += resource_identity_marker(node, var_name)
             code += f"{qualifier}{declaration}{register};\n"
             if (
                 mapped_type == "SamplerState"
@@ -9592,6 +9594,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             self.advance_resource_register(register_cursors, space, binding, 1)
             register = self.resource_register_suffix(register_prefix, binding, node)
+            code += resource_identity_marker(node, node.name)
             if isinstance(node, StructNode):
                 code += f"{buffer_keyword} {node.name}{register} {{\n"
                 members = getattr(node, "members", [])
@@ -11818,6 +11821,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         metadata = {
             "hlsl_program_constant",
             "maybe_unused",
+            "source_resource",
             "precise",
         }
         metadata.update(self.METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES)
