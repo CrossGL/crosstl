@@ -922,7 +922,15 @@ The current harness verifies:
   half initializer kernels match unchanged upstream Metal and independent
   expected words, including output guards. This is complete reduce translation, reflection,
   and native compiler coverage, not numerical execution or MLX host runtime
-  redirection;
+  redirection. A subsequent review of all 100 entries in source shard 0 updates
+  98 identities for unused-parameter annotations and typed integer boundary
+  constants. Every previous source is reconstructed to its accepted hash;
+  previous and current sources compile and link to byte-identical Metal libraries
+  with warnings fatal. The review preserves 384 materializations and 1,039
+  resources, leaving the other 2,298 records unchanged. This compiler-equivalence
+  check adds no numerical execution or current-pin coverage. Reference
+  reconciliation for the remaining shards is still tracked by
+  [#1966](https://github.com/CrossGL/crosstl/issues/1966);
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 2,052 host-named
   entries from `quantized.metal`. The compact schema-v2
   `contracts/quantized.metal-roundtrip.json` contract covers 38 normalized
