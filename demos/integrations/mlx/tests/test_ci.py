@@ -92,18 +92,21 @@ def test_pinned_binary_step_selects_every_native_case_without_portable_duplicate
     )
 
 
-def test_full_gemm_uses_existing_metal_job_and_retains_native_evidence():
+def test_full_gemm_uses_existing_native_jobs_and_retains_evidence():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     job = yaml.safe_load(workflow)["jobs"]["mlx-metal-porting"]
     step = next(
         s
         for s in job["steps"]
-        if s.get("name") == "Prove current MLX GEMM Metal round-trip"
+        if s.get("name") == "Prove current MLX GEMM native execution"
     )
     path = "demos/integrations/mlx/tests/kernels/test_current_gemm.py"
     assert workflow.count(path) == 1
     assert path in step["run"]
-    assert step["if"] == "runner.os == 'macOS'"
+    assert step["if"] == "runner.os == 'macOS' || runner.os == 'Windows'"
+    assert step["env"]["CROSTL_MLX_CURRENT_TARGET"] == (
+        "${{ runner.os == 'Windows' && 'directx' || 'metal' }}"
+    )
     assert step["env"]["CROSTL_REQUIRE_MLX_CURRENT_GEMM"] == "1"
     assert step["env"]["PYTEST_XDIST_AUTO_NUM_WORKERS"] == "2"
     assert step["env"]["CROSTL_MLX_CURRENT_ROOT"].endswith("/mlx-current-tree-upstream")
@@ -116,9 +119,12 @@ def test_full_gemm_uses_existing_metal_job_and_retains_native_evidence():
     upload = next(
         s
         for s in job["steps"]
-        if s.get("name") == "Upload current MLX GEMM Metal evidence"
+        if s.get("name") == "Upload current MLX GEMM native evidence"
     )
-    assert upload["if"] == "always() && runner.os == 'macOS'"
+    assert (
+        upload["if"] == "always() && (runner.os == 'macOS' || runner.os == 'Windows')"
+    )
+    assert upload["with"]["name"] == "mlx-gemm-${{ runner.os }}"
     assert upload["with"]["path"] == "mlx-gemm-results"
     assert upload["with"]["if-no-files-found"] == "error"
     assert upload["with"]["include-hidden-files"] is True

@@ -1,4 +1,4 @@
-"""Round-trip a complete pinned MLX GEMM entry and compare native results."""
+"""Translate a complete pinned MLX GEMM entry and compare native results."""
 
 import hashlib
 import json
@@ -40,6 +40,20 @@ CONSTANT_IDS = {
     "align_N": 201,
     "align_K": 202,
 }
+HEADER_HASHES = {
+    "loader.h": "c1b82153670b1e18371a6e88fdbcf440af692957775c2f837700315ab8a5112e",
+    "gemm.h": "c84af31e2c57154f2a8a24fa7f9fe2449765cce9a66f3f035846ed3c03b6a8b0",
+}
+WORKGROUP_LOADERS = {
+    "BlockLoader_float_false_16_32_false_32_16_false_32_4_16_4_false_128__load_unsafe": (
+        32,
+        16,
+    ),
+    "BlockLoader_float_false_32_16_false_16_32_false_16_4_32_4_false_128__load_unsafe": (
+        16,
+        32,
+    ),
+}
 GUARD = -98765.0
 CASES = (
     (1, 1, 1, 1, 0, 0),
@@ -70,18 +84,57 @@ def _write_json(path, payload):
     path.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
 
 
-def _config(root, output):
+def _loader_access_assertions():
+    assertions = []
+    for function, (rows, columns) in WORKGROUP_LOADERS.items():
+        # loader.h distributes four adjacent floats to each of 128 threads.
+        # gemm.h pads each row by 16 bytes for this non-transposed float entry.
+        leading = columns + 4
+        reads = rows * columns // 128
+        thread_columns = columns // reads
+        thread_rows = 128 // thread_columns
+        slots = [
+            (lane // thread_columns + row) * leading
+            + reads * (lane % thread_columns)
+            + element
+            for lane in range(128)
+            for row in range(0, rows, thread_rows)
+            for element in range(reads)
+        ]
+        assert len(slots) == len(set(slots)) == rows * columns
+        assert set(slots) == {
+            row * leading + column for row in range(rows) for column in range(columns)
+        }
+        assert max(slots) < rows * leading
+        assertions.append(
+            {
+                "source": SOURCE,
+                "entryPoint": ENTRY,
+                "function": function,
+                "parameter": "self.dst",
+                "minimum": min(slots),
+                "maximum": max(slots),
+            }
+        )
+    return tuple(assertions)
+
+
+def _config(root, output, target="metal"):
+    assert target in {"metal", "directx"}
     return ProjectConfig(
         root=root,
         source_roots=("mlx/backend/metal/kernels",),
         include_patterns=(SOURCE,),
         include_dirs=(".",),
-        targets=("metal",),
+        targets=(target,),
         output_dir=output,
         entry_points={SOURCE: (ENTRY,)},
         specialization_constants={name: False for name in CONSTANT_IDS},
         freeze_specialization_constants=True,
         workgroup_size_rules={SOURCE: (32, 2, 2)},
+        workgroup_access_assertions=(
+            _loader_access_assertions() if target == "directx" else ()
+        ),
         source_options={
             "metal": {
                 "max_template_specializations": 256,
@@ -91,9 +144,39 @@ def _config(root, output):
                     "mlx_steel_BaseMMAFrag_get_coord"
                 ),
                 "preserve_resource_origins": True,
+                "target_options": {
+                    "directx": {
+                        "cooperative_matrix_software_lowering": True,
+                        "software_subgroup_width": 32,
+                        "relative_wave_shuffle_out_of_range": "self",
+                    },
+                },
             }
         },
     )
+
+
+@pytest.mark.parametrize("target", ["metal", "directx"])
+def test_gemm_target_contract_is_explicit(tmp_path, target):
+    config = _config(tmp_path, "out", target)
+    assert list(config.targets) == [target]
+    assert config.workgroup_size_rules == {SOURCE: ("32", "2", "2")}
+    assert not config.index_range_assertions
+    if target == "directx":
+        assertions = config.workgroup_access_assertions
+        assert [(item.minimum, item.maximum) for item in assertions] == [
+            (0, 635),
+            (0, 571),
+        ]
+        assert {item.function for item in assertions} == set(WORKGROUP_LOADERS)
+        assert all(
+            item.source == SOURCE
+            and item.entry_point == ENTRY
+            and item.parameter == "self.dst"
+            for item in assertions
+        )
+    else:
+        assert not config.workgroup_access_assertions
 
 
 def _frozen_values(variant):
@@ -438,7 +521,12 @@ def test_gemm_scalar_reference():
 def gemm_source(tmp_path_factory):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for the pinned GEMM native gate")
-    assert sys.platform == "darwin" and shutil.which("xcrun")
+    target = os.environ.get(
+        "CROSTL_MLX_CURRENT_TARGET", "directx" if sys.platform == "win32" else "metal"
+    )
+    assert target in {"metal", "directx"}
+    assert sys.platform == {"metal": "darwin", "directx": "win32"}[target]
+    assert shutil.which("xcrun" if target == "metal" else "dxc")
     tmp_path = tmp_path_factory.mktemp("gemm-original")
     root = Path(os.environ["CROSTL_MLX_CURRENT_ROOT"]).resolve()
     assert (
@@ -463,21 +551,35 @@ def gemm_source(tmp_path_factory):
     ).strip()
     source = root / SOURCE
     assert hashlib.sha256(source.read_bytes()).hexdigest() == SOURCE_SHA256
-    run(["xcrun", "--sdk", "macosx", "metal", "--version"], tmp_path, "metal-version")
-    original = compile_metal(source, root, tmp_path / "original", flags=ORIGINAL_FLAGS)
-    return root, original
+    for name, digest in HEADER_HASHES.items():
+        header = root / "mlx/backend/metal/kernels/steel/gemm" / name
+        assert hashlib.sha256(header.read_bytes()).hexdigest() == digest
+    original = None
+    if target == "metal":
+        run(
+            ["xcrun", "--sdk", "macosx", "metal", "--version"],
+            tmp_path,
+            "metal-version",
+        )
+        original = compile_metal(
+            source, root, tmp_path / "original", flags=ORIGINAL_FLAGS
+        )
+    else:
+        run(["dxc", "--version"], tmp_path, "dxc-version")
+    return root, original, target
 
 
 @pytest.mark.parametrize("variant", CASES_BY_VARIANT)
-def test_current_gemm_metal_roundtrip(tmp_path, gemm_source, variant):
-    root, original = gemm_source
+def test_current_gemm_executes(tmp_path, gemm_source, variant):
+    root, original, target = gemm_source
     source = root / SOURCE
     specializations = _frozen_values(variant)
     with tempfile.TemporaryDirectory(prefix=".current-gemm-", dir=root) as directory:
         work = Path(directory)
         try:
             config = replace(
-                _config(root, work.name), specialization_constants=specializations
+                _config(root, work.name, target),
+                specialization_constants=specializations,
             )
             report = translate_project(config, format_output=False)
             report.write_json(tmp_path / "report.json")
@@ -486,7 +588,9 @@ def test_current_gemm_metal_roundtrip(tmp_path, gemm_source, variant):
             assert not payload["diagnostics"]
             assert len(payload["artifacts"]) == 1
             assert payload["project"]["indexRangeAssertions"] == []
-            assert payload["project"]["workgroupAccessAssertions"] == []
+            assert payload["project"]["workgroupAccessAssertions"] == (
+                list(_loader_access_assertions()) if target == "directx" else []
+            )
             descriptor, package = _prepare_native_package(report, tmp_path)
             constants = descriptor["specializationConstants"]
             assert len(constants) == len(CONSTANT_IDS)
@@ -529,7 +633,7 @@ def test_current_gemm_metal_roundtrip(tmp_path, gemm_source, variant):
                     inputs,
                     outputs,
                     geometry,
-                    expected_target="metal",
+                    expected_target=target,
                 )
                 assert not request.execution_plan.diagnostics
                 assert not request.adapter_contract.specialization_constants
@@ -537,36 +641,42 @@ def test_current_gemm_metal_roundtrip(tmp_path, gemm_source, variant):
                     request,
                     outputs,
                     case_work,
-                    validate=lambda path, destination, target: compile_metal(
-                        path,
-                        root,
-                        destination,
-                        flags=("-std=metal3.1", "-fno-fast-math"),
+                    validate=(
+                        (
+                            lambda path, destination, target: compile_metal(
+                                path,
+                                root,
+                                destination,
+                                flags=("-std=metal3.1", "-fno-fast-math"),
+                            )
+                        )
+                        if target == "metal"
+                        else None
                     ),
-                )
-                original_outputs = _original_outputs(
-                    request, source, original, case_work, specializations
                 )
                 generated = json.loads((case_work / "evidence.json").read_text())
                 record = generated["records"]["generated"]
-                assert (
-                    record["details"]["metalRuntime"]["librarySHA256"]
-                    == record["moduleSha256"]
-                )
-                assert record["details"]["metalRuntime"]["threadExecutionWidth"] == 32
+                if target == "metal":
+                    original_outputs = _original_outputs(
+                        request, source, original, case_work, specializations
+                    )
+                    assert original_outputs == record["outputs"]
+                    assert (
+                        record["details"]["metalRuntime"]["librarySHA256"]
+                        == record["moduleSha256"]
+                    )
+                    assert (
+                        record["details"]["metalRuntime"]["threadExecutionWidth"] == 32
+                    )
                 assert not record["request"]["constants"]
-                assert (
-                    original_outputs
-                    == generated["records"]["generated"]["outputs"]
-                    == outputs
-                )
+                assert record["outputs"] == outputs
                 results.append(
                     {
                         "shape": list(case[:4]),
                         "padding": case[4],
                         "extraWorkgroups": case[5],
                         "checkedValues": len(next(iter(outputs.values()))["values"]),
-                        "equalOriginalMetal": True,
+                        "equalOriginalMetal": True if target == "metal" else None,
                         "equalExactReference": True,
                     }
                 )
@@ -574,10 +684,12 @@ def test_current_gemm_metal_roundtrip(tmp_path, gemm_source, variant):
                     tmp_path / "parity.json",
                     {
                         "sourceCommit": MLX_COMMIT,
+                        "target": target,
                         "entryPoint": ENTRY,
                         "variant": variant,
                         "specializations": specializations,
                         "sourceSha256": SOURCE_SHA256,
+                        "headerSha256": HEADER_HASHES,
                         "cases": results,
                         "complete": len(results) == len(CASES_BY_VARIANT[variant]),
                         "scope": (

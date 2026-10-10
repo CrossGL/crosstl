@@ -48,13 +48,15 @@ checks. A previous revision's successful proof does not satisfy the current
 revision's required checks.
 Core and demo tests also remain part of the complete test suite.
 
-### Full-Entry GEMM Round-Trip
+### Full-Entry GEMM Execution
 
 `tests/kernels/test_current_gemm.py` translates the unchanged
 `steel_gemm_fused_nn_float32_float32_bm32_bn32_bk16_wm2_wn2` entry at commit
 `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8` through the project API, package
-verification and native Metal loader. It compares generated execution with the
-independently compiled upstream kernel and an exact matrix-product reference.
+verification and native Metal or DirectX loader. Both targets compare generated
+execution with an exact matrix-product reference. Metal additionally compares
+with the independently compiled upstream kernel; Windows does not claim to run
+the original Metal control.
 Fifteen cases cover scalar, partial-tile, aligned-tile and multi-tile matrices,
 contiguous and two-dimensional broadcast batches, padded rows and batch strides,
 and extra workgroups. Output padding and eight trailing guard values must remain
@@ -70,14 +72,24 @@ The original Metal kernel receives matching native function constants.
 The test uses the source-backed fragment mapping documented in
 `contracts/cooperative-matrix-fragment-mapping.json`, a 32-by-2-by-2 workgroup,
 and reflected parameter layouts. It does not edit upstream or generated kernels,
-substitute a reference shader, or supply unchecked index or workgroup bounds.
+or substitute a reference shader. DirectX uses two source-backed workgroup
+access assertions for the complete vector loads in `steel/gemm/loader.h`.
+For this entry, 128 threads load four adjacent floats each into A's 32-by-20
+and B's 16-by-36 shared arrays. The test enumerates every destination, proves
+unique coverage of the live elements, and bounds the addresses to 0..635 and
+0..571 respectively. Both this header and `steel/gemm/gemm.h` are hash-checked
+against the pin before execution. No unchecked index ranges are supplied.
 The original source is compiled with Metal 3.2 and the C++17/C++20 extension
 warning exceptions from upstream's kernel build. Both original and generated
 compilation disable fast math and treat remaining warnings as errors.
 
-The existing macOS project-porting job runs this required check and retains
+The existing macOS and Windows project-porting jobs run this required check and retain
 translation reports, packages, compiler logs, input records, compiled modules,
-readbacks and per-case parity results. Run it locally against a clean checkout
+readbacks and per-case parity results. Windows requires DXC compilation with
+warnings as errors and Direct3D 12 execution. Quarter-integer inputs make these
+products and sums exactly representable; this gate does not replace the separate
+rounding-sensitive cooperative-matrix controls tracked by #2193.
+Run it locally against a clean checkout
 of the pinned kernel tree:
 
 ```sh
@@ -91,10 +103,11 @@ python -m pytest -q -n auto \
 
 This proves one float32 NN entry and six function-constant configurations, not
 the complete GEMM family or the upstream MLX suite. Transposed operands, other
-element types and every mixed alignment combination are not covered. DirectX
-cooperative multiply-accumulate and OpenGL live-offset bounds remain separate
-translation gaps tracked by #1602 and #2179. This check does not establish host
-runtime redirection for those backends.
+element types and every mixed alignment combination are not covered. OpenGL
+collective participation and live-offset bounds remain separate translation
+gaps tracked by #2186 and #2179. This check does not establish full host-runtime
+redirection for any backend. A configured gate is not proof of success until
+its native job passes for the relevant revision.
 
 ### Resource-Index Controls
 
