@@ -1317,6 +1317,7 @@ jobs:
       - name: Validate exact partial subgroup execution
         env:
           CROSTL_REQUIRE_PARTIAL_SUBGROUP_READBACKS: "1"
+          CROSTL_REQUIRE_INTEGER_SHUFFLE_RUNTIME: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
@@ -1328,6 +1329,7 @@ jobs:
               --basetemp=.mlx-portable-host/subgroup-partial/pytest \
               --junitxml=.mlx-portable-host/subgroup-partial/results.xml \
               tests/test_translator/test_software_subgroup_partial.py \
+              tests/test_translator/test_integer_subgroup_shuffles.py \
               2>&1 | tee .mlx-portable-host/subgroup-partial.log
       - name: Validate source wave argument conversions
         env:

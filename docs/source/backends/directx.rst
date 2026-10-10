@@ -147,6 +147,12 @@ width. Multiple logical groups share an allocation but never read each other's
 values. Every invocation participates in both barriers around a collective;
 unproven divergent control flow remains a structured translation error.
 
+Software shuffles preserve signed and unsigned 16-bit and 64-bit integer
+payloads in typed groupshared storage, as well as 32-bit integers and floats.
+The wider shuffle support does not enable wider arithmetic reductions.
+Partial logical groups use only active invocations; offset checks precede
+lane addition, and repeated calls synchronize before reusing scratch storage.
+
 The entry captures ``SV_GroupIndex`` in private per-invocation storage before
 executing source statements. All dependent helpers use that captured identity,
 including helpers with invocation-like parameter annotations. If the source

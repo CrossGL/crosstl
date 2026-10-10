@@ -2067,6 +2067,12 @@ class HLSLCodeGen:
         {"WaveShuffleDown", *HLSL_SOFTWARE_SUBGROUP_REDUCTIONS}
     )
     HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES = frozenset({"float", "int", "uint"})
+    HLSL_SOFTWARE_SUBGROUP_SHUFFLE_TYPES = HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES | {
+        "int16_t",
+        "uint16_t",
+        "int64_t",
+        "uint64_t",
+    }
 
     def __init__(
         self,
@@ -5449,7 +5455,11 @@ class HLSLCodeGen:
         valid_type = (
             mapped_value_type == "bool"
             if is_vote
-            else mapped_value_type in self.HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
+            else mapped_value_type in (
+                self.HLSL_SOFTWARE_SUBGROUP_SHUFFLE_TYPES
+                if operation == "WaveShuffleDown"
+                else self.HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
+            )
         )
         if operation == "WaveActiveProduct":
             layout = scalar_storage_layout(self.type_name_string(value_type))
@@ -5457,7 +5467,8 @@ class HLSLCodeGen:
         if not valid_type:
             raise self.hlsl_software_subgroup_error(
                 "DirectX software subgroup votes require scalar bool payloads; "
-                "arithmetic and shuffles support only 32-bit float, int, and uint",
+                "arithmetic supports only 32-bit float, int, and uint; "
+                "shuffles also support signed and unsigned 16-bit and 64-bit integers",
                 workgroup_size=self.hlsl_software_subgroup_workgroup_size,
                 operation=operation,
                 reason="value-type-unsupported",

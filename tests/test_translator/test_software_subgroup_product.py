@@ -154,20 +154,22 @@ def _package(
     software_subgroups=True,
     index_range_assertions=(),
     workgroup_access_assertions=(),
+    source_backend="metal",
 ):
     if source is None:
         source = _source(kind, math.prod(shape))
-    (root / "products.metal").write_text(source, encoding="utf-8")
+    filename = "products.cgl" if source_backend == "crossgl" else "products.metal"
+    (root / filename).write_text(source, encoding="utf-8")
     options = {}
     if target != "metal" and software_subgroups:
         target_options = {"software_subgroup_width": 32}
         if target == "directx":
             target_options["relative_wave_shuffle_out_of_range"] = "self"
-        options = {"metal": {"target_options": {target: target_options}}}
+        options = {source_backend: {"target_options": {target: target_options}}}
     report = translate_project(
         ProjectConfig(
             root=root,
-            include_patterns=("products.metal",),
+            include_patterns=(filename,),
             targets=(target,),
             output_dir="out",
             workgroup_size=shape,
