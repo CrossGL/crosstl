@@ -922,12 +922,12 @@ The current harness verifies:
   half initializer kernels match unchanged upstream Metal and independent
   expected words, including output guards. This is complete reduce translation, reflection,
   and native compiler coverage, not numerical execution or MLX host runtime
-  redirection. A subsequent review of all 100 entries in source shard 0 updates
-  98 identities for unused-parameter annotations and typed integer boundary
+  redirection. Subsequent reviews of all 200 entries in source shards 0 and 1
+  update 196 identities for unused-parameter annotations and typed integer boundary
   constants. Every previous source is reconstructed to its accepted hash;
   previous and current sources compile and link to byte-identical Metal libraries
-  with warnings fatal. The review preserves 384 materializations and 1,039
-  resources, leaving the other 2,298 records unchanged. This compiler-equivalence
+  with warnings fatal. The reviews preserve 768 materializations and 2,078
+  resources, leaving the other 2,200 records unchanged. This compiler-equivalence
   check adds no numerical execution or current-pin coverage. Reference
   reconciliation for the remaining shards is still tracked by
   [#1966](https://github.com/CrossGL/crosstl/issues/1966);
