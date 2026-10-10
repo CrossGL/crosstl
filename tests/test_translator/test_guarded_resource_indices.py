@@ -99,6 +99,15 @@ RECORD_CASES = (
     "record-sibling",
     "record-else",
     "record-swizzle",
+    "record-chain",
+    "record-helper-nested",
+)
+DESTINATION_CASES = (
+    "destination-store",
+    "destination-store-subtract",
+    "destination-atomic",
+    "destination-atomic-subtract",
+    "destination-atomic-contended",
 )
 RECORD_REJECTED = (
     "record-mutation",
@@ -111,6 +120,9 @@ RECORD_REJECTED = (
     "record-after-loop",
     "record-other-field",
     "record-loop-mutation",
+    "record-chain-unknown",
+    "record-chain-mutation",
+    "record-helper-overflow",
 )
 
 
@@ -152,7 +164,23 @@ uint load_value(Cursor cursor) {{ return cursor.values[0]; }}
         "record-shadow": "Metadata info{-1, 0};",
         "record-sibling": "info.x = -1;",
         "record-call-mutation": "change(info);",
+        "record-chain-mutation": "info.count = -1;",
     }.get(case, "")
+    if case in {"record-chain", "record-chain-mutation"}:
+        access = (
+            f"Cursor cursor{{values + 1 + {field} - 1}}; result = load_value(cursor);"
+        )
+    elif case == "record-chain-unknown":
+        access = (
+            f"Cursor cursor{{values + info.x + {field}}}; result = load_value(cursor);"
+        )
+    elif case in {"record-helper-nested", "record-helper-overflow"}:
+        declarations += "Metadata shift(Metadata item, int delta) { item.count += delta; return item; }"
+        amount = "2147483647" if case == "record-helper-overflow" else "1"
+        access = (
+            f"Metadata shifted = shift(shift(info, {amount}), -{amount});"
+            "Cursor cursor{values + shifted.count}; result = load_value(cursor);"
+        )
     if case == "record-call-mutation":
         declarations += "void change(thread Metadata& info) { info.count = -1; }"
     elif case == "record-other-field":
@@ -187,7 +215,39 @@ kernel void guarded(constant uint* values [[buffer(0)]],
 """
 
 
+def _destination_source(case):
+    atomic = "atomic" in case
+    pointee = "atomic_uint" if atomic else "uint"
+    effect = (
+        "atomic_fetch_add_explicit(cursor.values, value, memory_order_relaxed);"
+        if atomic
+        else "cursor.values[0] = value;"
+    )
+    pointer = (
+        "results + 5 + info.count - 1"
+        if case.endswith("subtract")
+        else "results + 4 + info.count"
+    )
+    return f"""#include <metal_stdlib>
+using namespace metal;
+struct Metadata {{ int count; }};
+struct Cursor {{ device {pointee}* values; }};
+void update_value(Cursor cursor, uint value) {{ {effect} }}
+kernel void guarded(constant int* counts [[buffer(0)]],
+                    device {pointee}* results [[buffer(1)]],
+                    uint tid [[thread_position_in_grid]]) {{
+    Metadata info{{counts[tid & 3u]}};
+    if (info.count >= 0 && info.count < 4) {{
+        Cursor cursor{{{pointer}}};
+        update_value(cursor, uint(info.count + 1));
+    }}
+}}
+"""
+
+
 def _source(case):
+    if case in DESTINATION_CASES:
+        return _destination_source(case)
     if case.startswith("record-"):
         return _record_source(case)
     body = BODIES.get(case, REJECTED.get(case))
@@ -228,16 +288,18 @@ def _request(root, target, case):
         if case in {"record-narrow", "record-unsigned-narrow"}
         else [-1, 0, 2, 3]
     )
-    inputs = _bound_values(
-        descriptor,
-        {
-            "values": value([3, 5, 11, 17]),
-            ("counts" if case.startswith("record-") else "indices"): value(
-                indices, "int32"
-            ),
-            "results": value([guard] * 4 + [0] * 4 + [guard] * 4),
-        },
-    )
+    values = {"results": value([guard] * 4 + [0] * 4 + [guard] * 4)}
+    if case in DESTINATION_CASES:
+        words = [1, 0, 3, 4]
+        if case.endswith("contended"):
+            indices, words = [0, 0, 0, 0], [4, 0, 0, 0]
+        values["counts"] = value(indices, "int32")
+    else:
+        values["values"] = value([3, 5, 11, 17])
+        values["counts" if case.startswith("record-") else "indices"] = value(
+            indices, "int32"
+        )
+    inputs = _bound_values(descriptor, values)
     expected = _bound_values(
         descriptor, {"results": value([guard] * 4 + words + [guard] * 4)}
     )
@@ -253,14 +315,14 @@ def _request(root, target, case):
     return request, expected
 
 
-@pytest.mark.parametrize("case", [*BODIES, *RECORD_CASES])
+@pytest.mark.parametrize("case", [*BODIES, *RECORD_CASES, *DESTINATION_CASES])
 @pytest.mark.parametrize("target", ["opengl", "directx", "metal"])
 def test_guarded_resource_indices_compile(tmp_path, target, case):
     request, _ = _request(tmp_path, target, case)
     _compile(request.artifact_path.read_text(), target, tmp_path)
 
 
-@pytest.mark.parametrize("case", [*BODIES, *RECORD_CASES])
+@pytest.mark.parametrize("case", [*BODIES, *RECORD_CASES, *DESTINATION_CASES])
 def test_guarded_resource_indices_execute(tmp_path, case):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required guarded index execution")

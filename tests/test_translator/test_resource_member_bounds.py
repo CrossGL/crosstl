@@ -282,6 +282,92 @@ def test_straight_line_member_summaries(source, expected):
     assert _summary(source) == expected
 
 
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        ("return shift(shift(item, 4), 2);", {"offset": (6, 6)}),
+        ("return shift(shift(shift(item, 4), 2), -1);", {"offset": (5, 5)}),
+        ("return shift(shift(item, unknown), 2);", {}),
+        ("return shift(shift(item, 2147483648l), -1);", {}),
+        ("return shift(shift(item, 4), unknown++);", {}),
+        ("item.offset = 9223372036854775807l; return shift(shift(item, 1), -1);", {}),
+    ],
+)
+def test_nested_member_summaries_preserve_argument_contracts(body, expected):
+    source = (
+        "Item shift(Item item, int delta) { item.offset += delta; return item; } "
+        "Item make() { Item item; item.offset = 0; " + body + " }"
+    )
+    assert _summary(source) == expected
+
+
+@pytest.mark.parametrize(
+    "helpers",
+    [
+        "Item shift(Item item, int delta) { return shift(item, delta); }",
+        "Item shift(Item item, int delta) { return step(item, delta); } "
+        "Item step(Item item, int delta) { return shift(item, delta); }",
+        "Item shift(Item item, int delta) { return shift(shift(item, delta), delta); }",
+    ],
+)
+def test_recursive_member_summaries_remain_unknown(helpers):
+    assert (
+        _summary(
+            helpers
+            + "Item make() { Item item; item.offset = 0; return shift(item, 2); }"
+        )
+        == {}
+    )
+
+
+@pytest.mark.parametrize(
+    "parameter,body,argument,expected",
+    [
+        ("const int* unused", "item.offset += delta;", "buffer", {"offset": (2, 2)}),
+        ("device int* unused", "item.offset += delta;", "buffer", {"offset": (2, 2)}),
+        ("int* unused", "item.offset += delta;", "buffer", {}),
+        ("inout Item unused", "item.offset += delta;", "item", {}),
+        ("out Item unused", "item.offset += delta;", "item", {}),
+        ("Item& unused", "item.offset += delta;", "item", {}),
+        ("int* unused", "item.offset += delta;", "buffer++", {}),
+        ("int* buffer", "item.offset += *buffer;", "buffer", {}),
+        ("inout Item alias", "alias.offset = 9; item.offset += delta;", "item", {}),
+    ],
+)
+def test_member_summaries_ignore_only_unused_reference_parameters(
+    parameter, body, argument, expected
+):
+    assert (
+        _summary(
+            f"Item shift(Item item, int delta, {parameter}) {{ {body} return item; }}"
+            f"Item make() {{ Item item; item.offset = 0; return shift(item, 2, {argument}); }}"
+        )
+        == expected
+    )
+
+
+def test_finite_nested_member_summaries_do_not_repeat_argument_analysis(monkeypatch):
+    original = GLSLCodeGen.glsl_simple_struct_constructor_member_intervals
+    calls = 0
+
+    def observe(self, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        GLSLCodeGen, "glsl_simple_struct_constructor_member_intervals", observe
+    )
+    expression = "item"
+    for _ in range(16):
+        expression = f"shift({expression}, 1)"
+    assert _summary(
+        "Item shift(Item item, int delta) { item.offset += delta; return item; } "
+        "Item make() { Item item; item.offset = 0; return " + expression + "; }"
+    ) == {"offset": (16, 16)}
+    assert calls < 100
+
+
 @pytest.mark.parametrize("known", [False, True])
 def test_struct_fields_are_not_vector_component_aliases(known):
     generator = GLSLCodeGen()

@@ -11732,7 +11732,6 @@ class GLSLCodeGen:
         active = set() if _active is None else _active
         if id(constructor) in active:
             return {}
-        active = active | {id(constructor)}
         parameters = list(
             getattr(
                 constructor,
@@ -11741,24 +11740,27 @@ class GLSLCodeGen:
             )
             or []
         )
-        if any(
-            set(self.glsl_parameter_qualifiers(parameter)).intersection(
-                {"out", "inout"}
-            )
-            or (
-                self.type_name_string(
-                    getattr(parameter, "param_type", getattr(parameter, "vtype", None))
-                )
-                or ""
-            ).endswith(("*", "&"))
-            for parameter in parameters
-        ):
-            return {}
-
         body = getattr(constructor, "body", None)
         statements = list(getattr(body, "statements", body) or [])
         if not statements or not isinstance(statements[-1], ReturnNode):
             return {}
+        used_names = self.glsl_interval_dependency_names(statements)
+        for parameter in parameters:
+            parameter_type = (
+                self.type_name_string(
+                    getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+                )
+                or ""
+            )
+            if (
+                set(self.glsl_parameter_qualifiers(parameter)).intersection(
+                    {"out", "inout"}
+                )
+                or parameter_type.endswith("&")
+                or parameter_type.endswith("*")
+                and parameter.name in used_names
+            ):
+                return {}
 
         local_constants = self.initial_literal_int_constants(constructor)
         local_intervals = {}
@@ -11794,9 +11796,14 @@ class GLSLCodeGen:
             parameter_name = getattr(parameter, "name", None)
             if not parameter_name:
                 continue
-            if not effect_free(argument, intervals, constants):
+            argument_members = members(argument, intervals, constants)
+            if not (
+                self.glsl_side_effect_free_expression(argument)
+                or isinstance(argument, FunctionCallNode)
+                and argument_members
+            ):
                 return {}
-            for member, interval in members(argument, intervals, constants).items():
+            for member, interval in argument_members.items():
                 local_intervals[f"{parameter_name}.{member}"] = interval
             interval = scalar_interval(
                 argument,
@@ -11836,6 +11843,8 @@ class GLSLCodeGen:
                 if key is not None:
                     local_intervals[key] = component_interval
 
+        # Arguments are evaluated in the caller; only entering the body can recur.
+        active = active | {id(constructor)}
         for statement in statements[:-1]:
             if isinstance(statement, VariableNode):
                 name = getattr(statement, "name", None)

@@ -49,7 +49,7 @@ revision's required checks.
 Core and demo tests also remain part of the complete test suite.
 
 Guarded resource-index controls execute on original/generated Metal and on
-Mesa 25.0.7 llvmpipe with exact results and output guards; the same 24 HLSL
+Mesa 25.0.7 llvmpipe with exact results and output guards; the same 31 HLSL
 artifacts compile with strict DXC settings. The local ARM64 Mesa 22.3.6 driver
 returned incorrect results for a signed 64-bit conditional comparison. Updating
 the validation environment resolves that case without changing generated GLSL.
@@ -58,7 +58,10 @@ This driver result is not evidence of complete MLX runtime coverage.
 These controls cover scalar guards and integer fields of by-value records,
 including nested records, copies, helper calls and preconditioned loops. Field
 mutation and escaping references invalidate proofs; an unrelated field's bound
-does not justify an access. The Metal round trip also preserves 8-bit and 16-bit
+does not justify an access. Chained offsets cover reads, writes and atomic
+destinations, including contended atomic updates. Finite nested value calls
+preserve their bounds without authorizing recursive definitions or unsafe
+intermediate arithmetic. The Metal round trip also preserves 8-bit and 16-bit
 aggregate initializer conversions, including truncation and single evaluation.
 Runtime-derived GEMM metadata still requires a checked source or host contract;
 these controls do not supply arbitrary bounds for it.

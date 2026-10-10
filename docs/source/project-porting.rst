@@ -5071,6 +5071,11 @@ final subscripts require proven bounds or explicit allocation-derived range
 assertions. Unsupported aggregate escapes remain diagnostic on both targets.
 Bounds for integer members survive nested value construction, copies, assignments
 and straight-line by-value helper returns, including resource-handle rebasing.
+Finite nested helper calls retain their argument bounds; they are not recursive
+function definitions. Value summaries ignore unused storage pointer parameters, but
+reject pointer-dependent results, reference/output parameters and side-effecting
+arguments. Chained bounded offsets retain their proofs for reads, writes and
+atomic destinations.
 Storage specializations distinguish the member bounds at each call site;
 an unbounded call cannot reuse a proof from a bounded call. Unknown mutations,
 recursive or ambiguous constructors, unmodeled control flow and arithmetic
