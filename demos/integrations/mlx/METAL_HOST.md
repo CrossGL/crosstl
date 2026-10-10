@@ -61,8 +61,17 @@ gradient execution.
 
 ## Full-Suite Baseline
 
-A separate local discovery run at this revision executed 899 upstream Python
-tests on an Apple M2 Max, with 53 skips, four errors and one failure. Repeating
+A separately built, unmodified checkout at the current pin executed all 926
+discovered upstream Python tests on an Apple M2 Max using Python 3.13 and
+`MLX_METAL_JIT=ON`: one failure, four errors and 54 upstream skips. Both override
+variables were absent, and tracked source files were unchanged before and after
+execution. The errors are the four attention threadgroup-limit cases below;
+the failure is `TestLosses.test_triplet_loss`. This independently reproduces
+those problems without the host adaptation. It does not qualify any translated
+backend or waive the unchanged upstream assertions.
+
+An earlier adapted-build discovery run executed 899 upstream Python tests on an
+Apple M2 Max, with 53 skips, four errors and one failure. Repeating
 the affected tests with both override variables unset reproduced every failure:
 
 - Four cases in `TestFastSDPA.test_sdpa_vector_head_dim_512` request 1,024
@@ -117,6 +126,57 @@ larger arrays and unavailable values are explicitly marked. Complex values and
 non-finite floats have JSON-safe representations, preserving signed zeros.
 No seed, test input, assertion, tolerance or expected result is changed. Evidence
 capture errors cannot convert an upstream failure into a passing test.
+
+### Captured Scan Replay
+
+The [retained hosted failure](https://github.com/CrossGL/crosstl/actions/runs/38085353689/artifacts/11682384191)
+at translator revision `895dde51` was replayed on the separately rebuilt,
+unmodified MLX above. All 256 bfloat16 inputs, cumulative-sum outputs and reduced
+reference values match the hosted arrays exactly. Element `[5, 23]` is `9.5`
+versus `9.3125`; the absolute error is `0.1875`, exceeding the actual float32
+comparison bound `0.18725000321865082`. Float16 and float32 controls pass on the
+same inputs. The CPU bfloat16 comparison passes but has different outputs, so it
+is not a substitute for the Metal reference.
+
+A deterministic reduction of that captured case is:
+
+```python
+import mlx.core as mx
+
+mx.set_default_device(mx.gpu)
+a = mx.array([[
+    0.5625, 0.890625, 0.953125, 0.4921875,
+    0.1728515625, 0.267578125, 0.1015625, 0.765625,
+    0.310546875, 0.322265625, 0.1708984375, 0.0966796875,
+    0.1689453125, 0.22265625, 0.875, 0.59765625,
+    0.314453125, 0.029052734375, 0.87890625, 0.09130859375,
+    0.09521484375, 0.5234375, 0.2177734375, 0.322265625,
+]], dtype=mx.bfloat16)
+out = mx.cumsum(a, axis=-1)
+expected = (mx.tri(24).astype(mx.bfloat16) * a[:, None, :]).sum(axis=-1)
+print(out[0, -1].item(), expected[0, -1].item())
+print(mx.allclose(out, expected, rtol=0.02, atol=1e-3).item())
+```
+
+On the tested M2 Max this prints `9.5 9.3125` and `False`, without selecting a
+random seed. Independent sequential bfloat16 round-to-nearest-even accumulation
+reproduces all 256 original reduction reference values. Rounding the exact
+prefix sum only once gives `9.4375` at the failing element; that is not a model
+of the original subgroup scan's accumulation order. No source kernel, test,
+tolerance or required result is changed to accommodate the discrepancy.
+
+At translator revision `4232aa0a`, both complete
+`contig_scan_inclusive_sum_float32_float32` and
+`contig_scan_inclusive_sum_bfloat16_bfloat16` entries also translate, package,
+strictly compile and execute as Metal round trips on the captured 8x32 case.
+The 512 computed outputs and 64 output guards agree with separately compiled
+original Metal controls and the unmodified MLX host readbacks. These dispatches
+do not retain device input readbacks. This is selected kernel parity, not MLX
+scan host redirection or a passing scan-versus-reduction assertion. DirectX and
+OpenGL exact-width software prefix scans remain unsupported and are tracked in
+[#2196](https://github.com/CrossGL/crosstl/issues/2196).
+
+### Half-Precision Divmod
 
 The pinned original Metal backend also has a half-precision `divmod` boundary
 error. The macOS run at translator commit `78f86906` failed
