@@ -21003,6 +21003,15 @@ float {scalar}(float value) {{
                 or self.static_struct_member_type(name)
             )
         if isinstance(expr, ArrayAccessNode):
+            matrix_element = self.metal_cooperative_matrix_element_access(expr)
+            if matrix_element is not None:
+                matrix, _index = matrix_element
+                element_type, _columns, _rows = (
+                    self.metal_cooperative_matrix_type_parts(
+                        self.expression_metal_type(matrix)
+                    )
+                )
+                return self.resolve_type_alias(element_type)
             selection = self.metal_indexed_type_selection(expr)
             if selection["kind"] == "aggregate":
                 raise MetalIndexedComponentTypeResolutionError(

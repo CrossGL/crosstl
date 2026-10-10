@@ -4702,13 +4702,17 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "WaveOpNode calls lower to native HLSL Wave* intrinsics or equivalent helpers across lane queries, votes, reductions, scans, ballots, shuffle-and-fill, WaveMatch, WaveMultiPrefix*, quad reads, and arity/type diagnostics. Optional DXC validation covers compute wave shaders when dxc is installed.",
+          "notes": "WaveOpNode calls lower to native HLSL Wave* intrinsics or equivalent helpers across lane queries, votes, reductions, scans, ballots, shuffle-and-fill, WaveMatch, WaveMultiPrefix*, quad reads, and arity/type diagnostics. Optional DXC validation covers compute wave shaders when dxc is installed. Explicit logical-width-32 software mode also supports cooperative float 8x8 multiply-accumulate under the declared tile_4x4_row_pair mapping, with two lane elements, complete subgroups and statically uniform barrier schedules through helpers. It uses separately rounded binary32 products and sums in increasing inner-dimension order, not an implicit elementwise substitute or a promise of arbitrary-input bitwise Metal parity. Other matrix arithmetic contracts remain diagnostic.",
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_wave_and_rayquery_intrinsics_codegen",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_wave_intrinsics_reject_wrong_arity",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_wave_intrinsics_validate_argument_types",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_codegen_lowers_canonical_shuffle_and_fill_up_wave_op",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_wave_intrinsics_compute_validates_with_dxc"
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_wave_intrinsics_compute_validates_with_dxc",
+            "tests/test_translator/test_directx_cooperative_matrix.py::def test_software_matrix_compiles_without_native_waves",
+            "tests/test_translator/test_directx_cooperative_matrix.py::def test_software_matrix_checks_callee_control_flow",
+            "tests/test_translator/test_directx_cooperative_matrix.py::def test_software_matrix_executes",
+            "tests/test_translator/test_directx_cooperative_matrix.py::def test_project_matrix_native_parity"
           ]
         },
         "opengl": {

@@ -2094,6 +2094,7 @@ class HLSLCodeGen:
         self.set_software_subgroup_width(software_subgroup_width)
         self.set_widen_native_float16(widen_native_float16)
         self.directx_cooperative_matrix_lowerings = {}
+        self.required_hlsl_cooperative_matrix_mma = False
         self.texture_variables = set()
         self.sampler_variables = set()
         self.global_mixed_sampler_names = set()
@@ -3089,6 +3090,7 @@ class HLSLCodeGen:
         }
         target_stage = normalize_stage_name(target_stage)
         self.directx_cooperative_matrix_lowerings = {}
+        self.required_hlsl_cooperative_matrix_mma = False
         self.hlsl_builtin_option_available = False
         ast = self.with_hlsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:
@@ -4628,6 +4630,13 @@ class HLSLCodeGen:
         records = []
         for node in self.walk_ast(root):
             operation = None
+            if (
+                self.cooperative_matrix_software_lowering
+                and isinstance(node, CooperativeMatrixOpNode)
+                and node.operation == "multiply_accumulate"
+            ):
+                records.append(("CooperativeMatrixMultiplyAccumulate", node))
+                continue
             if isinstance(node, WaveOpNode):
                 operation = node.operation
             elif isinstance(node, FunctionCallNode):
@@ -5169,6 +5178,16 @@ class HLSLCodeGen:
                 source_location=getattr(entry_function, "source_location", None),
             )
         for operation, node in all_records:
+            if operation == "CooperativeMatrixMultiplyAccumulate":
+                if invocation_count % self.software_subgroup_width:
+                    raise self.hlsl_software_subgroup_error(
+                        "DirectX cooperative matrices require complete logical subgroups",
+                        workgroup_size=concrete_workgroup_size,
+                        operation=operation,
+                        reason="incomplete-matrix-subgroup",
+                        source_location=getattr(node, "source_location", None),
+                    )
+                continue
             if operation not in self.HLSL_SOFTWARE_SUBGROUP_OPERATIONS:
                 raise self.hlsl_software_subgroup_error(
                     f"DirectX software subgroup lowering does not support "
@@ -5595,7 +5614,10 @@ class HLSLCodeGen:
         return code + "    }\n"
 
     def generate_hlsl_software_subgroup_helpers(self):
-        if not self.required_hlsl_software_subgroup_helpers:
+        if not (
+            self.required_hlsl_software_subgroup_helpers
+            or self.required_hlsl_cooperative_matrix_mma
+        ):
             return ""
         invocation_count = self.hlsl_software_subgroup_invocation_count
         width = self.software_subgroup_width
@@ -5653,6 +5675,8 @@ class HLSLCodeGen:
                 "    return result;\n"
                 "}\n\n"
             )
+        if self.required_hlsl_cooperative_matrix_mma:
+            code += self.generate_hlsl_cooperative_matrix_mma_helper()
         return code
 
     def prepare_hlsl_physical_subgroup_id_helper_names(self, functions):
@@ -21908,9 +21932,190 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             source_location=getattr(expr, "source_location", None),
         )
 
+    def generate_hlsl_cooperative_matrix_mma(self, expr):
+        arguments = list(expr.arguments)
+        if len(arguments) not in {3, 4}:
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                "DirectX matrix multiply-accumulate requires three operands and "
+                "an optional destination",
+                reason="invalid-operation-arity",
+            )
+        destination = arguments[0] if len(arguments) == 4 else None
+        contracts = []
+        for argument in arguments:
+            matrix_type = _directx_cooperative_matrix_contract_type(
+                self.directx_cooperative_matrix_expression_type(argument)
+            )
+            if not isinstance(matrix_type, CooperativeMatrixType):
+                raise self.directx_cooperative_matrix_operation_error(
+                    expr,
+                    "DirectX matrix multiply-accumulate requires concrete operand contracts",
+                    reason="missing-operand-contract",
+                )
+            contracts.append(
+                self.directx_cooperative_matrix_fragment_lowering(
+                    matrix_type,
+                    operation=expr.operation,
+                    source_location=getattr(expr, "source_location", None),
+                )
+            )
+        accumulator = contracts[-1]
+        result_contracts = contracts[:1] if destination is not None else []
+        for source, candidate in (
+            ("result", getattr(expr, "result_type", None)),
+            ("expression", getattr(expr, "expression_type", None)),
+            ("contextual", self.current_expression_expected_type),
+        ):
+            if candidate is None or (
+                source == "contextual"
+                and self.type_name_string(candidate) in {"auto", "var"}
+            ):
+                continue
+            matrix_type = _directx_cooperative_matrix_contract_type(candidate)
+            if not isinstance(matrix_type, CooperativeMatrixType):
+                raise self.directx_cooperative_matrix_operation_error(
+                    expr,
+                    "DirectX matrix result must retain its cooperative contract",
+                    reason="incompatible-result-contract",
+                )
+            result_contracts.append(
+                self.directx_cooperative_matrix_fragment_lowering(
+                    matrix_type,
+                    operation=expr.operation,
+                    source_location=getattr(expr, "source_location", None),
+                )
+            )
+        if any(
+            self.directx_cooperative_matrix_contract_differences(accumulator, contract)
+            for contract in result_contracts
+        ):
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                "DirectX matrix destination and result must match the accumulator",
+                matrix_type=accumulator["matrix_type"],
+                reason="incompatible-result-contract",
+            )
+        if not all(
+            contract["component_type"] == "float"
+            and contract["rows"] == contract["columns"] == 8
+            and contract["subgroup_size"] == 32
+            and contract["elements_per_lane"] == 2
+            and contract["fragment_mapping"] == "tile_4x4_row_pair"
+            for contract in contracts + result_contracts
+        ):
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                "DirectX matrix multiply-accumulate requires the float "
+                "tile_4x4_row_pair 8x8/32x2 fragment contract",
+                matrix_type=accumulator["matrix_type"],
+                reason="incompatible-multiply-accumulate-contract",
+            )
+        if (
+            destination is not None
+            and not self.hlsl_typed_buffer_atomic_original_is_lvalue(destination)
+        ):
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                "DirectX matrix destination must be assignable",
+                reason="destination-requires-lvalue",
+            )
+        invocation = self.hlsl_software_subgroup_invocation_expressions.get(
+            self.current_function_name
+        )
+        if invocation is None:
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                "DirectX matrix multiply-accumulate requires validated uniform control flow",
+                reason="software-subgroup-contract-required",
+            )
+        self.required_hlsl_cooperative_matrix_mma = True
+        helper = self.hlsl_software_subgroup_identifier(
+            ("matrix", "mma"), "__crossgl_software_matrix_mma"
+        )
+        operands = ", ".join(
+            self.generate_expression(argument) for argument in arguments[-3:]
+        )
+        call = f"{helper}({operands}, uint({invocation}))"
+        if destination is not None:
+            return f"({self.generate_expression(destination)} = {call})"
+        return call
+
+    def generate_hlsl_cooperative_matrix_mma_helper(self):
+        mapping = get_cooperative_matrix_fragment_mapping(
+            "tile_4x4_row_pair", 8, 8, 32, 2
+        )
+        helper = self.hlsl_software_subgroup_identifier(
+            ("matrix", "mma"), "__crossgl_software_matrix_mma"
+        )
+        scratch = [
+            self.hlsl_software_subgroup_identifier(
+                ("matrix", operand), f"__crossgl_software_matrix_{operand}"
+            )
+            for operand in ("left", "right")
+        ]
+        count = self.hlsl_software_subgroup_invocation_count
+        lines = [f"groupshared float2 {name}[{count}];" for name in scratch]
+        lines.extend(
+            [
+                f"float2 {helper}(float2 left, float2 right, float2 accumulator, uint invocation) {{",
+                "    uint lane = invocation % 32u;",
+                "    uint subgroupBase = invocation - lane;",
+                f"    {scratch[0]}[invocation] = left;",
+                f"    {scratch[1]}[invocation] = right;",
+                "    GroupMemoryBarrierWithGroupSync();",
+                "    precise float2 result = accumulator;",
+            ]
+        )
+        # Tables come from the registered source mapping, not the physical wave layout.
+        owners = [mapping.owner(row, column) for row in range(8) for column in range(8)]
+        tables = {
+            "ownerLanes": [owner[0] for owner in owners],
+            "ownerElements": [owner[1] for owner in owners],
+        }
+        for element in range(2):
+            tables[f"coordinates{element}"] = [
+                row * 8 + column
+                for lane in range(32)
+                for row, column in [mapping.coordinate(lane, element)]
+            ]
+        for name, values in tables.items():
+            rendered = ", ".join(f"{value}u" for value in values)
+            lines.append(f"    const uint {name}[{len(values)}] = {{{rendered}}};")
+        for element in range(2):
+            lines.extend(
+                [
+                    f"    uint row{element} = coordinates{element}[lane] / 8u;",
+                    f"    uint column{element} = coordinates{element}[lane] % 8u;",
+                ]
+            )
+            for inner in range(8):
+                prefix = f"term{element}_{inner}"
+                lines.extend(
+                    [
+                        f"    uint {prefix}A = row{element} * 8u + {inner}u;",
+                        f"    uint {prefix}B = {inner}u * 8u + column{element};",
+                        f"    precise float {prefix} = "
+                        f"{scratch[0]}[subgroupBase + ownerLanes[{prefix}A]][ownerElements[{prefix}A]] * "
+                        f"{scratch[1]}[subgroupBase + ownerLanes[{prefix}B]][ownerElements[{prefix}B]];",
+                        f"    result[{element}] = result[{element}] + {prefix};",
+                    ]
+                )
+        lines.extend(
+            [
+                "    GroupMemoryBarrierWithGroupSync();",
+                "    return result;",
+                "}",
+                "",
+            ]
+        )
+        return "\n".join(lines)
+
     def directx_cooperative_matrix_operation_lowering(self, expr):
         operation = expr.operation
         result_type = getattr(expr, "result_type", None)
+        if operation == "multiply_accumulate" and self.software_subgroup_width == 32:
+            return self.generate_hlsl_cooperative_matrix_mma(expr)
 
         if operation not in self.DIRECTX_COOPERATIVE_MATRIX_LANE_LOCAL_OPERATIONS:
             raise self.directx_cooperative_matrix_operation_error(

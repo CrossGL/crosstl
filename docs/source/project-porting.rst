@@ -1982,11 +1982,23 @@ Two optional target policies are available through project source options:
 
 ``cooperative_matrix_software_lowering`` defaults to ``false`` on both targets.
 DirectX supports checked lane-local element access, copying, addition,
-subtraction, elementwise multiplication, and negation. Matrix multiplication,
-multiply-accumulate, loads and stores remain structured translation errors;
-enabling this policy does not substitute elementwise multiplication for a
-matrix product. Fragment dimensions, scalar types, registered mappings and
-source provenance must still be compatible.
+subtraction, elementwise multiplication, and negation. Combined with
+``software_subgroup_width = 32`` and
+``relative_wave_shuffle_out_of_range = "self"``, it also supports float 8-by-8
+multiply-accumulate with the ``tile_4x4_row_pair`` mapping and two elements per
+lane. This path uses shared memory within complete logical subgroups, independent
+of the hardware wave width. Workgroup dimensions must be concrete and all
+barriers, including those reached through helpers, must have proven uniform
+control flow. Divergent calls and incomplete subgroups are rejected.
+
+The DirectX fallback accumulates in increasing inner-dimension order using
+separately rounded binary32 products and sums; ``precise`` prevents contraction
+and reassociation. Metal does not specify a bitwise accumulation order for its
+matrix intrinsic. Native comparison remains required for the application's
+numerical tolerance; this policy does not promise bitwise equivalence for
+arbitrary floating-point inputs. Plain matrix multiplication, matrix loads and
+stores remain structured translation errors. Fragment dimensions, scalar types,
+registered mappings and source provenance must still be compatible.
 
 On OpenGL, supported fragment operations lower to explicit scalar storage and
 subgroup operations. Multiply-accumulate currently requires the float 8-by-8,
