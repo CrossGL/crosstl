@@ -121,6 +121,7 @@
       "tests": {
         "paths": [
           "tests/test_translator/test_codegen/test_directx_codegen.py",
+          "tests/test_translator/test_scalar_bitcast_widths.py",
           "tests/test_translator/test_directx_subgroup_overloads.py",
           "tests/test_translator/test_integer_subgroup_shuffles.py",
           "tests/test_translator/test_integer_literals.py",
@@ -170,7 +171,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 2063
+        "test_count": 2070
       },
       "translator_codegen": {
         "exists": true,
@@ -291,6 +292,7 @@
         "paths": [
           "tests/test_translator/test_arithmetic_conversions.py",
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
+          "tests/test_translator/test_scalar_bitcast_widths.py",
           "tests/test_translator/test_directx_subgroup_overloads.py",
           "tests/test_translator/test_integer_subgroup_shuffles.py",
           "tests/test_translator/test_integer_literals.py",
@@ -343,7 +345,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 2301
+        "test_count": 2308
       },
       "translator_codegen": {
         "exists": true,
@@ -729,6 +731,7 @@
           "tests/test_translator/test_metal_trunc.py",
           "tests/test_translator/test_metal_round.py",
           "tests/test_translator/test_metal_constructor_bitcasts.py",
+          "tests/test_translator/test_scalar_bitcast_widths.py",
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_translator/test_metal_precise_asin.py",
           "tests/test_translator/test_metal_precise_trig.py",
@@ -758,7 +761,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2494
+        "test_count": 2501
       },
       "translator_codegen": {
         "exists": true,

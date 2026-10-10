@@ -48,6 +48,22 @@ does not override a caller's choice to enable compiler fast-math reassociation.
 Supported Surface
 -----------------
 
+Scalar ``as_type<T>`` imports preserve the explicit logical bit width.
+The ``asfloat``, ``asint`` and ``asuint`` shorthand is used only when
+both operands have the same known 32-bit component layout. Equal lane counts
+do not justify narrowing a 64-bit result or widening a 16-bit payload.
+Saved CrossGL retains the same bitcast contract.
+
+Required native controls on Metal, DirectX and OpenGL cover signed and unsigned
+16- and 64-bit payloads, every finite binary16 pattern, 32-bit positive controls,
+single evaluation and output guards. OpenGL retains narrow integer source types
+despite widened storage and normalizes signedness at the bitcast. For these
+16- and 64-bit types, unsupported logical widths or shapes produce diagnostics
+rather than numeric casts. Byte-sized explicit bitcasts remain incomplete on
+DirectX and OpenGL; see `issue 2184 <https://github.com/CrossGL/crosstl/issues/2184>`_.
+These controls do not establish arbitrary vector reshaping or NaN payload
+preservation across widened floating-point storage.
+
 The backend focuses on Apple GPU shader integration:
 
 * vertex, fragment, compute, mesh/object/amplification, and ray tracing-style

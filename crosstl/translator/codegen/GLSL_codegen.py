@@ -36758,6 +36758,15 @@ complex64_t crossgl_complex64_mod_assign(
         source_narrow = self.glsl_narrow_integer_contract(source_name)
         target_narrow = self.glsl_narrow_integer_contract(target_name)
 
+        if (
+            source_narrow is not None
+            and target_narrow is not None
+            and source_narrow["bits"] == target_narrow["bits"] == 16
+            and source_narrow["width"] == target_narrow["width"]
+        ):
+            converted = f"{self.map_type(target_type)}({value})"
+            return self.glsl_apply_narrow_integer_contract(converted, target_type)
+
         if target_name in half_scalar_types:
             if source_name in half_scalar_types:
                 return value
@@ -36825,6 +36834,18 @@ complex64_t crossgl_complex64_mod_assign(
                 if target_narrow["signed"]:
                     return f"bitfieldExtract(int({payload}), 0, 16)"
                 return f"bitfieldExtract({payload}, 0, 16)"
+        if (
+            any(
+                narrow is not None and narrow["bits"] == 16
+                for narrow in (source_narrow, target_narrow)
+            )
+            and target_name not in self.GLSL_BFLOAT16_ALIASES
+        ):
+            raise ValueError(
+                f"OpenGL as_type<{target_name}> cannot exactly bitcast from "
+                f"{source_name}: 16-bit integer payloads require a matching "
+                "logical width and supported shape"
+            )
         return None
 
     def generate_metal_as_type_call(self, func_name, args):
@@ -37818,7 +37839,11 @@ complex64_t crossgl_complex64_mod_assign(
         if func_name == "buffer_load" and len(args) >= 2:
             self.validate_structured_buffer_access_argument(func_name, args)
             index = self.glsl_index_expression(args[1], args[0])
-            return f"{self.structured_buffer_access_expression(args[0], index)}"
+            value = self.structured_buffer_access_expression(args[0], index)
+            element_type = self.glsl_buffer_call_result_type(
+                func_name, args, source_type=True
+            )
+            return self.glsl_apply_narrow_integer_contract(value, element_type)
         if func_name == "buffer_store" and len(args) >= 3:
             self.validate_structured_buffer_access_argument(func_name, args)
             self.validate_glsl_storage_pointer_binding_access(
@@ -37879,9 +37904,13 @@ complex64_t crossgl_complex64_mod_assign(
             element_type = self.structured_buffer_source_element_type(
                 self.expression_result_type(args[0])
             )
-            return self.float_atomic_storage.buffer_value(
+            value = self.float_atomic_storage.buffer_value(
                 args[0], element_type, value, False
             )
+            source_element = self.glsl_buffer_call_result_type(
+                func_name, args, source_type=True
+            )
+            return self.glsl_apply_narrow_integer_contract(value, source_element)
         if func_name == "buffer_dimensions" and args:
             length_expr = self.structured_buffer_length_expression(args[0])
             if len(args) >= 2:
@@ -37899,7 +37928,10 @@ complex64_t crossgl_complex64_mod_assign(
         )
         if binding is not None and binding.get("element_type") is not None:
             source_element = binding.get("source_element_type")
-            if source_type and self.glsl_narrow_float_width(source_element) is not None:
+            if source_type and (
+                self.glsl_narrow_float_width(source_element) is not None
+                or self.glsl_narrow_integer_contract(source_element) is not None
+            ):
                 return source_element
             return binding["element_type"]
 

@@ -13016,9 +13016,14 @@ class MetalToCrossGLConverter:
 
         if alias_name is not None:
             source_type = self.expression_mapped_type(args[0]) if args else None
-            if source_type is None or self.crossgl_type_shape(
-                source_type
-            ) == self.crossgl_type_shape(mapped_type):
+            # These aliases preserve only 32-bit component layouts. Equal lane
+            # counts alone do not make a narrow or wide scalar interchangeable.
+            if (
+                re.fullmatch(r"(?:float|int|uint|[iu]?vec[234])", mapped_type)
+                and re.fullmatch(r"(?:float|int|uint|[iu]?vec[234])", str(source_type))
+                and self.crossgl_type_shape(source_type)
+                == self.crossgl_type_shape(mapped_type)
+            ):
                 return alias_name
         target_name = match.group(1).strip()
         inline_alias = target_name in self.local_type_alias_names or any(
@@ -21086,6 +21091,23 @@ float {scalar}(float value) {{
             builtin_result_type = self.metal_math_builtin_result_type(expr)
             if builtin_result_type is not None:
                 return builtin_result_type
+            atomic_name = str(expr.name).lstrip(":")
+            if atomic_name.startswith("metal::"):
+                atomic_name = atomic_name[len("metal::") :]
+            if (
+                atomic_name in {"atomic_load_explicit", *self.metal_atomic_intrinsics}
+                and len(expr.args)
+                == (2 if atomic_name == "atomic_load_explicit" else 3)
+                and not self.metal_user_function_overloads(expr.name)
+            ):
+                pointee = self.metal_pointer_pointee_type_once(
+                    self.expression_metal_type(expr.args[0])
+                )
+                atomic_result = self.atomic_element_type(
+                    self.normalized_metal_type(self.resolve_type_alias(pointee))
+                )
+                if atomic_result is not None:
+                    return atomic_result
             arity_candidates = [
                 candidate
                 for candidate in self.user_function_overloads_by_name.get(

@@ -1259,7 +1259,7 @@ EXTERNAL_FIXTURES = [
         "roundtrip": True,
         "contains": [
             "typedef bfloat16 bfloat16_t;",
-            "return asuint(x);",
+            "return as_type<uint16>(x);",
             "return as_type<bfloat16_t>(x);",
         ],
         "not_contains": [

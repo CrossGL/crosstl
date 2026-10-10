@@ -6688,7 +6688,7 @@ def test_structured_buffer_alias_helper_call_passes_ssbo_data_array():
         in generated
     )
     assert "uint readOne(uint localCounts[], uint index)" in generated
-    assert "return localCounts[index];" in generated
+    assert "return bitfieldExtract(localCounts[index], 0, 16);" in generated
     assert "return readOne(counts[which].data, index);" in generated
     assert "readOne(counts[which], index)" not in generated
     assert "buffer_load" not in generated
@@ -6739,7 +6739,7 @@ def test_structured_buffer_alias_array_helpers_expand_to_data_array_parameters()
         in generated
     )
     assert (
-        "return ((which == 0u) ? localCounts_0[index] : localCounts_1[index]);"
+        "return bitfieldExtract(((which == 0u) ? localCounts_0[index] : localCounts_1[index]), 0, 16);"
         in generated
     )
     assert (
@@ -6866,8 +6866,8 @@ def test_unsized_global_structured_buffer_arrays_infer_static_sizes():
         "uint readCount(uint localCounts_0[], uint localCounts_1[], uint index)"
         in generated
     )
-    assert "return localCounts_1[index];" in generated
-    assert "uint first = counts[0].data[index];" in generated
+    assert "return bitfieldExtract(localCounts_1[index], 0, 16);" in generated
+    assert "uint first = bitfieldExtract(counts[0].data[index], 0, 16);" in generated
     assert (
         "uint second = readCount(counts[0].data, counts[1].data, index);" in generated
     )
@@ -7017,7 +7017,7 @@ def test_structured_buffer_array_helpers_propagate_nested_fixed_sizes():
         "uint readMid(uint midCounts_0[], uint midCounts_1[], "
         "uint midCounts_2[], uint index)" in generated
     )
-    assert "return leafCounts_2[index];" in generated
+    assert "return bitfieldExtract(leafCounts_2[index], 0, 16);" in generated
     assert "return readLeaf(midCounts_0, midCounts_1, midCounts_2, index);" in generated
     assert "readMid(counts[0].data, counts[1].data, counts[2].data, index)" in generated
     assert "readLeaf(midCounts, index)" not in generated
