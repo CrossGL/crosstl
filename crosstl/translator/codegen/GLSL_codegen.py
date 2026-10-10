@@ -1708,6 +1708,7 @@ class GLSLCodeGen:
     # GLSL qualifiers and future-reserved words can be source-backend identifiers.
     GLSL_RESERVED_IDENTIFIERS = GLSL_VARIABLE_QUALIFIER_ATTRIBUTE_NAMES | {
         "active",
+        "barrier",
         "attribute",
         "buffer",
         "cast",
@@ -1837,6 +1838,7 @@ class GLSLCodeGen:
             "WaveActiveMin",
             "WaveActiveMax",
             "WaveShuffleDown",
+            "subgroupExecutionBarrier",
             *GLSL_SOFTWARE_SUBGROUP_VOTES,
         }
     )
@@ -2539,6 +2541,7 @@ class GLSLCodeGen:
         self.current_glsl_precise_return_type = None
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
+        self.glsl_atomic_fence_stage = None
         self.function_fragment_only_requirements = {}
         self.current_expression_expected_type = None
         self.current_discarded_expression = None
@@ -4313,7 +4316,14 @@ class GLSLCodeGen:
             if isinstance(node, WaveOpNode):
                 operation = node.operation
             elif isinstance(node, FunctionCallNode):
-                operation = self.glsl_wave_operation_name(self.function_call_name(node))
+                name = self.function_call_name(node)
+                if (
+                    name == "subgroupExecutionBarrier"
+                    and name not in self.function_return_types
+                ):
+                    records.append((name, node))
+                    continue
+                operation = self.glsl_wave_operation_name(name)
             if operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
                 records.append((operation, node))
         return records
@@ -5279,6 +5289,15 @@ class GLSLCodeGen:
             id(function) for _operation, _node, function in helper_records
         }
 
+        # Exempt only actual calls (and their callee identifiers), not raw
+        # hardware names used as values. Declared source functions keep ownership.
+        execution_barrier_call_nodes = set()
+        for node in self.walk_ast(ast):
+            if (
+                isinstance(node, FunctionCallNode)
+                and self.function_call_name(node) == "subgroupExecutionBarrier"
+            ):
+                execution_barrier_call_nodes.update((id(node), id(node.function)))
         for node in self.walk_ast(ast):
             name = None
             if isinstance(node, IdentifierNode):
@@ -5287,10 +5306,14 @@ class GLSLCodeGen:
                 name = self.function_call_name(node)
             semantic = self.semantic_from_node(node)
             mapped_semantic = self.map_semantic(semantic) if semantic else None
-            raw_hardware_name = isinstance(name, str) and (
-                name == "gl_NumSubgroups"
-                or name.startswith("gl_Subgroup")
-                or name.startswith("subgroup")
+            raw_hardware_name = (
+                id(node) not in execution_barrier_call_nodes
+                and isinstance(name, str)
+                and (
+                    name == "gl_NumSubgroups"
+                    or name.startswith("gl_Subgroup")
+                    or name.startswith("subgroup")
+                )
             )
             unsupported_mapped_semantic = (
                 mapped_semantic in self.GLSL_SUBGROUP_BASIC_BUILTINS
@@ -7263,6 +7286,10 @@ class GLSLCodeGen:
         self.current_glsl_precise_return_type = None
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
+        fence_stage_names = self.glsl_stage_names(ast, target_stage) - {None}
+        self.glsl_atomic_fence_stage = (
+            next(iter(fence_stage_names)) if len(fence_stage_names) == 1 else None
+        )
         self.function_fragment_only_requirements = {}
         self.current_expression_expected_type = None
         self.current_discarded_expression = None
@@ -35788,7 +35815,10 @@ complex64_t crossgl_complex64_mod_assign(
                 source_location=source_location,
             )
         if validate_stage and (
-            normalize_stage_name(self.current_stage_entry_type) != "compute"
+            normalize_stage_name(
+                self.current_stage_entry_type or self.glsl_atomic_fence_stage
+            )
+            != "compute"
         ):
             raise self.opengl_atomic_fence_contract_error(
                 "unsupported-shader-stage",
@@ -35823,6 +35853,19 @@ complex64_t crossgl_complex64_mod_assign(
     def synchronization_function_call(self, func_name, args, *, source_location=None):
         if not func_name or func_name in self.function_return_types:
             return None
+        if func_name == "subgroupExecutionBarrier":
+            if self.software_subgroup_width is not None:
+                return self.generate_glsl_software_subgroup_operation(
+                    func_name, args, source_location=source_location
+                )
+            if args:
+                raise self.glsl_software_subgroup_error(
+                    "OpenGL subgroup execution barriers require zero arguments",
+                    operation=func_name,
+                    reason="invalid-argument-count",
+                    source_location=source_location,
+                )
+            return "subgroupBarrier()"
         if func_name == "atomicThreadFence":
             return self.generate_glsl_atomic_thread_fence(
                 args,
@@ -35832,8 +35875,6 @@ complex64_t crossgl_complex64_mod_assign(
             return None
         if func_name in {"workgroupBarrier", "workgroupExecutionBarrier"}:
             return "barrier()"
-        if func_name == "subgroupExecutionBarrier":
-            return "subgroupBarrier()"
         return None
 
     def collect_metal_simd_group_placeholder_functions(self, functions):
@@ -37359,7 +37400,11 @@ complex64_t crossgl_complex64_mod_assign(
                 source_location=source_location,
             )
 
-        expected_arity = self.GLSL_WAVE_INTRINSIC_ARITIES[operation]
+        expected_arity = (
+            0
+            if operation == "subgroupExecutionBarrier"
+            else self.GLSL_WAVE_INTRINSIC_ARITIES[operation]
+        )
         if len(arguments) != expected_arity:
             raise self.glsl_software_subgroup_error(
                 f"OpenGL software subgroup operation '{operation}' requires "
@@ -37368,6 +37413,8 @@ complex64_t crossgl_complex64_mod_assign(
                 reason="invalid-argument-count",
                 source_location=source_location,
             )
+        if operation == "subgroupExecutionBarrier":
+            return "barrier()"
         value_type = self.glsl_source_expression_type(arguments[0])
         mapped_value_type = (
             self.map_type(value_type) if value_type is not None else None

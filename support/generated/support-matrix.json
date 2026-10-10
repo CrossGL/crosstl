@@ -6649,7 +6649,11 @@
             "tests/test_translator/test_collective_reference_effects.py::def test_selected_reference_writes_preserve_uniform_indices",
             "tests/test_translator/test_collective_reference_effects.py::def test_reference_effects_retain_control_mutations",
             "tests/test_translator/test_collective_reference_effects.py::def test_entry_exit_facts_retain_writes_and_unknown_calls",
-            "tests/test_translator/test_collective_reference_effects.py::def test_indexed_reference_helpers_execute"
+            "tests/test_translator/test_collective_reference_effects.py::def test_indexed_reference_helpers_execute",
+            "tests/test_translator/test_subgroup_execution_barriers.py::def test_execution_barrier_compiles_without_a_reduction",
+            "tests/test_translator/test_subgroup_execution_barriers.py::def test_execution_barrier_rejects_unproven_participation",
+            "tests/test_translator/test_subgroup_execution_barriers.py::def test_execution_barrier_target_intrinsic_is_not_captured",
+            "tests/test_translator/test_subgroup_execution_barriers.py::def test_fenced_execution_barriers_execute_with_scratch_reuse"
           ],
           "notes": "WaveOpNode calls lower to native HLSL Wave* intrinsics or equivalent helpers across lane queries, votes, reductions, scans, ballots, shuffle-and-fill, WaveMatch, WaveMultiPrefix*, quad reads, and arity/type diagnostics. Optional DXC validation covers compute wave shaders when dxc is installed. Explicit logical-width-32 software mode also supports cooperative float 8x8 multiply-accumulate under the declared tile_4x4_row_pair mapping, with two lane elements, complete subgroups and statically uniform barrier schedules through helpers. It uses separately rounded binary32 products and sums in increasing inner-dimension order, not an implicit elementwise substitute or a promise of arbitrary-input bitwise Metal parity. Other matrix arithmetic contracts remain diagnostic.",
           "status": "supported"
@@ -6679,7 +6683,9 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_read_lane_at_lowers_to_simd_broadcast",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_shuffle_and_fill_up_lowers_boolean_payloads",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_ballot_and_active_all_equal_vector_lowering",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_active_reductions_lower_to_simd_intrinsics"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_active_reductions_lower_to_simd_intrinsics",
+            "tests/test_translator/test_subgroup_execution_barriers.py::def test_fenced_execution_barriers_package_and_compile",
+            "tests/test_translator/test_subgroup_execution_barriers.py::def test_fenced_execution_barriers_execute_with_scratch_reuse"
           ],
           "notes": "Lowers CrossGL Wave* operations, including shuffle-and-fill, to Metal simdgroup intrinsics or helper functions, threads compute-stage lane metadata through helper calls, and emits compile-safe diagnostics for contexts where Metal cannot supply simdgroup lane values.",
           "status": "supported"
@@ -6712,6 +6718,10 @@
             "tests/test_translator/test_collective_reference_effects.py::def test_reference_effects_retain_control_mutations",
             "tests/test_translator/test_collective_reference_effects.py::def test_entry_exit_facts_retain_writes_and_unknown_calls",
             "tests/test_translator/test_collective_reference_effects.py::def test_indexed_reference_helpers_execute",
+            "tests/test_translator/test_subgroup_execution_barriers.py::def test_execution_barrier_compiles_without_a_reduction",
+            "tests/test_translator/test_subgroup_execution_barriers.py::def test_execution_barrier_rejects_unproven_participation",
+            "tests/test_translator/test_subgroup_execution_barriers.py::def test_atomic_fence_helpers_keep_the_unique_emitted_stage",
+            "tests/test_translator/test_subgroup_execution_barriers.py::def test_fenced_execution_barriers_execute_with_scratch_reuse",
             "demos/integrations/mlx/tests/kernels/test_gemv_native_loader.py::def test_current_mlx_gemv_executes_with_opengl_software_subgroups",
             "demos/integrations/mlx/tests/kernels/test_softmax_native_loader.py::def test_pinned_mlx_softmax_translates_to_software_subgroup_opengl",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_wave_intrinsics_compute_validates_with_glslang"

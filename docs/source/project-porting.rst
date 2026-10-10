@@ -622,6 +622,17 @@ explicit memory ordering as well as execution barriers. This does not establish
 complete MLX reduction support: collective-result uniformity and full host
 reduction dispatch remain separate work.
 
+Metal ``simdgroup_barrier(mem_flags::mem_none)`` also participates in the
+software subgroup convergence proof on DirectX and OpenGL, including direct
+calls, barrier-only helpers and repeated finite loops. Workgroup synchronization
+is emitted only when participation is proven; it is not an unconditional
+replacement for a native subgroup barrier. Native tests keep explicit atomic
+memory fences separate from execution barriers, exchange values within four
+logical subgroups, and check repeated scratch reuse, a uniformly inactive
+workgroup and untouched output guards. The Metal round trip retains the
+execution-only source flag. These controls do not establish support for every
+Metal barrier flag or complete GEMM numerical parity.
+
 Scalar float32, int32 and uint32 products use an adjacent-pair reduction tree
 with strides 1, 2, 4, 8 and 16 on both software backends. Integer products wrap
 at 32 bits. The required native product gate checks repeated helper calls,

@@ -147,6 +147,17 @@ width. Multiple logical groups share an allocation but never read each other's
 values. Every invocation participates in both barriers around a collective;
 unproven divergent control flow remains a structured translation error.
 
+Execution-only ``subgroupExecutionBarrier()`` calls use
+``GroupMemoryBarrierWithGroupSync()`` only under the same checked software
+subgroup contract. The convergence proof includes barrier-only entries and
+transitive helpers, even when no reduction or shuffle is present. Unproven
+partial-workgroup branches, early exits, loops and recursive calls are rejected.
+Native-wave lowering does not currently provide this execution barrier and
+reports ``execution-barrier-contract-unproven`` instead of emitting an unresolved
+call. Declared source functions with the same name retain their own semantics.
+Local variables and functions named after the emitted HLSL intrinsic are renamed;
+a colliding global declaration produces ``target-intrinsic-shadowed``.
+
 Software shuffles preserve signed and unsigned 16-bit and 64-bit integer
 payloads in typed groupshared storage, as well as 32-bit integers and floats.
 Two-word ``uint2`` payloads preserve both halves of source 64-bit wrappers.

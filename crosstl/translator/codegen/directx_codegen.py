@@ -2041,6 +2041,8 @@ class HLSLCodeGen:
         "firstbitlow",
         # OpenCL/GLSL fma lowers to HLSL mad.
         "mad",
+        # Software subgroup barriers must retain the target synchronization call.
+        "GroupMemoryBarrierWithGroupSync",
     }
     HLSL_BITCAST_FUNCTION_TARGETS = {
         "floatBitsToInt": "int",
@@ -2070,7 +2072,11 @@ class HLSLCodeGen:
     }
     HLSL_SOFTWARE_SUBGROUP_VOTES = frozenset({"WaveActiveAllTrue", "WaveActiveAnyTrue"})
     HLSL_SOFTWARE_SUBGROUP_OPERATIONS = frozenset(
-        {"WaveShuffleDown", *HLSL_SOFTWARE_SUBGROUP_REDUCTIONS}
+        {
+            "WaveShuffleDown",
+            "subgroupExecutionBarrier",
+            *HLSL_SOFTWARE_SUBGROUP_REDUCTIONS,
+        }
     )
     HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES = frozenset({"float", "int", "uint"})
     HLSL_SOFTWARE_SUBGROUP_SHUFFLE_TYPES = HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES | {
@@ -4646,6 +4652,12 @@ class HLSLCodeGen:
                 operation = node.operation
             elif isinstance(node, FunctionCallNode):
                 function_name = self.function_call_name(node)
+                if (
+                    function_name == "subgroupExecutionBarrier"
+                    and function_name not in self.function_return_types
+                ):
+                    records.append((function_name, node))
+                    continue
                 metal_name = self.hlsl_metal_simd_shuffle_name(function_name)
                 if metal_name is not None:
                     operation = {
@@ -5796,6 +5808,7 @@ class HLSLCodeGen:
         if not (
             self.required_hlsl_software_subgroup_helpers
             or self.required_hlsl_cooperative_matrix_mma
+            or self.hlsl_software_subgroup_invocation_variable is not None
         ):
             return ""
         invocation_count = self.hlsl_software_subgroup_invocation_count
@@ -23581,6 +23594,41 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def synchronization_function_call(self, func_name, args, *, source_location=None):
         if not func_name or func_name in getattr(self, "function_return_types", {}):
             return None
+
+        if func_name == "subgroupExecutionBarrier":
+            if args:
+                raise self.hlsl_software_subgroup_error(
+                    "DirectX subgroup execution barriers require zero arguments",
+                    operation=func_name,
+                    reason="invalid-argument-count",
+                    source_location=source_location,
+                )
+            if (
+                self.software_subgroup_width is None
+                or self.hlsl_software_subgroup_workgroup_size is None
+                or self.current_function_name
+                not in self.hlsl_software_subgroup_function_names
+            ):
+                raise self.hlsl_software_subgroup_error(
+                    "DirectX subgroup execution barriers require checked software "
+                    "subgroup lowering with uniform workgroup participation",
+                    operation=func_name,
+                    reason="execution-barrier-contract-unproven",
+                    source_location=source_location,
+                )
+            if (
+                "GroupMemoryBarrierWithGroupSync" in self.global_variable_types
+                or "GroupMemoryBarrierWithGroupSync"
+                in self.standard_math_constant_shadow_names
+            ):
+                raise self.hlsl_software_subgroup_error(
+                    "DirectX subgroup execution barrier target intrinsic is shadowed "
+                    "by a global source declaration",
+                    operation=func_name,
+                    reason="target-intrinsic-shadowed",
+                    source_location=source_location,
+                )
+            return "GroupMemoryBarrierWithGroupSync()"
 
         if func_name == "atomicThreadFence":
             return self.generate_hlsl_atomic_thread_fence(

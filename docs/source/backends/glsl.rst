@@ -100,6 +100,14 @@ errors. Const qualification alone does not prove invocation uniformity.
 Raw hardware subgroup builtins are rejected in software mode; annotated
 subgroup inputs use the configured logical width instead.
 
+Execution-only ``subgroupExecutionBarrier()`` calls lower to ``barrier()`` in
+software mode only after the same workgroup-participation proof. Barrier-only
+entries and nested helpers do not require an unrelated reduction to activate
+that proof. Native subgroup mode retains ``subgroupBarrier()`` and its extension
+requirement. Source-defined functions retain ownership of their names. Atomic
+fence helpers inherit a shader stage only from an explicitly selected stage or
+a module with one unique stage; mixed-stage modules do not assume compute.
+
 The entry point receives the same call-effect and local control-flow analysis
 when it contains collectives directly, without a collective helper. Uniform
 loop-induction branches therefore do not depend on an unrelated helper being
