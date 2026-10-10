@@ -12298,7 +12298,7 @@ class TestHipCodeGen:
         )
         assert (
             "float reduced = cgl_hip_shfl_down_sync_float"
-            "(4294967295, partial, 16);" in hip_code
+            "(4294967295u, partial, 16);" in hip_code
         )
 
     def test_direct_shfl_down_sync_width_lowers_to_guarded_hip_helper(self):

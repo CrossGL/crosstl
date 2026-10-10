@@ -105,7 +105,7 @@ def test_integer_constants_round_at_every_bfloat_midpoint():
 
 @pytest.mark.parametrize("target", ("directx", "opengl"))
 def test_metal_bfloat_constants_have_exact_target_initializers(tmp_path, target):
-    cases = CASES
+    cases = CASES + WIDE_CASES
     source = tmp_path / "constants.metal"
     source.write_text(_source(cases))
     generated = translate(str(source), backend=target, format_output=False)
@@ -136,7 +136,7 @@ def test_canonical_bfloat_constant_aliases(dtype, generator):
 @pytest.mark.parametrize("target", ("directx", "opengl"))
 @pytest.mark.parametrize(
     "expression",
-    ("bfloat(-1u)", "bfloat(uint(4294967296ul))", *(expr for expr, _ in WIDE_CASES)),
+    ("bfloat(-1u)", "bfloat(uint(4294967296ul))"),
 )
 def test_unproven_integer_constant_operations_are_diagnostic(
     tmp_path, target, expression
@@ -183,7 +183,7 @@ def test_global_integer_lookup_does_not_fold_a_shadowed_local(tmp_path):
 def test_bfloat_constants_execute_natively(tmp_path):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required bfloat constants")
-    cases = CASES
+    cases = CASES + WIDE_CASES
     source = _source(cases)
     _, descriptor, package = _package(
         tmp_path, TARGET, "uint", (1, 1, 1), source=source, software_subgroups=False

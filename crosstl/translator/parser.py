@@ -75,6 +75,7 @@ from .ast import (
     WildcardPatternNode,
     create_legacy_shader_node,
 )
+from .integer_literals import integer_literal_parts
 from .source_licenses import SOURCE_LICENSES
 from .stage_utils import shader_stage_from_name
 from .validation import validate_shader_cbuffers
@@ -5581,11 +5582,9 @@ class Parser:
             return LiteralNode(value, PrimitiveType("unknown"))
 
     def parse_integer_literal_parts(self, value):
-        """Return integer digits and signedness for an integer literal."""
-        value = str(value)
-        if value.endswith(("u", "U")):
-            return value[:-1], PrimitiveType("uint")
-        return value, PrimitiveType("int")
+        """Retain an integer literal's source width and signedness."""
+        digits, type_name = integer_literal_parts(value)
+        return digits, PrimitiveType(type_name)
 
     # Legacy compatibility methods
     def parse_legacy_shader(self):

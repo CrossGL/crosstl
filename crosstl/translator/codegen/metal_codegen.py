@@ -10595,6 +10595,10 @@ class MetalCodeGen:
                 and isinstance(operand_value, int)
                 and not isinstance(operand_value, bool)
                 and operand_value == 1 << 63
+                and self.map_type(
+                    getattr(getattr(expr.operand, "literal_type", None), "name", None)
+                )
+                not in {"ulong", "uint64_t"}
             ):
                 return "(-9223372036854775807L - 1L)"
             local_reinterpret = self.generate_metal_local_reinterpret_read(expr)
@@ -11366,6 +11370,11 @@ class MetalCodeGen:
                 literal_type = getattr(
                     getattr(expr, "literal_type", None), "name", None
                 )
+                if isinstance(value, int) and not isinstance(value, bool):
+                    mapped_type = self.map_type(literal_type) if literal_type else None
+                    if mapped_type in {"long", "ulong", "int64_t", "uint64_t"}:
+                        suffix = "ul" if mapped_type in {"ulong", "uint64_t"} else "l"
+                        return f"{value}{suffix}"
                 if (
                     literal_type == "uint"
                     and isinstance(value, int)

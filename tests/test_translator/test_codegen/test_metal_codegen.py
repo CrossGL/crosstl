@@ -5679,7 +5679,7 @@ def test_metal_signed_int64_minimum_literal_compiles_warning_fatal():
     shader SignedInt64Minimum {
         compute {
             void main(RWStructuredBuffer<int64_t> output @buffer(0)) {
-                output[0] = int64_t(-9223372036854775808);
+                output[0] = int64_t(-9223372036854775807l - 1l);
             }
         }
     }
@@ -5689,7 +5689,8 @@ def test_metal_signed_int64_minimum_literal_compiles_warning_fatal():
         crosstl.translator.parse(shader), "compute"
     )
 
-    assert "int64_t((-9223372036854775807L - 1L))" in generated_code
+    assert "-9223372036854775807l" in generated_code
+    assert "- 1l" in generated_code
     assert "-9223372036854775808" not in generated_code
     compile_with_metal_if_available(generated_code)
 

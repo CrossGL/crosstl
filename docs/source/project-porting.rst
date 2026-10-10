@@ -2890,11 +2890,21 @@ Scalar integer constant initializers also round directly to bfloat, without
 an intermediate float32 value. Constructor, cast, alias and implicit initializer
 forms preserve the difference between ``bfloat(16842753u)`` (16908288) and
 ``bfloat(float(16842753u))`` (16777216). Native controls retain signed zero,
-midpoint neighbors, ties of both parities, exponent carry and 32-bit extrema.
+midpoint neighbors, ties of both parities, exponent carry and 32/64-bit extrema.
 Unsupported constant expressions, including unproven unsigned negation,
-narrowing integer casts and Metal literals whose wider source type was lost,
+narrowing integer casts and integer literals outside their source type's range,
 remain diagnostic rather than silently using a rounded float32 initializer.
-Metal integer literal width preservation is tracked in issue #2070.
+
+Metal integer literals retain their signedness and 32/64-bit width through
+canonical parsing and target emission, including small values whose suffix
+selects wide shifts or overloads. Decimal, hexadecimal, binary and legacy octal
+forms use the first representable source integer type; an unsuffixed decimal
+value does not become unsigned merely because it exceeds the signed 32-bit
+range. Invalid suffixes and values outside the supported 64-bit types are
+rejected. Native controls cover original/generated Metal and generated
+DirectX/OpenGL arithmetic; they do not establish complete MLX runtime coverage.
+In particular, direct ``bfloat(9259400833873739777ul)`` retains payload ``0x5f01``,
+while an explicit float32 intermediate retains the distinct payload ``0x5f00``.
 
 Binary16 Storage
 ~~~~~~~~~~~~~~~~

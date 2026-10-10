@@ -792,9 +792,9 @@ EXTERNAL_FIXTURES = [
         "source_path": "naga/tests/out/msl/wgsl-int64.metal",
         "roundtrip": True,
         "contains": [
-            "constant uint64 constant_variable = 20u;",
-            "int64 val = 20;",
-            "return val + 5;",
+            "constant uint64 constant_variable = 20ul;",
+            "int64 val = 20l;",
+            "return val + 5l;",
         ],
         "not_contains": ["20uL", "20L", "5L"],
         "source": (

@@ -2748,7 +2748,7 @@ def test_hlsl_codegen_lowers_array_literals_to_expected_vector_arguments():
 
     generated = generate_code(ast)
 
-    assert "elem_to_loc(int64_t3(1, 2, 3))" in generated
+    assert "elem_to_loc(int64_t3(1ll, 2ll, 3ll))" in generated
     assert "elem_to_loc({" not in generated
 
 
@@ -13652,7 +13652,7 @@ def test_hlsl_typed_buffer_store_contextually_narrows_wide_integers(tmp_path):
 
     assert (
         "unsignedOutput[index] = "
-        "uint(((uint64_t(packed) & 1095216660480ull) >> 32));" in generated_code
+        "uint(((int64_t(packed) & 1095216660480ll) >> 32));" in generated_code
     )
     assert "signedOutput[index] = int((signedWide >> 32));" in generated_code
     assert "unsignedOutput[index] = unsignedSame;" in generated_code
@@ -13693,7 +13693,7 @@ def test_hlsl_typed_resource_assignment_contextually_narrows_wide_integers(
     assert "RWStructuredBuffer<uint> unsignedOutput : register(u0);" in generated_code
     assert (
         "unsignedOutput[index] = "
-        "uint(((uint64_t(packed) & 1095216660480ull) >> 32));" in generated_code
+        "uint(((int64_t(packed) & 1095216660480ll) >> 32));" in generated_code
     )
     assert "signedOutput[index] = int((signedWide >> 32));" in generated_code
     assert "unsignedOutput[index] = packed;" in generated_code
@@ -15819,7 +15819,7 @@ def test_hlsl_large_integer_literals_preserve_64_bit_values():
     shader LargeIntegerLiteralCodegen {
         compute {
             void main() {
-                uint64_t max_unsigned = uint64_t(18446744073709551615);
+                uint64_t max_unsigned = uint64_t(18446744073709551615ul);
                 int64_t max_signed = int64_t(9223372036854775807);
             }
         }
@@ -15829,7 +15829,7 @@ def test_hlsl_large_integer_literals_preserve_64_bit_values():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "18446744073709551615ull" in generated_code
-    assert "9223372036854775807ull" in generated_code
+    assert "9223372036854775807ll" in generated_code
 
 
 def test_hlsl_resource_binding_attributes_are_not_parameter_semantics():
@@ -20407,7 +20407,7 @@ def test_hlsl_clang_trailing_zero_builtins_preserve_width_and_signedness():
     )
     assert "int unsigned64Count = __crossgl_ctz_uint64_t(unsigned64);" in generated_code
     assert (
-        "int wideLiteralCount = __crossgl_ctz_uint64_t(4294967296ull);"
+        "int wideLiteralCount = __crossgl_ctz_uint64_t(uint64_t(4294967296ll));"
         in generated_code
     )
     assert "__builtin_ctz" not in generated_code

@@ -22078,14 +22078,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     mapped_literal_type == "uint64_t"
                     and isinstance(value, int)
                     and not isinstance(value, bool)
-                    and value > 0xFFFFFFFF
                 ):
                     return f"{value}ull"
                 if (
                     mapped_literal_type == "int64_t"
                     and isinstance(value, int)
                     and not isinstance(value, bool)
-                    and not (-0x80000000 <= value <= 0x7FFFFFFF)
                 ):
                     return f"{value}ll"
                 if (

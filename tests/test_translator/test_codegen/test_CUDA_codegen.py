@@ -1577,7 +1577,7 @@ class TestCudaCodeGen:
         assert "return __shfl_down_sync(mask, value, delta);" in cuda_code
         assert (
             "float reduced = cgl_cuda_shfl_down_sync_float"
-            "(4294967295, partial, 16);" in cuda_code
+            "(4294967295u, partial, 16);" in cuda_code
         )
 
     def test_direct_shfl_down_sync_width_lowers_to_guarded_cuda_helper(self):
@@ -1605,7 +1605,7 @@ class TestCudaCodeGen:
         assert "(void)width;" in cuda_code
         assert (
             "uint reduced = cgl_cuda_shfl_down_sync_width_uint"
-            "(4294967295, partial, 1, 32);" in cuda_code
+            "(4294967295u, partial, 1, 32);" in cuda_code
         )
 
     def test_direct_shfl_down_sync_rejects_invalid_arity(self):

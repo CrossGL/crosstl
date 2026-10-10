@@ -224,7 +224,7 @@ def test_glsl_clang_trailing_zero_builtins_preserve_width_and_signedness(
     assert "crossgl_ctz_uint(dynamic32)" in generated
     assert "crossgl_ctz_uint64_t(uint64_t(signed64))" in generated
     assert "crossgl_ctz_uint64_t(dynamic64)" in generated
-    assert "crossgl_ctz_uint64_t(uint64_t(4294967296ul))" in generated
+    assert "crossgl_ctz_uint64_t(uint64_t(4294967296l))" in generated
     assert "crossgl_ctz_uint(0u)" in generated
     assert "__builtin_ctz" not in generated
     assert_glsl_compute_validates_if_available(
@@ -7078,7 +7078,7 @@ def test_glsl_large_integer_literals_preserve_64_bit_values():
     shader LargeIntegerLiteralCodegen {
         compute {
             void main() {
-                uint64_t max_unsigned = uint64_t(18446744073709551615);
+                uint64_t max_unsigned = uint64_t(18446744073709551615ul);
                 int64_t max_signed = int64_t(9223372036854775807);
             }
         }
@@ -7088,7 +7088,7 @@ def test_glsl_large_integer_literals_preserve_64_bit_values():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "18446744073709551615ul" in generated_code
-    assert "9223372036854775807ul" in generated_code
+    assert "9223372036854775807l" in generated_code
 
 
 def test_glsl_resource_binding_attributes_are_not_parameter_semantics():

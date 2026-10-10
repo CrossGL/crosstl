@@ -5132,7 +5132,7 @@ def test_codegen_lowers_metal_uniform_values_to_annotated_payload_types():
 
     assert "const int signed_value @uniform_value = (-4);" in crossgl
     assert "const uint unsigned_value @uniform_value = 5u;" in crossgl
-    assert "const uint64 wide_value @uniform_value = 6u;" in crossgl
+    assert "const uint64 wide_value @uniform_value = 6ul;" in crossgl
     assert "const ivec2 lanes @uniform_value = ivec2(1, 2);" in crossgl
     assert "const int expression_value @uniform_value = (1 + 2) * 3;" in crossgl
     assert "make_uniform" not in crossgl

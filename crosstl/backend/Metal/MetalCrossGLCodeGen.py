@@ -13,6 +13,7 @@ from ...translator.cooperative_matrix import (
 )
 from ...translator.division_math import binary32_division_support
 from ...translator.fused_math import FMA_HELPER_KEYS, binary32_fma_support
+from ...translator.integer_literals import integer_literal_parts
 from ...translator.precise_exp import binary32_exp_support
 from ...translator.precise_log2 import binary32_log2_support
 from ...translator.precise_power import binary32_power_support
@@ -913,13 +914,6 @@ class MetalToCrossGLConverter:
     """Serialize Metal backend AST nodes back into CrossGL source."""
 
     crossgl_identifier_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-    decimal_integer_literal_pattern = re.compile(r"^(?P<body>\d+)(?P<suffix>[uUlL]+)$")
-    hex_integer_literal_pattern = re.compile(
-        r"^(?P<body>0[xX][0-9a-fA-F]+)(?P<suffix>[uUlL]+)$"
-    )
-    binary_integer_literal_pattern = re.compile(
-        r"^(?P<body>0[bB][01]+)(?P<suffix>[uUlL]+)$"
-    )
     cast_literal_operand_pattern = re.compile(
         r"^(?:0[xX][0-9a-fA-F]+u?|0[bB][01]+u?|"
         r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fF]?|\d+u?)$"
@@ -11230,17 +11224,12 @@ class MetalToCrossGLConverter:
             value = value.replace("'", "")
         if re.fullmatch(r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[hH]", value):
             return value[:-1]
-        for pattern in (
-            self.hex_integer_literal_pattern,
-            self.binary_integer_literal_pattern,
-            self.decimal_integer_literal_pattern,
-        ):
-            match = pattern.fullmatch(value)
-            if match:
-                suffix = match.group("suffix")
-                if "u" in suffix.lower():
-                    return f"{match.group('body')}u"
-                return match.group("body")
+        if re.fullmatch(r"(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*", value):
+            digits, type_name = integer_literal_parts(value, legacy_octal=True)
+            suffix = {"int": "", "uint": "u", "int64_t": "l", "uint64_t": "ul"}[
+                type_name
+            ]
+            return digits + suffix
         return value
 
     def generate_expression(self, expr, is_main=False):
@@ -13135,6 +13124,11 @@ class MetalToCrossGLConverter:
         if resolved_type in integer_ranges and operation in {"min", "lowest", "max"}:
             minimum, maximum = integer_ranges[resolved_type]
             value = maximum if operation == "max" else minimum
+            if resolved_type in {"ulong", "uint64_t", "size_t"}:
+                value += "ul"
+            elif resolved_type in {"long", "int64_t"}:
+                # The positive magnitude of LONG_MIN is not a signed literal.
+                value = maximum + "l" if operation == "max" else f"(-{maximum}l - 1l)"
             return f"{mapped_type}({value})"
         if resolved_type == "bool" and operation in {"min", "lowest", "max"}:
             return "true" if operation == "max" else "false"
@@ -20235,10 +20229,7 @@ float {scalar}(float value) {{
             text,
         )
         if integer is not None:
-            suffix = integer.group("suffix").lower()
-            if "l" in suffix:
-                return "uint64_t" if "u" in suffix else "int64_t"
-            return "uint" if "u" in suffix else "int"
+            return integer_literal_parts(text, legacy_octal=True)[1]
 
         floating = re.fullmatch(
             r"(?:"

@@ -730,7 +730,7 @@ class TestVulkanSPIRVCodeGen:
         shader IntMinLiteral {
             compute {
                 void main() {
-                    int value = -2147483648;
+                    int value = -2147483648u;
                 }
             }
         }
@@ -761,7 +761,10 @@ class TestVulkanSPIRVCodeGen:
             str(source_path), backend="vulkan", format_output=False
         )
 
-        self.assert_uint_int_min_literal_lowering(spv_code)
+        signed_wide = re.search(r"(%\d+) = OpTypeInt 64 1\b", spv_code).group(1)
+        assert re.search(rf"OpConstant {signed_wide} 2147483648\b", spv_code)
+        assert f"OpSNegate {signed_wide}" in spv_code
+        assert "OpSConvert" in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_metal_bool_function_constant_lowers_to_spirv_spec_constant(self, tmp_path):
