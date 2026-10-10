@@ -129,6 +129,11 @@ descriptor. Aggregate constant references have compilation coverage; their
 native execution still requires complete aggregate layout reflection and
 packing. Neither limitation is bypassed by fabricating scalar metadata.
 
+Helpers may advance or rebase their own constant-address-space pointer values.
+These updates are distinct from stores through the pointer: pointee writes
+remain unsupported, while offset updates survive the round trip. Native controls
+compare original and generated Metal, including unchanged caller pointers.
+
 Constant aggregate pointers use read-only structured resources in CrossGL, not
 single-object constant buffers. Metal restores the original ``constant T*``
 declaration and binding; HLSL uses an SRV and GLSL uses a read-only storage block.

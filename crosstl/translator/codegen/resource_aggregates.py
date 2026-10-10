@@ -311,6 +311,23 @@ def _pointer_type(value, owner=None):
     )
 
 
+def _remove_pointee_qualifiers(node):
+    # Storage access belongs to the pointee, not its private identity/offset value.
+    qualifiers = {
+        "const",
+        "device",
+        "constant",
+        "global",
+        "storage",
+        "threadgroup",
+        "workgroup",
+        "readonly",
+        "writeonly",
+    }
+    node.qualifiers = [q for q in node.qualifiers if q not in qualifiers]
+    node.attributes = [a for a in node.attributes if _name(a) not in qualifiers]
+
+
 def _contains_storage_pointer(node):
     return any(
         isinstance(child, PointerType)
@@ -1980,25 +1997,7 @@ class _Lowering:
             while isinstance(pointer, tuple):
                 pointer = pointer[0]
             if isinstance(pointer, _Pointer):
-                # Address/access qualifiers describe the pointee. The lowered
-                # handle (or array of handles) is still private, mutable data.
-                pointee_qualifiers = {
-                    "const",
-                    "device",
-                    "constant",
-                    "global",
-                    "storage",
-                    "threadgroup",
-                    "workgroup",
-                    "readonly",
-                    "writeonly",
-                }
-                result.qualifiers = [
-                    q for q in result.qualifiers if q not in pointee_qualifiers
-                ]
-                result.attributes = [
-                    a for a in result.attributes if _name(a) not in pointee_qualifiers
-                ]
+                _remove_pointee_qualifiers(result)
             return result
         if isinstance(node, ReturnNode):
             return ReturnNode(
@@ -2147,6 +2146,11 @@ class _Lowering:
                             param.param_type = reference
                         else:
                             param.param_type = self.target_type(type_)
+                        pointer = type_
+                        while isinstance(pointer, tuple):
+                            pointer = pointer[0]
+                        if isinstance(pointer, _Pointer):
+                            _remove_pointee_qualifiers(param)
                     function.parameters.extend(self.resource_parameters())
                     function.return_type = self.target_type(self.returns[id(function)])
                     function.name = self.overload_names.get(id(function), function.name)

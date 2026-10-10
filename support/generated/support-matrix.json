@@ -5870,6 +5870,8 @@
             "tests/test_translator/test_resource_aggregates.py::def test_resource_aggregate_compiles",
             "tests/test_translator/test_resource_aggregates.py::def test_resource_aggregate_executes_natively",
             "tests/test_translator/test_resource_aggregates.py::def test_resource_aggregate_rejects_unproven_operations",
+            "tests/test_translator/test_resource_aggregates.py::def test_rebased_readonly_parameter_still_rejects_pointee_writes",
+            "tests/test_translator/test_resource_aggregates.py::def test_pointer_parameter_lowering_keeps_value_parameter_qualifiers",
             "tests/test_translator/test_resource_aggregates.py::def test_resource_vector_pointee_retains_component_type_and_width",
             "tests/test_translator/test_resource_aggregates.py::def test_resource_vector_pointee_rejects_unproven_storage",
             "tests/test_translator/test_pointer_offset_address_spaces.py::def test_project_preserves_pointer_offset_calls",

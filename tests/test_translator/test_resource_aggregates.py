@@ -59,6 +59,13 @@ ORDER_CASES = (
     "effects-loop-update",
     "effects-shadow",
 )
+POINTER_PARAMETER_CASES = (
+    "helper-offset",
+    "helper-constant-offset",
+    "helper-nested-offset",
+    "helper-rebase",
+    "helper-returned-offset",
+)
 CASES = (
     (
         "cursor",
@@ -87,6 +94,7 @@ CASES = (
     )
     + VECTOR_CASES
     + ORDER_CASES
+    + POINTER_PARAMETER_CASES
 )
 
 
@@ -121,6 +129,35 @@ def _source(case):
         read = "read_cursor(cursor, tid)"
     elif case == "rebase":
         setup += "cursor.input = right + 4; cursor.input -= 2; cursor.output = second + 5; cursor.output -= 2;"
+    elif case in POINTER_PARAMETER_CASES:
+        declarations += """int shifted(const device int* values, uint index) {
+            values -= 1;
+            values += 2;
+            return values[index];
+        }
+        int nested(const device int* values, uint index) {
+            values += 1;
+            return shifted(values, index) + values[index];
+        }
+        int rebased(const device int* values, const device int* other, uint index) {
+            values = other + 2;
+            return shifted(values, index);
+        }
+        Cursor advance(const device int* values, device int* output) {
+            values += 1;
+            return Cursor{values, output, 4};
+        }"""
+        expression = {
+            "helper-offset": "shifted(cursor.input, tid)",
+            "helper-constant-offset": "shifted(cursor.input, tid)",
+            "helper-nested-offset": "nested(cursor.input, tid)",
+            "helper-rebase": "rebased(cursor.input, right, tid)",
+            "helper-returned-offset": "advance(cursor.input, first).input[tid]",
+        }[case]
+        read = f"{expression} + cursor.input[tid]"
+        if case == "helper-constant-offset":
+            declarations = declarations.replace("const device", "const constant")
+            setup = "Cursor cursor{right + 2, first + 2, 4};"
     elif case == "constant":
         declarations = declarations.replace("const device", "const constant")
         setup = "Cursor cursor{right + 2, first + 2, 4};"
@@ -229,7 +266,9 @@ def _source(case):
         body += "second[tid + 4] = int(offset);"
     if case == "shadow":
         body = f"if (tid < 4) {{ {body} }}"
-    right_space = "constant" if case == "constant" else "device"
+    right_space = (
+        "constant" if case in {"constant", "helper-constant-offset"} else "device"
+    )
     source = f"""#include <metal_stdlib>
 using namespace metal;
 {declarations}
@@ -294,6 +333,14 @@ def _workload(case):
             value, output, offset = right[tid + 2], second, 3
         elif case == "helper":
             value = left[tid + 2]
+        elif case in {"helper-offset", "helper-returned-offset"}:
+            value = left[tid + 2] + left[tid + 1]
+        elif case == "helper-constant-offset":
+            value = right[tid + 3] + right[tid + 2]
+        elif case == "helper-nested-offset":
+            value = left[tid + 3] + left[tid + 2] + left[tid + 1]
+        elif case == "helper-rebase":
+            value = right[tid + 3] + left[tid + 1]
         elif case in {"rebase", "shadow"}:
             value, output, offset = right[tid + 2], second, 3
         elif case == "constant":
@@ -491,7 +538,58 @@ def test_resource_aggregate_failure_is_reported_without_an_artifact(tmp_path):
     assert not list((tmp_path / "out").rglob("*.hlsl"))
 
 
-@pytest.mark.parametrize("case", ("array", "effects", *ORDER_CASES))
+@pytest.mark.parametrize("case", ["helper-offset", "helper-constant-offset"])
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_rebased_readonly_parameter_still_rejects_pointee_writes(
+    tmp_path, case, target
+):
+    source = _source(case).replace(
+        "return values[index];", "values[index] = 9; return values[index];"
+    )
+    path = tmp_path / "invalid.metal"
+    path.write_text(source)
+    with pytest.raises(ResourceAggregateError) as error:
+        translate(str(path), backend=target, format_output=False)
+    assert error.value.reason == "write-through-readonly-pointer"
+
+
+def test_constant_pointer_offset_is_not_a_store_through_the_pointer(tmp_path):
+    path = tmp_path / "constant.metal"
+    source = _source("helper-constant-offset")
+    path.write_text(source)
+    generated = translate(str(path), backend="metal", format_output=False)
+    assert "values -= 1;" in generated and "values += 2;" in generated
+    assert "unsupported Metal raw buffer store" not in generated
+    path.write_text(
+        source.replace(
+            "return values[index];", "values[index] = 9; return values[index];"
+        )
+    )
+    rejected = translate(str(path), backend="metal", format_output=False)
+    assert "readonly buffer 'values' cannot be written" in rejected
+
+
+def test_pointer_parameter_lowering_keeps_value_parameter_qualifiers(tmp_path):
+    path = tmp_path / "qualifiers.metal"
+    path.write_text(
+        _source("helper-offset").replace("uint index)", "const uint index)")
+    )
+    ast = parse(translate(str(path), backend="cgl", format_output=False))
+    source_function = next(
+        function for function in ast.functions if function.name == "shifted"
+    )
+    source_function.parameters[1].qualifiers = ["const", "in"]
+    lowered = lower_resource_aggregates(ast)
+    shifted = next(
+        function for function in lowered.functions if function.name == "shifted"
+    )
+    assert "const" not in shifted.parameters[0].qualifiers
+    assert shifted.parameters[1].qualifiers == ["const", "in"]
+
+
+@pytest.mark.parametrize(
+    "case", ("array", "effects", *ORDER_CASES, *POINTER_PARAMETER_CASES)
+)
 def test_resource_lowering_retains_source_ast_and_is_deterministic(tmp_path, case):
     path = tmp_path / "source.metal"
     path.write_text(_source(case))

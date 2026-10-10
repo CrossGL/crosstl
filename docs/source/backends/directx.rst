@@ -100,6 +100,16 @@ when the resulting shader compiles. This guard is conservative for fields and
 array elements; it does not prove their disjointness or provide alias-aware
 lowering. Wider source-reference aliasing remains outside this byte contract.
 
+Read-Only Pointer Parameters
+----------------------------
+
+Resource-handle lowering keeps pointee access separate from the helper's local
+pointer value. A helper can advance or rebase a pointer to read-only device or
+constant storage without changing the caller's pointer. The backing resource
+remains read-only; writes through the advanced pointer are rejected. Required
+native controls cover nested helpers, signed offsets, rebasing and returned
+aggregates, including caller-pointer preservation and output guards.
+
 Shared References in Aggregates
 -------------------------------
 

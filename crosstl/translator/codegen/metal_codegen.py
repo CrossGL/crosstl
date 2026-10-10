@@ -16481,13 +16481,23 @@ class MetalCodeGen:
         root_name = self.assignment_target_root_name(target)
         if root_name not in self.current_readonly_raw_buffer_parameters:
             return None
+        if self.current_address_space_variables.get(
+            root_name
+        ) == "constant" and self.mutable_const_pointee_pointer_assignment(
+            target, root_name, "constant address space"
+        ):
+            return None
         return (
             "/* unsupported Metal raw buffer store: readonly buffer "
             f"'{root_name}' cannot be written */"
         )
 
     def mutable_const_pointee_pointer_assignment(self, target, root_name, reason):
-        if reason not in {"const-qualified", "const-qualified local alias"}:
+        if reason not in {
+            "const-qualified",
+            "const-qualified local alias",
+            "constant address space",
+        }:
             return False
         if not isinstance(target, IdentifierNode):
             return False
