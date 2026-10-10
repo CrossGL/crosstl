@@ -78,6 +78,7 @@ void copy_{size}({size.capitalize()}Cursor cursor) {{
 using namespace metal;
 {declarations}
 kernel void record_transfer(const device {kind}* inputs [[buffer(0)]], device uint* results [[buffer(1)]], uint tid [[thread_position_in_grid]]) {{
+    if (tid >= 5u) {{ return; }}
     threadgroup {kind} tile[12];
     threadgroup {kind} small[4];
     uint base = 4u + 8u * tid;

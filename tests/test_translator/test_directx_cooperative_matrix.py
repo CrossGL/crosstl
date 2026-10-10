@@ -326,12 +326,16 @@ def test_precise_scalar_control_distinguishes_contraction():
     assert _word(left * right + addend) == 0xA8800000
 
 
-@pytest.mark.parametrize("flags", [(), ("-Gis",)], ids=["precise", "strict"])
+@pytest.mark.parametrize(
+    "flags", [(), ("-Gis",), ("-Gis", "-Od")], ids=["precise", "strict", "unoptimized"]
+)
 def test_precise_scalar_control_compiles(tmp_path, flags):
     _compile(PRECISE_SCALAR, tmp_path, flags=flags)
 
 
-@pytest.mark.parametrize("flags", [(), ("-Gis",)], ids=["precise", "strict"])
+@pytest.mark.parametrize(
+    "flags", [(), ("-Gis",), ("-Gis", "-Od")], ids=["precise", "strict", "unoptimized"]
+)
 @pytest.mark.parametrize(
     "buffer_byte_offset", [None, 16], ids=["direct", "native-views"]
 )

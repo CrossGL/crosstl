@@ -114,6 +114,7 @@ def _workflow_texts():
         "full-tests.yml",
         "examples-test.yml",
         "demo.yml",
+        "demo-project-testing.yml",
     ],
 )
 def test_test_workflows_replace_only_superseded_pull_request_runs(filename):

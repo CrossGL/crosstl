@@ -180,7 +180,13 @@ def test_project_demo_triggers_cover_code_without_root_documentation():
 def test_project_demo_queues_each_job_and_matrix_leg_independently():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     coverage = _load_ci_coverage_module()
-    assert "concurrency" not in yaml.safe_load(workflow)
+    assert yaml.safe_load(workflow)["concurrency"] == {
+        "group": (
+            "ci-${{ github.workflow }}-${{ github.event_name }}-"
+            "${{ github.event.pull_request.number || github.run_id }}"
+        ),
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+    }
     jobs = coverage.workflow_job_names(workflow)
     assert len(jobs) == 37
     groups = set()
