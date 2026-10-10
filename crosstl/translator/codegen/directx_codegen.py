@@ -6,7 +6,11 @@ from copy import deepcopy
 from hashlib import sha1
 
 from ...glsl_builtins import GLSL_BUILTIN_INT_LIMITS
-from ..arithmetic_conversions import ArithmeticScalarKind, narrow_integer_shape
+from ..arithmetic_conversions import (
+    ArithmeticScalarKind,
+    narrow_integer_shape,
+    source_integer_shape,
+)
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -4769,6 +4773,84 @@ class HLSLCodeGen:
             for child in children
         )
 
+    def hlsl_software_subgroup_fixed_stride(
+        self, initializer, bound, update, constants, operator
+    ):
+        """Prove the terminating update as well as every visited induction value."""
+        type_name = self.type_name_string(initializer.var_type)
+        if not type_name.isidentifier():
+            return False
+        shape = source_integer_shape(
+            {"min16int": "short", "min16uint": "ushort"}.get(type_name, type_name)
+        )
+        if shape is None or shape[2] != 1 or shape[1] > 32:
+            return False
+        if self.hlsl_software_subgroup_uniform_returns._qualified(
+            initializer, {"volatile"}
+        ) or self.hlsl_software_subgroup_uniform_returns._qualified(
+            initializer.var_type, {"volatile"}
+        ):
+            return False
+        unsigned = shape[0] == ArithmeticScalarKind.UNSIGNED_INTEGER
+        minimum = 0 if unsigned else -(1 << (shape[1] - 1))
+        maximum = (1 << (shape[1] - (not unsigned))) - 1
+
+        def checked_value(expression):
+            if isinstance(expression, (LiteralNode, IdentifierNode)):
+                pass
+            elif isinstance(expression, UnaryOpNode):
+                if expression.operator not in {"+", "-"}:
+                    return None
+                if checked_value(expression.operand) is None:
+                    return None
+            elif isinstance(expression, BinaryOpNode):
+                if expression.operator not in {"+", "-", "*", "/", "%"}:
+                    return None
+                left = checked_value(expression.left)
+                right = checked_value(expression.right)
+                if left is None or right is None:
+                    return None
+                if (
+                    expression.operator in {"/", "%"}
+                    and left == -(1 << 31)
+                    and right == -1
+                ):
+                    return None
+            else:
+                return None
+            value = evaluate_literal_int_expression(expression, constants)
+            if value is None:
+                return None
+            low, high = (
+                (0, (1 << 32) - 1)
+                if isinstance(value, _UnsignedLiteralInt)
+                else (-(1 << 31), (1 << 31) - 1)
+            )
+            return value if low <= value <= high else None
+
+        start = checked_value(initializer.initial_value)
+        stop = checked_value(bound)
+        amount = checked_value(update.value)
+        if any(value is None for value in (start, stop, amount)):
+            return False
+        if not all(minimum <= value <= maximum for value in (start, stop, amount)):
+            return False
+        # Mixed unsigned arithmetic may change the comparison or update before
+        # assignment. Nonnegative values avoid relying on wraparound semantics.
+        if any(
+            isinstance(value, _UnsignedLiteralInt) for value in (start, stop, amount)
+        ):
+            if min(start, stop, amount) < 0:
+                return False
+        step = int(amount) * (1 if update.operator == "+=" else -1)
+        if step == 0 or (step > 0) != (operator in {"<", "<="}):
+            return False
+        distance = int(stop) - int(start) if step > 0 else int(start) - int(stop)
+        distance += operator in {"<=", ">="}
+        trips = max(0, (distance + abs(step) - 1) // abs(step))
+        final = int(start) + trips * step
+        return minimum <= final <= maximum
+
     def hlsl_software_subgroup_uniform_for(
         self, node, uniform_names, call_mutations, uniform_components
     ):
@@ -4835,6 +4917,7 @@ class HLSLCodeGen:
 
         update = getattr(node, "update", None)
         halving_update = False
+        additive_update = False
         if isinstance(update, UnaryOpNode):
             update_operator = self.map_operator(
                 getattr(update, "op", getattr(update, "operator", None))
@@ -4849,7 +4932,7 @@ class HLSLCodeGen:
                 getattr(update, "op", getattr(update, "operator", None))
             )
             if (
-                update_operator not in {"/=", ">>="}
+                update_operator not in {"/=", ">>=", "+=", "-="}
                 or self.hlsl_software_subgroup_assignment_target_name(update)
                 != loop_name
             ):
@@ -4858,14 +4941,22 @@ class HLSLCodeGen:
             concrete_update_value = evaluate_literal_int_expression(
                 update_value, constants
             )
-            if (
-                concrete_update_value is None
-                or (update_operator == "/=" and concrete_update_value < 2)
-                or (update_operator == ">>=" and concrete_update_value < 1)
-            ):
+            if concrete_update_value is None:
                 return False
-            increasing = False
-            halving_update = True
+            if update_operator in {"+=", "-="}:
+                step = concrete_update_value * (1 if update_operator == "+=" else -1)
+                increasing = step > 0
+                additive_update = True
+            else:
+                if (
+                    update_operator == "/="
+                    and concrete_update_value < 2
+                    or update_operator == ">>="
+                    and concrete_update_value < 1
+                ):
+                    return False
+                increasing = False
+                halving_update = True
         else:
             return False
 
@@ -4882,25 +4973,52 @@ class HLSLCodeGen:
                 return False
         elif increasing != (normalized_operator in {"<", "<="}):
             return False
+        if additive_update and not self.hlsl_software_subgroup_fixed_stride(
+            initializer, bound, update, constants, normalized_operator
+        ):
+            return False
 
         bound_names = self.hlsl_software_subgroup_expression_identifier_names(bound)
-        control_names = bound_names | {loop_name}
+        stride_names = (
+            self.hlsl_software_subgroup_expression_identifier_names(update.value)
+            if additive_update
+            else set()
+        )
+        control_names = bound_names | stride_names | {loop_name}
         for child in self.walk_ast(getattr(node, "body", None)):
             if isinstance(child, (BreakNode, ContinueNode, ReturnNode)):
                 return False
             if isinstance(child, VariableNode) and child.name in control_names:
                 return False
+            if (
+                isinstance(child, VariableNode)
+                and isinstance(child.var_type, (PointerType, ReferenceType))
+                and self.hlsl_software_subgroup_expression_identifier_names(
+                    child.initial_value
+                )
+                & control_names
+            ):
+                return False
+            if (
+                isinstance(child, UnaryOpNode)
+                and self.map_operator(child.operator) == "&"
+                and self.hlsl_software_subgroup_expression_identifier_names(
+                    child.operand
+                )
+                & control_names
+            ):
+                return False
             if call_mutations.get(id(child), set()) & control_names:
                 return False
             if isinstance(child, AssignmentNode):
                 target_name = self.hlsl_software_subgroup_assignment_target_name(child)
-                if target_name == loop_name or target_name in bound_names:
+                if target_name in control_names:
                     return False
             if isinstance(child, UnaryOpNode) and self.map_operator(
                 getattr(child, "op", getattr(child, "operator", None))
             ) in {"++", "--"}:
                 target_name = self.expression_name(getattr(child, "operand", None))
-                if target_name == loop_name or target_name in bound_names:
+                if target_name in control_names:
                     return False
         return True
 

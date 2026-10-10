@@ -2013,6 +2013,15 @@ output. Aggregate constant-reference helpers have compiler coverage, not a
 complete constant-buffer upload contract. This does not remove the corresponding
 OpenGL limitation or establish convergence for every collective loop form.
 
+Fixed additive collective loops in DirectX also accept ``+=`` and ``-=`` when
+the initial value, bound and stride are checked integer constants. The proof
+uses the source induction width and signedness and includes the update after
+the last executed iteration. Positive and negative strides, reversed comparisons
+and zero-trip loops are covered. Overflow, unsigned wraparound, unknown or varying
+control values, induction aliases and divergent exits remain diagnostics. Native
+controls compare original and generated Metal kernels and require DirectX
+execution on Windows; this does not extend the OpenGL convergence analysis.
+
 The DirectX fallback accumulates in increasing inner-dimension order using
 separately rounded binary32 products and sums; ``precise`` prevents contraction
 and reassociation. Metal does not specify a bitwise accumulation order for its
