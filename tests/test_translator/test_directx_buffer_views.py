@@ -1068,7 +1068,7 @@ def test_runtime_comparison_does_not_replace_required_native_gate():
     assert "test_directx_cooperative_matrix.py" in required["run"]
     assert (
         comparison["if"]
-        == "failure() && runner.os == 'Windows' && steps.collective-helpers.outcome == 'failure'"
+        == "failure() && runner.os == 'Windows' && !matrix.warp_qualification && steps.collective-helpers.outcome == 'failure'"
     )
     assert comparison["env"]["CROSTL_REQUIRE_DIRECTX_COOPERATIVE_MATRIX"] == "1"
     assert comparison["timeout-minutes"] == 8

@@ -1103,7 +1103,7 @@ jobs:
       CMAKE_BUILD_PARALLEL_LEVEL: "4"
       CMAKE_ARGS: "-DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_CROSTL_HOST=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON"
 
-    name: MLX native host (${{ matrix.target }})
+    name: MLX native host (${{ matrix.target }}${{ matrix.warp_qualification && format(', WARP {0} qualification', matrix.warp_qualification) || '' }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 355
     strategy:
@@ -1116,6 +1116,9 @@ jobs:
             target: directx
           - os: xcode-27
             target: metal
+          - os: windows-2025
+            target: directx
+            warp_qualification: "1.0.13"
     defaults:
       run:
         shell: bash
@@ -1185,6 +1188,41 @@ jobs:
           }
           Expand-Archive $warpArchive -DestinationPath $warpRoot
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
+      - name: Select isolated WARP qualification runtime
+        if: runner.os == 'Windows' && matrix.warp_qualification == '1.0.13'
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $installed = Join-Path $env:pythonLocation "d3d10warp.dll"
+          $originalDigest = (Get-FileHash $installed -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($originalDigest -ne "e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3") {
+            throw "Required WARP 1.0.21 installation identity does not match."
+          }
+          $archive = Join-Path $env:RUNNER_TEMP "warp-qualification.zip"
+          $root = Join-Path $env:RUNNER_TEMP "warp-qualification"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.13/microsoft.direct3d.warp.1.0.13.nupkg" -OutFile $archive -TimeoutSec 30
+          $archiveDigest = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($archiveDigest -ne "63231c48b0573ba4c078f69cd10a4059a0fee3427107b8219e5e80ab75bd304b") {
+            throw "Qualification WARP archive checksum mismatch."
+          }
+          Expand-Archive $archive -DestinationPath $root
+          $library = Join-Path $root "build/native/bin/x64/d3d10warp.dll"
+          $libraryDigest = (Get-FileHash $library -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($libraryDigest -ne "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638") {
+            throw "Qualification WARP library checksum mismatch."
+          }
+          Copy-Item $library $installed -Force
+          $selectedDigest = (Get-FileHash $installed -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($selectedDigest -ne $libraryDigest) { throw "Qualification WARP selection failed." }
+          @{
+            qualificationVersion = "1.0.13"
+            archiveSHA256 = $archiveDigest
+            originalDLLSHA256 = $originalDigest
+            qualificationDLLSHA256 = $selectedDigest
+            replacesRequiredGate = $false
+          } | ConvertTo-Json | Set-Content ".mlx-portable-host/runtime-qualification.json"
       - name: Validate portable host contracts
         if: runner.os == 'Linux'
         run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_host.py demos/integrations/mlx/tests/host/test_portable_reductions.py demos/integrations/mlx/tests/host/test_portable_rows.py demos/integrations/mlx/tests/host/test_portable_reduction_shards.py demos/integrations/mlx/tests/host/test_portable_mixed_reductions.py demos/integrations/mlx/tests/host/test_portable_columns.py demos/integrations/mlx/tests/host/test_portable_small_rows.py demos/integrations/mlx/tests/host/test_portable_empty_reductions.py demos/integrations/mlx/tests/host/test_portable_bitwise.py demos/integrations/mlx/tests/host/test_portable_concatenate.py demos/integrations/mlx/tests/host/test_portable_selection.py demos/integrations/mlx/tests/host/test_portable_integer64.py demos/integrations/mlx/tests/host/test_portable_padding.py demos/integrations/mlx/tests/host/test_portable_slice_updates.py demos/integrations/mlx/tests/host/test_portable_slice_update_workloads.py demos/integrations/mlx/tests/host/test_slice_capacity.py demos/integrations/mlx/tests/test_random_audit.py demos/integrations/mlx/tests/host/test_portable_random.py demos/integrations/mlx/tests/host/test_cast_batches.py demos/integrations/mlx/tests/host/test_large_copies.py demos/integrations/mlx/tests/host/test_binary_batches.py demos/integrations/mlx/tests/host/test_unary_batches.py
@@ -1345,7 +1383,7 @@ jobs:
               tests/test_translator/test_project_subgroup_applicability.py \
               2>&1 | tee .mlx-portable-host/resource-values.log
       - name: Compare WARP arithmetic across codegen revisions
-        if: failure() && runner.os == 'Windows' && steps.collective-helpers.outcome == 'failure'
+        if: failure() && runner.os == 'Windows' && !matrix.warp_qualification && steps.collective-helpers.outcome == 'failure'
         shell: pwsh
         timeout-minutes: 8
         env:
@@ -2034,7 +2072,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mlx-portable-host-${{ matrix.target }}-${{ github.run_attempt }}
+          name: mlx-portable-host-${{ matrix.target }}${{ matrix.warp_qualification && format('-warp-{0}-qualification', matrix.warp_qualification) || '' }}-${{ github.run_attempt }}
           path: .mlx-portable-host
           include-hidden-files: true
           if-no-files-found: error

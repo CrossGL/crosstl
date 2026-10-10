@@ -412,7 +412,12 @@ def test_metal_fence_jobs_require_a_compatible_toolchain_without_extra_jobs():
         assert 'test -d "$DEVELOPER_DIR"' in command
         assert 'echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"' in command
         assert "metal -std=metal4.1 -x metal -fsyntax-only /dev/null" in command
-    assert len(demo["strategy"]["matrix"]["include"]) == 3
+    required_entries = [
+        row
+        for row in demo["strategy"]["matrix"]["include"]
+        if not row.get("warp_qualification")
+    ]
+    assert len(required_entries) == 3
     assert {"os": "xcode-27", "target": "metal"} in demo["strategy"]["matrix"][
         "include"
     ]
@@ -3277,7 +3282,7 @@ def test_project_native_job_deadlines_fit_runner_limit(job, overhead):
         comparison = failure_steps[0]
         assert (
             comparison["if"]
-            == "failure() && runner.os == 'Windows' && steps.collective-helpers.outcome == 'failure'"
+            == "failure() && runner.os == 'Windows' && !matrix.warp_qualification && steps.collective-helpers.outcome == 'failure'"
         )
         failed_index = next(
             index

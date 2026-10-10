@@ -2162,6 +2162,11 @@ def test_ci_limits_portable_contracts_without_removing_platform_abi_checks():
         {"os": "ubuntu-24.04", "target": "opengl"},
         {"os": "windows-2025", "target": "directx"},
         {"os": "xcode-27", "target": "metal"},
+        {
+            "os": "windows-2025",
+            "target": "directx",
+            "warp_qualification": "1.0.13",
+        },
     ]
     steps = {step.get("name"): step for step in job["steps"]}
     contracts = steps["Validate portable host contracts"]

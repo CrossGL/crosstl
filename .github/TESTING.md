@@ -99,6 +99,18 @@ independent scalar and matrix readback audits confirm the discrepancy
 The expanded diagnostic tests broader compatibility; it cannot replace or
 excuse the required 1.0.21 gate's failure. No historical runtime is adopted as
 a supported default, and passing this batch does not establish full MLX parity.
+
+One additional, explicitly labelled Windows host matrix entry qualifies WARP
+1.0.13 against every step of the existing native host job. It shares all test
+selections, native requirements, upstream source pins and execution deadlines
+with the required DirectX entry, including package generation and upstream host
+execution. The required 1.0.21 entry remains unchanged. Qualification verifies
+the original installation, downloaded archive, extracted DLL and selected DLL;
+its receipt and all execution evidence use a separate artifact name. It does
+not repeat the failure-only resource comparison or suppress any failure.
+This is a bounded runtime investigation, not adoption of a new default or
+evidence that the complete upstream MLX suite already passes.
+
 Metal corpus compilation stays on macOS because it requires Apple's toolchain.
 
 The complete unary, binary, copy, reduction and quantized Metal corpora separate portable translation

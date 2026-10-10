@@ -1,8 +1,13 @@
 import ast
+import hashlib
 import json
+import os
 import re
 import shlex
+import shutil
+import subprocess
 import textwrap
+import zipfile
 from fnmatch import fnmatchcase
 from pathlib import Path
 
@@ -151,6 +156,204 @@ def test_precise_atan2_uses_existing_native_arctangent_gate():
     assert "--timeout-seconds 180" in step["run"]
     assert "pytest -q -n auto" in step["run"]
     assert "if" not in step and "continue-on-error" not in step
+
+
+def test_windows_host_qualification_preserves_required_workloads():
+    workflow = yaml.safe_load(_workflow_texts()["demo-project-testing.yml"])
+    job = workflow["jobs"]["portable-host"]
+    assert job["strategy"]["matrix"] == {
+        "include": [
+            {"os": "ubuntu-24.04", "target": "opengl"},
+            {"os": "windows-2025", "target": "directx"},
+            {"os": "xcode-27", "target": "metal"},
+            {
+                "os": "windows-2025",
+                "target": "directx",
+                "warp_qualification": "1.0.13",
+            },
+        ]
+    }
+    assert job["strategy"]["fail-fast"] is False
+    assert "continue-on-error" not in job
+    assert job["timeout-minutes"] == 355
+    assert "WARP {0} qualification" in job["name"]
+    assert job["env"]["MLX_COMMIT"] == "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+    assert not any("warp_qualification" in str(value) for value in job["env"].values())
+    steps = {step.get("name"): step for step in job["steps"]}
+    install = steps["Install pinned DirectX tools"]
+    assert install["if"] == "runner.os == 'Windows'"
+    assert "microsoft.direct3d.warp/1.0.21/" in install["run"]
+    selection = steps["Select isolated WARP qualification runtime"]
+    assert selection["if"] == (
+        "runner.os == 'Windows' && matrix.warp_qualification == '1.0.13'"
+    )
+    assert selection["timeout-minutes"] == 2
+    assert selection["shell"] == "pwsh"
+    assert job["steps"].index(install) < job["steps"].index(selection)
+    assert job["steps"].index(selection) < job["steps"].index(
+        steps["Validate platform host ABI"]
+    )
+    script = selection["run"]
+    for value in (
+        "microsoft.direct3d.warp/1.0.13/",
+        "63231c48b0573ba4c078f69cd10a4059a0fee3427107b8219e5e80ab75bd304b",
+        "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638",
+        "e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3",
+        "-TimeoutSec 30",
+        "$selectedDigest -ne $libraryDigest",
+        "replacesRequiredGate = $false",
+        ".mlx-portable-host/runtime-qualification.json",
+    ):
+        assert value in script
+    assert script.index("installation identity") < script.index("Invoke-WebRequest")
+    assert script.index("archive checksum") < script.index("Expand-Archive")
+    assert script.index("library checksum") < script.index("Copy-Item")
+    assert script.index("selection failed") < script.index("ConvertTo-Json")
+    comparison = steps["Compare WARP arithmetic across codegen revisions"]
+    assert "!matrix.warp_qualification" in comparison["if"]
+    upload = steps["Retain native execution evidence"]
+    assert upload["if"] == "always()"
+    assert upload["with"]["name"] == (
+        "mlx-portable-host-${{ matrix.target }}"
+        "${{ matrix.warp_qualification && "
+        "format('-warp-{0}-qualification', matrix.warp_qualification) || '' }}"
+        "-${{ github.run_attempt }}"
+    )
+    assert upload["with"]["include-hidden-files"] is True
+    for step in job["steps"]:
+        assert "continue-on-error" not in step
+        if step not in (selection, comparison, upload):
+            assert "warp_qualification" not in json.dumps(step)
+    for name in (
+        "Validate collective helper arguments",
+        "Validate pinned native binary math",
+        "Build adapted upstream MLX",
+        "Translate unchanged upstream kernels",
+        "Execute upstream tests on the translated backend",
+    ):
+        assert "if" not in steps[name]
+
+
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell is not installed")
+@pytest.mark.parametrize(
+    "failure",
+    (
+        None,
+        "original",
+        "download",
+        "archive",
+        "missing-library",
+        "library",
+        "selection",
+    ),
+)
+def test_windows_host_qualification_selection_fails_closed(tmp_path, failure):
+    workflow = yaml.safe_load(_workflow_texts()["demo-project-testing.yml"])
+    selection = next(
+        step
+        for step in workflow["jobs"]["portable-host"]["steps"]
+        if step.get("name") == "Select isolated WARP qualification runtime"
+    )
+    original = b"required runtime fixture"
+    qualified = b"qualification runtime fixture"
+    digest = lambda value: hashlib.sha256(value).hexdigest()
+    archive = tmp_path / "fixture.zip"
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr(
+            (
+                "missing.dll"
+                if failure == "missing-library"
+                else "build/native/bin/x64/d3d10warp.dll"
+            ),
+            b"incorrect library" if failure == "library" else qualified,
+        )
+    archive_digest = digest(archive.read_bytes())
+    if failure == "archive":
+        with archive.open("ab") as stream:
+            stream.write(b"changed archive")
+    script = selection["run"]
+    for pinned, fixture in (
+        (
+            "e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3",
+            digest(original),
+        ),
+        (
+            "63231c48b0573ba4c078f69cd10a4059a0fee3427107b8219e5e80ab75bd304b",
+            archive_digest,
+        ),
+        (
+            "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638",
+            digest(qualified),
+        ),
+    ):
+        assert script.count(pinned) == 1
+        script = script.replace(pinned, fixture)
+    bootstrap = r"""
+function Invoke-WebRequest {
+    param([string]$Uri, [string]$OutFile, [int]$TimeoutSec)
+    if ($Uri -ne "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.13/microsoft.direct3d.warp.1.0.13.nupkg" -or $TimeoutSec -ne 30) {
+        throw "Unexpected download request."
+    }
+    if ($env:CROSTL_WARP_TEST_FAILURE -eq "download") { throw "Download failed." }
+    [System.IO.File]::Copy($env:CROSTL_WARP_TEST_ARCHIVE, $OutFile)
+}
+if ($env:CROSTL_WARP_TEST_FAILURE -eq "selection") {
+    function Copy-Item {
+        param([string]$Path, [string]$Destination, [switch]$Force)
+        [System.IO.File]::WriteAllText($Destination, "incorrect installed library")
+    }
+}
+"""
+    runner_temp = tmp_path / "runner"
+    runner_temp.mkdir()
+    python_root = tmp_path / "python"
+    python_root.mkdir()
+    installed = python_root / "d3d10warp.dll"
+    installed.write_bytes(b"incorrect original" if failure == "original" else original)
+    evidence = tmp_path / ".mlx-portable-host"
+    evidence.mkdir()
+    script_path = tmp_path / "select-runtime.ps1"
+    script_path.write_text(
+        bootstrap + script + '\n"ready" | Set-Content ".mlx-portable-host/ready.txt"\n'
+    )
+    env = dict(os.environ)
+    env.update(
+        RUNNER_TEMP=str(runner_temp),
+        pythonLocation=str(python_root),
+        CROSTL_WARP_TEST_ARCHIVE=str(archive),
+        CROSTL_WARP_TEST_FAILURE=failure or "",
+    )
+    result = subprocess.run(
+        [
+            shutil.which("pwsh"),
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            str(script_path),
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    receipt = evidence / "runtime-qualification.json"
+    if failure:
+        assert result.returncode != 0, result.stdout + result.stderr
+        assert not receipt.exists() and not (evidence / "ready.txt").exists()
+        if failure not in ("original", "selection"):
+            assert installed.read_bytes() == original
+        return
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert installed.read_bytes() == qualified
+    assert (evidence / "ready.txt").is_file()
+    assert json.loads(receipt.read_text(encoding="utf-8-sig")) == {
+        "qualificationVersion": "1.0.13",
+        "archiveSHA256": archive_digest,
+        "originalDLLSHA256": digest(original),
+        "qualificationDLLSHA256": digest(qualified),
+        "replacesRequiredGate": False,
+    }
 
 
 def test_project_demo_triggers_cover_code_without_root_documentation():
