@@ -410,7 +410,7 @@
       1,
       1
     ],
-    "generatedSizeBytesTotal": 1804791,
+    "generatedSizeBytesTotal": 1804815,
     "generatedSizeRange": {
       "minimum": {
         "entryPoint": "v_Absfloat16float16",
@@ -8265,8 +8265,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "5252972da0b75ff966e967e7327612b91ef9c72867efff55d3ec0a9a5dcb8aff",
-      "sizeBytes": 1091
+      "sha256": "14d07d8d749687e74069e1be534c3ebdb5f3a87b6447f706eff31d259d5bbdb3",
+      "sizeBytes": 1115
     },
     {
       "entryPoint": "v_Squareint16int16",

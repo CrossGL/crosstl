@@ -708,7 +708,12 @@ The current harness verifies:
   reference, and postfix output indexing survive the round trip. A host-owned
   ``[1, 1, 1]`` dispatch contract is preserved, and macOS CI compiles every
   deterministic artifact to non-empty AIR. This is complete discovered unary
-  Metal compiler/reflection coverage, not Metal numerical execution;
+  Metal compiler/reflection coverage, not Metal numerical execution. The reviewed
+  `v_Squarefloat32float32` reference includes an unused-parameter annotation;
+  removing only that annotation reproduces its prior accepted source hash, and
+  both versions compile to byte-identical Metal libraries with warnings fatal
+  and fast math disabled. This reference update does not approve unrelated
+  pending corpus changes or establish current-pin runtime parity;
 - selected-entry translation of all 877 discovered `unary.metal` entries
   at the same legacy reference revision to OpenGL. The schema-v2
   `contracts/unary.opengl-translation.json` contract pins every standalone

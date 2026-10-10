@@ -57,13 +57,13 @@ SCALAR_UNARY_METAL_CONTRACT_PATH = (
     / "unary.scalar-metal-roundtrip.json"
 )
 SCALAR_UNARY_METAL_CONTRACT_SHA256 = (
-    "53cd4a5c74d79951930e372173cc05456af1c4107db64a84ba20bb1b43b8ca0d"
+    "906bef3f20078b80a4b4bc4908f788c1d185968c25f7d27b24e9f495ff89a016"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "77c5b7edacaf5f6a28b72dde68967ad4e14332330b042caca355b6a90052085a"
+    "97fb652b520775035c903e1e1a8b39fdb9821cf93b984e9959788059f1b1f372"
 )
 
 
@@ -104,9 +104,9 @@ SQUARE_WORKLOAD = UnaryWorkload(
         },
         "metal": {
             "sha256": (
-                "5252972da0b75ff966e967e7327612b91ef9c72867efff55d3ec0a9a5dcb8aff"
+                "14d07d8d749687e74069e1be534c3ebdb5f3a87b6447f706eff31d259d5bbdb3"
             ),
-            "sizeBytes": 1091,
+            "sizeBytes": 1115,
         },
         "opengl": {
             "sha256": (
@@ -766,7 +766,7 @@ def test_current_mlx_unary_metal_contract_is_complete_and_classified():
         "intermediate": "crossgl",
         "hostInterfaceStatus": "ready",
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 1804791,
+        "generatedSizeBytesTotal": 1804815,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absfloat16float16", "sizeBytes": 1052},
             "maximum": {
