@@ -1344,41 +1344,36 @@ jobs:
               tests/test_translator/test_project_workgroup_rules.py::test_selected_entry_rules_execute \
               tests/test_translator/test_project_subgroup_applicability.py \
               2>&1 | tee .mlx-portable-host/resource-values.log
-      - name: Compare explicit Direct3D SDK arithmetic
+      - name: Compare legacy Direct3D shader arithmetic
         if: failure() && runner.os == 'Windows' && steps.collective-helpers.outcome == 'failure'
         shell: pwsh
         timeout-minutes: 5
         env:
-          CROSTL_REQUIRE_DIRECTX_SDK_COMPARISON: "1"
-          CROSTL_DIRECTX_SDK_VERSION: "619"
+          CROSTL_REQUIRE_DIRECTX_FXC_COMPARISON: "1"
         run: |
           $ErrorActionPreference = "Stop"
-          $ProgressPreference = "SilentlyContinue"
-          $archive = Join-Path $env:RUNNER_TEMP "agility-1.619.6.zip"
-          $root = Join-Path $env:RUNNER_TEMP "agility-1.619.6"
-          $evidence = ".mlx-portable-host/sdk-comparison"
+          $evidence = ".mlx-portable-host/fxc-comparison"
           New-Item -ItemType Directory -Force $evidence | Out-Null
-          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.d3d12/1.619.6/microsoft.direct3d.d3d12.1.619.6.nupkg" -OutFile $archive
-          $digest = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($digest -ne "08f0489281401aa430fc37322d6c3fc98a8025175aacd714c10d562f4963f1e9") {
-            throw "Comparison Direct3D SDK archive checksum mismatch."
+          $kits = Join-Path ${env:ProgramFiles(x86)} "Windows Kits/10/bin"
+          $compiler = Get-ChildItem $kits -Directory |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            ForEach-Object { Join-Path $_.FullName "x64/fxc.exe" } |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+            Select-Object -First 1
+          if (-not $compiler) {
+            throw "The Windows SDK FXC compiler is required for the comparison."
           }
-          Expand-Archive $archive -DestinationPath $root -Force
-          $env:CROSTL_DIRECTX_SDK_DIRECTORY = Join-Path $root "build/native/bin/x64"
-          $core = Join-Path $env:CROSTL_DIRECTX_SDK_DIRECTORY "D3D12Core.dll"
-          $coreDigest = (Get-FileHash $core -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($coreDigest -ne "37fa14281a58cc834076971873006feb8a8d25cddc908d1a345bda1b149ffc7d") {
-            throw "Comparison Direct3D SDK core checksum mismatch."
-          }
+          $env:CROSTL_FXC_EXECUTABLE = $compiler
           @{
-            comparisonVersion = "1.619.6"
-            sdkVersion = 619
-            archiveSHA256 = $digest
-            requestedCoreSHA256 = $coreDigest
+            compilerPath = $compiler
+            compilerVersion = (Get-Item $compiler).VersionInfo.FileVersion
+            compilerSHA256 = (Get-FileHash $compiler -Algorithm SHA256).Hash.ToLowerInvariant()
+            shaderProfile = "cs_5_1"
             warpSHA256 = (Get-FileHash (Join-Path $env:pythonLocation "d3d10warp.dll") -Algorithm SHA256).Hash.ToLowerInvariant()
             replacesRequiredGate = $false
-          } | ConvertTo-Json | Set-Content "$evidence/runtime-selection.json"
-          python tools/run_bounded_command.py --timeout-seconds 180 --label "Explicit Direct3D SDK arithmetic comparison" -- python -m pytest -q -n auto --basetemp="$evidence/pytest" --junitxml="$evidence/results.xml" tests/test_translator/test_directx_cooperative_matrix.py -k "sdk_comparison_executes"
+          } | ConvertTo-Json | Set-Content "$evidence/compiler-selection.json"
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Legacy Direct3D shader arithmetic comparison" -- python -m pytest -q -n auto --basetemp="$evidence/pytest" --junitxml="$evidence/results.xml" tests/test_translator/test_directx_cooperative_matrix.py -k "fxc_comparison_executes"
           exit $LASTEXITCODE
       - name: Validate exact partial subgroup execution
         env:

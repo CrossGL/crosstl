@@ -1,8 +1,13 @@
 """Logical-subgroup matrix products with checked workgroup synchronization."""
 
+import hashlib
+import json
 import os
+import re
+import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -215,7 +220,7 @@ def test_matrix_native_gates_are_required_without_extra_jobs():
     comparison = next(
         step
         for step in steps
-        if step.get("name") == "Compare explicit Direct3D SDK arithmetic"
+        if step.get("name") == "Compare legacy Direct3D shader arithmetic"
     )
     assert (
         comparison["if"]
@@ -333,10 +338,238 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
 PRECISE_OPERANDS = [0x3F800001, 0x3F7FFFFE, 0xBF800000]
 
 
+def _compile_fxc(source, tmp_path, *, flags=()):
+    compiler = Path(os.environ["CROSTL_FXC_EXECUTABLE"])
+    assert compiler.is_file(), "The explicit Windows FXC compiler is missing"
+    artifact = tmp_path / "translated.hlsl"
+    module = tmp_path / "translated.dxbc"
+    listing = tmp_path / "translated.asm"
+    artifact.write_text(source, encoding="utf-8")
+    module.unlink(missing_ok=True)
+    listing.unlink(missing_ok=True)
+    command = [
+        str(compiler),
+        "/nologo",
+        "/T",
+        "cs_5_1",
+        "/E",
+        "CSMain",
+        "/WX",
+        *flags,
+        "/Fo",
+        str(module),
+        "/Fc",
+        str(listing),
+        str(artifact),
+    ]
+    receipt = {
+        "command": command,
+        "compilerSHA256": hashlib.sha256(compiler.read_bytes()).hexdigest(),
+        "sourceSHA256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        "profile": "cs_5_1",
+    }
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        receipt.update(
+            returncode=result.returncode, stdout=result.stdout, stderr=result.stderr
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (
+            module.is_file() and module.stat().st_size > 32
+        ), "FXC produced no bytecode"
+        assert module.read_bytes().startswith(b"DXBC"), "FXC produced invalid bytecode"
+        assert (
+            listing.is_file() and listing.stat().st_size > 0
+        ), "FXC produced no disassembly"
+        assembly = listing.read_text(encoding="utf-8-sig")
+        assert "cs_5_1" in assembly, "FXC disassembly has the wrong profile"
+        assert re.search(
+            r"(?m)^\s*mul(?:\s|_)", assembly
+        ), "Missing separate multiplication"
+        assert re.search(r"(?m)^\s*add(?:\s|_)", assembly), "Missing separate addition"
+        assert not re.search(
+            r"(?m)^\s*(?:mad|fma)(?:\s|_)", assembly
+        ), "FXC contracted precise arithmetic"
+        assert (
+            receipt["sourceSHA256"] == hashlib.sha256(artifact.read_bytes()).hexdigest()
+        )
+        assert (
+            receipt["compilerSHA256"]
+            == hashlib.sha256(compiler.read_bytes()).hexdigest()
+        )
+        receipt.update(
+            moduleSHA256=hashlib.sha256(module.read_bytes()).hexdigest(),
+            disassemblySHA256=hashlib.sha256(listing.read_bytes()).hexdigest(),
+        )
+    except (AssertionError, OSError, subprocess.SubprocessError) as error:
+        receipt["error"] = {"type": type(error).__name__, "message": str(error)}
+        raise
+    finally:
+        (tmp_path / "compiler.json").write_text(json.dumps(receipt, indent=2))
+    return artifact, module
+
+
+@pytest.mark.parametrize("flags", [(), ("/Gis",), ("/Gis", "/Od")])
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "success",
+        "failure",
+        "missing-module",
+        "missing-listing",
+        "bad-magic",
+        "wrong-profile",
+        "missing-multiply",
+        "missing-add",
+        "fused",
+        "timeout",
+        "changed-source",
+        "changed-compiler",
+    ],
+)
+def test_fxc_control_retains_compilation_evidence(
+    tmp_path, monkeypatch, flags, outcome
+):
+    compiler = tmp_path / "fxc.exe"
+    compiler.write_bytes(b"compiler identity")
+    monkeypatch.setenv("CROSTL_FXC_EXECUTABLE", str(compiler))
+    module = tmp_path / "translated.dxbc"
+    listing = tmp_path / "translated.asm"
+    module.write_bytes(b"stale output")
+    listing.write_text("stale disassembly")
+
+    def compile_source(command, **options):
+        assert options == {"capture_output": True, "text": True, "timeout": 60}
+        assert command == [
+            str(compiler),
+            "/nologo",
+            "/T",
+            "cs_5_1",
+            "/E",
+            "CSMain",
+            "/WX",
+            *flags,
+            "/Fo",
+            str(module),
+            "/Fc",
+            str(listing),
+            str(tmp_path / "translated.hlsl"),
+        ]
+        assert not module.exists() and not listing.exists()
+        assert (tmp_path / "translated.hlsl").read_text() == PRECISE_SCALAR
+        if outcome == "timeout":
+            raise subprocess.TimeoutExpired(command, 60)
+        if outcome != "missing-module":
+            module.write_bytes(
+                (b"bad!" if outcome == "bad-magic" else b"DXBC") + bytes(36)
+            )
+        if outcome != "missing-listing":
+            assembly = "cs_5_1\nmul r0.x, r0.x, r0.y\nadd r0.x, r0.x, r0.z\n"
+            if outcome == "wrong-profile":
+                assembly = assembly.replace("cs_5_1", "cs_5_0")
+            elif outcome == "missing-multiply":
+                assembly = assembly.replace("mul ", "mov ")
+            elif outcome == "missing-add":
+                assembly = assembly.replace("add ", "mov ")
+            elif outcome == "fused":
+                assembly += "mad r0.x, r0.x, r0.y, r0.z\n"
+            listing.write_text(assembly)
+        if outcome == "changed-source":
+            (tmp_path / "translated.hlsl").write_text("different source")
+        if outcome == "changed-compiler":
+            compiler.write_bytes(b"different compiler")
+        return SimpleNamespace(
+            returncode=1 if outcome == "failure" else 0,
+            stdout="compiler stdout",
+            stderr="compiler stderr",
+        )
+
+    monkeypatch.setattr(subprocess, "run", compile_source)
+    if outcome == "success":
+        assert _compile_fxc(PRECISE_SCALAR, tmp_path, flags=flags) == (
+            tmp_path / "translated.hlsl",
+            module,
+        )
+    else:
+        with pytest.raises(
+            subprocess.TimeoutExpired if outcome == "timeout" else AssertionError
+        ):
+            _compile_fxc(PRECISE_SCALAR, tmp_path, flags=flags)
+    receipt = json.loads((tmp_path / "compiler.json").read_text())
+    assert receipt["compilerSHA256"] == hashlib.sha256(b"compiler identity").hexdigest()
+    assert (
+        receipt["sourceSHA256"]
+        == hashlib.sha256(PRECISE_SCALAR.replace("\n", os.linesep).encode()).hexdigest()
+    )
+    assert receipt["profile"] == "cs_5_1"
+    if outcome == "success":
+        assert (
+            receipt["moduleSHA256"] == hashlib.sha256(module.read_bytes()).hexdigest()
+        )
+        assert (
+            receipt["disassemblySHA256"]
+            == hashlib.sha256(listing.read_bytes()).hexdigest()
+        )
+        assert "error" not in receipt
+    else:
+        assert receipt["error"]["type"] == (
+            "TimeoutExpired" if outcome == "timeout" else "AssertionError"
+        )
+
+
+@pytest.mark.parametrize(
+    "flags", [(), ("/Gis",), ("/Gis", "/Od")], ids=["precise", "strict", "unoptimized"]
+)
+def test_precise_scalar_fxc_comparison_executes(tmp_path, monkeypatch, flags):
+    required = "CROSTL_REQUIRE_DIRECTX_FXC_COMPARISON"
+    if os.environ.get(required) != "1":
+        pytest.skip(f"set {required}=1 for legacy DirectX compiler comparison")
+    assert sys.platform == "win32", "FXC comparison requires Windows"
+    monkeypatch.setenv("CROSTL_REQUIRE_DIRECTX_FLOAT_ATOMICS", "1")
+    expected = [0] * 32
+    actual = _execute_words(
+        tmp_path,
+        PRECISE_SCALAR,
+        PRECISE_OPERANDS * 32,
+        expected,
+        workgroup_size=(32, 1, 1),
+        workgroup_count=(1, 1, 1),
+        compile_flags=flags,
+        buffer_byte_offset=16,
+        module_compiler=_compile_fxc,
+    )
+    assert actual == expected
+
+
 def test_precise_scalar_control_distinguishes_contraction():
     left, right, addend = map(_float, PRECISE_OPERANDS)
     assert _word(_float(_word(left * right)) + addend) == 0
     assert _word(left * right + addend) == 0xA8800000
+
+
+@pytest.mark.parametrize("flags", [(), ("/Gis",), ("/Gis", "/Od")])
+def test_fxc_comparison_preserves_scalar_workload(tmp_path, monkeypatch, flags):
+    monkeypatch.setenv("CROSTL_REQUIRE_DIRECTX_FXC_COMPARISON", "1")
+    monkeypatch.setattr(sys, "platform", "win32")
+    calls = []
+
+    def execute(work, source, words, expected, **options):
+        calls.append(options)
+        assert work == tmp_path and source == PRECISE_SCALAR
+        assert words == PRECISE_OPERANDS * 32
+        assert expected == [0] * 32
+        assert options == {
+            "workgroup_size": (32, 1, 1),
+            "workgroup_count": (1, 1, 1),
+            "compile_flags": flags,
+            "buffer_byte_offset": 16,
+            "module_compiler": _compile_fxc,
+        }
+        return expected
+
+    monkeypatch.setattr(sys.modules[__name__], "_execute_words", execute)
+    test_precise_scalar_fxc_comparison_executes(tmp_path, monkeypatch, flags)
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize(

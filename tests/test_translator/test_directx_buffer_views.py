@@ -1042,7 +1042,7 @@ def test_required_native_view_gate_keeps_existing_windows_runner():
     assert upload["with"]["if-no-files-found"] == "error"
 
 
-def test_sdk_comparison_does_not_replace_required_native_gate():
+def test_legacy_compiler_comparison_does_not_replace_required_native_gate():
     import yaml
 
     root = Path(__file__).resolve().parents[2]
@@ -1059,7 +1059,7 @@ def test_sdk_comparison_does_not_replace_required_native_gate():
     comparison = next(
         item
         for item in steps
-        if item.get("name") == "Compare explicit Direct3D SDK arithmetic"
+        if item.get("name") == "Compare legacy Direct3D shader arithmetic"
     )
     assert required["id"] == "collective-helpers"
     assert not required.get("continue-on-error") and not comparison.get(
@@ -1070,15 +1070,17 @@ def test_sdk_comparison_does_not_replace_required_native_gate():
         comparison["if"]
         == "failure() && runner.os == 'Windows' && steps.collective-helpers.outcome == 'failure'"
     )
-    assert comparison["env"]["CROSTL_REQUIRE_DIRECTX_SDK_COMPARISON"] == "1"
-    assert comparison["env"]["CROSTL_DIRECTX_SDK_VERSION"] == "619"
+    assert comparison["env"]["CROSTL_REQUIRE_DIRECTX_FXC_COMPARISON"] == "1"
     assert comparison["timeout-minutes"] == 5
     command = comparison["run"]
     assert "--timeout-seconds 180" in command and "-n auto" in command
-    assert '-k "sdk_comparison_executes"' in command
-    assert "08f0489281401aa430fc37322d6c3fc98a8025175aacd714c10d562f4963f1e9" in command
-    assert "37fa14281a58cc834076971873006feb8a8d25cddc908d1a345bda1b149ffc7d" in command
-    assert "CROSTL_DIRECTX_SDK_DIRECTORY" in command
+    assert '-k "fxc_comparison_executes"' in command
+    assert '"x64/fxc.exe"' in command
+    assert "[version]$_.Name" in command
+    assert "CROSTL_FXC_EXECUTABLE" in command
+    assert 'shaderProfile = "cs_5_1"' in command
+    assert "compilerVersion" in command and "compilerSHA256" in command
+    assert "Invoke-WebRequest" not in command
     assert "Copy-Item" not in command and "Remove-Item" not in command
     assert "warpSHA256" in command and "exit $LASTEXITCODE" in command
     assert "replacesRequiredGate = $false" in command

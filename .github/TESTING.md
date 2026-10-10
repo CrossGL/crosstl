@@ -83,13 +83,18 @@ checksum and does not fall back to another release. These jobs do not execute
 Direct3D; WARP numerical execution and Windows host integration remain required.
 
 If the required Windows collective/resource gate fails, its existing runner
-also compares unchanged precise scalar and matrix workloads against the pinned
-Agility SDK 1.619.6 (SDK 619). Archive and core checksums are verified before use;
-the isolated dispatch process must report the selected core's digest. WARP
-1.0.21 remains installed. The comparison retains a 180-second command deadline,
-adds no runner, and cannot replace or excuse the required gate's failure.
-Requested and observed runtime identities, compiled modules, inputs, expected
-values and readbacks are retained in the portable-host evidence artifact.
+also compiles the unchanged precise scalar control with the installed Windows
+SDK's x64 FXC compiler and executes its Shader Model 5.1 bytecode through the
+same isolated buffer-view worker. Ordinary, IEEE-strict and unoptimized modes
+retain the same inputs, zero-valued oracle, allocation offsets and output guards.
+Compiler path, version and digest, disassembly, loaded runtime identities,
+compiled modules and readbacks are retained in the portable-host artifact.
+The compiler listing must retain separate multiplication and addition.
+WARP 1.0.21 and the system Direct3D core remain unchanged. This replaces the
+completed SDK comparison, which reproduced the discrepancy with Agility 1.619.6
+and positively verified the selected core. It retains a 180-second command
+deadline, adds no runner, and cannot replace or excuse the required DXC gate's
+failure. Compiler comparison is diagnostic evidence, not an alternative backend.
 Metal corpus compilation stays on macOS because it requires Apple's toolchain.
 
 The complete unary, binary, copy, reduction and quantized Metal corpora separate portable translation

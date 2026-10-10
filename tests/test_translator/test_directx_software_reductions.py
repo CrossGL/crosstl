@@ -292,8 +292,10 @@ def _execute_words(
     compile_flags=(),
     buffer_byte_offset=None,
     buffer_view_executor=None,
+    module_compiler=None,
 ):
-    artifact, module = _compile(generated, tmp_path, flags=compile_flags)
+    compiler = _compile if module_compiler is None else module_compiler
+    artifact, module = compiler(generated, tmp_path, flags=compile_flags)
     guard = [0x6A15BEEF] * 32
     inputs = {
         "inputWords": words + guard,
@@ -403,8 +405,9 @@ def _execute_words(
 @pytest.mark.parametrize("failure", [False, True])
 @pytest.mark.parametrize("buffer_byte_offset", [None, 16])
 @pytest.mark.parametrize("injected", [False, True])
+@pytest.mark.parametrize("compiler_injected", [False, True])
 def test_word_executor_retains_runtime_identity(
-    tmp_path, monkeypatch, failure, buffer_byte_offset, injected
+    tmp_path, monkeypatch, failure, buffer_byte_offset, injected, compiler_injected
 ):
     module = sys.modules[__name__]
     artifact = tmp_path / "translated.hlsl"
@@ -454,6 +457,13 @@ def test_word_executor_retains_runtime_identity(
     libraries = [{"name": "d3d10warp.dll", "loaded": True, "sha256": "digest"}]
     monkeypatch.setattr(module, "_loaded_runtime_libraries", lambda: libraries)
     options = {"compile_flags": ("-Gis",), "buffer_byte_offset": buffer_byte_offset}
+    if compiler_injected:
+        options["module_compiler"] = compile_source
+        monkeypatch.setattr(
+            module,
+            "_compile",
+            lambda *args, **kwargs: pytest.fail("Unexpected DXC call"),
+        )
     executor = object()
     if injected:
         options["buffer_view_executor"] = executor
