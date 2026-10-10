@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from crosstl import translate
+from crosstl.project.directx_toolchain import dxc_compiler_arguments_for_source
 from crosstl.project.native_runtime_drivers import (
     DirectXComputeRuntime,
     OpenGLComputeRuntime,
@@ -93,6 +94,11 @@ def _compile(
                 "-E",
                 "CSMain",
                 "-WX",
+                *(
+                    flag
+                    for flag in dxc_compiler_arguments_for_source(generated)
+                    if flag not in directx_compile_flags
+                ),
                 *directx_compile_flags,
                 str(artifact),
                 "-Fo",
@@ -121,6 +127,36 @@ def _compile(
         if shutil.which("spirv-val"):
             _run(["spirv-val", "--target-env", "opengl4.5", str(module)])
     return artifact, module
+
+
+@pytest.mark.parametrize(
+    "source,flags,requires_native",
+    [
+        ("int16_t value;", (), True),
+        ("uint16_t2 value;", (), True),
+        ("float16_t value;", ("-HV", "2021"), True),
+        ("uint16_t value;", ("-enable-16bit-types", "-HV", "2021"), True),
+        ("float value;", ("-HV", "2021"), False),
+        ("// int16_t value;\nfloat value;", (), False),
+    ],
+)
+def test_compile_helper_uses_required_directx_flags(
+    tmp_path, monkeypatch, source, flags, requires_native
+):
+    commands = []
+    monkeypatch.setattr(shutil, "which", lambda tool: tool)
+    monkeypatch.setattr(sys.modules[__name__], "_run", commands.append)
+    artifact, module = _compile(
+        source, "directx", tmp_path, directx_compile_flags=flags
+    )
+    assert len(commands) == 1
+    command = commands[0]
+    assert command[:6] == ["dxc", "-T", "cs_6_6", "-E", "CSMain", "-WX"]
+    assert command.count("-enable-16bit-types") == int(requires_native)
+    assert command[-3:] == [str(artifact), "-Fo", str(module)]
+    if flags:
+        assert command[-3 - len(flags) : -3] == list(flags)
+    assert artifact.read_text() == source
 
 
 @pytest.mark.parametrize("target", ["directx", "opengl", "metal"])
