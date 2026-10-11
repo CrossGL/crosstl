@@ -1559,6 +1559,7 @@ DISPATCH_REGION_SOURCE_OPTION = "dispatch_region"
 COOPERATIVE_MATRIX_SOFTWARE_LOWERING_SOURCE_OPTION = (
     "cooperative_matrix_software_lowering"
 )
+COOPERATIVE_MATRIX_MMA_PROFILE_SOURCE_OPTION = "cooperative_matrix_mma_profile"
 PRIVATE_POINTER_OUT_OF_BOUNDS_READ_SOURCE_OPTION = "private_pointer_out_of_bounds_read"
 DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION = (
     "relative_wave_shuffle_out_of_range"
@@ -1845,6 +1846,7 @@ REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(
         "dispatchRegion",
         "dispatchRegionProgram",
         "softwareSubgroupPolicy",
+        "cooperativeMatrixMmaProfile",
         "binary32DivisionProfile",
         "binary16RemainderProfile",
         "binary16WideningProfile",
@@ -6150,6 +6152,7 @@ def _frontend_source_options(source_options: Mapping[str, Any]) -> dict[str, Any
             SOFTWARE_SUBGROUP_APPLICABILITY_SOURCE_OPTION,
             DISPATCH_REGION_SOURCE_OPTION,
             COOPERATIVE_MATRIX_SOFTWARE_LOWERING_SOURCE_OPTION,
+            COOPERATIVE_MATRIX_MMA_PROFILE_SOURCE_OPTION,
             PRIVATE_POINTER_OUT_OF_BOUNDS_READ_SOURCE_OPTION,
             DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION,
             METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION,
@@ -27233,6 +27236,30 @@ def _project_cooperative_matrix_software_lowering(
     return enabled
 
 
+def _project_cooperative_matrix_mma_profile(
+    target: str, source_options: Mapping[str, Any]
+) -> str | None:
+    option = COOPERATIVE_MATRIX_MMA_PROFILE_SOURCE_OPTION
+    if option not in source_options:
+        return None
+    if target != "directx":
+        raise ValueError(f"{option} is supported only by the DirectX target")
+    profile = source_options[option]
+    if profile is not None and (
+        not isinstance(profile, str)
+        or profile not in {
+            "rne-gradual",
+            "rne-flush",
+            "fma-rne-gradual",
+            "fma-rne-flush",
+        }
+    ):
+        raise ValueError(
+            f"{option} must be 'rne-gradual', 'rne-flush', 'fma-rne-gradual', 'fma-rne-flush', or None"
+        )
+    return profile
+
+
 def _project_private_pointer_out_of_bounds_read(
     target: str,
     source_options: Mapping[str, Any],
@@ -27328,6 +27355,7 @@ def _generate_project_target_from_crossgl_ast(
     software_subgroup_width: Any | None = None,
     software_subgroup_applicability: str | None = None,
     cooperative_matrix_software_lowering: bool | None = None,
+    cooperative_matrix_mma_profile: str | None = None,
     private_pointer_out_of_bounds_read: str | None = None,
     directx_relative_wave_shuffle_out_of_range: Any | None = None,
     directx_widen_native_float16: Any | None = None,
@@ -27345,6 +27373,15 @@ def _generate_project_target_from_crossgl_ast(
                 "cooperative_matrix_software_lowering"
             )
         configure_cooperative_matrix(cooperative_matrix_software_lowering)
+    if cooperative_matrix_mma_profile is not None:
+        configure_matrix_rounding = getattr(
+            codegen, "set_cooperative_matrix_mma_profile", None
+        )
+        if not callable(configure_matrix_rounding):
+            raise ValueError(
+                f"Target '{target}' does not consume cooperative_matrix_mma_profile"
+            )
+        configure_matrix_rounding(cooperative_matrix_mma_profile)
     if private_pointer_out_of_bounds_read is not None:
         configure_private_pointer_reads = getattr(
             codegen, "set_private_pointer_out_of_bounds_read", None
@@ -27481,6 +27518,11 @@ def _generate_project_target_from_crossgl_ast(
                     directx_relative_wave_shuffle_out_of_range
                 ),
                 "widenNativeFloat16": directx_widen_native_float16,
+                **(
+                    {"cooperativeMatrixMmaProfile": cooperative_matrix_mma_profile}
+                    if cooperative_matrix_mma_profile is not None
+                    else {}
+                ),
             },
         )
         selected_ast = specialize_dispatch_region(selected_ast, dispatch_region)
@@ -28470,6 +28512,7 @@ def _translate_project_impl(
                 software_subgroup_width = None
                 software_subgroup_applicability = None
                 cooperative_matrix_software_lowering = None
+                cooperative_matrix_mma_profile = None
                 private_pointer_out_of_bounds_read = None
                 directx_relative_wave_shuffle_out_of_range = None
                 directx_widen_native_float16 = None
@@ -28665,6 +28708,13 @@ def _translate_project_impl(
                             source_options,
                         )
                     )
+                    cooperative_matrix_mma_profile = (
+                        _project_cooperative_matrix_mma_profile(target, source_options)
+                    )
+                    if cooperative_matrix_mma_profile is not None:
+                        artifact["provenance"][
+                            "cooperativeMatrixMmaProfile"
+                        ] = cooperative_matrix_mma_profile
                     private_pointer_out_of_bounds_read = (
                         _project_private_pointer_out_of_bounds_read(
                             target,
@@ -28982,6 +29032,7 @@ def _translate_project_impl(
                         or requires_subgroup_specialization
                         or software_subgroup_width is not None
                         or cooperative_matrix_software_lowering is not None
+                        or cooperative_matrix_mma_profile is not None
                         or private_pointer_out_of_bounds_read is not None
                         or directx_relative_wave_shuffle_out_of_range is not None
                         or directx_widen_native_float16 is not None
@@ -29162,6 +29213,7 @@ def _translate_project_impl(
                                             cooperative_matrix_software_lowering=(
                                                 cooperative_matrix_software_lowering
                                             ),
+                                            cooperative_matrix_mma_profile=cooperative_matrix_mma_profile,
                                             private_pointer_out_of_bounds_read=(
                                                 private_pointer_out_of_bounds_read
                                             ),
@@ -29245,6 +29297,7 @@ def _translate_project_impl(
                                         cooperative_matrix_software_lowering=(
                                             cooperative_matrix_software_lowering
                                         ),
+                                        cooperative_matrix_mma_profile=cooperative_matrix_mma_profile,
                                         private_pointer_out_of_bounds_read=(
                                             private_pointer_out_of_bounds_read
                                         ),
@@ -29283,6 +29336,7 @@ def _translate_project_impl(
                         or workgroup_access_assertions
                         or software_subgroup_width is not None
                         or cooperative_matrix_software_lowering is not None
+                        or cooperative_matrix_mma_profile is not None
                         or private_pointer_out_of_bounds_read is not None
                         or directx_relative_wave_shuffle_out_of_range is not None
                         or directx_widen_native_float16 is not None
@@ -29320,6 +29374,7 @@ def _translate_project_impl(
                             cooperative_matrix_software_lowering=(
                                 cooperative_matrix_software_lowering
                             ),
+                            cooperative_matrix_mma_profile=cooperative_matrix_mma_profile,
                             private_pointer_out_of_bounds_read=(
                                 private_pointer_out_of_bounds_read
                             ),
@@ -46724,6 +46779,18 @@ def _provenance_contract_reasons(
             reasons.append(
                 f"{prefix}.softwareSubgroupPolicy requires DirectX or OpenGL"
             )
+    if "cooperativeMatrixMmaProfile" in provenance:
+        if artifact.get("target") != "directx":
+            reasons.append(f"{prefix}.cooperativeMatrixMmaProfile requires DirectX")
+        if provenance["cooperativeMatrixMmaProfile"] not in (
+            "rne-gradual",
+            "rne-flush",
+            "fma-rne-gradual",
+            "fma-rne-flush",
+        ):
+            reasons.append(
+                f"{prefix}.cooperativeMatrixMmaProfile must be rne-gradual, rne-flush, fma-rne-gradual or fma-rne-flush"
+            )
     if "binary32DivisionProfile" in provenance:
         if artifact.get("sourceBackend") != "metal":
             reasons.append(f"{prefix}.binary32DivisionProfile requires a Metal source")
@@ -46896,6 +46963,12 @@ def _provenance_contract_reasons(
         elif policy is not None:
             reasons.append(
                 f"{prefix}.softwareSubgroupPolicy requires an explicit applicability option"
+            )
+        if provenance.get("cooperativeMatrixMmaProfile") != options.get(
+            COOPERATIVE_MATRIX_MMA_PROFILE_SOURCE_OPTION
+        ):
+            reasons.append(
+                f"{prefix}.cooperativeMatrixMmaProfile must match the resolved project source options"
             )
         expected_division_profile = (
             options.get("binary32_division_profile")

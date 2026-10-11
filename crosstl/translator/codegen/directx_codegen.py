@@ -2100,6 +2100,7 @@ class HLSLCodeGen:
         target_profile=None,
         *,
         cooperative_matrix_software_lowering=False,
+        cooperative_matrix_mma_profile=None,
         relative_wave_shuffle_out_of_range="undefined",
         software_subgroup_width=None,
         widen_native_float16=False,
@@ -2109,6 +2110,7 @@ class HLSLCodeGen:
         self.set_cooperative_matrix_software_lowering(
             cooperative_matrix_software_lowering
         )
+        self.set_cooperative_matrix_mma_profile(cooperative_matrix_mma_profile)
         self.set_relative_wave_shuffle_out_of_range(relative_wave_shuffle_out_of_range)
         self.set_software_subgroup_width(software_subgroup_width)
         self.set_widen_native_float16(widen_native_float16)
@@ -2684,6 +2686,24 @@ class HLSLCodeGen:
         if not isinstance(enabled, bool):
             raise TypeError("cooperative_matrix_software_lowering must be a boolean")
         self.cooperative_matrix_software_lowering = enabled
+        return self
+
+    def set_cooperative_matrix_mma_profile(self, profile):
+        """Select explicit binary32 arithmetic for software matrix products."""
+        if profile is not None and (
+            not isinstance(profile, str)
+            or profile not in {
+                "rne-gradual",
+                "rne-flush",
+                "fma-rne-gradual",
+                "fma-rne-flush",
+            }
+        ):
+            raise ValueError(
+                "cooperative_matrix_mma_profile must be 'rne-gradual', 'rne-flush', "
+                "'fma-rne-gradual', 'fma-rne-flush', or None"
+            )
+        self.cooperative_matrix_mma_profile = profile
         return self
 
     def set_workgroup_access_assertions(self, assertions):
@@ -22285,6 +22305,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "DirectX matrix multiply-accumulate requires validated uniform control flow",
                 reason="software-subgroup-contract-required",
             )
+        if self.cooperative_matrix_mma_profile is not None:
+            for name in ("asuint", "asfloat"):
+                if (
+                    name in self.function_return_types
+                    or name in self.global_variable_types
+                    or name in self.structs_by_name
+                ):
+                    raise self.directx_cooperative_matrix_operation_error(
+                        expr,
+                        f"DirectX matrix rounding requires the unshadowed '{name}' builtin",
+                        reason="rounding-builtin-shadowed",
+                    )
         self.required_hlsl_cooperative_matrix_mma = True
         helper = self.hlsl_software_subgroup_identifier(
             ("matrix", "mma"), "__crossgl_software_matrix_mma"
@@ -22312,6 +22344,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ]
         count = self.hlsl_software_subgroup_invocation_count
         lines = [f"groupshared float2 {name}[{count}];" for name in scratch]
+        rounded = self.cooperative_matrix_mma_profile is not None
+        if rounded:
+            from ..fused_math import FMA_HELPER_KEYS, binary32_fma_support
+            from ..lexer import Lexer
+            from ..parser import Parser
+
+            names = {
+                key: self.hlsl_software_subgroup_identifier(
+                    ("matrix_round", key), f"__crossgl_software_matrix_round_{key}"
+                )
+                for key in FMA_HELPER_KEYS
+            }
+            source = "shader MatrixRounding {\n" + binary32_fma_support(names) + "\n}"
+            support = HLSLCodeGen().generate(Parser(Lexer(source).tokens).parse())
+            lines.insert(0, support)
+            flush = (
+                "true"
+                if self.cooperative_matrix_mma_profile.endswith("-flush")
+                else "false"
+            )
         lines.extend(
             [
                 f"float2 {helper}(float2 left, float2 right, float2 accumulator, uint invocation) {{",
@@ -22320,7 +22372,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"    {scratch[0]}[invocation] = left;",
                 f"    {scratch[1]}[invocation] = right;",
                 "    GroupMemoryBarrierWithGroupSync();",
-                "    precise float2 result = accumulator;",
+                (
+                    "    uint2 result = asuint(accumulator);"
+                    if rounded
+                    else "    precise float2 result = accumulator;"
+                ),
             ]
         )
         # Tables come from the registered source mapping, not the physical wave layout.
@@ -22351,16 +22407,43 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     [
                         f"    uint {prefix}A = row{element} * 8u + {inner}u;",
                         f"    uint {prefix}B = {inner}u * 8u + column{element};",
-                        f"    precise float {prefix} = "
-                        f"{scratch[0]}[subgroupBase + ownerLanes[{prefix}A]][ownerElements[{prefix}A]] * "
-                        f"{scratch[1]}[subgroupBase + ownerLanes[{prefix}B]][ownerElements[{prefix}B]];",
-                        f"    result[{element}] = result[{element}] + {prefix};",
                     ]
                 )
+                left = f"{scratch[0]}[subgroupBase + ownerLanes[{prefix}A]][ownerElements[{prefix}A]]"
+                right = f"{scratch[1]}[subgroupBase + ownerLanes[{prefix}B]][ownerElements[{prefix}B]]"
+                if rounded:
+                    lines.extend(
+                        [
+                            f"    uint {prefix}Left = asuint({left});",
+                            f"    uint {prefix}Right = asuint({right});",
+                        ]
+                    )
+                    if self.cooperative_matrix_mma_profile.startswith("fma-"):
+                        lines.append(
+                            f"    result[{element}] = {names['bits']}({prefix}Left, "
+                            f"{prefix}Right, result[{element}], {flush});"
+                        )
+                    else:
+                        # Separate rounding boundaries retain the product's signed zero.
+                        lines.extend(
+                            [
+                                f"    uint {prefix} = {names['bits']}({prefix}Left, {prefix}Right, "
+                                f"({prefix}Left ^ {prefix}Right) & 0x80000000u, {flush});",
+                                f"    result[{element}] = {names['bits']}(result[{element}], "
+                                f"0x3f800000u, {prefix}, {flush});",
+                            ]
+                        )
+                else:
+                    lines.extend(
+                        [
+                            f"    precise float {prefix} = {left} * {right};",
+                            f"    result[{element}] = result[{element}] + {prefix};",
+                        ]
+                    )
         lines.extend(
             [
                 "    GroupMemoryBarrierWithGroupSync();",
-                "    return result;",
+                "    return asfloat(result);" if rounded else "    return result;",
                 "}",
                 "",
             ]

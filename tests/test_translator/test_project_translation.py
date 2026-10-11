@@ -22703,6 +22703,7 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
             "dispatchRegion",
             "dispatchRegionProgram",
             "softwareSubgroupPolicy",
+            "cooperativeMatrixMmaProfile",
             "binary32DivisionProfile",
             "binary16RemainderProfile",
             "binary16WideningProfile",

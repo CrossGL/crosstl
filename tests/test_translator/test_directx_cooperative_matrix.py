@@ -698,7 +698,9 @@ kernel void matrix_products(const device uint* inputWords [[buffer(0)]],
 """
 
 
-def _project_request(root, target, *, shape=(32, 4, 1), rounding=False):
+def _project_request(
+    root, target, *, shape=(32, 4, 1), rounding=False, mma_profile=None, word_case=None
+):
     source = _metal_source()
     (root / "matrix.metal").write_text(source)
     options = {
@@ -717,6 +719,10 @@ def _project_request(root, target, *, shape=(32, 4, 1), rounding=False):
             options["target_options"][target][
                 "relative_wave_shuffle_out_of_range"
             ] = "self"
+            if mma_profile is not None:
+                options["target_options"][target][
+                    "cooperative_matrix_mma_profile"
+                ] = mma_profile
     report = translate_project(
         ProjectConfig(
             root=root,
@@ -731,7 +737,7 @@ def _project_request(root, target, *, shape=(32, 4, 1), rounding=False):
     report.write_json(root / "report.json")
     assert not report.to_json()["diagnostics"], report.to_json()
     descriptor, package = _prepare_native_package(report, root)
-    words, expected = _case(rounding=rounding)
+    words, expected = _case(rounding=rounding) if word_case is None else word_case
     guard = [0x6A15BEEF] * 32
 
     def value(values):

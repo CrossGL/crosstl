@@ -2045,6 +2045,30 @@ of the hardware wave width. Workgroup dimensions must be concrete and all
 barriers, including those reached through helpers, must have proven uniform
 control flow. Divergent calls and incomplete subgroups are rejected.
 
+DirectX's optional ``cooperative_matrix_mma_profile`` selects ``"rne-gradual"``
+or ``"rne-flush"`` for this software multiply-accumulate path. Each product and
+sum is rounded separately to binary32, in increasing inner-dimension order,
+using integer arithmetic with round-to-nearest, ties-to-even. The gradual
+profile preserves subnormals; the flush profile flushes subnormal operands and
+underflowing results to signed zero. Both use canonical quiet NaNs. This avoids
+reliance on a driver's handling of ``precise`` floating-point instructions.
+The default, ``None``, retains the existing native arithmetic. The option does
+not change lane-local matrix operations or establish arbitrary-input Metal
+parity; select it only when its arithmetic matches the required source contract.
+
+The alternatives ``"fma-rne-gradual"`` and ``"fma-rne-flush"`` fuse each inner
+product with the accumulator before rounding once. Both retain increasing
+inner-dimension order. A rounding-sensitive native control with twelve matrices
+and two successive products matches this fused reference on original and
+round-tripped Metal; 321 of its 768 results differ from separate rounding.
+This bounded evidence does not establish the ordering or arithmetic of every
+Metal matrix implementation or device.
+
+Reports and runtime packages retain the selected policy as
+``cooperativeMatrixMmaProfile`` and include it in dispatch-region identities.
+This records configuration, not proof that an entry uses matrix multiplication.
+No rounding helpers are emitted for entries without a software matrix product.
+
 OpenGL supports the same float 8-by-8 mapping with
 ``cooperative_matrix_software_lowering = true`` and
 ``software_subgroup_width = 32``. Matrix operands are exchanged through bounded

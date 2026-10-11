@@ -3469,7 +3469,7 @@ def test_directx_runtime_comparison_preserves_required_runtime_and_workload():
     )[1]
     required_tests = re.findall(r"tests/[^\s\\]+", resource_command)
     compared_tests = re.findall(r'"(tests/[^"\s]+)"', script)
-    assert len(required_tests) == 23
+    assert len(required_tests) == 24
     assert compared_tests == required_tests
     pytest_arguments = script.split("-- python -m pytest", 1)[1].splitlines()[0]
     assert not re.search(
