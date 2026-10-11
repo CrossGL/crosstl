@@ -2073,8 +2073,22 @@ DirectX emits a fixed eight-iteration loop for each fragment component, with
 unrolling disabled for the integer arithmetic profiles. This retains the
 inner-dimension order and both shared-memory barriers while avoiding repeated
 copies of the rounding helper's control flow. Smaller compiled artifacts are
-not evidence of native correctness: repeated products, special values and
-package execution still require the Windows numerical gates.
+not evidence of native correctness. The required Windows gates separately
+execute all four profiles with special values, dense quarter-valued inputs,
+rounding-sensitive inputs, two successive products and native project packages.
+The repeated-product controls cover both ``[32, 4, 1]`` and ``[16, 8, 1]``
+workgroups, with twelve logical subgroups per case.
+
+Native qualification at ``3b48ce23`` passes these 24 controls on WARP 1.0.21
+and on the 1.0.13 comparison: 18,432 exact result words and 768 guard words per
+runtime. The allocation-view controls also verify unchanged input bytes and
+physical padding, the loaded child-process runtime identity, and completion
+within the existing deadlines. Package controls retain upload and artifact
+identities and output guards; they do not retain device-side input readbacks or
+child-process runtime receipts. This evidence qualifies the bounded integer
+profiles, not default native arithmetic, every WARP capability, complete MLX
+GEMM execution or arbitrary-input Metal parity. See `the native matrix
+qualification <https://github.com/CrossGL/crosstl/issues/2203>`_.
 
 OpenGL supports the same float 8-by-8 mapping with
 ``cooperative_matrix_software_lowering = true`` and
@@ -2154,12 +2168,17 @@ proof. Required native tests cover forwarded pointers and array parameters,
 zero and varying uniform loop counts, multiple and partial logical subgroups,
 uniform early returns and output guards without additional CI runners.
 
-The DirectX fallback accumulates in increasing inner-dimension order using
-separately rounded binary32 products and sums; ``precise`` prevents contraction
-and reassociation. Metal does not specify a bitwise accumulation order for its
-matrix intrinsic. Native comparison remains required for the application's
-numerical tolerance; this policy does not promise bitwise equivalence for
-arbitrary floating-point inputs. Plain matrix multiplication, matrix loads and
+The default DirectX fallback requests separately rounded binary32 products and
+sums in increasing inner-dimension order using ``precise``. Compiled instructions
+alone do not prove that the runtime preserves this contract: WARP 1.0.21 returns
+contracted results for the retained precise scalar and matrix controls
+(`native arithmetic conformance <https://github.com/CrossGL/crosstl/issues/2193>`_).
+The explicit integer profiles above avoid that dependency for supported matrix
+products without changing the default path or its required conformance tests.
+Metal does not specify a bitwise accumulation order for its matrix intrinsic.
+Native comparison remains required for the application's numerical tolerance;
+this policy does not promise bitwise equivalence for arbitrary floating-point
+inputs. Plain matrix multiplication, matrix loads and
 stores remain structured translation errors. Fragment dimensions, scalar types,
 registered mappings and source provenance must still be compatible.
 
