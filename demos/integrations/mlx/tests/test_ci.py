@@ -59,7 +59,7 @@ def test_pinned_binary_step_selects_every_native_case_without_portable_duplicate
     assert "-n auto" in command and "if" not in step
     tokens = shlex.split(command.replace("\\\n", " "))
     selected = [token for token in tokens if ".py::test_" in token]
-    assert len(selected) == len(set(selected)) == 10
+    assert len(selected) == len(set(selected)) == 11
     # Keep the long integer batch away from the tail, where a worker can sit idle.
     assert [token.split("::")[0].rsplit("/", 1)[1] for token in selected[:3]] == [
         "test_current_integer_remainder.py",
@@ -76,6 +76,7 @@ def test_pinned_binary_step_selects_every_native_case_without_portable_duplicate
         f"demos/integrations/mlx/tests/kernels/test_current_{name}.py"
         for name in (
             "complex_power",
+            "complex_logaddexp",
             "binary_shapes",
             "half_remainder",
             "floating_remainder",

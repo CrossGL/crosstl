@@ -155,7 +155,7 @@
       1,
       1
     ],
-    "generatedSizeBytesTotal": 216081,
+    "generatedSizeBytesTotal": 217727,
     "generatedSizeRange": {
       "minimum": {
         "entryPoint": "ss_Addfloat16",
@@ -163,7 +163,7 @@
       },
       "maximum": {
         "entryPoint": "ss_LogAddExpcomplex64",
-        "sizeBytes": 3615
+        "sizeBytes": 5261
       }
     },
     "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",
@@ -1346,8 +1346,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "dade851d1f3345ab68fd1535ed4f303ccc9d918eaa5c14c99bb34bc59c48ccc3",
-      "sizeBytes": 3615
+      "sha256": "c5df79e772807fe2f23212fbc8f0d248040f2048df6e7ea06d3737fadfbb5e54",
+      "sizeBytes": 5261
     },
     {
       "entryPoint": "ss_LogAddExpfloat16",

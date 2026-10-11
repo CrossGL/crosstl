@@ -3401,11 +3401,32 @@ selection, all 6,026 materializations and all 19,106 resource declarations
 remain unchanged. This is compiler-equivalence evidence, not an additional
 numerical or current-pin MLX test-suite result.
 
-The other 123 references remain unchanged pending arithmetic review:
-54 floating `ArcTan2` entries, 54 floating `Power` entries and 15 complex
-`LogAddExp` entries. Their generated helpers differ beyond annotations, so
-they are not covered by the equivalence result above. The complete current
-binary family is not yet qualified; these cases remain tracked in
+The 15 complex `LogAddExp` references have a separate arithmetic review.
+Their precise square-root helper preserves the explicit `metal::precise::sqrt`
+call in upstream complex `log1p`; the other square root remains ordinary,
+as in the source. Accepted sources reconstruct to their recorded hashes,
+and both accepted and current sources compile with `-Werror -fno-fast-math`.
+Original MLX, accepted output and current output agree on 12,489 complex
+results per path: 291 layout controls across all 15 entries and 12,198
+vector/vector pairs covering the magnitude branch boundary, finite random
+inputs, subnormals, signed zeros, infinities and NaNs. Every non-NaN word
+matches exactly; NaN payloads are not compared. All 512 output guard words
+per path and all read-only input and constant buffers remain unchanged.
+The reflected interfaces and materialization contracts are unchanged.
+
+[`test_current_complex_logaddexp.py`](tests/kernels/test_current_complex_logaddexp.py)
+repeats these native comparisons after fresh project translation at the current
+`9c3d3557` integration pin. It runs in the existing macOS binary-math step,
+without adding runners or extending its deadline. DirectX and OpenGL skip
+this original-Metal comparison; it does not establish their numerical parity,
+complete complex input coverage, MLX host redirection or full upstream-suite
+execution. The historical artifact contracts remain pinned to `846d1762`.
+
+The remaining 108 binary arithmetic references are unchanged pending review:
+54 floating `ArcTan2` entries and 54 floating `Power` entries. Their generated
+helpers differ beyond annotations and are not covered by the equivalence
+result above. The complete current binary family is not yet qualified;
+these cases remain tracked in
 [#1966](https://github.com/CrossGL/crosstl/issues/1966).
 
 The same selected-entry pipeline translates all 4,122 binary entries to

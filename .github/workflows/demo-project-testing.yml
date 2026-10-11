@@ -2008,6 +2008,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_current_integer_remainder.py::test_current_integer_remainder_native_parity \
               demos/integrations/mlx/tests/kernels/test_current_floating_binary.py::test_current_floating_binary_native_parity \
               demos/integrations/mlx/tests/kernels/test_current_binary_shapes.py::test_current_mlx_complex_power_shape_native_parity \
+              demos/integrations/mlx/tests/kernels/test_current_complex_logaddexp.py::test_current_complex_logaddexp_native_parity \
               demos/integrations/mlx/tests/kernels/test_current_complex_power.py::test_current_mlx_complex_power_native_loader \
               demos/integrations/mlx/tests/kernels/test_current_half_remainder.py::test_current_half_remainder_native_parity \
               demos/integrations/mlx/tests/kernels/test_current_floating_remainder.py::test_current_floating_remainder_native_parity \
