@@ -381,103 +381,103 @@ MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS = {
     "layer_norm": {
         "layer_normfloat32": {
             "sha256": (
-                "cbe455f2066a28047f0c29b577d0805af38c038d774f19208ee13b3c90a23c54"
+                "13a622a8984e91be7d612505b170d225bdbcdefe4443994578670ae97b427be1"
             ),
-            "sizeBytes": 7749,
+            "sizeBytes": 8085,
         },
         "vjp_layer_normfloat32": {
             "sha256": (
-                "0bb98d28a12fb57d0ab5c33d97ebcffc141e2ed333f76c2329957a72353ff213"
+                "4590a5c4b587c5546dbcec1d0d4e91978e7d6485cfd7592af826a2f88fc4c10d"
             ),
-            "sizeBytes": 9616,
+            "sizeBytes": 9952,
         },
     },
     "logsumexp": {
         "block-float32-axis-1025": {
             "sha256": (
-                "9f1a22b6ee750f7b9a09a9b42d7ac6c86db2f08fccc4546e598278e6513c2c77"
+                "84da4cb73e478fdd54524a5de9d97ac04b42b6115a73550c30404f18f00446d7"
             ),
-            "sizeBytes": 3813,
+            "sizeBytes": 4149,
         },
         "block-float32-axis-32": {
             "sha256": (
-                "7da9284ba0d0bb6ae9c72d89c18bc911df239c19736dcd2de1d07a303f81e0c8"
+                "e8231373604f4d65837bc870d61f32744c16863d0b38fd6e12a6457bf281f433"
             ),
-            "sizeBytes": 3242,
+            "sizeBytes": 3578,
         },
     },
     "rms_norm": {
         "forward-bfloat16-axis-32": {
             "sha256": (
-                "ddea07eac2de6c3a2ace6aead53b4541c3498f4609f6f029d0d9fb7f7d70b3c7"
+                "6d9a2fd5379a9da45262a460ac748298f00385a6e9c429f280fc06390e947a50"
             ),
-            "sizeBytes": 6448,
+            "sizeBytes": 6784,
         },
         "forward-float16-axis-32": {
             "sha256": (
-                "1378c575e4551f34f74f42d19e712d1d5ca4b115fc0b170ffee8e9f29ea311be"
+                "a29ee882fd49f0828d48fdad2fee5e7f66f12d84a92cd0ffbf08dcaa4f7e249d"
             ),
-            "sizeBytes": 8257,
+            "sizeBytes": 8593,
         },
         "forward-float32-axis-256": {
             "sha256": (
-                "9e4212ba86da7dd42016935dcdc82a7834e2c2369000897623a223713ce151e2"
+                "c55d15fa9450d12ef09c6a28dcecfa2ddf2b39870b5295711ba6bf448cac1eec"
             ),
-            "sizeBytes": 6018,
+            "sizeBytes": 6354,
         },
         "forward-float32-axis-32": {
             "sha256": (
-                "906454d007bc4e1cabe40c5788ea0e57f9035312f6fa35d0a32e72086a9c3598"
+                "e9b54cb670c9827272f84b1e4ecc54ee2baf36c1eba20d64c2d51bb608ab495e"
             ),
-            "sizeBytes": 5448,
+            "sizeBytes": 5784,
         },
         "forward-float32-axis-4099": {
             "sha256": (
-                "92ec60bb8c413f345beac5d263e56af1f65b9d54e702f7f96b01822f3e00b799"
+                "5a3eac823886591d95b7b1e452262fd4ddefdda1649b3984092c8da2475bf088"
             ),
-            "sizeBytes": 6586,
+            "sizeBytes": 6922,
         },
         "forward-float32-axis-512": {
             "sha256": (
-                "a46136326830b2d8824401fe545c9ea66939304587c52a9862ada9849a1c653a"
+                "ee1a3f9e025d2bc70b4a93359ce1542b6a79ecfcac8ed2881f02b9de78f53440"
             ),
-            "sizeBytes": 6019,
+            "sizeBytes": 6355,
         },
         "vjp-float32-axis-256-has-w-false": {
             "sha256": (
-                "5400faaedf4af6fd8805631e547c73cee2ce1dd4b2399ae089a006e9512ad5c9"
+                "1c0e9fa62eedeb2060a68618ac97620382ec8a90a45f3bd5fef199ad687a9629"
             ),
-            "sizeBytes": 7882,
+            "sizeBytes": 8218,
         },
         "vjp-float32-axis-256-has-w-true": {
             "sha256": (
-                "fe05fd28d662e9c04697d079f288ac178622e8ba046ff79d36ad2b2ff92db874"
+                "fddd3cd62e2c7c4cfb2625f793ec6747db1ad219543e6a650ec845511b5863af"
             ),
-            "sizeBytes": 7881,
+            "sizeBytes": 8217,
         },
         "vjp-float32-axis-32-has-w-false": {
             "sha256": (
-                "0c5c714e6e5f68d220dbf5ba2b6744533689cb9291f8b9fd50757a1e7846b85e"
+                "a76712dd3ffb182e03d498b7acd833e2b3b3308a7e8ac3bcb3a5c71ef0655224"
             ),
-            "sizeBytes": 7312,
+            "sizeBytes": 7648,
         },
         "vjp-float32-axis-32-has-w-true": {
             "sha256": (
-                "83f089eed3eb8864cfac71ca06383ff027e5febf6d0469abfcd42edac9eeff34"
+                "22ad86a155e31175d21e807d7327ca486cf7d4869bc12392d5a091573d67a794"
             ),
-            "sizeBytes": 7311,
+            "sizeBytes": 7647,
         },
         "vjp-float32-axis-8192-has-w-false": {
             "sha256": (
-                "2bcf5ba310a80d747ff1c0b68af49ed6f6d0467880f9ab3289f53973e528874f"
+                "cb57ec6b84c321d58f2d6773392471d77d31980ccf3853efcd0f89fa2120eccf"
             ),
-            "sizeBytes": 8781,
+            "sizeBytes": 9117,
         },
         "vjp-float32-axis-8192-has-w-true": {
             "sha256": (
-                "797545fc8952b3df6d1d035c6eeb6df84e04bacc7a56f797803521dee37a58cf"
+                "1283d7bc15a031162daba1cbc8b6b7c37b26ad40c4e08807ce98016d93e76526"
             ),
-            "sizeBytes": 8780,
+            "sizeBytes": 9116,
         },
     },
 }

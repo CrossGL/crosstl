@@ -49,6 +49,17 @@ removed. A previous revision's successful proof does not satisfy the current
 revision's required checks.
 Core and demo tests also remain part of the complete test suite.
 
+If the required Windows collective checks fail, the existing job compares the
+same precise scalar, cooperative-matrix and narrow-buffer controls on the
+system WARP library and pinned WARP 1.0.13. Both comparisons share the existing
+360-second deadline. They retain library hashes, file versions, test results
+and runtime evidence, and restore the required WARP 1.0.21 library even after
+a test failure. This focused diagnostic replaces the duplicate broad rerun;
+the complete required and isolated qualification jobs are unchanged. Neither
+comparison qualifies a fallback or replaces the required numerical gate.
+The arithmetic and logical-buffer-tail defects remain tracked in #2193 and
+#2197 respectively.
+
 The pinned unary arithmetic batch retains its 300-second process deadline,
 two workers, per-test progress, duration report and native execution requirements.
 Its timed Python stack dump is disabled: an isolated x86-64 Python 3.12.15
@@ -874,7 +885,7 @@ The current harness verifies:
   read-only buffers, intact guards and independence from output initialization.
   The test verifies the upstream tolerance declarations from `python/tests`,
   now included in the current-tree CI checkout. It runs in the existing
-  five-minute unary step without additional jobs or longer deadlines, retaining
+  five-minute roots/logarithms step without additional jobs, retaining
   reports, modules and raw readbacks. The precise log and atan2 helpers retain
   their separate independent high-precision oracle checks and unchanged bounds.
   Nineteen natural-log references additionally select
@@ -942,10 +953,23 @@ The current harness verifies:
   sampled float32 ArcCos/ArcSin results differ by at most two/three ULPs.
   These pre-existing differences remain within the pinned upstream dtype
   tolerances; no reference update changes the computations or numerical gates.
-  Eight complex ArcSin/ArcCos references remain pending. Original, accepted
-  and current kernels were compiled and executed at both pins, but the current
-  default helpers preserve some tiny results that original Metal flushes.
-  The references are not accepted on the strength of finite-value tolerances.
+  Eight complex ArcSin/ArcCos references select the explicit
+  `binary32_atan2_profile = "flush-subnormals"` policy. Default helpers preserve
+  some tiny results that original Metal flushes; translator defaults and other
+  target contracts remain unchanged. Independent two-pin audits reopen 64
+  original/generated dispatches, covering 101,220 complex outputs per path and
+  initialization, two initializations, 512 guard words per path, and unchanged
+  read-only buffers. Zero signs and non-finite classifications match exactly;
+  sampled finite component differences reach two ULPs within the existing
+  upstream `rtol=1e-5`, `atol=1e-8` comparison. This is not bit-identical output
+  or an exhaustive accuracy claim. A required current-pin regression repeats
+  all eight layouts with guards and raw readbacks in a separate 180-second
+  step in the existing macOS job. It checks the pinned upstream comparison
+  declarations and preserves the existing unary step's cases and deadline.
+  Roots and logarithms have their own five-minute step after the growing
+  combined batch exceeded its limit on a hosted runner. No native case or
+  required flag is removed; the original arithmetic step still has its
+  five-minute limit, and each step retains its own failure evidence.
   Required current-pin float32 ArcSin and ArcCos package tests now run in the
   existing three-platform unary step. Each executes 4,394 inputs, including a
   dense domain sweep, endpoint neighbors, small normal values, signed zeros,
@@ -955,8 +979,23 @@ The current harness verifies:
   Local Metal and Linux software-OpenGL pass; Windows remains a required CI
   result. These value-based tests do not retain input-device readbacks, guards
   or NaN payloads and do not establish full backend or upstream-suite parity.
-  The remaining 65 arithmetic-changing references stay
-  unchanged under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
+  The final 57 Cos, Sin and Exp references have also been reviewed. Their
+  complete source changes are precision-pragma scope, unused receiver
+  annotations, and an explicit unsigned sign-bit mask in complex Exp. The
+  mask retains the same bit-31 condition for every 32-bit input. All 45 real
+  accepted/current libraries are byte-identical. Eight complex Cos/Sin
+  libraries differ, so their acceptance relies on retained native execution,
+  not binary identity. Across 570 dispatches at both pins, every accepted and
+  updated non-NaN output word agrees. Each pin covers 2,082,888 output words per
+  path and initialization, two initializations, 3,648 guards per path, and
+  unchanged read-only buffers. All 16-bit contiguous input patterns are covered.
+  Differences from original Metal remain explicit: some half/bfloat trigonometry
+  results differ by one storage ULP, sampled float32/complex trigonometry by up
+  to three/four ULPs, and real Exp retains subnormal results original Metal
+  flushes. These predate the reference update; no numerical expectation or
+  policy is changed to accept them. The unary reference review is complete,
+  but whole-family source parity and other Metal corpus families remain open
+  under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
   The historical pin and complete entry selection are preserved.
   At current pin `9c3d3557`, Abs and Sign use upstream's scaled `hypot`
   implementation rather than the historical sum-of-squares formula. A separate
@@ -974,10 +1013,14 @@ The current harness verifies:
   at the same legacy reference revision to OpenGL. The schema-v2
   `contracts/unary.opengl-translation.json` contract pins every standalone
   `main` artifact across the same five shapes, 37 operators, 20 type pairs,
-  1,243 materializations, and 3,363 reflected resources, totaling 4,780,991
+  1,243 materializations, and 3,363 reflected resources, totaling 5,221,624
   generated GLSL bytes. The references incorporate reviewed scalar/vector
   conversions and numeric helpers; every complete shader body and host
-  interface is compared before accepting an identity change. Translation
+  interface is compared before accepting an identity change. The
+  references now include all 134 remaining unary math and FP8 changes; the
+  other 743 sources are unchanged. Every current artifact compiles and passes
+  SPIR-V validation. These math corrections are not predecessor-equivalence
+  claims, and whole-family numerical parity remains unproven. Translation
   requires three explicit host/runtime
   index-range preconditions for `offset + i`, `out_idx++`, and `idx`; these are
   portability promises rather than inferred or runtime-enforced bounds. The
@@ -1028,10 +1071,13 @@ The current harness verifies:
   helper in an unused complex overload, while warning-fatal DXC compilation
   produces identical binaries before and after the change. Current-pin Windows
   execution separately checks all five layouts, 3,303 output values and 40
-  output guards through the native loader. The references now total 3,774,223
-  bytes;
-  source identities, classifications, resource bindings and dispatch contracts
-  are unchanged. The required Windows Square and ArcCos numerical tests retain
+  output guards through the native loader. The subsequent complete review
+  accounts for 875 changed references and two unchanged sources, totaling
+  5,159,617 bytes. Of the changed artifacts, 756 compile to byte-identical DXIL;
+  the remaining 119 incorporate reviewed precise math or conversion corrections.
+  All 877 current artifacts compile with warnings fatal. Source pins,
+  classifications, materializations, resource bindings and dispatch contracts
+  remain unchanged. The required Windows Square and ArcCos numerical tests retain
   their existing shader identities, inputs and tolerances. Other historical
   HLSL families remain under review in
   [crosstl#2071](https://github.com/CrossGL/crosstl/issues/2071). Whole-family
@@ -1153,7 +1199,7 @@ The current harness verifies:
   `contracts/binary.opengl-translation.json` contract pins every standalone
   `main` artifact across all 18 shapes, 11 templates, 24 operators, 25 type
   pairs, 6,026 materializations, and 19,106 reflected resources, totaling
-  16,534,612 generated GLSL bytes. Seven explicit
+  18,626,623 generated GLSL bytes. Seven explicit
   host/runtime index-range preconditions bound `offset + i`, `a_idx`, `b_idx`,
   `out_idx`, `out_idx++`, `idx.x`, and `idx.y` to signed 32-bit OpenGL index
   space; they are portability promises, not inferred or runtime-enforced
@@ -1161,8 +1207,9 @@ The current harness verifies:
   Linux CI shards retranslate every exact entry, verify deterministic identity,
   materialization, workgroup metadata, and reflected ABI, compile for
   OpenGL/SPIR-V 1.3 with `glslangValidator`, validate with `spirv-val`, and
-  require 4,122 non-empty SPIR-V modules. The complete-family reference review
-  remains open in [#2073](https://github.com/CrossGL/crosstl/issues/2073).
+  require 4,122 non-empty SPIR-V modules. All known binary reference changes
+  have complete source, interface and strict compiler reviews. The 123 changed
+  math artifacts are not claimed to be numerically equivalent to their predecessors.
   Reviewed half-remainder entries have bounded numerical evidence described
   below, not whole-family parity or MLX host runtime redirection;
 - selected-entry translation of all 4,122 discovered historical
@@ -1190,8 +1237,9 @@ The current harness verifies:
   the current DXIL exactly. Two vector-vector artifacts match the shaders
   executed in Windows CI: 9,344 results and 16 guards agree bit for bit,
   including NaN payloads and signed zero. These samples do not establish
-  whole-family numerical execution. Remaining binary reference reconciliation
-  is tracked in [#2071](https://github.com/CrossGL/crosstl/issues/2071);
+  whole-family numerical execution. The subsequent complete-family review
+  accounts for all remaining changes: 4,053 padding-only artifacts retain
+  byte-identical DXIL, and 69 reviewed math artifacts compile successfully;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 2,396
   discovered reduction entries from `reduce.metal` at historical revision
   `846d176227a0ac13d2667e58d2bb68b322109ab0`. The compact
@@ -1223,7 +1271,7 @@ The current harness verifies:
   `contracts/quantized.metal-roundtrip.json` contract covers 38 normalized
   variants over 17 source templates for three data types, group sizes 32/64/128,
   and bit widths 2/3/4/5/6/8. It pins 14,904 exact materializations and
-  40,559,670 generated Metal bytes without checking transient proof rows into
+  40,769,784 generated Metal bytes without checking transient proof rows into
   git. Thirty deduplicated exact ABI contracts span four- through
   twenty-two-resource interfaces and contain 31,374 reflected resources in
   aggregate, all with host-owned `[1, 1, 1]` workgroups. The original terminal external
@@ -1231,9 +1279,15 @@ The current harness verifies:
   byte-identical non-empty AIR, and is bound by the checked-in terminal,
   independent-audit, and adversarial identities. The `proof` section retains
   that original audit provenance; `entries` and `artifactContract` describe the
-  reconciled output. Complete body and interface comparisons account for source
-  grouping, explicit narrow conversions and infinity initializers. All 2,052
-  current sources pass strict compilation and a separate native bundle rebuild.
+  reconciled output at historical revision `846d1762`. The latest review
+  reconstructs the complete previous source identities for 1,998 changed
+  entries; 54 dequantizers are unchanged. Changes preserve pointer-reference
+  updates in batch-offset helpers and division grouping in matrix loaders,
+  annotate unused parameters, type integer masks explicitly and lower `round`
+  through the existing Metal helper. The pointer and grouping changes correct
+  computation and are not treated as compiler-equivalent formatting. Exact
+  materialization and resource contracts are unchanged. All 2,052 reviewed
+  sources pass strict Metal compilation with empty compiler streams.
   Twenty-four required Ubuntu CI
   shards rediscover the exact source entries, retranslate and reflect each one;
   twelve shards contain 86 entries and twelve contain 85. One dependent macOS
@@ -1251,18 +1305,29 @@ The current harness verifies:
   output guards preserved. `prove_quantized_metal.py` retains native commands,
   modules, inputs, expected outputs and readbacks. The refreshed-source check
   covers all 108 variants and 40,320 scalar values per original/generated path.
-  This bounded numerical check
-  adds no macOS runner or repeated translation and does not establish numerical
-  coverage of the remaining quantized families or MLX host runtime redirection;
+  Nine additional matrix/vector entries cover float32, float16 and bfloat16
+  across batched wide vectors and both matrix-loader layouts. Twenty-four cases
+  compare 13,536 output values per original/generated path with independently
+  calculated dyadic dot products. They include nonzero batch offsets,
+  two-dimensional broadcast strides, a partial matrix tile and two output
+  initializations. Every dispatch checks all sixteen bindings, including
+  readonly contents and sixteen guard bytes per binding. These bounded checks
+  add no macOS runner or repeated translation and do not establish numerical
+  parity for the complete quantized corpus or MLX host runtime redirection;
 - selected-entry translation of all 2,396 discovered `reduce.metal` entries at
   historical revision `846d176227a0ac13d2667e58d2bb68b322109ab0` to OpenGL. The compact schema-v2
   `contracts/reduce.opengl-translation.json` contract spans the same 39 exact
   ABI shapes, nine kernel templates, six operator families, 44 concrete
   operator types, and 13 input/output types. It pins 9,216 exact
-  materializations, 32,115,641 generated GLSL bytes, and 25,088
+  materializations, 41,794,920 generated GLSL bytes, and 25,088
   resources across scalar-layout-aware one- through twelve-resource target ABIs.
-  Complete source comparisons and strict compiler checks cover every entry;
-  85 fresh pipeline checks cover all reviewed edit patterns and ABI shapes.
+  Complete source comparisons and strict compiler checks cover every entry.
+  The latest review reconstructs every previous source identity and verifies
+  each specialized helper body, including its tail-loop continuation, before
+  accepting duplicated helper definitions. All 2,396 current modules compile
+  and validate; 1,124 optimized modules are byte-identical to their predecessors.
+  Integer initializers retain their source values and explicitly require the
+  64-bit integer extension when narrowing a wide literal.
   Resource declarations are unchanged. The 156 complex-buffer reference updates
   add explicit scalar-layout metadata rather than changing buffer storage.
   Six explicit host/runtime index-range preconditions bound the source pointer
@@ -1333,7 +1398,7 @@ The current harness verifies:
   materialization, workgroup metadata, and reflected ABI, and compile with
   checksum-pinned DXC using `-enable-16bit-types -WX -T cs_6_2 -E CSMain`,
   requiring 2,396 non-empty DXIL modules. The reviewed references total
-  36,957,938 HLSL bytes and 24,292,688 DXIL bytes. Source references preserve
+  37,811,299 HLSL bytes and 24,236,412 DXIL bytes. Source references preserve
   the original integer-product grouping. The subsequent half-selection review
   reproduces all 78 previous half minimum/maximum sources and DXIL identities,
   compares complete bodies and interfaces, and updates 76 changed references;
@@ -1342,8 +1407,16 @@ The current harness verifies:
   reproduces all 78 current modules. Shared Windows selection checks cover
   every binary16 encoding in both operand positions, with 853,840 exact values
   and 64 guards; they do not execute these complete reduction kernels.
-  The remaining 2,318 reduction references retain their earlier independent
-  compiler proof. This records complete
+  The latest review reproduces every previous source and DXIL identity and
+  independently recompiles all 2,396 current modules. Of those modules, 2,152
+  remain byte-identical. The other 244 include 52 bfloat NaN-predicate corrections
+  and 192 signed/unsigned byte-load corrections; these are not presented as
+  equivalent to the previous behavior. Byte loads now address one physical
+  storage element per logical element instead of unpacking four values from
+  it. Existing required native tests cover the shared value-load and floating
+  classification rules, without establishing execution of every reduction
+  kernel. All materialization and resource-interface identities are unchanged.
+  This records complete
   translation, reflection and compiler coverage for this historical HLSL corpus,
   not numerical execution or MLX host runtime redirection. Other target reference
   updates remain separate;
@@ -2763,7 +2836,7 @@ entry packaging stays tracked in
 
 The checked
 [`contracts/scaled_dot_product_attention.native-loader.dispatch.json`](contracts/scaled_dot_product_attention.native-loader.dispatch.json)
-contract now selects current-pinned `sdpa_vector_float_64_64` for the bounded
+contract selects `sdpa_vector_float_64_64` at the historical `846d1762` pin for the bounded
 one-pass vector path: batch 1, one query and KV head, query length 1, key length
 4, query/value dimensions 64, scale 0.125, and no mask, causal mode, or sinks.
 The host-derived contract fixes workgroup `[1024, 1, 1]`, subgroup width 32,
@@ -2777,8 +2850,8 @@ with variant ID
 and artifact ID
 `sha256:dd0138695bd82e1f8ea49bd667052b484420ee96cb2849c6eed20ba5eae39a89`.
 
-The 8,841-byte HLSL artifact has SHA-256
-`4f6bd4df5288687b239d09d546c903e7b4db3d14562b942f638fb160c486a46f`.
+The 9,153-byte HLSL artifact has SHA-256
+`552850818feb3a8a133b5cd36628f11eb2598a18a76181d91c9ec2f8da84bc7b`.
 Official DXC 1.9.2602.24 accepts `CSMain` under `cs_6_6`,
 `-enable-16bit-types`, and warnings as errors, producing 9,000 bytes of DXIL.
 Its 32 physical waves receive unique workgroup-synchronized subgroup IDs; no
@@ -2800,6 +2873,12 @@ add shared-memory ordering at subgroup barriers and preserve signed remainder.
 Dispatch geometry, specializations and resource interfaces remain unchanged.
 Both old references are reproduced from the earlier translator and strictly
 compiled before comparison; fingerprints alone are not numerical evidence.
+The subsequent HLSL reference review adds one padding member to each of 13
+unused empty structs. None is instantiated or used in a resource interface.
+Removing only those members reproduces the complete accepted source, and
+strict DXC compilation produces byte-identical DXIL. The GLSL source and
+validated SPIR-V are unchanged. This update does not change the required
+Windows execution, dispatch, bindings, or numerical comparisons.
 
 Both targets package complete native-loader requests. DirectX has 19 reflected
 resources including generated `CrossGLDispatchInfo`; OpenGL has 18. Optional
@@ -3058,15 +3137,21 @@ proof into the repository-level project report; it does not add runtime
 execution or numerical parity for those historical axis-size-4099 forward and
 axis-size-8192 VJP records.
 
-The reviewed forward artifact is 7,749 bytes with SHA-256
-`cbe455f2066a28047f0c29b577d0805af38c038d774f19208ee13b3c90a23c54`;
-the VJP artifact is 9,616 bytes with SHA-256
-`0bb98d28a12fb57d0ab5c33d97ebcffc141e2ed333f76c2329957a72353ff213`.
+The reviewed forward artifact is 8,085 bytes with SHA-256
+`13a622a8984e91be7d612505b170d225bdbcdefe4443994578670ae97b427be1`;
+the VJP artifact is 9,952 bytes with SHA-256
+`4590a5c4b587c5546dbcec1d0d4e91978e7d6485cfd7592af826a2f88fc4c10d`.
 Their complete body changes preserve the source's precise reciprocal-square-root
 and square-root operations, respectively. Resource interfaces, host dispatch
 contracts and source-map origins are unchanged. Both pass strict DXC compilation;
 the shared helpers have independent native arithmetic checks, but those checks
 do not establish execution or numerical parity for these larger workloads.
+The subsequent dispatch-reference review covers these two artifacts, both
+LogSumExp variants and all twelve RMSNorm variants. The only new source change
+is padding in unused empty structs. Every previous source identity is reproduced,
+resource interfaces are unchanged, and strict old/new DXC compilations produce
+byte-identical executables for all sixteen artifacts. Dispatch contracts,
+specialization constants and subgroup requirements are unchanged.
 
 A separate historical proof selects the forward `layer_normfloat32` entry at
 commit `846d176227a0ac13d2667e58d2bb68b322109ab0` through
@@ -3536,7 +3621,10 @@ with glslang and pass `spirv-val`. Linux software OpenGL execution returns the
 same 3,303 integer results and 40 guards per path as the unchanged Metal kernels
 at both revisions. No generated shader is patched before execution. Only these
 five historical OpenGL fingerprints are updated; complex Sign and other unary
-changes require their own review.
+changes are covered by the subsequent complete-source and compiler review.
+That review accounts for all remaining unary HLSL and GLSL identity changes,
+including FP8 conversions, roots, logarithms and complex math. It does not
+extend this bounded unsigned Sign numerical result to other operators.
 
 The pinned comparison-arithmetic CI step also exercises unsigned Sign across all
 five layouts through reflected packages, with exact integer comparisons and
@@ -3740,7 +3828,7 @@ standalone OpenGL ``main`` artifacts. The schema-v2
 [`contracts/binary.opengl-translation.json`](contracts/binary.opengl-translation.json)
 contract preserves all 18 shapes, 11 templates, 24 operators, 25 type pairs,
 and 6,026 exact materializations while pinning
-16,534,612 generated GLSL bytes and 19,106 reflected
+18,626,623 generated GLSL bytes and 19,106 reflected
 resources. Scalar artifacts expose three storage buffers; size-bounded vector
 forms add an entry-scoped uniform block. One-dimensional generalized forms add
 entry-scoped stride blocks, fixed two- and three-dimensional forms expose stride
@@ -3762,9 +3850,13 @@ call-site materialization provenance, ``main`` workgroup metadata, and exact
 three- through seven-resource host ABI, then compiles with
 ``glslangValidator --target-env opengl --target-env spirv1.3 -S comp`` and
 validates with ``spirv-val --target-env spv1.3``. All 4,122 SPIR-V modules must
-be non-empty. Remaining changed references are still under review in
-[#2073](https://github.com/CrossGL/crosstl/issues/2073); the coverage definition
-does not imply that every current generated reference has passed that review.
+be non-empty. All known changed binary references have been reviewed against
+their exact accepted predecessors. Of the sources, 3,999 remain unchanged and
+123 incorporate power-domain, complex magnitude or source-width rounding
+corrections. All 4,122 compile and validate; complete source comparisons and
+reflection checks preserve every materialization and resource binding. The
+math corrections are not numerical-equivalence claims. Whole-family numerical
+parity and MLX runtime redirection remain outside this reference review.
 
 The 18 `Remainderfloat16` entries explicitly select
 `binary16_remainder_profile = "binary32-quotient"`. This preserves the observed
@@ -4108,14 +4200,15 @@ These compiler-only shards do not require a Windows runner. Direct3D 12
 execution and readback checks remain on Windows; compiling DXIL on Linux is
 not a substitute for those runtime tests.
 
-The current HLSL references include a complete comparison of all 4,122
-historical and generated bodies, all 21,248 reflected resources, and strict
-compilation of both sets. The review accounts for source-width indexing,
-binary math and two-byte integer storage carrying IEEE binary16 values.
-Bindings, dispatch contracts, loop bounds, source pins and specialization
-counts remain unchanged. Of the generated artifacts, 2,435 change and 1,687
-remain byte-identical. The contract retains the previous identity and review
-scope; these compiler checks do not establish numerical execution of the
+The current HLSL references total 16,200,087 bytes. Complete comparisons cover
+all 4,122 predecessor and generated bodies, all 21,248 reflected resources,
+and strict compilation of both sets. Adding legal empty-record padding leaves
+4,053 DXIL modules byte-identical. The remaining 69 artifacts incorporate
+power-domain or precise complex-magnitude corrections and compile successfully;
+their changed binaries are retained as such, not treated as equivalent.
+Bindings, dispatch contracts, source pins and specialization counts remain
+unchanged. The contract preserves earlier review provenance and records this
+follow-up separately. These checks do not establish numerical execution of the
 complete binary family.
 
 The complete historical reduction gate covers all 2,396 host-named entries

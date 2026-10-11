@@ -44,12 +44,12 @@ BINARY_DIRECTX_CONTRACT_PATH = (
     / "binary.directx-translation.json"
 )
 BINARY_DIRECTX_CONTRACT_SHA256 = (
-    "ad54240fe89ec264b38e0e2e43dd91a866e5b886081a8fbb208f2ac775580864"
+    "553d8a63d32f8e995d598f772fbc4e599ab92ba491148e846930a6a150570364"
 )
-BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1471374
-BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 12151371
-BINARY_DIRECTX_GENERATED_SIZE_MINIMUM = ("ss_Addint32", 1848)
-BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_ArcTan2float16", 12935)
+BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1472029
+BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 16200087
+BINARY_DIRECTX_GENERATED_SIZE_MINIMUM = ("ss_Addint32", 2784)
+BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_ArcTan2float16", 13871)
 INDEX_RANGE_ASSERTIONS = (
     ("offset + i", 0, 2147483647),
     ("a_idx", 0, 2147483647),
@@ -478,6 +478,24 @@ def test_binary_atan2_artifact_refresh_preserves_corpus_scope():
                 "unaffectedEntryCount": 4068,
                 "reviewedBodyCount": 54,
                 "nativeCompiledChangedEntryCount": 54,
+                "unchangedSourceAndInterfaceContracts": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            },
+            {
+                "reason": (
+                    "Preserve source power domains, precise complex magnitude and legal HLSL empty records."
+                ),
+                "previousContractSha256": (
+                    "ad54240fe89ec264b38e0e2e43dd91a866e5b886081a8fbb208f2ac775580864"
+                ),
+                "changedEntryCount": 4122,
+                "unaffectedEntryCount": 0,
+                "reviewedBodyCount": 4122,
+                "nativeCompiledChangedEntryCount": 4122,
+                "nativeCompiledEntryCount": 4122,
+                "byteIdenticalDxilCount": 4053,
+                "reviewedResourceCount": 21248,
                 "unchangedSourceAndInterfaceContracts": True,
                 "numericalExecution": False,
                 "fullUpstreamSuite": False,

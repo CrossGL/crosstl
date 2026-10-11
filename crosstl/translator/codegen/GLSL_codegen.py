@@ -3704,8 +3704,10 @@ class GLSLCodeGen:
         return "es" in str(version_line or "").strip().split()[2:]
 
     def ensure_glsl_int64_support(self, code):
+        # Narrowing can retain a wide literal without any wide declarations.
         uses_int64 = re.search(
-            r"\b(?:int64_t|uint64_t|i64vec[234]|u64vec[234])\b", str(code)
+            r"\b(?:int64_t|uint64_t|i64vec[234]|u64vec[234]|[0-9]+u?l)\b",
+            str(code),
         )
         if uses_int64 is None:
             return code

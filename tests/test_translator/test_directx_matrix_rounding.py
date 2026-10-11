@@ -354,17 +354,12 @@ def test_matrix_rounding_keeps_required_native_ci():
     assert "tests/test_translator/test_directx_cooperative_matrix.py" in step["run"]
     assert step["env"][REQUIRE_ENV] == "${{ runner.os == 'Windows' && '1' || '0' }}"
     assert not step.get("continue-on-error")
-    comparison = next(
-        s
-        for s in workflow["jobs"]["portable-host"]["steps"]
-        if s.get("name") == "Compare WARP arithmetic across codegen revisions"
-    )
     # Run the expensive control before the batch can exhaust its remaining time.
-    for selected in (step, comparison):
-        command = selected["run"]
-        assert command.index(
-            "tests/test_translator/test_directx_matrix_rounding.py"
-        ) < command.index("tests/test_translator/test_static_resource_aggregates.py")
+    command = step["run"]
+    assert command.index(
+        "tests/test_translator/test_directx_matrix_rounding.py"
+    ) < command.index("tests/test_translator/test_static_resource_aggregates.py")
+    assert "if" not in step
 
 
 @pytest.mark.parametrize("target", ["metal", "vulkan"])

@@ -3,6 +3,7 @@
 import json
 import math
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -26,6 +27,48 @@ from tools import ci_coverage
 
 SOURCE = "mlx/backend/metal/kernels/unary.metal"
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_UNARY_FMA"
+
+
+def test_ci_preserves_partitioned_unary_selection():
+    workflow = (
+        Path(__file__).resolve().parents[5]
+        / ".github/workflows/demo-project-testing.yml"
+    ).read_text()
+    job = ci_coverage.workflow_job_text(workflow, "mlx-metal-porting")
+    groups = {
+        "Validate pinned unary arithmetic": {
+            "test_current_unary_fma.py": "UNARY_FMA",
+            "test_current_unary_trig.py": "UNARY_TRIG",
+            "test_current_complex_magnitude.py": "COMPLEX_MAGNITUDE",
+            "test_current_unary_fp8.py": "FP8",
+        },
+        "Validate pinned unary roots and logarithms": {
+            "test_current_unary_roots.py": "UNARY_ROOTS",
+            "test_current_unary_logarithms.py": "UNARY_LOGARITHMS",
+        },
+    }
+    observed = set()
+    for name, modules in groups.items():
+        step = job.split(f"      - name: {name}\n", 1)[1].split("      - name:", 1)[0]
+        selected = re.findall(
+            r"demos/integrations/mlx/tests/kernels/(test_\w+\.py)", step
+        )
+        assert len(selected) == len(modules) and set(selected) == set(modules)
+        assert not observed.intersection(selected)
+        observed.update(selected)
+        assert "if:" not in step and "continue-on-error" not in step
+        assert "--timeout-seconds 300" in step and "pytest -q -n auto" in step
+        assert "--basetemp=" in step and "--junitxml=" in step
+        pytest_arguments = step.split("pytest", 1)[1]
+        assert not any(
+            option in pytest_arguments
+            for option in (" -k ", "--deselect", "--ignore", " -m ")
+        )
+        for flag in modules.values():
+            assert f'CROSTL_REQUIRE_MLX_CURRENT_{flag}: "1"' in step
+        for target in ("metal", "directx", "opengl"):
+            assert f"CROSTL_MLX_CURRENT_TARGET={target}" in step
+    assert len(observed) == 6
 
 
 def wire_value(value):

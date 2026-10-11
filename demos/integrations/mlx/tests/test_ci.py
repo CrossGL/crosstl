@@ -357,6 +357,183 @@ if ($env:CROSTL_WARP_TEST_FAILURE -eq "selection") {
     }
 
 
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell is not installed")
+@pytest.mark.parametrize(
+    "failure",
+    (
+        None,
+        "missing-system",
+        "original",
+        "download",
+        "archive",
+        "library",
+        "system-selection",
+        "qualification-selection",
+        "system-failure",
+        "qualification-failure",
+        "timeout",
+        "restoration",
+    ),
+)
+def test_windows_runtime_comparison_preserves_gate_and_restores_library(
+    tmp_path, failure
+):
+    workflow = yaml.safe_load(_workflow_texts()["demo-project-testing.yml"])
+    step = next(
+        item
+        for item in workflow["jobs"]["portable-host"]["steps"]
+        if item.get("name") == "Compare WARP arithmetic across codegen revisions"
+    )
+    assert step["timeout-minutes"] == 8
+    assert "360 - [int][Math]::Ceiling($clock.Elapsed.TotalSeconds)" in step["run"]
+    assert "continue-on-error" not in step
+    original, system, qualified = b"required", b"system", b"qualified"
+    digest = lambda value: hashlib.sha256(value).hexdigest()
+    archive = tmp_path / "fixture.zip"
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr(
+            "build/native/bin/x64/d3d10warp.dll",
+            b"incorrect" if failure == "library" else qualified,
+        )
+    archive_digest = digest(archive.read_bytes())
+    if failure == "archive":
+        with archive.open("ab") as stream:
+            stream.write(b"changed archive")
+    script = step["run"]
+    assert script.count("$env:SystemRoot") == 1
+    script = script.replace("$env:SystemRoot", "$env:CROSTL_WARP_TEST_SYSTEM_ROOT")
+    for pinned, fixture in (
+        (
+            "e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3",
+            digest(original),
+        ),
+        (
+            "63231c48b0573ba4c078f69cd10a4059a0fee3427107b8219e5e80ab75bd304b",
+            archive_digest,
+        ),
+        (
+            "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638",
+            digest(qualified),
+        ),
+    ):
+        assert script.count(pinned) == 1
+        script = script.replace(pinned, fixture)
+    bootstrap = r"""
+function Invoke-WebRequest {
+    param([string]$Uri, [string]$OutFile, [int]$TimeoutSec)
+    if ($Uri -ne "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.13/microsoft.direct3d.warp.1.0.13.nupkg" -or $TimeoutSec -ne 30) {
+        throw "Unexpected download request."
+    }
+    if ($env:CROSTL_WARP_TEST_FAILURE -eq "download") { throw "Download failed." }
+    [System.IO.File]::Copy($env:CROSTL_WARP_TEST_ARCHIVE, $OutFile)
+}
+function Copy-Item {
+    param([string]$Path, [string]$Destination, [switch]$Force)
+    $failure = $env:CROSTL_WARP_TEST_FAILURE
+    if (($failure -eq "system-selection" -and $Path.Contains("System32")) -or
+        ($failure -eq "qualification-selection" -and $Path.Replace('\', '/').Contains("build/native")) -or
+        ($failure -eq "restoration" -and $Path.EndsWith("warp-required-backup.dll"))) {
+        [System.IO.File]::WriteAllText($Destination, "incorrect selection")
+    } else {
+        [System.IO.File]::Copy($Path, $Destination, $Force.IsPresent)
+    }
+}
+function python {
+    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
+    $version = [System.IO.File]::ReadAllText((Join-Path $env:pythonLocation "d3d10warp.dll"))
+    $Arguments | ConvertTo-Json | Set-Content "$version-arguments.json"
+    $global:LASTEXITCODE = 0
+    if (($env:CROSTL_WARP_TEST_FAILURE -eq "system-failure" -and $version -eq "system") -or
+        ($env:CROSTL_WARP_TEST_FAILURE -eq "qualification-failure" -and $version -eq "qualified")) {
+        $global:LASTEXITCODE = 1
+    }
+    if ($env:CROSTL_WARP_TEST_FAILURE -eq "timeout") { $global:LASTEXITCODE = 124 }
+}
+"""
+    for name in ("runner", "python", "windows/System32"):
+        (tmp_path / name).mkdir(parents=True)
+    installed = tmp_path / "python/d3d10warp.dll"
+    installed.write_bytes(b"incorrect" if failure == "original" else original)
+    if failure != "missing-system":
+        (tmp_path / "windows/System32/d3d10warp.dll").write_bytes(system)
+    script_path = tmp_path / "compare-runtime.ps1"
+    script_path.write_text(bootstrap + script)
+    env = dict(os.environ)
+    env.update(
+        RUNNER_TEMP=str(tmp_path / "runner"),
+        pythonLocation=str(tmp_path / "python"),
+        CROSTL_WARP_TEST_SYSTEM_ROOT=str(tmp_path / "windows"),
+        CROSTL_WARP_TEST_ARCHIVE=str(archive),
+        CROSTL_WARP_TEST_FAILURE=failure or "",
+    )
+    result = subprocess.run(
+        [
+            shutil.which("pwsh"),
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            str(script_path),
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert (result.returncode == 0) == (failure is None), result.stdout + result.stderr
+    if failure not in ("original", "restoration"):
+        assert installed.read_bytes() == original
+    evidence = tmp_path / ".mlx-portable-host/warp-codegen-comparison"
+    restoration = evidence / "restoration.json"
+    if failure in ("missing-system", "original", "download", "archive", "library"):
+        assert not restoration.exists()
+        assert not list(tmp_path.glob("*-arguments.json"))
+        return
+    receipt = json.loads(restoration.read_text(encoding="utf-8-sig"))
+    assert receipt["originalDLLSHA256"] == digest(original)
+    assert (receipt["restoredDLLSHA256"] == digest(original)) == (
+        failure != "restoration"
+    )
+    if failure and failure.endswith("selection"):
+        assert not (
+            evidence
+            / ("system" if failure.startswith("system") else "1.0.13")
+            / "runtime-selection.json"
+        ).exists()
+        return
+    assert [record["version"] for record in receipt["comparisons"]] == [
+        "system",
+        "1.0.13",
+    ]
+    for version, payload in (("system", system), ("1.0.13", qualified)):
+        selection = json.loads(
+            (evidence / version / "runtime-selection.json").read_text(
+                encoding="utf-8-sig"
+            )
+        )
+        assert selection["replacesRequiredGate"] is False
+        assert selection["comparisonDLLSHA256"] == digest(payload)
+        assert selection["originalDLLSHA256"] == digest(original)
+        assert Path(selection["sourceLibrary"]).read_bytes() == payload
+        arguments = json.loads(
+            (tmp_path / (payload.decode() + "-arguments.json")).read_text(
+                encoding="utf-8-sig"
+            )
+        )
+        assert (
+            arguments.count("-n") == 1
+            and arguments[arguments.index("-n") + 1] == "auto"
+        )
+        pytest_arguments = arguments[arguments.index("pytest") + 1 :]
+        assert not any(value in pytest_arguments for value in ("--maxfail", "-k", "-m"))
+        selected = [value for value in arguments if value.startswith("tests/")]
+        assert selected == [
+            "tests/test_translator/test_directx_cooperative_matrix.py::test_precise_scalar_control_executes",
+            "tests/test_translator/test_directx_cooperative_matrix.py::test_software_matrix_executes",
+            "tests/test_translator/test_directx_narrow_buffer_extents.py::test_narrow_buffer_extent_execute",
+        ]
+
+
 def test_project_demo_triggers_cover_code_without_root_documentation():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     paths = _workflow_event_paths(workflow, "pull_request")

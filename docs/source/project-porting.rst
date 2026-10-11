@@ -744,7 +744,7 @@ standalone OpenGL ``main`` artifacts at revision
 ``846d176227a0ac13d2667e58d2bb68b322109ab0``. The schema-v2
 ``unary.opengl-translation.json`` contract preserves the same five-shape,
 37-operator, 20-type-pair classification and all 1,243 exact materializations,
-while pinning 4,780,991 generated GLSL bytes and all 3,363 target-reflected
+while pinning 5,221,624 generated GLSL bytes and all 3,363 target-reflected
 resources. Vector artifacts expose read-only input, read-write output, and an
 entry-scoped size uniform block. Gather artifacts expose input, output, shape,
 stride, and the read-only ``ndimBuffer`` storage resource; scalar uses of the
@@ -783,7 +783,7 @@ in total. Source scalar uses of
 ``device const int& ndim`` alias ``ndim[0]`` and source ``out_idx++`` remains a
 postfix update.
 
-The reviewed HLSL references total 3,774,223 bytes. The earlier complete review
+The reviewed HLSL references total 5,159,617 bytes. The earlier complete review
 compared all 877 artifacts against hash-verified originals and compiled them
 with warnings fatal, updating 603 identities and retaining 274. A subsequent
 review recompiles all 34 Exp and Sigmoid entries and updates 20 identities:
@@ -799,6 +799,14 @@ and ArcCos numerical tests keep their existing artifact identities and tolerance
 This compiler contract does not establish numerical parity for all 877 entries.
 Historical Sigmoid uses the default exponential and no optional division
 profile; the current-pin, explicitly profiled numerical proof is separate.
+
+The latest complete source and interface review accounts for every remaining
+unary identity change. Of the 875 changed HLSL sources, 756 retain byte-identical
+DXIL; 119 contain reviewed math or conversion corrections. Two sources are
+unchanged. The GLSL review covers 134 changed math and FP8 artifacts and 743
+unchanged sources. Every current artifact compiles with strict validation;
+math corrections are not numerical-equivalence claims. Entry coverage,
+materialization, resource bindings and dispatch contracts remain unchanged.
 
 DirectX bfloat support covers every unary intrinsic required by the family.
 The inverse-hyperbolic ``acosh``, ``asinh``, and ``atanh`` paths decode bfloat
@@ -1798,7 +1806,7 @@ The same selected-entry pipeline translates all 4,122 binary entries to
 standalone OpenGL ``main`` artifacts. The schema-v2
 ``binary.opengl-translation.json`` contract preserves all 18 shapes, 11 kernel
 templates, 24 operators, 25 input/output type pairs, and 6,026 exact
-materializations. It pins 16,276,504 generated GLSL bytes
+materializations. It pins 18,626,623 generated GLSL bytes
 and 19,106 reflected resources across exact three-, four-, five-, and
 seven-resource target interfaces. Scalar forms expose three storage buffers;
 size-bounded forms add an entry-scoped size uniform block; fixed generalized
@@ -1899,12 +1907,15 @@ standalone OpenGL ``main`` artifacts. The compact schema-v2
 ``reduce.opengl-translation.json`` contract preserves the 39 shapes, nine
 kernel templates, six operator families, 44 concrete operator types, and 13
 input/output types while pinning 9,216 exact materializations,
-32,115,641 generated GLSL bytes, and 25,088 resources across
+41,794,920 generated GLSL bytes, and 25,088 resources across
 scalar-layout-aware one- through twelve-resource target ABIs.
 All source bodies and resource interfaces have complete reference comparisons;
-85 fresh pipeline checks cover every reviewed edit pattern and ABI shape.
+an earlier 85-entry pipeline review covers its edit patterns and ABI shapes.
 The 156 complex-buffer metadata updates describe existing storage layouts,
-not new resource declarations. These checks establish deterministic translation
+not new resource declarations. The subsequent complete review verifies helper
+deduplication and typed extrema, including required int64 extension declarations
+when a wide initializer is narrowed to a 32-bit result. All 2,396 current
+artifacts compile and validate. These checks establish deterministic translation
 and strict compilation, not whole-family numerical execution.
 
 OpenGL's signed 32-bit logical buffer offsets require six explicit

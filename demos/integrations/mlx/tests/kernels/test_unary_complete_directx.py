@@ -38,13 +38,13 @@ UNARY_DIRECTX_CONTRACT_PATH = (
     / "unary.directx-translation.json"
 )
 UNARY_DIRECTX_CONTRACT_SHA256 = (
-    "00cff2227ccd883b32fb4bd1160a68847baeb04e84eb6a6ae14ab4d4c22b48c0"
+    "6f13a8e6b775c1c5d3b6ed55172a05fd8a6680c055f29cd39edd5186aaf305d8"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "f306f5304ae3968f7c697a5e67c9cd83915ee32837a00d6eec1060b7d19615d1"
+    "9774c9137e675b38ea059d3e8c5efd27b6dac7622680c2b32d3c0f66a303d234"
 )
 INDEX_RANGE_ASSERTIONS = (
     ("offset + i", 0, 2147483647),
@@ -259,12 +259,12 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
             "gn4large": 1098,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 3776623,
+        "generatedSizeBytesTotal": 5159617,
         "generatedSizeRange": {
-            "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 2262},
+            "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3462},
             "maximum": {
-                "entryPoint": "gn4large_Sinfloat16float16",
-                "sizeBytes": 12022,
+                "entryPoint": "gn4large_ArcTancomplex64complex64",
+                "sizeBytes": 17536,
             },
         },
         "nativeCompiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
@@ -298,14 +298,14 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 3776623
+    assert sum(entry["sizeBytes"] for entry in entries) == 5159617
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
-        2262,
+        3462,
         "v_Absint32int32",
     )
     assert max((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
-        12022,
-        "gn4large_Sinfloat16float16",
+        17536,
+        "gn4large_ArcTancomplex64complex64",
     )
 
     metal_entries = {
@@ -516,7 +516,8 @@ def test_unary_precise_math_dependencies_preserve_corpus_scope():
 def test_unary_artifact_refresh_preserves_corpus_scope():
     assert UNARY_DIRECTX_CONTRACT["artifactIdentityRefresh"] == {
         "reason": (
-            "Preserve source-width arithmetic, narrow storage and precise unary math in HLSL."
+            "Preserve source-width arithmetic, narrow storage and precise unary math in "
+            "HLSL."
         ),
         "previousContractSha256": (
             "2f7617926d5b5f2d9798b49d26aaa9c55139f5b56c50b1e8f5f91200deffb0cc"
@@ -533,7 +534,8 @@ def test_unary_artifact_refresh_preserves_corpus_scope():
         "followupReviews": [
             {
                 "reason": (
-                    "Preserve precise exponential calls and bfloat arithmetic boundaries."
+                    "Preserve precise exponential calls and bfloat "
+                    "arithmetic boundaries."
                 ),
                 "previousContractSha256": (
                     "0a2c0ea2eacdc97ec3d3da60ac5314e121dbe73bbe93dbc16da8bea86674afb5"
@@ -549,7 +551,8 @@ def test_unary_artifact_refresh_preserves_corpus_scope():
             },
             {
                 "reason": (
-                    "Retain the precise square-root helper in unused complex Sign overloads."
+                    "Retain the precise square-root helper in unused "
+                    "complex Sign overloads."
                 ),
                 "previousContractSha256": (
                     "936601b95f9099df378f7d0c7266f1595c648caf75304c789b60f252ead8db75"
@@ -559,6 +562,25 @@ def test_unary_artifact_refresh_preserves_corpus_scope():
                 "reviewedBodyCount": 5,
                 "nativeCompiledEntryCount": 5,
                 "compiledBodiesIdentical": True,
+                "unchangedSourceAndInterfaceContracts": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            },
+            {
+                "reason": (
+                    "Preserve precise unary math, FP8 conversions and "
+                    "legal HLSL empty records."
+                ),
+                "previousContractSha256": (
+                    "00cff2227ccd883b32fb4bd1160a68847baeb04e84eb6a6ae14ab4d4c22b48c0"
+                ),
+                "changedEntryCount": 875,
+                "unaffectedEntryCount": 2,
+                "reviewedBodyCount": 877,
+                "nativeCompiledChangedEntryCount": 875,
+                "nativeCompiledEntryCount": 877,
+                "byteIdenticalDxilChangedEntryCount": 756,
+                "reviewedResourceCount": 3912,
                 "unchangedSourceAndInterfaceContracts": True,
                 "numericalExecution": False,
                 "fullUpstreamSuite": False,

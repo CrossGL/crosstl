@@ -235,7 +235,7 @@ def test_ci_requires_root_execution():
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
     step = (
         ci_coverage.workflow_job_text(workflow, "mlx-metal-porting")
-        .split("      - name: Validate pinned unary arithmetic\n", 1)[1]
+        .split("      - name: Validate pinned unary roots and logarithms\n", 1)[1]
         .split("      - name:", 1)[0]
     )
     assert "if:" not in step

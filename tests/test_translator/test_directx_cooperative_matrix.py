@@ -212,7 +212,7 @@ def test_matrix_native_gates_are_required_without_extra_jobs():
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
     assert (
-        workflow.count("tests/test_translator/test_directx_cooperative_matrix.py") == 2
+        workflow.count("tests/test_translator/test_directx_cooperative_matrix.py") == 3
     )
     import yaml
 

@@ -104,6 +104,120 @@ def test_affine_contract_selects_every_configuration_once():
     assert contract["sourceSha256"] == proof.SOURCE_SHA256
 
 
+def _matrix_cases():
+    return [
+        (dtype, family, layout, fill)
+        for dtype, family, fill in itertools.product(
+            proof.DATA_TYPES, proof.MATRIX_VARIANTS, (0xA5, 0x5A)
+        )
+        for layout in (("flat", "broadcast") if family == "wide" else ("flat",))
+    ]
+
+
+@pytest.mark.parametrize("dtype,family,layout,fill", _matrix_cases())
+def test_matrix_dataset_matches_uploaded_storage_and_batch_strides(
+    dtype, family, layout, fill
+):
+    inputs, outputs, geometry, shape = proof._matrix_dataset(
+        dtype, family, layout, fill
+    )
+    assert len(inputs) == 16 and set(outputs) == {4}
+    assert all(data[-16:] == proof.GUARD for data in inputs)
+    assert outputs[4][-16:] == proof.GUARD
+    assert inputs[4][:-16] == bytes([fill]) * (len(outputs[4]) - 16)
+    unpack = lambda slot, code: [
+        value[0] for value in struct.iter_unpack("<" + code, inputs[slot][:-16])
+    ]
+    k, n, m = (unpack(slot, "i")[0] for slot in (5, 6, 7))
+    assert (k, n, m) == (shape["K"], shape["N"], shape["M"])
+    assert geometry == {
+        "workgroupCount": [1, 2, shape["batch"]],
+        "workgroupSize": [32, 2, 1] if family == "wide" else [32, 2, 2],
+    }
+    code_count = len(inputs[0][:-16]) * 8 // shape["bits"]
+    codes = _unpack_codes(inputs[0][:-16], shape["bits"], code_count)
+    scales, biases, vectors = (_decode(inputs[slot][:-16], dtype) for slot in (1, 2, 3))
+
+    def offset(batch, shape_slot, stride_slot):
+        dimensions, strides = unpack(shape_slot, "i"), unpack(stride_slot, "q")
+        assert len(dimensions) == len(strides)
+        result = 0
+        for dimension, stride in reversed(list(zip(dimensions, strides))):
+            result += (batch % dimension) * stride
+            batch //= dimension
+        assert batch == 0
+        return result
+
+    expected = []
+    for batch in range(shape["batch"]):
+        x_offset = offset(batch, 9, 10)
+        w_offset = offset(batch, 12, 13) * 32 // shape["bits"]
+        s_offset, b_offset = offset(batch, 12, 14), offset(batch, 12, 15)
+        for row in range(m):
+            for column in range(n):
+                value = 0.0
+                for inner in range(k):
+                    index = (
+                        inner * n + column
+                        if family == "nontransposed"
+                        else column * k + inner
+                    )
+                    group = index // shape["groupSize"]
+                    value += vectors[x_offset + row * k + inner] * (
+                        codes[w_offset + index] * scales[s_offset + group]
+                        + biases[b_offset + group]
+                    )
+                expected.append(value)
+    # These dyadic controls have exactly representable outputs in all three types.
+    assert _decode(outputs[4][:-16], dtype) == expected
+    assert len(expected) == shape["batch"] * m * n
+
+
+def test_matrix_contract_selects_both_loader_layouts_and_batched_vectors():
+    entries = proof._matrix_entries(json.loads(proof.DEFAULT_CONTRACT.read_text()))
+    assert len(entries) == 9
+    assert {(family, entry["dataType"]) for family, entry in entries} == set(
+        itertools.product(proof.MATRIX_VARIANTS, proof.DATA_TYPES)
+    )
+    assert len(_matrix_cases()) == 24
+
+
+@pytest.mark.parametrize("change", ("missing", "duplicate", "type", "group", "bits"))
+def test_matrix_contract_rejects_changed_selection(change):
+    contract = json.loads(proof.DEFAULT_CONTRACT.read_text())
+    _, selected = proof._matrix_entries(contract)[0]
+    if change == "missing":
+        contract["entries"].remove(selected)
+    elif change == "duplicate":
+        contract["entries"].append(copy.deepcopy(selected))
+    else:
+        selected[
+            {"type": "dataType", "group": "groupSize", "bits": "bitWidth"}[change]
+        ] = "unsupported"
+    with pytest.raises(ValueError, match="coverage"):
+        proof._matrix_entries(contract)
+
+
+@pytest.mark.parametrize("slot", range(16))
+@pytest.mark.parametrize("change", ("payload", "guard", "truncate"))
+def test_matrix_readback_checks_cover_every_binding(tmp_path, slot, change):
+    inputs, outputs, _, _ = proof._matrix_dataset("float", "wide", "broadcast", 0xA5)
+    for index, data in enumerate(inputs):
+        (tmp_path / f"buffer-{index}.bin").write_bytes(outputs.get(index, data))
+    assert proof._check_readbacks(tmp_path, inputs, outputs)["errors"] == []
+    path = tmp_path / f"buffer-{slot}.bin"
+    data = bytearray(path.read_bytes())
+    if change == "truncate":
+        del data[-1:]
+    else:
+        data[0 if change == "payload" else -1] ^= 1
+    path.write_bytes(data)
+    assert [
+        error["slot"]
+        for error in proof._check_readbacks(tmp_path, inputs, outputs)["errors"]
+    ] == [slot]
+
+
 @pytest.mark.parametrize(
     "change", ("missing", "duplicate", "wrong-type", "wrong-bits", "wrong-group")
 )

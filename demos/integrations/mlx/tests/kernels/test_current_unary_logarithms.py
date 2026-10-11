@@ -203,15 +203,17 @@ def test_complex_logarithm_contracts_record_entry_policy(path):
     assert contract["sourceOptionsByEntryPoint"] == {
         f"{shape}_{operation}complex64complex64": PROFILE
         for shape in shapes
-        for operation in OPERATIONS
+        for operation in (*OPERATIONS, "ArcSin", "ArcCos")
     }
-    assert unary.COMPLEX_LOG_SOURCE_OPTIONS == PROFILE
+    assert unary.COMPLEX_ATAN2_SOURCE_OPTIONS == PROFILE
     assert contract["sourceOptionsByOperator"]["Log"] == LOG_PROFILE
     assert unary.LOG_SOURCE_OPTIONS == LOG_PROFILE
 
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
-@pytest.mark.parametrize("operation", (*OPERATIONS, "Log1p", "Sqrt"))
+@pytest.mark.parametrize(
+    "operation", (*OPERATIONS, "Log1p", "Sqrt", "ArcSin", "ArcCos", "ArcTan")
+)
 @pytest.mark.parametrize("dtype", ("float16", "bfloat16", "float32", "complex64"))
 def test_complex_logarithm_policy_is_scoped_to_metal_complex_entries(
     tmp_path, target, operation, dtype
@@ -226,7 +228,9 @@ def test_complex_logarithm_policy_is_scoped_to_metal_complex_entries(
     actual = {key: options[key] for key in PROFILE if key in options}
     expected = (
         PROFILE
-        if target == "metal" and dtype == "complex64" and operation in OPERATIONS
+        if target == "metal"
+        and dtype == "complex64"
+        and operation in (*OPERATIONS, "ArcSin", "ArcCos")
         else {}
     )
     assert actual == expected
@@ -245,7 +249,7 @@ def test_ci_requires_complex_logarithm_source_comparison():
     assert "sparse-checkout set mlx/backend/metal/kernels python/tests" in checkout
     step = (
         ci_coverage.workflow_job_text(workflow, "mlx-metal-porting")
-        .split("      - name: Validate pinned unary arithmetic\n", 1)[1]
+        .split("      - name: Validate pinned unary roots and logarithms\n", 1)[1]
         .split("      - name:", 1)[0]
     )
     assert "if:" not in step and "continue-on-error" not in step
@@ -327,6 +331,10 @@ def logarithm_reference(logarithm_source, tmp_path_factory):
     if os.environ["CROSTL_MLX_CURRENT_TARGET"] != "metal":
         pytest.skip("Original-source comparison requires native Metal")
     work = tmp_path_factory.mktemp("complex-logarithm-source")
+    return _build_complex_reference(logarithm_source, work)
+
+
+def _build_complex_reference(root, work):
     runner = work / "readback"
     _run(
         [
@@ -340,9 +348,9 @@ def logarithm_reference(logarithm_source, tmp_path_factory):
         "build-runner",
     )
     original = _metal_library(
-        logarithm_source / unary.MLX_UNARY_SOURCE,
+        root / unary.MLX_UNARY_SOURCE,
         work / "original.metallib",
-        logarithm_source,
+        root,
         upstream=True,
     )
     return runner, original
@@ -437,12 +445,15 @@ def test_current_logarithm_native_loader(logarithm_source, tmp_path):
 def test_current_complex_logarithm_native_comparison(
     logarithm_source, logarithm_reference, tmp_path, operation
 ):
-    root = logarithm_source
-    runner, original = logarithm_reference
+    _compare_complex_source(logarithm_source, logarithm_reference, tmp_path, operation)
+
+
+def _compare_complex_source(root, reference, tmp_path, operation):
+    runner, original = reference
     entries = [f"{shape}_{operation}complex64complex64" for shape in SHAPES]
     workloads = {row.entry_point: row for row in unary.UNARY_METAL_WORKLOADS}
     with tempfile.TemporaryDirectory(
-        prefix=".current-complex-logarithm-", dir=root
+        prefix=".current-complex-unary-", dir=root
     ) as path:
         work = Path(path)
         try:

@@ -1235,7 +1235,14 @@ def test_runtime_comparison_does_not_replace_required_native_gate():
         in command
     )
     assert "@tests" in command and " -k " not in command
-    assert '"tests/test_translator/test_directx_cooperative_matrix.py"' in command
+    for name in (
+        "test_precise_scalar_control_executes",
+        "test_software_matrix_executes",
+    ):
+        assert (
+            f'"tests/test_translator/test_directx_cooperative_matrix.py::{name}"'
+            in command
+        )
     assert "CROSTL_FXC_EXECUTABLE" not in command
     assert "originalDLLSHA256" in command and "comparisonDLLSHA256" in command
     assert "} finally {" in command

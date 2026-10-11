@@ -3444,9 +3444,11 @@ def test_directx_runtime_comparison_preserves_required_runtime_and_workload():
     required_gate = next(
         step for step in steps if step.get("id") == "collective-helpers"
     )
-    expected_env = dict(required_gate["env"])
-    expected_env["CROSTL_REQUIRE_DIRECTX_COOPERATIVE_MATRIX"] = "1"
-    assert comparison["env"] == expected_env
+    assert comparison["env"] == {
+        "CROSTL_REQUIRE_DIRECTX_NARROW_BUFFERS": "1",
+        "CROSTL_REQUIRE_DIRECTX_COOPERATIVE_MATRIX": "1",
+    }
+    assert "if" not in required_gate and "continue-on-error" not in required_gate
     assert not comparison.get("continue-on-error")
     script = comparison["run"]
     for value in (
@@ -3470,7 +3472,18 @@ def test_directx_runtime_comparison_preserves_required_runtime_and_workload():
     required_tests = re.findall(r"tests/[^\s\\]+", resource_command)
     compared_tests = re.findall(r'"(tests/[^"\s]+)"', script)
     assert len(required_tests) == 24
-    assert compared_tests == required_tests
+    assert compared_tests == [
+        "tests/test_translator/test_directx_cooperative_matrix.py::test_precise_scalar_control_executes",
+        "tests/test_translator/test_directx_cooperative_matrix.py::test_software_matrix_executes",
+        "tests/test_translator/test_directx_narrow_buffer_extents.py::test_narrow_buffer_extent_execute",
+    ]
+    assert all(
+        test.split("::", 1)[0] in required_gate["run"] for test in compared_tests
+    )
+    assert 'version = "system"' in script
+    assert 'Join-Path $env:SystemRoot "System32/d3d10warp.dll"' in script
+    assert "sourceLibrary = $case.dll" in script
+    assert "fileVersion = (Get-Item $case.dll).VersionInfo.FileVersion" in script
     pytest_arguments = script.split("-- python -m pytest", 1)[1].splitlines()[0]
     assert not re.search(
         r"(?:^|\s)(?:-k|-m|--keyword|--markexpr)(?:\s|=|$)", pytest_arguments

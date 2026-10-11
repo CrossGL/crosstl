@@ -40,13 +40,13 @@ UNARY_OPENGL_CONTRACT_PATH = (
     / "unary.opengl-translation.json"
 )
 UNARY_OPENGL_CONTRACT_SHA256 = (
-    "dbbcf1fa515ca24e979b1a5e8fcf9b74d3f8deb7af75569e9c3640b9d3e0b111"
+    "5175a6bf94bda0826c287f638895f3cd8e9dccd2fd5c69e5785bac3910bb6bd7"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "f306f5304ae3968f7c697a5e67c9cd83915ee32837a00d6eec1060b7d19615d1"
+    "9774c9137e675b38ea059d3e8c5efd27b6dac7622680c2b32d3c0f66a303d234"
 )
 INDEX_RANGE_ASSERTIONS = (
     ("offset + i", 0, 2147483647),
@@ -244,15 +244,15 @@ def test_current_mlx_unary_opengl_contract_is_complete_and_classified() -> None:
             "gn4large": 915,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 4780991,
+        "generatedSizeBytesTotal": 5221624,
         "generatedSizeRange": {
             "minimum": {
                 "entryPoint": "v_Absint32int32",
                 "sizeBytes": 3566,
             },
             "maximum": {
-                "entryPoint": "gn4large_Sinfloat16float16",
-                "sizeBytes": 12582,
+                "entryPoint": "gn4large_ArcTancomplex64complex64",
+                "sizeBytes": 19002,
             },
         },
         "nativeCompiler": (
@@ -288,14 +288,14 @@ def test_current_mlx_unary_opengl_contract_is_complete_and_classified() -> None:
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 4780991
+    assert sum(entry["sizeBytes"] for entry in entries) == 5221624
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
         3566,
         "v_Absint32int32",
     )
     assert max((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
-        12582,
-        "gn4large_Sinfloat16float16",
+        19002,
+        "gn4large_ArcTancomplex64complex64",
     )
 
     metal_entries = {

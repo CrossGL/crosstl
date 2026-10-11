@@ -57,19 +57,19 @@ SCALAR_UNARY_METAL_CONTRACT_PATH = (
     / "unary.scalar-metal-roundtrip.json"
 )
 SCALAR_UNARY_METAL_CONTRACT_SHA256 = (
-    "f15116cc130e5937313f6df721ef2ae9f4a43d17069eac77115d2ec866305621"
+    "a5b43cabe1d21987e318843d80bbff4b4431206714aae3884fb1cb4354553a7c"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "f306f5304ae3968f7c697a5e67c9cd83915ee32837a00d6eec1060b7d19615d1"
+    "9774c9137e675b38ea059d3e8c5efd27b6dac7622680c2b32d3c0f66a303d234"
 )
 ROOT_SOURCE_OPTIONS = {
     "binary32_sqrt_profile": "flush-subnormals",
     "binary32_rsqrt_profile": "flush-subnormals",
 }
-COMPLEX_LOG_SOURCE_OPTIONS = {"binary32_atan2_profile": "flush-subnormals"}
+COMPLEX_ATAN2_SOURCE_OPTIONS = {"binary32_atan2_profile": "flush-subnormals"}
 LOG_SOURCE_OPTIONS = {"binary32_log_profile": "flush-subnormals"}
 
 
@@ -772,12 +772,12 @@ def test_current_mlx_unary_metal_contract_is_complete_and_classified():
         "intermediate": "crossgl",
         "hostInterfaceStatus": "ready",
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 2127614,
+        "generatedSizeBytesTotal": 2199606,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absfloat16float16", "sizeBytes": 1076},
             "maximum": {
-                "entryPoint": "gn4large_ArcTancomplex64complex64",
-                "sizeBytes": 13837,
+                "entryPoint": "gn4large_ArcSincomplex64complex64",
+                "sizeBytes": 13843,
             },
         },
         "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",
@@ -975,9 +975,9 @@ def _project_config(target: str, workload: UnaryWorkload) -> str:
     if (
         target == "metal"
         and workload.input_type == "complex64_t"
-        and workload.operator_type in {"Log", "Log2", "Log10"}
+        and workload.operator_type in {"Log", "Log2", "Log10", "ArcSin", "ArcCos"}
     ):
-        source_options.update(COMPLEX_LOG_SOURCE_OPTIONS)
+        source_options.update(COMPLEX_ATAN2_SOURCE_OPTIONS)
     options = "\n".join(f'{key} = "{value}"' for key, value in source_options.items())
     return textwrap.dedent(f"""
         [project]

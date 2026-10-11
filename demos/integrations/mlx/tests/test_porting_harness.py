@@ -10512,7 +10512,9 @@ def test_scaled_attention_native_runtime_evidence_records_bounded_cross_target_p
     assert status["runtime_parity_claimed"] is False
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "selects current-pinned `sdpa_vector_float_64_64`" in readme
+    assert (
+        "selects `sdpa_vector_float_64_64` at the historical `846d1762` pin" in readme
+    )
     assert "partitions 1,024 invocations into 32 logical subgroups" in readme
     assert "six `OpSpecConstantFalse` declarations" in readme
     assert "no bounded attention dispatch, package, or numerical runtime proof" in (
@@ -11814,7 +11816,7 @@ def test_unary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "f306f5304ae3968f7c697a5e67c9cd83915ee32837a00d6eec1060b7d19615d1",
+        "sha256": "9774c9137e675b38ea059d3e8c5efd27b6dac7622680c2b32d3c0f66a303d234",
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12016,8 +12018,8 @@ def test_unary_opengl_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.opengl-translation.json",
         "schema_version": 2,
-        "sha256": "dbbcf1fa515ca24e979b1a5e8fcf9b74d3f8deb7af75569e9c3640b9d3e0b111",
-        "size_bytes": 317654,
+        "sha256": "5175a6bf94bda0826c287f638895f3cd8e9dccd2fd5c69e5785bac3910bb6bd7",
+        "size_bytes": 317686,
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12124,12 +12126,12 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 4780991,
+        "generated_size_bytes_total": 5221624,
         "generated_size_range": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3566},
             "maximum": {
-                "entryPoint": "gn4large_Sinfloat16float16",
-                "sizeBytes": 12582,
+                "entryPoint": "gn4large_ArcTancomplex64complex64",
+                "sizeBytes": 19002,
             },
         },
     }
@@ -12175,7 +12177,7 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         "all 877 discovered `unary.metal` entries at the same legacy reference revision to OpenGL"
     ) in readme
     assert f"`{CURRENT_MLX_COMMIT}`" in readme
-    assert "4,780,991 generated GLSL bytes" in readme
+    assert "5,221,624 generated GLSL bytes" in readme
     assert "three explicit host/runtime index-range preconditions" in readme
     assert "requires 877 non-empty SPIR-V 1.3 modules" in readme
     guide = " ".join(
@@ -12184,7 +12186,7 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         .split()
     )
     assert "all 877 historical unary entries to standalone OpenGL" in guide
-    assert "4,780,991 generated GLSL bytes" in guide
+    assert "5,221,624 generated GLSL bytes" in guide
     assert "five disjoint Linux shards" in guide
 
 
@@ -12223,8 +12225,8 @@ def test_unary_directx_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
         "schema_version": 2,
-        "sha256": "00cff2227ccd883b32fb4bd1160a68847baeb04e84eb6a6ae14ab4d4c22b48c0",
-        "size_bytes": 319838,
+        "sha256": "6f13a8e6b775c1c5d3b6ed55172a05fd8a6680c055f29cd39edd5186aaf305d8",
+        "size_bytes": 320517,
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12340,12 +12342,12 @@ def test_unary_directx_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 3776623,
+        "generated_size_bytes_total": 5159617,
         "generated_size_range": {
-            "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 2262},
+            "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3462},
             "maximum": {
-                "entryPoint": "gn4large_Sinfloat16float16",
-                "sizeBytes": 12022,
+                "entryPoint": "gn4large_ArcTancomplex64complex64",
+                "sizeBytes": 17536,
             },
         },
     }
@@ -16838,7 +16840,7 @@ def test_quantized_metal_roundtrip_evidence_records_complete_family():
         "generated_size_bytes_total": artifact["generatedSizeBytesTotal"],
         "generated_size_range": artifact["generatedSizeRange"],
     }
-    assert artifact["generatedSizeBytesTotal"] == 40559670
+    assert artifact["generatedSizeBytesTotal"] == 40769784
 
     assert status["terminal_proof"] == {
         "candidate_base_commit": contract["proof"]["candidateBaseCommit"],

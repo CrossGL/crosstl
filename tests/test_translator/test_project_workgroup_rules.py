@@ -1404,9 +1404,9 @@ def test_ci_requires_selected_entry_workgroup_execution():
     )
     selector = "tests/test_translator/test_project_workgroup_rules.py::test_selected_entry_rules_execute"
     assert step.count(selector) == 1
-    assert comparison.count(selector) == 1 and workflow.count(selector) == 2
+    assert selector not in comparison and workflow.count(selector) == 1
     assert 'CROSTL_REQUIRE_ENTRY_WORKGROUP_RULES: "1"' in step
-    assert 'CROSTL_REQUIRE_ENTRY_WORKGROUP_RULES: "1"' in comparison
+    assert "CROSTL_REQUIRE_ENTRY_WORKGROUP_RULES" not in comparison
     assert "--timeout-seconds 360" in step
     assert "continue-on-error" not in step and "if:" not in step
     assert (

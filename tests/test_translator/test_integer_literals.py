@@ -11,6 +11,7 @@ from crosstl.project import build_native_loader_dispatch_request
 from crosstl.translator import parse
 from crosstl.translator.ast import LiteralNode
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.integer_literals import (
     IntegerLiteralError,
     integer_literal_parts,
@@ -232,6 +233,103 @@ def test_integer_widths_are_required_in_native_ci():
     )[0]
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_integer_literals.py" in step
+
+
+NARROW_CASES = (
+    ("4294967295", 0xFFFFFFFF),
+    ("-2147483648", 0x80000000),
+    ("1l", 1),
+    ("1ul", 1),
+    ("0xfffffffffffffffful >> 32", 0xFFFFFFFF),
+    ("(-9223372036854775807l - 1l) >> 32", 0x80000000),
+)
+
+
+@pytest.mark.parametrize("expression,expected", NARROW_CASES)
+def test_glsl_narrowed_wide_literals_require_int64(expression, expected):
+    generator = GLSLCodeGen()
+    ast = parse(f"shader Literal {{ uint value() {{ return uint({expression}); }} }}")
+    generated = generator.generate(ast)
+    assert generated.count("#extension GL_ARB_gpu_shader_int64 : require") == 1
+    assert "int64_t" not in generated and "uint64_t" not in generated
+    following = generator.generate(parse("shader Next { uint value() { return 1u; } }"))
+    assert "GL_ARB_gpu_shader_int64" not in following
+
+
+@pytest.mark.parametrize(
+    "profile,message",
+    (
+        ("#version 320 es", "does not support GL_ARB_gpu_shader_int64"),
+        (
+            "#version 450 core\n#extension GL_ARB_gpu_shader_int64 : disable",
+            "requires GL_ARB_gpu_shader_int64",
+        ),
+    ),
+)
+def test_glsl_narrowed_wide_literals_reject_unsupported_profiles(profile, message):
+    ast = parse(f"{profile}\nshader Literal {{ uint value() {{ return uint(1l); }} }}")
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate(ast)
+
+
+def _narrow_source(expression):
+    return f"""#include <metal_stdlib>
+using namespace metal;
+kernel void narrowed_literal(device uint* results [[buffer(0)]]) {{
+    results[1] = uint({expression});
+}}
+"""
+
+
+@pytest.mark.parametrize("expression,expected", NARROW_CASES)
+@pytest.mark.parametrize("target", ("metal", "opengl", "directx"))
+def test_narrowed_wide_literals_compile(tmp_path, target, expression, expected):
+    _, descriptor, package = _package(
+        tmp_path,
+        target,
+        "uint",
+        (1, 1, 1),
+        source=_narrow_source(expression),
+        software_subgroups=False,
+    )
+    artifact = package / descriptor["artifact"]["packagePath"]
+    _compile(artifact.read_text(), target, tmp_path)
+
+
+@pytest.mark.parametrize("expression,expected", NARROW_CASES)
+def test_narrowed_wide_literals_execute(tmp_path, expression, expected):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required literal execution")
+    target = {"linux": "opengl", "darwin": "metal", "win32": "directx"}[sys.platform]
+    _, descriptor, package = _package(
+        tmp_path,
+        target,
+        "uint",
+        (1, 1, 1),
+        source=_narrow_source(expression),
+        software_subgroups=False,
+    )
+    guard = 0xDEADBEEF
+    inputs = {"results": {"dtype": "uint32", "shape": [3], "values": [guard, 0, guard]}}
+    outputs = {"results": {**inputs["results"], "values": [guard, expected, guard]}}
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        _bound_values(descriptor, inputs),
+        _bound_values(descriptor, outputs),
+        {"workgroupCount": [1, 1, 1], "workgroupSize": [1, 1, 1]},
+        expected_target=target,
+    )
+    assert not request.execution_plan.diagnostics
+    options = (
+        {
+            "original_source": _narrow_source(expression),
+            "original_entry": "narrowed_literal",
+        }
+        if target == "metal"
+        else {}
+    )
+    _execute(request, _bound_values(descriptor, outputs), tmp_path, **options)
 
 
 @pytest.mark.parametrize("operator", ["<<", ">>"])
