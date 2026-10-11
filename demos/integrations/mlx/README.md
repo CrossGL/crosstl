@@ -730,7 +730,22 @@ The current harness verifies:
   on 18,100 complex values per path and initialization, with two finite output
   initializations, 256 guard words per path and unchanged read-only buffers.
   Non-NaN words match exactly; NaN classification is compared without requiring
-  payload identity. The remaining 250 arithmetic-changing references stay
+  payload identity. A further 38 Sqrt/Rsqrt references, including eight scalar
+  entries, explicitly select `flush-subnormals` for binary32 square root and
+  reciprocal square root. The policy is recorded in the contracts and project
+  provenance, and applies only to these Metal demo selections; translator
+  defaults and other target references are unchanged. Accepted predecessors
+  reconstruct exactly and all 76 old/new sources compile with warnings fatal.
+  Original, accepted and freshly translated historical sources agree on
+  1,199,068 values per path and initialization across the five layouts, with
+  two output initializations, 1,216 guard words per path and unchanged read-only
+  buffers. Twelve contiguous narrow cases cover every 16-bit storage pattern.
+  Separate current-pin Metal checks cover 402,076 values per path and
+  initialization across eight entries, including four exhaustive narrow cases
+  and 256 guards per path. Non-NaN words, including signed zero, match exactly.
+  Different output initializations detect unwritten results without excluding
+  legitimate values from the exhaustive domains.
+  The remaining 212 arithmetic-changing references stay
   unchanged under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
   The historical pin and complete entry selection are preserved.
   At current pin `9c3d3557`, Abs and Sign use upstream's scaled `hypot`
@@ -739,6 +754,10 @@ The current harness verifies:
   current original Metal source over the same bounded inputs and guards.
   It runs in the existing macOS unary CI step without additional runners or a
   longer deadline, and retains compiler records and full input/output readbacks.
+  Current-pin float32 Sqrt/Rsqrt also use the public package and native-loader
+  path against an independent decimal oracle, with exact non-NaN word checks.
+  These cases are required on all three existing platform jobs; the
+  original-source raw-buffer comparison is Metal-only.
   These are bounded Metal results, not DirectX/OpenGL qualification, complete
   unary-family numerical parity or full MLX host integration;
 - selected-entry translation of all 877 discovered `unary.metal` entries

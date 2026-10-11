@@ -57,14 +57,18 @@ SCALAR_UNARY_METAL_CONTRACT_PATH = (
     / "unary.scalar-metal-roundtrip.json"
 )
 SCALAR_UNARY_METAL_CONTRACT_SHA256 = (
-    "3ac3bbb635c2d246cc3c066f0a8d41afabf0556929795318e002c56f78422f26"
+    "ff305db86e4e6cf074d11dd94bb25843fa0920ed33dafee7dd68bd3d1da32d1a"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "26da1d585874242f32cb311771643a568c28e651c3aff52b2aa11271e5aac9e3"
+    "5cd06039282816e5f238814e1be7acfcc7474e6c9d6214f8dc58a8e3f8dd1e96"
 )
+ROOT_SOURCE_OPTIONS = {
+    "binary32_sqrt_profile": "flush-subnormals",
+    "binary32_rsqrt_profile": "flush-subnormals",
+}
 
 
 @dataclass(frozen=True)
@@ -766,7 +770,7 @@ def test_current_mlx_unary_metal_contract_is_complete_and_classified():
         "intermediate": "crossgl",
         "hostInterfaceStatus": "ready",
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 1833007,
+        "generatedSizeBytesTotal": 1902750,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Logfloat16float16", "sizeBytes": 1052},
             "maximum": {
@@ -961,6 +965,11 @@ def _expected_unary_materializations(workload: UnaryWorkload) -> list[dict]:
 
 
 def _project_config(target: str, workload: UnaryWorkload) -> str:
+    root_options = ""
+    if target == "metal" and workload.operator_type in {"Sqrt", "Rsqrt"}:
+        root_options = "\n".join(
+            f'{key} = "{value}"' for key, value in ROOT_SOURCE_OPTIONS.items()
+        )
     return textwrap.dedent(f"""
         [project]
         source_roots = ["mlx/backend/metal/kernels"]
@@ -981,7 +990,7 @@ def _project_config(target: str, workload: UnaryWorkload) -> str:
         [project.source_options.metal]
         max_template_specializations = 64
         max_template_materialization_work = 4096
-        """).strip()
+        """).strip() + ("\n" + root_options if root_options else "")
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -1078,6 +1087,9 @@ def _translate_unary_artifact(
         "stage": "compute",
     }
     assert artifact["provenance"]["pipeline"] == "entry-scoped-translate"
+    if target == "metal" and workload.operator_type in {"Sqrt", "Rsqrt"}:
+        assert artifact["provenance"]["binary32SqrtProfile"] == "flush-subnormals"
+        assert artifact["provenance"]["binary32RsqrtProfile"] == "flush-subnormals"
     assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [1, 1, 1]
     materialization = artifact["templateMaterialization"]
     assert materialization["status"] == "materialized"

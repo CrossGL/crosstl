@@ -82,7 +82,10 @@ def test_current_mlx_unary_fma_native_loader(tmp_path, operation):
     )
 
 
-def _run_current_unary(tmp_path, operation, values, expected, rtol, atol, helper):
+def _run_current_unary(
+    tmp_path, operation, values, expected, rtol, atol, helper, *, source_options=None
+):
+    options = {"binary32_fma_profile": "rne-flush", **(source_options or {})}
     root = Path(os.environ["CROSTL_MLX_CURRENT_ROOT"]).resolve()
     target = os.environ["CROSTL_MLX_CURRENT_TARGET"]
     assert target in {"directx", "opengl", "metal"}
@@ -123,8 +126,7 @@ output_dir = "{work.name}/out"
 [project.entry_workgroup_size_rules."{SOURCE}"]
 "{entry}" = [1, 1, 1]
 [project.source_options.metal]
-binary32_fma_profile = "rne-flush"
-""",
+""" + "".join(f"{key} = {json.dumps(value)}\n" for key, value in options.items()),
             encoding="utf-8",
         )
         try:
@@ -134,9 +136,7 @@ binary32_fma_profile = "rne-flush"
             report.write_json(work / "report.json")
             payload = report.to_json()
             assert payload["summary"]["failedCount"] == 0, payload["diagnostics"]
-            assert payload["project"]["sourceOptions"]["metal"] == {
-                "binary32_fma_profile": "rne-flush"
-            }
+            assert payload["project"]["sourceOptions"]["metal"] == options
             assert len(payload["artifacts"]) == 1
             artifact = payload["artifacts"][0]
             assert artifact["entryPoint"]["source"] == entry
@@ -224,6 +224,7 @@ binary32_fma_profile = "rne-flush"
                         "entry": entry,
                         "target": target,
                         "profile": "rne-flush",
+                        "sourceOptions": options,
                         "rtol": rtol,
                         "atol": atol,
                         "cases": cases,

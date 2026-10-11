@@ -3959,6 +3959,7 @@ jobs:
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_FMA: "1"
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_TRIG: "1"
           CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_MAGNITUDE: "1"
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_ROOTS: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -3978,7 +3979,8 @@ jobs:
               --junitxml=mlx-unary-fma-results/results.xml \
               demos/integrations/mlx/tests/kernels/test_current_unary_fma.py \
               demos/integrations/mlx/tests/kernels/test_current_unary_trig.py \
-              demos/integrations/mlx/tests/kernels/test_current_complex_magnitude.py
+              demos/integrations/mlx/tests/kernels/test_current_complex_magnitude.py \
+              demos/integrations/mlx/tests/kernels/test_current_unary_roots.py
 
       - name: Upload pinned unary fused arithmetic evidence
         if: always()
