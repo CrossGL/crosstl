@@ -930,7 +930,32 @@ The current harness verifies:
   with sampled differences of at most two ULPs at both pins. The independent
   precise-atan oracle and current-pin native-package tests retain their existing
   bounds. No source policy, tolerance or whole-family parity status is changed.
-  The remaining 94 arithmetic-changing references stay
+  A further 29 real ArcSin/ArcCos references, including five scalar entries,
+  change only precision-pragma scope and unused-parameter annotations.
+  All accepted sources reproduce exactly; old and updated sources compile to
+  byte-identical Metal libraries at both pins. Independent audits retain
+  1,119,742 output words per path and initialization, two initializations,
+  1,856 guard words per path and unchanged read-only buffers. Contiguous narrow
+  entries exhaust all 65,536 storage patterns. Accepted and updated results
+  agree exactly apart from NaN payloads. They are not uniformly bit-identical
+  to original Metal: three half ArcCos inputs differ by one half ULP, and
+  sampled float32 ArcCos/ArcSin results differ by at most two/three ULPs.
+  These pre-existing differences remain within the pinned upstream dtype
+  tolerances; no reference update changes the computations or numerical gates.
+  Eight complex ArcSin/ArcCos references remain pending. Original, accepted
+  and current kernels were compiled and executed at both pins, but the current
+  default helpers preserve some tiny results that original Metal flushes.
+  The references are not accepted on the strength of finite-value tolerances.
+  Required current-pin float32 ArcSin and ArcCos package tests now run in the
+  existing three-platform unary step. Each executes 4,394 inputs, including a
+  dense domain sweep, endpoint neighbors, small normal values, signed zeros,
+  infinities and NaNs, against host binary64 functions rounded to binary32.
+  They enforce a four-ULP bound, exact zero signs and invalid-domain NaNs, and
+  verify source identity across translation, packaging and native execution.
+  Local Metal and Linux software-OpenGL pass; Windows remains a required CI
+  result. These value-based tests do not retain input-device readbacks, guards
+  or NaN payloads and do not establish full backend or upstream-suite parity.
+  The remaining 65 arithmetic-changing references stay
   unchanged under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
   The historical pin and complete entry selection are preserved.
   At current pin `9c3d3557`, Abs and Sign use upstream's scaled `hypot`
