@@ -332,7 +332,11 @@ from .image_access_contracts import (
     unsupported_texture_samples_query_call_expression,
     validate_texture_operation_arity,
 )
-from .loop_induction import fixed_stride_loop_terminates, loop_constant_bindings
+from .loop_induction import (
+    fixed_stride_loop_terminates,
+    geometric_loop_terminates,
+    loop_constant_bindings,
+)
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -4834,7 +4838,12 @@ class HLSLCodeGen:
             initializer.var_type, {"volatile"}
         ):
             return False
-        return fixed_stride_loop_terminates(
+        proof = (
+            geometric_loop_terminates
+            if update.operator in {"*=", "<<="}
+            else fixed_stride_loop_terminates
+        )
+        return proof(
             self.type_name_string(initializer.var_type),
             initializer.initial_value,
             bound,
@@ -4917,6 +4926,7 @@ class HLSLCodeGen:
         update = getattr(node, "update", None)
         halving_update = False
         additive_update = False
+        geometric_update = False
         if isinstance(update, UnaryOpNode):
             update_operator = self.map_operator(
                 getattr(update, "op", getattr(update, "operator", None))
@@ -4931,7 +4941,7 @@ class HLSLCodeGen:
                 getattr(update, "op", getattr(update, "operator", None))
             )
             if (
-                update_operator not in {"/=", ">>=", "+=", "-="}
+                update_operator not in {"/=", ">>=", "+=", "-=", "*=", "<<="}
                 or self.hlsl_software_subgroup_assignment_target_name(update)
                 != loop_name
             ):
@@ -4946,6 +4956,9 @@ class HLSLCodeGen:
                 step = concrete_update_value * (1 if update_operator == "+=" else -1)
                 increasing = step > 0
                 additive_update = True
+            elif update_operator in {"*=", "<<="}:
+                increasing = True
+                geometric_update = True
             else:
                 if (
                     update_operator == "/="
@@ -4972,10 +4985,14 @@ class HLSLCodeGen:
                 return False
         elif increasing != (normalized_operator in {"<", "<="}):
             return False
-        checked_stride = additive_update or (
-            isinstance(update, UnaryOpNode)
-            and narrow_integer_shape(self.type_name_string(initializer.var_type))
-            is not None
+        checked_stride = (
+            additive_update
+            or geometric_update
+            or (
+                isinstance(update, UnaryOpNode)
+                and narrow_integer_shape(self.type_name_string(initializer.var_type))
+                is not None
+            )
         )
         if checked_stride and not self.hlsl_software_subgroup_fixed_stride(
             initializer, bound, update, constants, normalized_operator
@@ -4985,7 +5002,7 @@ class HLSLCodeGen:
         bound_names = self.hlsl_software_subgroup_expression_identifier_names(bound)
         stride_names = (
             self.hlsl_software_subgroup_expression_identifier_names(update.value)
-            if additive_update
+            if additive_update or geometric_update
             else set()
         )
         control_names = bound_names | stride_names | {loop_name}

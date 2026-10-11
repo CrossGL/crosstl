@@ -292,12 +292,16 @@ effectful calls, mutation, division and unknown control flow are not speculated.
 Native mode keeps the original branch. Required native checks retain NaNs in
 different subgroups, both return paths, repeated calls and buffer guards.
 
-Scalar declarations initialized by pure forwarding subgroup wrappers can also
+Scalar declarations initialized by pure subgroup wrappers can also
 be lifted out of a proven subgroup-ID condition. Input loads and argument
 effects remain conditional; all workgroup invocations execute the wrapper,
 using zero inputs for inactive subgroups, and stores keep their original guard.
-Only immutable, unescaped subgroup-ID predicates and single-return scalar
-wrappers qualify. Else branches, resource-reading wrappers, scalar reference
+The proof admits private scalar assignments, pure comparison helpers and
+checked finite loops, including positive multiplication and left-shift induction.
+Every visited induction value and the terminating update must fit the source
+type. Integer overflow, unchecked shifts, floating-to-integer conversions and
+runtime loop bounds are not speculated. Immutable, unescaped subgroup-ID
+predicates are required. Else branches, resource-reading wrappers, scalar reference
 effects, ambiguous overloads and unproven participation remain diagnostic.
 Native controls include partial groups, inactive subgroups and repeated calls,
 including side effects in unused arguments. This is not general if-conversion.

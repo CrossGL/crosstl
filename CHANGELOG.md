@@ -15,11 +15,12 @@ All notable changes to CrossTL are documented in this file.
 - Native runtime support for Boolean, binary16, bfloat16, byte and 64-bit integer storage, shared allocation views, immutable DirectX constants and validated resource ranges.
 - Project integration demos for selected array operations, copies, casts, reductions, indexing, scatter and random generation through translated runtime packages. The MLX demo records pinned sources, host adaptations, native dispatches and unchanged upstream test selections; it does not provide a complete replacement backend or pass the complete upstream suite.
 - Release package checks on Ubuntu, including isolated installation of both the wheel and source distribution, CLI translation and packaged native runtime resources before publication.
-- Verify published PyPI archive sizes and SHA-256 digests before creating the GitHub Release, including retry-safe rejection of conflicting existing distributions.
+- Verify published PyPI archive sizes and SHA-256 digests before creating the GitHub Release, including retry-safe rejection of conflicting existing distributions. Download GitHub Release assets into a fresh directory and require the exact validated inventory and archive bytes after both creation and updates.
 - Declarative package metadata with a pinned Flit build backend, preserving Python 3.8 source, wheel and editable installs without the affected setuptools and wheel build dependencies. Release validation and publication tooling support the same metadata format.
 
 ### Improved
 
+- Preserve private scalar accumulators and comparison helpers in subgroup-conditional software execution, with checked geometric loop termination and complete pinned extrema-scan controls. Unsupported effects, arithmetic and barrier participation remain diagnostic.
 - Project-specific manifests, test fixtures, adapters and reports now live under `demos/integrations/mlx`, with project validation consolidated in `demo-project-testing.yml`.
 - Python compatibility matrices run on Ubuntu, with grouped Windows and macOS suites retaining platform coverage. Compiler-only DirectX checks run on Ubuntu; Metal artifact generation is separated from native compilation. Required numerical execution remains on the corresponding native platforms.
 - Native demo checks reuse compatible translation and source-library setup, retain per-test progress and preserve numerical cases, guards and evidence when a check fails.

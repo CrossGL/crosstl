@@ -244,3 +244,10 @@ jobs:
               --title "$title" \
               --notes-file release-notes.md
           fi
+
+          verification="$(mktemp -d "${RUNNER_TEMP}/github-release.XXXXXX")"
+          gh release download "$GITHUB_REF_NAME" --dir "$verification"
+          python tools/check_release.py distributions "$verification"
+          for archive in dist/*; do
+            cmp -- "$archive" "$verification/$(basename "$archive")"
+          done

@@ -229,6 +229,29 @@ subgroup, all workgroup invocations reach the software barriers, and stores
 retain the original predicate. The proof does not admit arbitrary conditional
 collectives, resource-reading wrappers or unresolved overloads.
 
+The `Validate pinned extrema scans` step additionally checks the complete
+inclusive minimum and maximum entries for float32 and int32 at 128 and 256
+threads. Forty cases cover axes 1 and 33 and both sides of each launch's
+four-items-per-thread boundary. `tests/fixtures/scan_extrema_reference.json`
+retains fresh original-Metal results, including signed zeros, infinities,
+signaling and quiet NaN inputs, integer extrema and 32 output guards per case.
+macOS re-executes the unchanged original source and checks its input buffers.
+Generated read-only input readbacks are not claimed. The new step shares the
+existing three project jobs, keeps its evidence on failure and has a separate
+240-second bound; no runner job or existing deadline is changed.
+The scan steps group cases by launch configuration so each worker builds a
+package once instead of duplicating translation and compilation. This preserves
+all cases and readback comparisons within the existing two-worker jobs. The
+previous Windows run passed the 32- and 128-thread sums before timing out during
+256-thread package setup; the grouped Windows run still requires qualification.
+
+These entries require private scalar accumulator and comparison proofs inside
+the conditional wrappers, together with checked doubling loops. The lowering
+preserves the source's order and comparison behavior. It does not replace the
+algorithm with a native target min/max scan, change the upstream source, or
+establish reverse, strided, complex or log-add-exp scan host routing. Native
+Windows execution remains required before claiming DirectX parity.
+
 A separate survey of twelve unchanged entries per target at revision
 `8d4cec0a` identified three blockers:
 subgroup-only conditional scans at 128 threads
@@ -251,11 +274,12 @@ Software shuffle-and-fill now has independent compiler and native controls for
 numeric scalars, Boolean values and two-word payloads. The existing subgroup
 CI step covers every supported segment width, lane-varying fill values,
 partial groups and repeated calls through wrappers; Metal also executes the
-original source. This adds no runner jobs. The complete minimum, maximum,
-log-add-exp and complex scan entries now reach the conditional-collective
-restriction in #2207 on both targets, at unchanged 128-thread or 64-thread
-launches. No complete entry or host-routing claim follows from the isolated
-operation tests. Native Windows readbacks remain a required qualification.
+original source. This adds no runner jobs. The earlier shuffle-only survey
+reached the conditional-collective restriction in #2207 for minimum, maximum,
+log-add-exp and complex scans. The scalar extrema controls above extend that
+proof to selected complete entries; complex and log-add-exp wrappers remain
+unqualified. No complete host-routing claim follows from isolated operation
+tests. Native Windows readbacks remain a required qualification.
 
 ### Half-Precision Divmod
 

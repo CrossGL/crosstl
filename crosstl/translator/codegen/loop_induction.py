@@ -143,3 +143,44 @@ def fixed_stride_loop_terminates(type_name, start, bound, update, constants, ope
     trips = max(0, (distance + abs(step) - 1) // abs(step))
     final = int(start) + trips * step
     return minimum <= final <= maximum
+
+
+def geometric_loop_terminates(type_name, start, bound, update, constants, operator):
+    """Prove positive geometric induction, including the terminating update."""
+    if not isinstance(type_name, str) or not type_name.isidentifier():
+        return False
+    shape = source_integer_shape(
+        {"min16int": "short", "min16uint": "ushort"}.get(type_name, type_name)
+    )
+    if (
+        shape is None
+        or shape[2] != 1
+        or shape[1] > 32
+        or getattr(update, "operator", None) not in {"*=", "<<="}
+        or operator not in {"<", "<="}
+    ):
+        return False
+    unsigned = shape[0] == ArithmeticScalarKind.UNSIGNED_INTEGER
+    maximum = (1 << (shape[1] - (not unsigned))) - 1
+    start = checked_induction_value(start, constants)
+    stop = checked_induction_value(bound, constants)
+    amount = checked_induction_value(update.value, constants)
+    if any(value is None for value in (start, stop, amount)):
+        return False
+    if not (0 < start <= maximum and 0 <= stop <= maximum):
+        return False
+    if update.operator == "<<=":
+        if not 0 < amount < shape[1]:
+            return False
+        factor = 1 << int(amount)
+    else:
+        if not 1 < amount <= maximum:
+            return False
+        factor = int(amount)
+    value = int(start)
+    # Growth is at least twofold, so at most the source bit width is visited.
+    while value < stop or operator == "<=" and value == stop:
+        value *= factor
+        if value > maximum:
+            return False
+    return True

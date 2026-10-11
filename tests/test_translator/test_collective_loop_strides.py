@@ -1,4 +1,4 @@
-"""Finite additive induction preserves every software collective invocation."""
+"""Checked finite induction preserves every software collective invocation."""
 
 import os
 import sys
@@ -51,6 +51,18 @@ CASES = {
     "unit-descending": ("ushort step = 3; step > 0; --step", (3, 2, 1)),
     "local-positive": ("short step = 0; step < limit; step += stride", (0, 8)),
     "local-negative": ("int step = 7; step > -2; step += stride", (7, 4, 1)),
+    "doubling": ("int step = 1; step <= 16; step *= 2", (1, 2, 4, 8, 16)),
+    "tripling": ("uint step = 1u; step < 28u; step *= 3u", (1, 3, 9, 27)),
+    "left-shift": ("uint step = 1u; step < 32u; step <<= 1u", (1, 2, 4, 8, 16)),
+    "geometric-reversed": ("int step = 1; 16 >= step; step *= 2", (1, 2, 4, 8, 16)),
+    "geometric-zero-trip": ("short step = 16; step < 16; step *= 2", ()),
+    "geometric-narrow": ("short step = 4096; step < 16384; step *= 2", (4096, 8192)),
+    "geometric-narrow-shift": (
+        "ushort step = 8192; step < 32768; step <<= 1",
+        (8192, 16384),
+    ),
+    "local-factor": ("int step = 1; step <= limit; step *= factor", (1, 2, 4, 8, 16)),
+    "local-shift": ("uint step = 1u; step < limit; step <<= shift", (1, 4, 16)),
 }
 
 LOCAL_CONSTANTS = {
@@ -58,6 +70,8 @@ LOCAL_CONSTANTS = {
         "const short base = 4; const short stride = base * 2; const short limit = stride * 2;"
     ),
     "local-negative": "const int stride = -3;",
+    "local-factor": "const int factor = 1 + 1; const int limit = factor * 8;",
+    "local-shift": "const uint shift = 2u; const uint limit = 32u;",
 }
 
 
@@ -104,6 +118,25 @@ def test_fixed_stride_collectives_compile(tmp_path, case, stride_target):
         "int step = 0; step < 16; step += unknown()",
         "int step = 0; step < 16; step += (2147483647 + 8) - 2147483647",
         "int step = 0; step < 16; step += ((-2147483647 - 1) % -1) + 8",
+        "int step = 0; step < 16; step *= 2",
+        "int step = 1; step < 16; step *= 1",
+        "int step = 1; step < 16; step *= 0",
+        "int step = 1; step < 16; step *= -2",
+        "int step = -1; step < 16; step *= 2",
+        "int step = 16; step > 0; step *= 2",
+        "int step = 1; step <= 1073741824; step *= 2",
+        "uint step = 1u; step <= 2147483648u; step *= 2u",
+        "short step = 16384; step <= 16384; step *= 2",
+        "ushort step = 32768; step <= 32768; step <<= 1",
+        "int step = 1; step < 16; step <<= 0",
+        "int step = 1; step < 16; step <<= -1",
+        "uint step = 1u; step < 16u; step <<= 32u",
+        "short step = 1; step < 16; step <<= 16",
+        "int step = 1; step < 16; step *= invocation",
+        "int step = 1; step < invocation; step *= 2",
+        "int step = int(group.x); step < 16; step <<= 1",
+        "int step = 1; step < 16; step *= (2147483647 + 2) - 2147483647",
+        "volatile int step = 1; step < 16; step *= 2",
     ],
 )
 def test_unproved_or_overflowing_induction_is_rejected(header, stride_target):
@@ -125,11 +158,70 @@ def test_unproved_or_overflowing_induction_is_rejected(header, stride_target):
         "if (invocation == 0u) { return; }",
     ],
 )
-def test_fixed_stride_proof_retains_mutation_and_exit_checks(body, stride_target):
+@pytest.mark.parametrize(
+    "header",
+    (
+        "int step = 0; step < 16; step += 8",
+        "int step = 1; step <= 16; step *= 2",
+        "int step = 1; step <= 16; step <<= 1",
+    ),
+)
+def test_fixed_stride_proof_retains_mutation_and_exit_checks(
+    body, header, stride_target
+):
     with pytest.raises(STRIDE_ERRORS):
         _generator(stride_target).generate_stage(
-            parse(_canonical("int step = 0; step < 16; step += 8", body)),
+            parse(_canonical(header, body)),
             "compute",
+        )
+
+
+@pytest.mark.parametrize(
+    "declarations,body,header",
+    (
+        (
+            "const int factor = 2;",
+            "factor = int(invocation);",
+            "int step = 1; step <= 16; step *= factor",
+        ),
+        (
+            "const int factor = 2;",
+            "unknown(factor);",
+            "int step = 1; step <= 16; step *= factor",
+        ),
+        (
+            "const int factor = 2;",
+            "int& alias = factor; alias = int(invocation);",
+            "int step = 1; step <= 16; step *= factor",
+        ),
+        (
+            "const int factor = 2;",
+            "int factor = int(invocation);",
+            "int step = 1; step <= 16; step *= factor",
+        ),
+        (
+            "volatile const int factor = 2;",
+            "",
+            "int step = 1; step <= 16; step *= factor",
+        ),
+        (
+            "const uint shift = 1u;",
+            "++shift;",
+            "uint step = 1u; step <= 16u; step <<= shift",
+        ),
+        (
+            "const int factor = 2147483647 + 2;",
+            "",
+            "int step = 1; step <= 16; step *= factor",
+        ),
+    ),
+)
+def test_geometric_control_values_remain_immutable(
+    declarations, body, header, stride_target
+):
+    with pytest.raises(STRIDE_ERRORS):
+        _generator(stride_target).generate_stage(
+            parse(_canonical(header, body, declarations=declarations)), "compute"
         )
 
 

@@ -329,7 +329,11 @@ from .index_range_contracts import (
     decide_index_narrowing,
     parse_index_range_assertions,
 )
-from .loop_induction import fixed_stride_loop_terminates, loop_constant_bindings
+from .loop_induction import (
+    fixed_stride_loop_terminates,
+    geometric_loop_terminates,
+    loop_constant_bindings,
+)
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -6329,6 +6333,7 @@ class GLSLCodeGen:
         update = getattr(node, "update", None)
         halving_update = False
         additive_update = False
+        geometric_update = False
         if isinstance(update, UnaryOpNode):
             update_operator = self.map_operator(
                 getattr(update, "op", getattr(update, "operator", None))
@@ -6343,7 +6348,7 @@ class GLSLCodeGen:
                 getattr(update, "op", getattr(update, "operator", None))
             )
             if (
-                update_operator not in {"/=", ">>=", "+=", "-="}
+                update_operator not in {"/=", ">>=", "+=", "-=", "*=", "<<="}
                 or self.glsl_software_subgroup_assignment_target_name(update)
                 != loop_name
             ):
@@ -6359,6 +6364,9 @@ class GLSLCodeGen:
                 step = concrete_update_value * (1 if update_operator == "+=" else -1)
                 increasing = step > 0
                 additive_update = True
+            elif update_operator in {"*=", "<<="}:
+                increasing = True
+                geometric_update = True
             else:
                 if (
                     update_operator == "/="
@@ -6397,17 +6405,26 @@ class GLSLCodeGen:
                 return False
         elif increasing != (normalized_operator in {"<", "<="}):
             return False
-        if additive_update or (
-            isinstance(update, UnaryOpNode)
-            and narrow_integer_shape(self.type_name_string(initializer.var_type))
-            is not None
+        if (
+            additive_update
+            or geometric_update
+            or (
+                isinstance(update, UnaryOpNode)
+                and narrow_integer_shape(self.type_name_string(initializer.var_type))
+                is not None
+            )
         ):
+            proof = (
+                geometric_loop_terminates
+                if geometric_update
+                else fixed_stride_loop_terminates
+            )
             if any(
                 self.glsl_software_subgroup_uniform_returns._qualified(
                     value, {"volatile"}
                 )
                 for value in (initializer, initializer.var_type)
-            ) or not fixed_stride_loop_terminates(
+            ) or not proof(
                 self.type_name_string(initializer.var_type),
                 initial_expression,
                 bound,
@@ -6420,7 +6437,7 @@ class GLSLCodeGen:
         bound_names = self.glsl_software_subgroup_expression_identifier_names(bound)
         stride_names = (
             self.glsl_software_subgroup_expression_identifier_names(update.value)
-            if additive_update
+            if additive_update or geometric_update
             else set()
         )
         control_names = bound_names | stride_names | {loop_name}

@@ -188,6 +188,9 @@ def test_release_checks_and_publishes_the_same_distributions():
     assert publish["with"]["attestations"] == "false"
     release = jobs["github-release"]["steps"][-1]["run"]
     assert "--verify-tag" in release and "dist/*" in release
+    assert 'gh release download "$GITHUB_REF_NAME" --dir "$verification"' in release
+    assert 'python tools/check_release.py distributions "$verification"' in release
+    assert 'cmp -- "$archive" "$verification/$(basename "$archive")"' in release
     steps = jobs["github-release"]["steps"]
     names = [step["name"] for step in steps]
     verify = names.index("Verify published PyPI archive identities")
@@ -258,6 +261,85 @@ def test_release_archive_checks_accept_complete_payload(release_tree, tmp_path):
     result = check_distributions(release_tree, directory)
     assert result["version"] == "1.2.3" and result["packageFiles"] == 2
     assert release_notes(release_tree, "1.2.3") == "### Fixed\n\n- A change.\n"
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or not shutil.which("bash"), reason="Release jobs run on Ubuntu"
+)
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("fault", ["none", "changed", "missing", "extra", "download"])
+def test_github_release_verifies_uploaded_bytes(
+    release_tree, tmp_path, existing, fault
+):
+    _archives(release_tree, release_tree / "dist")
+    scripts = release_tree / "tools"
+    scripts.mkdir()
+    shutil.copyfile(ROOT / "tools/check_release.py", scripts / "check_release.py")
+    (release_tree / "release-notes.md").write_text("Release notes\n", encoding="utf-8")
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    log = tmp_path / "calls.jsonl"
+    gh = tmp_path / "gh"
+    gh.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, shutil, sys, zipfile\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "assert args[0] == 'release' and args[2] == 'v1.2.3'\n"
+        "with open(os.environ['CALLS'], 'a') as log: log.write(json.dumps(args) + '\\n')\n"
+        "action = args[1]\n"
+        "remote = Path(os.environ['REMOTE'])\n"
+        "fault = os.environ['FAULT']\n"
+        "if action == 'view': sys.exit(0 if os.environ['EXISTING'] == '1' else 1)\n"
+        "if action in {'create', 'upload'}:\n"
+        "    for path in Path('dist').iterdir(): shutil.copyfile(path, remote / path.name)\n"
+        "elif action == 'download':\n"
+        "    assert args[3] == '--dir' and len(args) == 5\n"
+        "    if fault == 'download': sys.exit(73)\n"
+        "    if fault == 'missing': (remote / 'crosstl-1.2.3.tar.gz').unlink()\n"
+        "    if fault == 'extra': (remote / 'unexpected.txt').write_text('unexpected')\n"
+        "    if fault == 'changed':\n"
+        "        with zipfile.ZipFile(remote / 'crosstl-1.2.3-py3-none-any.whl', 'a') as archive: archive.comment = b'different archive bytes'\n"
+        "    for path in remote.iterdir(): shutil.copyfile(path, Path(args[4]) / path.name)\n"
+        "else: assert action == 'edit'\n",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    (tmp_path / "python").symlink_to(sys.executable)
+    command = _workflow()["jobs"]["github-release"]["steps"][-1]["run"]
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", command],
+        cwd=release_tree,
+        env=dict(
+            os.environ,
+            PATH=str(tmp_path) + os.pathsep + os.environ["PATH"],
+            GITHUB_REF_NAME="v1.2.3",
+            RUNNER_TEMP=str(tmp_path),
+            EXISTING="1" if existing else "0",
+            FAULT=fault,
+            REMOTE=str(remote),
+            CALLS=str(log),
+        ),
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert (result.returncode == 0) == (fault == "none"), result.stdout + result.stderr
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert [call[1] for call in calls] == (
+        ["view", "edit", "upload", "download"]
+        if existing
+        else ["view", "create", "download"]
+    )
+    directory = Path(calls[-1][-1])
+    assert directory.parent == tmp_path and directory.name.startswith("github-release.")
+    if fault == "changed":
+        # Valid archive contents do not establish byte identity with the upload.
+        assert check_distributions(release_tree, directory)["version"] == "1.2.3"
+        assert "differ" in result.stdout
+    elif fault == "none":
+        for path in (release_tree / "dist").iterdir():
+            assert (directory / path.name).read_bytes() == path.read_bytes()
 
 
 @pytest.fixture

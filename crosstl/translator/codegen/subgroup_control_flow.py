@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 
+from ..arithmetic_conversions import ArithmeticScalarKind, source_integer_shape
 from ..ast import (
     ArrayAccessNode,
     AssignmentNode,
@@ -9,6 +10,8 @@ from ..ast import (
     BlockNode,
     CastNode,
     ConstructorNode,
+    ExpressionStatementNode,
+    ForNode,
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
@@ -24,6 +27,11 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
     WaveOpNode,
+)
+from .loop_induction import (
+    checked_induction_value,
+    fixed_stride_loop_terminates,
+    geometric_loop_terminates,
 )
 
 _FLOATS = {
@@ -317,38 +325,225 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
         node.name for node in nodes if isinstance(node, StructNode) and not node.members
     }
 
-    def expression_inputs(node, parameters, visiting):
+    def value_type(node, types):
+        if isinstance(node, IdentifierNode):
+            return types.get(node.name)
+        if isinstance(node, LiteralNode):
+            return _type_name(node.literal_type)
+        if isinstance(node, CastNode):
+            return _type_name(node.target_type)
+        if isinstance(node, ConstructorNode):
+            return _type_name(node.constructor_type)
+        if isinstance(node, UnaryOpNode):
+            return (
+                "bool"
+                if map_operator(node.operator) == "!"
+                else value_type(node.operand, types)
+            )
+        if isinstance(node, BinaryOpNode):
+            if map_operator(node.operator) in {
+                "==",
+                "!=",
+                "<",
+                "<=",
+                ">",
+                ">=",
+                "&&",
+                "||",
+            }:
+                return "bool"
+            left, right = value_type(node.left, types), value_type(node.right, types)
+            return (
+                left
+                if left == right
+                else (
+                    "float"
+                    if left in _FLOATS or right in _FLOATS
+                    else (
+                        "uint"
+                        if left in {"uint", "uint32_t"} or right in {"uint", "uint32_t"}
+                        else "int"
+                    )
+                )
+            )
+        if isinstance(node, TernaryOpNode):
+            left, right = value_type(node.true_expr, types), value_type(
+                node.false_expr, types
+            )
+            return left if left == right else None
+        operation = _operation(node)
+        if operation in functions:
+            candidates = [
+                function
+                for function in functions[operation]
+                if len(function.parameters) == len(node.arguments)
+            ]
+            return (
+                _type_name(candidates[0].return_type) if len(candidates) == 1 else None
+            )
+        if operation in _SCALARS:
+            return operation
+        if operation in {"isnan", "isinf"} | _VOTES:
+            return "bool"
+        if operation in {"asfloat", "asint", "asuint"}:
+            return {"asfloat": "float", "asint": "int", "asuint": "uint"}[operation]
+        if operation in operations and node.arguments:
+            return value_type(node.arguments[0], types)
+        return None
+
+    def integer_constant(node):
+        type_name = value_type(node, {})
+        shape = source_integer_shape(type_name) if type_name else None
+        if shape is None or shape[2] != 1 or shape[1] > 64:
+            return None
+        unsigned = shape[0] == ArithmeticScalarKind.UNSIGNED_INTEGER
+        if isinstance(node, LiteralNode) and type(node.value) is int:
+            value = node.value
+        elif isinstance(node, UnaryOpNode) and map_operator(node.operator) in {
+            "+",
+            "-",
+        }:
+            value = integer_constant(node.operand)
+            if value is None or unsigned and map_operator(node.operator) == "-":
+                return None
+            value *= -1 if map_operator(node.operator) == "-" else 1
+        else:
+            return None
+        minimum = 0 if unsigned else -(1 << (shape[1] - 1))
+        maximum = (1 << (shape[1] - (not unsigned))) - 1
+        return value if minimum <= value <= maximum else None
+
+    def converts_safely(target, value, types):
+        source = value_type(value, types)
+        constant = integer_constant(value)
+        if constant is not None and target in _SCALARS:
+            if target in _FLOATS | {"bool"}:
+                return True
+            shape = source_integer_shape(target)
+            unsigned = shape[0] == ArithmeticScalarKind.UNSIGNED_INTEGER
+            return (
+                (0 if unsigned else -(1 << (shape[1] - 1)))
+                <= constant
+                <= (1 << (shape[1] - (not unsigned))) - 1
+            )
+        return (
+            source in _SCALARS
+            and target in _SCALARS
+            and (target in _FLOATS | {"bool"} or source not in _FLOATS)
+        )
+
+    def expression_inputs(node, parameters, types, visiting):
         if isinstance(node, IdentifierNode) and node.name in parameters:
-            return frozenset({parameters[node.name]}), False
+            return (
+                (parameters[node.name], False) if types[node.name] in _SCALARS else None
+            )
         if isinstance(node, LiteralNode):
             return frozenset(), False
-        if isinstance(node, CastNode) and _type_name(node.target_type) in _FLOATS:
-            return expression_inputs(node.expression, parameters, visiting)
+        if integer_constant(node) is not None:
+            return frozenset(), False
+        if (
+            isinstance(node, (UnaryOpNode, BinaryOpNode))
+            and checked_induction_value(node, {}) is not None
+        ):
+            return frozenset(), False
+        if isinstance(node, CastNode) and converts_safely(
+            _type_name(node.target_type), node.expression, types
+        ):
+            return expression_inputs(node.expression, parameters, types, visiting)
         if (
             isinstance(node, ConstructorNode)
-            and _type_name(node.constructor_type) in _FLOATS | {"bool"}
             and not node.named_arguments
             and len(node.arguments) == 1
+            and converts_safely(
+                _type_name(node.constructor_type), node.arguments[0], types
+            )
         ):
-            return expression_inputs(node.arguments[0], parameters, visiting)
+            return expression_inputs(node.arguments[0], parameters, types, visiting)
+        children = None
+        if isinstance(node, UnaryOpNode):
+            operator = map_operator(node.operator)
+            operand_type = value_type(node.operand, types)
+            if (
+                operator in {"!", "+"}
+                or operator == "-"
+                and (
+                    operand_type in _FLOATS
+                    or checked_induction_value(node, {}) is not None
+                )
+                or operator == "~"
+                and operand_type in _SCALARS - _FLOATS
+            ):
+                children = [node.operand]
+        elif isinstance(node, BinaryOpNode):
+            operator = map_operator(node.operator)
+            operands = {value_type(node.left, types), value_type(node.right, types)}
+            if (
+                operator in {
+                    "==",
+                    "!=",
+                    "<",
+                    "<=",
+                    ">",
+                    ">=",
+                    "&&",
+                    "||",
+                    "&",
+                    "|",
+                    "^",
+                }
+                or operator in {"+", "-", "*"}
+                and operands <= _SCALARS
+                and operands & _FLOATS
+            ):
+                children = [node.left, node.right]
+        elif isinstance(node, TernaryOpNode):
+            children = [node.condition, node.true_expr, node.false_expr]
+        if children is not None:
+            proofs = [
+                expression_inputs(child, parameters, types, visiting)
+                for child in children
+            ]
+            if any(proof is None for proof in proofs):
+                return None
+            return frozenset().union(*(proof[0] for proof in proofs)), any(
+                proof[1] for proof in proofs
+            )
         operation = _operation(node)
         if (
             isinstance(node, FunctionCallNode)
-            and operation in _FLOATS | {"bool"}
+            and operation in _SCALARS
             and operation not in functions
             and len(node.arguments) == 1
             and not node.generic_args
+            and converts_safely(operation, node.arguments[0], types)
         ):
-            return expression_inputs(node.arguments[0], parameters, visiting)
+            return expression_inputs(node.arguments[0], parameters, types, visiting)
+        if (
+            isinstance(node, FunctionCallNode)
+            and operation in {"isnan", "isinf", "asfloat", "asint", "asuint"}
+            and operation not in functions
+            and len(node.arguments) == 1
+            and not node.generic_args
+            and value_type(node.arguments[0], types)
+            in {"float", "float32_t", "int", "int32_t", "uint", "uint32_t"}
+        ):
+            return expression_inputs(node.arguments[0], parameters, types, visiting)
         if operation in operations and operation not in functions:
             required = range(len(node.arguments))
             collective = True
         elif isinstance(node, FunctionCallNode):
-            proof = wrapper(node, visiting)
+            proof = wrapper(node, visiting, allow_pure=True)
             if proof is None:
                 return None
-            _function, required = proof
-            collective = True
+            _function, required, collective = proof
+            if any(
+                _type_name(parameter.param_type) in _SCALARS
+                and not converts_safely(
+                    _type_name(parameter.param_type), argument, types
+                )
+                for parameter, argument in zip(_function.parameters, node.arguments)
+            ):
+                return None
         else:
             return None
         dependencies = set()
@@ -361,7 +556,7 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                 ):
                     return None
                 continue
-            proof = expression_inputs(argument, parameters, visiting)
+            proof = expression_inputs(argument, parameters, types, visiting)
             if proof is None:
                 return None
             if operation in operations and index == 0 and not proof[0]:
@@ -370,7 +565,209 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
             collective |= proof[1]
         return frozenset(dependencies), collective
 
-    def wrapper(call, visiting=frozenset()):
+    def body_inputs(
+        body,
+        parameters,
+        types,
+        visiting,
+        result_type,
+        constants=None,
+        controls=frozenset(),
+    ):
+        parameters, types, constants = (
+            dict(parameters),
+            dict(types),
+            dict(constants or {}),
+        )
+        dependencies, collective = set(), False
+        for statement in _statements(body):
+            if isinstance(statement, ExpressionStatementNode):
+                statement = statement.expression
+            if isinstance(statement, (VariableNode, AssignmentNode, ReturnNode)):
+                if isinstance(statement, VariableNode):
+                    if (
+                        statement.name in parameters
+                        or statement.name in controls
+                        or statement.attributes
+                        or set(statement.qualifiers or []) - {"const", "thread"}
+                        or set(getattr(statement.var_type, "qualifiers", []) or [])
+                        - {"const", "thread"}
+                    ):
+                        return None
+                    name, target, value = (
+                        statement.name,
+                        _type_name(statement.var_type),
+                        statement.initial_value,
+                    )
+                elif isinstance(statement, AssignmentNode):
+                    if (
+                        not isinstance(statement.target, IdentifierNode)
+                        or statement.target.name not in parameters
+                        or statement.target.name in controls
+                        or map_operator(statement.operator) != "="
+                    ):
+                        return None
+                    name = statement.target.name
+                    target, value = types[name], statement.value
+                else:
+                    name, target, value = None, result_type, statement.value
+                proof = expression_inputs(value, parameters, types, visiting)
+                if (
+                    proof is None
+                    or target is not None
+                    and not converts_safely(target, value, types)
+                ):
+                    return None
+                if name is not None:
+                    parameters[name], types[name] = proof[0], target
+                    constants.pop(name, None)
+                    if isinstance(statement, VariableNode) and "const" in set(
+                        statement.qualifiers or []
+                    ) | set(getattr(statement.var_type, "qualifiers", []) or []):
+                        constant = checked_induction_value(value, constants)
+                        if constant is not None:
+                            constants[name] = constant
+            elif isinstance(statement, (BlockNode, IfNode)):
+                if isinstance(statement, BlockNode):
+                    branches, conditions = [statement], []
+                elif (
+                    isinstance(statement.condition, LiteralNode)
+                    and type(statement.condition.value) is bool
+                    and not statement.else_if_conditions
+                    and not statement.else_if_bodies
+                ):
+                    branches = [
+                        (
+                            statement.then_branch
+                            if statement.condition.value
+                            else statement.else_branch
+                        )
+                    ]
+                    conditions = []
+                else:
+                    branches = [
+                        statement.then_branch,
+                        *statement.else_if_bodies,
+                        statement.else_branch,
+                    ]
+                    conditions = [statement.condition, *statement.else_if_conditions]
+                proofs = [
+                    expression_inputs(condition, parameters, types, visiting)
+                    for condition in conditions
+                ]
+                results = [
+                    body_inputs(
+                        branch,
+                        parameters,
+                        types,
+                        visiting,
+                        result_type,
+                        constants,
+                        controls,
+                    )
+                    for branch in branches
+                ]
+                if any(proof is None for proof in [*proofs, *results]):
+                    return None
+                proofs += [result[:2] for result in results]
+                if conditions and any(proof[1] for proof in proofs):
+                    return None
+                proof = frozenset().union(*(proof[0] for proof in proofs)), any(
+                    proof[1] for proof in proofs
+                )
+                for name in parameters:
+                    parameters[name] |= frozenset().union(
+                        *(result[2][name] for result in results)
+                    )
+                constants = {
+                    name: value
+                    for name, value in constants.items()
+                    if all(result[3].get(name) == value for result in results)
+                }
+            elif isinstance(statement, ForNode):
+                initial, condition, update = (
+                    statement.init,
+                    statement.condition,
+                    statement.update,
+                )
+                if (
+                    not isinstance(initial, VariableNode)
+                    or initial.name in parameters
+                    or initial.name in controls
+                    or initial.attributes
+                    or initial.qualifiers
+                    or not isinstance(condition, BinaryOpNode)
+                    or not isinstance(condition.left, IdentifierNode)
+                    or condition.left.name != initial.name
+                    or not isinstance(update, (AssignmentNode, UnaryOpNode))
+                ):
+                    return None
+                target = (
+                    update.target
+                    if isinstance(update, AssignmentNode)
+                    else update.operand
+                )
+                if (
+                    not isinstance(target, IdentifierNode)
+                    or target.name != initial.name
+                ):
+                    return None
+                terminate = (
+                    geometric_loop_terminates
+                    if map_operator(update.operator) in {"*=", "<<="}
+                    else fixed_stride_loop_terminates
+                )
+                if not terminate(
+                    _type_name(initial.var_type),
+                    initial.initial_value,
+                    condition.right,
+                    update,
+                    constants,
+                    map_operator(condition.operator),
+                ):
+                    return None
+                if any(
+                    isinstance(child, ReturnNode) for child in walk_ast(statement.body)
+                ):
+                    return None
+                nested_parameters = {**parameters, initial.name: frozenset()}
+                nested_types = {**types, initial.name: _type_name(initial.var_type)}
+                loop_controls = (
+                    controls
+                    | {initial.name}
+                    | {
+                        child.name
+                        for root in (condition.right, update)
+                        for child in walk_ast(root)
+                        if isinstance(child, IdentifierNode)
+                    }
+                )
+                result = body_inputs(
+                    statement.body,
+                    nested_parameters,
+                    nested_types,
+                    visiting,
+                    result_type,
+                    constants,
+                    loop_controls,
+                )
+                if result is None:
+                    return None
+                proof = result[:2]
+                for name in parameters:
+                    parameters[name] |= result[2][name]
+                constants = {
+                    name: value
+                    for name, value in constants.items()
+                    if result[3].get(name) == value
+                }
+            else:
+                return None
+            dependencies.update(proof[0])
+            collective |= proof[1]
+        return frozenset(dependencies), collective, parameters, constants
+
+    def wrapper(call, visiting=frozenset(), *, allow_pure=False):
         if getattr(call, "generic_args", None):
             return None
         candidates = [
@@ -388,8 +785,8 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
             statements = _statements(function.body)
             proof = None
             if (
-                len(statements) == 1
-                and isinstance(statements[0], ReturnNode)
+                statements
+                and isinstance(statements[-1], ReturnNode)
                 and _type_name(function.return_type) in _SCALARS
                 and not getattr(function, "generic_params", None)
                 and not any(
@@ -399,15 +796,20 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                     for parameter in function.parameters
                 )
             ):
-                proof = expression_inputs(
-                    statements[0].value,
+                proof = body_inputs(
+                    statements,
                     {
-                        parameter.name: i
+                        parameter.name: frozenset({i})
                         for i, parameter in enumerate(function.parameters)
                     },
+                    {
+                        parameter.name: _type_name(parameter.param_type)
+                        for parameter in function.parameters
+                    },
                     visiting | {key},
+                    _type_name(function.return_type),
                 )
-            if proof is not None and proof[1]:
+            if proof is not None:
                 for index, parameter in enumerate(function.parameters):
                     if (
                         index not in proof[0]
@@ -423,9 +825,11 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                     ):
                         proof = None
                         break
-            summaries[key] = proof[0] if proof is not None and proof[1] else None
-        required = summaries[key]
-        return (function, required) if required is not None else None
+            summaries[key] = proof[:2] if proof is not None else None
+        proof = summaries[key]
+        if proof is None or not (allow_pure or proof[1]):
+            return None
+        return (function, *proof) if allow_pure else (function, proof[0])
 
     def root_name(node):
         while isinstance(node, (ArrayAccessNode, MemberAccessNode)):

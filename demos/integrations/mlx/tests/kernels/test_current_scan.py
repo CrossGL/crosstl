@@ -36,6 +36,10 @@ REFERENCE_SHA256 = "8302e4268f6ed3bcbed4ffed60ba9749aaec1279085a96c4e122f80e23e8
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_SCAN"
 AXES = (1, 3, 31, 32, 33, 127, 128, 129, 257, 513)
 DTYPES = ("float32", "bfloat16")
+SCAN_LAUNCHES = tuple(
+    pytest.param(width, marks=pytest.mark.xdist_group(f"scan-width-{width}"))
+    for width in (32, 128, 256)
+)
 WIDE_AXES = (1, 31, 33, 129, 511, 512, 513, 1023, 1024, 1025)
 WIDE_REFERENCE = REFERENCE.with_name("scan_subgroup_reference.json")
 WIDE_REFERENCE_SHA256 = (
@@ -43,15 +47,35 @@ WIDE_REFERENCE_SHA256 = (
 )
 
 
-def _entry(dtype):
-    return f"contig_scan_inclusive_sum_{dtype}_{dtype}"
+def _entry(dtype, operation="sum"):
+    return f"contig_scan_inclusive_{operation}_{dtype}_{dtype}"
 
 
 def _guard(dtype):
-    return 0xC7F12000 if dtype == "float32" else 0x3EAB
+    return 0x3EAB if dtype == "bfloat16" else 0xC7F12000
 
 
-def _input_words(dtype, axis):
+def _input_words(dtype, axis, operation="sum"):
+    if operation != "sum":
+        assert operation in {"min", "max"} and dtype in {"float32", "int32"}
+        patterns = (
+            (
+                [0x80000000, 0, 0x3F000000, 0xBF000000, 0x7F800000, 0xFF800000],
+                [0x40000000, 0x3F800000, 0xBF800000, 0xC0000000],
+                [0x3F800000, 0x7FA12345, 0xBF800000, 0x7FC01234],
+            )
+            if dtype == "float32"
+            else (
+                [0x80000000, 0x7FFFFFFF, 0, 0xFFFFFFFF],
+                [7, 4, 1, 0xFFFFFFFE, 0xFFFFFFFB],
+                [0, 1, 0xFFFFFFFF, 2, 0xFFFFFFFE],
+            )
+        )
+        return [
+            pattern[index % len(pattern)]
+            for pattern in patterns
+            for index in range(axis)
+        ]
     patterns = (
         [((index * 7) % 19 - 9) * 0.125 for index in range(19)],
         [2.0**24, 1.0, -(2.0**24), 1.0],
@@ -93,6 +117,12 @@ def _references():
 
 
 def _packet(dtype, target, words):
+    if dtype == "int32":
+        return {
+            "dtype": dtype,
+            "shape": [len(words)],
+            "values": [word if word < 1 << 31 else word - (1 << 32) for word in words],
+        }
     if dtype == "float32":
         return {
             "dtype": dtype,
@@ -235,6 +265,9 @@ def scan_package(tmp_path_factory, request):
     root = Path(os.environ["CROSTL_MLX_CURRENT_ROOT"]).resolve()
     target = os.environ["CROSTL_MLX_CURRENT_TARGET"]
     width = getattr(request, "param", 32)
+    entries = tuple(_entry(dtype) for dtype in DTYPES)
+    if isinstance(width, tuple):
+        width, entries = width
     assert width in {32, 128, 256}
     assert target in {"metal", "opengl", "directx"}
     assert (
@@ -268,7 +301,7 @@ def scan_package(tmp_path_factory, request):
             include_dirs=(".",),
             targets=(target,),
             output_dir=Path(directory).name + "/out",
-            entry_points={SOURCE: tuple(_entry(dtype) for dtype in DTYPES)},
+            entry_points={SOURCE: entries},
             workgroup_size_rules={SOURCE: (width, 1, 1)},
             source_options={
                 "metal": {
@@ -296,14 +329,14 @@ def scan_package(tmp_path_factory, request):
         package = work / "package"
         assert build_runtime_package(work / "artifacts.json", package)["success"]
         loader = build_runtime_loader_manifest(package / "runtime-package.json")
-        assert loader["success"] and len(loader["loadUnits"]) == 2, loader
+        assert loader["success"] and len(loader["loadUnits"]) == len(entries), loader
         descriptors, modules = {}, {}
         for unit in loader["loadUnits"]:
             entry = unit["entryPoint"]["source"]
             descriptor = build_native_loader_abi_descriptor(
                 loader, load_unit_id=unit["id"]
             )
-            assert entry in {_entry(dtype) for dtype in DTYPES}
+            assert entry in entries
             descriptors[entry] = descriptor
             (work / f"{entry}.json").write_text(json.dumps(descriptor, indent=2))
             compilation = work / entry
@@ -349,7 +382,7 @@ def scan_package(tmp_path_factory, request):
         yield target, package, descriptors, modules, original, width
 
 
-@pytest.mark.parametrize("scan_package", (32, 128, 256), indirect=True)
+@pytest.mark.parametrize("scan_package", SCAN_LAUNCHES, indirect=True)
 @pytest.mark.parametrize("dtype", DTYPES)
 def test_complete_scan_package_retains_source_buffer_layout(scan_package, dtype):
     target, _, descriptors, _, _, _ = scan_package
@@ -381,11 +414,13 @@ def test_complete_scan_package_retains_source_buffer_layout(scan_package, dtype)
         )
 
 
-def _original_readback(work, original, dtype, axis, expected, width=32):
+def _original_readback(
+    work, original, dtype, axis, expected, width=32, operation="sum"
+):
     runner, library = original
-    code = "I" if dtype == "float32" else "H"
+    code = "H" if dtype == "bfloat16" else "I"
     values = (
-        _input_words(dtype, axis) + [_guard(dtype)] * 32,
+        _input_words(dtype, axis, operation) + [_guard(dtype)] * 32,
         [_guard(dtype)] * len(expected),
         [axis],
     )
@@ -409,7 +444,11 @@ def _original_readback(work, original, dtype, axis, expected, width=32):
         )
     )
     output = work / "original-readback"
-    run([runner, library, _entry(dtype), request, output], work, "original-execute")
+    run(
+        [runner, library, _entry(dtype, operation), request, output],
+        work,
+        "original-execute",
+    )
     readback = (output / "buffer-1.bin").read_bytes()
     assert len(readback) == len(payloads[1])
     _check_words(list(struct.unpack("<" + code * len(expected), readback)), expected)
@@ -417,7 +456,7 @@ def _original_readback(work, original, dtype, axis, expected, width=32):
         assert (output / f"buffer-{index}.bin").read_bytes() == payloads[index]
 
 
-@pytest.mark.parametrize("scan_package", (32,), indirect=True)
+@pytest.mark.parametrize("scan_package", SCAN_LAUNCHES[:1], indirect=True)
 @pytest.mark.parametrize("dtype", DTYPES)
 @pytest.mark.parametrize("axis", AXES)
 def test_complete_scan_executes_natively(scan_package, tmp_path, dtype, axis):
@@ -425,7 +464,7 @@ def test_complete_scan_executes_natively(scan_package, tmp_path, dtype, axis):
     _execute_scan_case(scan_package, tmp_path, dtype, axis, expected)
 
 
-@pytest.mark.parametrize("scan_package", (128, 256), indirect=True)
+@pytest.mark.parametrize("scan_package", SCAN_LAUNCHES[1:], indirect=True)
 @pytest.mark.parametrize("dtype", DTYPES)
 @pytest.mark.parametrize("axis", WIDE_AXES)
 def test_multisubgroup_scan_executes_natively(scan_package, tmp_path, dtype, axis):
@@ -433,11 +472,11 @@ def test_multisubgroup_scan_executes_natively(scan_package, tmp_path, dtype, axi
     _execute_scan_case(scan_package, tmp_path, dtype, axis, expected)
 
 
-def _execute_scan_case(scan_package, tmp_path, dtype, axis, expected):
+def _execute_scan_case(scan_package, tmp_path, dtype, axis, expected, operation="sum"):
     target, package, descriptors, modules, original, width = scan_package
     if original:
-        _original_readback(tmp_path, original, dtype, axis, expected, width)
-    descriptor = descriptors[_entry(dtype)]
+        _original_readback(tmp_path, original, dtype, axis, expected, width, operation)
+    descriptor = descriptors[_entry(dtype, operation)]
     names = {
         binding["provenance"]["sourceResource"]["parameter"]: binding["name"]
         for binding in descriptor["bindings"]
@@ -446,7 +485,7 @@ def _execute_scan_case(scan_package, tmp_path, dtype, axis, expected):
     assert set(names) == {"in", "out", "axis_size"}, names
     inputs = {
         names["in"]: _packet(
-            dtype, target, _input_words(dtype, axis) + [_guard(dtype)] * 32
+            dtype, target, _input_words(dtype, axis, operation) + [_guard(dtype)] * 32
         ),
         names["out"]: _packet(dtype, target, [_guard(dtype)] * len(expected)),
         names["axis_size"]: {"dtype": "uint64", "shape": [1], "values": [axis]},
@@ -472,7 +511,7 @@ def _execute_scan_case(scan_package, tmp_path, dtype, axis, expected):
             artifact.read_bytes()
             == (package / descriptor["artifact"]["packagePath"]).read_bytes()
         )
-        module = modules[_entry(dtype)]
+        module = modules[_entry(dtype, operation)]
         copied = directory / module.name
         shutil.copyfile(module, copied)
         return copied
@@ -501,7 +540,14 @@ def test_ci_requires_complete_scan_execution_on_each_native_platform():
         assert f"{platform}) export CROSTL_MLX_CURRENT_TARGET={target}" in step
     assert "test_current_scan.py" in step
     assert "--timeout-seconds 240" in step and "pytest -q -n auto" in step
+    assert "--dist=loadgroup" in step
+    for parameter in SCAN_LAUNCHES:
+        (width,) = parameter.values
+        assert [(mark.name, mark.args) for mark in parameter.marks] == [
+            ("xdist_group", (f"scan-width-{width}",))
+        ]
     assert "--basetemp=" in step and "--junitxml=" in step
     upload = ci_coverage.workflow_step_section(job, "Upload complete scan evidence")
     assert "if: always()" in upload and "if-no-files-found: error" in upload
     assert "path: mlx-scan-results" in upload
+    assert "include-hidden-files: true" in upload

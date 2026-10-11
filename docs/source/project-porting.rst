@@ -678,15 +678,20 @@ references and original Metal compiled without fast math, retaining exact
 finite results, NaN classification, repeated calls and guards. Full MLX host
 reduction planning and arbitrary collective control flow remain separate work.
 
-A scalar declaration initialized by a pure forwarding collective wrapper may
+A scalar declaration initialized by a pure collective wrapper may
 also move outside a proven subgroup-ID branch. Its input expressions are
 evaluated under the original guard, including side effects in unused scalar
 arguments. The wrapper executes for every workgroup invocation with private
 zero inputs for disabled subgroups, followed by the guarded source stores.
 This preserves collective inputs without speculating memory accesses or
 treating subgroup uniformity as workgroup uniformity. The proof requires an
-immutable, unescaped subgroup ID, a single-return scalar wrapper and no else
-branch. Resource-reading wrappers, scalar reference effects, ambiguous
+immutable, unescaped subgroup ID, private scalar state and no else branch
+around the original call. Pure comparison helpers and checked finite loops
+are supported. Positive multiplicative and left-shift induction must preserve
+the source integer range, including the terminating update. Unchecked runtime
+bounds, speculative integer overflow and floating-to-integer conversions
+remain diagnostic; representable literal integer identities may be narrowed.
+Resource-reading wrappers, scalar reference effects, ambiguous
 overloads and nested collective arguments remain diagnostic. Existing
 convergence analysis still checks the transformed program. Required native
 controls retain original Metal comparisons, partial groups, inactive groups,
