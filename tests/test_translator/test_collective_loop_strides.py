@@ -11,8 +11,10 @@ from crosstl.translator import parse
 from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
 from crosstl.translator.codegen.GLSL_codegen import (
     GLSLCodeGen,
+    OpenGLPrivatePointerParameterError,
     OpenGLSoftwareSubgroupError,
 )
+from crosstl.translator.codegen.loop_induction import loop_constant_bindings
 from tests.test_translator.test_directx_software_reductions import _codegen, _source
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
@@ -47,13 +49,22 @@ CASES = {
     ),
     "unit-boundary": ("short step = 32765; step < 32767; ++step", (32765, 32766)),
     "unit-descending": ("ushort step = 3; step > 0; --step", (3, 2, 1)),
+    "local-positive": ("short step = 0; step < limit; step += stride", (0, 8)),
+    "local-negative": ("int step = 7; step > -2; step += stride", (7, 4, 1)),
+}
+
+LOCAL_CONSTANTS = {
+    "local-positive": (
+        "const short base = 4; const short stride = base * 2; const short limit = stride * 2;"
+    ),
+    "local-negative": "const int stride = -3;",
 }
 
 
-def _canonical(header, body="", helpers=""):
+def _canonical(header, body="", helpers="", declarations=""):
     return _source(
         "uint",
-        f"uint result = 0u; for ({header}) {{ {body} result += WaveActiveSum(invocation + uint(step)); }} outputWords[index] = result;",
+        f"{declarations} uint result = 0u; for ({header}) {{ {body} result += WaveActiveSum(invocation + uint(step)); }} outputWords[index] = result;",
         helpers,
     )
 
@@ -61,7 +72,7 @@ def _canonical(header, body="", helpers=""):
 @pytest.mark.parametrize("case", CASES)
 def test_fixed_stride_collectives_compile(tmp_path, case, stride_target):
     generator = _generator(stride_target)
-    ast = parse(_canonical(CASES[case][0]))
+    ast = parse(_canonical(CASES[case][0], declarations=LOCAL_CONSTANTS.get(case, "")))
     generated = generator.generate_stage(ast, "compute")
     assert generated == generator.generate_stage(ast, "compute")
     assert (
@@ -130,6 +141,131 @@ def test_constant_expression_stride_compiles(tmp_path, stride_target):
     _compile(generated, stride_target, tmp_path)
 
 
+@pytest.mark.parametrize("through_helper", [False, True])
+def test_lexical_stride_is_available_before_collective_helper_analysis(
+    tmp_path, stride_target, through_helper
+):
+    call = "collect(invocation)" if through_helper else "WaveActiveSum(invocation)"
+    source = _source(
+        "uint",
+        "const int base = 4; const int stride = base * 2; "
+        f"for (uint step = 0u; step < 24u; step += stride) {{ uint result = {call}; outputWords[index] = result; }}",
+        "uint collect(uint value) { return WaveActiveSum(value); }",
+    )
+    generator = _generator(stride_target)
+    generated = generator.generate_stage(parse(source), "compute")
+    assert generated == generator.generate_stage(parse(source), "compute")
+    _compile(generated, stride_target, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "declarations,before,header",
+    [
+        ("const int stride = 0;", "", "int step = 0; step < 16; step += stride"),
+        ("const int stride = -8;", "", "int step = 0; step < 16; step += stride"),
+        ("const uint stride = 2u;", "", "int step = -2; step < 8; step += stride"),
+        (
+            "const short stride = 65544;",
+            "",
+            "short step = 0; step < 16; step += stride",
+        ),
+        (
+            "const int stride = (2147483647 + 8) - 2147483647;",
+            "",
+            "int step = 0; step < 16; step += stride",
+        ),
+        (
+            "const int stride = 8;",
+            "",
+            "short step = 32760; step < 32767; step += stride",
+        ),
+        (
+            "const uint stride = 8u;",
+            "",
+            "uint step = 0u; step < group.x; step += stride",
+        ),
+        (
+            "const uint stride = invocation;",
+            "",
+            "uint step = 0u; step < 16u; step += stride",
+        ),
+        (
+            "volatile const uint stride = 8u;",
+            "",
+            "uint step = 0u; step < 16u; step += stride",
+        ),
+        (
+            "uint stride = 8u;",
+            "stride = invocation;",
+            "uint step = 0u; step < 16u; step += stride",
+        ),
+        (
+            "uint stride = 8u;",
+            "unknown(stride);",
+            "uint step = 0u; step < 16u; step += stride",
+        ),
+        (
+            "uint stride = 8u;",
+            "uint& alias = stride; alias = invocation;",
+            "uint step = 0u; step < 16u; step += stride",
+        ),
+        (
+            "uint stride = 8u;",
+            "uint* alias = &stride; *alias = invocation;",
+            "uint step = 0u; step < 16u; step += stride",
+        ),
+        (
+            "{ const uint stride = 8u; }",
+            "uint stride = invocation;",
+            "uint step = 0u; step < 16u; step += stride",
+        ),
+    ],
+)
+def test_local_constant_proofs_reject_unchecked_induction(
+    stride_target, declarations, before, header
+):
+    with pytest.raises((*STRIDE_ERRORS, OpenGLPrivatePointerParameterError)):
+        _generator(stride_target).generate_stage(
+            parse(_canonical(header, declarations=f"{declarations} {before}")),
+            "compute",
+        )
+
+
+def test_loop_constant_snapshots_preserve_scope_and_initializer_order():
+    source = _source(
+        "uint",
+        "",
+        """
+        void inspect() {
+            const int stride = 8;
+            for (int a = 0; a < 16; a += stride) {}
+            { const int stride = 4; for (int b = 0; b < 16; b += stride) {} }
+            for (int c = 0; c < 16; c += stride) {}
+            if (true) { const int bound = 24; for (int d = 0; d < bound; d += stride) {} }
+            for (int e = 0; e < bound; e += stride) {}
+            const int bound = 32;
+            for (int f = 0; f < bound; f += stride) {}
+        }
+    """,
+    )
+    function = parse(source).functions[0]
+    snapshots = loop_constant_bindings(
+        function, {}, set(), _generator("directx").type_name_string
+    )
+    assert list(snapshots.values()) == [
+        {"stride": 8},
+        {"stride": 4},
+        {"stride": 8},
+        {"stride": 8, "bound": 24},
+        {"stride": 8},
+        {"stride": 8, "bound": 32},
+    ]
+    invalidated = loop_constant_bindings(
+        function, {}, {"stride"}, _generator("directx").type_name_string
+    )
+    assert all("stride" not in snapshot for snapshot in invalidated.values())
+
+
 @pytest.mark.parametrize(
     "index", ["index", "index + 4u", "group.x * 128u + invocation"]
 )
@@ -195,6 +331,7 @@ def _metal_source(case):
 using namespace metal;
 uint collect(uint lane) {{
     uint result = 0u;
+    {LOCAL_CONSTANTS.get(case, "")}
     for ({CASES[case][0]}) {{ result += simd_sum(lane + uint(step)); }}
     return result;
 }}

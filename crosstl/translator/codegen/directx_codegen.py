@@ -332,7 +332,7 @@ from .image_access_contracts import (
     unsupported_texture_samples_query_call_expression,
     validate_texture_operation_arity,
 )
-from .loop_induction import fixed_stride_loop_terminates
+from .loop_induction import fixed_stride_loop_terminates, loop_constant_bindings
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -2081,6 +2081,7 @@ class HLSLCodeGen:
     HLSL_SOFTWARE_SUBGROUP_OPERATIONS = frozenset(
         {
             "WaveShuffleDown",
+            "WaveReadLaneAt",
             "subgroupExecutionBarrier",
             *HLSL_SOFTWARE_SUBGROUP_REDUCTIONS,
             *HLSL_SOFTWARE_SUBGROUP_SCANS,
@@ -4833,7 +4834,12 @@ class HLSLCodeGen:
         )
 
     def hlsl_software_subgroup_uniform_for(
-        self, node, uniform_names, call_mutations, uniform_components
+        self,
+        node,
+        uniform_names,
+        call_mutations,
+        uniform_components,
+        loop_constants=None,
     ):
         initializer = getattr(node, "init", None)
         if not isinstance(initializer, VariableNode):
@@ -4851,7 +4857,9 @@ class HLSLCodeGen:
             return False
         constants = {
             name: value
-            for name, value in self.literal_int_constants.items()
+            for name, value in (
+                self.literal_int_constants if loop_constants is None else loop_constants
+            ).items()
             if name in uniform_names and name != loop_name
         }
         initial_expression = getattr(initializer, "initial_value", None)
@@ -5037,6 +5045,12 @@ class HLSLCodeGen:
             if operation_records
             else getattr(function, "source_location", None)
         )
+        loop_constants = loop_constant_bindings(
+            function,
+            self.initial_literal_int_constants(function),
+            mutable_names,
+            self.type_name_string,
+        )
 
         def validate_statements(statements, names, components):
             for statement in self.hlsl_software_subgroup_statement_list(statements):
@@ -5105,7 +5119,11 @@ class HLSLCodeGen:
                     continue
                 if isinstance(statement, ForNode):
                     if not self.hlsl_software_subgroup_uniform_for(
-                        statement, names, call_mutations, components
+                        statement,
+                        names,
+                        call_mutations,
+                        components,
+                        loop_constants.get(id(statement), {}),
                     ):
                         raise self.hlsl_software_subgroup_error(
                             "DirectX software subgroup barriers require a "
@@ -5721,6 +5739,8 @@ class HLSLCodeGen:
         )
         if operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS:
             operation_name = operation[len("Wave") :]
+        elif operation == "WaveReadLaneAt":
+            operation_name = "read_lane_at"
         return self.hlsl_software_subgroup_identifier(
             ("helper", operation, value_type),
             f"__crossgl_software_subgroup_{operation_name}_{suffix}",
@@ -5736,7 +5756,7 @@ class HLSLCodeGen:
             if is_vote
             else mapped_value_type in (
                 self.HLSL_SOFTWARE_SUBGROUP_SHUFFLE_TYPES
-                if operation == "WaveShuffleDown"
+                if operation in {"WaveShuffleDown", "WaveReadLaneAt"}
                 else self.HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
             )
         )
@@ -5900,6 +5920,8 @@ class HLSLCodeGen:
             reduction = operation in self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS
             scan = operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS
             delta_parameter = "uint delta, " if operation == "WaveShuffleDown" else ""
+            if operation == "WaveReadLaneAt":
+                delta_parameter = "uint index, "
             code += (
                 f"{value_type} {helper}({value_type} value, {delta_parameter}"
                 "uint invocation) {\n"
@@ -5922,9 +5944,17 @@ class HLSLCodeGen:
                     operation, value_type, scratch
                 )
             else:
+                active_count = "activeCount" if partial else f"{width}u"
+                absolute = operation == "WaveReadLaneAt"
+                valid = (
+                    f"index < {active_count}"
+                    if absolute
+                    else f"delta < ({active_count} - lane)"
+                )
+                source_lane = "index" if absolute else "lane + delta"
                 code += (
-                    f"    bool sourceValid = delta < ({'activeCount' if partial else str(width) + 'u'} - lane);\n"
-                    "    uint sourceLane = sourceValid ? lane + delta : lane;\n"
+                    f"    bool sourceValid = {valid};\n"
+                    f"    uint sourceLane = sourceValid ? {source_lane} : lane;\n"
                     f"    {value_type} result = sourceValid\n"
                     f"        ? {scratch}[subgroupBase + sourceLane]\n"
                     "        : value;\n"
@@ -24759,6 +24789,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if simd_name in {"simd_broadcast", "simd_shuffle"} and len(args) == 2:
             data = self.generate_expression_with_expected(args[0], None)
             lane = self.generate_expression_with_expected(args[1], "uint")
+            if self.software_subgroup_width is not None:
+                self.validate_hlsl_wave_scalar_int_uint_argument(
+                    "WaveReadLaneAt", args[1], "lane index"
+                )
+                return self.hlsl_cast_metal_simd_shuffle_result(
+                    self.hlsl_software_subgroup_call(
+                        "WaveReadLaneAt", value_type, data, lane
+                    )
+                )
             if complex_value:
                 return complex_wave_read(data, lane)
             return self.hlsl_cast_metal_simd_shuffle_result(
@@ -25769,6 +25808,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         self.validate_hlsl_wave_intrinsic_arguments(operation, args)
         self.validate_hlsl_wave_intrinsic_result_context(operation, args)
+        if self.software_subgroup_width is not None and operation == "WaveReadLaneAt":
+            value_type = self.expression_result_type(args[0])
+            value = self.generate_expression_with_expected(args[0], value_type)
+            lane = self.generate_expression_with_expected(args[1], "uint")
+            result = self.hlsl_software_subgroup_call(
+                operation, value_type, value, lane
+            )
+            return self.hlsl_wave_shuffle_result_conversion(operation, args, result)
         if self.software_subgroup_width is not None and operation in (
             self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS.keys()
             | self.HLSL_SOFTWARE_SUBGROUP_SCANS.keys()
@@ -41950,6 +41997,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.hlsl_expression_is_repeatable(item) for item in indices or []
             )
         if isinstance(expr, UnaryOpNode):
+            if self.map_operator(getattr(expr, "op", None)) in {"++", "--"}:
+                return False
             return self.hlsl_expression_is_repeatable(getattr(expr, "operand", None))
         if isinstance(expr, BinaryOpNode):
             return self.hlsl_expression_is_repeatable(

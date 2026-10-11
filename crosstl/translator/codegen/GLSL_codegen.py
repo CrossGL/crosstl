@@ -329,7 +329,7 @@ from .index_range_contracts import (
     decide_index_narrowing,
     parse_index_range_assertions,
 )
-from .loop_induction import fixed_stride_loop_terminates
+from .loop_induction import fixed_stride_loop_terminates, loop_constant_bindings
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -1847,6 +1847,7 @@ class GLSLCodeGen:
             "WaveActiveMin",
             "WaveActiveMax",
             "WaveShuffleDown",
+            "WaveReadLaneAt",
             "subgroupExecutionBarrier",
             "CooperativeMatrixMultiplyAccumulate",
             *GLSL_SOFTWARE_SUBGROUP_VOTES,
@@ -4525,6 +4526,7 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_helper_function_names = set()
         self.glsl_software_subgroup_helper_function_ids = set()
         self.glsl_software_subgroup_omitted_helper_function_ids = set()
+        self.glsl_software_subgroup_loop_constants = {}
 
         functions = self.glsl_software_subgroup_functions(ast)
         functions_by_id = {id(function): function for function in functions}
@@ -5291,6 +5293,7 @@ class GLSLCodeGen:
 
     def validate_glsl_software_subgroup_contract(self, ast, target_stage=None):
         self.required_glsl_software_subgroup_helpers = set()
+        self.glsl_software_subgroup_loop_constants = {}
         self.glsl_software_subgroup_call_mutations = {}
         self.glsl_software_subgroup_uniform_call_ids = set()
         self.glsl_software_subgroup_uniform_returns = UniformReturnAnalysis({}, set())
@@ -5747,6 +5750,14 @@ class GLSLCodeGen:
 
     def glsl_software_subgroup_uniform_arguments(self, function, seeds, *, entry):
         facts = self.glsl_software_subgroup_exit_facts(function, seeds, entry)
+        self.glsl_software_subgroup_loop_constants.update(
+            loop_constant_bindings(
+                function,
+                self.initial_literal_int_constants(function),
+                facts["mutable_names"],
+                self.type_name_string,
+            )
+        )
         arguments = {}
 
         def visit(body, names, components):
@@ -6259,7 +6270,11 @@ class GLSLCodeGen:
         loop_type = self.map_type(getattr(initializer, "var_type", None))
         if not loop_name or loop_type not in {"int", "uint", "int16_t", "uint16_t"}:
             return False
-        constants = self.glsl_active_literal_int_constants()
+        constants = dict(
+            getattr(self, "glsl_software_subgroup_loop_constants", {}).get(
+                id(node), self.glsl_active_literal_int_constants()
+            )
+        )
         constants.pop(loop_name, None)
         if uniform_names is not None:
             constants = {
@@ -37656,6 +37671,7 @@ complex64_t crossgl_complex64_mod_assign(
             "WaveActiveAllTrue": "All",
             "WaveActiveAnyTrue": "Any",
             "WaveShuffleDown": "ShuffleDown",
+            "WaveReadLaneAt": "ReadLaneAt",
             "WavePrefixSum": "PrefixSum",
             "WavePrefixProduct": "PrefixProduct",
             "WavePrefixInclusiveSum": "PrefixInclusiveSum",
@@ -37758,6 +37774,7 @@ complex64_t crossgl_complex64_mod_assign(
             "WavePrefixProduct": 8,
             "WavePrefixInclusiveSum": 9,
             "WavePrefixInclusiveProduct": 10,
+            "WaveReadLaneAt": 11,
         }
         for operation, value_type in sorted(
             self.required_glsl_software_subgroup_helpers,
@@ -37767,10 +37784,22 @@ complex64_t crossgl_complex64_mod_assign(
             ),
         ):
             helper = self.glsl_software_subgroup_helper_name(operation, value_type)
-            if operation == "WaveShuffleDown" and value_type == "uvec2":
+            if (
+                operation in {"WaveShuffleDown", "WaveReadLaneAt"}
+                and value_type == "uvec2"
+            ):
                 component_helper = self.glsl_software_subgroup_helper_name(
                     operation, "uint"
                 )
+                if operation == "WaveReadLaneAt":
+                    code += (
+                        f"uvec2 {helper}(uvec2 value, uint index) {{\n"
+                        f"    uint x = {component_helper}(value.x, index);\n"
+                        f"    uint y = {component_helper}(value.y, index);\n"
+                        "    return uvec2(x, y);\n"
+                        "}\n\n"
+                    )
+                    continue
                 code += (
                     f"uvec2 {helper}(uvec2 value, uint delta) {{\n"
                     f"    return uvec2({component_helper}(value.x, delta), "
@@ -37868,14 +37897,22 @@ complex64_t crossgl_complex64_mod_assign(
                     if invocation_count == self.software_subgroup_width
                     else "subgroupBase + sourceLane"
                 )
+                absolute = operation == "WaveReadLaneAt"
+                parameter = "index" if absolute else "delta"
+                valid = (
+                    f"index < {active_count}"
+                    if absolute
+                    else f"delta < ({active_count} - lane)"
+                )
+                source_lane = "index" if absolute else "lane + delta"
                 code += (
-                    f"{value_type} {helper}({value_type} value, uint delta) {{\n"
+                    f"{value_type} {helper}({value_type} value, uint {parameter}) {{\n"
                     f"{lane_setup}"
                     f"    {scratch}[{write_index}] = value;\n"
                     "    memoryBarrierShared();\n"
                     "    barrier();\n"
-                    f"    bool sourceValid = delta < ({active_count} - lane);\n"
-                    "    uint sourceLane = sourceValid ? lane + delta : lane;\n"
+                    f"    bool sourceValid = {valid};\n"
+                    f"    uint sourceLane = sourceValid ? {source_lane} : lane;\n"
                     f"    {value_type} result = sourceValid ? {scratch}[{source_index}] : value;\n"
                     "    memoryBarrierShared();\n"
                     "    barrier();\n"
@@ -38057,7 +38094,8 @@ complex64_t crossgl_complex64_mod_assign(
         )
         vector_shuffle_type = (
             mapped_value_type
-            if operation == "WaveShuffleDown" and mapped_value_type == "uvec2"
+            if operation in {"WaveShuffleDown", "WaveReadLaneAt"}
+            and mapped_value_type == "uvec2"
             else None
         )
         is_vote = operation in self.GLSL_SOFTWARE_SUBGROUP_VOTES
@@ -38070,6 +38108,7 @@ complex64_t crossgl_complex64_mod_assign(
         if (
             operation == "WaveActiveProduct"
             or operation in self.GLSL_SOFTWARE_SUBGROUP_SCANS
+            or (operation == "WaveReadLaneAt" and vector_shuffle_type is None)
         ):
             layout = scalar_storage_layout(self.glsl_normalized_source_type(value_type))
             valid_type = valid_type and layout is not None and layout.bit_width == 32
@@ -38082,26 +38121,37 @@ complex64_t crossgl_complex64_mod_assign(
                 reason="value-type-unsupported",
                 source_location=source_location,
             )
-        if operation == "WaveShuffleDown":
+        if operation in {"WaveShuffleDown", "WaveReadLaneAt"}:
             delta_type = self.glsl_source_expression_type(arguments[1])
             mapped_delta_type = (
                 self.map_type(delta_type) if delta_type is not None else None
             )
             if mapped_delta_type not in {"int", "uint"}:
                 raise self.glsl_software_subgroup_error(
-                    "OpenGL software subgroup shuffle-down requires a 32-bit "
-                    "integer delta",
+                    f"OpenGL software subgroup '{operation}' requires a 32-bit "
+                    "integer lane argument",
                     operation=operation,
                     reason="delta-type-unsupported",
                     source_location=source_location,
                 )
+            if operation == "WaveReadLaneAt":
+                layout = scalar_storage_layout(
+                    self.glsl_normalized_source_type(delta_type)
+                )
+                if layout is None or layout.bit_width != 32:
+                    raise self.glsl_software_subgroup_error(
+                        "OpenGL software subgroup lane reads require a 32-bit integer index",
+                        operation=operation,
+                        reason="lane-index-type-unsupported",
+                        source_location=source_location,
+                    )
 
         if vector_shuffle_type is not None:
             self.required_glsl_software_subgroup_helpers.add((operation, "uint"))
         self.required_glsl_software_subgroup_helpers.add((operation, mapped_value_type))
         helper = self.glsl_software_subgroup_helper_name(operation, mapped_value_type)
         value = self.generate_expression_with_expected(arguments[0], mapped_value_type)
-        if operation == "WaveShuffleDown":
+        if operation in {"WaveShuffleDown", "WaveReadLaneAt"}:
             delta = self.generate_expression(arguments[1])
             return f"{helper}({value}, uint({delta}))"
         return f"{helper}({value})"

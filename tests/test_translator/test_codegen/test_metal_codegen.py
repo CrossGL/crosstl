@@ -3460,7 +3460,7 @@ def test_metal_wave_prefix_ops_lower_to_simd_prefix_exclusive():
     assert "WaveActiveCountBits(" not in generated_code
 
 
-def test_metal_wave_read_lane_at_lowers_to_simd_broadcast():
+def test_metal_wave_read_lane_at_preserves_dynamic_lane_indices():
     shader = """
     shader MetalWaveReadLaneAt {
         compute {
@@ -3479,9 +3479,7 @@ def test_metal_wave_read_lane_at_lowers_to_simd_broadcast():
 
     assert "uint fromLane3 = simd_broadcast(value, ushort(3u));" in generated_code
     assert "uint fromFirst = simd_broadcast_first(value);" in generated_code
-    assert (
-        "uint fromDynamic = simd_broadcast(value, ushort(laneIdx));" in generated_code
-    )
+    assert "uint fromDynamic = simd_shuffle(value, ushort(laneIdx));" in generated_code
     assert "WaveReadLaneAt(" not in generated_code
     assert "WaveReadLaneFirst(" not in generated_code
 

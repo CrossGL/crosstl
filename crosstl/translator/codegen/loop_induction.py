@@ -1,8 +1,109 @@
 """Checked finite induction for collective control-flow proofs."""
 
 from ..arithmetic_conversions import ArithmeticScalarKind, source_integer_shape
-from ..ast import BinaryOpNode, IdentifierNode, LiteralNode, UnaryOpNode
+from ..ast import (
+    BinaryOpNode,
+    BlockNode,
+    ForNode,
+    IdentifierNode,
+    IfNode,
+    LiteralNode,
+    UnaryOpNode,
+    VariableNode,
+)
 from .array_utils import _UnsignedLiteralInt, evaluate_literal_int_expression
+
+
+def checked_induction_value(expression, constants):
+    """Evaluate integer proof operands without hiding overflowing subexpressions."""
+    if isinstance(expression, (LiteralNode, IdentifierNode)):
+        pass
+    elif isinstance(expression, UnaryOpNode):
+        if expression.operator not in {"+", "-"}:
+            return None
+        if checked_induction_value(expression.operand, constants) is None:
+            return None
+    elif isinstance(expression, BinaryOpNode):
+        if expression.operator not in {"+", "-", "*", "/", "%"}:
+            return None
+        left = checked_induction_value(expression.left, constants)
+        right = checked_induction_value(expression.right, constants)
+        if left is None or right is None:
+            return None
+        if expression.operator in {"/", "%"} and left == -(1 << 31) and right == -1:
+            return None
+    else:
+        return None
+    value = evaluate_literal_int_expression(expression, constants)
+    if value is None:
+        return None
+    low, high = (
+        (0, (1 << 32) - 1)
+        if isinstance(value, _UnsignedLiteralInt)
+        else (-(1 << 31), (1 << 31) - 1)
+    )
+    return value if low <= value <= high else None
+
+
+def loop_constant_bindings(function, constants, mutable_names, type_name):
+    """Snapshot immutable local integer constants at each lexical for loop.
+
+    The caller supplies names invalidated by writes, references, address escapes
+    and resolved call effects. Other control-flow forms gain no new proof.
+    """
+    result = {}
+
+    def visit(body, incoming):
+        visible = dict(incoming)
+        statements = body.statements if isinstance(body, BlockNode) else body
+        if statements is None:
+            return
+        if not isinstance(statements, (list, tuple)):
+            statements = [statements]
+        for statement in statements:
+            if isinstance(statement, VariableNode):
+                visible.pop(statement.name, None)
+                qualifiers = set(statement.qualifiers or []) | set(
+                    getattr(statement.var_type, "qualifiers", []) or []
+                )
+                if (
+                    statement.name in mutable_names
+                    or not qualifiers & {"const", "constant"}
+                    or "volatile" in qualifiers
+                ):
+                    continue
+                shape = source_integer_shape(type_name(statement.var_type))
+                if shape is None or shape[2] != 1 or shape[1] > 32:
+                    continue
+                value = checked_induction_value(statement.initial_value, visible)
+                unsigned = shape[0] == ArithmeticScalarKind.UNSIGNED_INTEGER
+                low = 0 if unsigned else -(1 << (shape[1] - 1))
+                high = (1 << (shape[1] - (not unsigned))) - 1
+                if value is not None and low <= value <= high:
+                    visible[statement.name] = (
+                        _UnsignedLiteralInt(value) if unsigned else int(value)
+                    )
+            elif isinstance(statement, BlockNode):
+                visit(statement, visible)
+            elif isinstance(statement, IfNode):
+                for branch in [
+                    statement.then_branch,
+                    *statement.else_if_bodies,
+                    statement.else_branch,
+                ]:
+                    visit(branch, visible)
+            elif isinstance(statement, ForNode):
+                result[id(statement)] = dict(visible)
+                nested = dict(visible)
+                if isinstance(statement.init, VariableNode):
+                    nested.pop(statement.init.name, None)
+                visit(statement.body, nested)
+
+    visit(
+        function.body,
+        {name: value for name, value in constants.items() if name not in mutable_names},
+    )
+    return result
 
 
 def fixed_stride_loop_terminates(type_name, start, bound, update, constants, operator):
@@ -23,38 +124,9 @@ def fixed_stride_loop_terminates(type_name, start, bound, update, constants, ope
     minimum = 0 if unsigned else -(1 << (shape[1] - 1))
     maximum = (1 << (shape[1] - (not unsigned))) - 1
 
-    def checked_value(expression):
-        if isinstance(expression, (LiteralNode, IdentifierNode)):
-            pass
-        elif isinstance(expression, UnaryOpNode):
-            if expression.operator not in {"+", "-"}:
-                return None
-            if checked_value(expression.operand) is None:
-                return None
-        elif isinstance(expression, BinaryOpNode):
-            if expression.operator not in {"+", "-", "*", "/", "%"}:
-                return None
-            left = checked_value(expression.left)
-            right = checked_value(expression.right)
-            if left is None or right is None:
-                return None
-            if expression.operator in {"/", "%"} and left == -(1 << 31) and right == -1:
-                return None
-        else:
-            return None
-        value = evaluate_literal_int_expression(expression, constants)
-        if value is None:
-            return None
-        low, high = (
-            (0, (1 << 32) - 1)
-            if isinstance(value, _UnsignedLiteralInt)
-            else (-(1 << 31), (1 << 31) - 1)
-        )
-        return value if low <= value <= high else None
-
-    start = checked_value(start)
-    stop = checked_value(bound)
-    amount = 1 if unary else checked_value(update.value)
+    start = checked_induction_value(start, constants)
+    stop = checked_induction_value(bound, constants)
+    amount = 1 if unary else checked_induction_value(update.value, constants)
     if any(value is None for value in (start, stop, amount)):
         return False
     if not all(minimum <= value <= maximum for value in (start, stop, amount)):

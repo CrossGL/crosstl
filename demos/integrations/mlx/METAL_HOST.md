@@ -211,6 +211,25 @@ failure. Its Windows execution must pass before complete-entry DirectX parity
 can be claimed; it does not waive the separate upstream `test_scans` failure
 or establish full MLX cumulative-operation routing.
 
+Those complete-entry comparisons use 32-thread workgroups. They do not qualify
+the larger launches selected by the upstream host. A separate survey of twelve
+unchanged entries per target at revision `8d4cec0a` identified three blockers:
+subgroup-only conditional scans at 128 threads
+([#2207](https://github.com/CrossGL/crosstl/issues/2207)), absolute lane reads in
+256-thread strided scans ([#2208](https://github.com/CrossGL/crosstl/issues/2208)),
+and software shuffle-and-fill used by minimum, maximum, log-add-exp and complex
+scans ([#2209](https://github.com/CrossGL/crosstl/issues/2209)). The lane-read
+implementation has independent compiler and native controls; complete strided
+entries and host routing require their own qualification. Reducing every launch
+to 32 threads would change the accumulation order and is not a host-port fix.
+
+The local-constant induction proof now resolves the strided scan's `BM`
+constant. Its runtime `axis_size` still requires a checked range that prevents
+overflow in the terminating increment
+([#2187](https://github.com/CrossGL/crosstl/issues/2187)). Neither the larger
+complete entry nor cumulative-operation host routing is qualified by the
+independent lane-read and fixed-stride controls.
+
 ### Half-Precision Divmod
 
 The pinned original Metal backend also has a half-precision `divmod` boundary

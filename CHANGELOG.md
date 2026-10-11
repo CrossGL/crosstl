@@ -41,6 +41,8 @@ All notable changes to CrossTL are documented in this file.
 - DirectX compilation resolves relative includes through long Windows paths without changing the compiler's working-directory semantics.
 - Source-map reports no longer infer original line locations from token overlap. Only line-preserving artifacts carry line mappings; transformed artifacts retain file-level provenance. Validation rejects legacy guessed line maps and directs report regeneration.
 - Demo artifact references are reconciled only after source, interface and compiler review. Compiler acceptance is reported separately from numerical and host-runtime coverage.
+- Software subgroup lane reads preserve lane-varying indices, partial groups and single operand evaluation in HLSL and GLSL. Metal uses shuffle semantics for dynamic indices instead of requiring a uniform broadcast index.
+- HLSL scalar-to-vector construction evaluates increment and decrement operands once. Fixed-stride collective proofs retain local integer constants without leaking scope or assuming unchecked runtime bounds.
 
 ---
 

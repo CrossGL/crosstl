@@ -168,6 +168,18 @@ call. Declared source functions with the same name retain their own semantics.
 Local variables and functions named after the emitted HLSL intrinsic are renamed;
 a colliding global declaration produces ``target-intrinsic-shadowed``.
 
+Absolute ``WaveReadLaneAt`` operations share the checked software lowering
+used by ``WaveShuffleDown``. They allow a different source lane per invocation;
+uniform indices also implement broadcasts. Generated scratch accesses are
+bounded to active lanes in the logical subgroup. Source reads from inactive or
+out-of-range lanes remain undefined and are not a portable numerical contract.
+Both arguments are evaluated once, including side effects in vector constructors.
+
+Fixed-stride collective loops can use preceding local integer constants in
+entries and helpers. The proof retains declaration scope and representable
+intermediate arithmetic, rejects mutable or escaped values, and checks the
+terminating increment. Runtime bounds without a checked range remain diagnostic.
+
 Software shuffles preserve signed and unsigned 16-bit and 64-bit integer
 payloads in typed groupshared storage, as well as 32-bit integers and floats.
 Two-word ``uint2`` payloads preserve both halves of source 64-bit wrappers.

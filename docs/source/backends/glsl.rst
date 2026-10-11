@@ -100,6 +100,19 @@ errors. Const qualification alone does not prove invocation uniformity.
 Raw hardware subgroup builtins are rejected in software mode; annotated
 subgroup inputs use the configured logical width instead.
 
+Software ``WaveReadLaneAt`` supports 32-bit integer and floating-point scalars
+and two-word ``uvec2`` payloads. Absolute indices can vary by lane; shared scratch
+is partitioned by logical subgroup and bounded to active invocations. Calls
+evaluate both arguments once and synchronize before scratch reuse. Reads from
+inactive or out-of-range source lanes remain undefined; an internal bounds
+fallback is not a portable result guarantee. The same workgroup convergence
+checks apply to broadcasts and lane-varying reads.
+
+Fixed-stride collective loops can use preceding local integer constants in
+entries and helpers. The proof retains declaration scope and representable
+intermediate arithmetic, rejects mutable or escaped values, and checks the
+terminating increment. Runtime bounds without a checked range remain diagnostic.
+
 Execution-only ``subgroupExecutionBarrier()`` calls lower to ``barrier()`` in
 software mode only after the same workgroup-participation proof. Barrier-only
 entries and nested helpers do not require an unrelated reduction to activate

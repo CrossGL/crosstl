@@ -12029,7 +12029,13 @@ class MetalCodeGen:
         if operation == "WaveReadLaneAt":
             value = self.generate_expression(arguments[0])
             lane = self.generate_expression(arguments[1])
-            return f"simd_broadcast({value}, ushort({lane}))"
+            # Broadcast requires a subgroup-uniform index; arbitrary lane reads do not.
+            intrinsic = (
+                "simd_broadcast"
+                if self.literal_int_value(arguments[1]) is not None
+                else "simd_shuffle"
+            )
+            return f"{intrinsic}({value}, ushort({lane}))"
         if operation in self.METAL_WAVE_SHUFFLE_AND_FILL_INTRINSICS:
             value = self.generate_expression(arguments[0])
             fill = self.generate_expression(arguments[1])
