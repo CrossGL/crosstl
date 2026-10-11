@@ -38,7 +38,7 @@ BINARY_SCALAR_METAL_CONTRACT_PATH = (
     / "binary.scalar-metal-roundtrip.json"
 )
 BINARY_SCALAR_METAL_CONTRACT_SHA256 = (
-    "24d8690da2586d4d25e2ed6fc34526731193378002c8dc27e9e52b7aef4393d4"
+    "2c3d81cd232c695f77517ce7a8bea5ab268772a439f34131908449173beb89e9"
 )
 
 
@@ -245,10 +245,10 @@ def test_current_mlx_binary_scalar_metal_contract_is_complete_and_classified():
         "hostInterfaceStatus": "ready",
         "hostResourceCountPerArtifact": 3,
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 217727,
+        "generatedSizeBytesTotal": 235147,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "ss_Addfloat16", "sizeBytes": 772},
-            "maximum": {"entryPoint": "ss_LogAddExpcomplex64", "sizeBytes": 5261},
+            "maximum": {"entryPoint": "ss_ArcTan2bfloat16", "sizeBytes": 6661},
         },
         "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",
         "requiresNonemptyAirArtifact": True,
@@ -332,6 +332,11 @@ def test_current_mlx_binary_scalar_metal_ci_shards_are_complete_and_disjoint():
 
 
 def _project_config(workload: BinaryMetalWorkload) -> str:
+    profile = (
+        'binary32_atan2_profile = "flush-subnormals"'
+        if workload.operator_type == "ArcTan2"
+        else ""
+    )
     return textwrap.dedent(f"""
         [project]
         source_roots = ["mlx/backend/metal/kernels"]
@@ -352,6 +357,7 @@ def _project_config(workload: BinaryMetalWorkload) -> str:
         [project.source_options.metal]
         max_template_specializations = 64
         max_template_materialization_work = 4096
+        {profile}
         """).strip()
 
 
@@ -436,10 +442,17 @@ def _translate_binary_metal_artifact(
         "target": workload.entry_point,
         "stage": "compute",
     }
-    assert artifact["provenance"] == {
+    expected_provenance = {
         "pipeline": "entry-scoped-translate",
         "intermediate": "crossgl",
     }
+    if workload.operator_type == "ArcTan2":
+        expected_provenance["binary32Atan2Profile"] = "flush-subnormals"
+        assert (
+            payload["project"]["sourceOptions"]["metal"]["binary32_atan2_profile"]
+            == "flush-subnormals"
+        )
+    assert artifact["provenance"] == expected_provenance
     assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [1, 1, 1]
     materialization = artifact["templateMaterialization"]
     assert materialization["status"] == "materialized"

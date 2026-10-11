@@ -155,15 +155,15 @@
       1,
       1
     ],
-    "generatedSizeBytesTotal": 217727,
+    "generatedSizeBytesTotal": 235147,
     "generatedSizeRange": {
       "minimum": {
         "entryPoint": "ss_Addfloat16",
         "sizeBytes": 772
       },
       "maximum": {
-        "entryPoint": "ss_LogAddExpcomplex64",
-        "sizeBytes": 5261
+        "entryPoint": "ss_ArcTan2bfloat16",
+        "sizeBytes": 6661
       }
     },
     "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",
@@ -293,8 +293,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "82601b001d4cdd16d0ad9eb9ec9e4481ce75ab8368570d4fe1510d7961d659cf",
-      "sizeBytes": 859
+      "sha256": "4557ea47b7a561ef66794479005065a42e8f51395641f9da38fddfea9b47e276",
+      "sizeBytes": 6661
     },
     {
       "entryPoint": "ss_ArcTan2float16",
@@ -302,8 +302,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "83ce6545cd27e40353dfc868b9794bf5a342ef642a19ad64e14b121eb0b32e61",
-      "sizeBytes": 786
+      "sha256": "7119796f264e9d6ec1da2a06fbf1557810a06813af67753cc681f7005e6d37bb",
+      "sizeBytes": 6602
     },
     {
       "entryPoint": "ss_ArcTan2float32",
@@ -311,8 +311,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "f10c796a39dddf7d7e2889ec0e7387972ab63b4a4b6888aea5c2b59b4c5d3b4c",
-      "sizeBytes": 799
+      "sha256": "4d7846441984d199e7afc5dc43caefc52399c99e9e9406701cbc40a87d669426",
+      "sizeBytes": 6601
     },
     {
       "entryPoint": "ss_BitwiseAndbool_",

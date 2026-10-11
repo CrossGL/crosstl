@@ -1774,7 +1774,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
       "schema_version": 1,
-      "sha256": "24d8690da2586d4d25e2ed6fc34526731193378002c8dc27e9e52b7aef4393d4",
+      "sha256": "2c3d81cd232c695f77517ce7a8bea5ab268772a439f34131908449173beb89e9",
       "entry_identity_fields": [
         "entryPoint",
         "operator",
@@ -1870,15 +1870,15 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 217727,
+      "generated_size_bytes_total": 235147,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "ss_Addfloat16",
           "sizeBytes": 772
         },
         "maximum": {
-          "entryPoint": "ss_LogAddExpcomplex64",
-          "sizeBytes": 5261
+          "entryPoint": "ss_ArcTan2bfloat16",
+          "sizeBytes": 6661
         }
       }
     },
@@ -1931,7 +1931,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "c4cd302f31b8934db0cdaff4339551f4ad9d641795fef4230a2afc0fe07e9914",
+      "sha256": "2adcf4b297490da205ef1eee4949805609dd0f17d96feb2277cf2678e2afe225",
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -1944,7 +1944,7 @@
         "sizeBytes"
       ],
       "scalar_subset_path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
-      "scalar_subset_sha256": "24d8690da2586d4d25e2ed6fc34526731193378002c8dc27e9e52b7aef4393d4"
+      "scalar_subset_sha256": "2c3d81cd232c695f77517ce7a8bea5ab268772a439f34131908449173beb89e9"
     },
     "shape_counts": {
       "g1": 238,
@@ -2042,15 +2042,15 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 5657084,
+      "generated_size_bytes_total": 5970644,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "ss_Addfloat16",
           "sizeBytes": 772
         },
         "maximum": {
-          "entryPoint": "gn4large_LogAddExpcomplex64",
-          "sizeBytes": 6495
+          "entryPoint": "gn4large_ArcTan2bfloat16",
+          "sizeBytes": 7895
         }
       }
     },

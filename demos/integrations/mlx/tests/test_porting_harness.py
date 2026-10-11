@@ -12434,7 +12434,7 @@ def test_binary_scalar_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
         "schema_version": 1,
-        "sha256": "24d8690da2586d4d25e2ed6fc34526731193378002c8dc27e9e52b7aef4393d4",
+        "sha256": "2c3d81cd232c695f77517ce7a8bea5ab268772a439f34131908449173beb89e9",
         "entry_identity_fields": [
             "entryPoint",
             "operator",
@@ -12595,7 +12595,7 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/binary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "c4cd302f31b8934db0cdaff4339551f4ad9d641795fef4230a2afc0fe07e9914",
+        "sha256": "2adcf4b297490da205ef1eee4949805609dd0f17d96feb2277cf2678e2afe225",
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12611,7 +12611,7 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
             "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json"
         ),
         "scalar_subset_sha256": (
-            "24d8690da2586d4d25e2ed6fc34526731193378002c8dc27e9e52b7aef4393d4"
+            "2c3d81cd232c695f77517ce7a8bea5ab268772a439f34131908449173beb89e9"
         ),
     }
     contract_path = ROOT / status["contract"]["path"]

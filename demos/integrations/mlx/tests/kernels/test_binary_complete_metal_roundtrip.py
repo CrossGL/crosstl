@@ -42,7 +42,7 @@ BINARY_SCALAR_METAL_CONTRACT_PATH = (
     / "binary.scalar-metal-roundtrip.json"
 )
 BINARY_SCALAR_METAL_CONTRACT_SHA256 = (
-    "24d8690da2586d4d25e2ed6fc34526731193378002c8dc27e9e52b7aef4393d4"
+    "2c3d81cd232c695f77517ce7a8bea5ab268772a439f34131908449173beb89e9"
 )
 BINARY_METAL_CONTRACT_PATH = (
     ROOT
@@ -53,7 +53,7 @@ BINARY_METAL_CONTRACT_PATH = (
     / "binary.metal-roundtrip.json"
 )
 BINARY_METAL_CONTRACT_SHA256 = (
-    "c4cd302f31b8934db0cdaff4339551f4ad9d641795fef4230a2afc0fe07e9914"
+    "2adcf4b297490da205ef1eee4949805609dd0f17d96feb2277cf2678e2afe225"
 )
 
 
@@ -449,10 +449,10 @@ def test_current_mlx_binary_metal_contract_is_complete_and_classified():
         "reflectedResourceCount": 19106,
         "reflectedResourceCountsByShape": resource_counts,
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 5657084,
+        "generatedSizeBytesTotal": 5970644,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "ss_Addfloat16", "sizeBytes": 772},
-            "maximum": {"entryPoint": "gn4large_LogAddExpcomplex64", "sizeBytes": 6495},
+            "maximum": {"entryPoint": "gn4large_ArcTan2bfloat16", "sizeBytes": 7895},
         },
         "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",
         "requiresNonemptyAirArtifact": True,
@@ -588,6 +588,11 @@ def test_current_mlx_binary_metal_ci_shards_are_complete_and_disjoint():
 
 
 def _project_config(workload: BinaryMetalWorkload) -> str:
+    profile = (
+        'binary32_atan2_profile = "flush-subnormals"'
+        if workload.operator_type == "ArcTan2"
+        else ""
+    )
     return textwrap.dedent(f"""
         [project]
         source_roots = ["mlx/backend/metal/kernels"]
@@ -608,6 +613,7 @@ def _project_config(workload: BinaryMetalWorkload) -> str:
         [project.source_options.metal]
         max_template_specializations = 64
         max_template_materialization_work = 4096
+        {profile}
         """).strip()
 
 
@@ -720,10 +726,17 @@ def _translate_binary_metal_artifact(
         "target": workload.entry_point,
         "stage": "compute",
     }
-    assert artifact["provenance"] == {
+    expected_provenance = {
         "pipeline": "entry-scoped-translate",
         "intermediate": "crossgl",
     }
+    if workload.operator_type == "ArcTan2":
+        expected_provenance["binary32Atan2Profile"] = "flush-subnormals"
+        assert (
+            payload["project"]["sourceOptions"]["metal"]["binary32_atan2_profile"]
+            == "flush-subnormals"
+        )
+    assert artifact["provenance"] == expected_provenance
     assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [1, 1, 1]
     materialization = artifact["templateMaterialization"]
     assert materialization["status"] == "materialized"

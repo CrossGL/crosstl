@@ -187,12 +187,14 @@ def test_atan2_comparison_enforces_precision_boundary(dtype, target):
             _compare(case, actual, expected, dtype, target)
 
 
-@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize("target", ("directx", "opengl", "metal", "metal-scalar"))
 def test_atan2_profiles_are_scoped_to_every_binary_shape(tmp_path, target):
     from crosstl.project import load_project_config
     from demos.integrations.mlx.tests.kernels import (
         test_binary_complete_directx,
+        test_binary_complete_metal_roundtrip,
         test_binary_complete_opengl,
+        test_binary_metal_roundtrip,
     )
 
     corpus, workloads = {
@@ -204,6 +206,14 @@ def test_atan2_profiles_are_scoped_to_every_binary_shape(tmp_path, target):
             test_binary_complete_opengl,
             test_binary_complete_opengl.BINARY_OPENGL_WORKLOADS,
         ),
+        "metal": (
+            test_binary_complete_metal_roundtrip,
+            test_binary_complete_metal_roundtrip.BINARY_METAL_WORKLOADS,
+        ),
+        "metal-scalar": (
+            test_binary_metal_roundtrip,
+            test_binary_metal_roundtrip.BINARY_SCALAR_METAL_WORKLOADS,
+        ),
     }[target]
 
     selected = []
@@ -213,7 +223,9 @@ def test_atan2_profiles_are_scoped_to_every_binary_shape(tmp_path, target):
         assert (f'binary32_atan2_profile = "{PROFILE}"' in text) == enabled
         if enabled:
             selected.append(workload)
-    assert len(selected) == 54 and len({workload.shape for workload in selected}) == 18
+    assert len(selected) == (3 if target == "metal-scalar" else 54)
+    if target != "metal-scalar":
+        assert len({workload.shape for workload in selected}) == 18
     path = tmp_path / "crosstl.toml"
     options = (
         {"entry_points": [w.entry_point for w in selected]}

@@ -3422,11 +3422,12 @@ this original-Metal comparison; it does not establish their numerical parity,
 complete complex input coverage, MLX host redirection or full upstream-suite
 execution. The historical artifact contracts remain pinned to `846d1762`.
 
-The remaining 108 binary arithmetic references are unchanged pending review:
-54 floating `ArcTan2` entries and 54 floating `Power` entries. Their generated
-helpers differ beyond annotations and are not covered by the equivalence
-result above. The complete current binary family is not yet qualified;
-these cases remain tracked in
+The 54 floating `ArcTan2` entries have also been reviewed with an explicit
+source underflow policy, as described below. The remaining 54 floating `Power`
+references are unchanged pending arithmetic review. Their generated helpers
+differ beyond annotations and are not covered by the equivalence result above.
+The complete current binary family is not yet qualified; remaining cases are
+tracked in
 [#1966](https://github.com/CrossGL/crosstl/issues/1966).
 
 The same selected-entry pipeline translates all 4,122 binary entries to
@@ -3711,6 +3712,33 @@ Dispatch sizing follows the source's `WorkPerThread<T>` rule, including two
 float32 values or four narrow values per thread where applicable. These layout
 checks complement the larger vector-vector domain checks above; they do not
 claim DirectX execution of every layout or full MLX-suite parity.
+
+The historical Metal corpus and its scalar subset now select the same
+`flush-subnormals` policy for `ArcTan2` only. This is a demo configuration
+choice, not a change to the translator's default policy. Before that explicit
+selection, the generated helper satisfied the preserve-subnormals model but
+did not match the original Metal device's underflow behavior: the vector
+controls had 208 bfloat and 247 float violations of the flush-profile checks.
+No precision bound or numerical oracle was relaxed to reconcile those cases.
+The selected policy is required in each project report and artifact's
+provenance; unrelated operators retain their existing settings.
+
+All 54 accepted Metal sources reconstruct to their exact recorded identities.
+The accepted and updated sources pass 108 strict Metal compile/link checks,
+with unchanged reflected interfaces, materializations and indexing bodies.
+Local original-source, accepted-output and updated-output execution covers
+165 workloads: the 162 layout controls above plus the three vector/vector
+domains. Each path checks 34,364 results and 1,320 guards against the existing
+precision-specific oracle, with every read-only buffer unchanged and finite
+sentinels rejecting unwritten outputs. The observed maximum storage errors
+are one half ULP, zero bfloat ULPs and two float ULPs for the updated output;
+this is precision-bounded agreement, not bit identity for every finite result.
+
+Fresh current-pin package execution separately repeats the existing 31,232-pair
+test, including unchanged original Metal controls. CI already requires that
+test in its bounded arctangent step; this review adds no runners or deadlines.
+The artifact contracts retain their historical `846d1762` pin. These results
+do not establish complete MLX host redirection or full upstream-suite parity.
 
 Floating-power domain failures (#2119), narrow
 log-add-exp accuracy (#2068), and float32/bfloat multiplication's source subnormal
