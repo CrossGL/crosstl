@@ -721,11 +721,26 @@ The current harness verifies:
   pass warnings-fatal Metal compilation and link to byte-identical library
   pairs. This updates 617 annotation-only identities, including 127 scalar
   entries; two already match their references. Removing only unused-parameter
-  annotations makes each changed pair byte-identical. The other 258 entries
-  remain unchanged pending arithmetic review under
-  [#1966](https://github.com/CrossGL/crosstl/issues/1966). The historical pin,
-  complete entry selection and numerical execution requirements are preserved.
-  This is compiler-equivalence evidence, not full-family numerical parity;
+  annotations makes each changed pair byte-identical. A separate arithmetic
+  review accepts eight complex Abs/Sign references across `v`, `v2`, `gn1`,
+  and `gn4large`, including two scalar entries. Their accepted sources
+  reconstruct exactly, all 16 old/new sources compile with warnings fatal and
+  fast math disabled, and fresh historical translations preserve interfaces
+  and materializations. Original MLX, accepted output and updated output agree
+  on 18,100 complex values per path and initialization, with two finite output
+  initializations, 256 guard words per path and unchanged read-only buffers.
+  Non-NaN words match exactly; NaN classification is compared without requiring
+  payload identity. The remaining 250 arithmetic-changing references stay
+  unchanged under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
+  The historical pin and complete entry selection are preserved.
+  At current pin `9c3d3557`, Abs and Sign use upstream's scaled `hypot`
+  implementation rather than the historical sum-of-squares formula. A separate
+  fresh-translation regression checks those same four layouts against the
+  current original Metal source over the same bounded inputs and guards.
+  It runs in the existing macOS unary CI step without additional runners or a
+  longer deadline, and retains compiler records and full input/output readbacks.
+  These are bounded Metal results, not DirectX/OpenGL qualification, complete
+  unary-family numerical parity or full MLX host integration;
 - selected-entry translation of all 877 discovered `unary.metal` entries
   at the same legacy reference revision to OpenGL. The schema-v2
   `contracts/unary.opengl-translation.json` contract pins every standalone

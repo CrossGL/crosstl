@@ -139,8 +139,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "d096c90d78bbb5f0ffdcf0f19ec3d98f4bfc82a833e34af931fc0dd6851f2147",
-      "sizeBytes": 1538
+      "sha256": "086e91a57250649c2315f73cbedaa27effa72e252186372f0c38c2dbc7d5aebf",
+      "sizeBytes": 3184
     },
     {
       "entryPoint": "v_Absfloat16float16",
@@ -1345,8 +1345,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "46fa07c7c34ad6240e45d1bf798e93dadb46797157618be6dc09ba3f82ec2a19",
-      "sizeBytes": 2823
+      "sha256": "6a8038995beae40e3b90bb313f2179606a1d61973d0598eb466d9fe19b1d40c0",
+      "sizeBytes": 4493
     },
     {
       "entryPoint": "v_Signfloat16float16",
