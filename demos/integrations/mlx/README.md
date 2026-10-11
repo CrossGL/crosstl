@@ -826,7 +826,26 @@ The current harness verifies:
   inside the existing four-ULP bound. That bound and the native gates are
   unchanged; this review does not establish exhaustive float32 or cross-target
   numerical parity.
-  The remaining 152 arithmetic-changing references stay
+  Eight complex Cosh/Sinh references, including two scalar entries, have a
+  separate source and native review. Reversing only precision-directive scope
+  and unused-parameter annotations reproduces every accepted source exactly.
+  All old/new sources compile with warnings fatal and fast math disabled;
+  their Metal libraries differ, so compilation alone does not establish
+  equivalence. Fresh translations at both pins preserve resources and selected
+  materializations. The retained scalar Sinh run used a wildcard workgroup
+  rule; fresh runs select the exact entry, with the same `[1, 1, 1]` geometry
+  and independently verified rule identities.
+  Native readback audits at each pin cover 95,460 complex outputs per path and
+  initialization across `v`, `v2`, `gn1` and `gn4large`, two output
+  initializations, 512 guard words per path and unchanged read-only buffers.
+  Inputs include signed zeros, subnormals, infinities, NaNs, overflow neighbors
+  and seeded raw and finite-range samples. Accepted and updated outputs match
+  exactly apart from NaN payloads. Both differ from original Metal in 23,258
+  finite component words per initialization, by at most four ULP on these
+  inputs; zero signs and non-finite classifications agree. This is a measured
+  difference, not a new tolerance or a claim of bit-identical original output.
+  No numerical gate, source pin or whole-family parity status is changed.
+  The remaining 144 arithmetic-changing references stay
   unchanged under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
   The historical pin and complete entry selection are preserved.
   At current pin `9c3d3557`, Abs and Sign use upstream's scaled `hypot`
