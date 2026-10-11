@@ -845,7 +845,23 @@ The current harness verifies:
   inputs; zero signs and non-finite classifications agree. This is a measured
   difference, not a new tolerance or a claim of bit-identical original output.
   No numerical gate, source pin or whole-family parity status is changed.
-  The remaining 144 arithmetic-changing references stay
+  Four complex Log1p references have a separate original-source audit. Each
+  previously accepted source is reconstructed by its recorded hash and size;
+  old and updated sources compile with warnings fatal and fast math disabled.
+  Their libraries differ, so native execution is checked separately. At both
+  the historical and current pins, the audit covers 50,610 complex outputs per
+  path and initialization across all four layouts, two output initializations,
+  256 guard words per path and unchanged input and constant buffers. Inputs
+  include signed zeros, subnormals, infinities, NaNs, boundary neighbors and
+  seeded raw and finite-range samples. Original, accepted and updated outputs
+  match word-for-word apart from NaN payloads. This bounded result does not
+  establish exhaustive complex Log1p accuracy or qualify another target.
+  Complex Log2 and Log10 remain under review. Current-pin probes with the
+  explicit `binary32_atan2_profile = "flush-subnormals"` option remove the
+  observed zero/classification differences from original Metal; remaining
+  sampled component differences are at most two float32 ULPs. That observation
+  is not a new tolerance, a default-policy change or reference acceptance.
+  The remaining 140 arithmetic-changing references stay
   unchanged under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
   The historical pin and complete entry selection are preserved.
   At current pin `9c3d3557`, Abs and Sign use upstream's scaled `hypot`

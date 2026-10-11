@@ -994,8 +994,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "f342ad95d186472e48e5a77e4588b3478c9a988ab17e46f5bf66cc6003f02cb8",
-      "sizeBytes": 2312
+      "sha256": "eb51a60e0f6c143d84d14110bb5264ca059dce4e2ef424b92109f155e0d61f1b",
+      "sizeBytes": 3958
     },
     {
       "entryPoint": "v_Log1pfloat16float16",
