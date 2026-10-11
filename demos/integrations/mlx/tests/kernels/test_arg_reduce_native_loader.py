@@ -90,15 +90,15 @@ MLX_ARG_REDUCE_ARTIFACTS = {
     "directx": {
         "argmin_float32": {
             "sha256": (
-                "6a2667147d9a6fb8260e3cff1e5fd4c87e97d647653bf1d7bc704ab719c72c91"
+                "9ad32989ed91db2add926046a2f58c8735ca23d459e394e0ae9c890f12edd086"
             ),
-            "sizeBytes": 6793,
+            "sizeBytes": 7129,
         },
         "argmax_float32": {
             "sha256": (
-                "33b85b7e9ec1d21af96bc52a157c46039a174233f28e4e44cfbc59e5dcde6b75"
+                "d7343928b87693f63464227baf181759adcda3a349835b11182a99bc8292d999"
             ),
-            "sizeBytes": 6855,
+            "sizeBytes": 7191,
         },
     },
     "opengl": {

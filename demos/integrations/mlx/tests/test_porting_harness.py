@@ -10281,6 +10281,7 @@ def test_arg_reduce_native_runtime_evidence_records_bounded_cross_target_proof()
     assert status["source"] == module.MLX_ARG_REDUCE_SOURCE
     assert status["source_sha256"] == module.MLX_CURRENT_ARG_REDUCE_SHA256
     assert status["selected_entry_points"] == ["argmin_float32", "argmax_float32"]
+    assert status["materialization"]["dependency_discovery_work_count"] == 75
 
     contract = status["dispatch_contract"]
     assert contract["path"] == (
@@ -10319,12 +10320,12 @@ def test_arg_reduce_native_runtime_evidence_records_bounded_cross_target_proof()
 
     directx = status["artifacts"]["directx"]
     assert directx["argmin_float32"] == {
-        "sha256": "6a2667147d9a6fb8260e3cff1e5fd4c87e97d647653bf1d7bc704ab719c72c91",
-        "size_bytes": 6793,
+        "sha256": "9ad32989ed91db2add926046a2f58c8735ca23d459e394e0ae9c890f12edd086",
+        "size_bytes": 7129,
     }
     assert directx["argmax_float32"] == {
-        "sha256": "33b85b7e9ec1d21af96bc52a157c46039a174233f28e4e44cfbc59e5dcde6b75",
-        "size_bytes": 6855,
+        "sha256": "d7343928b87693f63464227baf181759adcda3a349835b11182a99bc8292d999",
+        "size_bytes": 7191,
     }
     assert directx["compiler"] == "dxc"
     assert directx["compiler_version"] == "1.9.2602.24"

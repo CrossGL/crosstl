@@ -2481,9 +2481,9 @@ two axis-32 rows. It applies the host formula
 wave width of 32, emits `[32, 1, 1]`, and dispatches `[1, 2, 1]` workgroups.
 Signature-aware helper materialization selects the scalar
 `elem_to_loc<int64_t>` overload rather than the `uint3` overload. The HLSL
-artifacts are 6,793 and 6,855 bytes with SHA-256
-`6a2667147d9a6fb8260e3cff1e5fd4c87e97d647653bf1d7bc704ab719c72c91`
-and `33b85b7e9ec1d21af96bc52a157c46039a174233f28e4e44cfbc59e5dcde6b75`;
+artifacts are 7,129 and 7,191 bytes with SHA-256
+`9ad32989ed91db2add926046a2f58c8735ca23d459e394e0ae9c890f12edd086`
+and `d7343928b87693f63464227baf181759adcda3a349835b11182a99bc8292d999`;
 official DXC 1.9.2602.24 accepts both under `cs_6_6`,
 `-enable-16bit-types`, and warnings as errors. This proof explicitly sets
 `project.source_options.metal.target_options.directx.relative_wave_shuffle_out_of_range`
@@ -2493,6 +2493,19 @@ lane or the calling lane before every unconditional `WaveReadLaneAt`, so the
 second reduction cannot consume undefined high-lane state. The default DirectX
 policy remains `"undefined"`, preserving existing artifacts unless a project
 opts in.
+
+The latest HLSL reference review reproduces both accepted predecessors with
+the translator revision that recorded them. The complete source delta adds
+one placeholder member to each of 14 empty structs; 13 are unreferenced and
+the remaining reduction receiver never accesses the added member. Reflected
+bindings, workgroup configuration, shuffle policy and materialization are
+unchanged. All four accepted/current sources compile with warnings fatal.
+Their DXIL containers are not byte-identical: the second reduction loop's
+simultaneous PHI values are reordered and renamed. LLVM comparison and a
+complete IR comparison after only value naming and PHI ordering confirm
+equivalence, without instruction folding or operand reordering. The recorded
+dependency-discovery count is corrected to 75 to match both reports.
+This review does not substitute for new-head Windows numerical execution.
 
 The explicit OpenGL software-subgroup artifacts are 8,024 and 8,030 bytes with
 SHA-256
