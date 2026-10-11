@@ -88,7 +88,7 @@ def test_pointer_write_roots_require_typed_storage_and_value_only_offsets(
     )
 
 
-def _source(array, size, *, address=None, mutation=""):
+def _source(array, size, *, address=None, mutation="", local_alias=False):
     slots = 2 if array else 1
     signature = "thread const uint values[2]" if array else "uint value"
     argument = "values" if array else "value"
@@ -113,8 +113,15 @@ def _source(array, size, *, address=None, mutation=""):
         if array
         else ""
     )
+    if local_alias:
+        prepare += (
+            f"device uint* cursor = {address.replace('4u +', 'OUTPUT_GUARD +', 1)};"
+        )
+        address = "cursor"
+    constants = "constant uint OUTPUT_GUARD = 4u;" if local_alias else ""
     return f"""#include <metal_stdlib>
 using namespace metal;
+{constants}
 {helpers}
 kernel void pointer_effects(device uint* output [[buffer(0)]],
                             constant uint& count [[buffer(1)]],
@@ -133,6 +140,7 @@ kernel void pointer_effects(device uint* output [[buffer(0)]],
 
 
 @pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize("local_alias", [False, True])
 @pytest.mark.parametrize(
     "address,mutation",
     [
@@ -146,24 +154,24 @@ kernel void pointer_effects(device uint* output [[buffer(0)]],
     ],
 )
 def test_pointer_address_effects_retain_mutated_loop_bounds(
-    tmp_path, target, address, mutation
+    tmp_path, target, address, mutation, local_alias
 ):
     _report(
         tmp_path,
         target,
-        _source(False, 64, address=address, mutation=mutation),
+        _source(False, 64, address=address, mutation=mutation, local_alias=local_alias),
         diagnostic=f"project.translate.{target}-software-subgroup-invalid",
     )
 
 
-def _request(root, target, array, shape, count):
+def _request(root, target, array, shape, count, *, local_alias=False):
     size, slots = math.prod(shape), 2 if array else 1
     source, descriptor, package = _package(
         root,
         target,
         "uint",
         shape,
-        source=_source(array, size),
+        source=_source(array, size, local_alias=local_alias),
         preserve_resource_origins=True,
     )
     guard = 0xDEADBEEF
@@ -218,6 +226,31 @@ def _request(root, target, array, shape, count):
 def test_pointer_offset_helpers_translate_and_compile(tmp_path, target, array):
     _, request, _ = _request(tmp_path, target, array, (32, 2, 1), 3)
     _compile(request.artifact_path.read_text(), target, tmp_path)
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
+@pytest.mark.parametrize("array", [False, True])
+def test_pointer_offset_local_aliases_translate_and_compile(tmp_path, target, array):
+    _, request, _ = _request(tmp_path, target, array, (32, 2, 1), 3, local_alias=True)
+    _compile(request.artifact_path.read_text(), target, tmp_path)
+
+
+@pytest.mark.parametrize("array", [False, True])
+@pytest.mark.parametrize("shape", [(32, 1, 1), (32, 2, 1)])
+def test_pointer_offset_local_aliases_execute(tmp_path, array, shape):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required pointer-effect execution")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    source, request, outputs = _request(
+        tmp_path, target, array, shape, 3, local_alias=True
+    )
+    _execute(
+        request,
+        outputs,
+        tmp_path,
+        original_source=source if target == "metal" else None,
+        original_entry="pointer_effects",
+    )
 
 
 @pytest.mark.parametrize("array", [False, True])

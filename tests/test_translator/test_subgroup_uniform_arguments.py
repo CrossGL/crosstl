@@ -276,6 +276,48 @@ def test_opengl_constructor_arguments_preserve_uniform_bounds(
     _compile(generated, "opengl", tmp_path)
 
 
+@pytest.mark.parametrize("kind", ["uint", "int64", "uint64", "int64_t", "uint64_t"])
+def test_opengl_loop_index_constructors_do_not_mutate_control(tmp_path, kind):
+    generated = _generate(
+        "float result = 0.0; for (uint i = 0u; i < groups; ++i) { "
+        f"{kind} index = {kind}(i); "
+        "result += reduce_twice(float(invocation) + float(index), i); } "
+        "results[invocation] = asuint(result);",
+        _helper(),
+        "opengl",
+    )
+    assert "for (uint i" in generated
+    assert "barrier();" in generated
+    _compile(generated, "opengl", tmp_path)
+
+
+@pytest.mark.parametrize(
+    "expression,helpers",
+    [
+        ("uint64(i++)", ""),
+        ("uint64(++i)", ""),
+        (
+            "uint64(mutate(i, invocation))",
+            "uint mutate(inout uint x, uint lane) { x = lane; return x; }",
+        ),
+        (
+            "uint64(i, invocation)",
+            "uint uint64(inout uint x, uint lane) { x = lane; return x; }",
+        ),
+    ],
+)
+def test_opengl_loop_constructors_preserve_argument_mutations(expression, helpers):
+    with pytest.raises(OpenGLSoftwareSubgroupError):
+        _generate(
+            "float result = 0.0; for (uint i = 0u; i < groups; ++i) { "
+            f"uint64 index = {expression}; "
+            "result += reduce_twice(float(invocation) + float(index), i); } "
+            "results[invocation] = asuint(result);",
+            helpers + _helper(),
+            "opengl",
+        )
+
+
 @pytest.mark.parametrize(
     "body,helpers",
     [

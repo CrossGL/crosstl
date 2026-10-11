@@ -2488,6 +2488,8 @@ def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
         "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in software_step
     )
     assert 'CROSTL_REQUIRE_MLX_DOT_OPENGL_NATIVE_LOADER: "1"' in software_step
+    assert 'CROSTL_KEEP_CORPUS_EVIDENCE: "1"' in software_step
+    assert "--junitxml=demo-results/dot/opengl.xml" in software_step
     assert "EGL_PLATFORM: surfaceless" in software_step
     assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in software_step
     assert "MESA_LOADER_DRIVER_OVERRIDE: llvmpipe" in software_step

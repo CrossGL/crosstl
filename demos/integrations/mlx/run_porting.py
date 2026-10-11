@@ -1063,9 +1063,9 @@ FFT_DIRECTX_TRANSLATION_TIMEOUT_SECONDS = 300
 FFT_DIRECTX_EXPECTED_SPECIALIZATION_COUNT = 24
 FFT_DIRECTX_EXPECTED_FUNCTION_CONSTANT_COUNT = 21
 FFT_DIRECTX_GENERATED_SHA256 = (
-    "d5fa1ae408154eae551c1ad20f02a81c47f95fe4be7df16714b4ff7bf4e8048b"
+    "d611594837648c52f0fc0e7847c1ebdd660f158c830eccc0002aa3dd597bbab9"
 )
-FFT_DIRECTX_GENERATED_SIZE_BYTES = 145277
+FFT_DIRECTX_GENERATED_SIZE_BYTES = 144151
 FFT_DIRECTX_SPECIALIZATION_CONSTANTS = {
     "0": False,
     "1": True,
@@ -2316,9 +2316,9 @@ MLX_RMS_NORM_NATIVE_RUNTIME_EVIDENCE = {
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "27146f3b1c16701885dd133b628c602027152453041badf9652450cb3e386c51"
+                "a7e7c7da1c51a42cff5e2bdb9bb1955bc1ee302552130e291f3158c5cc7846da"
             ),
-            "size_bytes": 5544,
+            "size_bytes": 5856,
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
             "compiler_profile": "cs_6_6",

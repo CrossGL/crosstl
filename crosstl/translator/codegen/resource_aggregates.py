@@ -555,7 +555,7 @@ class _Lowering:
                 or extent <= 0
                 or numeric is None
                 or numeric.bits != 32
-                or numeric.lanes != 1
+                or numeric.lanes not in {1, 2, 4}
                 or numeric.kind == ArithmeticScalarKind.BOOLEAN
             ):
                 raise ResourceAggregateError("workgroup-allocation-layout", node)
@@ -568,7 +568,10 @@ class _Lowering:
                 raise ResourceAggregateError(
                     "workgroup-allocation-initializer-or-qualifier", node
                 )
-            pointer = _Pointer(_name(element), "threadgroup", True, True)
+            element_name = _name(element) or arithmetic_type_name(
+                numeric.kind, numeric.bits, numeric.lanes
+            )
+            pointer = _Pointer(element_name, "threadgroup", True, True)
             root = self.fresh(f"crosstl_workgroup_{node.name}")
             handle = self.fresh(f"crosstl_reference_{node.name}")
             identity = len(self.resources)

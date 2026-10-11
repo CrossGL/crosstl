@@ -62,12 +62,12 @@ MLX_MXFP4_VARIANT_ID = (
 )
 MLX_MXFP4_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "ff64661e8c32779e3f397436b33f9effd042ea413678c7c1214d9ede7e656f81",
-        "sizeBytes": 9816,
+        "sha256": "8d2c5257a8d90310d9a96051bd4243c694bd6fa32ec2a80b4f221a6ef287ea37",
+        "sizeBytes": 10335,
     },
     "opengl": {
-        "sha256": "fa30bdc9d3983644c94683aa2556b6f896f730f1ae32e72ff0b7082f0e1bea3b",
-        "sizeBytes": 11346,
+        "sha256": "3aae7fd8aede237351ea9eeaff8b22bcecb49f920c91451ab021cf1f1ff52451",
+        "sizeBytes": 11932,
     },
 }
 REQUIRE_DIRECTX_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_MXFP4_DIRECTX_NATIVE_LOADER"
@@ -489,7 +489,12 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "GL_KHR_shader_subgroup" not in generated
         assert "gl_Subgroup" not in generated
         assert "subgroupMax" not in generated
-        assert generated.count("unpackHalf2x16(") == 1
+        assert "unpackHalf2x16(" not in generated
+        assert "float crossgl_half_bits_decode(uint value)" in generated
+        assert (
+            "float converted = crossgl_half_bits_decode("
+            "bitfieldExtract(uint(((int(self.bits) & 7) << 9)), 0, 16));"
+        ) in generated
         assert "fp8_e4m3_operator_float" not in generated
         assert "converted = crossgl_round_half1((converted * 16384.0));" in generated
         assert generated.count("memoryBarrierShared();") == 3

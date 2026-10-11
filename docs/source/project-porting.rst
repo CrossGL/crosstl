@@ -5456,8 +5456,9 @@ condition, not just its initializer. Mutation invalidates earlier bounds, escape
 locals do not acquire new guard proofs, and a do-while condition does not constrain
 the first iteration. These checks establish index representability, not the
 length of a runtime allocation.
-Fixed workgroup arrays of 32-bit scalar integer or floating-point elements can
-also back these references. Their allocations retain distinct identities when
+Fixed workgroup arrays of 32-bit integer or floating-point elements, including
+two- and four-component vectors, can also back these references. Their
+allocations retain distinct identities when
 source names are shadowed; copies, rebasing and helper calls preserve the shared
 storage rather than copying array contents. Access helpers select only compatible
 address spaces. Initializers, unsupported layouts, qualified allocations and
@@ -5466,6 +5467,10 @@ still requires a range proof: bounded project assertions can target the generate
 ``crosstl_workgroup_load_<element>`` and ``crosstl_workgroup_store_<element>``
 helpers' ``reference.offset + index`` expressions. Four-lane native controls
 exercise barriers, cross-lane reads, multiple allocations and untouched guards.
+Vector controls cover rebased shared arrays across three workgroups with exact
+output and shared-storage guards. Three-component layouts remain rejected.
+Rewritten resource aggregates currently retain file-level source provenance;
+fine-grained diagnostic locations within generated helpers are not available.
 General typed reinterpretation through aggregate-held references remains unsupported;
 the immediate byte-record copy contract below is a separate supported operation.
 Calls within the selected resource-helper graph are bound to source overloads

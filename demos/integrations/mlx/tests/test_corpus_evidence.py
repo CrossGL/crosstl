@@ -1008,17 +1008,36 @@ def test_dot_retains_report_before_translation_and_identity_assertions(
     assert report.parent.parent == tmp_path / EVIDENCE_DIRECTORY
 
 
+@pytest.mark.parametrize("target", ("directx", "opengl"))
 @pytest.mark.parametrize("failure", (None, "status", "readback", "unavailable"))
 def test_dot_retains_native_results_without_suppressing_failures(
-    failure, tmp_path, monkeypatch
+    target, failure, tmp_path, monkeypatch
 ):
     from demos.integrations.mlx.tests.kernels import test_dot_native_loader as proof
 
     monkeypatch.setenv(KEEP_EVIDENCE_ENV, "1")
-    monkeypatch.setenv(proof.REQUIRE_PROOF_ENVS["directx"], "1")
+    monkeypatch.setenv(
+        (
+            proof.REQUIRE_PROOF_ENVS["directx"]
+            if target == "directx"
+            else proof.REQUIRE_OPENGL_RUNTIME_ENV
+        ),
+        "1",
+    )
     monkeypatch.setattr(proof, "_pinned_mlx_root", lambda: tmp_path)
     monkeypatch.setattr(
-        proof, "_build_directx_runtime_package", lambda *args: ({}, tmp_path)
+        proof,
+        (
+            "_build_directx_runtime_package"
+            if target == "directx"
+            else "_build_opengl_software_runtime_package"
+        ),
+        lambda *args: ({}, tmp_path),
+    )
+    left, right, output, params = (
+        ("a", "b", "output", f"{proof.MLX_DOT_ENTRY}_n_Constants")
+        if target == "directx"
+        else ("aBuffer", "bBuffer", "output_Buffer", f"{proof.MLX_DOT_ENTRY}_n_Args")
     )
     fixture = {}
     plan = {
@@ -1031,12 +1050,12 @@ def test_dot_retains_native_results_without_suppressing_failures(
 
     def build_request(descriptor, package, inputs, outputs, groups, **kwargs):
         assert descriptor == {} and package == tmp_path
-        assert inputs["a"]["values"] == [1.0] * 1024
-        assert inputs["b"]["values"] == [0.25] * 1024
-        assert inputs[f"{proof.MLX_DOT_ENTRY}_n_Constants"]["values"] == [1024]
-        assert outputs["output"]["values"] == [256.0]
-        assert outputs["output"]["tolerance"] == {"absolute": 1e-5, "relative": 1e-5}
-        assert groups == (1, 1, 1) and kwargs == {"expected_target": "directx"}
+        assert inputs[left]["values"] == [1.0] * 1024
+        assert inputs[right]["values"] == [0.25] * 1024
+        assert inputs[params]["values"] == [1024]
+        assert outputs[output]["values"] == [256.0]
+        assert outputs[output]["tolerance"] == {"absolute": 1e-5, "relative": 1e-5}
+        assert groups == (1, 1, 1) and kwargs == {"expected_target": target}
         fixture.update(inputs=inputs, expectedOutputs=outputs)
         return SimpleNamespace(
             fixture=SimpleNamespace(to_json=lambda: fixture),
@@ -1060,7 +1079,7 @@ def test_dot_retains_native_results_without_suppressing_failures(
     result = SimpleNamespace(
         status="failed" if failure == "status" else "ok",
         outputs={
-            "output": {
+            output: {
                 "dtype": "float32",
                 "shape": [1],
                 "values": [2.7272588775775887e23 if failure == "readback" else 256.0],
@@ -1079,7 +1098,10 @@ def test_dot_retains_native_results_without_suppressing_failures(
     monkeypatch.setattr(proof, "RuntimeParityExecutor", lambda *a, **kw: executor)
     error = pytest.fail.Exception if failure == "unavailable" else AssertionError
     with pytest.raises(error) if failure else nullcontext():
-        proof.test_pinned_mlx_dot_executes_through_directx_native_loader()
+        if target == "directx":
+            proof.test_pinned_mlx_dot_executes_through_directx_native_loader()
+        else:
+            proof.test_pinned_mlx_dot_executes_with_opengl_software_subgroups()
     (work,) = (tmp_path / EVIDENCE_DIRECTORY).iterdir()
     request = json.loads((work / "request.json").read_text())
     assert request == {

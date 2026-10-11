@@ -40,8 +40,8 @@ MLX_DOT_SHA256 = "97bcad13d09c3d5fed87482a0bb9719d6eeff9b21d364967cd6aec5b695b34
 MLX_DOT_ENTRY = "dot_product_float32_it32_tg512_sg16"
 MLX_DOT_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "f902bae0e7603d302340327c61e5a82ab392b9ce1afffb5557b1760592a1465f",
-        "sizeBytes": 5110,
+        "sha256": "f10d13d3dfbed2c5e59f785ec0e9a61c93026d3bead541738e450fe72ae2113e",
+        "sizeBytes": 5422,
     },
     "opengl": {
         "sha256": "ef69a757339fe09897a38804c27be279a19a7db146e2e02f85f0349c59f3168d",
@@ -49,8 +49,8 @@ MLX_DOT_GENERATED_ARTIFACTS = {
     },
 }
 MLX_DOT_SOFTWARE_OPENGL_ARTIFACT = {
-    "sha256": "a3c1958daa680419ce3f38559de1a6a2319a7abdac556a049632194c88223a32",
-    "sizeBytes": 6275,
+    "sha256": "fdeafb72874a7759a2672eed005556fa928933381a6b9874366ee3fb01275943",
+    "sizeBytes": 6360,
 }
 REQUIRE_PROOF_ENVS = {
     "directx": "CROSTL_REQUIRE_MLX_DOT_DIRECTX_NATIVE_LOADER",
@@ -205,6 +205,10 @@ def _translate_dot_artifact(
         "stage": "compute",
     }
     assert artifact["provenance"]["pipeline"] == "entry-scoped-translate"
+    assert artifact["sourceRemap"]["mappingCount"] == 1
+    assert artifact["sourceRemap"]["mappingGranularity"] == "file"
+    source_remap = json.loads((mlx_root / artifact["sourceRemap"]["path"]).read_text())
+    assert source_remap["mappings"][0]["original"]["file"] == MLX_DOT_SOURCE
     entry = artifact["execution"]["entryPoints"][0]
     assert entry["sourceEntryPoint"] == MLX_DOT_ENTRY
     assert entry["workgroupSize"] == [512, 1, 1]
@@ -320,6 +324,7 @@ def _assert_software_opengl_spirv(generated_path: Path, work_dir: Path) -> None:
     )
     assembly = assembly_path.read_text(encoding="utf-8")
     assert assembly.count("OpControlBarrier") == 4
+    assert assembly.count("OpMemoryBarrier") == 3
     assert "OpGroupNonUniform" not in assembly
     assert "OpExecutionMode %main LocalSize 512 1 1" in assembly
 
@@ -631,9 +636,11 @@ def _build_opengl_software_runtime_package(
 
 def test_pinned_mlx_dot_executes_with_opengl_software_subgroups():
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-dot-opengl-software-native-loader-",
-        dir=mlx_root,
+    with corpus_workspace(
+        mlx_root,
+        family="dot",
+        target="opengl",
+        entry_point=MLX_DOT_ENTRY,
     ) as temporary_directory:
         descriptor, package_dir = _build_opengl_software_runtime_package(
             mlx_root,
@@ -672,6 +679,12 @@ def test_pinned_mlx_dot_executes_with_opengl_software_subgroups():
             (1, 1, 1),
             expected_target="opengl",
         )
+        record_native_request(
+            Path(temporary_directory),
+            request,
+            commit=MLX_COMMIT,
+            workload_id=MLX_DOT_ENTRY,
+        )
         assert request.execution_plan is not None
         assert request.execution_plan.diagnostics == ()
         assert request.execution_plan.dispatch.workgroup_size == (512, 1, 1)
@@ -688,6 +701,14 @@ def test_pinned_mlx_dot_executes_with_opengl_software_subgroups():
             runtime_adapter=OpenGLRuntimeParityAdapter(runtime=OpenGLComputeRuntime()),
         )
         availability = executor.is_available(request)
+        _write_json(
+            Path(temporary_directory) / "availability.json",
+            {
+                "available": availability.available,
+                "reason": availability.reason,
+                "details": availability.details,
+            },
+        )
         if not availability.available:
             _skip_or_fail(
                 "opengl",
@@ -696,6 +717,7 @@ def test_pinned_mlx_dot_executes_with_opengl_software_subgroups():
             )
 
         result = executor.run(request)
+        record_native_result(Path(temporary_directory), result)
 
     assert result.status == "ok"
     assert result.outputs["output_Buffer"]["dtype"] == "float32"

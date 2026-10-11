@@ -165,6 +165,16 @@ prefix sum only once gives `9.4375` at the failing element; that is not a model
 of the original subgroup scan's accumulation order. No source kernel, test,
 tolerance or required result is changed to accommodate the discrepancy.
 
+The original-backend invocation failed again at translator revision `a974196b`,
+before translated execution began. Its [retained inputs and failure record](https://github.com/CrossGL/crosstl/actions/runs/38165857701/artifacts/11714125128)
+reproduce all 256 cumulative-sum outputs and all 256 reduction references on
+the clean M2 Max build. Five elements in row 5 exceed the unchanged tolerance;
+for example, `[5, 29]` returns `12.3125` against `12.0`, exceeding the float32
+comparison bound `0.2409999966621399`. The failing input snapshot has SHA-256
+`3fceae9c3d112cd01d131e66c2318f112d5f2b1a23e40d5ba696cfe065dea46d`.
+This original-backend failure remains a failed required check, not a passing
+translation result or an automatic retry condition.
+
 At translator revision `4232aa0a`, both complete
 `contig_scan_inclusive_sum_float32_float32` and
 `contig_scan_inclusive_sum_bfloat16_bfloat16` entries also translate, package,
@@ -172,9 +182,14 @@ strictly compile and execute as Metal round trips on the captured 8x32 case.
 The 512 computed outputs and 64 output guards agree with separately compiled
 original Metal controls and the unmodified MLX host readbacks. These dispatches
 do not retain device input readbacks. This is selected kernel parity, not MLX
-scan host redirection or a passing scan-versus-reduction assertion. DirectX and
-OpenGL exact-width software prefix scans remain unsupported and are tracked in
-[#2196](https://github.com/CrossGL/crosstl/issues/2196).
+scan host redirection or a passing scan-versus-reduction assertion. Subsequent
+exact-width prefix and pointer-effect support allows both complete entries to
+translate and strictly compile for DirectX and OpenGL. Local original/generated
+Metal and OpenGL comparisons cover twenty boundary cases per target, matching
+7,524 computed words and 640 guards. Complete-entry Windows execution and MLX
+scan host routing remain unverified and are tracked in
+[#2196](https://github.com/CrossGL/crosstl/issues/2196). Generic prefix-scan
+execution does not substitute for those complete-entry and host checks.
 
 ### Half-Precision Divmod
 

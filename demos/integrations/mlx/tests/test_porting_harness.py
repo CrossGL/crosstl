@@ -10722,9 +10722,9 @@ def test_rms_norm_native_runtime_evidence_records_bounded_cross_target_proof():
         "selected_parameters": {"N_READS": "RMS_N_READS", "T": "float"},
     }
     assert status["artifacts"]["directx"]["sha256"] == (
-        "27146f3b1c16701885dd133b628c602027152453041badf9652450cb3e386c51"
+        "a7e7c7da1c51a42cff5e2bdb9bb1955bc1ee302552130e291f3158c5cc7846da"
     )
-    assert status["artifacts"]["directx"]["size_bytes"] == 5544
+    assert status["artifacts"]["directx"]["size_bytes"] == 5856
     assert status["artifacts"]["directx"]["native_runtime"]["status"] == (
         "required-on-ci"
     )
@@ -10882,9 +10882,9 @@ def test_rms_norm_vjp_native_runtime_evidence_records_deferred_cross_target_proo
 
     directx = status["artifacts"]["directx"]
     assert directx["sha256"] == (
-        "7076ecd04029ecdf6b266eef11b3bda85f261ba40767b16a11c7314a5857f846"
+        "1820e6a8454f4a44fc0c8998950c0469596a8318fb2b7efa250794bfd21d2ab8"
     )
-    assert directx["size_bytes"] == 8863
+    assert directx["size_bytes"] == 9175
     assert directx["wave_active_sum_call_count"] == 4
     assert directx["native_runtime"]["status"] == "required-on-ci"
     opengl = status["artifacts"]["opengl"]
@@ -11220,9 +11220,9 @@ def test_layer_norm_vjp_native_runtime_evidence_records_deferred_cross_target_pr
 
     directx = status["artifacts"]["directx"]
     assert directx["sha256"] == (
-        "b684a98b4ef99d01084e8d0ea4e64d3075aa4e7fd75ef8becff2608b1c46cb86"
+        "e1d1a2c741e0aed892413adc1b2d99db444878f5981effca373091b46f61b54e"
     )
-    assert directx["size_bytes"] == 9140
+    assert directx["size_bytes"] == 9452
     assert directx["wave_active_sum_call_count"] == 4
     assert directx["native_runtime"]["status"] == "required-on-ci"
     opengl = status["artifacts"]["opengl"]
@@ -11440,8 +11440,8 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     }
     assert status["artifacts"]["directx"] == {
         "target_entry_point": "CSMain",
-        "sha256": "f902bae0e7603d302340327c61e5a82ab392b9ce1afffb5557b1760592a1465f",
-        "size_bytes": 5110,
+        "sha256": "f10d13d3dfbed2c5e59f785ec0e9a61c93026d3bead541738e450fe72ae2113e",
+        "size_bytes": 5422,
         "subgroup_enforcement": "hlsl-wave-size-attribute",
         "subgroup_id_lowering": "workgroup-synchronized-physical-wave-allocation",
         "native_runtime": {
@@ -11473,9 +11473,9 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
         "software_runtime_artifact": {
             "target_entry_point": "main",
             "sha256": (
-                "a3c1958daa680419ce3f38559de1a6a2319a7abdac556a049632194c88223a32"
+                "fdeafb72874a7759a2672eed005556fa928933381a6b9874366ee3fb01275943"
             ),
-            "size_bytes": 6275,
+            "size_bytes": 6360,
             "subgroup_enforcement": "explicit-32-lane-software-subgroup",
             "software_subgroup_width": 32,
             "software_subgroup_count": 16,
@@ -11537,9 +11537,12 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     assert "selects `dot_product_float32_it32_tg512_sg16`" in readme
     assert "preserve the read-only `float4` storage views" in readme
     assert "requires a readback of `256.0`" in readme
-    assert "separate software artifact is 6,275 bytes" in readme
+    assert "separate software artifact is 6,360 bytes" in readme
     assert "sixteen independent 32-lane logical subgroups" in readme
-    assert "four control barriers and no group-nonuniform instruction" in readme
+    assert "four control barriers, three shared-memory barriers" in readme
+    assert "no group-nonuniform instruction" in readme
+    assert "file-level source remapping to `dot.metal`" in readme
+    assert "strict DXC compilation produces identical DXIL" in readme
     assert "Mesa llvmpipe executes the same workload" in readme
     assert "still fails closed at storage-backed vector pointer lowering" in readme
     assert "do not redirect MLX host dispatch" in readme
@@ -13213,9 +13216,21 @@ def test_fft_windows_evidence_matches_artifact_and_bounded_controls(
         (ROOT / "demos/integrations/mlx/expected-gaps.json").read_text(encoding="utf-8")
     )
     status = gaps[status_key]
+    assert status["artifact"]["native_execution_status"] == "required-on-ci"
+    assert (
+        status["verified_native_execution"]["source_artifact_sha256"]
+        != status["artifact"]["sha256"]
+    )
     assert status["verified_native_execution"] == {
         "source_commit": source_commit,
-        "source_artifact_sha256": status["artifact"]["sha256"],
+        "source_artifact_sha256": {
+            "directx_fft_translation_status": (
+                "d5fa1ae408154eae551c1ad20f02a81c47f95fe4be7df16714b4ff7bf4e8048b"
+            ),
+            "directx_fft_current_corpus_status": (
+                "f8c8c4b18cabaa7f2997dcdb68b8a9f32645f274c271e454e44dfe463cd4a1ff"
+            ),
+        }[status_key],
         "workflow_commit": "a688ad155e168c22171ac274f04edb8b39db9947",
         "job_url": (
             "https://github.com/CrossGL/crosstl/actions/runs/37525218285"
@@ -13292,6 +13307,7 @@ def test_fft_directx_evidence_records_selected_native_runtime_proof():
     assert status["artifact"] == {
         "sha256": module.FFT_DIRECTX_GENERATED_SHA256,
         "size_bytes": module.FFT_DIRECTX_GENERATED_SIZE_BYTES,
+        "native_execution_status": "required-on-ci",
         "promoted_native_16_shift_count": 20,
         "first_class_workgroup_pointer_residue": False,
     }
@@ -13408,8 +13424,9 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
         "pruned_candidate_count": 2120,
     }
     assert status["artifact"] == {
-        "sha256": "f8c8c4b18cabaa7f2997dcdb68b8a9f32645f274c271e454e44dfe463cd4a1ff",
-        "size_bytes": 176506,
+        "sha256": "33c9aa89cee60ba565ea744ad3452ee4a2213d0a991098e64aa093c3b31b6b37",
+        "size_bytes": 175427,
+        "native_execution_status": "required-on-ci",
         "promoted_native_16_shift_count": 20,
         "first_class_workgroup_pointer_residue": False,
         "workgroup_pointer_transport": "concrete-groupshared-root-plus-integer-offset",
@@ -13484,13 +13501,13 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
     assert "materializes 37 specializations" in readme
     assert "records 42 reachable specializations before pruning" in readme
     assert "two compatible `ReadWriter_float2_float2__load` overload bodies" in readme
-    assert "transport `crosstl_ptr_buf` as an integer offset" in readme
+    assert "transport workgroup pointers as typed resource handles" in readme
     assert "carried into the CrossGL intermediate before target lowering" in readme
     assert "removes that unobserved resource parameter" in readme
     assert (
         "null pointer that can be observed or dereferenced still fails closed" in readme
     )
-    assert "176,506-byte HLSL artifact" in readme
+    assert "175,427-byte HLSL artifact" in readme
     assert "before merging a reference update" in readme
     assert "All 20 native-16 ``power`` shift counts" in readme
     assert "explicitly promoted to ``int``" in readme
@@ -13530,7 +13547,7 @@ def test_fft_current_opengl_evidence_records_native_runtime_proof():
         "project_diagnostic_count": 0,
         "index_range_assertion_count": 6,
         "workgroup_access_assertion_count": 1,
-        "source_remap_mapping_count": 84,
+        "source_remap_mapping_count": 1,
         "max_template_specializations": 4096,
         "max_template_materialization_work": 2097152,
     }
@@ -13546,9 +13563,10 @@ def test_fft_current_opengl_evidence_records_native_runtime_proof():
         "pruned_candidate_count": 2120,
     }
     assert status["artifact"] == {
-        "sha256": "5c6fefea7315d7d091641d024aea27bbdcecf1f2f4b7a63a2db5af401e036512",
-        "size_bytes": 109547,
-        "source_remap_mapping_count": 84,
+        "sha256": "30bda0723b143bf426f0e102dabb23f042ff2e64991e9d225a39ed2347c9c2b8",
+        "size_bytes": 116599,
+        "source_remap_granularity": "file",
+        "source_remap_mapping_count": 1,
         "pointer_transport": "concrete-workgroup-and-storage-resource-offsets",
         "default_null_resource_pointer_transport": "statically-unobserved-chain-pruned",
         "encoded_generic_vector_constructor_residue": False,
@@ -13617,7 +13635,7 @@ def test_fft_current_opengl_evidence_records_native_runtime_proof():
     assert status["runtime_parity_claimed"] is False
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "current FFT source now also emits a 109,547-byte GLSL artifact" in readme
+    assert "current FFT source now also emits a 116,599-byte GLSL artifact" in readme
     assert "21 deferred specialization constants" in readme
     assert "8-byte size, stride, and alignment" in readme
     assert "19 control barriers and no group-nonuniform instructions" in readme
@@ -13979,9 +13997,9 @@ def test_gemv_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "6c9a9cff75874925dda1562ab18b512bb452ac1bdd5b45275b9590bd692f55af"
+                "2d6d7f4dec61bc3a19066a76f83192df59fe10cc1d5aef27ea5e8065fe6e8ca9"
             ),
-            "size_bytes": 8382,
+            "size_bytes": 8718,
             "subgroup_id_lowering": "flattened-logical-software-subgroups",
             "relative_shuffle_out_of_range": "calling-invocation-value",
             "software_subgroup_width": 32,
@@ -14245,9 +14263,9 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "ff64661e8c32779e3f397436b33f9effd042ea413678c7c1214d9ede7e656f81"
+                "8d2c5257a8d90310d9a96051bd4243c694bd6fa32ec2a80b4f221a6ef287ea37"
             ),
-            "size_bytes": 9816,
+            "size_bytes": 10335,
             "workgroup_size": [32, 1, 1],
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
@@ -14259,15 +14277,15 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "opengl": {
             "target_entry_point": "main",
             "sha256": (
-                "fa30bdc9d3983644c94683aa2556b6f896f730f1ae32e72ff0b7082f0e1bea3b"
+                "3aae7fd8aede237351ea9eeaff8b22bcecb49f920c91451ab021cf1f1ff52451"
             ),
-            "size_bytes": 11346,
+            "size_bytes": 11932,
             "workgroup_size": [32, 1, 1],
             "subgroup_enforcement": "explicit-32-lane-software-subgroup",
             "compiler": "glslangValidator",
             "compiler_target": "OpenGL/SPIR-V 1.3",
             "validator": "spirv-val",
-            "compiled_artifact_size_bytes": 15296,
+            "compiled_artifact_size_bytes": 16720,
             "control_barrier_instruction_count": 3,
             "group_non_uniform_instruction_count": 0,
             "compiler_validation_status": "passed",
@@ -14372,9 +14390,9 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         },
         "corrected_dxil_contract": {
             "artifact_sha256": (
-                "ff64661e8c32779e3f397436b33f9effd042ea413678c7c1214d9ede7e656f81"
+                "8d2c5257a8d90310d9a96051bd4243c694bd6fa32ec2a80b4f221a6ef287ea37"
             ),
-            "artifact_size_bytes": 9816,
+            "artifact_size_bytes": 10335,
             "source_bitcast": "integer-ieee754-binary16-to-float32",
             "subnormal_decode": "integer-ieee754-binary16-to-float32",
             "arithmetic": "fmul-float",

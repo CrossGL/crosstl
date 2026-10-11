@@ -2336,17 +2336,17 @@ specializations before pruning, and concretizes 21 of 23 configured function
 constants. The source reaches two compatible `ReadWriter_float2_float2__load`
 overload bodies. DirectX workgroup-pointer reachability now analyzes both
 bodies, merges their forwarded calls and access ranges, and retains the
-concrete `fft_mem_256_float2_float2_shared_in[256]` backing identity. Generated
-helpers transport `crosstl_ptr_buf` as an integer offset instead of a bare
-first-class workgroup pointer expression. The omitted default `twiddles =
+concrete `crosstl_workgroup_shared_in[256]` backing identity. Generated
+helpers transport workgroup pointers as typed resource handles carrying the
+backing identity and an integer offset. The omitted default `twiddles =
 nullptr` argument is carried into the CrossGL intermediate before target
 lowering. Because the materialized `use_twiddle_table = false` call chain makes
 every twiddle dereference unreachable, DirectX removes that unobserved resource
 parameter through the forwarding chain rather than inventing a backing buffer.
 A null pointer that can be observed or dereferenced still fails closed.
 
-The current source emits a 176,506-byte HLSL artifact with SHA-256
-`f8c8c4b18cabaa7f2997dcdb68b8a9f32645f274c271e454e44dfe463cd4a1ff`
+The current source emits a 175,427-byte HLSL artifact with SHA-256
+`33c9aa89cee60ba565ea744ad3452ee4a2213d0a991098e64aa093c3b31b6b37`
 and zero project diagnostics. All 20 native-16 ``power`` shift counts are
 explicitly promoted to ``int`` before HLSL shifting, matching Metal/C++ integer
 promotion rather than retaining minimum-precision count semantics. Windows CI
@@ -2360,14 +2360,15 @@ identity or extent still fail closed, and
 [#1518](https://github.com/CrossGL/crosstl/issues/1518) continues to track the
 broader pointer-offset contract. The historical proof remains separately
 recorded under its own commit provenance; it is no longer being used as a
-substitute for current-corpus evidence. Its reviewed artifact is 145,277 bytes,
-SHA-256 `d5fa1ae408154eae551c1ad20f02a81c47f95fe4be7df16714b4ff7bf4e8048b`.
+substitute for current-corpus evidence. Its reviewed artifact is 144,151 bytes,
+SHA-256 `d611594837648c52f0fc0e7847c1ebdd660f158c830eccc0002aa3dd597bbab9`.
 Both artifact revisions preserve reflected bindings and dispatch dimensions;
 native Windows numerical execution remains required before merging a reference
 update. Successful DXC compilation alone does not satisfy that requirement.
 
 [Windows run 37525218285](https://github.com/CrossGL/crosstl/actions/runs/37525218285/job/112481552970)
-verifies both revised artifacts at `a688ad15`. The `mlx-fft-directx` artifact
+verifies the preceding 176,506-byte and 145,277-byte artifacts at `a688ad15`.
+The `mlx-fft-directx` artifact
 (11443897833) retains all ten input fixtures, dispatch plans, compiler commands,
 HLSL/DXIL snapshots and returned values. Independent DFT recomputation from the
 saved inputs verifies 5,120 values and 80 exact guards across the two source
@@ -2378,10 +2379,13 @@ their contracts, and both compiled modules have SHA-256
 This verifies these five controls for each historical pin; it does not establish
 the `9c3d3557` corpus, arbitrary FFT plans or physical driver-upload bytes.
 
-The current FFT source now also emits a 109,547-byte GLSL artifact with
+The current FFT source now also emits a 116,599-byte GLSL artifact with
 SHA-256
-`5c6fefea7315d7d091641d024aea27bbdcecf1f2f4b7a63a2db5af401e036512`
-and 84 source-remap mappings. OpenGL keeps the 21 reachable function constants
+`30bda0723b143bf426f0e102dabb23f042ff2e64991e9d225a39ed2347c9c2b8`.
+Resource-aggregate lowering currently retains one file-level source mapping,
+not the preceding artifact's 84 finer-grained mappings. Diagnostics preserve
+the original source path but do not yet identify individual rewritten lines.
+OpenGL keeps the 21 reachable function constants
 as 21 deferred specialization constants and uses the same `[1, 1, 64]`
 workgroup contract. A fifth current-source index assertion bounds
 `batch_idx + index + r`. A sixth assertion bounds the resource helper's
@@ -2407,6 +2411,16 @@ independent references within the required `2e-4` tolerances, with exact guard
 preservation. The first execution must publish the verified compilation cache;
 the remaining four must use it. This is one exact current-pinned plan and does not establish full
 FFT, MLX host-runtime, or backend parity.
+
+The shared-vector lowering accepts fixed-size arrays of two- or four-component
+32-bit numeric vectors and preserves typed loads, stores and element offsets.
+Three-component layouts, unknown extents and unsupported qualifiers remain
+rejected. General regressions exercise rebased arrays, three workgroups and
+exact output and shared-storage guards on Metal and OpenGL. The revised
+FFT passes the five unchanged OpenGL controls locally. Its DirectX modules
+compile with unchanged reflection; Windows numerical execution of the new
+source identities remains required. Earlier Windows results are retained under
+their original artifact hashes and do not certify these revised artifacts.
 
 A dedicated project replay now translates the complete pinned `fft.metal`
 source to one standalone OpenGL compute shader with a 4,096-specialization
@@ -2505,8 +2519,8 @@ and
 
 Entry-scoped translation materializes only the selected GEMV and
 `elem_to_loc_uint`, with no unsupported record or project diagnostic. The
-8,382-byte HLSL has SHA-256
-`6c9a9cff75874925dda1562ab18b512bb452ac1bdd5b45275b9590bd692f55af`,
+8,718-byte HLSL has SHA-256
+`2d6d7f4dec61bc3a19066a76f83192df59fe10cc1d5aef27ea5e8065fe6e8ca9`,
 retains `[numthreads(32, 2, 1)]` and `[WaveSize(32)]`, and passes official DXC
 1.9.2602.24 under `cs_6_6`, `-enable-16bit-types`, and warnings as errors.
 Direct3D does not guarantee that a multidimensional workgroup's flattened
@@ -2543,6 +2557,11 @@ adds explicit shared-memory ordering and checks the source lane before addition.
 Bindings, entry geometry, template materializations and upstream source hashes
 are unchanged. Both historical references are reproduced exactly and compiled
 before comparison; all four historical/current artifacts pass their validators.
+The subsequent empty-struct compatibility update adds one padding member to
+each of 14 unused HLSL declarations. Its complete executable body and reflected
+interface are unchanged, and strict DXC compilation produces byte-identical
+DXIL to the accepted 8,382-byte reference. The GLSL source and compiled module
+are unchanged. Native execution remains a separate required check.
 
 Both target-specific software-subgroup analyses recognize either `value > 0`
 or the integral-equivalent `value >= 1` as a canonical positive-to-zero
@@ -2603,8 +2622,8 @@ and
 
 Entry-scoped translation materializes only the selected specialization with
 `T=float`, `group_size=32`, `bits=4`, and `has_global_scale=false`. The
-9,816-byte HLSL has SHA-256
-`ff64661e8c32779e3f397436b33f9effd042ea413678c7c1214d9ede7e656f81`,
+10,335-byte HLSL has SHA-256
+`8d2c5257a8d90310d9a96051bd4243c694bd6fa32ec2a80b4f221a6ef287ea37`,
 retains `[numthreads(32, 1, 1)]` and `[WaveSize(32)]`, and passes DXC under
 `cs_6_6`, `-enable-16bit-types`, and warnings as errors. Its compiled DXIL is
 4,836 bytes. This artifact explicitly enables the DirectX-only
@@ -2643,15 +2662,17 @@ masked with `0xffff`. The corrected HLSL emits
 `int(uint16_t(bits)) << 23`; DXIL now shifts the 32-bit value by 23 before
 `asfloat`, while retaining zero native-half instructions.
 
-The 11,346-byte GLSL has SHA-256
-`fa30bdc9d3983644c94683aa2556b6f896f730f1ae32e72ff0b7082f0e1bea3b`,
+The 11,932-byte GLSL has SHA-256
+`3aae7fd8aede237351ea9eeaff8b22bcecb49f920c91451ab021cf1f1ff52451`,
 uses one explicit 32-lane software subgroup for `WaveActiveMax(float)`, and
-passes `glslangValidator` and `spirv-val`. Its 15,296-byte SPIR-V has three
+passes `glslangValidator` and `spirv-val`. Its 16,720-byte SPIR-V has three
 control barriers, no group-nonuniform instruction, and local size
 `[32, 1, 1]`. Because GLSL widens source binary16 values to float32, the same
-source bitcast preserves the low 16-bit payload through `unpackHalf2x16` rather
-than incorrectly reinterpreting the widened integer as a 32-bit float; the
-inverse form uses `packHalf2x16` and exact low-bit extraction.
+source bitcast decodes the low 16-bit payload with integer operations before
+constructing the float32 representation. This preserves binary16 subnormals
+without relying on a target half-conversion instruction's denormal behavior.
+The decoder replaces `unpackHalf2x16` at the FP4 conversion; no numerical
+tolerance, input, dispatch geometry, or resource binding changes.
 
 The reference update compares complete historical/current bodies and all seven
 reflected resources across both targets. HLSL preserves eight-bit assignments,
@@ -2664,6 +2685,11 @@ conversion. Resource bindings, element widths, dispatch geometry, and template
 materializations are unchanged. The non-required HLSL `sign_bit` metadata
 retains the same 0/8 values with explicit byte conversion. Both historical
 references reproduce exactly, and all four old/new artifacts pass compilation.
+The subsequent HLSL update adds empty-struct padding and explicit integer
+types to three constant shifts. Strict compilation produces the same DXIL
+as the accepted 9,816-byte source. The GLSL decoder update changes SPIR-V and
+requires separate numerical execution; compiler validation alone is not a
+runtime parity claim.
 
 A subsequent template-scope correction removes only the unused
 `integral_constant_res_t_res` structure, reducing the reachable record count
@@ -3252,8 +3278,8 @@ shape and weighted-gradient provenance. Materialization selects
 `threadgroup_sum<3>`, and `threadgroup_sum<1>` from seven reachable
 specializations while pruning 194 candidates.
 
-The generated HLSL is 9,140 bytes with SHA-256
-`b684a98b4ef99d01084e8d0ea4e64d3075aa4e7fd75ef8becff2608b1c46cb86`.
+The generated HLSL is 9,452 bytes with SHA-256
+`e1d1a2c741e0aed892413adc1b2d99db444878f5981effca373091b46f61b54e`.
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, compiles as `cs_6_6` with `-enable-16bit-types`, and
 must execute numerically through Direct3D 12 WARP on Windows CI. The generated
@@ -3500,6 +3526,13 @@ four reflected resource layouts. For DirectX, the 16 physical waves receive
 unique, wave-uniform IDs through the synchronized allocator rather than a
 lane-varying flattened-index quotient.
 
+The reviewed 5,422-byte HLSL artifact has SHA-256
+`f10d13d3dfbed2c5e59f785ec0e9a61c93026d3bead541738e450fe72ae2113e`.
+Its source differs from the previous reference only by thirteen unused empty
+struct padding members; strict DXC compilation produces identical DXIL. Current
+dot artifacts retain file-level source remapping to `dot.metal`, not the older
+line mappings. Neither property establishes native DirectX correctness.
+
 Windows CI compiles the HLSL artifact with DXC, packages its native-loader ABI,
 and dispatches one workgroup through Direct3D 12 WARP. The bounded workload
 computes the dot product of 1,024 float32 values containing `1.0` and `0.25` and
@@ -3518,8 +3551,8 @@ command and compiled artifacts, and returned values under `mlx-dot-directx`,
 including when validation fails. These records describe the native request and
 readback; they do not establish the exact bytes uploaded by the driver.
 
-A separate software artifact is 6,275 bytes with SHA-256
-`a3c1958daa680419ce3f38559de1a6a2319a7abdac556a049632194c88223a32`.
+A separate software artifact is 6,360 bytes with SHA-256
+`fdeafb72874a7759a2672eed005556fa928933381a6b9874366ee3fb01275943`.
 It allocates 512 shared float elements and partitions them into sixteen
 independent 32-lane logical subgroups. The first sum reduces within each
 partition. For the second sum beneath `tid < 16`, inactive lanes contribute the
@@ -3527,15 +3560,18 @@ additive identity while all 512 invocations reach the helper barriers uniformly;
 only the active lanes consume the subgroup-zero result. The artifact emits no
 KHR subgroup extension, hardware `gl_Subgroup*` builtin, or group-nonuniform
 SPIR-V operation. `glslangValidator` and `spirv-val` accept its SPIR-V 1.3
-module, whose disassembly contains four control barriers and no group-nonuniform
-instruction. Mesa llvmpipe executes the same workload through surfaceless EGL
+module, whose disassembly contains four control barriers, three shared-memory
+barriers, and no group-nonuniform instruction. Mesa llvmpipe executes the same workload through surfaceless EGL
 and requires the same `256.0` readback at `1e-5` absolute and relative
 tolerance.
+Linux CI retains this software artifact, its compilation outputs, package,
+input fixture, dispatch plan, availability and readback, including failed
+results. Evidence retention does not alter numerical comparisons.
 
 macOS CI records that the equivalent selected Metal round trip still fails
 closed at storage-backed vector pointer lowering under
 [#1903](https://github.com/CrossGL/crosstl/issues/1903); it does not claim native
-Metal compiler acceptance. These checks establish cross-target numerical
+Metal compiler acceptance. These checks establish OpenGL numerical
 execution for one selected kernel workload and do not redirect MLX host
 dispatch, cover the float16 or bfloat16 dot entries, or run the MLX test suite.
 
@@ -4385,8 +4421,8 @@ preserving reachable constants, resolving
 materializes one `rms_single_row<float, RMS_N_READS>` specialization from four
 reachable specializations while pruning 168 unrelated candidates.
 
-The generated HLSL artifact is 5,544 bytes with SHA-256
-`27146f3b1c16701885dd133b628c602027152453041badf9652450cb3e386c51`;
+The generated HLSL artifact is 5,856 bytes with SHA-256
+`a7e7c7da1c51a42cff5e2bdb9bb1955bc1ee302552130e291f3158c5cc7846da`;
 it retains `[WaveSize(32)]` and compiles as `cs_6_6` with
 `-enable-16bit-types`. The generated GLSL
 artifact is 6,882 bytes with SHA-256
@@ -4426,8 +4462,8 @@ input and cotangent views. Materialization selects
 `vjp_rms_single_row<float, RMS_N_READS>` from four reachable specializations
 while pruning 168 unrelated candidates.
 
-The generated HLSL is 8,863 bytes with SHA-256
-`7076ecd04029ecdf6b266eef11b3bda85f261ba40767b16a11c7314a5857f846`.
+The generated HLSL is 9,175 bytes with SHA-256
+`1820e6a8454f4a44fc0c8998950c0469596a8318fb2b7efa250794bfd21d2ab8`.
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, and compiles as `cs_6_6` with
 `-enable-16bit-types`. The generated software-subgroup GLSL is 10,257 bytes
@@ -4445,6 +4481,11 @@ absolute difference below `5.97e-8`, with 16 source-output guards and unchanged
 read-only buffers. Strict HLSL compilation and independently replayed Windows
 helper tests pass; complete updated-kernel execution remains required on
 Windows. No numerical tolerance or dispatch setting changes.
+The later empty-struct compatibility update changes only 13 unused HLSL
+declarations in each RMSNorm artifact. Both revised HLSL sources produce
+byte-identical DXIL to their accepted references. OpenGL's gradient loop now
+distinguishes a pointer's storage from the value-only calculation of its
+offset; its generated source is identical to the accepted reference.
 
 RMSNorm VJP exercises a canonical runtime row loop. The explicit software
 subgroup path accepts that loop only after proving its initializer and bound

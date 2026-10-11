@@ -4979,8 +4979,11 @@ class HLSLCodeGen:
             if (
                 isinstance(child, VariableNode)
                 and isinstance(child.var_type, (PointerType, ReferenceType))
-                and self.hlsl_software_subgroup_expression_identifier_names(
-                    child.initial_value
+                and call_mutations.get(
+                    id(child),
+                    self.hlsl_software_subgroup_expression_identifier_names(
+                        child.initial_value
+                    ),
                 )
                 & control_names
             ):
@@ -5336,10 +5339,32 @@ class HLSLCodeGen:
         resolved_calls = {}
         unresolved_calls = []
         call_source_types = {}
+        declarations = {}
+        constant_nodes = list(ast.constants) + [
+            node
+            for node in ast.global_variables
+            if isinstance(node, VariableNode)
+            and set(node.qualifiers) & {"const", "constant"}
+            and "volatile" not in node.qualifiers
+        ]
         edges = {id(function): [] for function in functions}
         for function in functions:
             lexical = self.hlsl_function_lexical_type_bindings(function)
             call_source_types.update(lexical["call_source_types"])
+            declared_names = {
+                binding["name"] for binding in lexical["declarations"].values()
+            }
+            constant_types = {
+                node.name: self.directx_specialization_constant_type(node)
+                for node in constant_nodes
+                if node.name not in declared_names
+            }
+            for binding in lexical["declarations"].values():
+                binding["initializer_source_types"] = {
+                    **constant_types,
+                    **binding.get("initializer_source_types", {}),
+                }
+            declarations.update(lexical["declarations"])
             for call in self.walk_ast(getattr(function, "body", None)):
                 if not isinstance(call, FunctionCallNode):
                     continue
@@ -5468,6 +5493,16 @@ class HLSLCodeGen:
             self.structs_by_name,
         )
         call_mutations = {}
+        for binding in declarations.values():
+            declaration = binding["node"]
+            if not isinstance(getattr(declaration, "var_type", None), PointerType):
+                continue
+            roots = self.hlsl_software_subgroup_uniform_returns.pointer_argument_write_roots(
+                declaration.initial_value,
+                binding.get("initializer_source_types", {}),
+            )
+            if roots is not None:
+                call_mutations[id(declaration)] = roots
         for node in calls:
             call_name = self.function_call_name(node)
             arguments = list(getattr(node, "arguments", []) or [])
@@ -16965,6 +17000,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "id": id(node),
                 "kind": kind,
                 "name": name,
+                "node": node,
                 "source_type": source_type,
             }
             declarations[id(node)] = binding
@@ -17013,6 +17049,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 name = getattr(node, "name", None)
                 if name:
                     visible.pop(name, None)
+                initializer_source_types = visible_source_types(visible)
                 visit(getattr(node, "initial_value", None), visible)
                 if name:
                     visible[name] = register(
@@ -17021,6 +17058,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         declaration_source_type(node, visible),
                         "local",
                     )
+                    visible[name]["initializer_source_types"] = initializer_source_types
                 return
 
             if isinstance(node, FunctionCallNode):

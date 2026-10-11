@@ -4687,8 +4687,36 @@ class GLSLCodeGen:
             self.structs_by_name,
         )
         self.glsl_software_subgroup_uniform_returns = analysis
+        constant_source_types = {
+            **self.glsl_constant_types,
+            **{
+                node.name: node.var_type
+                for node in ast.global_variables
+                if isinstance(node, VariableNode)
+                and set(node.qualifiers) & {"const", "constant"}
+                and "volatile" not in node.qualifiers
+            },
+        }
         for function in functions:
             lexical = self.glsl_scalar_array_view_lexical_bindings(function)
+            declared_names = {
+                binding["name"] for binding in lexical["declarations"].values()
+            }
+            constant_types = {
+                name: type_
+                for name, type_ in constant_source_types.items()
+                if name not in declared_names
+            }
+            for binding in lexical["declarations"].values():
+                declaration = binding["node"]
+                if not isinstance(getattr(declaration, "var_type", None), PointerType):
+                    continue
+                roots = analysis.pointer_argument_write_roots(
+                    declaration.initial_value,
+                    {**constant_types, **binding.get("initializer_source_types", {})},
+                )
+                if roots is not None:
+                    self.glsl_software_subgroup_call_mutations[id(declaration)] = roots
             for call in self.walk_ast(getattr(function, "body", None)):
                 if not isinstance(call, FunctionCallNode):
                     continue
@@ -6384,8 +6412,11 @@ class GLSLCodeGen:
                     return False
                 if (
                     isinstance(child.var_type, (PointerType, ReferenceType))
-                    and self.glsl_software_subgroup_expression_identifier_names(
-                        child.initial_value
+                    and self.glsl_software_subgroup_call_mutations.get(
+                        id(child),
+                        self.glsl_software_subgroup_expression_identifier_names(
+                            child.initial_value
+                        ),
                     )
                     & control_names
                 ):
@@ -21109,6 +21140,7 @@ class GLSLCodeGen:
                 name = getattr(node, "name", None)
                 if name:
                     visible.pop(name, None)
+                initializer_source_types = visible_source_types(visible)
                 visit(getattr(node, "initial_value", None), visible)
                 if name:
                     visible[name] = register(
@@ -21117,6 +21149,7 @@ class GLSLCodeGen:
                         declaration_source_type(node, visible),
                         "local",
                     )
+                    visible[name]["initializer_source_types"] = initializer_source_types
                 return
 
             if isinstance(node, FunctionCallNode):

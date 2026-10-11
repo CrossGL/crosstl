@@ -685,10 +685,11 @@
       ]
     },
     "artifact": {
-      "sha256": "d5fa1ae408154eae551c1ad20f02a81c47f95fe4be7df16714b4ff7bf4e8048b",
-      "size_bytes": 145277,
+      "sha256": "d611594837648c52f0fc0e7847c1ebdd660f158c830eccc0002aa3dd597bbab9",
+      "size_bytes": 144151,
       "promoted_native_16_shift_count": 20,
-      "first_class_workgroup_pointer_residue": false
+      "first_class_workgroup_pointer_residue": false,
+      "native_execution_status": "required-on-ci"
     },
     "native_validation": {
       "compiler": "dxc",
@@ -802,8 +803,8 @@
     "artifacts": {
       "directx": {
         "target_entry_point": "CSMain",
-        "sha256": "f902bae0e7603d302340327c61e5a82ab392b9ce1afffb5557b1760592a1465f",
-        "size_bytes": 5110,
+        "sha256": "f10d13d3dfbed2c5e59f785ec0e9a61c93026d3bead541738e450fe72ae2113e",
+        "size_bytes": 5422,
         "subgroup_enforcement": "hlsl-wave-size-attribute",
         "subgroup_id_lowering": "workgroup-synchronized-physical-wave-allocation",
         "native_runtime": {
@@ -828,8 +829,8 @@
         "native_runtime_executed": false,
         "software_runtime_artifact": {
           "target_entry_point": "main",
-          "sha256": "a3c1958daa680419ce3f38559de1a6a2319a7abdac556a049632194c88223a32",
-          "size_bytes": 6275,
+          "sha256": "fdeafb72874a7759a2672eed005556fa928933381a6b9874366ee3fb01275943",
+          "size_bytes": 6360,
           "subgroup_enforcement": "explicit-32-lane-software-subgroup",
           "software_subgroup_width": 32,
           "software_subgroup_count": 16,
@@ -3857,14 +3858,15 @@
       "pruned_candidate_count": 2120
     },
     "artifact": {
-      "sha256": "f8c8c4b18cabaa7f2997dcdb68b8a9f32645f274c271e454e44dfe463cd4a1ff",
-      "size_bytes": 176506,
+      "sha256": "33c9aa89cee60ba565ea744ad3452ee4a2213d0a991098e64aa093c3b31b6b37",
+      "size_bytes": 175427,
       "promoted_native_16_shift_count": 20,
       "first_class_workgroup_pointer_residue": false,
       "workgroup_pointer_transport": "concrete-groupshared-root-plus-integer-offset",
       "overload_body_reachability": "all-compatible-source-overloads",
       "default_null_resource_pointer_transport": "statically-unobserved-chain-pruned",
-      "observable_null_resource_pointer_policy": "fail-closed"
+      "observable_null_resource_pointer_policy": "fail-closed",
+      "native_execution_status": "required-on-ci"
     },
     "native_validation": {
       "compiler": "dxc",
@@ -3974,7 +3976,7 @@
       "project_diagnostic_count": 0,
       "index_range_assertion_count": 6,
       "workgroup_access_assertion_count": 1,
-      "source_remap_mapping_count": 84,
+      "source_remap_mapping_count": 1,
       "max_template_specializations": 4096,
       "max_template_materialization_work": 2097152
     },
@@ -4019,13 +4021,14 @@
       "pruned_candidate_count": 2120
     },
     "artifact": {
-      "sha256": "5c6fefea7315d7d091641d024aea27bbdcecf1f2f4b7a63a2db5af401e036512",
-      "size_bytes": 109547,
-      "source_remap_mapping_count": 84,
+      "sha256": "30bda0723b143bf426f0e102dabb23f042ff2e64991e9d225a39ed2347c9c2b8",
+      "size_bytes": 116599,
+      "source_remap_mapping_count": 1,
       "pointer_transport": "concrete-workgroup-and-storage-resource-offsets",
       "default_null_resource_pointer_transport": "statically-unobserved-chain-pruned",
       "encoded_generic_vector_constructor_residue": false,
-      "all_overload_specialization_declarations_defined": true
+      "all_overload_specialization_declarations_defined": true,
+      "source_remap_granularity": "file"
     },
     "native_validation": {
       "compiler": "glslangValidator",
@@ -4034,8 +4037,8 @@
       "control_barrier_count": 19,
       "group_non_uniform_instruction_count": 0,
       "canonical_probe_spirv": {
-        "sha256": "2593d8ec9d9038c1e7caf586f4db373fa2744076d032a11ae12f4d1f598ea364",
-        "size_bytes": 192784,
+        "sha256": "d48c32870b8bb0a0870177c374afb3bfb6653a3e18bd5554c6151a557d23629d",
+        "size_bytes": 204276,
         "identity_scope": "probe-glslang-version-only"
       }
     },
@@ -4871,8 +4874,8 @@
     "artifacts": {
       "directx": {
         "target_entry_point": "CSMain",
-        "sha256": "6c9a9cff75874925dda1562ab18b512bb452ac1bdd5b45275b9590bd692f55af",
-        "size_bytes": 8382,
+        "sha256": "2d6d7f4dec61bc3a19066a76f83192df59fe10cc1d5aef27ea5e8065fe6e8ca9",
+        "size_bytes": 8718,
         "subgroup_id_lowering": "flattened-logical-software-subgroups",
         "relative_shuffle_out_of_range": "calling-invocation-value",
         "software_subgroup_width": 32,
@@ -5128,8 +5131,8 @@
     "artifacts": {
       "directx": {
         "target_entry_point": "CSMain",
-        "sha256": "ff64661e8c32779e3f397436b33f9effd042ea413678c7c1214d9ede7e656f81",
-        "size_bytes": 9816,
+        "sha256": "8d2c5257a8d90310d9a96051bd4243c694bd6fa32ec2a80b4f221a6ef287ea37",
+        "size_bytes": 10335,
         "workgroup_size": [
           32,
           1,
@@ -5147,8 +5150,8 @@
       },
       "opengl": {
         "target_entry_point": "main",
-        "sha256": "fa30bdc9d3983644c94683aa2556b6f896f730f1ae32e72ff0b7082f0e1bea3b",
-        "size_bytes": 11346,
+        "sha256": "3aae7fd8aede237351ea9eeaff8b22bcecb49f920c91451ab021cf1f1ff52451",
+        "size_bytes": 11932,
         "workgroup_size": [
           32,
           1,
@@ -5158,7 +5161,7 @@
         "compiler": "glslangValidator",
         "compiler_target": "OpenGL/SPIR-V 1.3",
         "validator": "spirv-val",
-        "compiled_artifact_size_bytes": 15296,
+        "compiled_artifact_size_bytes": 16720,
         "control_barrier_instruction_count": 3,
         "group_non_uniform_instruction_count": 0,
         "compiler_validation_status": "passed"
@@ -5233,8 +5236,8 @@
         "rejected_dxil_scale_bit_construction": "native-uint16-shift-23-truncated-to-shift-7-and-mask-0xffff"
       },
       "corrected_dxil_contract": {
-        "artifact_sha256": "ff64661e8c32779e3f397436b33f9effd042ea413678c7c1214d9ede7e656f81",
-        "artifact_size_bytes": 9816,
+        "artifact_sha256": "8d2c5257a8d90310d9a96051bd4243c694bd6fa32ec2a80b4f221a6ef287ea37",
+        "artifact_size_bytes": 10335,
         "source_bitcast": "integer-ieee754-binary16-to-float32",
         "subnormal_decode": "integer-ieee754-binary16-to-float32",
         "arithmetic": "fmul-float",
@@ -6364,8 +6367,8 @@
     "artifacts": {
       "directx": {
         "target_entry_point": "CSMain",
-        "sha256": "27146f3b1c16701885dd133b628c602027152453041badf9652450cb3e386c51",
-        "size_bytes": 5544,
+        "sha256": "a7e7c7da1c51a42cff5e2bdb9bb1955bc1ee302552130e291f3158c5cc7846da",
+        "size_bytes": 5856,
         "subgroup_enforcement": "hlsl-wave-size-attribute",
         "compiler": "dxc",
         "compiler_profile": "cs_6_6",
@@ -6593,8 +6596,8 @@
     "artifacts": {
       "directx": {
         "target_entry_point": "CSMain",
-        "sha256": "7076ecd04029ecdf6b266eef11b3bda85f261ba40767b16a11c7314a5857f846",
-        "size_bytes": 8863,
+        "sha256": "1820e6a8454f4a44fc0c8998950c0469596a8318fb2b7efa250794bfd21d2ab8",
+        "size_bytes": 9175,
         "subgroup_enforcement": "hlsl-wave-size-attribute",
         "compiler": "dxc",
         "compiler_profile": "cs_6_6",
@@ -7135,8 +7138,8 @@
     "artifacts": {
       "directx": {
         "target_entry_point": "CSMain",
-        "sha256": "b684a98b4ef99d01084e8d0ea4e64d3075aa4e7fd75ef8becff2608b1c46cb86",
-        "size_bytes": 9140,
+        "sha256": "e1d1a2c741e0aed892413adc1b2d99db444878f5981effca373091b46f61b54e",
+        "size_bytes": 9452,
         "subgroup_enforcement": "hlsl-wave-size-attribute",
         "compiler": "dxc",
         "compiler_profile": "cs_6_6",

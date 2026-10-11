@@ -247,6 +247,125 @@ def test_shared_resource_aggregate_execution_is_required():
     assert "--basetemp=" in step and "--junitxml=" in step
 
 
+def _vector_request(root, target, kind, width):
+    vector = f"{kind}{width}"
+    components = "xyzw"[:width]
+    construct = ", ".join(
+        f"as_type<{kind}>(inputs[(4u * group.x + lane) * {width}u + {index}u])"
+        for index in range(width)
+    )
+    readback = "\n".join(
+        f"results[4u + (8u * group.x + i) * {width}u + {index}u] = words.{member};"
+        for index, member in enumerate(components)
+    )
+    source_text = f"""#include <metal_stdlib>
+using namespace metal;
+struct Cursor {{ threadgroup {vector}* values; }};
+void store(Cursor cursor, uint lane, {vector} value) {{ cursor.values[lane] = value; }}
+kernel void shared_vectors(const device uint* inputs [[buffer(0)]],
+                           device uint* results [[buffer(1)]],
+                           uint lane [[thread_index_in_threadgroup]],
+                           uint3 group [[threadgroup_position_in_grid]]) {{
+    threadgroup {vector} storage[8];
+    for (uint i = lane; i < 8u; i += 4u) {{
+        storage[i] = as_type<{vector}>(uint{width}({GUARD}u));
+    }}
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    Cursor cursor{{storage + 1}};
+    cursor.values += 1;
+    store(cursor, lane, {vector}({construct}));
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint i = lane; i < 8u; i += 4u) {{
+        uint{width} words = as_type<uint{width}>(storage[i]);
+        {readback}
+    }}
+}}
+"""
+    values = [0x3F800000 + index * 17 for index in range(12 * width)]
+    expected = [GUARD] * 4
+    for group in range(3):
+        expected.extend([GUARD] * (2 * width))
+        expected.extend(values[group * 4 * width : (group + 1) * 4 * width])
+        expected.extend([GUARD] * (2 * width))
+    expected.extend([GUARD] * 4)
+    source, descriptor, package = _package(
+        root,
+        target,
+        kind,
+        (4, 1, 1),
+        source=source_text,
+        software_subgroups=False,
+        index_range_assertions=(
+            [
+                {
+                    "source": "products.metal",
+                    "function": f"crosstl_{storage}_{operation}_{element}{suffix}",
+                    "expression": "reference.offset + index",
+                    "minimum": 0,
+                    "maximum": 7 if storage == "workgroup" else len(expected) - 1,
+                }
+                for storage, element in (("workgroup", vector), ("resource", "uint"))
+                for operation in ("load", "store")
+                for suffix in ("", "_2")
+            ]
+            if target == "opengl"
+            else ()
+        ),
+    )
+    inputs = _bound_values(
+        descriptor,
+        {
+            "inputs": {"dtype": "uint32", "shape": [len(values)], "values": values},
+            "results": {
+                "dtype": "uint32",
+                "shape": [len(expected)],
+                "values": (
+                    [GUARD] * 4 + [0xDEADBEEF] * (len(expected) - 8) + [GUARD] * 4
+                ),
+            },
+        },
+    )
+    outputs = _bound_values(
+        descriptor,
+        {"results": {"dtype": "uint32", "shape": [len(expected)], "values": expected}},
+    )
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        outputs,
+        {"workgroupCount": [3, 1, 1], "workgroupSize": [4, 1, 1]},
+        expected_target=target,
+    )
+    assert not request.execution_plan.diagnostics
+    return source, request, outputs
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
+@pytest.mark.parametrize("kind", ["float", "int", "uint"])
+@pytest.mark.parametrize("width", [2, 4])
+def test_shared_vector_aggregate_compiles(tmp_path, target, kind, width):
+    _, request, _ = _vector_request(tmp_path, target, kind, width)
+    _compile(request.artifact_path.read_text(), target, tmp_path)
+
+
+@pytest.mark.parametrize("kind", ["float", "int", "uint"])
+@pytest.mark.parametrize("width", [2, 4])
+def test_shared_vector_aggregate_executes(tmp_path, kind, width):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required shared aggregate execution")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    source, request, outputs = _vector_request(tmp_path, target, kind, width)
+    _execute(
+        request,
+        outputs,
+        tmp_path,
+        original_source=source if target == "metal" else None,
+        original_entry="shared_vectors",
+        metal_compile_flags=("-Wall", "-Wextra", "-fno-fast-math"),
+    )
+
+
 def _ast(tmp_path):
     source = tmp_path / "shared.metal"
     source.write_text(_source("uint", "direct"))
@@ -273,7 +392,7 @@ def test_shared_allocation_requires_exact_layout(tmp_path, mode):
     elif mode == "narrow":
         left.var_type.element_type = PrimitiveType("uint", size_bits=16)
     elif mode == "vector":
-        left.var_type.element_type = PrimitiveType("uint2")
+        left.var_type.element_type = PrimitiveType("uint3")
     elif mode == "nested":
         left.var_type.element_type = ArrayType(
             PrimitiveType("uint"), LiteralNode(2, "int")

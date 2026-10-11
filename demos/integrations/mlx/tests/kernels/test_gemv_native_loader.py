@@ -58,8 +58,8 @@ MLX_GEMV_VARIANT_ID = (
 )
 MLX_GEMV_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "6c9a9cff75874925dda1562ab18b512bb452ac1bdd5b45275b9590bd692f55af",
-        "sizeBytes": 8382,
+        "sha256": "2d6d7f4dec61bc3a19066a76f83192df59fe10cc1d5aef27ea5e8065fe6e8ca9",
+        "sizeBytes": 8718,
     },
     "opengl": {
         "sha256": "2a295b13be5c7bed11f01b86025dd7e0509c9003e515958fb1b24bc0b5ed07f1",

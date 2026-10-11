@@ -54,17 +54,17 @@ CURRENT_MLX_FFT_SHA256 = (
 CURRENT_MLX_FFT_SOURCE_SIZE_BYTES = 3436
 MLX_FFT_ENTRY = "fft_mem_256_float2_float2"
 MLX_FFT_GENERATED_SHA256 = (
-    "d5fa1ae408154eae551c1ad20f02a81c47f95fe4be7df16714b4ff7bf4e8048b"
+    "d611594837648c52f0fc0e7847c1ebdd660f158c830eccc0002aa3dd597bbab9"
 )
-MLX_FFT_GENERATED_SIZE_BYTES = 145277
+MLX_FFT_GENERATED_SIZE_BYTES = 144151
 CURRENT_MLX_FFT_GENERATED_SHA256 = (
-    "f8c8c4b18cabaa7f2997dcdb68b8a9f32645f274c271e454e44dfe463cd4a1ff"
+    "33c9aa89cee60ba565ea744ad3452ee4a2213d0a991098e64aa093c3b31b6b37"
 )
-CURRENT_MLX_FFT_GENERATED_SIZE_BYTES = 176506
+CURRENT_MLX_FFT_GENERATED_SIZE_BYTES = 175427
 CURRENT_MLX_FFT_OPENGL_GENERATED_SHA256 = (
-    "5c6fefea7315d7d091641d024aea27bbdcecf1f2f4b7a63a2db5af401e036512"
+    "30bda0723b143bf426f0e102dabb23f042ff2e64991e9d225a39ed2347c9c2b8"
 )
-CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES = 109547
+CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES = 116599
 MLX_FFT_SIZE = 256
 FFT_OUTPUT_GUARDS = [777.25 + index for index in range(8)]
 REQUIRE_PROOF_ENV = "CROSTL_REQUIRE_MLX_FFT_DIRECTX_NATIVE_LOADER"
@@ -994,9 +994,12 @@ def _build_current_opengl_runtime_package(
     }, json.dumps(payload["diagnostics"], indent=2)
     assert payload["project"]["indexRangeAssertionCount"] == 6
     assert payload["project"]["workgroupAccessAssertionCount"] == 1
-    assert payload["summary"]["sourceRemapMappingCount"] == 84
+    assert payload["summary"]["sourceRemapMappingCount"] == 1
 
     artifact = payload["artifacts"][0]
+    assert artifact["sourceMap"]["mappingGranularity"] == "file"
+    assert artifact["sourceMap"]["source"]["file"] == MLX_FFT_SOURCE
+    assert artifact["sourceRemap"]["mappingGranularity"] == "file"
     assert artifact["source"] == MLX_FFT_SOURCE
     assert artifact["sourceHash"] == {
         "algorithm": "sha256",
@@ -1044,7 +1047,9 @@ def _build_current_opengl_runtime_package(
     assert "layout(std430, binding = 1) buffer out_Buffer" in generated
     assert "vec_u3cfloat_u2c2_u3e" not in generated
     assert "nullptr" not in generated
-    assert "crosstl_ptr_buf_offset" in generated
+    assert "shared vec2 crosstl_workgroup_shared_in[256];" in generated
+    assert "crosstl_workgroup_load_vec2" in generated
+    assert "crosstl_workgroup_store_vec2" in generated
     _assert_current_opengl_spirv(generated_path, work_dir)
 
     report_path = work_dir / "portability-report.json"

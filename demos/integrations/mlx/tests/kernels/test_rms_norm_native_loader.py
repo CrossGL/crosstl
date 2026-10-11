@@ -57,8 +57,8 @@ MLX_RMS_NORM_DISPATCH_CONTRACT = (
 )
 MLX_RMS_NORM_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "27146f3b1c16701885dd133b628c602027152453041badf9652450cb3e386c51",
-        "sizeBytes": 5544,
+        "sha256": "a7e7c7da1c51a42cff5e2bdb9bb1955bc1ee302552130e291f3158c5cc7846da",
+        "sizeBytes": 5856,
     },
     "opengl": {
         "sha256": "04b447795637318a75158fac8025e189a6374dc8a97311d49597dc9f04f76fad",
