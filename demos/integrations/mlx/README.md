@@ -3732,7 +3732,7 @@ remain byte-identical. The contract retains the previous identity and review
 scope; these compiler checks do not establish numerical execution of the
 complete binary family.
 
-The complete current-pinned reduction gate covers all 2,396 host-named entries
+The complete historical reduction gate covers all 2,396 host-named entries
 from `reduce.metal` at commit
 `846d176227a0ac13d2667e58d2bb68b322109ab0`. Three base forms cover
 initialization, all-reduce, and simple row reduction. Six multidimensional
@@ -3766,6 +3766,14 @@ helper linkage and the source shuffle offset's 16-bit width. The reference
 refresh preserves every entry, operator, materialization and resource interface;
 the updated sources compile with warnings treated as errors. Compilation alone
 does not establish numerical parity for the full reduction family.
+The remaining 1,969 source identities were reconciled after reviewing 2,096
+current artifacts against their exact accepted predecessors. Every pair has
+identical reflected interfaces and produces a byte-identical Metal library;
+the differences are unused-parameter annotations and explicitly typed integer
+boundary constants. The other 300 entries retain their previously reviewed
+sources and compiler evidence. All 9,216 materializations and 25,088 resources
+are preserved. This completes the historical reference review, not numerical
+qualification at the current integration pin.
 
 Required Ubuntu CI partitions the sorted family into 24 disjoint shards: 20 with
 100 entries and four with 99. Each shard retranslates its exact entries,
