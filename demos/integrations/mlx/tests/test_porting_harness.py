@@ -11813,7 +11813,7 @@ def test_unary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "97fb652b520775035c903e1e1a8b39fdb9821cf93b984e9959788059f1b1f372",
+        "sha256": "0d1a59be482e2b84310c3d5f1709d416872943b026665c87fa3e0e847628e26d",
         "entry_identity_fields": [
             "entryPoint",
             "shape",

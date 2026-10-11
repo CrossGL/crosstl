@@ -713,7 +713,19 @@ The current harness verifies:
   removing only that annotation reproduces its prior accepted source hash, and
   both versions compile to byte-identical Metal libraries with warnings fatal
   and fast math disabled. This reference update does not approve unrelated
-  pending corpus changes or establish current-pin runtime parity;
+  pending corpus changes or establish current-pin runtime parity.
+  A subsequent full inventory checks all 877 current artifacts, recovering 125
+  missing CI results through fresh public project translation. For 619 entries,
+  accepted sources reconstruct to their recorded hashes and byte counts with
+  unchanged reflected interfaces and materializations. All 1,238 old/new sources
+  pass warnings-fatal Metal compilation and link to byte-identical library
+  pairs. This updates 617 annotation-only identities, including 127 scalar
+  entries; two already match their references. Removing only unused-parameter
+  annotations makes each changed pair byte-identical. The other 258 entries
+  remain unchanged pending arithmetic review under
+  [#1966](https://github.com/CrossGL/crosstl/issues/1966). The historical pin,
+  complete entry selection and numerical execution requirements are preserved.
+  This is compiler-equivalence evidence, not full-family numerical parity;
 - selected-entry translation of all 877 discovered `unary.metal` entries
   at the same legacy reference revision to OpenGL. The schema-v2
   `contracts/unary.opengl-translation.json` contract pins every standalone
@@ -842,9 +854,13 @@ The current harness verifies:
   signed zero, subnormals, infinities and NaNs. Generated Metal and OpenGL match
   unmodified original Metal across 131,072 computed values and 128 output guards
   per target. Inputs use lossless bit-pattern transport; output buffers start
-  with the opposite expected value. The same tests are required in the existing
-  Windows native job; local strict DXC checks pass, but Windows numerical
-  execution of these additions remains unverified. The copy harness uses the
+  with the opposite expected value. The same module now passes all 52 tests in
+  the Windows native job at `29e8eff3`. Independent review of the retained
+  [Windows evidence](https://github.com/CrossGL/crosstl/actions/runs/38107583878/artifacts/11691531710)
+  verifies all 131,072 bfloat-to-Boolean results and 128 guards against the
+  conversion oracle and original Metal readbacks, alongside the HLSL identities
+  and strict DXC receipts. Generated input readbacks are unavailable, so this
+  does not establish input immutability. The copy harness uses the
   existing host-runtime entry-name normalization for reflected HLSL constants,
   including exported names ending in an underscore. This changes test bindings,
   not upstream sources, generated shaders or numerical expectations.
