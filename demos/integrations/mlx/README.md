@@ -856,12 +856,27 @@ The current harness verifies:
   seeded raw and finite-range samples. Original, accepted and updated outputs
   match word-for-word apart from NaN payloads. This bounded result does not
   establish exhaustive complex Log1p accuracy or qualify another target.
-  Complex Log2 and Log10 remain under review. Current-pin probes with the
-  explicit `binary32_atan2_profile = "flush-subnormals"` option remove the
-  observed zero/classification differences from original Metal; remaining
-  sampled component differences are at most two float32 ULPs. That observation
-  is not a new tolerance, a default-policy change or reference acceptance.
-  The remaining 140 arithmetic-changing references stay
+  Eight complex Log2/Log10 references record the explicit
+  `binary32_atan2_profile = "flush-subnormals"` option in
+  `sourceOptionsByEntryPoint`. It applies only to these Metal corpus entries;
+  translator defaults, real-valued operations and other target contracts are
+  unchanged. At both pins, audits cover 101,220 complex outputs per path and
+  initialization, two initializations, 512 guard words per path and unchanged
+  input/constants. The profile removes the observed sign and classification
+  mismatches. Sampled finite component differences from original Metal reach
+  two float32 ULPs at the current pin and three at the historical pin. They
+  are not bit-identical results or a new ULP tolerance.
+  A current-pin regression translates all eight entries and compares their
+  native readbacks using the pinned upstream logarithm tests' existing
+  `numpy.allclose` tolerances (`rtol=1e-5`, `atol=1e-8`). It additionally
+  requires exact zero signs, matching non-finite classifications, unchanged
+  read-only buffers, intact guards and independence from output initialization.
+  The test verifies the upstream tolerance declarations from `python/tests`,
+  now included in the current-tree CI checkout. It runs in the existing
+  five-minute unary step without additional jobs or longer deadlines, retaining
+  reports, modules and raw readbacks. The precise log and atan2 helpers retain
+  their separate independent high-precision oracle checks and unchanged bounds.
+  The remaining 132 arithmetic-changing references stay
   unchanged under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
   The historical pin and complete entry selection are preserved.
   At current pin `9c3d3557`, Abs and Sign use upstream's scaled `hypot`

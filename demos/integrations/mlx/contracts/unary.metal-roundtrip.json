@@ -410,15 +410,15 @@
       1,
       1
     ],
-    "generatedSizeBytesTotal": 1959059,
+    "generatedSizeBytesTotal": 2031779,
     "generatedSizeRange": {
       "minimum": {
         "entryPoint": "v_Logfloat16float16",
         "sizeBytes": 1052
       },
       "maximum": {
-        "entryPoint": "gn4large_Coscomplex64complex64",
-        "sizeBytes": 7815
+        "entryPoint": "gn4large_Log10complex64complex64",
+        "sizeBytes": 12076
       }
     },
     "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",
@@ -1456,8 +1456,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "1d740408c6d4acf2f88f24e05d0a89c202ac61ee86d3ad80b161b256e9383836",
-      "sizeBytes": 2937
+      "sha256": "638a26b48c97a9acccf98117728f62521a85bec7ca19953ffaae77624f79c4e7",
+      "sizeBytes": 12027
     },
     {
       "entryPoint": "gn1_Log10float16float16",
@@ -1544,8 +1544,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "4b4a5a4f1250075b8a0e1d620cb7f69f64eeae99b76feb884130988e80be1b4a",
-      "sizeBytes": 2927
+      "sha256": "631e6dbbd7de71a3eba96f2b0ab45765b97f35277a683159471ea85574addb56",
+      "sizeBytes": 12017
     },
     {
       "entryPoint": "gn1_Log2float16float16",
@@ -3469,8 +3469,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "0199d12cb79ec90a2e576aaf1e7414cea5d84ff2fd4165063e17648ebf9bfcd2",
-      "sizeBytes": 2986
+      "sha256": "eb10a07612e18d14a7e14a8d4f239478b794a72eef5aa735f91204839794c778",
+      "sizeBytes": 12076
     },
     {
       "entryPoint": "gn4large_Log10float16float16",
@@ -3557,8 +3557,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "14c7e399c4524af25014b2c7507a39817c5b8e205500d126c0a2fb5dc9abea97",
-      "sizeBytes": 2976
+      "sha256": "b5766bf8ccb4febfd7eb9879ce58bcaa27fb8c47f768ba41a9e310bb22ecf54a",
+      "sizeBytes": 12066
     },
     {
       "entryPoint": "gn4large_Log2float16float16",
@@ -5482,8 +5482,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "b3360b9a27913b5ff844dd0697a36f9e6034243818e1a7086d72d9bb8c85fd0a",
-      "sizeBytes": 2507
+      "sha256": "5ec5c4fe81c196fae7a43e86e1e270821b4f3a54398c44ef5f295f4f20a33688",
+      "sizeBytes": 11597
     },
     {
       "entryPoint": "v2_Log10float16float16",
@@ -5570,8 +5570,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "08f198e6fbb7da8bfa79e899e49622ff9923a844190f6655adaa7f2a8f2f96e1",
-      "sizeBytes": 2496
+      "sha256": "b8f70cccc7522e03cd5c9c5e6ec0872e656483160ff5479f14afd9f856969f85",
+      "sizeBytes": 11586
     },
     {
       "entryPoint": "v2_Log2float16float16",
@@ -7495,8 +7495,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "271337387cf5a1ca3799c5668c843007f114b3341b81db79e3992bbe041998ec",
-      "sizeBytes": 2407
+      "sha256": "feec913683df51800454e225ee8b4f82b304d75fe69c5ca723f664b25dec97b3",
+      "sizeBytes": 11497
     },
     {
       "entryPoint": "v_Log10float16float16",
@@ -7583,8 +7583,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "60e1a21cd8051d82ac7892d0f5db86b036902827c3f8dd56b5a3b9dfff99b8e7",
-      "sizeBytes": 2396
+      "sha256": "829b1f1fd01d0a8dd3c92bef17e87ef44be935807f52c34c8edc127809c4db99",
+      "sizeBytes": 11486
     },
     {
       "entryPoint": "v_Log2float16float16",
@@ -10081,6 +10081,32 @@
     "Rsqrt": {
       "binary32_sqrt_profile": "flush-subnormals",
       "binary32_rsqrt_profile": "flush-subnormals"
+    }
+  },
+  "sourceOptionsByEntryPoint": {
+    "gn1_Log10complex64complex64": {
+      "binary32_atan2_profile": "flush-subnormals"
+    },
+    "gn1_Log2complex64complex64": {
+      "binary32_atan2_profile": "flush-subnormals"
+    },
+    "gn4large_Log10complex64complex64": {
+      "binary32_atan2_profile": "flush-subnormals"
+    },
+    "gn4large_Log2complex64complex64": {
+      "binary32_atan2_profile": "flush-subnormals"
+    },
+    "v2_Log10complex64complex64": {
+      "binary32_atan2_profile": "flush-subnormals"
+    },
+    "v2_Log2complex64complex64": {
+      "binary32_atan2_profile": "flush-subnormals"
+    },
+    "v_Log10complex64complex64": {
+      "binary32_atan2_profile": "flush-subnormals"
+    },
+    "v_Log2complex64complex64": {
+      "binary32_atan2_profile": "flush-subnormals"
     }
   }
 }

@@ -958,8 +958,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "271337387cf5a1ca3799c5668c843007f114b3341b81db79e3992bbe041998ec",
-      "sizeBytes": 2407
+      "sha256": "feec913683df51800454e225ee8b4f82b304d75fe69c5ca723f664b25dec97b3",
+      "sizeBytes": 11497
     },
     {
       "entryPoint": "v_Log10float16float16",
@@ -1030,8 +1030,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "60e1a21cd8051d82ac7892d0f5db86b036902827c3f8dd56b5a3b9dfff99b8e7",
-      "sizeBytes": 2396
+      "sha256": "829b1f1fd01d0a8dd3c92bef17e87ef44be935807f52c34c8edc127809c4db99",
+      "sizeBytes": 11486
     },
     {
       "entryPoint": "v_Log2float16float16",
@@ -1771,6 +1771,14 @@
     "Rsqrt": {
       "binary32_sqrt_profile": "flush-subnormals",
       "binary32_rsqrt_profile": "flush-subnormals"
+    }
+  },
+  "sourceOptionsByEntryPoint": {
+    "v_Log10complex64complex64": {
+      "binary32_atan2_profile": "flush-subnormals"
+    },
+    "v_Log2complex64complex64": {
+      "binary32_atan2_profile": "flush-subnormals"
     }
   }
 }

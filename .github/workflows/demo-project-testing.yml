@@ -3943,7 +3943,7 @@ jobs:
           git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-tree-upstream
           git -C mlx-current-tree-upstream config core.autocrlf false
           git -C mlx-current-tree-upstream sparse-checkout init --cone
-          git -C mlx-current-tree-upstream sparse-checkout set mlx/backend/metal/kernels
+          git -C mlx-current-tree-upstream sparse-checkout set mlx/backend/metal/kernels python/tests
           git -C mlx-current-tree-upstream checkout --detach "$MLX_CURRENT_TREE_COMMIT"
           test "$(git -C mlx-current-tree-upstream rev-parse HEAD)" = "$MLX_CURRENT_TREE_COMMIT"
 
@@ -3965,6 +3965,7 @@ jobs:
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_FMA: "1"
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_TRIG: "1"
           CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_MAGNITUDE: "1"
+          CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_LOGARITHM: "1"
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_ROOTS: "1"
           CROSTL_REQUIRE_MLX_CURRENT_FP8: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
@@ -3989,6 +3990,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_current_unary_fma.py \
               demos/integrations/mlx/tests/kernels/test_current_unary_trig.py \
               demos/integrations/mlx/tests/kernels/test_current_complex_magnitude.py \
+              demos/integrations/mlx/tests/kernels/test_current_complex_logarithm.py \
               demos/integrations/mlx/tests/kernels/test_current_unary_roots.py \
               demos/integrations/mlx/tests/kernels/test_current_unary_fp8.py
 

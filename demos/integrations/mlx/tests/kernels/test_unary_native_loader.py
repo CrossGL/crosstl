@@ -57,18 +57,19 @@ SCALAR_UNARY_METAL_CONTRACT_PATH = (
     / "unary.scalar-metal-roundtrip.json"
 )
 SCALAR_UNARY_METAL_CONTRACT_SHA256 = (
-    "5c1cc3b3ca07913f974a696f5482c243c29f34f01f25a49af480e4a8b8bdeab5"
+    "2c512bbe3ef6e81f8828d432e4d786eb2f19a1fb864036bc4cfa6b9cf01ac476"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "4c91bddf7da615c1c7c059f3bc56d5f02fe5303a8323485de9dd804699c6f3c7"
+    "5aa0f1612e64ba71d46ddf08d7f0eb401e5811f5340c9b764483bc514b729c08"
 )
 ROOT_SOURCE_OPTIONS = {
     "binary32_sqrt_profile": "flush-subnormals",
     "binary32_rsqrt_profile": "flush-subnormals",
 }
+COMPLEX_LOG_SOURCE_OPTIONS = {"binary32_atan2_profile": "flush-subnormals"}
 
 
 @dataclass(frozen=True)
@@ -770,12 +771,12 @@ def test_current_mlx_unary_metal_contract_is_complete_and_classified():
         "intermediate": "crossgl",
         "hostInterfaceStatus": "ready",
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 1959059,
+        "generatedSizeBytesTotal": 2031779,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Logfloat16float16", "sizeBytes": 1052},
             "maximum": {
-                "entryPoint": "gn4large_Coscomplex64complex64",
-                "sizeBytes": 7815,
+                "entryPoint": "gn4large_Log10complex64complex64",
+                "sizeBytes": 12076,
             },
         },
         "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",
@@ -965,11 +966,16 @@ def _expected_unary_materializations(workload: UnaryWorkload) -> list[dict]:
 
 
 def _project_config(target: str, workload: UnaryWorkload) -> str:
-    root_options = ""
+    source_options = {}
     if target == "metal" and workload.operator_type in {"Sqrt", "Rsqrt"}:
-        root_options = "\n".join(
-            f'{key} = "{value}"' for key, value in ROOT_SOURCE_OPTIONS.items()
-        )
+        source_options.update(ROOT_SOURCE_OPTIONS)
+    if (
+        target == "metal"
+        and workload.input_type == "complex64_t"
+        and workload.operator_type in {"Log2", "Log10"}
+    ):
+        source_options.update(COMPLEX_LOG_SOURCE_OPTIONS)
+    options = "\n".join(f'{key} = "{value}"' for key, value in source_options.items())
     return textwrap.dedent(f"""
         [project]
         source_roots = ["mlx/backend/metal/kernels"]
@@ -990,7 +996,7 @@ def _project_config(target: str, workload: UnaryWorkload) -> str:
         [project.source_options.metal]
         max_template_specializations = 64
         max_template_materialization_work = 4096
-        """).strip() + ("\n" + root_options if root_options else "")
+        """).strip() + ("\n" + options if options else "")
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -1090,6 +1096,12 @@ def _translate_unary_artifact(
     if target == "metal" and workload.operator_type in {"Sqrt", "Rsqrt"}:
         assert artifact["provenance"]["binary32SqrtProfile"] == "flush-subnormals"
         assert artifact["provenance"]["binary32RsqrtProfile"] == "flush-subnormals"
+    if (
+        target == "metal"
+        and workload.input_type == "complex64_t"
+        and workload.operator_type in {"Log2", "Log10"}
+    ):
+        assert artifact["provenance"]["binary32Atan2Profile"] == "flush-subnormals"
     assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [1, 1, 1]
     materialization = artifact["templateMaterialization"]
     assert materialization["status"] == "materialized"
