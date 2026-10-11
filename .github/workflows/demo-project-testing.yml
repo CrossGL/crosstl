@@ -1340,6 +1340,7 @@ jobs:
           CROSTL_REQUIRE_WORKGROUP_RANGE_READBACKS: "1"
           CROSTL_REQUIRE_ENTRY_WORKGROUP_RULES: "1"
           CROSTL_REQUIRE_SUBGROUP_APPLICABILITY: "1"
+          LP_NUM_THREADS: "2"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
@@ -1347,7 +1348,7 @@ jobs:
           set -euo pipefail
           mkdir -p .mlx-portable-host/subgroup-arguments
           python tools/run_bounded_command.py --timeout-seconds 360 --label "Collective helper arguments" -- \
-            python -m pytest -q -n auto \
+            python -m pytest -q -n auto -vv --durations=25 \
               --basetemp=.mlx-portable-host/subgroup-arguments/pytest \
               --junitxml=.mlx-portable-host/subgroup-arguments/results.xml \
               tests/test_translator/test_directx_narrow_buffer_extents.py::test_narrow_buffer_extent_execute \
@@ -1369,7 +1370,7 @@ jobs:
               2>&1 | tee .mlx-portable-host/subgroup-arguments.log
           mkdir -p .mlx-portable-host/resource-values
           python tools/run_bounded_command.py --timeout-seconds 360 --label "Resource values and project execution" -- \
-            python -m pytest -q -n auto \
+            python -m pytest -q -n auto -vv --durations=25 \
               --basetemp=.mlx-portable-host/resource-values/pytest \
               --junitxml=.mlx-portable-host/resource-values/results.xml \
               tests/test_translator/test_directx_matrix_rounding.py \
@@ -1423,14 +1424,26 @@ jobs:
               dll = $systemLibrary
               dllSHA256 = (Get-FileHash $systemLibrary -Algorithm SHA256).Hash.ToLowerInvariant()
             },
-            @{ version = "1.0.13"; archiveSHA256 = "63231c48b0573ba4c078f69cd10a4059a0fee3427107b8219e5e80ab75bd304b"; dllSHA256 = "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638" }
+            @{ version = "1.0.13"; archiveSHA256 = "63231c48b0573ba4c078f69cd10a4059a0fee3427107b8219e5e80ab75bd304b"; dllSHA256 = "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638" },
+            @{ version = "1.0.14.1"; archiveSHA256 = "d593b5d09d4d3115e7ab1c1b5880365672616f04f2e9bb3095307f5795f3b5fb"; dllSHA256 = "801d460575c5c3e041ae496aea035380872bf7147f189c0bcdc3d188314dcd6b" },
+            @{ version = "1.0.14.2"; archiveSHA256 = "e688a64b2fcc6f17fadb338a0fa29841c9743c5513baeccaf2b88b95e5d66b22"; dllSHA256 = "610c8ec96c00aa7037f010f70a467576cc51296c4d6372526b1ebb8db54dc0ec" },
+            @{ version = "1.0.15"; archiveSHA256 = "98c645f20af5b43bf4c9cc5f9158a7091673190e19aedff6e67e2b1f4490dd52"; dllSHA256 = "25dac4debec9a162ede99f50df3c8933277da3a7a8b565ea299c6d0431c4c05c" },
+            @{ version = "1.0.15.1"; archiveSHA256 = "40bd68dad23bfdd933e67e34b65f2d036432cf211941d328c4b5d1f62183f3d7"; dllSHA256 = "b4db7d0d8d2e66e2347d1c0eeb67febec6dd246eabcf07588b782037ac88ac63" },
+            @{ version = "1.0.16"; archiveSHA256 = "aaa2c8994aa4758cbe36b494c107799c9609076e14b0ad46da393a339a1a381b"; dllSHA256 = "b97f164acb9149f7b2177047036ba535103891351187a950adba8dd9886e3698" },
+            @{ version = "1.0.16.1"; archiveSHA256 = "4c702c5e40d4e7dcdd2a03809967b32eab6b80e333e73170674ca13cedaba27b"; dllSHA256 = "f49af8c7209bca45ca6a663bc359c4ddc5c7f681b1a28d285c51128e83538de8" },
+            @{ version = "1.0.17"; archiveSHA256 = "4a579c67fd72a48634bc4d6a68c43a637c5258bc960910f11f0c0655ecd9360a"; dllSHA256 = "5cfdb809906ea6e7e44876dc9755ed9290ea21d7b982fba414fc758a3b1470a8" },
+            @{ version = "1.0.18"; archiveSHA256 = "9e4574bd125a146d2da880f023ec4e9da017ced1c913085ad2261340a4f5ee48"; dllSHA256 = "c07e702c754e4f70798376d8e690137f80a467f541748b6951a3c07da87f8c74" },
+            @{ version = "1.0.19"; archiveSHA256 = "332b1b70602e6ceec0531bb352508e42ec4948acd3f576bfb46434c165d073f7"; dllSHA256 = "1fd2f9d991f00d890d06c00f791a756446f5f29da508b12fdeb8ffd1b5696add" }
           )
+          $clock = [System.Diagnostics.Stopwatch]::StartNew()
           foreach ($case in $cases) {
             if ($case.version -eq "system") { continue }
+            $remaining = 360 - [int][Math]::Ceiling($clock.Elapsed.TotalSeconds)
+            if ($remaining -le 0) { throw "WARP comparison exhausted its shared deadline." }
             $version = $case.version
             $archive = Join-Path $env:RUNNER_TEMP "warp-$version.zip"
             $root = Join-Path $env:RUNNER_TEMP "warp-$version"
-            Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/$version/microsoft.direct3d.warp.$version.nupkg" -OutFile $archive -TimeoutSec 30
+            Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/$version/microsoft.direct3d.warp.$version.nupkg" -OutFile $archive -TimeoutSec ([Math]::Min(30, $remaining))
             if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $case.archiveSHA256) {
               throw "Comparison WARP archive checksum mismatch: $version"
             }
@@ -1449,7 +1462,6 @@ jobs:
           Copy-Item $installed $backup -Force
           $result = 0
           $outcomes = @()
-          $clock = [System.Diagnostics.Stopwatch]::StartNew()
           try {
             foreach ($case in $cases) {
               $caseEvidence = Join-Path $evidence $case.version
@@ -3844,6 +3856,8 @@ jobs:
           CROSTL_REQUIRE_FUSED_MATH: "1"
           CROSTL_REQUIRE_HALF_REMAINDER: "1"
           CROSTL_REQUIRE_HALF_WIDENING: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          LP_NUM_THREADS: "2"
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER: llvmpipe
           EGL_PLATFORM: surfaceless
@@ -3853,6 +3867,7 @@ jobs:
           python tools/run_bounded_command.py \
             --label "binary32 arithmetic" --timeout-seconds 120 -- \
             python -m pytest -q -n auto \
+              -k "execute or original_metal or modules_link_together" \
               --basetemp="fused-math-results/pytest" \
               --junitxml="fused-math-results/results.xml" \
               tests/test_translator/test_fused_math.py \

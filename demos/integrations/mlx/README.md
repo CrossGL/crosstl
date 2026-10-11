@@ -49,13 +49,25 @@ removed. A previous revision's successful proof does not satisfy the current
 revision's required checks.
 Core and demo tests also remain part of the complete test suite.
 
+The project-porting binary32 step selects every native execution and Metal
+linking case without repeating portable parser and compiler checks from the
+main suite. It limits test workers and software-OpenGL threads to two while
+retaining the 120-second deadline, all numerical inputs and all guard checks.
+A workflow regression checks that every device test remains selected.
+The larger collective and resource batches also cap software-OpenGL threads
+at two. Their complete module selections and separate 360-second deadlines
+remain unchanged; per-test progress and durations make timeout diagnosis visible.
+
 If the required Windows collective checks fail, the existing job compares the
 same precise scalar, cooperative-matrix and narrow-buffer controls on the
-system WARP library and pinned WARP 1.0.13. Both comparisons share the existing
-360-second deadline. They retain library hashes, file versions, test results
+system WARP library and checksum-pinned stable releases: 1.0.13, 1.0.14.1,
+1.0.14.2, 1.0.15, 1.0.15.1, 1.0.16, 1.0.16.1, 1.0.17, 1.0.18 and 1.0.19.
+The downloads and comparisons share the existing 360-second deadline, with
+the eight-minute step limit leaving time for restoration. They retain library
+hashes, file versions, test results
 and runtime evidence, and restore the required WARP 1.0.21 library even after
 a test failure. This focused diagnostic replaces the duplicate broad rerun;
-the complete required and isolated qualification jobs are unchanged. Neither
+the complete required and isolated qualification jobs are unchanged. No
 comparison qualifies a fallback or replaces the required numerical gate.
 The arithmetic and logical-buffer-tail defects remain tracked in #2193 and
 #2197 respectively.

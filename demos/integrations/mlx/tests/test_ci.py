@@ -387,45 +387,55 @@ def test_windows_runtime_comparison_preserves_gate_and_restores_library(
     assert step["timeout-minutes"] == 8
     assert "360 - [int][Math]::Ceiling($clock.Elapsed.TotalSeconds)" in step["run"]
     assert "continue-on-error" not in step
-    original, system, qualified = b"required", b"system", b"qualified"
+    original, system = b"required", b"system"
     digest = lambda value: hashlib.sha256(value).hexdigest()
-    archive = tmp_path / "fixture.zip"
-    with zipfile.ZipFile(archive, "w") as package:
-        package.writestr(
-            "build/native/bin/x64/d3d10warp.dll",
-            b"incorrect" if failure == "library" else qualified,
-        )
-    archive_digest = digest(archive.read_bytes())
-    if failure == "archive":
-        with archive.open("ab") as stream:
-            stream.write(b"changed archive")
     script = step["run"]
     assert script.count("$env:SystemRoot") == 1
     script = script.replace("$env:SystemRoot", "$env:CROSTL_WARP_TEST_SYSTEM_ROOT")
-    for pinned, fixture in (
-        (
-            "e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3",
-            digest(original),
-        ),
-        (
-            "63231c48b0573ba4c078f69cd10a4059a0fee3427107b8219e5e80ab75bd304b",
-            archive_digest,
-        ),
-        (
-            "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638",
-            digest(qualified),
-        ),
-    ):
+    pins = re.findall(
+        r'@\{ version = "([\d.]+)"; archiveSHA256 = "([a-f0-9]{64})"; '
+        r'dllSHA256 = "([a-f0-9]{64})" \}',
+        script,
+    )
+    assert len(pins) == 10
+    replacements = {
+        "e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3": digest(
+            original
+        )
+    }
+    archives = {}
+    libraries = {"system": system}
+    for version, archive_hash, library_hash in pins:
+        qualified = f"qualified-{version}".encode()
+        libraries[version] = qualified
+        archive = tmp_path / f"fixture-{version}.zip"
+        with zipfile.ZipFile(archive, "w") as package:
+            package.writestr(
+                "build/native/bin/x64/d3d10warp.dll",
+                b"incorrect" if failure == "library" else qualified,
+            )
+        replacements[archive_hash] = digest(archive.read_bytes())
+        replacements[library_hash] = digest(qualified)
+        if failure == "archive":
+            with archive.open("ab") as stream:
+                stream.write(b"changed archive")
+        url = (
+            "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/"
+            f"{version}/microsoft.direct3d.warp.{version}.nupkg"
+        )
+        archives[url] = str(archive)
+    for pinned, fixture in replacements.items():
         assert script.count(pinned) == 1
         script = script.replace(pinned, fixture)
     bootstrap = r"""
 function Invoke-WebRequest {
     param([string]$Uri, [string]$OutFile, [int]$TimeoutSec)
-    if ($Uri -ne "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.13/microsoft.direct3d.warp.1.0.13.nupkg" -or $TimeoutSec -ne 30) {
+    $archives = $env:CROSTL_WARP_TEST_ARCHIVES | ConvertFrom-Json -AsHashtable
+    if (-not $archives.ContainsKey($Uri) -or $TimeoutSec -ne 30) {
         throw "Unexpected download request."
     }
     if ($env:CROSTL_WARP_TEST_FAILURE -eq "download") { throw "Download failed." }
-    [System.IO.File]::Copy($env:CROSTL_WARP_TEST_ARCHIVE, $OutFile)
+    [System.IO.File]::Copy($archives[$Uri], $OutFile)
 }
 function Copy-Item {
     param([string]$Path, [string]$Destination, [switch]$Force)
@@ -444,7 +454,7 @@ function python {
     $Arguments | ConvertTo-Json | Set-Content "$version-arguments.json"
     $global:LASTEXITCODE = 0
     if (($env:CROSTL_WARP_TEST_FAILURE -eq "system-failure" -and $version -eq "system") -or
-        ($env:CROSTL_WARP_TEST_FAILURE -eq "qualification-failure" -and $version -eq "qualified")) {
+        ($env:CROSTL_WARP_TEST_FAILURE -eq "qualification-failure" -and $version.StartsWith("qualified-"))) {
         $global:LASTEXITCODE = 1
     }
     if ($env:CROSTL_WARP_TEST_FAILURE -eq "timeout") { $global:LASTEXITCODE = 124 }
@@ -463,7 +473,7 @@ function python {
         RUNNER_TEMP=str(tmp_path / "runner"),
         pythonLocation=str(tmp_path / "python"),
         CROSTL_WARP_TEST_SYSTEM_ROOT=str(tmp_path / "windows"),
-        CROSTL_WARP_TEST_ARCHIVE=str(archive),
+        CROSTL_WARP_TEST_ARCHIVES=json.dumps(archives),
         CROSTL_WARP_TEST_FAILURE=failure or "",
     )
     result = subprocess.run(
@@ -501,11 +511,8 @@ function python {
             / "runtime-selection.json"
         ).exists()
         return
-    assert [record["version"] for record in receipt["comparisons"]] == [
-        "system",
-        "1.0.13",
-    ]
-    for version, payload in (("system", system), ("1.0.13", qualified)):
+    assert [record["version"] for record in receipt["comparisons"]] == list(libraries)
+    for version, payload in libraries.items():
         selection = json.loads(
             (evidence / version / "runtime-selection.json").read_text(
                 encoding="utf-8-sig"

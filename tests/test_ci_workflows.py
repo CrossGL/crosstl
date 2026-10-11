@@ -3488,8 +3488,24 @@ def test_directx_runtime_comparison_preserves_required_runtime_and_workload():
     assert not re.search(
         r"(?:^|\s)(?:-k|-m|--keyword|--markexpr)(?:\s|=|$)", pytest_arguments
     )
-    assert re.findall(r'@\{ version = "([^"]+)"', script) == ["1.0.13"]
+    assert re.findall(r'@\{ version = "([^"]+)"', script) == [
+        "1.0.13",
+        "1.0.14.1",
+        "1.0.14.2",
+        "1.0.15",
+        "1.0.15.1",
+        "1.0.16",
+        "1.0.16.1",
+        "1.0.17",
+        "1.0.18",
+        "1.0.19",
+    ]
     assert 'version = "1.0.14"' not in script
+    assert script.count("[System.Diagnostics.Stopwatch]::StartNew()") == 1
+    assert script.index("[System.Diagnostics.Stopwatch]::StartNew()") < script.index(
+        "Invoke-WebRequest"
+    )
+    assert "-TimeoutSec ([Math]::Min(30, $remaining))" in script
     assert script.index("archive checksum mismatch") < script.index(
         "Copy-Item $installed $backup"
     )
@@ -3505,6 +3521,77 @@ def test_directx_runtime_comparison_preserves_required_runtime_and_workload():
     )
     assert "microsoft.direct3d.warp/1.0.21/" in required["run"]
     assert "e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3" in script
+
+
+def test_native_collective_batches_limit_software_driver_threads():
+    workflow = yaml.safe_load((WORKFLOW_DIR / "demo-project-testing.yml").read_text())
+    job = workflow["jobs"]["portable-host"]
+    step = next(item for item in job["steps"] if item.get("id") == "collective-helpers")
+    assert job["env"]["PYTEST_XDIST_AUTO_NUM_WORKERS"] == "2"
+    assert step["env"]["LP_NUM_THREADS"] == "2"
+    assert "if" not in step and "continue-on-error" not in step
+    assert step["run"].count("--timeout-seconds 360") == 2
+    assert step["run"].count("-n auto -vv --durations=25") == 2
+    batches = step["run"].split("python -m pytest ")[1:]
+    assert len(batches) == 2
+    for batch, count in zip(batches, (16, 24)):
+        selectors = re.findall(r"tests/[^\s\\]+", batch)
+        assert len(selectors) == len(set(selectors)) == count
+        assert not re.search(r"(?:^|\s)(?:-k|-m|--maxfail)(?:\s|=|$)", batch)
+
+
+def test_project_arithmetic_selection_retains_every_device_test():
+    from tools import ci_coverage
+
+    workflow = (WORKFLOW_DIR / "demo-project-testing.yml").read_text()
+    step = ci_coverage.workflow_job_step_section(
+        workflow, "mlx-metal-porting", "Validate binary32 arithmetic"
+    )
+    expression = "execute or original_metal or modules_link_together"
+    assert f'-k "{expression}"' in step
+    assert "--timeout-seconds 120" in step
+    assert 'PYTEST_XDIST_AUTO_NUM_WORKERS: "2"' in step
+    assert 'LP_NUM_THREADS: "2"' in step
+    assert "if:" not in step
+    assert "continue-on-error" not in step
+    assert 'CROSTL_REQUIRE_FUSED_MATH: "1"' in step
+    assert 'CROSTL_REQUIRE_HALF_REMAINDER: "1"' in step
+    assert 'CROSTL_REQUIRE_HALF_WIDENING: "1"' in step
+    selectors = re.findall(
+        r"tests/test_translator/test_[a-z_]+\.py(?:::[a-z_]+)?", step
+    )
+    assert len(selectors) == len(set(selectors)) == 7
+    modules = {selector.split("::")[0] for selector in selectors}
+    assert len(modules) == 6
+    selected = set()
+    required = set()
+    for module in modules:
+        tree = ast.parse((ROOT / module).read_text())
+        for function in tree.body:
+            if not isinstance(
+                function, ast.FunctionDef
+            ) or not function.name.startswith("test_"):
+                continue
+            identity = (module, function.name)
+            if (
+                module in selectors or f"{module}::{function.name}" in selectors
+            ) and any(term in function.name for term in expression.split(" or ")):
+                selected.add(identity)
+            if any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "environ"
+                and any(
+                    isinstance(argument, ast.Name) and argument.id == "REQUIRE_ENV"
+                    for argument in node.args
+                )
+                for node in ast.walk(function)
+            ):
+                required.add(identity)
+    assert len(required) == 9
+    assert selected == required
 
 
 def test_native_arithmetic_selection_retains_every_device_test():
