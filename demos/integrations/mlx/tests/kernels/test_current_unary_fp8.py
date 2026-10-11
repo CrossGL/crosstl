@@ -100,12 +100,13 @@ def _bindings(descriptor, words, expected, fill):
         names.add(member)
         dtype, encoding = layout["elementType"], None
         if member == "in":
-            assert dtype in {"float32", "float16", "uint16"}
+            dtype = layout.get("storageEncoding", {}).get("logicalElementType", dtype)
+            assert dtype in {"float32", "float16"}
             data = [_widen(word) for word in words] if dtype == "float32" else words
             encoding = {
                 "float32": "ieee754-binary32",
                 "float16": "ieee754-binary16",
-            }.get(dtype)
+            }[dtype]
         elif member == "size":
             assert dtype == "int64"
             data = [len(words)]
@@ -131,6 +132,49 @@ def _check_output(actual, expected):
         if got != want
     ]
     assert not mismatches, mismatches[:16]
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+def test_current_half_fp8_bindings_retain_logical_input_type(tmp_path, target):
+    from tests.test_translator.test_half_buffer_runtime import WORDS, _directx_buffers
+    from tests.test_translator.test_software_subgroup_product import _package
+
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+kernel void {ENTRY}(const device half* in [[buffer(0)]],
+                    device uchar* out [[buffer(1)]],
+                    constant long& size [[buffer(2)]],
+                    uint i [[thread_position_in_grid]]) {{
+    if (long(i) < size) {{ out[i] = uchar(as_type<ushort>(in[i])); }}
+}}
+"""
+    _, descriptor, package = _package(
+        tmp_path, target, "uint", (1, 1, 1), source=source, software_subgroups=False
+    )
+    words = list(WORDS)
+    inputs, outputs = _bindings(descriptor, words, [word & 255 for word in words], 85)
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        outputs,
+        {"workgroupCount": [len(words), 1, 1], "workgroupSize": [1, 1, 1]},
+        expected_target=target,
+    )
+    assert not request.execution_plan.diagnostics
+    input_name = next(name for name, value in inputs.items() if value.get("encoding"))
+    assert inputs[input_name] == {
+        "dtype": "float32" if target == "opengl" else "float16",
+        "encoding": "ieee754-binary32" if target == "opengl" else "ieee754-binary16",
+        "shape": [len(words)],
+        "values": [_widen(word) for word in words] if target == "opengl" else words,
+    }
+    if target == "directx":
+        buffer = next(
+            buffer for buffer in _directx_buffers(request) if buffer.name == input_name
+        )
+        assert buffer.stride == 2 and buffer.byte_length == len(words) * 2
+        assert buffer.payload == struct.pack("<" + "H" * len(words), *words)
 
 
 @pytest.mark.parametrize("defect", ["nan-sign", "guard", "truncated", "empty"])

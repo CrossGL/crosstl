@@ -94,8 +94,9 @@ def _check_readback(payloads, readbacks, sentinel):
     assert set(readbacks) == set(payloads)
     for name, payload in payloads.items():
         assert len(readbacks[name]) == len(payload)
-        if name != "out_":
-            assert readbacks[name] == payload, f"Read-only buffer changed: {name}"
+        if name != "out_" and readbacks[name] != payload:
+            # Keep exact byte equality without pytest expanding whole buffers.
+            raise AssertionError(f"Read-only buffer changed: {name}")
     words = _words(readbacks["out_"])
     assert words[-len(GUARDS) :] == GUARDS
     actual = words[: -len(GUARDS)]
@@ -177,8 +178,10 @@ def test_complex_magnitude_readbacks_reject_corruption(sentinel, mutation):
     elif mutation == "unwritten":
         readbacks["out_"] = _pack([sentinel, 4] + list(GUARDS))
     if mutation:
-        with pytest.raises(AssertionError):
+        with pytest.raises(AssertionError) as error:
             _check_readback(payloads, readbacks, sentinel)
+        if mutation == "input":
+            assert str(error.value) == "Read-only buffer changed: in_"
     else:
         assert _check_readback(payloads, readbacks, sentinel) == (3, 4)
 

@@ -105,8 +105,9 @@ def _check_readback(payloads, readbacks, dtype):
     assert set(readbacks) == set(payloads), "Missing readback"
     for name, payload in payloads.items():
         assert len(readbacks[name]) == len(payload), f"Truncated readback: {name}"
-        if name != "out_":
-            assert readbacks[name] == payload, f"Read-only buffer changed: {name}"
+        if name != "out_" and readbacks[name] != payload:
+            # Keep exact byte equality without pytest expanding whole buffers.
+            raise AssertionError(f"Read-only buffer changed: {name}")
     code = _format(dtype)[0]
     raw = readbacks["out_"]
     words = struct.unpack(f"<{len(raw) // struct.calcsize(code)}{code}", raw)
@@ -203,8 +204,11 @@ def test_root_inputs_and_readback_checks(dtype):
             readbacks["out_"] = readbacks["out_"][:-1]
         else:
             del readbacks["in_"]
-        with pytest.raises(AssertionError):
+        with pytest.raises(AssertionError) as error:
             _check_readback(payloads, readbacks, dtype)
+        if mutation in {"input", "constant"}:
+            name = "in_" if mutation == "input" else "size"
+            assert str(error.value) == f"Read-only buffer changed: {name}"
 
 
 @pytest.mark.parametrize("dtype", TYPES)
