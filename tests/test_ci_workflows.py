@@ -422,6 +422,141 @@ def test_metal_fence_jobs_require_a_compatible_toolchain_without_extra_jobs():
     ]
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Metal setup uses a POSIX shell")
+@pytest.mark.parametrize(
+    "workflow,job_id,step_name",
+    [
+        ("translator-tests.yml", "test", "Verify Metal 4.1 toolchain"),
+        ("demo-project-testing.yml", "portable-host", "Verify macOS Metal toolchain"),
+    ],
+)
+@pytest.mark.parametrize(
+    "failure,diagnostic_failure,exit_code,downloads",
+    [
+        ("", False, 0, 0),
+        ("missing", False, 0, 1),
+        ("download", False, 19, 1),
+        ("unavailable", False, 17, 1),
+        ("language", False, 23, 0),
+        ("language", True, 23, 0),
+    ],
+)
+def test_metal_setup_diagnostics_preserve_failures(
+    tmp_path,
+    workflow,
+    job_id,
+    step_name,
+    failure,
+    diagnostic_failure,
+    exit_code,
+    downloads,
+):
+    bash = shutil.which("bash")
+    assert bash is not None
+    job = yaml.safe_load((WORKFLOW_DIR / workflow).read_text())["jobs"][job_id]
+    step = next(row for row in job["steps"] if row.get("name") == step_name)
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    script = f"#!{sys.executable}\n" + textwrap.dedent("""\
+        import json
+        import os
+        import sys
+        from pathlib import Path
+
+        tool = Path(sys.argv[0]).name
+        args = sys.argv[1:]
+        failure = os.environ["TEST_FAILURE"]
+        state = Path(os.environ["TEST_INSTALLED"])
+        with Path(os.environ["TEST_LOG"]).open("a") as output:
+            output.write(json.dumps({"tool": tool, "args": args}) + "\\n")
+        diagnostic = (
+            tool == "mount" or "-showComponent" in args or "--find" in args
+        )
+        if diagnostic:
+            if os.environ["TEST_DIAGNOSTIC_FAILURE"] == "1":
+                sys.exit(97)
+            if tool == "xcodebuild":
+                print(json.dumps({"status": "installed" if state.exists() else "missing"}))
+            elif tool == "mount":
+                print("test-toolchain on /private/var/run/test-toolchain")
+            else:
+                print("/selected/toolchain/usr/bin/metal")
+        elif tool == "xcodebuild" and "-downloadComponent" in args:
+            if failure == "download":
+                sys.exit(19)
+            state.touch()
+        elif tool == "xcrun" and "metal" in args:
+            if failure == "unavailable" or (
+                failure in {"missing", "download"} and not state.exists()
+            ):
+                print("missing Metal Toolchain", file=sys.stderr)
+                sys.exit(17)
+            if failure == "language" and "-std=metal4.1" in args:
+                print("unsupported Metal language version", file=sys.stderr)
+                sys.exit(23)
+        """)
+    for name in ("xcodebuild", "xcrun", "mount"):
+        path = tools / name
+        path.write_text(script, encoding="utf-8")
+        path.chmod(0o755)
+    developer = tmp_path / "selected developer"
+    developer.mkdir()
+    (tmp_path / ".mlx-portable-host").mkdir()
+    log = tmp_path / "calls.jsonl"
+    body = step["run"].replace(
+        "/Applications/Xcode_27.1.app/Contents/Developer", shlex.quote(str(developer))
+    )
+    result = subprocess.run(
+        [bash, "-c", body],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": str(tools) + os.pathsep + os.environ["PATH"],
+            "GITHUB_ENV": str(tmp_path / "github-env"),
+            "TEST_FAILURE": failure,
+            "TEST_DIAGNOSTIC_FAILURE": "1" if diagnostic_failure else "0",
+            "TEST_INSTALLED": str(tmp_path / "installed"),
+            "TEST_LOG": str(log),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == exit_code, result.stdout + result.stderr
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert sum("-downloadComponent" in row["args"] for row in calls) == downloads
+    diagnostics = [
+        row
+        for row in calls
+        if row["tool"] == "mount"
+        or "-showComponent" in row["args"]
+        or "--find" in row["args"]
+    ]
+    assert diagnostics == (
+        [
+            {
+                "tool": "xcodebuild",
+                "args": ["-showComponent", "MetalToolchain", "-json"],
+            },
+            {"tool": "xcrun", "args": ["--sdk", "macosx", "--find", "metal"]},
+            {"tool": "mount", "args": []},
+        ]
+        if exit_code
+        else []
+    )
+    assert any("-std=metal4.1" in row["args"] for row in calls) is (
+        failure not in {"download", "unavailable"}
+        or workflow == "translator-tests.yml"
+        and failure == "unavailable"
+    )
+    if exit_code:
+        assert "::group::Metal toolchain failure diagnostics" in result.stdout
+    if failure == "unavailable" and not diagnostic_failure:
+        assert '"status": "installed"' in result.stdout
+    if failure == "language":
+        assert "unsupported Metal language version" in result.stderr
+
+
 @pytest.mark.parametrize("exit_code", (0, 7))
 @pytest.mark.parametrize(
     "workflow,component_key,component,selection",

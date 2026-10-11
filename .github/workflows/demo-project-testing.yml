@@ -1145,6 +1145,18 @@ jobs:
         run: |
           set -euo pipefail
           export DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer
+          diagnose_metal_failure() {
+            local status=$?
+            if [ "$status" -ne 0 ]; then
+              echo "::group::Metal toolchain failure diagnostics"
+              xcodebuild -showComponent MetalToolchain -json || true
+              xcrun --sdk macosx --find metal || true
+              mount || true
+              echo "::endgroup::"
+            fi
+            exit "$status"
+          }
+          trap diagnose_metal_failure EXIT
           test -d "$DEVELOPER_DIR"
           echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
           xcodebuild -version | tee .mlx-portable-host/xcode-version.txt

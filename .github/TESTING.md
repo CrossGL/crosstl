@@ -69,6 +69,12 @@ two existing runners, not additional matrix jobs, and does not change the
 source fence order, numerical assertions or execution requirements. Other
 macOS jobs retain their existing images and language requirements.
 
+If either Metal 4.1 prerequisite fails, the job log records the component
+status, compiler lookup and mounted filesystems. This distinguishes a completed
+download from an available compiler or mounted toolchain. Diagnostics preserve
+the original failure status even if a diagnostic command fails. They do not
+retry the download, select another compiler or bypass the language probe.
+
 The open-source porting demo runs its portable tests and all-target reference
 comparison once on Ubuntu, using two pytest workers. Windows and macOS retain
 every target-specific regeneration, comparison and compiler check, without
