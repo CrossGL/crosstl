@@ -3314,8 +3314,8 @@ instantiation. It remains a compiler proof, not Metal numerical execution,
 DirectX/OpenGL whole-family coverage, MLX host runtime redirection, or an MLX
 test-suite claim.
 
-The complete binary family gate covers all 4,122 discovered current-pinned binary
-entries from ``binary.metal``: fifteen 238-entry base shapes and three 184-entry
+The complete binary family gate covers all 4,122 binary entries discovered at
+the historical `846d1762` pin: fifteen 238-entry base shapes and three 184-entry
 work-per-thread shapes. The 18 shapes and 11 concrete kernel templates span 24
 operators and 25 concrete input/output type pairs across Boolean, signed and
 unsigned integer, float16, float32, bfloat16, and complex64 values. Every
@@ -3387,10 +3387,26 @@ against the checked-in contract before invoking
 no source-warning exemption is used. Missing, duplicate or altered bundle entries
 fail before compilation. Compiler commands, diagnostics and output identities are
 retained even on failure. The local round-trip test still performs both phases.
-This validates selected-entry translation, reflection and native compilation
+This gate requires selected-entry translation, reflection and native compilation
 for every discovered binary instantiation. The bfloat review above adds bounded
 numerical evidence, not whole-family numerical parity, MLX host-runtime
 redirection or an MLX test-suite claim.
+
+The annotation-only reference review at the historical `846d1762` revision
+covers 3,999 entries, including 231 scalar entries. Each accepted predecessor
+was reconstructed to its exact recorded source hash and byte count. The only
+source change is an unused-parameter annotation; both versions compile with
+warnings treated as errors and link to byte-identical Metal libraries. Entry
+selection, all 6,026 materializations and all 19,106 resource declarations
+remain unchanged. This is compiler-equivalence evidence, not an additional
+numerical or current-pin MLX test-suite result.
+
+The other 123 references remain unchanged pending arithmetic review:
+54 floating `ArcTan2` entries, 54 floating `Power` entries and 15 complex
+`LogAddExp` entries. Their generated helpers differ beyond annotations, so
+they are not covered by the equivalence result above. The complete current
+binary family is not yet qualified; these cases remain tracked in
+[#1966](https://github.com/CrossGL/crosstl/issues/1966).
 
 The same selected-entry pipeline translates all 4,122 binary entries to
 standalone OpenGL ``main`` artifacts. The schema-v2
