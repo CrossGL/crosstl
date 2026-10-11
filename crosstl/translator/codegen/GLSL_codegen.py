@@ -1848,6 +1848,7 @@ class GLSLCodeGen:
             "WaveActiveMax",
             "WaveShuffleDown",
             "WaveReadLaneAt",
+            "WaveShuffleAndFillUp",
             "subgroupExecutionBarrier",
             "CooperativeMatrixMultiplyAccumulate",
             *GLSL_SOFTWARE_SUBGROUP_VOTES,
@@ -4550,11 +4551,12 @@ class GLSLCodeGen:
                 )
             direct_records.setdefault(id(function), []).append((operation, node))
 
-        def source_overload_count(name):
+        def source_overload_count(name, arity=None):
             return len(
                 {
                     self.glsl_source_function_signature(function)
                     for function in functions_by_name.get(name, ())
+                    if arity is None or len(function.parameters or []) == arity
                 }
             )
 
@@ -4814,9 +4816,9 @@ class GLSLCodeGen:
             operation, operation_node = first_operation(target_id)
             target = functions_by_id[target_id]
             name = getattr(target, "name", None)
-            if source_overload_count(name) != 1:
+            if source_overload_count(name, len(target.parameters or [])) != 1:
                 raise self.glsl_software_subgroup_error(
-                    "OpenGL software subgroup root helpers cannot use overloaded "
+                    "OpenGL software subgroup root helpers cannot use same-arity overloaded "
                     f"source function name '{name}'",
                     workgroup_size=workgroup_size,
                     operation=operation,
@@ -37672,6 +37674,7 @@ complex64_t crossgl_complex64_mod_assign(
             "WaveActiveAnyTrue": "Any",
             "WaveShuffleDown": "ShuffleDown",
             "WaveReadLaneAt": "ReadLaneAt",
+            "WaveShuffleAndFillUp": "ShuffleAndFillUp",
             "WavePrefixSum": "PrefixSum",
             "WavePrefixProduct": "PrefixProduct",
             "WavePrefixInclusiveSum": "PrefixInclusiveSum",
@@ -37751,6 +37754,7 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 if value_type in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
                 or value_type == "bool"
+                or (_operation == "WaveShuffleAndFillUp" and value_type == "uvec2")
             },
             key=lambda value_type: self.GLSL_SOFTWARE_SUBGROUP_TYPE_SUFFIXES[
                 value_type
@@ -37775,6 +37779,7 @@ complex64_t crossgl_complex64_mod_assign(
             "WavePrefixInclusiveSum": 9,
             "WavePrefixInclusiveProduct": 10,
             "WaveReadLaneAt": 11,
+            "WaveShuffleAndFillUp": 12,
         }
         for operation, value_type in sorted(
             self.required_glsl_software_subgroup_helpers,
@@ -37808,6 +37813,42 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 continue
             scratch = self.glsl_software_subgroup_scratch_name(value_type)
+            if operation == "WaveShuffleAndFillUp":
+                width = self.software_subgroup_width
+                code += (
+                    f"{value_type} {helper}({value_type} value, {value_type} fill, uint delta, uint modulo) {{\n"
+                    "    uint invocation = gl_LocalInvocationIndex;\n"
+                    f"    uint lane = invocation % {width}u;\n"
+                    "    uint subgroupBase = invocation - lane;\n"
+                    f"    uint activeCount = min({width}u, {invocation_count}u - subgroupBase);\n"
+                    "    bool validModulo = modulo == 2u || modulo == 4u || modulo == 8u || modulo == 16u || modulo == 32u;\n"
+                    "    uint segmentWidth = validModulo ? modulo : 32u;\n"
+                    "    uint segmentLane = lane % segmentWidth;\n"
+                    "    bool useValue = segmentLane >= delta;\n"
+                    "    uint sourceLane = lane;\n"
+                    "    if (validModulo && delta <= segmentWidth) {\n"
+                    "        sourceLane = useValue ? lane - delta : lane + segmentWidth - delta;\n"
+                    "    }\n"
+                    "    bool sourceValid = validModulo && delta <= segmentWidth && sourceLane < activeCount;\n"
+                    "    sourceLane = sourceValid ? sourceLane : lane;\n"
+                    f"    {scratch}[invocation] = value;\n"
+                    "    memoryBarrierShared();\n"
+                    "    barrier();\n"
+                    f"    {value_type} result = {scratch}[subgroupBase + sourceLane];\n"
+                    "    memoryBarrierShared();\n"
+                    "    barrier();\n"
+                    f"    {scratch}[invocation] = fill;\n"
+                    "    memoryBarrierShared();\n"
+                    "    barrier();\n"
+                    "    if (sourceValid && !useValue) {\n"
+                    f"        result = {scratch}[subgroupBase + sourceLane];\n"
+                    "    }\n"
+                    "    memoryBarrierShared();\n"
+                    "    barrier();\n"
+                    "    return result;\n"
+                    "}\n\n"
+                )
+                continue
             if operation in self.GLSL_SOFTWARE_SUBGROUP_SCANS:
                 code += self.glsl_software_subgroup_scan_helper(
                     operation, value_type, helper, scratch
@@ -38078,7 +38119,10 @@ complex64_t crossgl_complex64_mod_assign(
             if operation == "subgroupExecutionBarrier"
             else self.GLSL_WAVE_INTRINSIC_ARITIES[operation]
         )
-        if len(arguments) != expected_arity:
+        accepted_arities = self.GLSL_WAVE_INTRINSIC_ALTERNATE_ARITIES.get(
+            operation, (expected_arity,)
+        )
+        if len(arguments) not in accepted_arities:
             raise self.glsl_software_subgroup_error(
                 f"OpenGL software subgroup operation '{operation}' requires "
                 f"{expected_arity} arguments",
@@ -38088,6 +38132,45 @@ complex64_t crossgl_complex64_mod_assign(
             )
         if operation == "subgroupExecutionBarrier":
             return "barrier()"
+        if operation == "WaveShuffleAndFillUp":
+            diagnostic = self.glsl_wave_validate_shuffle_and_fill_up(
+                operation, arguments
+            )
+            if diagnostic is not None:
+                raise self.glsl_software_subgroup_error(
+                    "OpenGL software shuffle-and-fill requires matching payload types and scalar integer delta/modulo arguments",
+                    operation=operation,
+                    reason="argument-type-unsupported",
+                    source_location=source_location,
+                )
+            value_type = self.glsl_source_expression_type(arguments[0])
+            mapped_type = self.map_type(value_type)
+            layout = scalar_storage_layout(self.glsl_normalized_source_type(value_type))
+            valid_type = mapped_type in {"bool", "uvec2"} or (
+                mapped_type in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
+                and layout is not None
+                and layout.bit_width == 32
+            )
+            if not valid_type:
+                raise self.glsl_software_subgroup_error(
+                    "OpenGL software shuffle-and-fill requires a 32-bit numeric scalar, bool, or two-word uint payload",
+                    operation=operation,
+                    reason="value-type-unsupported",
+                    source_location=source_location,
+                )
+            self.required_glsl_software_subgroup_helpers.add((operation, mapped_type))
+            helper = self.glsl_software_subgroup_helper_name(operation, mapped_type)
+            value, fill = (
+                self.generate_expression_with_expected(arg, mapped_type)
+                for arg in arguments[:2]
+            )
+            delta = self.generate_expression(arguments[2])
+            modulo = (
+                self.generate_expression(arguments[3])
+                if len(arguments) == 4
+                else f"{self.software_subgroup_width}u"
+            )
+            return f"{helper}({value}, {fill}, uint({delta}), uint({modulo}))"
         value_type = self.glsl_source_expression_type(arguments[0])
         mapped_value_type = (
             self.map_type(value_type) if value_type is not None else None

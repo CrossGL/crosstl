@@ -43,6 +43,8 @@ All notable changes to CrossTL are documented in this file.
 - Demo artifact references are reconciled only after source, interface and compiler review. Compiler acceptance is reported separately from numerical and host-runtime coverage.
 - Software subgroup lane reads preserve lane-varying indices, partial groups and single operand evaluation in HLSL and GLSL. Metal uses shuffle semantics for dynamic indices instead of requiring a uniform broadcast index.
 - HLSL scalar-to-vector construction evaluates increment and decrement operands once. Fixed-stride collective proofs retain local integer constants without leaking scope or assuming unchecked runtime bounds.
+- Exact-width HLSL and GLSL software shuffle-and-fill preserves segment boundaries, remote fill lanes, partial-group bounds and repeated scratch use. Metal roundtrips retain the four-argument segmented form instead of a default value. Native HLSL composite helpers read both source payloads before selecting a result.
+- OpenGL software subgroup analysis accepts resolved wrapper roots with distinct argument counts while retaining per-function uniformity facts and rejecting ambiguous overloads.
 
 ---
 

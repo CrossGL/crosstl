@@ -11933,11 +11933,15 @@ class MetalCodeGen:
             return None
 
         actual_arity = len(arguments)
-        if actual_arity != expected_arity:
+        accepted_arities = (
+            (3, 4) if operation == "WaveShuffleAndFillUp" else (expected_arity,)
+        )
+        if actual_arity not in accepted_arities:
+            expected = " or ".join(str(arity) for arity in accepted_arities)
             return self.metal_wave_diagnostic_expression(
                 operation,
                 arguments,
-                f"expects {expected_arity} arguments, got {actual_arity}",
+                f"expects {expected} arguments, got {actual_arity}",
             )
 
         unsupported_reason = self.METAL_WAVE_UNSUPPORTED_OPERATIONS.get(operation)
@@ -12040,6 +12044,11 @@ class MetalCodeGen:
             value = self.generate_expression(arguments[0])
             fill = self.generate_expression(arguments[1])
             delta = self.generate_expression(arguments[2])
+            modulo = (
+                f", ushort({self.generate_expression(arguments[3])})"
+                if len(arguments) == 4
+                else ""
+            )
             mapped_type, component_type, _array_suffix = (
                 self.metal_wave_argument_mapped_type(arguments[0])
             )
@@ -12059,9 +12068,11 @@ class MetalCodeGen:
                 zero = "0u" if component_count == 1 else f"{payload_type}(0u)"
                 return (
                     f"(simd_shuffle_and_fill_up({payload_type}({value}), "
-                    f"{payload_type}({fill}), ushort({delta})) != {zero})"
+                    f"{payload_type}({fill}), ushort({delta}){modulo}) != {zero})"
                 )
-            result = f"simd_shuffle_and_fill_up({value}, {fill}, ushort({delta}))"
+            result = (
+                f"simd_shuffle_and_fill_up({value}, {fill}, ushort({delta}){modulo})"
+            )
             expected_type = self.map_type(self.current_expression_expected_type)
             if expected_type == "bool":
                 return (
@@ -12263,7 +12274,13 @@ class MetalCodeGen:
                 "value and fill arguments must have matching types, got "
                 f"{value_type} and {fill_type}",
             )
-        return self.metal_wave_validate_lane_argument(operation, arguments[2], "delta")
+        for argument, role in zip(arguments[2:], ("delta", "modulo")):
+            diagnostic = self.metal_wave_validate_lane_argument(
+                operation, argument, role
+            )
+            if diagnostic is not None:
+                return diagnostic
+        return None
 
     def metal_wave_expression_is_boolean(self, expression):
         expression_type = self.expression_result_type(expression)

@@ -2082,6 +2082,7 @@ class HLSLCodeGen:
         {
             "WaveShuffleDown",
             "WaveReadLaneAt",
+            "WaveShuffleAndFillUp",
             "subgroupExecutionBarrier",
             *HLSL_SOFTWARE_SUBGROUP_REDUCTIONS,
             *HLSL_SOFTWARE_SUBGROUP_SCANS,
@@ -5741,13 +5742,22 @@ class HLSLCodeGen:
             operation_name = operation[len("Wave") :]
         elif operation == "WaveReadLaneAt":
             operation_name = "read_lane_at"
+        elif operation == "WaveShuffleAndFillUp":
+            operation_name = "shuffle_and_fill_up"
         return self.hlsl_software_subgroup_identifier(
             ("helper", operation, value_type),
             f"__crossgl_software_subgroup_{operation_name}_{suffix}",
         )
 
     def hlsl_software_subgroup_call(
-        self, operation, value_type, value_expression, delta_expression=None
+        self,
+        operation,
+        value_type,
+        value_expression,
+        delta_expression=None,
+        *,
+        fill_expression=None,
+        modulo_expression=None,
     ):
         mapped_value_type = self.map_type(value_type)
         is_vote = operation in self.HLSL_SOFTWARE_SUBGROUP_VOTES
@@ -5766,6 +5776,13 @@ class HLSLCodeGen:
         ):
             layout = scalar_storage_layout(self.type_name_string(value_type))
             valid_type = valid_type and layout is not None and layout.bit_width == 32
+        if operation == "WaveShuffleAndFillUp":
+            layout = scalar_storage_layout(self.type_name_string(value_type))
+            valid_type = mapped_value_type in {"bool", "uint2"} or (
+                mapped_value_type in self.HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
+                and layout is not None
+                and layout.bit_width == 32
+            )
         if not valid_type:
             raise self.hlsl_software_subgroup_error(
                 "DirectX software subgroup votes require scalar bool payloads; "
@@ -5791,8 +5808,12 @@ class HLSLCodeGen:
         self.required_hlsl_software_subgroup_helpers.add(key)
         helper = self.hlsl_software_subgroup_helper_name(operation, mapped_value_type)
         arguments = [value_expression]
+        if fill_expression is not None:
+            arguments.append(fill_expression)
         if delta_expression is not None:
             arguments.append(f"uint({delta_expression})")
+        if modulo_expression is not None:
+            arguments.append(f"uint({modulo_expression})")
         arguments.append(f"uint({invocation})")
         return f"{helper}({', '.join(arguments)})"
 
@@ -5922,6 +5943,8 @@ class HLSLCodeGen:
             delta_parameter = "uint delta, " if operation == "WaveShuffleDown" else ""
             if operation == "WaveReadLaneAt":
                 delta_parameter = "uint index, "
+            if operation == "WaveShuffleAndFillUp":
+                delta_parameter = f"{value_type} fill, uint delta, uint modulo, "
             code += (
                 f"{value_type} {helper}({value_type} value, {delta_parameter}"
                 "uint invocation) {\n"
@@ -5935,7 +5958,31 @@ class HLSLCodeGen:
                 + f"    {scratch}[invocation] = value;\n"
                 "    GroupMemoryBarrierWithGroupSync();\n"
             )
-            if scan:
+            if operation == "WaveShuffleAndFillUp":
+                active_count = "activeCount" if partial else f"{width}u"
+                # Reuse scratch only after every lane has read the value phase.
+                # Invalid/inactive source lanes have no portable result, but must
+                # never address another subgroup or escape the shared allocation.
+                code += (
+                    "    bool validModulo = modulo == 2u || modulo == 4u || modulo == 8u || modulo == 16u || modulo == 32u;\n"
+                    "    uint segmentWidth = validModulo ? modulo : 32u;\n"
+                    "    uint segmentLane = lane % segmentWidth;\n"
+                    "    bool useValue = segmentLane >= delta;\n"
+                    "    uint sourceLane = lane;\n"
+                    "    if (validModulo && delta <= segmentWidth) {\n"
+                    "        sourceLane = useValue ? lane - delta : lane + segmentWidth - delta;\n"
+                    "    }\n"
+                    f"    bool sourceValid = validModulo && delta <= segmentWidth && sourceLane < {active_count};\n"
+                    "    sourceLane = sourceValid ? sourceLane : lane;\n"
+                    f"    {value_type} result = {scratch}[subgroupBase + sourceLane];\n"
+                    "    GroupMemoryBarrierWithGroupSync();\n"
+                    f"    {scratch}[invocation] = fill;\n"
+                    "    GroupMemoryBarrierWithGroupSync();\n"
+                    "    if (sourceValid && !useValue) {\n"
+                    f"        result = {scratch}[subgroupBase + sourceLane];\n"
+                    "    }\n"
+                )
+            elif scan:
                 code += self.hlsl_software_subgroup_scan_body(
                     operation, value_type, scratch
                 )
@@ -7209,10 +7256,15 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
     uint delta
 ) {
     uint lane = WaveGetLaneIndex();
-    if (lane < delta) {
-        return fill;
+    bool useValue = lane >= delta;
+    uint valueLane = useValue ? lane - delta : lane;
+    uint fillLane = useValue ? lane : WaveGetLaneCount() + lane - delta;
+    complex64_t valueResult = __crossgl_complex64_wave_read_lane_at(value, valueLane);
+    complex64_t fillResult = __crossgl_complex64_wave_read_lane_at(fill, fillLane);
+    if (useValue) {
+        return valueResult;
     }
-    return __crossgl_complex64_wave_read_lane_at(value, lane - delta);
+    return fillResult;
 }
 
 """
@@ -24840,7 +24892,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"WaveReadLaneAt({data}, (WaveGetLaneIndex() - uint({delta})))"
             )
 
-        if simd_name == "simd_shuffle_and_fill_up" and len(args) == 3:
+        if simd_name == "simd_shuffle_and_fill_up" and len(args) in {3, 4}:
+            if (
+                self.software_subgroup_width is not None
+                or len(args) == 4
+                or not complex_value
+            ):
+                return self.generate_hlsl_wave_intrinsic_call(
+                    "WaveShuffleAndFillUp", args
+                )
             data = self.generate_expression_with_expected(args[0], None)
             filling = self.generate_expression_with_expected(args[1], None)
             delta = self.generate_expression_with_expected(args[2], "uint")
@@ -24855,11 +24915,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     "__crossgl_complex64_wave_shuffle_and_fill_up("
                     f"{data}, {filling}, uint({delta}))"
                 )
-            return self.hlsl_cast_metal_simd_shuffle_result(
-                "((WaveGetLaneIndex() >= uint({delta})) ? "
-                "WaveReadLaneAt({data}, (WaveGetLaneIndex() - uint({delta}))) : "
-                "{filling})".format(data=data, filling=filling, delta=delta)
-            )
 
         return None
 
@@ -25765,8 +25820,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"DirectX wave intrinsic '{operation}' requires a statically "
                 "known value type"
             )
-        self.required_hlsl_wave_shuffle_and_fill_up_types.add(mapped_value_type)
-        helper_name = self.hlsl_wave_shuffle_and_fill_up_helper_name(mapped_value_type)
         value = self.generate_expression_with_expected(args[0], mapped_value_type)
         fill = self.generate_expression_with_expected(args[1], mapped_value_type)
         delta = self.generate_expression_with_expected(args[2], "uint")
@@ -25779,7 +25832,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if modulo_type in {"int16_t", "uint16_t", "min16int", "min16uint"}:
                 modulo = f"uint({modulo})"
         else:
-            modulo = "WaveGetLaneCount()"
+            modulo = (
+                f"{self.software_subgroup_width}u"
+                if self.software_subgroup_width is not None
+                else "WaveGetLaneCount()"
+            )
+        if self.software_subgroup_width is not None:
+            result = self.hlsl_software_subgroup_call(
+                operation,
+                value_type,
+                value,
+                delta,
+                fill_expression=fill,
+                modulo_expression=modulo,
+            )
+            return self.hlsl_wave_shuffle_result_conversion(operation, args, result)
+        self.required_hlsl_wave_shuffle_and_fill_up_types.add(mapped_value_type)
+        helper_name = self.hlsl_wave_shuffle_and_fill_up_helper_name(mapped_value_type)
         result = f"{helper_name}({value}, {fill}, {delta}, {modulo})"
         return self.hlsl_wave_shuffle_result_conversion(operation, args, result)
 

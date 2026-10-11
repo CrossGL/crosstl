@@ -108,6 +108,16 @@ inactive or out-of-range source lanes remain undefined; an internal bounds
 fallback is not a portable result guarantee. The same workgroup convergence
 checks apply to broadcasts and lane-varying reads.
 
+Software ``WaveShuffleAndFillUp`` supports three- and four-argument forms with
+32-bit integer and floating-point scalars, Boolean values and ``uvec2`` payloads.
+The optional modulo partitions each logical subgroup into segments of 2, 4, 8,
+16 or 32 lanes. Lanes below delta read the corresponding upper fill lanes.
+Value and fill phases reuse bounded scratch with unconditional barriers.
+Invalid widths or deltas and inactive source lanes have no portable result;
+the bounds fallback does not define source behavior. Calls through wrappers
+with distinct argument counts retain resolved function identities. Same-arity
+overloaded roots and unproven workgroup participation remain diagnostic.
+
 Fixed-stride collective loops can use preceding local integer constants in
 entries and helpers. The proof retains declaration scope and representable
 intermediate arithmetic, rejects mutable or escaped values, and checks the

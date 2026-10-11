@@ -4701,9 +4701,14 @@ def test_hlsl_codegen_lowers_metal_simd_shuffle_helpers_to_wave_reads():
     generated = generate_code(ast)
 
     assert "metal_u3a_u3asimd_shuffle_and_fill_up" not in generated
-    assert "return ((WaveGetLaneIndex() >= uint(delta))" in generated
-    assert "WaveReadLaneAt(uint(data), (WaveGetLaneIndex() - uint(delta)))" in generated
-    assert "return ((((WaveGetLaneIndex() >= uint(delta))" in generated
+    assert (
+        "__crossgl_wave_shuffle_and_fill_up_uint("
+        "uint(data), uint(filling), uint(delta), WaveGetLaneCount())" in generated
+    )
+    assert "WaveReadLaneAt(value, valueSourceLane)" in generated
+    assert "WaveReadLaneAt(fill, fillSourceLane)" in generated
+    assert "segmentBase + modulo + segmentLane - delta" in generated
+    assert "return ((WaveGetLaneIndex() >= uint(delta))" not in generated
     assert " != 0);" in generated
     assert "return simd_shuffle_and_fill_up(uint(data)" not in generated
 

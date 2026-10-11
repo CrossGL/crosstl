@@ -147,6 +147,41 @@ def test_wrapper_root_overloads_remain_diagnostic():
     assert raised.value.reason == "helper-identity-ambiguous"
 
 
+def test_root_overloads_with_distinct_arities_keep_function_identity(tmp_path):
+    helpers = """float wrapper(float value) { return WaveActiveSum(value); }
+    float wrapper(float value, uint count) {
+        for (uint i = 0u; i < count; ++i) { value = WaveActiveMax(value); }
+        return value;
+    }
+    float wrapper(float value, uint unused, bool divergent) {
+        if (divergent) { return WaveActiveMin(value); }
+        return value;
+    }"""
+    generated = _generate(
+        "float a = wrapper(float(invocation)); "
+        "float b = wrapper(a, 2u); results[invocation] = uint(b);",
+        helpers,
+    )
+    assert "float wrapper(float value)" in generated
+    assert "float wrapper(float value, uint count)" in generated
+    assert "bool divergent" not in generated
+    _compile(generated, "opengl", tmp_path)
+
+
+def test_root_overloads_do_not_share_parameter_uniformity():
+    helpers = """float wrapper(float value) { return WaveActiveSum(value); }
+    float wrapper(float value, uint count) {
+        for (uint i = 0u; i < count; ++i) { value = WaveActiveMax(value); }
+        return value;
+    }"""
+    with pytest.raises(OpenGLSoftwareSubgroupError):
+        _generate(
+            "float a = wrapper(float(invocation)); "
+            "float b = wrapper(a, invocation); results[invocation] = uint(b);",
+            helpers,
+        )
+
+
 @pytest.mark.parametrize("condition", ["groups > 1u", "gl_WorkGroupID.x % 2u == 0u"])
 def test_wrappers_in_immutable_workgroup_uniform_branches_compile(tmp_path, condition):
     helpers, callee = _helpers(2, "WaveActiveAnyTrue", "bool")

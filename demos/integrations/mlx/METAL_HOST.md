@@ -230,6 +230,16 @@ overflow in the terminating increment
 complete entry nor cumulative-operation host routing is qualified by the
 independent lane-read and fixed-stride controls.
 
+Software shuffle-and-fill now has independent compiler and native controls for
+numeric scalars, Boolean values and two-word payloads. The existing subgroup
+CI step covers every supported segment width, lane-varying fill values,
+partial groups and repeated calls through wrappers; Metal also executes the
+original source. This adds no runner jobs. The complete minimum, maximum,
+log-add-exp and complex scan entries now reach the conditional-collective
+restriction in #2207 on both targets, at unchanged 128-thread or 64-thread
+launches. No complete entry or host-routing claim follows from the isolated
+operation tests. Native Windows readbacks remain a required qualification.
+
 ### Half-Precision Divmod
 
 The pinned original Metal backend also has a half-precision `divmod` boundary

@@ -175,6 +175,16 @@ bounded to active lanes in the logical subgroup. Source reads from inactive or
 out-of-range lanes remain undefined and are not a portable numerical contract.
 Both arguments are evaluated once, including side effects in vector constructors.
 
+Software ``WaveShuffleAndFillUp`` supports three- and four-argument forms with
+32-bit integer and floating-point scalars, Boolean values and ``uint2`` payloads.
+The optional modulo partitions each logical subgroup into segments of 2, 4, 8,
+16 or 32 lanes. Lanes below delta read the corresponding upper fill lanes,
+not the calling lane's fill value. Value and fill phases reuse bounded scratch
+with unconditional barriers between reads and writes. Invalid segment widths,
+deltas outside the segment and inactive source lanes have no portable result;
+internal bounds handling is only a memory-safety measure. Source operands are
+evaluated once, and existing workgroup-convergence requirements still apply.
+
 Fixed-stride collective loops can use preceding local integer constants in
 entries and helpers. The proof retains declaration scope and representable
 intermediate arithmetic, rejects mutable or escaped values, and checks the
