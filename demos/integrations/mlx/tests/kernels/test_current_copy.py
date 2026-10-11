@@ -525,6 +525,43 @@ def _bfloat_boolean_workload(prefix, start):
     return workload
 
 
+def _constant_inputs(target, workload):
+    prefix = workload["entry"].rstrip("_") + "_" if target == "directx" else ""
+    return {
+        prefix + name: {"dtype": dtype, "shape": [len(values)], "values": values}
+        for name, (dtype, values, _) in workload["constants"].items()
+    }
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+@pytest.mark.parametrize("prefix", ("v_copy", "g1_copy"))
+@pytest.mark.parametrize("conversion", ("float16float16", "bfloat16bool_"))
+def test_copy_constants_follow_reflected_member_names(target, prefix, conversion):
+    workload = (
+        _half_workload(prefix, 0)
+        if conversion == "float16float16"
+        else _bfloat_boolean_workload(prefix, 0)
+    )
+    name = "size" if prefix == "v_copy" else "src_stride"
+    dtype, values, _ = workload["constants"][name]
+    if target == "directx":
+        stem = {"float16float16": "float16float16", "bfloat16bool_": "bfloat16bool"}[
+            conversion
+        ]
+        member = f"{prefix}{stem}_{name}"
+        binding = member + "_Constants"
+    else:
+        member = binding = name
+    descriptor = {
+        "bindings": [{"name": binding, "scalarLayout": {"memberName": member}}]
+    }
+    inputs = _constant_inputs(target, workload)
+    assert set(inputs) == {member}
+    assert _bound_values(descriptor, inputs) == {
+        binding: {"dtype": dtype, "shape": [len(values)], "values": values}
+    }
+
+
 def test_bfloat_boolean_copy_covers_every_payload_and_preserves_guards():
     for prefix in ("v_copy", "g1_copy"):
         observed, converted = [], []
@@ -582,14 +619,7 @@ def test_current_bfloat_boolean_copy_preserves_all_payloads(
                     ],
                 },
             }
-            for name, (dtype, values, _) in workload["constants"].items():
-                if target == "directx":
-                    name = workload["entry"] + "_" + name
-                inputs[name] = {
-                    "dtype": dtype,
-                    "shape": [len(values)],
-                    "values": values,
-                }
+            inputs.update(_constant_inputs(target, workload))
             outputs = {
                 "dst": {
                     **inputs["dst"],
@@ -692,14 +722,7 @@ def test_current_half_copy_preserves_all_payloads(
                 "src": _half_payload(target, workload["source"]),
                 "dst": _half_payload(target, workload["initial"]),
             }
-            for name, (dtype, values, _) in workload["constants"].items():
-                if target == "directx":
-                    name = workload["entry"] + "_" + name
-                inputs[name] = {
-                    "dtype": dtype,
-                    "shape": [len(values)],
-                    "values": values,
-                }
+            inputs.update(_constant_inputs(target, workload))
             outputs = {"dst": _half_payload(target, workload["expected"])}
             (work / "workload.json").write_text(json.dumps(workload, indent=2))
             (work / "values.json").write_text(

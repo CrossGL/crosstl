@@ -844,7 +844,11 @@ The current harness verifies:
   per target. Inputs use lossless bit-pattern transport; output buffers start
   with the opposite expected value. The same tests are required in the existing
   Windows native job; local strict DXC checks pass, but Windows numerical
-  execution of these additions remains unverified. These two entries do not
+  execution of these additions remains unverified. The copy harness uses the
+  existing host-runtime entry-name normalization for reflected HLSL constants,
+  including exported names ending in an underscore. This changes test bindings,
+  not upstream sources, generated shaders or numerical expectations.
+  These two entries do not
   establish whole-family numerical parity or complete MLX host redirection;
 - selected-entry translation of all 2,496 discovered historical
   `copy.metal` entries to DirectX at revision
