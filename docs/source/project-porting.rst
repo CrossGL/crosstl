@@ -645,6 +645,27 @@ native hardware reduction order or denormal mode.
 Narrow products remain diagnostic until their intermediate rounding is
 preserved, even where a target normally uses a 32-bit carrier for that type.
 
+The same explicit software mode supports inclusive and exclusive prefix sums
+and products for scalar float32, int32 and uint32. Prefixes follow increasing
+logical lane order within each 32-lane partition, including a final partial
+partition. A five-stage block-prefix tree combines the lower half's prefix
+into each upper-half lane at strides 1, 2, 4, 8 and 16. Exclusive results
+read the preceding lane's completed prefix; inclusive results combine that
+exclusive result with the current operand. Integer arithmetic wraps at 32 bits.
+Floating-point combines round separately to binary32, with negative zero as
+the exclusive sum identity and one as the product identity. This is an explicit
+software accumulation order, not a guarantee that every native device chooses
+the same order or denormal mode.
+
+The native product job also checks scans on Windows, Linux and macOS, retaining
+input words, all output words, guards, and original Metal comparisons. Cases
+exercise repeated helper calls, single operand evaluation, signed zeros,
+non-finite values, overflow, cancellation, and order-sensitive products.
+Narrow floats, wide integers, vectors and Boolean scans remain diagnostic;
+a wider carrier does not justify changing source-width rounding. Unproven
+barrier participation remains rejected. These checks do not establish complete
+MLX cumulative-operation host routing or unchanged upstream-suite parity.
+
 Pure scalar helpers of the form ``if (subgroup_vote) return fallback; return
 subgroup_reduce(value);`` can converge both collectives before selecting each
 logical subgroup's result. This retains different subgroup votes within one

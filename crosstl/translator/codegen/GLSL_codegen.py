@@ -1834,6 +1834,12 @@ class GLSLCodeGen:
     GLSL_SOFTWARE_SUBGROUP_WIDTH_MACRO = "CROSSTL_SOFTWARE_SUBGROUP_WIDTH"
     GLSL_SOFTWARE_SUBGROUP_SUPPORTED_WIDTH = 32
     GLSL_SOFTWARE_SUBGROUP_VOTES = frozenset({"WaveActiveAllTrue", "WaveActiveAnyTrue"})
+    GLSL_SOFTWARE_SUBGROUP_SCANS = {
+        "WavePrefixSum": ("+", False),
+        "WavePrefixProduct": ("*", False),
+        "WavePrefixInclusiveSum": ("+", True),
+        "WavePrefixInclusiveProduct": ("*", True),
+    }
     GLSL_SOFTWARE_SUBGROUP_OPERATIONS = frozenset(
         {
             "WaveActiveSum",
@@ -1844,6 +1850,7 @@ class GLSLCodeGen:
             "subgroupExecutionBarrier",
             "CooperativeMatrixMultiplyAccumulate",
             *GLSL_SOFTWARE_SUBGROUP_VOTES,
+            *GLSL_SOFTWARE_SUBGROUP_SCANS,
         }
     )
     GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES = frozenset({"float", "int", "uint"})
@@ -37402,11 +37409,66 @@ complex64_t crossgl_complex64_mod_assign(
             "WaveActiveAllTrue": "All",
             "WaveActiveAnyTrue": "Any",
             "WaveShuffleDown": "ShuffleDown",
+            "WavePrefixSum": "PrefixSum",
+            "WavePrefixProduct": "PrefixProduct",
+            "WavePrefixInclusiveSum": "PrefixInclusiveSum",
+            "WavePrefixInclusiveProduct": "PrefixInclusiveProduct",
         }[operation]
         type_suffix = self.GLSL_SOFTWARE_SUBGROUP_TYPE_SUFFIXES[value_type]
         return self.glsl_generated_module_identifier(
             ("software-subgroup-helper", operation, value_type),
             f"crossglSoftwareSubgroup{operation_suffix}{type_suffix}",
+        )
+
+    def glsl_software_subgroup_scan_helper(
+        self, operation, value_type, helper, scratch
+    ):
+        operator, inclusive = self.GLSL_SOFTWARE_SUBGROUP_SCANS[operation]
+        qualifier = "precise " if value_type == "float" else ""
+        left = f"{scratch}[subgroupBase + (lane & ~(2u * stride - 1u)) + stride - 1u]"
+        combine = f"{left} {operator} result"
+        if value_type == "int":
+            combine = f"int(uint({left}) {operator} uint(result))"
+        # Separate each read phase from shared writes, including partial subgroups.
+        code = (
+            f"{value_type} {helper}({value_type} value) {{\n"
+            "    uint invocation = gl_LocalInvocationIndex;\n"
+            f"    uint lane = invocation % {self.software_subgroup_width}u;\n"
+            "    uint subgroupBase = invocation - lane;\n"
+            f"    {qualifier}{value_type} result = value;\n"
+            f"    {scratch}[invocation] = value;\n"
+            "    memoryBarrierShared();\n"
+            "    barrier();\n"
+            f"    for (uint stride = 1u; stride < {self.software_subgroup_width}u; stride <<= 1u) {{\n"
+            "        if ((lane & stride) != 0u) {\n"
+            f"            result = {combine};\n"
+            "        }\n"
+            "        memoryBarrierShared();\n"
+            "        barrier();\n"
+            f"        {scratch}[invocation] = result;\n"
+            "        memoryBarrierShared();\n"
+            "        barrier();\n"
+            "    }\n"
+        )
+        identity = f"{value_type}({'0' if operator == '+' else '1'})"
+        if value_type == "float" and operator == "+":
+            identity = "uintBitsToFloat(0x80000000u)"
+        code += (
+            f"    result = {identity};\n"
+            "    if (lane > 0u) {\n"
+            f"        result = {scratch}[invocation - 1u];\n"
+            "    }\n"
+        )
+        if inclusive:
+            combine = f"result {operator} value"
+            if value_type == "int":
+                combine = f"int(uint(result) {operator} uint(value))"
+            code += f"    result = {combine};\n"
+        return code + (
+            "    memoryBarrierShared();\n"
+            "    barrier();\n"
+            "    return result;\n"
+            "}\n\n"
         )
 
     def generate_glsl_software_subgroup_support(self):
@@ -37445,6 +37507,10 @@ complex64_t crossgl_complex64_mod_assign(
             "WaveActiveAllTrue": 4,
             "WaveActiveAnyTrue": 5,
             "WaveActiveProduct": 6,
+            "WavePrefixSum": 7,
+            "WavePrefixProduct": 8,
+            "WavePrefixInclusiveSum": 9,
+            "WavePrefixInclusiveProduct": 10,
         }
         for operation, value_type in sorted(
             self.required_glsl_software_subgroup_helpers,
@@ -37466,6 +37532,11 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 continue
             scratch = self.glsl_software_subgroup_scratch_name(value_type)
+            if operation in self.GLSL_SOFTWARE_SUBGROUP_SCANS:
+                code += self.glsl_software_subgroup_scan_helper(
+                    operation, value_type, helper, scratch
+                )
+                continue
             if invocation_count == self.software_subgroup_width:
                 lane_setup = "    uint lane = gl_LocalInvocationIndex;\n"
                 left = f"{scratch}[lane]"
@@ -37749,7 +37820,10 @@ complex64_t crossgl_complex64_mod_assign(
             else mapped_value_type in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
             or vector_shuffle_type is not None
         )
-        if operation == "WaveActiveProduct":
+        if (
+            operation == "WaveActiveProduct"
+            or operation in self.GLSL_SOFTWARE_SUBGROUP_SCANS
+        ):
             layout = scalar_storage_layout(self.glsl_normalized_source_type(value_type))
             valid_type = valid_type and layout is not None and layout.bit_width == 32
         if not valid_type:

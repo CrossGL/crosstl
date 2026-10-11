@@ -1257,6 +1257,7 @@ jobs:
       - name: Validate software subgroup products
         env:
           CROSTL_REQUIRE_SOFTWARE_SUBGROUP_PRODUCT: "1"
+          CROSTL_REQUIRE_SOFTWARE_SUBGROUP_SCAN: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
@@ -1268,6 +1269,7 @@ jobs:
               --basetemp=.mlx-portable-host/subgroup-products/pytest \
               --junitxml=.mlx-portable-host/subgroup-products/results.xml \
               tests/test_translator/test_software_subgroup_product.py \
+              tests/test_translator/test_software_subgroup_scan.py \
               2>&1 | tee .mlx-portable-host/subgroup-products.log
       - name: Validate subgroup-guarded returns
         env:

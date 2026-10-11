@@ -2072,11 +2072,18 @@ class HLSLCodeGen:
         "WaveActiveAnyTrue": "any",
     }
     HLSL_SOFTWARE_SUBGROUP_VOTES = frozenset({"WaveActiveAllTrue", "WaveActiveAnyTrue"})
+    HLSL_SOFTWARE_SUBGROUP_SCANS = {
+        "WavePrefixSum": ("+", False),
+        "WavePrefixProduct": ("*", False),
+        "WavePrefixInclusiveSum": ("+", True),
+        "WavePrefixInclusiveProduct": ("*", True),
+    }
     HLSL_SOFTWARE_SUBGROUP_OPERATIONS = frozenset(
         {
             "WaveShuffleDown",
             "subgroupExecutionBarrier",
             *HLSL_SOFTWARE_SUBGROUP_REDUCTIONS,
+            *HLSL_SOFTWARE_SUBGROUP_SCANS,
         }
     )
     HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES = frozenset({"float", "int", "uint"})
@@ -5649,6 +5656,8 @@ class HLSLCodeGen:
         operation_name = self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS.get(
             operation, "shuffle_down"
         )
+        if operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS:
+            operation_name = operation[len("Wave") :]
         return self.hlsl_software_subgroup_identifier(
             ("helper", operation, value_type),
             f"__crossgl_software_subgroup_{operation_name}_{suffix}",
@@ -5668,7 +5677,10 @@ class HLSLCodeGen:
                 else self.HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
             )
         )
-        if operation == "WaveActiveProduct":
+        if (
+            operation == "WaveActiveProduct"
+            or operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS
+        ):
             layout = scalar_storage_layout(self.type_name_string(value_type))
             valid_type = valid_type and layout is not None and layout.bit_width == 32
         if not valid_type:
@@ -5755,6 +5767,42 @@ class HLSLCodeGen:
             code += f"        result = {reducer}(result, operand);\n"
         return code + "    }\n"
 
+    def hlsl_software_subgroup_scan_body(self, operation, value_type, scratch):
+        operator, inclusive = self.HLSL_SOFTWARE_SUBGROUP_SCANS[operation]
+        qualifier = "precise " if value_type == "float" else ""
+        left = f"{scratch}[subgroupBase + (lane & ~(2u * stride - 1u)) + stride - 1u]"
+        combine = f"{left} {operator} result"
+        if value_type == "int":
+            combine = f"asint(asuint({left}) {operator} asuint(result))"
+        # Read every previous-stage value before any lane overwrites shared scratch.
+        code = (
+            f"    {qualifier}{value_type} result = value;\n"
+            "    [unroll]\n"
+            f"    for (uint stride = 1u; stride < {self.software_subgroup_width}u; stride <<= 1u) {{\n"
+            "        if ((lane & stride) != 0u) {\n"
+            f"            result = {combine};\n"
+            "        }\n"
+            "        GroupMemoryBarrierWithGroupSync();\n"
+            f"        {scratch}[invocation] = result;\n"
+            "        GroupMemoryBarrierWithGroupSync();\n"
+            "    }\n"
+        )
+        identity = f"{value_type}({'0' if operator == '+' else '1'})"
+        if value_type == "float" and operator == "+":
+            identity = "asfloat(0x80000000u)"
+        code += (
+            f"    result = {identity};\n"
+            "    if (lane > 0u) {\n"
+            f"        result = {scratch}[invocation - 1u];\n"
+            "    }\n"
+        )
+        if inclusive:
+            combine = f"result {operator} value"
+            if value_type == "int":
+                combine = f"asint(asuint(result) {operator} asuint(value))"
+            code += f"    result = {combine};\n"
+        return code
+
     def generate_hlsl_software_subgroup_helpers(self):
         if not (
             self.required_hlsl_software_subgroup_helpers
@@ -5787,7 +5835,8 @@ class HLSLCodeGen:
             helper = self.hlsl_software_subgroup_helper_name(operation, value_type)
             scratch = self.hlsl_software_subgroup_scratch_name(value_type)
             reduction = operation in self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS
-            delta_parameter = "" if reduction else "uint delta, "
+            scan = operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS
+            delta_parameter = "uint delta, " if operation == "WaveShuffleDown" else ""
             code += (
                 f"{value_type} {helper}({value_type} value, {delta_parameter}"
                 "uint invocation) {\n"
@@ -5801,7 +5850,11 @@ class HLSLCodeGen:
                 + f"    {scratch}[invocation] = value;\n"
                 "    GroupMemoryBarrierWithGroupSync();\n"
             )
-            if reduction:
+            if scan:
+                code += self.hlsl_software_subgroup_scan_body(
+                    operation, value_type, scratch
+                )
+            elif reduction:
                 code += self.hlsl_software_subgroup_reduction_body(
                     operation, value_type, scratch
                 )
@@ -25520,13 +25573,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         self.validate_hlsl_wave_intrinsic_arguments(operation, args)
         self.validate_hlsl_wave_intrinsic_result_context(operation, args)
-        if (
-            self.software_subgroup_width is not None
-            and operation in self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS
+        if self.software_subgroup_width is not None and operation in (
+            self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS.keys()
+            | self.HLSL_SOFTWARE_SUBGROUP_SCANS.keys()
         ):
             value_type = (
                 self.hlsl_source_expression_type(args[0])
                 if operation == "WaveActiveProduct"
+                or operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS
                 else self.expression_result_type(args[0])
             )
             value = self.generate_expression_with_expected(args[0], value_type)
