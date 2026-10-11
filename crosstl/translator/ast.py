@@ -1,5 +1,6 @@
 """Canonical CrossGL abstract syntax tree node definitions."""
 
+from copy import deepcopy
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
@@ -573,6 +574,13 @@ class StageMap(dict):
     def copy(self):
         return StageMap(self)
 
+    def __deepcopy__(self, memo):
+        result = StageMap()
+        memo[id(self)] = result
+        for key, stage in self.items():
+            result.append(deepcopy(key, memo), deepcopy(stage, memo))
+        return result
+
 
 class ImportNode(ASTNode):
     """Import/include statements."""
@@ -706,6 +714,8 @@ class FunctionNode(ASTNode):
         qualifiers: List[str] = None,
         is_unsafe: bool = False,
         is_async: bool = False,
+        linkage: str = "external",
+        is_inline: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -719,6 +729,9 @@ class FunctionNode(ASTNode):
         self.qualifiers = qualifiers or []
         self.is_unsafe = is_unsafe
         self.is_async = is_async
+        # Linkage does not select a shader stage.
+        self.linkage = linkage
+        self.is_inline = is_inline
 
     def __repr__(self):
         return f"FunctionNode(name={self.name}, return_type={self.return_type})"
@@ -974,12 +987,20 @@ class ForInNode(StatementNode):
     """For-in loop (Rust, Python style)."""
 
     def __init__(
-        self, pattern: str, iterable: "ExpressionNode", body: StatementNode, **kwargs
+        self,
+        pattern: str,
+        iterable: "ExpressionNode",
+        body: StatementNode,
+        binding_type=None,
+        binding_qualifiers=None,
+        **kwargs,
     ):
         super().__init__(**kwargs)
         self.pattern = pattern
         self.iterable = iterable
         self.body = body
+        self.binding_type = binding_type
+        self.binding_qualifiers = list(binding_qualifiers or [])
 
     def __repr__(self):
         return f"ForInNode(pattern={self.pattern})"

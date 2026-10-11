@@ -137,8 +137,7 @@ class ResourceQueryMixin:
                 func_name = self.raw_function_call_name(current)
                 raw_args = getattr(current, "arguments", getattr(current, "args", []))
                 if (
-                    func_name
-                    in {
+                    func_name in {
                         "textureSize",
                         "imageSize",
                         "textureSamples",

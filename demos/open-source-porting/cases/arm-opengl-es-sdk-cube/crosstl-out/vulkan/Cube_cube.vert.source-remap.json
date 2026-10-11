@@ -5,44 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 15,
-        "endOffset": 390,
+        "endLine": 89,
+        "endOffset": 2351,
         "file": "crosstl-out/vulkan/Cube_cube.vert.spvasm",
-        "length": 33,
-        "line": 14,
-        "offset": 357
+        "length": 2351,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 32,
-        "endOffset": 1340,
+        "endLine": 33,
+        "endOffset": 1342,
         "file": "Cube_cube.vert",
-        "length": 37,
-        "line": 31,
-        "offset": 1303
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 20,
-        "endOffset": 534,
-        "file": "crosstl-out/vulkan/Cube_cube.vert.spvasm",
-        "length": 25,
-        "line": 19,
-        "offset": 509
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 32,
-        "endOffset": 1340,
-        "file": "Cube_cube.vert",
-        "length": 37,
-        "line": 31,
-        "offset": 1303
+        "length": 1342,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

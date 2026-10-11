@@ -298,8 +298,10 @@ def glsl_buffer_block_predicate_matches(predicate, node, node_type):
         sum(
             1
             for param in parameters.values()
-            if param.kind
-            in (Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD)
+            if param.kind in (
+                Parameter.POSITIONAL_ONLY,
+                Parameter.POSITIONAL_OR_KEYWORD,
+            )
         )
         >= 2
     )

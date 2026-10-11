@@ -1880,8 +1880,9 @@ def test_external_rocm_texture_management_lod_grad_gather_codegen_reparse():
         in crossgl
     )
     assert (
-        "out[gl_LocalInvocationID.x] = ((sampled_lod + sampled_grad) + gathered);"
-        in (crossgl)
+        "out[gl_LocalInvocationID.x] = ((sampled_lod + sampled_grad) + gathered);" in (
+            crossgl
+        )
     )
     assert "tex2DLod" not in crossgl
     assert "tex2DGrad" not in crossgl

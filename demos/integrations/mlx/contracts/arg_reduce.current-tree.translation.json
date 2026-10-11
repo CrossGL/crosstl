@@ -3,13 +3,13 @@
   "kind": "crosstl-mlx-current-tree-arg-reduce-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "d9add9d11f3154111a4c85f267ec2fd307ecd18e",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
     "source": "mlx/backend/metal/kernels/arg_reduce.metal",
     "sourceSha256": "036a586af92b869a94f0b67e54590abf935e87f99290db46daed86cd8941e429"
   },
   "corpusCensus": {
-    "metalUnitCount": 42,
-    "entryCount": 17478,
+    "metalUnitCount": 49,
+    "entryCount": 17832,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -41,296 +41,296 @@
   "artifacts": {
     "directx": {
       "argmin_bool_": {
-        "sha256": "9b6eca3aa715896d7cdf4ce3465c96777a5b20d089862ef01baf07f223fc2676",
-        "sizeBytes": 8741
+        "sha256": "841b0bfa5028ae03e6d49dda5a8c37bab402fcea0d6df060dea2b1628b4260fe",
+        "sizeBytes": 9283
       },
       "argmax_bool_": {
-        "sha256": "a4320903ca7fc56c363946695ac43f2ffb45d0ad85acaee09f0e507639b20b2e",
-        "sizeBytes": 8743
+        "sha256": "219a8f36e0cc935e94f0530d65b6c6c710549296a8333f21c887c3fe54485f1c",
+        "sizeBytes": 9285
       },
       "argmin_uint8": {
-        "sha256": "42ed837ee36b995b138e18b61251083fbd4401ea777c37b54b3beb33ea77e0de",
-        "sizeBytes": 6690
+        "sha256": "09f4b5a349fdc5ad7d20432e9088bc8913fc1fe55753fc13dff8c62a6e20df44",
+        "sizeBytes": 7318
       },
       "argmax_uint8": {
-        "sha256": "b072c5bef3c99e82f7e8b58183e2d814991d179687cbed711fa1e29ee129cc6a",
-        "sizeBytes": 6686
+        "sha256": "23f97e600842f4046235ad8ef1b5181f4a88ca858ba4ecd6826acb5f62c143e1",
+        "sizeBytes": 7314
       },
       "argmin_uint16": {
-        "sha256": "66068689426dffad2564eda40ba11467c269401fc892c2d4743fdcf5efed31b4",
-        "sizeBytes": 7126
+        "sha256": "a8655583f8e495fc2566c2f5f997c125dada67676564a53ff017a123bc9a15fe",
+        "sizeBytes": 8386
       },
       "argmax_uint16": {
-        "sha256": "d41655607b8bc651f4b3a391011cb8f023ca4dd242710a7bcd118685d37e10b9",
-        "sizeBytes": 7118
+        "sha256": "5e4d14c8ccbc89a0097b5b693fa76771c3ffaf05c1286979c63a11d087d9356b",
+        "sizeBytes": 8378
       },
       "argmin_uint32": {
-        "sha256": "85f52e6cc3f8ae8b3428e7e7460b1a3fdc3a69cf1a55d033984d5d24a94ca6df",
-        "sizeBytes": 6709
+        "sha256": "a62eb4a8277f007dad94727b2beb69d290db48b22323401d4bcd85405e32e901",
+        "sizeBytes": 7667
       },
       "argmax_uint32": {
-        "sha256": "5245ebe5b423e586e866036ace1d8ddab6951d8e7ebf1f0f0ded470cf586db62",
-        "sizeBytes": 6689
+        "sha256": "9dc8f951ddaf8b4e061814f23bff0a01f18bdcde264b9b7f7f520ba6832a9cc0",
+        "sizeBytes": 7645
       },
       "argmin_uint64": {
-        "sha256": "a9603d8967aebdb67920f2c25c7cfa1a36b0e663ef0f8db7a3a9b543e6f3897a",
-        "sizeBytes": 9034
+        "sha256": "467fdaa9fb5938d63b89b1af650694a7f6f86b0ddaf3d2d899aead47457d6916",
+        "sizeBytes": 10858
       },
       "argmax_uint64": {
-        "sha256": "1d00bf4e89e0a5e3e50708ea92edcd410f45d73e0ea43b9109d6d487b5a001f6",
-        "sizeBytes": 8990
+        "sha256": "4684f22295e0ce54e1895158a9c64031140d86bb08fcee2bd2b7b835eb51277b",
+        "sizeBytes": 10820
       },
       "argmin_int8": {
-        "sha256": "871d0bd231fd4a844ffb047cbcb649246a5067c122e88b86bc1d21ce3d251012",
-        "sizeBytes": 6978
+        "sha256": "6f2896511701eefe8a64da9944ff5fd108354ba74fd421330a6992b1affd461a",
+        "sizeBytes": 7737
       },
       "argmax_int8": {
-        "sha256": "a5edb61ee04828f255a755f7d8e8b9fe4a37197f01b375cf6b0db6445519cbd4",
-        "sizeBytes": 6980
+        "sha256": "1467653d714af86b6133ba813b2493e57af24f8e5af205591dd135ae8841093d",
+        "sizeBytes": 7739
       },
       "argmin_int16": {
-        "sha256": "352632c957c26bed94e9adfe1d3c2cea4470852b80d589b6bfce24e2570f6186",
-        "sizeBytes": 7052
+        "sha256": "30ca101381a6682d6796444c283cc34e2d3f3cad1042a558a90a00bb99c69ddf",
+        "sizeBytes": 8308
       },
       "argmax_int16": {
-        "sha256": "664a0b39119a171fd06988d9d180424c9c311ff1f776da4726b9fa954975b03a",
-        "sizeBytes": 7054
+        "sha256": "278b4e0ab4529d6964f8c932e489eedb1423713bb36d197f74859b4c89e026d0",
+        "sizeBytes": 8310
       },
       "argmin_int32": {
-        "sha256": "7afcc44299a8526a95b8a68f075289d0d391e2f3eaa60b604083358b79fb0e07",
-        "sizeBytes": 6972
+        "sha256": "89f10ac366b7a3c44781c536b14c517e40f05b9cbda963836661d02661383222",
+        "sizeBytes": 8212
       },
       "argmax_int32": {
-        "sha256": "249f5e5dca802869f6842bb8b5d9b0a8f814c9628b041e963d472fda9165db6c",
-        "sizeBytes": 6976
+        "sha256": "dbba01fabdffb80dd2c2d201e719d471b323926e8136fc98a293872ec88939e8",
+        "sizeBytes": 8218
       },
       "argmin_int64": {
-        "sha256": "86cb622d330f427f449a8fc4e7c5d9dc232322859aa410160db34d864f918916",
-        "sizeBytes": 8963
+        "sha256": "4c336568e1c2bd3b225597d126f9b05192b7334df5f604db13669df6ef317560",
+        "sizeBytes": 10785
       },
       "argmax_int64": {
-        "sha256": "8a575b4cccdf65f9fd52cf068505cae387f1f726edf6a3ac4ac7be9d1b03b6c7",
-        "sizeBytes": 8965
+        "sha256": "2e52421b697eb52d85341dec94a7a964a4903b8bbec38e1ecc9872f7b3ffb4dc",
+        "sizeBytes": 10803
       },
       "argmin_float16": {
-        "sha256": "94219f02373811fcf39fe3062c3e624d332019673b29f2d15b69458fcb59933e",
-        "sizeBytes": 6842
+        "sha256": "f450ae20b34ecae3aa4986ac7349cc4deea1b248d481f973d5a215197d730889",
+        "sizeBytes": 8563
       },
       "argmax_float16": {
-        "sha256": "30891177b7a79922c54e08803cf8af7104de900ed2918c6f10355e1f228da857",
-        "sizeBytes": 6844
+        "sha256": "497e53dee2432797fbde734e107fe534ad4d68822f2bc21e62d97a69de4f9eaa",
+        "sizeBytes": 8565
       },
       "argmin_float32": {
-        "sha256": "982c090fb7001d557976cebaae61d392a4ade3db3bc116e71a32f1708a92d9f8",
-        "sizeBytes": 7625
+        "sha256": "d4da45e9e0230bf1e20dee667e4b833426bda99a60008cf16b02e9a844176dee",
+        "sizeBytes": 8061
       },
       "argmax_float32": {
-        "sha256": "44deffd7bb7baf3df53cdf1a509588123a2028f226b17abc5aa8bbd4a6063780",
-        "sizeBytes": 7627
+        "sha256": "098fe7de24162b565aba5881dc5e9b22e0973c3bb1be6fcbb4ed25679f769136",
+        "sizeBytes": 8123
       },
       "argmin_bfloat16": {
-        "sha256": "fc486b3bcbbcaaa07f4b86794b15107bf71c8c82a7bd6bdf26e4139d84b56f9b",
-        "sizeBytes": 8144
+        "sha256": "575c1b77726e489029c503ff5d5b6597e17a6c90159371cb0c265afeebbe0394",
+        "sizeBytes": 8618
       },
       "argmax_bfloat16": {
-        "sha256": "454b48d309341a7e2e6a333cc24f9b2b3d98fe3f6e72276140bad6b4da80da88",
-        "sizeBytes": 8204
+        "sha256": "1d3d3738d96944a13fa36057d211295a66f29aeaf71e54c4008400172c207eb9",
+        "sizeBytes": 8678
       }
     },
     "opengl": {
       "argmin_bool_": {
-        "sha256": "8fcc570c24a8fc3692b2df1324a2897839992e311a909da9c9349fa4f750b756",
-        "sizeBytes": 7843
+        "sha256": "1fc50fdbdf7bf258d2889c2be92a846e0516ec3d8b519ab9a2ed9ae96f3cede2",
+        "sizeBytes": 8171
       },
       "argmax_bool_": {
-        "sha256": "1c782526027fe46a22e4b27c7517748ffd2c8447f86fbb2a87c24db2648b6905",
-        "sizeBytes": 7845
+        "sha256": "c4e2c3b2dc5540f003dad72cd101a988040aa8e15aeb6ff146845546b074624a",
+        "sizeBytes": 8173
       },
       "argmin_uint8": {
-        "sha256": "3789491c0fe6b0c60e6b16e8ae565d547ab5b416146a9feeb881c1a99bbf4c0a",
-        "sizeBytes": 7634
+        "sha256": "9f7295f1acccab3fc7434abf21cc94e6630bd672a9ef0aff9e5a8c4f22e68a16",
+        "sizeBytes": 7962
       },
       "argmax_uint8": {
-        "sha256": "61784ed7517b40bab351bad20407454fc661a51fd81c360f88de0f9d0f7a9874",
-        "sizeBytes": 7630
+        "sha256": "6ab4270cf1725e5c8a2eedf687a8503d7de88cff297135fcbb5709c933f20f9f",
+        "sizeBytes": 7958
       },
       "argmin_uint16": {
-        "sha256": "e1f1f2e95903d13c32bf2513d1430f6fce23a618a482352d2bb30da3e838bb5c",
-        "sizeBytes": 7693
+        "sha256": "42ef076afc61d1a73f1e4374625b699269453bfef7ce01c69bc44760c018b5af",
+        "sizeBytes": 8021
       },
       "argmax_uint16": {
-        "sha256": "1d8b2b9a3f579ad9a9acaede3888fae2b29458aacf2d2e0e6c62953f9662ea3e",
-        "sizeBytes": 7685
+        "sha256": "5c8bec2628ef05ca5a3d42d096d7236ef85e4b41d2b83484e5c9988d94ecc5ef",
+        "sizeBytes": 8013
       },
       "argmin_uint32": {
-        "sha256": "ae710523b1692c8d7be6d48311d07f388e1f8af0989da495440e14024a7ae5f4",
-        "sizeBytes": 7579
+        "sha256": "dd9e06cfbba49b79290e55236ff92c9579c92ea265639033135f67eb90960ea3",
+        "sizeBytes": 7907
       },
       "argmax_uint32": {
-        "sha256": "816dd8c8b95018f364f6ac7b6c9aef86b4459fb4240ca2a78b501739a1bacba0",
-        "sizeBytes": 7559
+        "sha256": "17c6d3e44199a234a3e512593614ea661609858b01a88fb665338eb157e04ea6",
+        "sizeBytes": 7887
       },
       "argmin_uint64": {
-        "sha256": "3d437ae9d74ee1c52f605f5b9be0c576b8d2a241656b9e0943dd62e48822bf68",
-        "sizeBytes": 8342
+        "sha256": "b1c052baa967b3c38a55714f5ce23011b19f15dc92213b0a923c9bf49fcd0153",
+        "sizeBytes": 8670
       },
       "argmax_uint64": {
-        "sha256": "052cd1ae53122aa96bd95d94cf589236eaeef8c5afff6abb3e394a1aa0467872",
-        "sizeBytes": 8300
+        "sha256": "f4aa718f30c19b068654def06046565d454691f79dca37388f314618d643df2c",
+        "sizeBytes": 8632
       },
       "argmin_int8": {
-        "sha256": "6f36dfdfbd74cce02181e87d430b3d0ce424b3bd557b59c34eb5e0990092a8ae",
-        "sizeBytes": 7932
+        "sha256": "aeccecbf9f9b96c1fdcf8e2ed9038a7abb9e82d30f62ea045f2cd6e0ca5aa830",
+        "sizeBytes": 8375
       },
       "argmax_int8": {
-        "sha256": "15b8b1864587ca8291e6f0f40b1dc768cbac3ffcbb84b36fb4d7fe05edb4c587",
-        "sizeBytes": 7938
+        "sha256": "a1b4ba5a3ffe6e7bfee2cfba40296ce2a689770b8eba44bab348d86c6a9777ca",
+        "sizeBytes": 8381
       },
       "argmin_int16": {
-        "sha256": "b1e740224e5104c6bb5f31a52eccc733a1964d62ea44ee9a78750f6a37e21231",
-        "sizeBytes": 7991
+        "sha256": "5b716e5603d58045d754ce58149463d52d4e820b574cc34c6fa9b8c9c4916e9d",
+        "sizeBytes": 8434
       },
       "argmax_int16": {
-        "sha256": "5745a484cd5f934b16fa77001beae46e5b5b6c3ed768444765316643a15127de",
-        "sizeBytes": 7997
+        "sha256": "8ede7c37791da8c37570562e8a70e7c412ae9439f220b3ca153cc6bfde6d8e01",
+        "sizeBytes": 8440
       },
       "argmin_int32": {
-        "sha256": "bcd8f70148f40e1025cd8e87d99c8b2d574bc05e4072f1a2f85168aa67db33d1",
-        "sizeBytes": 7905
+        "sha256": "508b7acd99dd5b888e3050bdaa3de31bba58e50555af1cfc7a7cc1e1aa1e2841",
+        "sizeBytes": 8348
       },
       "argmax_int32": {
-        "sha256": "57d6879c5247587652ff99732a2b0ac5b848f471cfc0c015ca6806b8a3edaaff",
-        "sizeBytes": 7913
+        "sha256": "00dffeedf4a376c29f0d93e81cb671702383b96468b5da049bd7d0e29c603415",
+        "sizeBytes": 8356
       },
       "argmin_int64": {
-        "sha256": "7ad3a1b4001ceec958a7e572f9f5c54efcfc420b23a955893a71e5c1264c87cb",
-        "sizeBytes": 8287
+        "sha256": "f51a15a010783855b489cf11f6d2181bcb192b4bee3311ea1d52211a0eb78957",
+        "sizeBytes": 8613
       },
       "argmax_int64": {
-        "sha256": "449ec891dfd9c355e9806cc42b72bf478f293651e3d8e3fab922c2e55be23a6d",
-        "sizeBytes": 8293
+        "sha256": "eb41ff4f6fe29eb78ed9c40af9ab9b2f1a4b5f4c6fb88023a79d8cbdebf4ca64",
+        "sizeBytes": 8633
       },
       "argmin_float16": {
-        "sha256": "5591f0d48daf2a1cf546b0f82bf047da9472acdb1e8252530088eba7b760293f",
-        "sizeBytes": 7726
+        "sha256": "9b55b1a5adf9bc45a4ab4deec55387ee96ab8067e2fca358dc71c97714e5e39b",
+        "sizeBytes": 9540
       },
       "argmax_float16": {
-        "sha256": "9aa80e7436b4d4253f72e206a536250ae7b76144e37b7970fac7fe0f0a8a0e1a",
-        "sizeBytes": 7732
+        "sha256": "3f4b07ac5c5ff7589063a87a900fbeb09981ddf40302ab7f91111f3f83afa1f4",
+        "sizeBytes": 9546
       },
       "argmin_float32": {
-        "sha256": "14fcee01e9c7f5b5bb05a32262e6c3932cf80ea8bdd50582f26ae77f8976d320",
-        "sizeBytes": 7750
+        "sha256": "ee802da16f965a7dda2da0ac37f8f7a05001248fe3df768eca06e86836db389e",
+        "sizeBytes": 8193
       },
       "argmax_float32": {
-        "sha256": "4b0595da819da2efaa81672604182e87f870b6fde30cb255bbcf434d2ddc7e21",
-        "sizeBytes": 7756
+        "sha256": "16b40c743d66925d15c411f0969bdaebdaeb2aa20770656664d710719219a327",
+        "sizeBytes": 8199
       },
       "argmin_bfloat16": {
-        "sha256": "77104705bd5981225d23ed627bf62d239fef60a6d74ea8d27684e52043ac1e1e",
-        "sizeBytes": 7974
+        "sha256": "5c7a083032c1489b5849bb1f967075c99e31cd9777e12a78fcd084bd28586cdc",
+        "sizeBytes": 8797
       },
       "argmax_bfloat16": {
-        "sha256": "ec1977efd5fb41e24de63817977c6f386bd01a6296b288459d8f66775ac0c50f",
-        "sizeBytes": 7980
+        "sha256": "0e714cc919987a25caf3de3ca35acd381449003f720c06d657b5a311be02f620",
+        "sizeBytes": 8803
       }
     },
     "metal": {
       "argmin_bool_": {
-        "sha256": "02ae43a54bd28570f69b3733745c690c02685afdf3591e5f7bfd5acc531cf4af",
-        "sizeBytes": 4923
+        "sha256": "48b4214a0a1461067ed81ce71f5f29158a5e82e37f969c68e667871bf3a034c1",
+        "sizeBytes": 5231
       },
       "argmax_bool_": {
-        "sha256": "cda6ef6fc99842bca63546bceb052d062e73de01ed93c3183f462bd90dd4e98a",
-        "sizeBytes": 4925
+        "sha256": "4e192b25ddf5da8ed952c8a314639a5c2877f3e6aaca2fe6def4993f437e58ff",
+        "sizeBytes": 5233
       },
       "argmin_uint8": {
-        "sha256": "c1dcd224bda22c06fe25c90689be79dac5277a87c7f7416530168789ea43e727",
-        "sizeBytes": 4117
+        "sha256": "905adc21c642fca01fd93879f3bc966f4749f77cd523cad5480819901fec9eb4",
+        "sizeBytes": 4501
       },
       "argmax_uint8": {
-        "sha256": "9542580180bad0a0b201099151a93aa59fe1ef71b7e0b9760f71f122473c37ca",
-        "sizeBytes": 4113
+        "sha256": "400c1fa82e466b8d1de318f3cb80f0e961cb51b1154b738d4e633bb5730f1b40",
+        "sizeBytes": 4497
       },
       "argmin_uint16": {
-        "sha256": "e07ecb0f8bcfb12505e946b86a55ec1672ee86f9575d747af1e248e905415b16",
-        "sizeBytes": 4158
+        "sha256": "98f89ddbf72abea643e49af14976c61a29f447e933d573b0fe99a7604c2573f1",
+        "sizeBytes": 4389
       },
       "argmax_uint16": {
-        "sha256": "b5cfbd64a6f95b082d0db194718c563efd9c53a6002321712bf79c17332bfc50",
-        "sizeBytes": 4150
+        "sha256": "0a3f61769d847ec708b02636ca735ced1dc1917a3bcf1b55db3a8f014c08e643",
+        "sizeBytes": 4381
       },
       "argmin_uint32": {
-        "sha256": "f48065265af057f5477bdab5ed6d5232fa9d267b65af8693f5d6c9304053c58e",
-        "sizeBytes": 4160
+        "sha256": "a21fd3ef30a8dd605121620aa87c712f7c8b96e2589a05599ef4f862d8810025",
+        "sizeBytes": 4375
       },
       "argmax_uint32": {
-        "sha256": "fe8276460c6399e82bf55ae0f44aa8cdfd77073ff47a279373074aec2a334d1a",
-        "sizeBytes": 4142
+        "sha256": "d4a48982d8e56ace8e8c2a86ffe39d1b8770a47551a932b0ffb3d97e3fd6c589",
+        "sizeBytes": 4355
       },
       "argmin_uint64": {
-        "sha256": "716042ba37fa828f4d5988d0737b3d00156964c38a13dfa969065c7a960b65f4",
-        "sizeBytes": 5112
+        "sha256": "dad0c1b529c7af9dac0cdafbb49699103ecc9c9e7ef77963b11f1f01a0d87426",
+        "sizeBytes": 5424
       },
       "argmax_uint64": {
-        "sha256": "39513c295098950b3ea2c1a7ed975d384dc9e44280af159c361b05b8270bba76",
-        "sizeBytes": 5074
+        "sha256": "d7cd2df32a90e555823da11443a0932348f3d87721b99e7de427172c3277840c",
+        "sizeBytes": 5386
       },
       "argmin_int8": {
-        "sha256": "f7785b93901d5b1a2c6b9370a5c87fded5a1d1d809129bf987e5a002b3036b6c",
-        "sizeBytes": 4075
+        "sha256": "2fb9fcb77481baaa8daa16f96230c62d031b0677d7373a55efbff3761532ac9c",
+        "sizeBytes": 4433
       },
       "argmax_int8": {
-        "sha256": "e2d4170d03a9c5c1603118c181c97e5de3e39def46d63405dd4d2f471f9c9dad",
-        "sizeBytes": 4077
+        "sha256": "8622d7005c115ff49accd1c45cacfbab3f44ae0e4993577d841ca7761ef8731b",
+        "sizeBytes": 4435
       },
       "argmin_int16": {
-        "sha256": "98aaad1ec921acd02ba7626f70dcc7ad64e0daad042d6098019ff2ff09fb39d5",
-        "sizeBytes": 4116
+        "sha256": "d48ca4d9e54fc3ae297ab0753469e30e9c6361fd1815381316c76d03dc8a483b",
+        "sizeBytes": 4345
       },
       "argmax_int16": {
-        "sha256": "a8b012bdabcdd1ade236f6460a53abf3e1090948e54fc28a972d1e1029286466",
-        "sizeBytes": 4118
+        "sha256": "545c1d0bf96dad0b32e90caef805982e57a52161d07193f5354f9d41831ebeb8",
+        "sizeBytes": 4347
       },
       "argmin_int32": {
-        "sha256": "1303af3b44a5a6e2f8a860e7a9840ce2de6ed8ea846c34bac40cb528eb82b582",
-        "sizeBytes": 4118
+        "sha256": "fe22c75c073af75f4a5ac49b2825f826258c46d68e32f050fd0e359878e58bd5",
+        "sizeBytes": 4331
       },
       "argmax_int32": {
-        "sha256": "9b17151107a518cbf5db58def922848b983da5555c61956c1242f9d21babc1b5",
-        "sizeBytes": 4120
+        "sha256": "b222dc6326e8860d075754094401b3e12d7ee7e9d4a11758593f5bb6fba0a6b7",
+        "sizeBytes": 4335
       },
       "argmin_int64": {
-        "sha256": "71d7c03cf2fb66d82fb944e302d49b0542c0cfe033ac32b4522d1f73c8934a15",
-        "sizeBytes": 5068
+        "sha256": "bb08aee274e4173b74b7e54b274f29b880fd0ee0aa26ccb6be16d0d538b02a84",
+        "sizeBytes": 5378
       },
       "argmax_int64": {
-        "sha256": "f75a4b6ae0fdd783d204638012314e00d85eb03bec441d192fbe340b227babca",
-        "sizeBytes": 5086
+        "sha256": "fb5e266fe010b8c25a2152203b874831cc37251001028f8f8b212f5087b51ccd",
+        "sizeBytes": 5390
       },
       "argmin_float16": {
-        "sha256": "623a6bbb83613892520a68ce7d33b3793f8c34e3121c9a4b16a8ad6417867103",
-        "sizeBytes": 3980
+        "sha256": "f2d793f603a7c2fa3d43d331adf5c3177662e6093b1d90da534b6cfe605a01fc",
+        "sizeBytes": 4162
       },
       "argmax_float16": {
-        "sha256": "94c4a3d37c10f093fd1556b8e4c2747d0266cb7aee281455182a6db58fc9c03e",
-        "sizeBytes": 3982
+        "sha256": "5a68cb65060ef3e4c02b64e798e5deb1a40f066a3db43d6d121a1d80d81a53d9",
+        "sizeBytes": 4164
       },
       "argmin_float32": {
-        "sha256": "955ededf34bbf85d26c24b75da7d9a8f2d394eb359af0898a81c379e5ae2205e",
-        "sizeBytes": 4000
+        "sha256": "2cff5b36b3a8437d0e5f6be68b982f7ca6b168e36f4a7b6b7d4b42d47cd0ac26",
+        "sizeBytes": 4182
       },
       "argmax_float32": {
-        "sha256": "1a9f08f4a607e9f1f45ee95da2d08fd753fac967073f081f6c3bb2d2d3c39d4c",
-        "sizeBytes": 4002
-      },
-      "argmin_bfloat16": {
-        "sha256": "02197cbd75af21ec86bf9151c7caba697168f0662bea23f3ebe6f219eb8f56e0",
+        "sha256": "7b3e5c739949232212d9c155863510d4fb8b1dc64cd720375747a679894f01e2",
         "sizeBytes": 4184
       },
+      "argmin_bfloat16": {
+        "sha256": "93285c3d4d4b0e9a0c9fd5334bdc62fcb67481276da40dc5c572108e8b4952f8",
+        "sizeBytes": 4366
+      },
       "argmax_bfloat16": {
-        "sha256": "d77f0d264519f6b9868dfe6741013878368044ab3cf10e2a8925730fc2836ae2",
-        "sizeBytes": 4194
+        "sha256": "a8c10582cae5046fdd206170182f9ff58b2d91db6572ee6cef55938d8b624959",
+        "sizeBytes": 4376
       }
     }
   },
@@ -386,7 +386,19 @@
         ],
         "runtimeEntries": [
           "argmin_float32",
-          "argmax_float32"
+          "argmax_float32",
+          "argmin_uint16",
+          "argmax_uint16",
+          "argmin_int16",
+          "argmax_int16",
+          "argmin_uint32",
+          "argmax_uint32",
+          "argmin_int32",
+          "argmax_int32",
+          "argmin_uint64",
+          "argmax_uint64",
+          "argmin_int64",
+          "argmax_int64"
         ]
       },
       "opengl": {
@@ -423,7 +435,19 @@
         ],
         "runtimeEntries": [
           "argmin_float32",
-          "argmax_float32"
+          "argmax_float32",
+          "argmin_uint16",
+          "argmax_uint16",
+          "argmin_int16",
+          "argmax_int16",
+          "argmin_uint32",
+          "argmax_uint32",
+          "argmin_int32",
+          "argmax_int32",
+          "argmin_uint64",
+          "argmax_uint64",
+          "argmin_int64",
+          "argmax_int64"
         ]
       },
       "metal": {
@@ -460,7 +484,19 @@
         ],
         "runtimeEntries": [
           "argmin_float32",
-          "argmax_float32"
+          "argmax_float32",
+          "argmin_uint16",
+          "argmax_uint16",
+          "argmin_int16",
+          "argmax_int16",
+          "argmin_uint32",
+          "argmax_uint32",
+          "argmin_int32",
+          "argmax_int32",
+          "argmin_uint64",
+          "argmax_uint64",
+          "argmin_int64",
+          "argmax_int64"
         ]
       }
     }
@@ -472,12 +508,96 @@
       "argmax_float32"
     ],
     "caseCount": 16,
-    "note": "All 24 entries require deterministic translation and native compiler validation; numerical runtime parity remains the two float32 entries."
+    "note": "All 24 entries require deterministic translation and native compiler validation. All three targets require two float32 and twelve signed/unsigned 16/32/64-bit integer entries. DirectX uses exact-width software subgroups, including resolved two-word 64-bit wrappers. Required execution is distinct from whole-corpus coverage and unchanged upstream suite execution.",
+    "integerCases": {
+      "entries": [
+        "argmin_uint16",
+        "argmax_uint16",
+        "argmin_int16",
+        "argmax_int16",
+        "argmin_uint32",
+        "argmax_uint32",
+        "argmin_int32",
+        "argmax_int32",
+        "argmin_uint64",
+        "argmax_uint64",
+        "argmin_int64",
+        "argmax_int64"
+      ],
+      "axisSizes": [
+        31,
+        32,
+        33,
+        129
+      ],
+      "axisStrides": [
+        1,
+        2
+      ],
+      "extremaAndLowestIndexTies": true,
+      "entriesByTarget": {
+        "metal": [
+          "argmin_uint16",
+          "argmax_uint16",
+          "argmin_int16",
+          "argmax_int16",
+          "argmin_uint32",
+          "argmax_uint32",
+          "argmin_int32",
+          "argmax_int32",
+          "argmin_uint64",
+          "argmax_uint64",
+          "argmin_int64",
+          "argmax_int64"
+        ],
+        "opengl": [
+          "argmin_uint16",
+          "argmax_uint16",
+          "argmin_int16",
+          "argmax_int16",
+          "argmin_uint32",
+          "argmax_uint32",
+          "argmin_int32",
+          "argmax_int32",
+          "argmin_uint64",
+          "argmax_uint64",
+          "argmin_int64",
+          "argmax_int64"
+        ],
+        "directx": [
+          "argmin_uint16",
+          "argmax_uint16",
+          "argmin_int16",
+          "argmax_int16",
+          "argmin_uint32",
+          "argmax_uint32",
+          "argmin_int32",
+          "argmax_int32",
+          "argmin_uint64",
+          "argmax_uint64",
+          "argmin_int64",
+          "argmax_int64"
+        ]
+      },
+      "caseCountByTarget": {
+        "metal": 96,
+        "opengl": 96,
+        "directx": 96
+      },
+      "upstreamMetallibParityTargets": [
+        "metal"
+      ]
+    }
   },
   "scope": {
     "coveredEntryCount": 24,
-    "runtimeCoveredEntryCount": 2,
-    "completeCorpusEntryCount": 17478,
+    "runtimeCoveredEntryCount": 14,
+    "runtimeCoveredEntryCountByTarget": {
+      "metal": 14,
+      "opengl": 14,
+      "directx": 14
+    },
+    "completeCorpusEntryCount": 17832,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false
   }

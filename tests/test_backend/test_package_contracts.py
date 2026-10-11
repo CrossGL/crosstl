@@ -1,23 +1,11 @@
-import ast
 import importlib
 import inspect
 import json
 from pathlib import Path
 
+from tools.check_release import package_metadata
+
 ROOT = Path(__file__).resolve().parents[2]
-
-
-def _setup_keyword(name):
-    tree = ast.parse((ROOT / "setup.py").read_text(encoding="utf-8"))
-    setup_call = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "setup"
-    )
-    keyword = next(item for item in setup_call.keywords if item.arg == name)
-    return ast.literal_eval(keyword.value)
 
 
 def _catalog_backends():
@@ -65,7 +53,7 @@ def test_native_backend_modules_are_importable():
 
 
 def test_directx_runtime_extra_declares_supported_compushady_release():
-    extras = _setup_keyword("extras_require")
+    extras = package_metadata(ROOT)["optional-dependencies"]
 
     assert extras["directx-runtime"] == [
         "compushady>=0.17.5,<0.18; platform_system=='Windows'"

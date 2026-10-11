@@ -14,12 +14,15 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+from crosstl.project.buffer_requirements import valid_minimum_binding_size
 from crosstl.project.native_loader_abi import (
     NativeLoaderABIError,
     _validate_descriptor,
 )
+from crosstl.project.runtime_value_encoding import validate_value_encoding
 from crosstl.project.runtime_verification import (
     RuntimeAdapterContract,
+    RuntimeAllocationView,
     RuntimeArtifactIdentity,
     RuntimeArtifactSelector,
     RuntimeDispatchGeometry,
@@ -32,14 +35,30 @@ from crosstl.project.runtime_verification import (
     RuntimeValue,
     prepare_runtime_execution,
 )
+from crosstl.project.storage_record_layout import validate_storage_record_layout
+from crosstl.project.uniform_layout import validate_std140_block_layout
+from crosstl.translator.dispatch_regions import DispatchRegion
+from crosstl.translator.frozen_specializations import (
+    FROZEN_SPECIALIZATION_PREFIX,
+    frozen_specializations,
+    parse_frozen_specializations,
+)
+from crosstl.translator.resource_storage import encoded_storage_dtype
 
 _ERROR_PREFIX = "project.native-loader-dispatch"
 _COMPUTE_STAGE = "compute"
 _TARGET_ARTIFACT_FORMATS = {
+    "metal": frozenset(("Metal source",)),
     "directx": frozenset(("HLSL source", "DXIL binary")),
     "opengl": frozenset(("GLSL source", "SPIR-V binary")),
 }
 _TARGET_RESOURCE_NAMESPACES = {
+    "metal": {
+        ("buffer", "read"): "buffer",
+        ("buffer", "write"): "buffer",
+        ("buffer", "read_write"): "buffer",
+        ("constant-buffer", "read"): "buffer",
+    },
     "directx": {
         ("buffer", "read"): "srv",
         ("buffer", "write"): "uav",
@@ -61,6 +80,31 @@ _BUFFER_KIND_ALIASES = {
     "uniform": "constant-buffer",
 }
 _BUFFER_DTYPE_ALIASES = {
+    "bfloat": "bfloat16",
+    "bfloat16": "bfloat16",
+    "bfloat16_t": "bfloat16",
+    "short": "int16",
+    "i16": "int16",
+    "int16": "int16",
+    "int16_t": "int16",
+    "ushort": "uint16",
+    "u16": "uint16",
+    "uint16": "uint16",
+    "uint16_t": "uint16",
+    "half": "float16",
+    "f16": "float16",
+    "float16": "float16",
+    "float16_t": "float16",
+    "char": "int8",
+    "i8": "int8",
+    "int8": "int8",
+    "int8_t": "int8",
+    "uchar": "uint8",
+    "u8": "uint8",
+    "uint8": "uint8",
+    "uint8_t": "uint8",
+    "bool": "bool",
+    "boolean": "bool",
     "float": "float32",
     "f32": "float32",
     "float32": "float32",
@@ -89,6 +133,13 @@ _SPECIALIZATION_DTYPE_ALIASES = {
 }
 _SPECIALIZATION_DTYPE_ALIASES.update({"bool": "bool", "boolean": "bool"})
 _DTYPE_SIZES = {
+    "bfloat16": 2,
+    "int16": 2,
+    "uint16": 2,
+    "float16": 2,
+    "int8": 1,
+    "uint8": 1,
+    "bool": 1,
     "float32": 4,
     "int32": 4,
     "uint32": 4,
@@ -96,6 +147,13 @@ _DTYPE_SIZES = {
     "uint64": 8,
 }
 _PHYSICAL_TYPES = {
+    "bfloat16": "bfloat",
+    "int16": "short",
+    "uint16": "ushort",
+    "float16": "half",
+    "int8": "char",
+    "uint8": "uchar",
+    "bool": "bool",
     "float32": "float",
     "int32": "int",
     "uint32": "uint",
@@ -103,6 +161,7 @@ _PHYSICAL_TYPES = {
     "uint64": "uint64_t",
 }
 _TARGET_STORAGE_LAYOUTS = {
+    "metal": {"buffer": "metal-buffer", "constant-buffer": "metal-constant"},
     "directx": {
         "buffer": "hlsl-structured-buffer",
         "constant-buffer": "hlsl-constant-buffer",
@@ -110,12 +169,21 @@ _TARGET_STORAGE_LAYOUTS = {
     "opengl": {"buffer": "std430", "constant-buffer": "std140"},
 }
 _VALUE_FIELDS = frozenset(
-    ("name", "kind", "dtype", "shape", "values", "value", "tolerance", "metadata")
+    (
+        "name",
+        "kind",
+        "dtype",
+        "shape",
+        "values",
+        "value",
+        "tolerance",
+        "metadata",
+        "encoding",
+    )
 )
 _ALIAS_METADATA_FIELDS = frozenset(("aliases", "resourceAliases", "bindingAliases"))
 _ENTRY_POINT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _UINT32_MAX = (1 << 32) - 1
-_UINT64_MAX = (1 << 64) - 1
 
 
 class NativeLoaderDispatchError(ValueError):
@@ -161,13 +229,15 @@ def build_native_loader_dispatch_request(
     *,
     expected_target: str | None = None,
 ) -> RuntimeExecutionRequest:
-    """Build and preflight one DirectX or OpenGL native runtime request.
+    """Build and preflight one DirectX, OpenGL or Metal native runtime request.
 
     The descriptor remains the source of truth for artifact identity, resource
     coordinates, entry-point metadata, and specialization identities. Callers
     provide values only under the exact reflected binding names and numeric
     specialization ids. Reflected execution inputs are derived from validated
     dispatch geometry rather than supplied as ordinary fixture values.
+    Buffer payloads are copied before validation so subsequent caller mutations
+    cannot change the values retained by this request.
     """
 
     normalized = _validated_descriptor(descriptor)
@@ -176,6 +246,25 @@ def build_native_loader_dispatch_request(
     artifact_path, package_root = _verified_artifact(
         normalized["artifact"], runtime_package_root
     )
+    try:
+        declared_frozen = frozen_specializations(normalized["specializationConstants"])
+        with artifact_path.open("rb") as artifact_file:
+            first_line = artifact_file.readline(65537)
+        reflected_frozen = (
+            parse_frozen_specializations(first_line.decode("utf-8"))
+            if first_line.startswith(FROZEN_SPECIALIZATION_PREFIX.encode("ascii"))
+            else []
+        )
+        if declared_frozen != reflected_frozen:
+            raise ValueError(
+                "Descriptor frozen values differ from the artifact header."
+            )
+    except (ValueError, UnicodeError) as exc:
+        raise NativeLoaderDispatchError(
+            "frozen-specialization-invalid",
+            str(exc),
+            path="$.specializationConstants",
+        ) from exc
 
     inputs = _typed_values(input_values, role="input")
     outputs = _typed_values(output_values, role="output")
@@ -184,6 +273,33 @@ def build_native_loader_dispatch_request(
         entry_point=entry_point["name"],
         reflected_workgroup_size=_reflected_workgroup_size(entry_point),
     )
+    if "dispatchRegion" in normalized["provenance"]:
+        region = DispatchRegion.from_json(normalized["provenance"]["dispatchRegion"])
+        if (
+            _padded_dimensions(dispatch.workgroup_count) != region.workgroup_count
+            or _padded_dimensions(dispatch.workgroup_size) != region.workgroup_size
+            or dispatch.thread_grid_size
+        ):
+            raise NativeLoaderDispatchError(
+                "dispatch-region-geometry-mismatch",
+                "A specialized dispatch region requires its recorded physical "
+                "workgroup count and size, without a second thread-grid mapping.",
+                path="$.dispatchGeometry",
+                details={"dispatchRegion": region.to_json()},
+            )
+    if dispatch.thread_grid_size and target != "metal":
+        raise NativeLoaderDispatchError(
+            "exact-thread-grid-unsupported",
+            "Exact thread-grid dispatch is not implemented for this native target.",
+            path="$.dispatchGeometry.threadGridSize",
+            details={"target": target},
+        )
+    if target == "metal" and not dispatch.workgroup_size:
+        raise NativeLoaderDispatchError(
+            "workgroup-size-missing",
+            "Metal native dispatch requires an explicit or reflected workgroup size.",
+            path="$.dispatchGeometry.workgroupSize",
+        )
     inputs = _with_derived_execution_inputs(
         inputs,
         normalized["bindings"],
@@ -228,6 +344,7 @@ def build_native_loader_dispatch_request(
             },
             "scalarLayout": _ordered_scalar_layout(normalized["scalarLayout"]),
             "provenance": copy.deepcopy(normalized["provenance"]),
+            **({"frozenSpecializations": declared_frozen} if declared_frozen else {}),
         },
     )
     artifact = _runtime_artifact(normalized)
@@ -299,7 +416,7 @@ def _validated_target(
     if target not in _TARGET_ARTIFACT_FORMATS:
         raise NativeLoaderDispatchError(
             "target-unsupported",
-            "Native loader dispatch supports DirectX and OpenGL targets only.",
+            "Native loader dispatch supports DirectX, OpenGL and Metal targets only.",
             path="$.target",
             details={
                 "target": target,
@@ -318,7 +435,7 @@ def _validated_target(
         if expected not in _TARGET_ARTIFACT_FORMATS:
             raise NativeLoaderDispatchError(
                 "expected-target-invalid",
-                "Expected target must identify DirectX or OpenGL.",
+                "Expected target must identify DirectX, OpenGL or Metal.",
                 path="$.expectedTarget",
                 details={"value": expected_target},
             )
@@ -339,9 +456,11 @@ def _validated_target(
             path="$.artifact.format",
             details={
                 "target": target,
-                "expectedFormat": (
-                    "HLSL source" if target == "directx" else "GLSL source"
-                ),
+                "expectedFormat": {
+                    "directx": "HLSL source",
+                    "opengl": "GLSL source",
+                    "metal": "Metal source",
+                }[target],
                 "supportedFormats": sorted(supported_formats),
                 "actualFormat": actual_format,
             },
@@ -594,6 +713,7 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             values=value.get("values", value.get("value")),
             tolerance=tolerance,
             metadata=copy.deepcopy(dict(metadata)),
+            encoding=value.get("encoding"),
         )
     else:
         raise NativeLoaderDispatchError(
@@ -622,6 +742,7 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             path=f"{path}.kind",
             details={"name": runtime_value.name, "kind": runtime_value.kind},
         )
+    runtime_value = replace(runtime_value, values=copy.deepcopy(runtime_value.values))
     metadata = runtime_value.metadata
     if not isinstance(metadata, Mapping):
         raise NativeLoaderDispatchError(
@@ -638,6 +759,23 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             details={"aliasFields": aliases, "name": runtime_value.name},
         )
     dtype = _buffer_dtype(runtime_value.dtype, path=f"{path}.dtype")
+    if runtime_value.allocation is not None and not isinstance(
+        runtime_value.allocation, RuntimeAllocationView
+    ):
+        raise NativeLoaderDispatchError(
+            "value-allocation-invalid",
+            "Typed runtime allocations must be RuntimeAllocationView instances.",
+            path=f"{path}.allocation",
+        )
+    try:
+        validate_value_encoding(runtime_value.encoding, dtype, runtime_value.values)
+    except ValueError as exc:
+        raise NativeLoaderDispatchError(
+            "value-encoding-invalid",
+            str(exc),
+            path=f"{path}.encoding",
+            details={"name": runtime_value.name},
+        ) from exc
     shape = _value_shape(runtime_value.shape, path=f"{path}.shape")
     if not shape:
         raise NativeLoaderDispatchError(
@@ -668,13 +806,14 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
                     "actualCount": actual_count,
                 },
             )
-        _validate_buffer_values(
-            flattened_values,
-            dtype=dtype,
-            path=f"{path}.values",
-            name=runtime_value.name,
-            role=role,
-        )
+        if runtime_value.encoding is None:
+            _validate_buffer_values(
+                flattened_values,
+                dtype=dtype,
+                path=f"{path}.values",
+                name=runtime_value.name,
+                role=role,
+            )
     return RuntimeValue(
         name=runtime_value.name,
         kind="buffer",
@@ -683,6 +822,8 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
         values=runtime_value.values,
         tolerance=runtime_value.tolerance,
         metadata=copy.deepcopy(dict(metadata)),
+        encoding=runtime_value.encoding,
+        allocation=copy.deepcopy(runtime_value.allocation),
     )
 
 
@@ -751,7 +892,7 @@ def _buffer_dtype(value: Any, *, path: str) -> str:
         raise NativeLoaderDispatchError(
             "value-dtype-unsupported",
             "Native runtime buffers support float32, int32, uint32, int64, "
-            "and uint64 values only.",
+            "uint64, Metal/DirectX float16, int16 and uint16, and Metal bfloat16, bool, int8 and uint8 values only.",
             path=path,
             details={"dtype": value},
         )
@@ -776,21 +917,23 @@ def _validate_buffer_values(
 ) -> None:
     for index, value in enumerate(values):
         valid = False
-        if dtype in {"int32", "int64"}:
+        if dtype == "bool":
+            valid = type(value) is bool
+        elif dtype in {"int8", "int16", "int32", "int64"}:
             bit_width = _DTYPE_SIZES[dtype] * 8
             valid = (
                 isinstance(value, int)
                 and not isinstance(value, bool)
                 and -(1 << (bit_width - 1)) <= value < (1 << (bit_width - 1))
             )
-        elif dtype in {"uint32", "uint64"}:
-            maximum = _UINT32_MAX if dtype == "uint32" else _UINT64_MAX
+        elif dtype in {"uint8", "uint16", "uint32", "uint64"}:
+            maximum = (1 << (_DTYPE_SIZES[dtype] * 8)) - 1
             valid = (
                 isinstance(value, int)
                 and not isinstance(value, bool)
                 and 0 <= value <= maximum
             )
-        elif dtype == "float32":
+        elif dtype in {"float16", "float32"}:
             if isinstance(value, str):
                 # Strict JSON cannot carry NaN or infinities as numeric values.
                 # Runtime inputs may use these exact portable tokens; expected
@@ -807,7 +950,7 @@ def _validate_buffer_values(
                     numeric_value = float(value)
                     valid = math.isfinite(numeric_value)
                     if valid:
-                        struct.pack("<f", numeric_value)
+                        struct.pack("<e" if dtype == "float16" else "<f", numeric_value)
                 except (OverflowError, struct.error, ValueError):
                     valid = False
         if not valid:
@@ -1022,7 +1165,7 @@ def _resource_bindings(
         if coordinates["set"] != 0:
             raise NativeLoaderDispatchError(
                 "resource-set-unsupported",
-                "DirectX and OpenGL native runtime adapters currently require resource set zero.",
+                "Native runtime buffer adapters require resource set zero.",
                 path=f"{path}.coordinates.set",
                 details={"target": target, "name": name, "set": coordinates["set"]},
             )
@@ -1137,6 +1280,120 @@ def _validated_scalar_layout(
             path=path,
             details={"binding": runtime_value.name},
         )
+    if runtime_value.dtype == "bool" and target != "metal":
+        raise NativeLoaderDispatchError(
+            "resource-layout-mismatch",
+            "Byte-sized boolean values require Metal storage; other targets use their reflected physical representation.",
+            path=path,
+            details={"binding": runtime_value.name, "target": target},
+        )
+    if runtime_value.dtype in {"int8", "uint8"} and target != "metal":
+        raise NativeLoaderDispatchError(
+            "resource-layout-mismatch",
+            "Byte-sized integers require Metal storage; other targets use their reflected physical representation.",
+            path=path,
+            details={"binding": runtime_value.name, "target": target},
+        )
+    if runtime_value.dtype == "bfloat16" and target != "metal":
+        raise NativeLoaderDispatchError(
+            "resource-layout-mismatch",
+            "Bfloat16 values require native Metal storage; other targets use their reflected physical representation.",
+            path=path,
+            details={"binding": runtime_value.name, "target": target},
+        )
+    if runtime_value.dtype in {"float16", "int16", "uint16"} and target not in {
+        "metal",
+        "directx",
+    }:
+        raise NativeLoaderDispatchError(
+            "resource-layout-mismatch",
+            "16-bit values require native two-byte storage; widened targets use their reflected physical representation.",
+            path=path,
+            details={"binding": runtime_value.name, "target": target},
+        )
+    # Metal's constant address space does not imply a fixed-size argument.
+    if (
+        target == "metal"
+        and resource_kind == "constant-buffer"
+        and layout.get("storageLayout") == "metal-buffer"
+        and layout.get("runtimeSized") is True
+    ):
+        resource_kind = "buffer"
+    if "minimumBindingSizeBytes" in layout and not valid_minimum_binding_size(
+        layout["minimumBindingSizeBytes"]
+    ):
+        raise NativeLoaderDispatchError(
+            "resource-minimum-binding-size-invalid",
+            "Minimum binding size must be a positive signed 64-bit byte count.",
+            path=f"{path}.minimumBindingSizeBytes",
+            details={"binding": runtime_value.name},
+        )
+    storage_dtype = _encoded_storage_dtype(
+        layout,
+        runtime_value=runtime_value,
+        target=target,
+        resource_kind=resource_kind,
+        path=path,
+    )
+    if "structMembers" in layout or "componentCount" in layout:
+        if "payloadEncoding" in layout or layout.get("elementType") == "record":
+            try:
+                stride = validate_storage_record_layout(layout)
+            except ValueError as exc:
+                raise NativeLoaderDispatchError(
+                    "resource-layout-invalid",
+                    str(exc),
+                    path=path,
+                    details={"binding": runtime_value.name},
+                ) from exc
+            if (
+                resource_kind != "buffer"
+                or layout["storageLayout"]
+                != _TARGET_STORAGE_LAYOUTS[target][resource_kind]
+                or runtime_value.dtype != "uint32"
+                or runtime_value.encoding is not None
+                or math.prod(runtime_value.shape) * 4 % stride
+            ):
+                raise NativeLoaderDispatchError(
+                    "resource-layout-mismatch",
+                    "Mixed storage records require complete reflected elements as uint32 words, including padding.",
+                    path=path,
+                    details={
+                        "binding": runtime_value.name,
+                        "elementStrideBytes": stride,
+                    },
+                )
+            return copy.deepcopy(dict(layout))
+        return _validated_struct_layout(
+            layout,
+            runtime_value=runtime_value,
+            target=target,
+            resource_kind=resource_kind,
+            path=path,
+        )
+    if "blockMembers" in layout or "payloadEncoding" in layout:
+        try:
+            block_size = validate_std140_block_layout(layout)
+        except ValueError as exc:
+            raise NativeLoaderDispatchError(
+                "resource-layout-invalid",
+                str(exc),
+                path=path,
+                details={"binding": runtime_value.name},
+            ) from exc
+        if (
+            target != "opengl"
+            or resource_kind != "constant-buffer"
+            or runtime_value.dtype != "uint32"
+            or math.prod(runtime_value.shape) * 4 != block_size
+        ):
+            raise NativeLoaderDispatchError(
+                "resource-layout-mismatch",
+                "Aggregate uniforms require the complete std140 block as uint32 words, including padding.",
+                path=path,
+                details={"binding": runtime_value.name, "blockSizeBytes": block_size},
+            )
+        return copy.deepcopy(dict(layout))
     element_type = _buffer_dtype(layout.get("elementType"), path=f"{path}.elementType")
     element_size = layout.get("elementSizeBytes")
     element_stride = layout.get("elementStrideBytes")
@@ -1177,13 +1434,33 @@ def _validated_scalar_layout(
     physical_type = layout.get("physicalType")
     storage_layout = layout.get("storageLayout")
     runtime_sized = layout.get("runtimeSized")
-    expected_physical_type = _PHYSICAL_TYPES[runtime_value.dtype]
+    expected_physical_type = _PHYSICAL_TYPES[storage_dtype]
+    if storage_dtype in {"float16", "int16", "uint16"} and target == "directx":
+        expected_physical_type = f"{storage_dtype}_t"
     if vector_width != 1:
         expected_physical_type = f"{expected_physical_type}{vector_width}"
     expected_element_size = _DTYPE_SIZES[runtime_value.dtype] * vector_width
+    if (
+        runtime_value.dtype in {
+            "int8",
+            "uint8",
+            "float16",
+            "bfloat16",
+            "int16",
+            "uint16",
+        }
+        and target == "metal"
+        and (vector_width not in {1, 2, 4} or alignment != expected_element_size)
+    ):
+        raise NativeLoaderDispatchError(
+            "resource-layout-unsupported",
+            "Metal narrow buffers require the natural scalar, two-lane or four-lane alignment.",
+            path=path,
+            details={"binding": runtime_value.name, "vectorWidth": vector_width},
+        )
     expected_storage_layout = _TARGET_STORAGE_LAYOUTS[target][resource_kind]
     if (
-        element_type != runtime_value.dtype
+        element_type != storage_dtype
         or element_size != expected_element_size
         or physical_type != expected_physical_type
         or storage_layout != expected_storage_layout
@@ -1230,14 +1507,23 @@ def _validated_scalar_layout(
             },
         )
     if resource_kind == "buffer":
+        # A Metal device reference binds one naturally aligned value, not an array.
+        device_reference = (
+            target == "metal"
+            and runtime_sized is False
+            and type(layout.get("blockSizeBytes")) is int
+            and layout["blockSizeBytes"] == element_size
+            and layout.get("minimumBindingSizeBytes") == element_size
+            and alignment == element_size
+        )
         if (
-            runtime_sized is not True
+            (runtime_sized is not True and not device_reference)
             or alignment > element_size
             or element_size % alignment
         ):
             raise NativeLoaderDispatchError(
                 "resource-layout-unsupported",
-                "Native loader storage buffers require an exact scalar or vector runtime-array layout.",
+                "Native loader storage buffers require an exact scalar or vector runtime-array layout, or a fixed Metal device reference.",
                 path=path,
                 details={
                     "binding": runtime_value.name,
@@ -1269,6 +1555,119 @@ def _validated_scalar_layout(
                     "elementSizeBytes": element_size,
                 },
             )
+    return copy.deepcopy(dict(layout))
+
+
+def _encoded_storage_dtype(
+    layout: Mapping[str, Any],
+    *,
+    runtime_value: RuntimeValue,
+    target: str,
+    resource_kind: str,
+    path: str,
+) -> str:
+    try:
+        return encoded_storage_dtype(
+            layout,
+            target=target,
+            resource_kind=resource_kind,
+            logical_dtype=runtime_value.dtype,
+        )
+    except ValueError as exc:
+        raise NativeLoaderDispatchError(
+            "resource-storage-encoding-invalid",
+            str(exc),
+            path=f"{path}.storageEncoding",
+            details={"binding": runtime_value.name},
+        ) from exc
+
+
+def _validated_struct_layout(
+    layout: Mapping[str, Any],
+    *,
+    runtime_value: RuntimeValue,
+    target: str,
+    resource_kind: str,
+    path: str,
+) -> dict[str, Any]:
+    members = layout.get("structMembers")
+    count = layout.get("componentCount")
+    storage_dtype = _encoded_storage_dtype(
+        layout,
+        runtime_value=runtime_value,
+        target=target,
+        resource_kind=resource_kind,
+        path=path,
+    )
+    scalar_type = _PHYSICAL_TYPES[storage_dtype]
+    if storage_dtype in {"float16", "int16", "uint16"} and target == "directx":
+        scalar_type = f"{storage_dtype}_t"
+    scalar_size = _DTYPE_SIZES[runtime_value.dtype]
+    type_name = layout.get("physicalType")
+    valid = (
+        resource_kind == "buffer"
+        and isinstance(members, list)
+        and isinstance(count, int)
+        and not isinstance(count, bool)
+        and 1 <= count <= 64
+        and len(members) == count
+        and isinstance(type_name, str)
+        and re.fullmatch(r"[A-Za-z_]\w*", type_name) is not None
+        and type_name not in _PHYSICAL_TYPES.values()
+        and "vectorWidth" not in layout
+        and layout.get("elementType") == storage_dtype
+        and layout.get("storageLayout")
+        == _TARGET_STORAGE_LAYOUTS[target][resource_kind]
+        and layout.get("runtimeSized") is True
+    )
+    if valid:
+        expected_sizes = {
+            "elementSizeBytes": scalar_size * count,
+            "elementStrideBytes": scalar_size * count,
+            "alignmentBytes": scalar_size,
+            "memberOffsetBytes": 0,
+        }
+        valid = all(
+            type(layout.get(key)) is int and layout[key] == value
+            for key, value in expected_sizes.items()
+        )
+    if valid:
+        names = set()
+        for index, member in enumerate(members):
+            if not isinstance(member, Mapping):
+                valid = False
+                break
+            name = member.get("name")
+            if (
+                set(member) != {"name", "physicalType", "offsetBytes"}
+                or not isinstance(name, str)
+                or re.fullmatch(r"[A-Za-z_]\w*", name) is None
+                or name in names
+                or member.get("physicalType") != scalar_type
+                or type(member.get("offsetBytes")) is not int
+                or member["offsetBytes"] != index * scalar_size
+            ):
+                valid = False
+                break
+            names.add(name)
+    if not valid:
+        raise NativeLoaderDispatchError(
+            "resource-layout-unsupported",
+            "Native struct buffers require exact tightly packed homogeneous scalar members.",
+            path=path,
+            details={"binding": runtime_value.name},
+        )
+    if math.prod(runtime_value.shape) % count:
+        raise NativeLoaderDispatchError(
+            "resource-layout-mismatch",
+            "Runtime value shape does not contain complete reflected struct elements.",
+            path=path,
+            details={
+                "binding": runtime_value.name,
+                "componentCount": count,
+                "shape": list(runtime_value.shape),
+            },
+        )
     return copy.deepcopy(dict(layout))
 
 
@@ -1444,6 +1843,30 @@ def _specialization_constants(
                     },
                 )
 
+        if "frozen" in constant:
+            if (
+                constant["frozen"] is not True
+                or not has_descriptor_value
+                or dtype != "bool"
+            ):
+                raise NativeLoaderDispatchError(
+                    "frozen-specialization-invalid",
+                    "Frozen specialization metadata is invalid.",
+                    path=path,
+                )
+            if has_explicit and explicit_values[constant_id] != constant["value"]:
+                raise NativeLoaderDispatchError(
+                    "frozen-specialization-override",
+                    "A frozen specialization cannot be changed at dispatch.",
+                    path=f"$.specializationValues[{constant_id}]",
+                    details={
+                        "id": constant_id,
+                        "name": constant.get("name"),
+                        "frozenValue": constant["value"],
+                        "suppliedValue": explicit_values[constant_id],
+                    },
+                )
+            continue
         if has_explicit:
             resolved_value = explicit_values[constant_id]
             source = "explicit"
@@ -1470,6 +1893,8 @@ def _specialization_constants(
             "descriptorProvenance": copy.deepcopy(constant.get("provenance", {})),
         }
         kind = "specialization-constant"
+        if target == "metal":
+            kind = "function-constant"
         if target == "directx":
             kind = "compile-time-constant"
             metadata["mechanism"] = "compiled"
@@ -1610,6 +2035,7 @@ def _dispatch_geometry(
         supplied_workgroup_size = value.workgroup_size
         global_size = value.global_size
         grid_size = value.grid_size
+        thread_grid_size = value.thread_grid_size
         metadata = value.metadata
     elif isinstance(value, Mapping):
         allowed = {
@@ -1618,6 +2044,7 @@ def _dispatch_geometry(
             "workgroupSize",
             "globalSize",
             "gridSize",
+            "threadGridSize",
             "metadata",
         }
         unsupported = sorted(set(value) - allowed, key=str)
@@ -1633,6 +2060,7 @@ def _dispatch_geometry(
         supplied_workgroup_size = value.get("workgroupSize", ())
         global_size = value.get("globalSize", ())
         grid_size = value.get("gridSize", ())
+        thread_grid_size = value.get("threadGridSize", ())
         metadata = value.get("metadata", {})
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         dispatch_entry_point = None
@@ -1640,6 +2068,7 @@ def _dispatch_geometry(
         supplied_workgroup_size = ()
         global_size = ()
         grid_size = ()
+        thread_grid_size = ()
         metadata = {}
     else:
         raise NativeLoaderDispatchError(
@@ -1695,6 +2124,33 @@ def _dispatch_geometry(
         derived_global_size = tuple(
             count * size for count, size in zip(padded_counts, padded_size)
         )
+    exact_grid = ()
+    if thread_grid_size != ():
+        exact_grid = _positive_dimensions(
+            thread_grid_size,
+            path=f"{path}.threadGridSize",
+            label="thread grid size",
+        )
+        if not workgroup_size:
+            raise NativeLoaderDispatchError(
+                "workgroup-size-missing",
+                "Exact thread-grid dispatch requires a workgroup size.",
+                path=f"{path}.workgroupSize",
+            )
+        expected_counts = tuple(
+            (extent + width - 1) // width
+            for extent, width in zip(
+                _padded_dimensions(exact_grid), _padded_dimensions(workgroup_size)
+            )
+        )
+        if expected_counts != _padded_dimensions(counts):
+            raise NativeLoaderDispatchError(
+                "dispatch-size-mismatch",
+                "Thread grid does not match its covering workgroup count.",
+                path=f"{path}.threadGridSize",
+                details={"expectedWorkgroupCount": list(expected_counts)},
+            )
+        derived_global_size = _padded_dimensions(exact_grid)
     for field_name, candidate in (("globalSize", global_size), ("gridSize", grid_size)):
         if not candidate:
             continue
@@ -1719,6 +2175,7 @@ def _dispatch_geometry(
         workgroup_count=counts,
         global_size=derived_global_size,
         grid_size=derived_global_size,
+        thread_grid_size=exact_grid,
         metadata={
             **copy.deepcopy(dict(metadata)),
             "source": "native-loader-dispatch",

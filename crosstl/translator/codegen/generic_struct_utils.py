@@ -428,7 +428,18 @@ def render_constructor_arguments(generator, constructor_name, expr, fields):
         )
 
     rendered_args = []
+    render_argument = getattr(generator, "generate_struct_constructor_argument", None)
     for index, (field_name, field_type) in enumerate(fields):
+        argument = (
+            positional_args[index]
+            if index < len(positional_args)
+            else named_args.get(field_name)
+        )
+        if callable(render_argument):
+            rendered = render_argument(argument, field_type)
+            if rendered is not None:
+                rendered_args.append(rendered)
+                continue
         if index < len(positional_args):
             rendered_args.append(
                 generator.generate_expression_with_expected(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -181,8 +182,14 @@ def _build_request(tmp_path: Path, target: str):
     return request, descriptor, artifact_path
 
 
-def _executor(target: str) -> RuntimeParityExecutor:
-    if target == "directx":
+def _executor(target: str, *, metal_language_version=None) -> RuntimeParityExecutor:
+    if target == "metal":
+        from crosstl.project import MetalRuntimeParityAdapter
+
+        runtime_adapter = MetalRuntimeParityAdapter(
+            language_version=metal_language_version
+        )
+    elif target == "directx":
         runtime_adapter = DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime())
     else:
         runtime_adapter = OpenGLRuntimeParityAdapter(
@@ -196,6 +203,139 @@ def _executor(target: str) -> RuntimeParityExecutor:
             adapter_kind=f"{target}-native-runtime",
         ),
         runtime_adapter=runtime_adapter,
+    )
+
+
+def _native_workgroup_limit(tmp_path, monkeypatch, target, axis):
+    context = None
+    if target == "opengl":
+        import moderngl
+
+        context = moderngl.create_standalone_context(require=430, backend="egl")
+        limit = context.info["GL_MAX_COMPUTE_WORK_GROUP_COUNT"][axis]
+        context.release()
+    else:
+        limit = 65535
+    extent = min(limit, 65535)
+    coordinate = "xyz"[axis]
+    source = _SOURCES[target].decode()
+    if target == "opengl":
+        source = source.replace(
+            "gl_GlobalInvocationID.x", f"gl_GlobalInvocationID.{coordinate}"
+        )
+        source = source.replace(
+            "    output_values[index]",
+            f"    if (index >= {extent}u) return;\n    output_values[index]",
+        )
+    else:
+        source = source.replace("thread_id.x", f"thread_id.{coordinate}")
+        source = source.replace(
+            "    output_values[",
+            f"    if (thread_id.{coordinate} >= {extent}u) return;\n    output_values[",
+        )
+    monkeypatch.setitem(_SOURCES, target, source.encode())
+    descriptor, _ = _write_package(tmp_path, target)
+    inputs = {
+        "input_values": {
+            "dtype": "uint32",
+            "shape": [extent],
+            "values": list(range(extent)),
+        }
+    }
+    expected = [value * 3 + 7 for value in range(extent)]
+    outputs = {
+        "output_values": {"dtype": "uint32", "shape": [extent], "values": expected}
+    }
+    counts = [1, 1, 1]
+    counts[axis] = extent
+
+    def request():
+        return build_native_loader_dispatch_request(
+            descriptor,
+            tmp_path,
+            inputs,
+            outputs,
+            {"workgroupCount": counts, "workgroupSize": [1, 1, 1]},
+            expected_target=target,
+        )
+
+    executor = _executor(target)
+    valid_request = request()
+    availability = executor.is_available(valid_request)
+    assert availability.available, availability.reason or availability.details
+    result = executor.run(valid_request)
+    assert (
+        result.status == "ok" and result.outputs["output_values"]["values"] == expected
+    )
+    counts[axis] = limit + 1
+    with pytest.raises(RuntimeExecutionError) as caught:
+        executor.run(request())
+    details = caught.value.details
+    assert details["reasonKind"] == "dispatch-limit-exceeded"
+    assert details["axis"] == axis and details["field"] == "workgroupCount"
+    assert details["requested"] == limit + 1 and details["maximum"] == limit
+    (tmp_path / "dispatch-limit-evidence.json").write_text(
+        json.dumps(
+            {
+                "target": target,
+                "axis": axis,
+                "validGroups": extent,
+                "deviceLimit": limit,
+                "boundaryExecuted": extent == limit,
+                "matchingOutputs": len(expected),
+                "rejection": details,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_native_directx_workgroup_limits(tmp_path, monkeypatch, axis):
+    if os.environ.get("CROSTL_RUN_NATIVE_LOADER_DIRECTX_DEVICE_TEST") != "1":
+        pytest.skip("Direct3D native loader device test is not enabled")
+    _native_workgroup_limit(tmp_path, monkeypatch, "directx", axis)
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_native_opengl_workgroup_limits(tmp_path, monkeypatch, axis):
+    if os.environ.get("CROSTL_RUN_NATIVE_LOADER_OPENGL_DEVICE_TEST") != "1":
+        pytest.skip("OpenGL native loader device test is not enabled")
+    _native_workgroup_limit(tmp_path, monkeypatch, "opengl", axis)
+
+
+def test_native_opengl_submission_error_is_not_success(tmp_path, monkeypatch):
+    if os.environ.get("CROSTL_RUN_NATIVE_LOADER_OPENGL_DEVICE_TEST") != "1":
+        pytest.skip("OpenGL native loader device test is not enabled")
+    import ctypes
+    import ctypes.util
+
+    import moderngl
+
+    library = ctypes.util.find_library("GL")
+    assert library, "The required native OpenGL library is unavailable"
+    gl = ctypes.CDLL(library)
+    gl.glUseProgram.argtypes = [ctypes.c_uint]
+    gl.glUseProgram.restype = None
+    gl.glDispatchCompute.argtypes = [ctypes.c_uint] * 3
+    gl.glDispatchCompute.restype = None
+
+    def rejected_submission(shader, group_x=1, group_y=1, group_z=1):
+        # A compute launch without an active program produces a real API error.
+        gl.glUseProgram(0)
+        gl.glDispatchCompute(group_x, group_y, group_z)
+
+    monkeypatch.setattr(moderngl.ComputeShader, "run", rejected_submission)
+    request, _, _ = _build_request(tmp_path, "opengl")
+    with pytest.raises(RuntimeExecutionError) as caught:
+        _executor("opengl").run(request)
+    details = caught.value.details
+    assert details["reasonKind"] == "opengl-api-error"
+    assert details["phase"] == "dispatch"
+    assert details["glError"] == "GL_INVALID_OPERATION"
+    (tmp_path / "submission-error-evidence.json").write_text(
+        json.dumps(details, indent=2), encoding="utf-8"
     )
 
 

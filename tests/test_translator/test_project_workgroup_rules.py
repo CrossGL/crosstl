@@ -1,7 +1,10 @@
 import copy
 import json
+import os
+import sys
 import textwrap
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -212,8 +215,7 @@ def test_project_workgroup_rules_emit_directx_library_and_opengl_entries(tmp_pat
         "CSMain",
     ]
     assert all(
-        entry["parameters"]
-        == {
+        entry["parameters"] == {
             "BM": "2" if entry["sourceEntryPoint"] == "tile_large" else "1",
             "BN": "4" if entry["sourceEntryPoint"] == "tile_large" else "2",
             "T": "float",
@@ -241,8 +243,7 @@ def test_project_workgroup_rules_emit_directx_library_and_opengl_entries(tmp_pat
         "tile_small",
     }
     assert all(
-        artifact["entryPoint"]
-        == {
+        artifact["entryPoint"] == {
             "source": artifact["execution"]["sourceEntryPoints"][0],
             "target": "main",
             "stage": "compute",
@@ -667,8 +668,7 @@ def test_project_workgroup_size_keeps_ordinary_multi_entry_aggregate_closed(tmp_
         "opengl",
     }
     assert all(
-        diagnostic["details"]["executionSpecialization"]
-        == {
+        diagnostic["details"]["executionSpecialization"] == {
             "reason": "aggregate-entry-size-unproven",
             "sourceEntryPoints": ["first", "second"],
             "workgroupSize": [8, 4, 2],
@@ -1076,3 +1076,341 @@ def test_project_config_rejects_malformed_entry_workgroup_size_rules(
 
     with pytest.raises(ValueError, match="entry_workgroup_size_rules"):
         project_api.ProjectConfig(root=repo, entry_workgroup_size_rules=rules)
+
+
+def _selected_entry_config(repo, target, *, discovered=False):
+    repo.mkdir(parents=True, exist_ok=True)
+    (repo / "entries.metal").write_text(
+        """#include <metal_stdlib>
+using namespace metal;
+template <int K>
+kernel void fill(device float* output [[buffer(0)]],
+                 uint3 index [[thread_position_in_grid]],
+                 uint3 group [[threads_per_threadgroup]]) {
+    output[index.x + 1u] = float(index.x * K + group.x + 3u * group.y + 7u * group.z);
+}
+template [[host_name("fill_small")]] kernel void fill<2>(device float*, uint3, uint3);
+template [[host_name("fill_large")]] kernel void fill<3>(device float*, uint3, uint3);
+""",
+        encoding="utf-8",
+    )
+    return project_api.ProjectConfig(
+        root=repo,
+        targets=(target,),
+        output_dir="out",
+        entry_points={} if discovered else {"*.metal": ("fill_large", "fill_small")},
+        translate_discovered_entry_points=("entries.metal",) if discovered else (),
+        entry_workgroup_size_rules={
+            "*.metal": {"fill_s*": ("K + 1", 1, 1), "fill_l*": ("K + 1", 1, 1)}
+        },
+    )
+
+
+def _check_selected_entry_sizes(payload):
+    assert payload["summary"]["failedCount"] == 0, payload["diagnostics"]
+    assert payload["summary"]["translatedCount"] == 2
+    observed = {}
+    for artifact in payload["artifacts"]:
+        entries = artifact["execution"]["entryPoints"]
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["sourceEntryPoint"] == artifact["entryPoint"]["source"]
+        observed[entry["sourceEntryPoint"]] = entry["workgroupSize"]
+        assert entry["parameters"]["K"] == (
+            "2" if entry["sourceEntryPoint"] == "fill_small" else "3"
+        )
+    assert observed == {"fill_small": [3, 1, 1], "fill_large": [4, 1, 1]}
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+@pytest.mark.parametrize("workers", (1, 2))
+@pytest.mark.parametrize("discovered", (False, True))
+def test_selected_entry_workgroup_rules_keep_project_scope(
+    tmp_path, target, workers, discovered
+):
+    config = _selected_entry_config(tmp_path / "repo", target, discovered=discovered)
+    report = project_api.translate_project(
+        config, max_workers=workers, format_output=False, validate=True
+    )
+    _check_selected_entry_sizes(report.to_json())
+    path = tmp_path / "report.json"
+    report.write_json(path)
+    assert project_api.validate_project_report(path)["success"]
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+@pytest.mark.parametrize("workers", (1, 2))
+def test_selected_entry_rules_keep_variant_artifacts_separate(
+    tmp_path, target, workers
+):
+    config = _selected_entry_config(tmp_path / "repo", target)
+    config = replace(config, variants={"first": {"MODE": "1"}, "second": {"MODE": "2"}})
+    report = project_api.translate_project(
+        config, max_workers=workers, format_output=False
+    )
+    payload = report.to_json()
+    assert payload["summary"]["failedCount"] == 0, payload["diagnostics"]
+    assert payload["summary"]["translatedCount"] == 4
+    for variant in ("first", "second"):
+        artifacts = [
+            item for item in payload["artifacts"] if item["variant"] == variant
+        ]
+        assert len(artifacts) == 2
+        assert {
+            item["entryPoint"]["source"]: item["execution"]["entryPoints"][0][
+                "workgroupSize"
+            ]
+            for item in artifacts
+        } == {"fill_small": [3, 1, 1], "fill_large": [4, 1, 1]}
+    assert len({item["path"] for item in payload["artifacts"]}) == 4
+    path = tmp_path / "report.json"
+    report.write_json(path)
+    assert project_api.validate_project_report(path)["success"]
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+@pytest.mark.parametrize("workers", (1, 2))
+def test_selected_entry_rules_survive_checkpoint_resume(
+    tmp_path, target, workers, monkeypatch
+):
+    config = _selected_entry_config(tmp_path / "repo", target)
+    checkpoint = tmp_path / "checkpoint.json"
+    completed_reports = []
+
+    def interrupt_before_completion(self, payload):
+        completed_reports.append(payload)
+        raise KeyboardInterrupt("interrupted before final checkpoint publication")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            project_pipeline.ProjectTranslationCheckpointRecorder,
+            "write_complete",
+            interrupt_before_completion,
+        )
+        with pytest.raises(KeyboardInterrupt, match="before final checkpoint"):
+            project_api.translate_project(
+                config,
+                max_workers=workers,
+                format_output=False,
+                checkpoint_path=checkpoint,
+            )
+    assert len(completed_reports) == 1
+    interrupted = json.loads(checkpoint.read_text(encoding="utf-8"))
+    assert interrupted["state"] == "interrupted"
+    assert interrupted["plan"]["completedCount"] == 2
+    _check_selected_entry_sizes(completed_reports[0])
+
+    def unexpected_translation(**kwargs):
+        pytest.fail("Completed entry-scoped artifacts should be restored")
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "_project_template_materialization_for_artifact",
+        unexpected_translation,
+    )
+    restored = project_api.translate_project(
+        config,
+        max_workers=workers,
+        format_output=False,
+        checkpoint_path=checkpoint,
+        resume=True,
+    )
+    _check_selected_entry_sizes(restored.to_json())
+    assert restored.to_json()["artifacts"] == completed_reports[0]["artifacts"]
+    assert json.loads(checkpoint.read_text(encoding="utf-8"))["state"] == "complete"
+
+
+@pytest.mark.parametrize("discovered", (False, True))
+@pytest.mark.parametrize(
+    "fault", ("unknown-rule", "excluded-entry", "resolved-selection", "sibling-size")
+)
+def test_selected_entry_rule_report_rejects_tampering(tmp_path, discovered, fault):
+    config = _selected_entry_config(tmp_path / "repo", "opengl", discovered=discovered)
+    payload = project_api.translate_project(config, format_output=False).to_json()
+    _check_selected_entry_sizes(payload)
+    if fault == "unknown-rule":
+        payload["project"]["entryWorkgroupSizeRules"]["*.metal"]["absent_*"] = [
+            "1",
+            "1",
+            "1",
+        ]
+    elif fault == "excluded-entry":
+        payload["project"]["entryPointSelections"] = {"*.metal": ["fill_small"]}
+        payload["project"]["resolvedEntryPointSelections"] = {"*.metal": ["fill_small"]}
+    elif fault == "resolved-selection":
+        payload["project"]["resolvedEntryPointSelections"] = {"*.metal": ["fill_small"]}
+    else:
+        artifact = payload["artifacts"][0]
+        execution = artifact["execution"]
+        entry = execution["entryPoints"][0]
+        entry["workgroupSize"] = [
+            3 if entry["sourceEntryPoint"] == "fill_large" else 4,
+            1,
+            1,
+        ]
+        entry["identity"] = project_pipeline._workgroup_rule_entry_identity(
+            source=artifact["source"],
+            source_hash=artifact["sourceHash"],
+            target=artifact["target"],
+            variant=artifact.get("variant"),
+            entry=entry,
+        )
+        execution["identity"] = project_pipeline._workgroup_rule_execution_identity(
+            source=artifact["source"],
+            source_hash=artifact["sourceHash"],
+            target=artifact["target"],
+            variant=artifact.get("variant"),
+            source_entry_points=execution["sourceEntryPoints"],
+            entry_points=execution["entryPoints"],
+            provenance=execution["provenance"],
+        )
+    path = tmp_path / "tampered.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    validation = project_api.validate_project_report(path)
+    assert not validation["success"], validation
+    message = _diagnostic(validation, "project.validate.invalid-report")["message"]
+    expected = {
+        "unknown-rule": "all match template materializations: absent_*",
+        "excluded-entry": "all match template materializations: fill_l*",
+        "resolved-selection": (
+            "resolvedEntryPointSelections must match configured selectors"
+        ),
+        "sibling-size": "workgroupSize must match its evaluated rule",
+    }
+    assert expected[fault] in message
+    assert not project_api.build_runtime_artifact_manifest(path)["success"]
+
+
+@pytest.mark.parametrize("workers", (1, 2))
+@pytest.mark.parametrize(
+    "fault", ("unknown-pattern", "missing-rule", "invalid-size", "unselected-entry")
+)
+def test_selected_entry_rules_keep_invalid_rule_diagnostics(tmp_path, workers, fault):
+    config = _selected_entry_config(tmp_path / "repo", "opengl")
+    rules = dict(config.entry_workgroup_size_rules["*.metal"])
+    if fault == "unknown-pattern":
+        rules["missing_*"] = (1, 1, 1)
+    elif fault == "missing-rule":
+        del rules["fill_l*"]
+    elif fault == "invalid-size":
+        rules["fill_l*"] = (0, 1, 1)
+    else:
+        config = replace(config, entry_points={"*.metal": ("fill_small",)})
+    config = replace(config, entry_workgroup_size_rules={"*.metal": rules})
+    report = project_api.translate_project(
+        config, max_workers=workers, format_output=False
+    ).to_json()
+    assert report["summary"]["failedCount"] > 0
+    errors = [item for item in report["diagnostics"] if item["severity"] == "error"]
+    assert errors
+    if fault != "invalid-size":
+        assert all(
+            item["code"] == "project.translate.workgroup-size-entry-rule-unmatched"
+            for item in errors
+        )
+    if fault in {"unknown-pattern", "unselected-entry"}:
+        assert report["summary"]["translatedCount"] == 0
+
+
+def test_selected_entry_rules_execute(tmp_path):
+    if os.environ.get("CROSTL_REQUIRE_ENTRY_WORKGROUP_RULES") != "1":
+        pytest.skip(
+            "set CROSTL_REQUIRE_ENTRY_WORKGROUP_RULES=1 for native entry rule checks"
+        )
+    from tests.runtime_helpers import _validate
+    from tests.test_translator.test_native_loader_dispatch_integration import _executor
+
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    config = _selected_entry_config(tmp_path / "repo", target)
+    report = project_api.translate_project(config, format_output=False)
+    _check_selected_entry_sizes(report.to_json())
+    path = tmp_path / "report.json"
+    report.write_json(path)
+    manifest = project_api.build_runtime_artifact_manifest(path)
+    assert manifest["success"], manifest
+    path = tmp_path / "artifacts.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    package = tmp_path / "package"
+    assert project_api.build_runtime_package(path, package)["success"]
+    loader = project_api.build_runtime_loader_manifest(package / "runtime-package.json")
+    assert loader["success"] and len(loader["loadUnits"]) == 2
+    executor = _executor(target)
+    try:
+        for unit in loader["loadUnits"]:
+            descriptor = project_api.build_native_loader_abi_descriptor(
+                loader, load_unit_id=unit["id"]
+            )
+            entry = unit["entryPoint"]["source"]
+            k = 2 if entry == "fill_small" else 3
+            width, count, guard = k + 1, 3 * (k + 1), 1234567.0
+            work = tmp_path / entry
+            work.mkdir()
+            _validate(package / descriptor["artifact"]["packagePath"], work, target)
+            assert len(descriptor["bindings"]) == 1
+            binding = descriptor["bindings"][0]
+            assert binding["scalarLayout"]["elementType"] == "float32"
+            initial = [guard] * (count + 9)
+            expected = (
+                [guard]
+                + [float(index * k + width + 10) for index in range(count)]
+                + [guard] * 8
+            )
+            value = {"dtype": "float32", "shape": [len(initial)], "values": initial}
+            outputs = {binding["name"]: {**value, "values": expected}}
+            request = project_api.build_native_loader_dispatch_request(
+                descriptor,
+                package,
+                {binding["name"]: value},
+                outputs,
+                {"workgroupCount": [3, 1, 1], "workgroupSize": [width, 1, 1]},
+                expected_target=target,
+            )
+            assert executor.is_available(request).available
+            result = executor.run(request)
+            (work / "evidence.json").write_text(
+                json.dumps(
+                    {
+                        "descriptor": descriptor,
+                        "expected": outputs,
+                        "plan": request.execution_plan.to_json(),
+                        "status": result.status,
+                        "outputs": result.outputs,
+                        "details": result.details,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            assert result.status == "ok", result.details
+            assert result.outputs[binding["name"]]["values"] == expected
+    finally:
+        close = getattr(executor.runtime_adapter.runtime, "close", None)
+        if close:
+            close()
+
+
+def test_ci_requires_selected_entry_workgroup_execution():
+    from tools import ci_coverage
+
+    workflow = (
+        Path(__file__).resolve().parents[2]
+        / ".github/workflows/demo-project-testing.yml"
+    ).read_text()
+    step = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Validate collective helper arguments"
+    )
+    comparison = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Compare WARP arithmetic across codegen revisions"
+    )
+    selector = "tests/test_translator/test_project_workgroup_rules.py::test_selected_entry_rules_execute"
+    assert step.count(selector) == 1
+    assert comparison.count(selector) == 1 and workflow.count(selector) == 2
+    assert 'CROSTL_REQUIRE_ENTRY_WORKGROUP_RULES: "1"' in step
+    assert 'CROSTL_REQUIRE_ENTRY_WORKGROUP_RULES: "1"' in comparison
+    assert "--timeout-seconds 360" in step
+    assert "continue-on-error" not in step and "if:" not in step
+    assert (
+        "if: failure() && runner.os == 'Windows' && !matrix.warp_qualification "
+        "&& steps.collective-helpers.outcome == 'failure'" in comparison
+    )
+    assert "continue-on-error" not in comparison

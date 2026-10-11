@@ -5,44 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 12,
-        "endOffset": 264,
+        "endLine": 14,
+        "endOffset": 295,
         "file": "crosstl-out/opengl/cube.vsh.glsl",
-        "length": 59,
-        "line": 11,
-        "offset": 205
+        "length": 295,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 28,
-        "endOffset": 839,
+        "endLine": 30,
+        "endOffset": 870,
         "file": "cube.vsh",
-        "length": 62,
-        "line": 27,
-        "offset": 777
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 13,
-        "endOffset": 293,
-        "file": "crosstl-out/opengl/cube.vsh.glsl",
-        "length": 29,
-        "line": 12,
-        "offset": 264
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 29,
-        "endOffset": 868,
-        "file": "cube.vsh",
-        "length": 29,
-        "line": 28,
-        "offset": 839
+        "length": 870,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

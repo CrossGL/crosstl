@@ -34,7 +34,7 @@ float4 PSMain(FragmentInput input): SV_Target0 {
         if (lights[i].enabled == 1) {
             float3 light = float3(0.0, 0.0, 0.0);
             if (lights[i].type == 0) {
-                light = -normalize((lights[i].target - lights[i].position));
+                light = asfloat(asuint(normalize((lights[i].target - lights[i].position))) ^ uint3(0x80000000u, 0x80000000u, 0x80000000u));
             }
             if (lights[i].type == 1) {
                 light = normalize((lights[i].position - input.fragPosition));
@@ -43,7 +43,7 @@ float4 PSMain(FragmentInput input): SV_Target0 {
             lightDot += (lights[i].color.rgb * NdotL);
             float specCo = 0.0;
             if (NdotL > 0.0) {
-                specCo = pow(max(0.0, dot(viewD, reflect(-light, normal))), 16.0);
+                specCo = pow(max(0.0, dot(viewD, reflect(asfloat(asuint(light) ^ uint3(0x80000000u, 0x80000000u, 0x80000000u)), normal))), 16.0);
             }
             specular += specCo;
         }

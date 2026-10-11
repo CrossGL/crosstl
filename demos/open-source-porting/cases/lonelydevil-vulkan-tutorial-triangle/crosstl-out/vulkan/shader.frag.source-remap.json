@@ -5,22 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 12,
-        "endOffset": 300,
+        "endLine": 54,
+        "endOffset": 1377,
         "file": "crosstl-out/vulkan/shader.frag.spvasm",
-        "length": 30,
-        "line": 11,
-        "offset": 270
+        "length": 1377,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 6,
-        "endOffset": 91,
+        "endLine": 10,
+        "endOffset": 138,
         "file": "shader.frag",
-        "length": 38,
-        "line": 5,
-        "offset": 53
+        "length": 138,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

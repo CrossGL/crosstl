@@ -4,6 +4,23 @@ on:
   push:
     tags:
       - "v*.*.*"
+  pull_request:
+    branches: [main]
+    paths:
+      - "crosstl/**"
+      - "examples/**"
+      - "support/**"
+      - "docs/**"
+      - "pyproject.toml"
+      - "README.md"
+      - "LICENSE"
+      - "CITATION.cff"
+      - ".zenodo.json"
+      - "CHANGELOG.md"
+      - "tools/check_release.py"
+      - "tests/test_release.py"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,12 +35,21 @@ jobs:
     name: Build and validate distributions
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
 
     steps:
-      - name: Checkout tagged source
+      - name: Checkout source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+
+      - name: Set up minimum supported Python
+        id: python-minimum
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.8"
 
       - name: Set up Python 3.12
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -31,6 +57,7 @@ jobs:
           python-version: "3.12"
 
       - name: Verify tag belongs to main and matches package version
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -48,12 +75,11 @@ jobs:
               ;;
           esac
 
-          # setup-python does not guarantee that setuptools is preinstalled.
-          python -m pip install setuptools==75.3.2
-          package_version="$(python setup.py --version)"
+          package_version="$(python tools/check_release.py version)"
           test "v${package_version}" = "${GITHUB_REF_NAME}"
 
       - name: Verify required main CI succeeded
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -64,6 +90,9 @@ jobs:
             translator-tests.yml
             docs.yml
             examples-test.yml
+            native-host-loader.yml
+            deferred-native-compilation.yml
+            demo-project-testing.yml
           )
 
           for workflow in "${required_workflows[@]}"; do
@@ -92,13 +121,35 @@ jobs:
           done
 
       - name: Install release tooling
-        run: python -m pip install build==1.2.2.post1 twine==6.1.0
+        run: python -m pip install build==1.2.2.post1 twine==7.0.0
 
       - name: Build wheel and source distribution
         run: python -m build
 
       - name: Validate distribution metadata
         run: python -m twine check --strict dist/*
+
+      - name: Verify release metadata and package contents
+        run: python tools/check_release.py distributions dist
+
+      - name: Test isolated wheel and source installations
+        shell: bash
+        run: |
+          version="$(python tools/check_release.py version)"
+          index=0
+          for interpreter in "${{ steps.python-minimum.outputs.python-path }}" "$(command -v python)"; do
+            index=$((index + 1))
+            for package in dist/*.whl dist/*.tar.gz; do
+              environment="$RUNNER_TEMP/install-$index-$(basename "$package")"
+              "$interpreter" -m venv "$environment"
+              "$environment/bin/python" -m pip install "$GITHUB_WORKSPACE/$package"
+              (
+                cd "$RUNNER_TEMP"
+                env -u PYTHONPATH "$environment/bin/python" \
+                  "$GITHUB_WORKSPACE/tools/check_release.py" installed --version "$version"
+              )
+            done
+          done
 
       - name: Upload distributions
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -111,6 +162,7 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -124,16 +176,18 @@ jobs:
           path: dist/
 
       - name: Publish distributions with repository token
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           user: __token__
           password: ${{ secrets.PYPI_TOKEN }}
           packages-dir: dist/
           skip-existing: true
+          attestations: false
 
   github-release:
     name: Create GitHub Release
     needs: publish-pypi
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -145,11 +199,19 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
       - name: Download distributions
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: python-distributions-${{ github.sha }}
           path: dist/
+
+      - name: Verify published PyPI archive identities
+        run: python tools/check_release.py published dist
 
       - name: Extract release notes from changelog
         shell: bash

@@ -1028,7 +1028,7 @@ def test_project_test_runner_inspection_summarizes_unavailable_adapters(tmp_path
 
 
 def test_project_cli_test_runner_plan_text_uses_mlx_fixture(tmp_path):
-    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    fixture_dir = ROOT / "demos/integrations/mlx/fixtures/runtime_verification"
     artifact_report = fixture_dir / "reduced_binary_add.artifacts.json"
     fixture_metadata = fixture_dir / "reduced_binary_add.fixture-metadata.json"
     manifest_path = tmp_path / "runtime-test-manifest.json"

@@ -279,7 +279,17 @@ def _metal_aligned_byte_view_struct_contract(struct_node):
     ):
         return None
 
-    members = list(getattr(struct_node, "members", ()) or ())
+    members = [
+        member
+        for member in getattr(struct_node, "members", ()) or ()
+        if "static" not in {
+            str(getattr(item, "name", item)).lower()
+            for item in [
+                *(getattr(member, "qualifiers", ()) or ()),
+                *(getattr(member, "attributes", ()) or ()),
+            ]
+        }
+    ]
     if len(members) != 1:
         return None
     member_type = getattr(members[0], "member_type", None)

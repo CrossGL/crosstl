@@ -14,10 +14,16 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
-    runs-on: ${{ matrix.runner || matrix.OS }}
+    runs-on: ${{ matrix.OS == 'macOS-latest' && 'xcode-27' || matrix.OS }}
     timeout-minutes: 45
+    env:
+      PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
     strategy:
       matrix:
         component:
@@ -38,12 +44,16 @@ jobs:
         python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
         OS: [ubuntu-latest, windows-latest, macOS-latest]
         exclude:
-          - python-version: "3.8"
-            OS: windows-latest
+          - OS: windows-latest
+          - OS: macOS-latest
         include:
-          - python-version: "3.9"
+          - component: all
+            python-version: "3.13"
             OS: windows-latest
-            runner: windows-2022
+          - component: all
+            python-version: "3.13"
+            OS: macOS-latest
+
       fail-fast: false
 
     steps:
@@ -73,26 +83,44 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
+      - name: Verify Metal 4.1 toolchain
+        if: runner.os == 'macOS'
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          export DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer
+          test -d "$DEVELOPER_DIR"
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          xcodebuild -version
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk macosx metal -std=metal4.1 -x metal -fsyntax-only /dev/null
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-          pip install -r requirements.txt
+          pip install -r requirements.txt pytest-xdist
 
       - name: Run translator tests
         id: run_translator_tests
         shell: bash
         run: |
           mkdir -p support/generated
-          if [ "${{ matrix.component }}" == "general" ]; then
-            python -m pytest tests/test_translator --ignore=tests/test_translator/test_codegen \
+          if [ "${{ matrix.component }}" == "all" ]; then
+            python -m pytest tests/test_translator -n auto \
+              --junitxml support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
+          elif [ "${{ matrix.component }}" == "general" ]; then
+            python -m pytest tests/test_translator --ignore=tests/test_translator/test_codegen -n auto \
               --junitxml support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
           elif [ "${{ matrix.component }}" == "GLSL" ]; then
-            python -m pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py \
+            python -m pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py -n auto \
               tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py \
               --junitxml support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
           else
-            python -m pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py \
+            python -m pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py -n auto \
               --junitxml support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
           fi
 

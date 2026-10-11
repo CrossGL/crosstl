@@ -29,10 +29,21 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
+from crosstl.backend.Metal.function_specialization import (
+    _explicit_template_function_specialization_for_selected_overload,
+    _metal_declared_type_and_name,
+    _metal_function_parameter_declarations,
+    _normalize_metal_type_text,
+    _strip_metal_attribute_blocks,
+    _template_parameter_values_from_arguments,
+)
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
     dxc_compiler_arguments_for_source,
+    dxc_file_path,
+    dxc_library_command_tool,
+    dxc_long_path_command,
     dxc_profile_for_source,
     hlsl_requires_native_16bit_types,
 )
@@ -65,12 +76,14 @@ from crosstl.project.translation_checkpoint import (
     ProjectTranslationCheckpointError,
     ProjectTranslationCheckpointRecorder,
     load_project_translation_checkpoint,
+    project_translation_implementation_identity,
 )
 from crosstl.translator.ast import (
     AttributeNode,
     IdentifierNode,
     LiteralNode,
     PrimitiveType,
+    WaveOpNode,
 )
 from crosstl.translator.codegen import (
     backend_names,
@@ -93,6 +106,12 @@ from crosstl.translator.codegen.workgroup_access_contracts import (
     parse_workgroup_access_assertions,
 )
 from crosstl.translator.default_arguments import lower_default_arguments
+from crosstl.translator.dispatch_region_identity import (
+    build_dispatch_region_program,
+    validate_dispatch_region_program,
+)
+from crosstl.translator.dispatch_region_lowering import specialize_dispatch_region
+from crosstl.translator.dispatch_regions import DispatchRegion
 from crosstl.translator.entry_discovery import (
     ENTRY_DISCOVERY_AVAILABLE,
     ENTRY_DISCOVERY_FAILED,
@@ -101,6 +120,11 @@ from crosstl.translator.entry_discovery import (
     SourceEntryDiscovery,
     SourceEntryDiscoveryDiagnostic,
     SourceEntryLocation,
+)
+from crosstl.translator.frozen_specializations import (
+    fold_frozen_specialization_branches,
+    frozen_specialization_header,
+    frozen_specializations,
 )
 from crosstl.translator.plugin_loader import discover_backend_plugins
 from crosstl.translator.source_registry import (
@@ -1497,6 +1521,7 @@ REPORT_PROJECT_FIELDS = frozenset(
         "variantDefineCounts",
         "specializationConstants",
         "specializationConstantCount",
+        "freezeSpecializationConstants",
         "sourceSpecializationConstants",
         "sourceSpecializationPatternCount",
         "sourceSpecializationConstantCounts",
@@ -1529,6 +1554,8 @@ REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
 SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
 TARGET_SOURCE_OPTIONS_KEY = "target_options"
 SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION = "software_subgroup_width"
+SOFTWARE_SUBGROUP_APPLICABILITY_SOURCE_OPTION = "software_subgroup_applicability"
+DISPATCH_REGION_SOURCE_OPTION = "dispatch_region"
 COOPERATIVE_MATRIX_SOFTWARE_LOWERING_SOURCE_OPTION = (
     "cooperative_matrix_software_lowering"
 )
@@ -1811,7 +1838,29 @@ REPORT_ARTIFACT_INCLUDE_DEPENDENCY_PROCESSING_FIELDS = frozenset(
     )
 )
 REPORT_HASH_FIELDS = frozenset(("algorithm", "value"))
-REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(("pipeline", "intermediate"))
+REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(
+    (
+        "pipeline",
+        "intermediate",
+        "dispatchRegion",
+        "dispatchRegionProgram",
+        "softwareSubgroupPolicy",
+        "binary32DivisionProfile",
+        "binary16RemainderProfile",
+        "binary32ComparisonProfile",
+        "binary32RemainderProfile",
+        "binary32AdditiveProfile",
+        "binary32MultiplicationProfile",
+        "binary32Atan2Profile",
+        "binary32LogProfile",
+        "binary32Log2OperandProfile",
+        "binary32Log2AccuracyProfile",
+        "binary32SqrtProfile",
+        "binary32RsqrtProfile",
+        "binary32PowerOperandProfile",
+        "binary32PowerAccuracyProfile",
+    )
+)
 REPORT_ARTIFACT_ENTRY_POINT_FIELDS = frozenset(("source", "target", "stage"))
 REPORT_ARTIFACT_EXECUTION_FIELDS = frozenset(
     (
@@ -3500,6 +3549,14 @@ def _as_source_pattern_options(
         for per_source_name, per_source_value in per_source_options.items():
             if not isinstance(per_source_name, str) or not per_source_name.strip():
                 raise ValueError(f"{source_path} keys must be non-empty strings")
+            if per_source_name == DISPATCH_REGION_SOURCE_OPTION:
+                try:
+                    normalized_pattern_options[per_source_name] = (
+                        DispatchRegion.from_json(per_source_value).to_json()
+                    )
+                except ValueError as exc:
+                    raise ValueError(f"{source_path}.{per_source_name}: {exc}") from exc
+                continue
             if isinstance(per_source_value, bool):
                 normalized_pattern_options[per_source_name] = per_source_value
             elif isinstance(per_source_value, int):
@@ -3573,6 +3630,16 @@ def _as_source_option_table(
                     allow_target_options=False,
                 )
             normalized_options[name] = target_options
+            continue
+        if name == DISPATCH_REGION_SOURCE_OPTION:
+            try:
+                normalized_options[name] = DispatchRegion.from_json(
+                    option_value
+                ).to_json()
+            except ValueError as exc:
+                raise ValueError(
+                    f"{_mapping_key_path(option_path, name)}: {exc}"
+                ) from exc
             continue
         if isinstance(option_value, bool):
             normalized_options[name] = option_value
@@ -3933,8 +4000,7 @@ def _variant_defines(variants: Mapping[str, Any]) -> dict[str, dict[str, str]]:
             {
                 key: item
                 for key, item in value.items()
-                if key
-                not in {
+                if key not in {
                     SPECIALIZATION_CONSTANTS_CONFIG_KEY,
                     WORKGROUP_SIZE_CONFIG_KEY,
                 }
@@ -4044,13 +4110,31 @@ def _supported_target_names() -> list[str]:
     return sorted(set(backend_names()) | CROSSL_TARGETS)
 
 
+def _resolved_comparison_path(path: Path) -> Path | PureWindowsPath:
+    resolved = path.resolve()
+    if isinstance(resolved, PureWindowsPath):
+        # Windows resolution can retain the extended prefix for the same location.
+        value = str(resolved)
+        if re.match(r"^\\\\\?\\[A-Za-z]:\\", value):
+            return PureWindowsPath(value[4:])
+        if value.lower().startswith("\\\\?\\unc\\"):
+            unc_path = PureWindowsPath("\\\\" + value[8:])
+            if unc_path.is_absolute():
+                return unc_path
+    return resolved
+
+
 def _relpath(path: Path, root: Path) -> str:
-    return path.resolve().relative_to(root.resolve()).as_posix()
+    return (
+        _resolved_comparison_path(path)
+        .relative_to(_resolved_comparison_path(root))
+        .as_posix()
+    )
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
     try:
-        path.resolve().relative_to(root.resolve())
+        _resolved_comparison_path(path).relative_to(_resolved_comparison_path(root))
     except ValueError:
         return False
     return True
@@ -4497,128 +4581,6 @@ def _line_preserving_source_map_mappings(
             source_line_spans, generated_line_spans
         )
     ]
-
-
-SOURCE_MAP_LINE_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?")
-SOURCE_MAP_LINE_TOKEN_ALIASES = {
-    "bool1": "bool",
-    "bool2": "vec2",
-    "bool3": "vec3",
-    "bool4": "vec4",
-    "double2": "vec2",
-    "double3": "vec3",
-    "double4": "vec4",
-    "float2": "vec2",
-    "float3": "vec3",
-    "float4": "vec4",
-    "half2": "vec2",
-    "half3": "vec3",
-    "half4": "vec4",
-    "int2": "vec2",
-    "int3": "vec3",
-    "int4": "vec4",
-    "uint2": "vec2",
-    "uint3": "vec3",
-    "uint4": "vec4",
-    "vsmain": "main",
-    "vertex_main": "main",
-    "fragment_main": "main",
-    "compute_main": "main",
-}
-SOURCE_MAP_LINE_STOP_TOKENS = frozenset(
-    (
-        "attribute",
-        "buffer",
-        "case",
-        "cbuffer",
-        "centroid",
-        "class",
-        "const",
-        "constant",
-        "core",
-        "device",
-        "else",
-        "for",
-        "if",
-        "in",
-        "include",
-        "inout",
-        "layout",
-        "metal_stdlib",
-        "namespace",
-        "out",
-        "position",
-        "return",
-        "stage_in",
-        "static",
-        "struct",
-        "switch",
-        "uniform",
-        "using",
-        "void",
-        "while",
-    )
-)
-
-
-def _source_map_line_tokens(text: str) -> frozenset[str]:
-    tokens = set()
-    for match in SOURCE_MAP_LINE_TOKEN_RE.finditer(text):
-        raw_token = match.group(0).lower()
-        for part in raw_token.split("_"):
-            token = SOURCE_MAP_LINE_TOKEN_ALIASES.get(part, part)
-            if token and token not in SOURCE_MAP_LINE_STOP_TOKENS:
-                tokens.add(token)
-        token = SOURCE_MAP_LINE_TOKEN_ALIASES.get(raw_token, raw_token)
-        if token and token not in SOURCE_MAP_LINE_STOP_TOKENS:
-            tokens.add(token)
-    return frozenset(tokens)
-
-
-def _derived_line_source_map_mappings(
-    source_path: Path,
-    source_report_path: str,
-    generated_path: Path,
-    generated_report_path: str,
-) -> list[dict[str, Any]]:
-    source_lines = _normalized_line_text(source_path.read_bytes()).splitlines()
-    generated_lines = _normalized_line_text(generated_path.read_bytes()).splitlines()
-    source_line_spans = _line_spans(source_path, source_report_path)
-    generated_line_spans = _line_spans(generated_path, generated_report_path)
-    source_tokens_by_index = [
-        _source_map_line_tokens(line) for line in source_lines[: len(source_line_spans)]
-    ]
-    generated_tokens_by_index = [
-        _source_map_line_tokens(line)
-        for line in generated_lines[: len(generated_line_spans)]
-    ]
-    mappings = []
-    for generated_index, generated_tokens in enumerate(generated_tokens_by_index):
-        if len(generated_tokens) < 2:
-            continue
-        scores = [
-            (len(generated_tokens & source_tokens), source_index)
-            for source_index, source_tokens in enumerate(source_tokens_by_index)
-            if source_tokens
-        ]
-        if not scores:
-            continue
-        best_score = max(score for score, _source_index in scores)
-        if best_score < 2:
-            continue
-        best_source_indexes = [
-            source_index for score, source_index in scores if score == best_score
-        ]
-        if len(best_source_indexes) != 1:
-            continue
-        source_index = best_source_indexes[0]
-        mappings.append(
-            {
-                "source": source_line_spans[source_index].to_json(),
-                "generated": generated_line_spans[generated_index].to_json(),
-            }
-        )
-    return mappings
 
 
 def _artifact_report_path(path: Path, config: ProjectConfig) -> str:
@@ -6180,11 +6142,12 @@ def _frontend_source_options(source_options: Mapping[str, Any]) -> dict[str, Any
     return {
         name: value
         for name, value in source_options.items()
-        if name
-        not in {
+        if name not in {
             TEMPLATE_VARIANTS_SOURCE_OPTION,
             TARGET_SOURCE_OPTIONS_KEY,
             SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION,
+            SOFTWARE_SUBGROUP_APPLICABILITY_SOURCE_OPTION,
+            DISPATCH_REGION_SOURCE_OPTION,
             COOPERATIVE_MATRIX_SOFTWARE_LOWERING_SOURCE_OPTION,
             PRIVATE_POINTER_OUT_OF_BOUNDS_READ_SOURCE_OPTION,
             DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION,
@@ -7646,6 +7609,7 @@ class ProjectConfig:
     source_options: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     variants: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     specialization_constants: Mapping[str, Any] = field(default_factory=dict)
+    freeze_specialization_constants: bool = False
     source_specialization_constants: Mapping[str, Mapping[str, Any]] = field(
         default_factory=dict
     )
@@ -7838,8 +7802,7 @@ class ProjectConfig:
                 {
                     key: value
                     for key, value in defines.items()
-                    if key
-                    not in {
+                    if key not in {
                         SPECIALIZATION_CONSTANTS_CONFIG_KEY,
                         WORKGROUP_SIZE_CONFIG_KEY,
                     }
@@ -7847,6 +7810,10 @@ class ProjectConfig:
                 field_name=f"ProjectConfig.variants.{name}",
             )
         object.__setattr__(self, "variants", variants)
+        if type(self.freeze_specialization_constants) is not bool:
+            raise ValueError(
+                "ProjectConfig.freeze_specialization_constants must be a boolean"
+            )
         object.__setattr__(
             self,
             "specialization_constants",
@@ -8961,6 +8928,9 @@ class ProjectPortabilityReport:
                 "specializationConstantCount": len(
                     self.config.specialization_constants
                 ),
+                "freezeSpecializationConstants": (
+                    self.config.freeze_specialization_constants
+                ),
                 "sourceSpecializationConstants": {
                     pattern: dict(sorted(values.items()))
                     for pattern, values in sorted(
@@ -9266,6 +9236,9 @@ def load_project_config(
         variants=_variant_defines(variants),
         specialization_constants=specialization_constants,
         source_specialization_constants=source_specialization_constants,
+        freeze_specialization_constants=project.get(
+            "freeze_specialization_constants", False
+        ),
         variant_specialization_constants=_variant_specialization_constants(variants),
         workgroup_size=workgroup_size,
         variant_workgroup_sizes=_variant_workgroup_sizes(variants),
@@ -11139,6 +11112,7 @@ def _project_translation_checkpoint_identity(
         "targets": list(targets),
         "outputDir": str(scan.config.output_path),
         "packageVersion": _package_version(),
+        "implementation": project_translation_implementation_identity(),
     }
 
 
@@ -12214,12 +12188,21 @@ def _project_workgroup_rule_execution_metadata(
             if isinstance(record, Mapping)
             and _is_non_empty_string(record.get("hostName"))
         ]
+        # Split artifacts retain one materialization, but rule coverage belongs
+        # to the source's complete project selection, including sibling jobs.
+        rule_entry_points = (
+            _resolved_entry_points_for_unit(config, unit) or host_names
+            if entry_scoped
+            else host_names
+        )
         unmatched_entry_patterns = [
             pattern
             for pattern in entry_rules
-            if not any(fnmatch.fnmatch(host_name, pattern) for host_name in host_names)
+            if not any(
+                fnmatch.fnmatch(host_name, pattern) for host_name in rule_entry_points
+            )
         ]
-        if host_names and unmatched_entry_patterns:
+        if rule_entry_points and unmatched_entry_patterns:
             raise ProjectWorkgroupSizeError(
                 "Configured entry workgroup-size patterns remain unmatched by "
                 "host-named materializations.",
@@ -12230,7 +12213,7 @@ def _project_workgroup_rule_execution_metadata(
                     "sourcePattern": entry_source_pattern,
                     "entryPatterns": sorted(unmatched_entry_patterns),
                 },
-                materialization_details={"hostNames": sorted(host_names)},
+                materialization_details={"hostNames": sorted(rule_entry_points)},
             )
     joined = _workgroup_materialization_join(
         stages=stages,
@@ -13287,13 +13270,6 @@ def _artifact_source_map(
         output_path,
         artifact_path,
     )
-    if not line_mappings:
-        line_mappings = _derived_line_source_map_mappings(
-            unit.path,
-            unit.relative_path,
-            output_path,
-            artifact_path,
-        )
     mapping_granularity = "line" if line_mappings else "file"
     mappings = (
         line_mappings
@@ -14046,436 +14022,6 @@ def _template_source_declaration_record(
         "column": location.column,
         "name": str(template.name),
     }
-
-
-def _template_parameter_values_from_arguments(
-    preprocessor: Any,
-    template: Any,
-    arguments: Sequence[str],
-) -> dict[str, str]:
-    substitutions, variadic_bindings = preprocessor._template_argument_bindings(
-        template,
-        list(arguments),
-    )
-    parameters = {name: str(value) for name, value in substitutions.items()}
-    for name, values in variadic_bindings.items():
-        parameters[name] = ", ".join(str(value) for value in values)
-    return parameters
-
-
-def _explicit_template_function_specialization_for_selected_overload(
-    *,
-    preprocessor: Any,
-    explicit_specializations: Mapping[
-        tuple[str, tuple[str, ...], tuple[str, ...]],
-        Mapping[str, Any],
-    ],
-    template: Any,
-    function_name: str,
-    arguments: Sequence[str],
-    parameter_declarations: Sequence[tuple[str, str, bool]],
-    declaration_source: str,
-    declaration_type_aliases: Mapping[str, Sequence[Any]],
-    argument_alias_contexts: Sequence[
-        tuple[Mapping[str, Sequence[Any]], int, str]
-    ] = (),
-) -> Mapping[str, Any] | None:
-    """Select an explicit body only when its concrete overload is proven exact.
-
-    Metal/C++ overload identity is based on canonical types, not the source
-    spelling of a visible ``typedef``/``using`` alias.  Resolve each spelling at
-    the position where it occurs: call arguments at their call site, the primary
-    signature at its declaration, and every explicit signature at its own
-    declaration.  An unresolved forward/cyclic alias must fail closed instead of
-    making a valid explicit body look absent and silently selecting the primary.
-    """
-    from crosstl.backend.Metal.preprocessor import (
-        MetalTemplateSpecializationError,
-    )
-
-    specialization_key = preprocessor._template_specialization_key(
-        function_name,
-        arguments,
-    )
-    requested_signature = preprocessor._template_specialization_signature(
-        function_name,
-        list(specialization_key[1]),
-    )
-    named_candidates = [
-        specialization
-        for (
-            name,
-            _template_arguments,
-            _signature,
-        ), specialization in explicit_specializations.items()
-        if name == specialization_key[0]
-    ]
-    if not named_candidates:
-        return None
-
-    def source_location(source: str, position: int, text: str) -> Any:
-        return preprocessor._source_location_for_offsets(
-            source,
-            position,
-            min(len(source), position + max(len(text), 1)),
-        )
-
-    def canonical_type(
-        type_text: str,
-        *,
-        aliases: Mapping[str, Sequence[Any]],
-        position: int,
-        source: str,
-        context: str,
-        location: Any = None,
-        excluded_aliases: set[str] | None = None,
-    ) -> str:
-        canonical = preprocessor._canonicalize_type_aliases_at(
-            type_text,
-            aliases,
-            position,
-            excluded_aliases=excluded_aliases,
-        )
-        if canonical is not None:
-            return _normalize_metal_type_text(canonical)
-
-        suggested_action = (
-            "declare every type alias before the specialization use, remove "
-            "cyclic aliases, and keep each concrete overload signature unique"
-        )
-        raise MetalTemplateSpecializationError(
-            "Metal explicit free-function specialization cannot be selected "
-            f"safely for overload '{requested_signature}': {context} "
-            f"'{_normalize_metal_type_text(type_text)}' has type aliases that "
-            "cannot be resolved with declaration-order and lexical-scope "
-            f"fidelity. Suggested action: {suggested_action}.",
-            requested_signature=requested_signature,
-            suggested_action=suggested_action,
-            source_location=(
-                location
-                if location is not None
-                else source_location(source, position, type_text)
-            ),
-            callee_template=function_name,
-            requested_arguments=tuple(specialization_key[1]),
-        )
-
-    def canonical_template_arguments(
-        values: Sequence[str],
-        *,
-        alias_contexts: Sequence[tuple[Mapping[str, Sequence[Any]], int, str]],
-        context: str,
-        location: Any = None,
-    ) -> tuple[str, ...]:
-        canonical = [
-            preprocessor._normalize_template_argument_text(value) for value in values
-        ]
-        template_parameters = list(getattr(template, "template_parameters", ()) or ())
-        non_type_parameters = set(
-            (getattr(template, "template_parameter_types", {}) or {}).keys()
-        )
-        variadic_parameters = set(
-            getattr(template, "variadic_template_parameters", ()) or ()
-        )
-        argument_index = 0
-        for parameter_index, parameter in enumerate(template_parameters):
-            if parameter in variadic_parameters:
-                remaining_fixed = len(template_parameters) - parameter_index - 1
-                argument_count = max(
-                    0,
-                    len(canonical) - argument_index - remaining_fixed,
-                )
-            else:
-                argument_count = int(argument_index < len(canonical))
-            if parameter not in non_type_parameters:
-                for index in range(
-                    argument_index,
-                    min(argument_index + argument_count, len(canonical)),
-                ):
-                    for aliases, position, source in alias_contexts:
-                        canonical[index] = canonical_type(
-                            canonical[index],
-                            aliases=aliases,
-                            position=position,
-                            source=source,
-                            context=context,
-                            location=location,
-                        )
-            argument_index += argument_count
-        return tuple(canonical)
-
-    selected_alias_contexts = tuple(argument_alias_contexts) or (
-        (
-            declaration_type_aliases,
-            int(template.span[0]),
-            declaration_source,
-        ),
-    )
-    selected_arguments = canonical_template_arguments(
-        specialization_key[1],
-        alias_contexts=selected_alias_contexts,
-        context="selected template argument",
-    )
-
-    candidates: list[Mapping[str, Any]] = []
-    for specialization in named_candidates:
-        if not specialization["templateArgumentsExplicit"]:
-            # Omitted or empty argument lists are deduced from the concrete
-            # function type. Exact parameter-signature matching below decides
-            # whether this selected primary owns the specialization body.
-            candidates.append(specialization)
-            continue
-        specialization_position = int(specialization["span"][0])
-        candidate_arguments = canonical_template_arguments(
-            specialization["arguments"],
-            alias_contexts=(
-                (
-                    declaration_type_aliases,
-                    specialization_position,
-                    declaration_source,
-                ),
-            ),
-            context="explicit specialization template argument",
-            location=specialization.get("sourceLocation"),
-        )
-        if candidate_arguments == selected_arguments:
-            candidates.append(specialization)
-    if not candidates:
-        return None
-
-    parameters = _template_parameter_values_from_arguments(
-        preprocessor,
-        template,
-        list(selected_arguments),
-    )
-
-    def concrete_signature(
-        declarations: Sequence[tuple[str, str, bool]],
-        *,
-        aliases: Mapping[str, Sequence[Any]],
-        position: int,
-        source: str,
-        context: str,
-        substitute: bool,
-        location: Any = None,
-    ) -> tuple[str, ...]:
-        signature = []
-        for type_text, _name, variadic in declarations:
-            resolved = (
-                preprocessor._replace_identifiers(type_text, parameters)
-                if substitute
-                else type_text
-            )
-            normalized = canonical_type(
-                resolved,
-                aliases=aliases,
-                position=position,
-                source=source,
-                context=context,
-                location=location,
-                excluded_aliases=(
-                    set(getattr(template, "template_parameters", ()) or ())
-                    if substitute
-                    else None
-                ),
-            )
-            signature.append(f"{normalized}..." if variadic else normalized)
-        return tuple(signature)
-
-    template_position = int(template.span[0])
-    selected_signature = concrete_signature(
-        parameter_declarations,
-        aliases=declaration_type_aliases,
-        position=template_position,
-        source=declaration_source,
-        context="selected primary parameter type",
-        substitute=True,
-    )
-    matches = []
-    for specialization in candidates:
-        specialization_declarations = _metal_function_parameter_declarations(
-            preprocessor,
-            str(specialization["header"]),
-        )
-        specialization_signature = concrete_signature(
-            specialization_declarations,
-            aliases=declaration_type_aliases,
-            position=int(specialization["span"][0]),
-            source=declaration_source,
-            context="explicit specialization parameter type",
-            substitute=False,
-            location=specialization.get("sourceLocation"),
-        )
-        if selected_signature == specialization_signature:
-            matches.append(specialization)
-
-    if not matches:
-        # Another overload alone may be explicitly specialized for the same
-        # canonical template arguments. It must not replace or invalidate this
-        # overload; materialize the selected primary body instead.
-        return None
-
-    if len(matches) > 1:
-        raise MetalTemplateSpecializationError(
-            "Metal explicit free-function specialization cannot be selected safely "
-            f"for overload '{requested_signature}' with canonical parameter "
-            f"signature {selected_signature!r}: more than one explicit body matches",
-            requested_signature=requested_signature,
-            suggested_action=(
-                "keep one exact explicit specialization for each canonical "
-                "concrete overload signature"
-            ),
-            source_location=matches[0].get("sourceLocation"),
-            callee_template=function_name,
-            requested_arguments=tuple(selected_arguments),
-        )
-
-    specialization = matches[0]
-    specialization_position = int(specialization["span"][0])
-    specialization_source = str(specialization["source"])
-    specialization_header = str(specialization["header"])
-    # The scanner masks comments/literals without changing length, so the raw
-    # source header ends at the same offset as the stored masked header.
-    raw_header = specialization_source[: len(specialization_header)]
-    name_start, name_end = (int(value) for value in specialization["nameSpan"])
-    open_paren = preprocessor._function_parameter_start(raw_header)
-    close_paren = (
-        preprocessor._find_matching_delimiter(raw_header, open_paren, "(", ")")
-        if open_paren is not None
-        else None
-    )
-    if open_paren is None or close_paren is None:
-        suggested_action = (
-            "keep the selected explicit specialization as a concrete function "
-            "declaration with a parseable parameter list"
-        )
-        raise MetalTemplateSpecializationError(
-            "Metal explicit free-function specialization cannot be materialized "
-            f"safely for overload '{requested_signature}': its concrete "
-            f"parameter list cannot be reconstructed. Suggested action: "
-            f"{suggested_action}.",
-            requested_signature=requested_signature,
-            suggested_action=suggested_action,
-            source_location=specialization.get("sourceLocation"),
-            callee_template=function_name,
-            requested_arguments=tuple(selected_arguments),
-        )
-
-    def canonical_alias_fragment(fragment: str, context: str) -> str:
-        canonical = preprocessor._canonicalize_type_aliases_at(
-            fragment,
-            declaration_type_aliases,
-            specialization_position,
-        )
-        if canonical is None:
-            # Reuse the structured alias failure contract above.
-            canonical_type(
-                fragment,
-                aliases=declaration_type_aliases,
-                position=specialization_position,
-                source=declaration_source,
-                context=context,
-                location=specialization.get("sourceLocation"),
-            )
-            raise AssertionError("unreachable")
-        return canonical
-
-    return_prefix = canonical_alias_fragment(
-        raw_header[:name_start],
-        "explicit specialization return type",
-    ).rstrip()
-    if return_prefix:
-        return_prefix += " "
-
-    raw_parameters = preprocessor._split_top_level_commas(
-        raw_header[open_paren + 1 : close_paren]
-    )
-    parsed_parameters = _metal_function_parameter_declarations(
-        preprocessor,
-        raw_header,
-    )
-    concrete_parameters = [
-        parameter for parameter in raw_parameters if parameter.strip() != "void"
-    ]
-    if len(concrete_parameters) != len(parsed_parameters):
-        suggested_action = (
-            "use ordinary named or unnamed concrete parameters in the explicit "
-            "specialization"
-        )
-        raise MetalTemplateSpecializationError(
-            "Metal explicit free-function specialization cannot be materialized "
-            f"safely for overload '{requested_signature}': its parameter "
-            f"declarators are ambiguous. Suggested action: {suggested_action}.",
-            requested_signature=requested_signature,
-            suggested_action=suggested_action,
-            source_location=specialization.get("sourceLocation"),
-            callee_template=function_name,
-            requested_arguments=tuple(selected_arguments),
-        )
-
-    canonical_parameters: list[str] = []
-    parsed_index = 0
-    for raw_parameter in raw_parameters:
-        if raw_parameter.strip() == "void":
-            canonical_parameters.append("void")
-            continue
-        _type_text, parameter_name, _variadic = parsed_parameters[parsed_index]
-        parsed_index += 1
-        if not parameter_name:
-            canonical_parameters.append(
-                canonical_alias_fragment(
-                    raw_parameter,
-                    "explicit specialization parameter type",
-                )
-            )
-            continue
-        name_matches = list(
-            re.finditer(rf"\b{re.escape(parameter_name)}\b", raw_parameter)
-        )
-        if not name_matches:
-            suggested_action = (
-                "use a concrete parameter declarator whose name can be retained "
-                "during alias canonicalization"
-            )
-            raise MetalTemplateSpecializationError(
-                "Metal explicit free-function specialization cannot be "
-                f"materialized safely for overload '{requested_signature}': "
-                f"parameter '{parameter_name}' cannot be located in its "
-                f"declarator. Suggested action: {suggested_action}.",
-                requested_signature=requested_signature,
-                suggested_action=suggested_action,
-                source_location=specialization.get("sourceLocation"),
-                callee_template=function_name,
-                requested_arguments=tuple(selected_arguments),
-            )
-        name_match = name_matches[-1]
-        canonical_prefix = canonical_alias_fragment(
-            raw_parameter[: name_match.start()],
-            "explicit specialization parameter type",
-        ).rstrip()
-        declarator_suffix = raw_parameter[name_match.start() :].lstrip()
-        canonical_parameters.append(f"{canonical_prefix} {declarator_suffix}".strip())
-
-    canonical_header = (
-        return_prefix
-        + raw_header[name_start:name_end]
-        + raw_header[name_end : open_paren + 1]
-        + ", ".join(canonical_parameters)
-        + raw_header[close_paren:]
-    )
-    canonical_specialization = dict(specialization)
-    canonical_specialization["header"] = canonical_header
-    canonical_specialization["source"] = (
-        canonical_header + specialization_source[len(raw_header) :]
-    )
-    canonical_specialization["nameSpan"] = (
-        len(return_prefix),
-        len(return_prefix) + name_end - name_start,
-    )
-    canonical_specialization["parameterTypes"] = tuple(
-        value[:-3] if value.endswith("...") else value for value in selected_signature
-    )
-    return canonical_specialization
 
 
 def _template_parameter_sources_from_arguments(
@@ -15885,24 +15431,6 @@ METAL_TEMPLATE_SCALAR_TYPE_ALIASES = {
 }
 
 
-def _strip_metal_attribute_blocks(text: str) -> str:
-    return re.sub(r"\[\[[^\]]*\]\]", " ", str(text or ""))
-
-
-def _normalize_metal_type_text(type_text: str) -> str:
-    # Strip C/C++ comments first: a type spelling never legitimately contains a
-    # comment, but extraction can pick one up (e.g. a trailing `// ...` after a
-    # return type). Leaving it in makes downstream token scans treat comment
-    # words as identifiers (e.g. flagging "Get" as a missing template parameter).
-    text = re.sub(r"/\*.*?\*/", " ", type_text, flags=re.DOTALL)
-    text = re.sub(r"//[^\n]*", " ", text)
-    text = _strip_metal_attribute_blocks(text)
-    text = re.sub(r"\b(?:struct|class|typename)\s+", "", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    text = re.sub(r"\s*([<>,*&\[\]()])\s*", r"\1", text)
-    return text.strip()
-
-
 def _strip_metal_type_qualifiers(type_text: str) -> str:
     text = _normalize_metal_type_text(type_text)
     tokens = text.split(" ")
@@ -16497,62 +16025,6 @@ def _metal_trailing_struct_arguments_match_defaults(
                 return False
         substitutions[parameter] = expanded_actual
     return True
-
-
-def _metal_declared_type_and_name(declaration: str) -> tuple[str, str] | None:
-    cleaned = _strip_metal_attribute_blocks(declaration)
-    cleaned = cleaned.split("=", 1)[0].strip()
-    cleaned = cleaned.rstrip(";").strip()
-    if not cleaned or cleaned == "void":
-        return None
-    name_match = re.search(
-        r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\]\s*)*$",
-        cleaned,
-    )
-    if name_match is None:
-        return None
-    name = name_match.group("name")
-    type_text = cleaned[: name_match.start()].strip()
-    if not type_text:
-        return None
-    array_suffix = cleaned[name_match.end("name") :].strip()
-    if array_suffix:
-        type_text = f"{type_text}{array_suffix}"
-    return _normalize_metal_type_text(type_text), name
-
-
-def _metal_function_parameter_declarations(
-    preprocessor: Any, header: str
-) -> list[tuple[str, str, bool]]:
-    open_paren = preprocessor._function_parameter_start(header)
-    if open_paren is None:
-        return []
-    close_paren = preprocessor._find_matching_delimiter(header, open_paren, "(", ")")
-    if close_paren is None:
-        return []
-
-    declarations: list[tuple[str, str, bool]] = []
-    for parameter in preprocessor._split_top_level_commas(
-        header[open_paren + 1 : close_paren]
-    ):
-        parameter = parameter.strip()
-        if not parameter or parameter == "void":
-            continue
-        variadic = "..." in parameter
-        normalized = parameter.replace("...", " ")
-        parsed = _metal_declared_type_and_name(normalized)
-        if parsed is None:
-            declaration, _default = preprocessor._split_top_level_assignment(normalized)
-            unnamed_type = _strip_metal_attribute_blocks(declaration).strip()
-            if not unnamed_type:
-                continue
-            declarations.append(
-                (_normalize_metal_type_text(unnamed_type), "", variadic)
-            )
-            continue
-        type_text, name = parsed
-        declarations.append((type_text, name, variadic))
-    return declarations
 
 
 def _metal_template_call_arity_matches(
@@ -17859,21 +17331,12 @@ def _metal_struct_field_type_environments(
     environments: list[tuple[tuple[int, int], str, dict[str, str]]] = []
     for struct in structs:
         field_types: dict[str, str] = {}
-        full_pointer_types = {
-            member.name: member.type_text
-            for member in struct.data_members
-            if member.is_pointer
-        }
         for name, type_text in struct.data_member_types.items():
-            # ``data_member_types`` intentionally stores a value-normalized
-            # spelling for legacy member-overload inference.  Plain helper
-            # deduction needs the full Metal storage pointer type: directly
-            # binding ``W`` from a ``threadgroup T*`` member must not silently
-            # materialize a default ``thread T*`` helper.  The ordered member
-            # metadata retains that complete declaration.
-            inference_type = full_pointer_types.get(name, type_text)
+            # Keep declarator dimensions and nested pointer qualifiers until an
+            # expression selects an element; an array of device pointers is not
+            # a device pointer, and one index does not select its pointee.
             canonical = preprocessor._canonicalize_struct_scoped_type(
-                inference_type,
+                type_text,
                 struct,
                 structs_by_name,
             )
@@ -18126,7 +17589,7 @@ def _metal_expression_type(
             if cursor >= len(text) or text[cursor] != "[":
                 break
             close = preprocessor._find_matching_delimiter(text, cursor, "[", "]")
-            if close is None:
+            if close is None or not text[cursor + 1 : close].strip():
                 break
             index_count += 1
             cursor = close + 1
@@ -18140,7 +17603,9 @@ def _metal_expression_type(
             for _ in range(index_count):
                 if not indexed_type:
                     return None
-                element_type = _metal_array_element_type(indexed_type)
+                element_type = preprocessor._subscript_declared_element_type(
+                    indexed_type
+                )
                 if element_type is None:
                     element_type = _metal_pointer_pointee_type(indexed_type)
                 if element_type is None:
@@ -22431,7 +21896,6 @@ def _project_template_materialization_for_artifact(
 
     base_preprocessor_kwargs: dict[str, Any] = {
         "include_paths": list(include_paths),
-        "group_non_type_template_substitutions": target == "opengl",
     }
     if "strict_preprocessor" in source_options:
         base_preprocessor_kwargs["strict"] = bool(source_options["strict_preprocessor"])
@@ -22574,6 +22038,10 @@ def _project_template_materialization_for_artifact(
             if instantiation.host_name == entry_point
         ]
     )
+    if templates:
+        # A concrete functor used as a helper argument can be materialized below.
+        # Diagnose any residue after specialization, not before it has run.
+        unsupported_type_records = unresolved_type_records
     if unsupported_type_records and not source_instantiations:
         metadata = _template_materialization_metadata(
             specializations=[],
@@ -23464,6 +22932,12 @@ def _project_template_materialization_for_artifact(
         if record.get("name") not in late_materialized_template_names
     )
     post_materialization_unsupported = [
+        *_unmaterialized_metal_template_functor_records(
+            preprocessor=preprocessor,
+            unit=unit,
+            source=materialized,
+            target=target,
+        ),
         *_post_materialization_unresolved_metal_template_type_records(
             preprocessor=preprocessor,
             unit=unit,
@@ -23540,7 +23014,12 @@ def _project_template_materialization_for_artifact(
         unsupported=unsupported,
         accounting=accounting,
     )
-    if not specializations and not unsupported and not stripped_diagnostic_helpers:
+    if (
+        not specializations
+        and not preprocessor._materialized_struct_specializations
+        and not unsupported
+        and not stripped_diagnostic_helpers
+    ):
         return None
 
     if unsupported:
@@ -24012,6 +23491,29 @@ def _metal_template_argument_failure_details(
     return dict(sorted(details.items()))
 
 
+def _metal_scalar_alias_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-scalar-alias-unresolved"
+    ):
+        return {}
+    alias: dict[str, Any] = {
+        "aliasName": str(exc.alias_name),
+        "reason": str(exc.reason),
+    }
+    chain = getattr(exc, "dependency_chain", ())
+    if chain:
+        alias["dependencyChain"] = list(chain)
+    return {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+        "scalarAlias": alias,
+    }
+
+
 def _metal_struct_alias_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -24379,6 +23881,7 @@ def _math_intrinsic_failure_details(
         "project.translate.directx-copysign-unrepresentable",
         "project.translate.directx-inverse-hyperbolic-unrepresentable",
         "project.translate.opengl-copysign-unrepresentable",
+        "project.translate.opengl-fmod-unrepresentable",
     }:
         return {}
 
@@ -25376,6 +24879,7 @@ def _translation_failure_details(
         **_metal_static_constant_failure_details(exc, unit, artifact_path),
         **_metal_sizeof_failure_details(exc, unit, artifact_path),
         **_metal_template_argument_failure_details(exc, unit, artifact_path),
+        **_metal_scalar_alias_failure_details(exc, unit, artifact_path),
         **_metal_struct_alias_failure_details(exc, unit, artifact_path),
         **_metal_callable_failure_details(exc, unit, artifact_path),
         **_metal_callable_alias_failure_details(exc, unit, artifact_path),
@@ -26653,6 +26157,25 @@ def _resolved_project_specialization_constants(
             record["value"] = concrete_value
             record["status"] = "override"
             record["valueProvenance"] = dict(provenance)
+            if config.freeze_specialization_constants:
+                if (
+                    declaration.source_type != "bool"
+                    or type(concrete_value) is not bool
+                    or target not in {"metal", "opengl", "directx"}
+                ):
+                    diagnostics.append(
+                        _specialization_diagnostic(
+                            declaration,
+                            unit,
+                            target,
+                            variant,
+                            code="project.translate.frozen-specialization-unsupported",
+                            message="Frozen specializations require Boolean constants and Metal, DirectX or OpenGL targets.",
+                        )
+                    )
+                else:
+                    record["frozen"] = True
+                    record["deferred"] = False
         elif not deferred and declaration.has_default:
             valid, concrete_value, reason = _specialization_value_for_type(
                 declaration.default_value, declaration.source_type
@@ -26732,6 +26255,13 @@ def _resolved_project_specialization_constants(
         "concreteCount": sum("concreteValue" in record for record in records),
         "source": "shared-crossgl-specialization",
     }
+    if any(record.get("frozen") for record in records):
+        metadata["mode"] = "concrete-crossgl-variant"
+        if status != "failed" and not any(record["deferred"] for record in records):
+            metadata["status"] = "concrete"
+        metadata["frozenCount"] = sum(
+            record.get("frozen") is True for record in records
+        )
     return records, metadata, diagnostics
 
 
@@ -27178,7 +26708,7 @@ def _scope_artifact_specialization_metadata_for_entry(
     scoped_constants = [
         dict(constant)
         for constant in constants
-        if constant.get("name") in reachable_names
+        if constant.get("name") in reachable_names or constant.get("frozen") is True
     ]
     if not scoped_constants:
         artifact.pop("specializationConstants", None)
@@ -27323,6 +26853,7 @@ def _crossgl_ast_for_project_target(
     defines: Mapping[str, str],
     source_options: Mapping[str, Any],
     source_is_materialized: bool = False,
+    frozen_constants: Sequence[Mapping[str, Any]] = (),
 ) -> Any:
     register_default_sources()
     source_spec = SOURCE_REGISTRY.get(source_backend)
@@ -27368,12 +26899,16 @@ def _crossgl_ast_for_project_target(
             )
         intermediate = reverse_codegen.generate(source_ast)
 
-    return cgl_spec.parse(
+    ast = cgl_spec.parse(
         intermediate,
         source_options={
             "strict_function_bodies": original_source_backend != "mojo",
         },
     )
+    ast.annotations["dispatch_region_intermediate_hash"] = hashlib.sha256(
+        intermediate.encode("utf-8")
+    ).hexdigest()
+    return fold_frozen_specialization_branches(ast, frozen_constants)
 
 
 def _project_workgroup_execution_metadata(
@@ -27588,6 +27123,97 @@ def _project_software_subgroup_width(
     return width
 
 
+def _project_software_subgroup_applicability(
+    target: str, source_options: Mapping[str, Any]
+) -> str | None:
+    option = SOFTWARE_SUBGROUP_APPLICABILITY_SOURCE_OPTION
+    if option not in source_options:
+        return None
+    applicability = source_options[option]
+    error = (
+        DirectXSoftwareSubgroupError
+        if target == "directx"
+        else OpenGLSoftwareSubgroupError
+    )
+    width = source_options.get(SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION)
+    if not isinstance(applicability, str) or applicability not in {
+        "required",
+        "when-used",
+    }:
+        raise error(
+            "software_subgroup_applicability must be 'required' or 'when-used'",
+            software_subgroup_width=width,
+            reason="configured-applicability-invalid",
+        )
+    if width is None:
+        raise error(
+            "software_subgroup_applicability requires software_subgroup_width",
+            reason="configured-width-missing",
+        )
+    return applicability
+
+
+def _project_software_subgroup_requirements(
+    codegen: Any, ast: Any, target: str
+) -> list[str]:
+    if target == "directx":
+        records = codegen.hlsl_software_subgroup_operation_records(ast)
+    else:
+        records = codegen.glsl_software_subgroup_operation_records(
+            ast, discover_zero_trip=True
+        )
+    requirements = {f"operation:{operation}" for operation, _ in records}
+    # System inputs and hardware width contracts must never become native-wave
+    # operations merely because this entry has no collective function call.
+    subgroup_inputs = {
+        "gl_SubgroupInvocationID",
+        "gl_SubgroupSize",
+        "gl_SubgroupID",
+        "gl_NumSubgroups",
+    }
+    for node in codegen.walk_ast(ast):
+        if isinstance(node, WaveOpNode):
+            requirements.add(f"operation:{node.operation}")
+        semantic = codegen.semantic_from_node(node)
+        if semantic in subgroup_inputs:
+            requirements.add(f"input:{semantic}")
+        if isinstance(node, IdentifierNode) and node.name in subgroup_inputs:
+            requirements.add(f"input:{node.name}")
+        if isinstance(node, AttributeNode) and _wave_size_attribute(node):
+            requirements.add("attribute:WaveSize")
+    return sorted(requirements)
+
+
+def _software_subgroup_policy_contract_reasons(prefix: str, policy: Any) -> list[str]:
+    fields = {"applicability", "requestedWidth", "effectiveWidth", "requirements"}
+    if not isinstance(policy, Mapping) or set(policy) != fields:
+        return [
+            f"{prefix} must contain applicability, requestedWidth, effectiveWidth, and requirements"
+        ]
+    reasons = []
+    mode = policy["applicability"]
+    if not isinstance(mode, str) or mode not in {"required", "when-used"}:
+        reasons.append(f"{prefix}.applicability must be required or when-used")
+    if type(policy["requestedWidth"]) is not int or policy["requestedWidth"] != 32:
+        reasons.append(f"{prefix}.requestedWidth must be the integer 32")
+    requirements = policy["requirements"]
+    if not isinstance(requirements, list) or not all(
+        isinstance(value, str)
+        and value.startswith(("operation:", "input:", "attribute:"))
+        for value in requirements
+    ):
+        reasons.append(f"{prefix}.requirements must be a list of subgroup dependencies")
+    elif requirements != sorted(set(requirements)):
+        reasons.append(f"{prefix}.requirements must be sorted and unique")
+    expected = None if mode == "when-used" and requirements == [] else 32
+    actual = policy["effectiveWidth"]
+    if type(actual) is not type(expected) or actual != expected:
+        reasons.append(
+            f"{prefix}.effectiveWidth must match applicability and requirements"
+        )
+    return reasons
+
+
 def _project_cooperative_matrix_software_lowering(
     target: str,
     source_options: Mapping[str, Any],
@@ -27596,10 +27222,10 @@ def _project_cooperative_matrix_software_lowering(
     if option not in source_options:
         return None
     enabled = source_options[option]
-    if target != "opengl":
+    if target not in {"opengl", "directx"}:
         raise ValueError(
             "cooperative_matrix_software_lowering is supported only by "
-            "the OpenGL target"
+            "the OpenGL and DirectX targets"
         )
     if not isinstance(enabled, bool):
         raise TypeError("cooperative_matrix_software_lowering must be a boolean")
@@ -27655,6 +27281,40 @@ def _project_directx_widen_native_float16(
     return enabled
 
 
+def _project_dispatch_region(
+    target: str, source_options: Mapping[str, Any]
+) -> DispatchRegion | None:
+    if DISPATCH_REGION_SOURCE_OPTION not in source_options:
+        return None
+    if target not in {"directx", "opengl"}:
+        raise ValueError("dispatch_region is supported only by DirectX and OpenGL")
+    return DispatchRegion.from_json(source_options[DISPATCH_REGION_SOURCE_OPTION])
+
+
+def _validate_project_dispatch_region_execution(
+    region: DispatchRegion, execution: Mapping[str, Any] | None
+) -> None:
+    sizes = []
+    if isinstance(execution, Mapping):
+        if "workgroupSize" in execution:
+            sizes.append(execution["workgroupSize"])
+        if isinstance(execution.get("entryPoints"), list):
+            sizes.extend(
+                entry.get("workgroupSize") if isinstance(entry, Mapping) else None
+                for entry in execution["entryPoints"]
+            )
+    if not sizes or any(
+        not isinstance(size, (tuple, list))
+        or any(type(n) is not int for n in size)
+        or tuple(size) != region.workgroup_size
+        for size in sizes
+    ):
+        raise ValueError(
+            "dispatch_region requires a concrete workgroup_size matching its "
+            "physical workgroupSize"
+        )
+
+
 def _generate_project_target_from_crossgl_ast(
     *,
     ast: Any,
@@ -27665,10 +27325,13 @@ def _generate_project_target_from_crossgl_ast(
     index_range_assertions: Sequence[IndexRangeAssertion] = (),
     workgroup_access_assertions: Sequence[WorkgroupAccessAssertion] = (),
     software_subgroup_width: Any | None = None,
+    software_subgroup_applicability: str | None = None,
     cooperative_matrix_software_lowering: bool | None = None,
     private_pointer_out_of_bounds_read: str | None = None,
     directx_relative_wave_shuffle_out_of_range: Any | None = None,
     directx_widen_native_float16: Any | None = None,
+    dispatch_region: DispatchRegion | None = None,
+    provenance: dict[str, Any] | None = None,
 ) -> str:
     codegen = get_codegen(target)
     if cooperative_matrix_software_lowering is not None:
@@ -27749,6 +27412,79 @@ def _generate_project_target_from_crossgl_ast(
     selected_ast, remaining_entry_point = prepare_entry_scoped_target(
         codegen, ast, entry_point
     )
+    if software_subgroup_applicability is not None:
+        entries = (
+            codegen.hlsl_software_subgroup_stage_entries(selected_ast)
+            if target == "directx"
+            else codegen.glsl_software_subgroup_stage_entries(selected_ast)
+        )
+        if len(entries) != 1 or entries[0][0] != "compute":
+            raise software_subgroup_error(
+                "Software subgroup applicability requires one selected compute entry",
+                software_subgroup_width=software_subgroup_width,
+                reason="entry-point-contract-invalid",
+            )
+        requirements = _project_software_subgroup_requirements(
+            codegen, selected_ast, target
+        )
+        requested_width = software_subgroup_width
+        if software_subgroup_applicability == "when-used" and not requirements:
+            software_subgroup_width = None
+            configure_software_subgroup(None)
+        if provenance is not None:
+            provenance["softwareSubgroupPolicy"] = {
+                "applicability": software_subgroup_applicability,
+                "requestedWidth": requested_width,
+                "effectiveWidth": software_subgroup_width,
+                "requirements": requirements,
+            }
+    if dispatch_region is not None:
+        stages = _crossgl_compute_stages(selected_ast, remaining_entry_point)
+        if len(stages) != 1:
+            raise ValueError("Dispatch region identity requires one compute entry")
+        stage = stages[0]
+        execution = dict(getattr(stage, "execution_config", {}) or {})
+        for key in (
+            "numthreads",
+            "workgroup_size",
+            "local_size",
+            "local_size_x",
+            "local_size_y",
+            "local_size_z",
+        ):
+            execution.pop(key, None)
+        program = build_dispatch_region_program(
+            intermediate_hash=ast.annotations.get("dispatch_region_intermediate_hash"),
+            entry_point=stage.entry_point.name,
+            target=target,
+            settings={
+                "execution": execution,
+                "subgroupWidths": [
+                    [
+                        _literal_workgroup_size_component(value)
+                        for value in attribute.arguments
+                    ]
+                    for attribute in getattr(stage.entry_point, "attributes", ())
+                    if _wave_size_attribute(attribute)
+                ],
+                "indexRanges": [item.to_json() for item in index_range_assertions],
+                "workgroupAccesses": [
+                    item.to_json() for item in workgroup_access_assertions
+                ],
+                "softwareSubgroupWidth": software_subgroup_width,
+                "cooperativeMatrixSoftwareLowering": (
+                    cooperative_matrix_software_lowering
+                ),
+                "privatePointerOutOfBoundsRead": private_pointer_out_of_bounds_read,
+                "relativeWaveShuffleOutOfRange": (
+                    directx_relative_wave_shuffle_out_of_range
+                ),
+                "widenNativeFloat16": directx_widen_native_float16,
+            },
+        )
+        selected_ast = specialize_dispatch_region(selected_ast, dispatch_region)
+        if provenance is not None:
+            provenance["dispatchRegionProgram"] = program
     validate_pointer_reinterpretation_target(selected_ast, target)
     if remaining_entry_point is None:
         generated = codegen.generate(selected_ast)
@@ -28226,6 +27962,10 @@ def _finalize_project_generated_artifact(
     report_output_path: Path | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
     report_output_path = report_output_path or output_path
+    header = frozen_specialization_header(artifact.get("specializationConstants", []))
+    if header:
+        generated_source = header + generated_source
+        output_path.write_text(generated_source, encoding="utf-8")
     mojo_diagnostics = _mojo_unresolved_target_construct_diagnostics(
         artifact, generated_source
     )
@@ -28495,6 +28235,7 @@ def _translate_project_impl(
             source_options=config.source_options,
             variants=config.variants,
             specialization_constants=config.specialization_constants,
+            freeze_specialization_constants=config.freeze_specialization_constants,
             source_specialization_constants=(config.source_specialization_constants),
             variant_specialization_constants=(config.variant_specialization_constants),
             workgroup_size=config.workgroup_size,
@@ -28722,18 +28463,191 @@ def _translate_project_impl(
                         config,
                         unit.relative_path,
                     )
-                    if target == "opengl"
+                    if target in {"opengl", "directx"}
                     else ()
                 )
                 software_subgroup_width = None
+                software_subgroup_applicability = None
                 cooperative_matrix_software_lowering = None
                 private_pointer_out_of_bounds_read = None
                 directx_relative_wave_shuffle_out_of_range = None
                 directx_widen_native_float16 = None
+                dispatch_region = None
                 try:
+                    division_profile = source_options.get("binary32_division_profile")
+                    multiplication_profile = source_options.get(
+                        "binary32_multiplication_profile"
+                    )
+                    if (
+                        unit.source_backend == "metal"
+                        and multiplication_profile is not None
+                    ):
+                        if multiplication_profile not in ("rne-gradual", "rne-flush"):
+                            raise ValueError(
+                                "binary32_multiplication_profile must be 'rne-gradual', 'rne-flush', or None"
+                            )
+                        artifact["provenance"][
+                            "binary32MultiplicationProfile"
+                        ] = multiplication_profile
+                    additive_profile = source_options.get("binary32_additive_profile")
+                    if unit.source_backend == "metal" and additive_profile is not None:
+                        if additive_profile not in ("rne-gradual", "rne-flush"):
+                            raise ValueError(
+                                "binary32_additive_profile must be 'rne-gradual', 'rne-flush', or None"
+                            )
+                        artifact["provenance"][
+                            "binary32AdditiveProfile"
+                        ] = additive_profile
+                    remainder_profile = source_options.get("binary32_remainder_profile")
+                    if unit.source_backend == "metal" and remainder_profile is not None:
+                        if remainder_profile not in (
+                            "preserve-subnormals",
+                            "flush-arithmetic-subnormals",
+                        ):
+                            raise ValueError(
+                                "binary32_remainder_profile must be 'preserve-subnormals', "
+                                "'flush-arithmetic-subnormals', or None"
+                            )
+                        artifact["provenance"][
+                            "binary32RemainderProfile"
+                        ] = remainder_profile
+                    comparison_profile = source_options.get(
+                        "binary32_comparison_profile"
+                    )
+                    atan2_profile = source_options.get("binary32_atan2_profile")
+                    if unit.source_backend == "metal" and atan2_profile is not None:
+                        if atan2_profile not in (
+                            "preserve-subnormals",
+                            "flush-subnormals",
+                        ):
+                            raise ValueError(
+                                "binary32_atan2_profile must be 'preserve-subnormals', "
+                                "'flush-subnormals', or None"
+                            )
+                        artifact["provenance"]["binary32Atan2Profile"] = atan2_profile
+                    log_profile = source_options.get("binary32_log_profile")
+                    if unit.source_backend == "metal" and log_profile is not None:
+                        if log_profile not in (
+                            "preserve-subnormals",
+                            "flush-subnormals",
+                        ):
+                            raise ValueError(
+                                "binary32_log_profile must be 'preserve-subnormals', "
+                                "'flush-subnormals', or None"
+                            )
+                        artifact["provenance"]["binary32LogProfile"] = log_profile
+                    for option, field, allowed in (
+                        (
+                            "binary32_log2_operand_profile",
+                            "binary32Log2OperandProfile",
+                            ("preserve-subnormals", "flush-subnormals"),
+                        ),
+                        (
+                            "binary32_log2_accuracy_profile",
+                            "binary32Log2AccuracyProfile",
+                            ("portable-finite",),
+                        ),
+                    ):
+                        profile = source_options.get(option)
+                        if unit.source_backend == "metal" and profile is not None:
+                            if profile not in allowed:
+                                raise ValueError(
+                                    f"{option} must be one of {allowed} or None"
+                                )
+                            artifact["provenance"][field] = profile
+                    sqrt_profile = source_options.get("binary32_sqrt_profile")
+                    if unit.source_backend == "metal" and sqrt_profile is not None:
+                        if sqrt_profile not in (
+                            "preserve-subnormals",
+                            "flush-subnormals",
+                        ):
+                            raise ValueError(
+                                "binary32_sqrt_profile must be 'preserve-subnormals', "
+                                "'flush-subnormals', or None"
+                            )
+                        artifact["provenance"]["binary32SqrtProfile"] = sqrt_profile
+                    rsqrt_profile = source_options.get("binary32_rsqrt_profile")
+                    if unit.source_backend == "metal" and rsqrt_profile is not None:
+                        if rsqrt_profile not in (
+                            "preserve-subnormals",
+                            "flush-subnormals",
+                        ):
+                            raise ValueError(
+                                "binary32_rsqrt_profile must be 'preserve-subnormals', "
+                                "'flush-subnormals', or None"
+                            )
+                        artifact["provenance"]["binary32RsqrtProfile"] = rsqrt_profile
+                    power_operand_profile = source_options.get(
+                        "binary32_power_operand_profile"
+                    )
+                    if (
+                        unit.source_backend == "metal"
+                        and power_operand_profile is not None
+                    ):
+                        if power_operand_profile != "flush-subnormals":
+                            raise ValueError(
+                                "binary32_power_operand_profile must be 'flush-subnormals' or None"
+                            )
+                        artifact["provenance"][
+                            "binary32PowerOperandProfile"
+                        ] = power_operand_profile
+                    power_accuracy_profile = source_options.get(
+                        "binary32_power_accuracy_profile"
+                    )
+                    if (
+                        unit.source_backend == "metal"
+                        and power_accuracy_profile is not None
+                    ):
+                        if power_accuracy_profile != "portable-finite":
+                            raise ValueError(
+                                "binary32_power_accuracy_profile must be 'portable-finite' or None"
+                            )
+                        artifact["provenance"][
+                            "binary32PowerAccuracyProfile"
+                        ] = power_accuracy_profile
+                    if (
+                        unit.source_backend == "metal"
+                        and comparison_profile is not None
+                    ):
+                        if comparison_profile not in (
+                            "preserve-subnormals",
+                            "flush-subnormals",
+                        ):
+                            raise ValueError(
+                                "binary32_comparison_profile must be 'preserve-subnormals', "
+                                "'flush-subnormals', or None"
+                            )
+                        artifact["provenance"][
+                            "binary32ComparisonProfile"
+                        ] = comparison_profile
+                    if unit.source_backend == "metal" and division_profile is not None:
+                        if division_profile not in ("rne-gradual", "rne-flush"):
+                            raise ValueError(
+                                "binary32_division_profile must be 'rne-gradual', 'rne-flush', or None"
+                            )
+                        artifact["provenance"][
+                            "binary32DivisionProfile"
+                        ] = division_profile
+                    remainder_profile = source_options.get("binary16_remainder_profile")
+                    if unit.source_backend == "metal" and remainder_profile is not None:
+                        if remainder_profile != "binary32-quotient":
+                            raise ValueError(
+                                "binary16_remainder_profile must be 'binary32-quotient' or None"
+                            )
+                        artifact["provenance"][
+                            "binary16RemainderProfile"
+                        ] = remainder_profile
+                    dispatch_region = _project_dispatch_region(target, source_options)
+                    if dispatch_region is not None:
+                        artifact["provenance"][
+                            "dispatchRegion"
+                        ] = dispatch_region.to_json()
                     software_subgroup_width = _project_software_subgroup_width(
                         target,
                         source_options,
+                    )
+                    software_subgroup_applicability = (
+                        _project_software_subgroup_applicability(target, source_options)
                     )
                     cooperative_matrix_software_lowering = (
                         _project_cooperative_matrix_software_lowering(
@@ -28881,10 +28795,10 @@ def _translate_project_impl(
                         if translation_source_backend == "metal":
                             translation_source_options[
                                 METAL_PRESERVE_POINTER_POINTEE_CONST_SOURCE_OPTION
-                            ] = (target == "opengl")
+                            ] = target == "opengl"
                             translation_source_options[
                                 METAL_RESOLVE_STANDARD_REMOVE_CV_ALIASES_SOURCE_OPTION
-                            ] = (target != "metal")
+                            ] = target != "metal"
                     (
                         specialization_constants,
                         specialization_materialization,
@@ -29061,6 +28975,7 @@ def _translate_project_impl(
                         or private_pointer_out_of_bounds_read is not None
                         or directx_relative_wave_shuffle_out_of_range is not None
                         or directx_widen_native_float16 is not None
+                        or dispatch_region is not None
                     ):
                         crossgl_ast = _crossgl_ast_for_project_target(
                             input_path=translation_input_path,
@@ -29073,6 +28988,7 @@ def _translate_project_impl(
                             source_is_materialized=(
                                 template_materialization is not None
                             ),
+                            frozen_constants=specialization_constants,
                         )
                         workgroup_execution = _project_workgroup_execution_metadata(
                             ast=crossgl_ast,
@@ -29144,6 +29060,10 @@ def _translate_project_impl(
                                 )
                             )
                         if execution is not None:
+                            if dispatch_region is not None:
+                                _validate_project_dispatch_region_execution(
+                                    dispatch_region, execution
+                                )
                             split_specs = (
                                 _opengl_workgroup_split_specs(
                                     execution,
@@ -29210,6 +29130,8 @@ def _translate_project_impl(
                                     split_artifact["execution"] = split_execution
                                     try:
                                         split_source = _generate_project_target_from_crossgl_ast(
+                                            dispatch_region=dispatch_region,
+                                            provenance=split_artifact["provenance"],
                                             ast=crossgl_ast,
                                             target=target,
                                             output_path=split_output_path,
@@ -29223,6 +29145,9 @@ def _translate_project_impl(
                                             ),
                                             software_subgroup_width=(
                                                 software_subgroup_width
+                                            ),
+                                            software_subgroup_applicability=(
+                                                software_subgroup_applicability
                                             ),
                                             cooperative_matrix_software_lowering=(
                                                 cooperative_matrix_software_lowering
@@ -29290,6 +29215,8 @@ def _translate_project_impl(
                                 artifact["execution"] = execution
                                 try:
                                     generated_source = _generate_project_target_from_crossgl_ast(
+                                        dispatch_region=dispatch_region,
+                                        provenance=artifact["provenance"],
                                         ast=crossgl_ast,
                                         target=target,
                                         output_path=output_path,
@@ -29301,6 +29228,9 @@ def _translate_project_impl(
                                         ),
                                         software_subgroup_width=(
                                             software_subgroup_width
+                                        ),
+                                        software_subgroup_applicability=(
+                                            software_subgroup_applicability
                                         ),
                                         cooperative_matrix_software_lowering=(
                                             cooperative_matrix_software_lowering
@@ -29337,12 +29267,16 @@ def _translate_project_impl(
                                 )
                     if generated_source is None and (
                         index_range_assertions
+                        or any(
+                            record.get("frozen") for record in specialization_constants
+                        )
                         or workgroup_access_assertions
                         or software_subgroup_width is not None
                         or cooperative_matrix_software_lowering is not None
                         or private_pointer_out_of_bounds_read is not None
                         or directx_relative_wave_shuffle_out_of_range is not None
                         or directx_widen_native_float16 is not None
+                        or dispatch_region is not None
                     ):
                         crossgl_ast = crossgl_ast or _crossgl_ast_for_project_target(
                             input_path=translation_input_path,
@@ -29355,8 +29289,15 @@ def _translate_project_impl(
                             source_is_materialized=(
                                 template_materialization is not None
                             ),
+                            frozen_constants=specialization_constants,
                         )
+                        if dispatch_region is not None:
+                            _validate_project_dispatch_region_execution(
+                                dispatch_region, artifact.get("execution")
+                            )
                         generated_source = _generate_project_target_from_crossgl_ast(
+                            dispatch_region=dispatch_region,
+                            provenance=artifact["provenance"],
                             ast=crossgl_ast,
                             target=target,
                             output_path=output_path,
@@ -29365,6 +29306,7 @@ def _translate_project_impl(
                             index_range_assertions=index_range_assertions,
                             workgroup_access_assertions=(workgroup_access_assertions),
                             software_subgroup_width=software_subgroup_width,
+                            software_subgroup_applicability=software_subgroup_applicability,
                             cooperative_matrix_software_lowering=(
                                 cooperative_matrix_software_lowering
                             ),
@@ -29643,7 +29585,7 @@ def _validation_toolchain_run_tool_name(run: Mapping[str, Any]) -> str | None:
         or not command
     ):
         return None
-    tool_name = command[0]
+    tool_name = dxc_library_command_tool(list(command)) or command[0]
     if isinstance(tool_name, str) and tool_name.strip():
         return tool_name.strip()
     return None
@@ -29806,7 +29748,10 @@ def _source_map_line_preserving_mapping_reasons(
         artifact_report_path,
     )
     if not expected_mappings:
-        return []
+        return [
+            f"{prefix} line mappings require line-preserving source and generated files; "
+            "regenerate the project report to record file-level provenance"
+        ]
     if mappings == expected_mappings:
         return []
     if len(mappings) != len(expected_mappings):
@@ -29824,55 +29769,6 @@ def _source_map_line_preserving_mapping_reasons(
             ]
     return [
         f"{prefix}.mappings must match current line-preserving line spans "
-        f"({_value_mismatch_context(expected_mappings, mappings)})"
-    ]
-
-
-def _source_map_derived_line_mapping_reasons(
-    prefix: str,
-    source_map: Mapping[str, Any],
-    source_path: Path,
-    source_report_path: str,
-    artifact_path: Path,
-    artifact_report_path: str,
-) -> list[str]:
-    if source_map.get("mappingGranularity") != "line":
-        return []
-    mappings = source_map.get("mappings")
-    if not isinstance(mappings, list):
-        return []
-    if _line_preserving_source_map_mappings(
-        source_path,
-        source_report_path,
-        artifact_path,
-        artifact_report_path,
-    ):
-        return []
-    expected_mappings = _derived_line_source_map_mappings(
-        source_path,
-        source_report_path,
-        artifact_path,
-        artifact_report_path,
-    )
-    if not expected_mappings:
-        return []
-    if mappings == expected_mappings:
-        return []
-    if len(mappings) != len(expected_mappings):
-        return [
-            f"{prefix}.mappings count must match current derived line count "
-            f"({_value_mismatch_context(len(expected_mappings), len(mappings))})"
-        ]
-    for mapping_index, expected_mapping in enumerate(expected_mappings):
-        mapping = mappings[mapping_index]
-        if not isinstance(mapping, Mapping) or dict(mapping) != expected_mapping:
-            return [
-                f"{prefix}.mappings[{mapping_index}] must match current "
-                "derived line span "
-                f"({_value_mismatch_context(expected_mapping, mapping)})"
-            ]
-    return [
-        f"{prefix}.mappings must match current derived line spans "
         f"({_value_mismatch_context(expected_mappings, mappings)})"
     ]
 
@@ -29951,17 +29847,6 @@ def _source_map_file_span_validation_diagnostics(
                 artifact_report_path,
             )
         )
-        reasons.extend(
-            _source_map_derived_line_mapping_reasons(
-                "sourceMap",
-                source_map,
-                source_path,
-                source,
-                artifact_path,
-                artifact_report_path,
-            )
-        )
-
     if not reasons:
         return []
     return [
@@ -29970,7 +29855,8 @@ def _source_map_file_span_validation_diagnostics(
             code=(
                 "project.validate.source-map-line-span-mismatch"
                 if any(
-                    "line-preserving line" in reason or "derived line" in reason
+                    "line-preserving line" in reason
+                    or "line mappings require" in reason
                     for reason in reasons
                 )
                 else "project.validate.source-map-file-span-mismatch"
@@ -31086,24 +30972,62 @@ def _validate_artifacts(
     }
 
 
+@dataclass(frozen=True)
+class _ValidatedProjectReport:
+    report: Any
+    validation: dict[str, Any]
+
+
 def validate_project_report(
     report_path: str | os.PathLike[str], *, run_toolchains: bool = False
 ) -> dict[str, Any]:
     """Validate artifact existence and optional toolchain availability for a report."""
     run_toolchains = _bool_arg(run_toolchains, field_name="run_toolchains")
     path = _filesystem_path_arg(report_path, field_name="Project report path")
+    return _read_validated_project_report(
+        path, run_toolchains=run_toolchains
+    ).validation
+
+
+def _read_validated_project_report(
+    path: Path, *, run_toolchains: bool = False
+) -> _ValidatedProjectReport:
+    source_hash = None
     try:
-        report = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        contents = path.read_bytes()
+        source_hash = {
+            "algorithm": "sha256",
+            "value": hashlib.sha256(contents).hexdigest(),
+        }
+        report = json.loads(contents.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         diagnostic = _invalid_report_diagnostic(
             path, [f"could not read JSON report: {exc}"]
         )
-        return _validation_report_payload(
-            path,
-            [diagnostic.to_json()],
-            {"toolchains": [], "artifacts": []},
+        return _ValidatedProjectReport(
+            report=None,
+            validation=_validation_report_payload(
+                path,
+                [diagnostic.to_json()],
+                {"toolchains": [], "artifacts": []},
+                source_report_hash=source_hash,
+            ),
         )
+    return _ValidatedProjectReport(
+        report=report,
+        validation=_validate_project_report_contents(
+            path, report, source_hash=source_hash, run_toolchains=run_toolchains
+        ),
+    )
 
+
+def _validate_project_report_contents(
+    path: Path,
+    report: Any,
+    *,
+    source_hash: Mapping[str, str],
+    run_toolchains: bool,
+) -> dict[str, Any]:
     contract_diagnostics = _report_contract_diagnostics(path, report)
     if contract_diagnostics:
         diagnostics = [diagnostic.to_json() for diagnostic in contract_diagnostics]
@@ -31111,6 +31035,7 @@ def validate_project_report(
             path,
             diagnostics,
             {"toolchains": [], "artifacts": []},
+            source_report_hash=source_hash,
             project=report.get("project") if isinstance(report, Mapping) else None,
         )
 
@@ -31142,7 +31067,11 @@ def validate_project_report(
         [diagnostic.to_json() for diagnostic in diagnostic_objects],
     )
     return _validation_report_payload(
-        path, diagnostics, validation, project=report.get("project")
+        path,
+        diagnostics,
+        validation,
+        source_report_hash=source_hash,
+        project=report.get("project"),
     )
 
 
@@ -31943,13 +31872,18 @@ def plan_runtime_integration(
         max_runtime_references, field_name="max_runtime_references"
     )
     path = _filesystem_path_arg(report_path, field_name="Project report path")
-    validation_report = validate_project_report(path)
-    validation_success = bool(validation_report.get("success"))
-    try:
-        report = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        report = {}
+    snapshot = _read_validated_project_report(path)
+    return _build_runtime_integration_plan(path, snapshot, runtime_reference_limit)
 
+
+def _build_runtime_integration_plan(
+    path: Path,
+    snapshot: _ValidatedProjectReport,
+    runtime_reference_limit: int,
+) -> dict[str, Any]:
+    validation_report = snapshot.validation
+    validation_success = bool(validation_report.get("success"))
+    report = snapshot.report
     report_mapping = (
         report if validation_success and isinstance(report, Mapping) else {}
     )
@@ -31997,7 +31931,7 @@ def plan_runtime_integration(
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": RUNTIME_INTEGRATION_PLAN_KIND,
         "sourceReport": str(path),
-        "sourceReportHash": _optional_source_hash(path),
+        "sourceReportHash": validation_report["sourceReportHash"],
         "generatedAt": int(time.time()),
         "success": validation_success,
         "scope": RUNTIME_INTEGRATION_PLAN_SCOPE,
@@ -32123,10 +32057,28 @@ def _runtime_manifest_reflected_host_interface(
 
 
 def _runtime_manifest_host_interface(
-    root_path: Path | None, artifact: Mapping[str, Any]
+    root_path: Path | None,
+    artifact: Mapping[str, Any],
+    *,
+    source_interfaces: dict[tuple[Any, ...], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any] | None:
     reflected = _runtime_manifest_reflected_host_interface(root_path, artifact)
-    source_interface = _runtime_manifest_source_host_interface(root_path, artifact)
+    if source_interfaces is None:
+        source_interface = _runtime_manifest_source_host_interface(root_path, artifact)
+    else:
+        # Source reflection is source-wide; entry and execution metadata are
+        # merged separately for each artifact. Keep failed parses cached too.
+        key = (
+            root_path,
+            artifact.get("source"),
+            artifact.get("sourceBackend"),
+            artifact.get("target"),
+        )
+        if key not in source_interfaces:
+            source_interfaces[key] = _runtime_manifest_source_host_interface(
+                root_path, artifact
+            )
+        source_interface = copy.deepcopy(source_interfaces[key])
     base = reflected if isinstance(reflected, Mapping) else source_interface
     if not isinstance(base, Mapping):
         return None
@@ -32960,8 +32912,11 @@ def _runtime_manifest_artifact(
     validation_artifacts: Mapping[tuple[Any, ...], Mapping[str, Any]] | None = None,
     toolchains: Mapping[str, Mapping[str, Any]] | None = None,
     toolchain_runs: Mapping[tuple[Any, ...], Sequence[Mapping[str, Any]]] | None = None,
+    source_interfaces: dict[tuple[Any, ...], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
-    host_interface = _runtime_manifest_host_interface(root_path, artifact)
+    host_interface = _runtime_manifest_host_interface(
+        root_path, artifact, source_interfaces=source_interfaces
+    )
     host_interface = _runtime_manifest_execution_host_interface(
         artifact, host_interface
     )
@@ -33166,13 +33121,10 @@ def build_runtime_artifact_manifest(
     """Build a runtime artifact manifest from a validated project report."""
 
     path = _filesystem_path_arg(report_path, field_name="Project report path")
-    validation_report = validate_project_report(path)
+    snapshot = _read_validated_project_report(path)
+    validation_report = snapshot.validation
     validation_success = bool(validation_report.get("success"))
-    try:
-        report = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        report = {}
-
+    report = snapshot.report
     report_mapping = (
         report if validation_success and isinstance(report, Mapping) else {}
     )
@@ -33189,7 +33141,9 @@ def build_runtime_artifact_manifest(
     failed_artifact_count = sum(
         1 for artifact in artifacts if artifact.get("status") == "failed"
     )
-    runtime_plan = plan_runtime_integration(path)
+    runtime_plan = _build_runtime_integration_plan(
+        path, snapshot, RUNTIME_REFERENCE_INSPECTION_SAMPLE_LIMIT
+    )
     runtime_plan_payload = _runtime_manifest_runtime_plan(runtime_plan)
     runtime_reference_count = runtime_plan_payload["runtimeReferenceCount"]
     source_map_rollups = _source_map_rollups(translated_artifacts)
@@ -33199,6 +33153,7 @@ def build_runtime_artifact_manifest(
     validation_artifacts = _runtime_manifest_validation_artifacts(validation_report)
     toolchains = _runtime_manifest_toolchains(validation_report)
     toolchain_runs = _runtime_manifest_toolchain_runs(validation_report)
+    source_interfaces: dict[tuple[Any, ...], dict[str, Any] | None] = {}
     manifest_artifacts = [
         _runtime_manifest_artifact(
             artifact,
@@ -33206,6 +33161,7 @@ def build_runtime_artifact_manifest(
             validation_artifacts=validation_artifacts,
             toolchains=toolchains,
             toolchain_runs=toolchain_runs,
+            source_interfaces=source_interfaces,
         )
         for artifact in translated_artifacts
     ]
@@ -33214,7 +33170,7 @@ def build_runtime_artifact_manifest(
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": RUNTIME_ARTIFACT_MANIFEST_KIND,
         "sourceReport": str(path),
-        "sourceReportHash": _optional_source_hash(path),
+        "sourceReportHash": validation_report["sourceReportHash"],
         "generatedAt": int(time.time()),
         "success": validation_success,
         "scope": RUNTIME_ARTIFACT_MANIFEST_SCOPE,
@@ -35782,7 +35738,7 @@ def _runtime_package_inspection_host_interface(
             )
         return host_interface
 
-    reflected_targets = {"directx", "opengl", "webgl", "vulkan"}
+    reflected_targets = {"directx", "opengl", "webgl", "vulkan", "metal"}
     if target_name in reflected_targets:
         if not _is_non_empty_string(package_relative_path):
             return _runtime_host_interface_empty(
@@ -35923,6 +35879,47 @@ def _runtime_package_inspection_binding(
         artifact_diagnostics=artifact_diagnostics,
     )
     diagnostics = [*artifact_diagnostics, *source_remap_diagnostics]
+    diagnostics.extend(
+        _runtime_package_resource_identity_diagnostics(
+            package_path, artifact, host_interface
+        )
+    )
+    frozen_mismatch = False
+    try:
+        declared_frozen = frozen_specializations(
+            _record_sequence(artifact.get("specializationConstants"))
+        )
+        reflected_frozen = frozen_specializations(
+            _record_sequence(host_interface.get("specializationConstants"))
+        )
+        declared_interface = artifact.get("hostInterface")
+        interface_frozen = (
+            frozen_specializations(
+                _record_sequence(declared_interface.get("specializationConstants"))
+            )
+            if isinstance(declared_interface, Mapping)
+            else []
+        )
+        frozen_mismatch = (
+            declared_frozen != reflected_frozen or interface_frozen != reflected_frozen
+        )
+    except ValueError:
+        frozen_mismatch = True
+    frozen_errors = [
+        record
+        for record in host_interface.get("diagnosticRecords", [])
+        if record.get("details", {}).get("contract") == "frozen-specialization"
+    ]
+    if frozen_mismatch or frozen_errors:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-package-inspection.frozen-specialization-invalid",
+                message="Frozen specialization declarations differ from the packaged artifact.",
+                location=SourceLocation(file=str(package_path)),
+                check_kind="runtime-package-inspection",
+            )
+        )
     return {
         "id": _runtime_package_inspection_binding_id(artifact),
         "status": "ready" if not diagnostics else "failed",
@@ -35973,6 +35970,60 @@ def _runtime_package_inspection_binding(
         "hostInterface": host_interface,
         "diagnostics": [diagnostic.code for diagnostic in diagnostics],
     }, diagnostics
+
+
+def _runtime_package_resource_identity_diagnostics(package_path, artifact, reflected):
+    errors = [
+        record
+        for record in _record_sequence(reflected.get("diagnosticRecords"))
+        if isinstance(record, Mapping)
+        and isinstance(record.get("details"), Mapping)
+        and record["details"].get("contract") == "source-resource-identity"
+        and record.get("severity") == "error"
+    ]
+    declared = artifact.get("hostInterface")
+
+    def identities(interface):
+        result = []
+        for resource in _record_sequence(interface.get("resources")):
+            if not isinstance(resource, Mapping):
+                continue
+            metadata = resource.get("metadata")
+            if not isinstance(metadata, Mapping):
+                continue
+            provenance = metadata.get("provenance")
+            if (
+                not isinstance(provenance, Mapping)
+                or "sourceResource" not in provenance
+            ):
+                continue
+            result.append(
+                {
+                    "name": resource.get("name"),
+                    "entryPoint": metadata.get("entryPoint"),
+                    "sourceResource": provenance["sourceResource"],
+                }
+            )
+        return sorted(result, key=lambda item: json.dumps(item, sort_keys=True))
+
+    mismatch = isinstance(declared, Mapping) and identities(declared) != identities(
+        reflected
+    )
+    if not errors and not mismatch:
+        return []
+    return [
+        ProjectDiagnostic(
+            severity="error",
+            code="project.runtime-package-inspection.resource-identity-invalid",
+            message=(
+                errors[0]["message"]
+                if errors
+                else "Declared source resource identities differ from the packaged artifact."
+            ),
+            location=SourceLocation(file=str(package_path)),
+            check_kind="runtime-package-inspection",
+        )
+    ]
 
 
 def _runtime_package_inspection_target(
@@ -38622,8 +38673,7 @@ def _runtime_variant_arguments(
         for specialization in specializations
         if specialization.get("name") == source_entry
         and (
-            target_entry
-            in {
+            target_entry in {
                 specialization.get("hostName"),
                 specialization.get("materializedName"),
                 specialization.get("name"),
@@ -46327,6 +46377,7 @@ def _validation_report_payload(
     diagnostics: Sequence[Mapping[str, Any]],
     validation: Mapping[str, Any],
     *,
+    source_report_hash: Mapping[str, str] | None,
     project: Any = None,
 ) -> dict[str, Any]:
     validation_artifacts = _record_sequence(validation.get("artifacts"))
@@ -46346,7 +46397,7 @@ def _validation_report_payload(
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": VALIDATION_REPORT_KIND,
         "sourceReport": str(path),
-        "sourceReportHash": _optional_source_hash(path),
+        "sourceReportHash": source_report_hash,
         "generatedAt": int(time.time()),
         "success": not any(
             diagnostic.get("severity") == "error" for diagnostic in diagnostics
@@ -46634,6 +46685,7 @@ def _provenance_contract_reasons(
     *,
     required: bool = False,
     require_closed_fields: bool = False,
+    config: ProjectConfig | None = None,
 ) -> list[str]:
     if "provenance" not in artifact:
         if required:
@@ -46652,6 +46704,318 @@ def _provenance_contract_reasons(
         if require_closed_fields
         else []
     )
+    if "softwareSubgroupPolicy" in provenance:
+        reasons.extend(
+            _software_subgroup_policy_contract_reasons(
+                f"{prefix}.softwareSubgroupPolicy", provenance["softwareSubgroupPolicy"]
+            )
+        )
+        if artifact.get("target") not in {"directx", "opengl"}:
+            reasons.append(
+                f"{prefix}.softwareSubgroupPolicy requires DirectX or OpenGL"
+            )
+    if "binary32DivisionProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(f"{prefix}.binary32DivisionProfile requires a Metal source")
+        if provenance["binary32DivisionProfile"] not in ("rne-gradual", "rne-flush"):
+            reasons.append(
+                f"{prefix}.binary32DivisionProfile must be rne-gradual or rne-flush"
+            )
+    if "binary16RemainderProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(f"{prefix}.binary16RemainderProfile requires a Metal source")
+        if provenance["binary16RemainderProfile"] != "binary32-quotient":
+            reasons.append(
+                f"{prefix}.binary16RemainderProfile must be binary32-quotient"
+            )
+    if "binary32AdditiveProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(f"{prefix}.binary32AdditiveProfile requires a Metal source")
+        if provenance["binary32AdditiveProfile"] not in ("rne-gradual", "rne-flush"):
+            reasons.append(
+                f"{prefix}.binary32AdditiveProfile must be rne-gradual or rne-flush"
+            )
+    if "binary32MultiplicationProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(
+                f"{prefix}.binary32MultiplicationProfile requires a Metal source"
+            )
+        if provenance["binary32MultiplicationProfile"] not in (
+            "rne-gradual",
+            "rne-flush",
+        ):
+            reasons.append(
+                f"{prefix}.binary32MultiplicationProfile must be rne-gradual or rne-flush"
+            )
+    if "binary32RemainderProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(f"{prefix}.binary32RemainderProfile requires a Metal source")
+        if provenance["binary32RemainderProfile"] not in (
+            "preserve-subnormals",
+            "flush-arithmetic-subnormals",
+        ):
+            reasons.append(
+                f"{prefix}.binary32RemainderProfile must be preserve-subnormals or flush-arithmetic-subnormals"
+            )
+    if "binary32ComparisonProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(
+                f"{prefix}.binary32ComparisonProfile requires a Metal source"
+            )
+        if provenance["binary32ComparisonProfile"] not in (
+            "preserve-subnormals",
+            "flush-subnormals",
+        ):
+            reasons.append(
+                f"{prefix}.binary32ComparisonProfile must be preserve-subnormals or flush-subnormals"
+            )
+    if "binary32Atan2Profile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(f"{prefix}.binary32Atan2Profile requires a Metal source")
+        if provenance["binary32Atan2Profile"] not in (
+            "preserve-subnormals",
+            "flush-subnormals",
+        ):
+            reasons.append(
+                f"{prefix}.binary32Atan2Profile must be preserve-subnormals or flush-subnormals"
+            )
+    if "binary32LogProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(f"{prefix}.binary32LogProfile requires a Metal source")
+        if provenance["binary32LogProfile"] not in (
+            "preserve-subnormals",
+            "flush-subnormals",
+        ):
+            reasons.append(
+                f"{prefix}.binary32LogProfile must be preserve-subnormals or flush-subnormals"
+            )
+    for field, allowed in (
+        ("binary32Log2OperandProfile", ("preserve-subnormals", "flush-subnormals")),
+        ("binary32Log2AccuracyProfile", ("portable-finite",)),
+    ):
+        if field in provenance:
+            if artifact.get("sourceBackend") != "metal":
+                reasons.append(f"{prefix}.{field} requires a Metal source")
+            if provenance[field] not in allowed:
+                reasons.append(f"{prefix}.{field} must be one of {allowed}")
+    if "binary32SqrtProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(f"{prefix}.binary32SqrtProfile requires a Metal source")
+        if provenance["binary32SqrtProfile"] not in (
+            "preserve-subnormals",
+            "flush-subnormals",
+        ):
+            reasons.append(
+                f"{prefix}.binary32SqrtProfile must be preserve-subnormals or flush-subnormals"
+            )
+    if "binary32RsqrtProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(f"{prefix}.binary32RsqrtProfile requires a Metal source")
+        if provenance["binary32RsqrtProfile"] not in (
+            "preserve-subnormals",
+            "flush-subnormals",
+        ):
+            reasons.append(
+                f"{prefix}.binary32RsqrtProfile must be preserve-subnormals or flush-subnormals"
+            )
+    if "binary32PowerOperandProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(
+                f"{prefix}.binary32PowerOperandProfile requires a Metal source"
+            )
+        if provenance["binary32PowerOperandProfile"] != "flush-subnormals":
+            reasons.append(
+                f"{prefix}.binary32PowerOperandProfile must be flush-subnormals"
+            )
+    if "binary32PowerAccuracyProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(
+                f"{prefix}.binary32PowerAccuracyProfile requires a Metal source"
+            )
+        if provenance["binary32PowerAccuracyProfile"] != "portable-finite":
+            reasons.append(
+                f"{prefix}.binary32PowerAccuracyProfile must be portable-finite"
+            )
+    if "dispatchRegion" in provenance:
+        try:
+            region = DispatchRegion.from_json(provenance["dispatchRegion"])
+            if artifact.get("target") not in {"directx", "opengl"}:
+                raise ValueError("dispatch regions require DirectX or OpenGL")
+            if artifact.get("status") == "translated":
+                _validate_project_dispatch_region_execution(
+                    region, artifact.get("execution")
+                )
+        except ValueError as exc:
+            reasons.append(f"{prefix}.dispatchRegion: {exc}")
+    if "dispatchRegionProgram" in provenance:
+        try:
+            if "dispatchRegion" not in provenance:
+                raise ValueError("dispatchRegionProgram requires dispatchRegion")
+            validate_dispatch_region_program(
+                provenance["dispatchRegionProgram"], target=artifact.get("target")
+            )
+        except ValueError as exc:
+            reasons.append(f"{prefix}.dispatchRegionProgram: {exc}")
+    if (
+        config is not None
+        and artifact.get("status") == "translated"
+        and all(
+            _is_non_empty_string(artifact.get(key))
+            for key in ("sourceBackend", "source", "target")
+        )
+    ):
+        options = _source_options_for_unit(
+            config, artifact["sourceBackend"], artifact["source"], artifact["target"]
+        )
+        policy = provenance.get("softwareSubgroupPolicy")
+        applicability = options.get(SOFTWARE_SUBGROUP_APPLICABILITY_SOURCE_OPTION)
+        if applicability is not None:
+            if not isinstance(policy, Mapping) or (
+                policy.get("applicability") != applicability
+                or policy.get("requestedWidth")
+                != options.get(SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION)
+            ):
+                reasons.append(
+                    f"{prefix}.softwareSubgroupPolicy must match the resolved project source options"
+                )
+        elif policy is not None:
+            reasons.append(
+                f"{prefix}.softwareSubgroupPolicy requires an explicit applicability option"
+            )
+        expected_division_profile = (
+            options.get("binary32_division_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("binary32DivisionProfile") != expected_division_profile:
+            reasons.append(
+                f"{prefix}.binary32DivisionProfile must match the resolved project source options"
+            )
+        expected_remainder_profile = (
+            options.get("binary16_remainder_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("binary16RemainderProfile") != expected_remainder_profile:
+            reasons.append(
+                f"{prefix}.binary16RemainderProfile must match the resolved project source options"
+            )
+        expected_remainder_profile = (
+            options.get("binary32_remainder_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("binary32RemainderProfile") != expected_remainder_profile:
+            reasons.append(
+                f"{prefix}.binary32RemainderProfile must match the resolved project source options"
+            )
+        expected_additive_profile = (
+            options.get("binary32_additive_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("binary32AdditiveProfile") != expected_additive_profile:
+            reasons.append(
+                f"{prefix}.binary32AdditiveProfile must match the resolved project source options"
+            )
+        expected_multiplication_profile = (
+            options.get("binary32_multiplication_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if (
+            provenance.get("binary32MultiplicationProfile")
+            != expected_multiplication_profile
+        ):
+            reasons.append(
+                f"{prefix}.binary32MultiplicationProfile must match the resolved project source options"
+            )
+        expected_comparison_profile = (
+            options.get("binary32_comparison_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("binary32ComparisonProfile") != expected_comparison_profile:
+            reasons.append(
+                f"{prefix}.binary32ComparisonProfile must match the resolved project source options"
+            )
+        expected_atan2_profile = (
+            options.get("binary32_atan2_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("binary32Atan2Profile") != expected_atan2_profile:
+            reasons.append(
+                f"{prefix}.binary32Atan2Profile must match the resolved project source options"
+            )
+        expected_log_profile = (
+            options.get("binary32_log_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("binary32LogProfile") != expected_log_profile:
+            reasons.append(
+                f"{prefix}.binary32LogProfile must match the resolved project source options"
+            )
+        for option, field in (
+            ("binary32_log2_operand_profile", "binary32Log2OperandProfile"),
+            ("binary32_log2_accuracy_profile", "binary32Log2AccuracyProfile"),
+        ):
+            expected = (
+                options.get(option) if artifact["sourceBackend"] == "metal" else None
+            )
+            if provenance.get(field) != expected:
+                reasons.append(
+                    f"{prefix}.{field} must match the resolved project source options"
+                )
+        expected_sqrt_profile = (
+            options.get("binary32_sqrt_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("binary32SqrtProfile") != expected_sqrt_profile:
+            reasons.append(
+                f"{prefix}.binary32SqrtProfile must match the resolved project source options"
+            )
+        expected_rsqrt_profile = (
+            options.get("binary32_rsqrt_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("binary32RsqrtProfile") != expected_rsqrt_profile:
+            reasons.append(
+                f"{prefix}.binary32RsqrtProfile must match the resolved project source options"
+            )
+        expected_power_operand_profile = (
+            options.get("binary32_power_operand_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if (
+            provenance.get("binary32PowerOperandProfile")
+            != expected_power_operand_profile
+        ):
+            reasons.append(
+                f"{prefix}.binary32PowerOperandProfile must match the resolved project source options"
+            )
+        expected_power_accuracy_profile = (
+            options.get("binary32_power_accuracy_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if (
+            provenance.get("binary32PowerAccuracyProfile")
+            != expected_power_accuracy_profile
+        ):
+            reasons.append(
+                f"{prefix}.binary32PowerAccuracyProfile must match the resolved project source options"
+            )
+        if provenance.get("dispatchRegion") != options.get(
+            DISPATCH_REGION_SOURCE_OPTION
+        ):
+            reasons.append(
+                f"{prefix}.dispatchRegion must match the resolved project source options"
+            )
     pipeline = provenance.get("pipeline")
     if not _is_non_empty_string(pipeline):
         reasons.append(f"{prefix}.pipeline must be a string")
@@ -47160,6 +47524,9 @@ def _project_config_for_scan_validation(
         },
         variants=variants,
         specialization_constants=dict(specialization_constants),
+        freeze_specialization_constants=project.get(
+            "freezeSpecializationConstants", False
+        ),
         source_specialization_constants={
             str(pattern): dict(values)
             for pattern, values in source_specialization_constants.items()
@@ -47315,21 +47682,28 @@ def _scan_skipped_label(identity: ProjectScanSkippedIdentity) -> str:
     return label
 
 
-def _current_project_scan_contract_reasons(
+def _current_project_scan_for_report_validation(
     project: Mapping[str, Any] | None,
+    root_path: Path | None,
+) -> ProjectScan | None:
+    config = _project_config_for_scan_validation(project, root_path)
+    if config is None:
+        return None
+    try:
+        return scan_project(config)
+    except (OSError, ValueError):
+        return None
+
+
+def _current_project_scan_contract_reasons(
+    current_scan: ProjectScan | None,
     units: Sequence[Any],
     skipped: Sequence[Any],
     *,
     root_path: Path | None,
     report_path: Path,
 ) -> list[str]:
-    config = _project_config_for_scan_validation(project, root_path)
-    if config is None:
-        return []
-
-    try:
-        current_scan = scan_project(config)
-    except (OSError, ValueError):
+    if current_scan is None:
         return []
 
     ignored_report_path = None
@@ -47580,10 +47954,17 @@ def _artifact_rule_execution_contract_reasons(
             normalized_entry_rules.get(selected_entry_rule_source_pattern, {})
         )
         host_names = [str(item["hostName"]) for item in host_specializations]
+        rule_entry_points = (
+            _configured_entry_points_for_artifact(record, project) or host_names
+            if isinstance(record.get("entryPoint"), Mapping)
+            else host_names
+        )
         unmatched_entry_patterns = sorted(
             pattern
             for pattern in configured_entry_patterns
-            if not any(fnmatch.fnmatch(host_name, pattern) for host_name in host_names)
+            if not any(
+                fnmatch.fnmatch(host_name, pattern) for host_name in rule_entry_points
+            )
         )
         if unmatched_entry_patterns:
             reasons.append(
@@ -50438,6 +50819,9 @@ def _project_config_for_include_validation(
         defines=dict(defines),
         variants=variants,
         specialization_constants=dict(specialization_constants),
+        freeze_specialization_constants=project.get(
+            "freezeSpecializationConstants", False
+        ),
         source_specialization_constants={
             str(pattern): dict(values)
             for pattern, values in source_specialization_constants.items()
@@ -50801,16 +51185,9 @@ def _current_include_scan_diagnostic_contract_reasons(
 def _current_project_config_diagnostic_contract_reasons(
     diagnostics: Sequence[Any],
     *,
-    root_path: Path | None,
-    project: Mapping[str, Any] | None,
+    current_scan: ProjectScan | None,
 ) -> list[str]:
-    config = _project_config_for_scan_validation(project, root_path)
-    if config is None:
-        return []
-
-    try:
-        current_scan = scan_project(config)
-    except (OSError, ValueError):
+    if current_scan is None:
         return []
 
     reported_diagnostic_counts = Counter(
@@ -51676,6 +52053,18 @@ def _subgroup_width_rule_mapping_contract_reasons(
     return reasons
 
 
+def _dispatch_region_options_contract_reasons(
+    prefix: str, options: Mapping[str, Any]
+) -> list[str]:
+    if DISPATCH_REGION_SOURCE_OPTION not in options:
+        return []
+    try:
+        DispatchRegion.from_json(options[DISPATCH_REGION_SOURCE_OPTION])
+    except ValueError as exc:
+        return [f"{prefix}.{DISPATCH_REGION_SOURCE_OPTION}: {exc}"]
+    return []
+
+
 def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
     if not isinstance(value, Mapping):
         return [f"{prefix} must be an object"]
@@ -51690,6 +52079,9 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
         if not isinstance(options, Mapping):
             reasons.append(f"{option_prefix} must be an object")
             continue
+        reasons.extend(
+            _dispatch_region_options_contract_reasons(option_prefix, options)
+        )
         for name, option_value in options.items():
             if not _is_non_empty_string(name):
                 reasons.append(f"{option_prefix} keys must be non-empty strings")
@@ -51716,12 +52108,18 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
                         )
                     if any(
                         not isinstance(pattern_value, (str, int, bool))
-                        for pattern_value in pattern_options.values()
+                        for pattern_key, pattern_value in pattern_options.items()
+                        if pattern_key != DISPATCH_REGION_SOURCE_OPTION
                     ):
                         reasons.append(
                             f"{pattern_prefix} values must be strings, "
                             "integers, or booleans"
                         )
+                    reasons.extend(
+                        _dispatch_region_options_contract_reasons(
+                            pattern_prefix, pattern_options
+                        )
+                    )
                 continue
             if name == TEMPLATE_VARIANTS_SOURCE_OPTION:
                 reasons.extend(
@@ -51744,6 +52142,11 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
                     if not isinstance(target_options, Mapping):
                         reasons.append(f"{target_prefix} must be an object")
                         continue
+                    reasons.extend(
+                        _dispatch_region_options_contract_reasons(
+                            target_prefix, target_options
+                        )
+                    )
                     for (
                         target_option_name,
                         target_option_value,
@@ -51789,18 +52192,30 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
                                     )
                                 if any(
                                     not isinstance(pattern_value, (str, int, bool))
-                                    for pattern_value in pattern_options.values()
+                                    for pattern_key, pattern_value in (
+                                        pattern_options.items()
+                                    )
+                                    if pattern_key != DISPATCH_REGION_SOURCE_OPTION
                                 ):
                                     reasons.append(
                                         f"{pattern_prefix} values must be strings, "
                                         "integers, or booleans"
                                     )
+                                reasons.extend(
+                                    _dispatch_region_options_contract_reasons(
+                                        pattern_prefix, pattern_options
+                                    )
+                                )
+                            continue
+                        if target_option_name == DISPATCH_REGION_SOURCE_OPTION:
                             continue
                         if not isinstance(target_option_value, (str, int, bool)):
                             reasons.append(
                                 f"{target_prefix} values must be strings, "
                                 "integers, booleans, or source_patterns objects"
                             )
+                continue
+            if name == DISPATCH_REGION_SOURCE_OPTION:
                 continue
             if not isinstance(option_value, (str, int, bool)):
                 reasons.append(
@@ -53039,6 +53454,8 @@ def _project_metadata_contract_reasons(
 
     specialization_constants = project.get("specializationConstants")
     specialization_constants_are_mapping = isinstance(specialization_constants, Mapping)
+    if type(project.get("freezeSpecializationConstants", False)) is not bool:
+        reasons.append("project.freezeSpecializationConstants must be a boolean")
     if _optional_project_field(
         project, "specializationConstants", required=require_full_metadata
     ):
@@ -53959,7 +54376,8 @@ def _toolchain_run_contract_reasons(
     elif _is_non_empty_string(run.get("target")):
         normalized_target = _normalized_targets([str(run["target"])])[0]
         configured_tools = TOOLCHAIN_BY_BACKEND.get(normalized_target, ())
-        if configured_tools and command[0] not in configured_tools:
+        tool_name = dxc_library_command_tool(command) or command[0]
+        if configured_tools and tool_name not in configured_tools:
             reasons.append(
                 f"{prefix}.command[0] must match a configured validation tool "
                 f"for target {normalized_target}"
@@ -56070,10 +56488,28 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     )
                 )
 
+    needs_current_scan = (
+        has_summary
+        and isinstance(units, list)
+        and (
+            isinstance(skipped, list)
+            or (
+                isinstance(project, Mapping)
+                and isinstance(report.get("diagnostics", []), list)
+            )
+        )
+    )
+    current_scan = (
+        _current_project_scan_for_report_validation(
+            project if isinstance(project, Mapping) else None, root_path
+        )
+        if needs_current_scan
+        else None
+    )
     if has_summary and isinstance(units, list) and isinstance(skipped, list):
         reasons.extend(
             _current_project_scan_contract_reasons(
-                project if isinstance(project, Mapping) else None,
+                current_scan,
                 units,
                 skipped,
                 root_path=root_path,
@@ -56090,6 +56526,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
     )
 
     artifacts = report.get("artifacts", [])
+    region_config = (
+        _project_config_for_scan_validation(
+            project if isinstance(project, Mapping) else None, root_path
+        )
+        if has_summary
+        else None
+    )
     if has_summary and "artifacts" not in report:
         reasons.append("artifacts must be a list")
     if not isinstance(artifacts, list):
@@ -56457,6 +56900,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     artifact,
                     required=has_summary,
                     require_closed_fields=has_summary,
+                    config=region_config,
                 )
             )
             reasons.extend(
@@ -56609,8 +57053,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             reasons.extend(
                 _current_project_config_diagnostic_contract_reasons(
                     diagnostics,
-                    root_path=root_path,
-                    project=project,
+                    current_scan=current_scan,
                 )
             )
             reasons.extend(
@@ -56959,15 +57402,18 @@ def _directx_dxc_smoke_commands(
     entry_profiles = _directx_dxc_entry_profiles(artifact_path, artifact=artifact)
     if entry_profiles is None:
         return [
-            [
-                tool,
-                "-T",
-                dxc_profile_for_source("lib_6_3", source),
-                *compiler_arguments,
-                str(artifact_path),
-                "-Fo",
-                os.devnull,
-            ]
+            dxc_long_path_command(
+                [
+                    tool,
+                    "-T",
+                    dxc_profile_for_source("lib_6_3", source),
+                    *compiler_arguments,
+                    dxc_file_path(artifact_path),
+                    "-Fo",
+                    os.devnull,
+                ],
+                artifact_path,
+            )
         ]
 
     return [
@@ -56990,17 +57436,20 @@ def _directx_dxc_entry_smoke_command(
     *,
     compiler_arguments: Sequence[str] = (),
 ) -> list[str]:
-    return [
-        tool,
-        "-T",
-        profile,
-        *compiler_arguments,
-        "-E",
-        entry,
-        str(artifact_path),
-        "-Fo",
-        os.devnull,
-    ]
+    return dxc_long_path_command(
+        [
+            tool,
+            "-T",
+            profile,
+            *compiler_arguments,
+            "-E",
+            entry,
+            dxc_file_path(artifact_path),
+            "-Fo",
+            os.devnull,
+        ],
+        artifact_path,
+    )
 
 
 def _directx_dxc_entry_profile(artifact_path: Path) -> tuple[str, str] | None:

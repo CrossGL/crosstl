@@ -53,6 +53,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   open-source-porting:
     name: Open-Source Porting Demo (${{ matrix.os }})
@@ -64,6 +68,7 @@ jobs:
         os: [ubuntu-latest, macOS-latest, windows-latest]
     env:
       DEMO_FAILURE_SUMMARY_DIR: support/generated/demo-reports/${{ matrix.os }}
+      PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
 
     steps:
       - name: Checkout repository
@@ -79,10 +84,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y glslang-tools spirv-tools
-
-      - name: Install macOS shader validators
-        if: runner.os == 'macOS'
-        run: brew install glslang spirv-tools
 
       - name: Install DirectX Shader Compiler
         if: runner.os == 'Windows'
@@ -111,7 +112,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          python -m pip install -e . pytest
+          python -m pip install -e . pytest pytest-xdist
         shell: bash
 
       - name: Prepare demo failure summary helper
@@ -168,6 +169,7 @@ jobs:
 
       - name: Run open-source porting demo tests
         id: run_demo_tests
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           mkdir -p support/generated/demo-reports/${{ matrix.os }}
@@ -178,7 +180,7 @@ jobs:
           done < <(python tools/demo_ci_metadata.py emit-pytest-files)
           demo_selector="$(python tools/demo_ci_metadata.py emit-pytest-selector)"
           demo_selector="${demo_selector%$'\r'}"
-          python -m pytest -q \
+          python -m pytest -q -n auto \
             "${demo_test_files[@]}" \
             -k "$demo_selector" \
             --junitxml support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml
@@ -194,6 +196,7 @@ jobs:
           cat support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify checked-in demo artifacts
+        if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           source support/generated/demo-failure-summary.sh

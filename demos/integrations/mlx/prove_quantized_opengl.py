@@ -36,7 +36,7 @@ PINNED_FILE_SHA256 = {
 TARGET = "opengl"
 TEMPLATE_SPECIALIZATION_LIMIT = 128
 MATERIALIZATION_WORK_LIMIT = 4096
-REACHABLE_SPECIALIZATION_COUNT = 6
+REACHABLE_SPECIALIZATION_COUNT = 5
 CONCRETE_SPECIALIZATION_COUNT = 3
 PRUNED_CANDIDATE_COUNT = 110861
 INDEX_RANGE_MINIMUM = 0
@@ -83,7 +83,7 @@ ENTRY_CONTRACTS = {
     MLX_QUANTIZED_GATHER_ENTRY_POINT: {
         "specializationName": "affine_gather_qmv_fast",
         "parameters": {"T": "float", "bits": "2", "group_size": "32"},
-        "reachableSpecializationCount": 11,
+        "reachableSpecializationCount": 10,
         "concreteSpecializationCount": 8,
         "prunedCandidateCount": PRUNED_CANDIDATE_COUNT,
         "generatedContract": "gather-qmv-fast",
@@ -105,12 +105,32 @@ _GENERATED_SEMANTIC_SENTINELS = {
     "minimumReduction": "w_min = subgroupMin(w_min);",
     "maximumReduction": "w_max = subgroupMax(w_max);",
     "scaleCalculation": "float scale = max(((w_max - w_min) / n_bins), eps);",
-    "edgeRounding": "float q0 = round((edge / scale));",
-    "quantization": (
-        "uint val = bitfieldExtract(uint(min(round(((w_thread[i] - bias) / "
-        "scale)), n_bins)), 0, 8);"
+    "roundingImplementation": (
+        """float crossgl_metal_round_float(float value) {
+    uint bits = floatBitsToUint(value);
+    uint magnitude = (bits & 2147483647u);
+    uint sign = (bits & 2147483648u);
+    if ((magnitude >= 1258291200u)) {
+        return value;
+    }
+    if ((magnitude < 1056964608u)) {
+        return 0.0;
+    }
+    if ((magnitude < 1065353216u)) {
+        return uintBitsToFloat((sign | 1065353216u));
+    }
+    uint shift = (150u - (magnitude >> 23u));
+    uint unit = (1u << shift);
+    uint rounded = ((magnitude + (unit >> 1u)) & (~(unit - 1u)));
+    return uintBitsToFloat((sign | rounded));
+}"""
     ),
-    "subgroupPacking": "uint sval = subgroupShuffleDown(val, j);",
+    "edgeRounding": "float q0 = crossgl_metal_round_float(float((edge / scale)));",
+    "quantization": (
+        "uint val = bitfieldExtract(uint(min(crossgl_metal_round_float(float(((w_thread[i] - bias) / "
+        "scale))), n_bins)), 0, 8);"
+    ),
+    "subgroupPacking": "uint sval = subgroupShuffleDown(val, (uint(j) & 65535u));",
 }
 _GENERATED_INDEX_SENTINELS = {
     "in_index + i": "w[uint((in_index + uint64_t(i)))]",
@@ -436,8 +456,9 @@ def _validate_execution_report(
     _require(
         isinstance(project, Mapping)
         and project.get("workgroupSize") is None
-        and project.get("workgroupSizeRules")
-        == {MLX_QUANTIZED_SOURCE: [str(value) for value in workgroup_size]}
+        and project.get("workgroupSizeRules") == {
+            MLX_QUANTIZED_SOURCE: [str(value) for value in workgroup_size]
+        }
         and project.get("workgroupSizeRuleCount") == 1
         and project.get("subgroupWidthRules") == {}
         and project.get("subgroupWidthRuleCount") == 0,
@@ -449,8 +470,10 @@ def _validate_execution_report(
     _require(
         isinstance(execution, Mapping)
         and execution.get("sourceEntryPoints") == [entry_point]
-        and execution.get("provenance")
-        == {"kind": "materialized-template-rule", "path": rule_path}
+        and execution.get("provenance") == {
+            "kind": "materialized-template-rule",
+            "path": rule_path,
+        }
         and _is_sha256_identity(execution.get("identity"))
         and isinstance(entries, list)
         and len(entries) == 1
@@ -464,8 +487,7 @@ def _validate_execution_report(
         and execution_entry.get("targetEntryPoint") == "main"
         and execution_entry.get("workgroupSize") == workgroup_size
         and execution_entry.get("rule") == expected_rule
-        and execution_entry.get("materialization")
-        == {
+        and execution_entry.get("materialization") == {
             "name": entry_contract["specializationName"],
             "hostName": entry_point,
             "materializedName": entry_point,
@@ -503,19 +525,19 @@ def _translated_artifact(
         and artifact.get("sourceBackend") == "metal"
         and artifact.get("target") == TARGET
         and artifact.get("status") == "translated"
-        and artifact.get("sourceHash")
-        == {
+        and artifact.get("sourceHash") == {
             "algorithm": "sha256",
             "value": PINNED_FILE_SHA256[MLX_QUANTIZED_SOURCE],
         }
-        and artifact.get("provenance")
-        == {"pipeline": "entry-scoped-translate", "intermediate": "crossgl"}
+        and artifact.get("provenance") == {
+            "pipeline": "entry-scoped-translate",
+            "intermediate": "crossgl",
+        }
         and artifact.get("requiredCapabilities") == [],
         "OpenGL artifact provenance does not match pinned quantized.metal",
     )
     _require(
-        artifact.get("entryPoint")
-        == {
+        artifact.get("entryPoint") == {
             "source": entry_point,
             "target": "main",
             "stage": "compute",
@@ -576,8 +598,10 @@ def _translated_artifact(
     )
     _require(
         artifact_path.suffix == ".glsl"
-        and artifact.get("generatedHash")
-        == {"algorithm": "sha256", "value": _sha256(artifact_path)}
+        and artifact.get("generatedHash") == {
+            "algorithm": "sha256",
+            "value": _sha256(artifact_path),
+        }
         and artifact.get("generatedSizeBytes") == artifact_path.stat().st_size,
         "generated GLSL identity does not match the project report",
     )

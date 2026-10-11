@@ -5,22 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 9,
-        "endOffset": 207,
+        "endLine": 29,
+        "endOffset": 694,
         "file": "crosstl-out/vulkan/lib.spvasm",
-        "length": 40,
-        "line": 8,
-        "offset": 167
+        "length": 694,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 8,
-        "endOffset": 125,
+        "endLine": 10,
+        "endOffset": 180,
         "file": "lib.rs",
-        "length": 44,
-        "line": 7,
-        "offset": 81
+        "length": 180,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

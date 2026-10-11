@@ -3294,8 +3294,7 @@ class CudaParser:
         return " ".join(
             part
             for part in str(vtype).split()
-            if part
-            not in {
+            if part not in {
                 "const",
                 "volatile",
                 "__restrict__",

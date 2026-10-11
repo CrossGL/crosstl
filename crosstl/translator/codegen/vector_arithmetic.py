@@ -141,8 +141,7 @@ class VectorArithmeticMixin:
                 if vector_info is not None:
                     return vector_info["component_type"]
             if (
-                func_name
-                in {
+                func_name in {
                     "abs",
                     "sign",
                     "fract",

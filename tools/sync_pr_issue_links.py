@@ -9,7 +9,6 @@ managed closing lines in the PR body.
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import re
@@ -220,6 +219,8 @@ class GitHubClient:
         path: str,
         payload: dict[str, Any] | None = None,
         query: dict[str, Any] | None = None,
+        *,
+        accept: str = "application/vnd.github+json",
     ) -> tuple[Any, dict[str, str]]:
         url = self.api_url + path
         if query:
@@ -228,7 +229,7 @@ class GitHubClient:
         if payload is not None:
             body = json.dumps(payload).encode("utf-8")
         req = request.Request(url, data=body, method=method)
-        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("Accept", accept)
         req.add_header("Authorization", f"Bearer {self.token}")
         req.add_header("X-GitHub-Api-Version", API_VERSION)
         if body is not None:
@@ -283,15 +284,12 @@ class GitHubClient:
             "GET",
             f"/repos/{repo}/contents/{parse.quote(path)}",
             query={"ref": ref},
+            # The metadata response omits content for files larger than 1 MiB.
+            accept="application/vnd.github.raw+json",
         )
         if not isinstance(payload, dict):
-            raise ValueError("GitHub contents response is not an object")
-        encoding = payload.get("encoding")
-        content = payload.get("content")
-        if encoding != "base64" or not isinstance(content, str):
-            raise ValueError("GitHub contents response is not base64 JSON content")
-        raw = base64.b64decode(content)
-        return json.loads(raw.decode("utf-8"))
+            raise ValueError("Repository JSON file is not an object")
+        return payload
 
     def list_support_issues(self) -> list[dict[str, Any]]:
         issues: list[dict[str, Any]] = []

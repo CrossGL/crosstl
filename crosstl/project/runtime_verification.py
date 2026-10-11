@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -17,10 +18,13 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
+from crosstl.project.buffer_requirements import valid_minimum_binding_size
 from crosstl.project.directx_toolchain import (
     dxc_compiler_arguments_for_source,
     dxc_profile_for_source,
 )
+from crosstl.project.runtime_value_encoding import validate_value_encoding
+from crosstl.project.storage_record_layout import validate_storage_record_layout
 from crosstl.translator.codegen import normalize_backend_name
 
 RUNTIME_VERIFICATION_FIXTURES_KIND = "crosstl-runtime-verification-fixtures"
@@ -199,6 +203,7 @@ class RuntimeValue:
     tolerance: RuntimeTolerance | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
     allocation: RuntimeAllocationView | None = None
+    encoding: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {"name": self.name, "kind": self.kind}
@@ -208,6 +213,8 @@ class RuntimeValue:
             payload["shape"] = list(self.shape)
         if self.values is not None:
             payload["values"] = self.values
+        if self.encoding is not None:
+            payload["encoding"] = self.encoding
         if self.tolerance is not None:
             payload["tolerance"] = self.tolerance.to_json()
         if self.metadata:
@@ -388,6 +395,7 @@ class RuntimeDispatchGeometry:
     global_size: tuple[int, ...] = field(default_factory=tuple)
     grid_size: tuple[int, ...] = field(default_factory=tuple)
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    thread_grid_size: tuple[int, ...] = field(default_factory=tuple)
 
     def to_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {}
@@ -401,6 +409,8 @@ class RuntimeDispatchGeometry:
             payload["globalSize"] = list(self.global_size)
         if self.grid_size:
             payload["gridSize"] = list(self.grid_size)
+        if self.thread_grid_size:
+            payload["threadGridSize"] = list(self.thread_grid_size)
         if self.metadata:
             payload["metadata"] = dict(self.metadata)
         return payload
@@ -595,6 +605,25 @@ class RuntimeExecutionPlan:
 
 
 @dataclass(frozen=True)
+class _NativeRuntimeUploadSnapshot:
+    dtype: str
+    shape: tuple[int, ...]
+    encoding: str | None
+    element_count: int
+    payload: bytes
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "dtype": self.dtype,
+            "shape": list(self.shape),
+            "encoding": self.encoding,
+            "elementCount": self.element_count,
+            "sizeBytes": len(self.payload),
+            "sha256": hashlib.sha256(self.payload).hexdigest(),
+        }
+
+
+@dataclass(frozen=True)
 class NativeRuntimeBufferBinding:
     """Prepared native runtime buffer/image binding derived from fixture data."""
 
@@ -607,6 +636,8 @@ class NativeRuntimeBufferBinding:
     metadata: Mapping[str, Any] = field(default_factory=dict)
     expected_output: RuntimeValue | None = None
     allocation: RuntimeAllocationView | None = None
+    encoding: str | None = None
+    upload_snapshot: _NativeRuntimeUploadSnapshot | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -617,6 +648,8 @@ class NativeRuntimeBufferBinding:
             payload["source"] = self.source
         if self.dtype is not None:
             payload["dtype"] = self.dtype
+        if self.encoding is not None:
+            payload["encoding"] = self.encoding
         if self.shape:
             payload["shape"] = list(self.shape)
         if self.metadata:
@@ -625,6 +658,8 @@ class NativeRuntimeBufferBinding:
             payload["expectedOutput"] = _runtime_value_reference(self.expected_output)
         if self.allocation is not None:
             payload["allocation"] = self.allocation.to_json()
+        if self.upload_snapshot is not None:
+            payload["uploadSnapshot"] = self.upload_snapshot.to_json()
         return payload
 
 
@@ -1558,6 +1593,8 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
     def _native_buffer_bindings(
         self, state: RuntimeExecutionState
     ) -> dict[str, NativeRuntimeBufferBinding]:
+        from .native_runtime_drivers import _snapshot_native_buffer_binding
+
         bindings: dict[str, NativeRuntimeBufferBinding] = {}
         for resource in state.plan.resource_bindings:
             binding = resource.binding
@@ -1571,14 +1608,14 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
             allocation_value = upload_value or expected_output or resource.value
             bindings[key] = NativeRuntimeBufferBinding(
                 name=key,
-                binding=binding,
+                binding=replace(binding, metadata=copy.deepcopy(binding.metadata)),
                 value=upload_value.values if upload_value is not None else None,
                 source=resource.source,
                 dtype=allocation_value.dtype if allocation_value is not None else None,
                 shape=allocation_value.shape if allocation_value is not None else (),
                 metadata=(
                     {
-                        **dict(allocation_value.metadata),
+                        **copy.deepcopy(dict(allocation_value.metadata)),
                         "runtimeValueName": allocation_value.name,
                     }
                     if allocation_value is not None
@@ -1586,7 +1623,14 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                 ),
                 expected_output=expected_output,
                 allocation=resource.allocation,
+                encoding=(
+                    allocation_value.encoding if allocation_value is not None else None
+                ),
             )
+            if self.target in {"metal", "directx", "opengl", "vulkan"}:
+                bindings[key] = _snapshot_native_buffer_binding(
+                    bindings[key], target=self.target
+                )
         return bindings
 
     def _native_constant_bindings(
@@ -1847,6 +1891,90 @@ class VulkanRuntimeParityAdapter(NativeRuntimeParityAdapter):
         )
 
 
+class MetalRuntimeParityAdapter(NativeRuntimeParityAdapter):
+    """Compile an identity-checked Metal snapshot before native buffer execution."""
+
+    name = "metal-native-runtime"
+    target = "metal"
+    targets = ("metal",)
+    required_tools = ("xcrun",)
+    supported_platforms = ("darwin",)
+
+    def __init__(
+        self, runtime=None, *, timeout_seconds=120, language_version=None, **kwargs
+    ):
+        from .metal_runtime import MetalComputeRuntime, run_metal_command
+
+        if language_version is not None and (
+            not isinstance(language_version, str)
+            or re.fullmatch(r"[1-9][0-9]*\.[0-9]+", language_version) is None
+        ):
+            raise ValueError("Metal language version must be a major.minor string.")
+        self.language_version = language_version
+        if (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+        ):
+            raise ValueError("Metal operation timeout must be positive and finite.")
+        if runtime is None:
+            runtime = MetalComputeRuntime(timeout_seconds=timeout_seconds)
+        if kwargs.get("command_runner") is None:
+
+            def runner(command, *, input_text=None):
+                return run_metal_command(
+                    command, input_text=input_text, timeout_seconds=timeout_seconds
+                )
+
+            kwargs["command_runner"] = runner
+        super().__init__(runtime=runtime, **kwargs)
+
+    def validation_commands(self, state, artifact_path, *, temp_dir):
+        _ = state
+        if artifact_path.suffix == ".metallib":
+            return ()
+        air = temp_dir / "kernel.air"
+        library = temp_dir / "kernel.metallib"
+        xcrun = self._tool_command("xcrun")
+        return (
+            NativeRuntimeValidationCommand(
+                command=(
+                    xcrun,
+                    "--sdk",
+                    "macosx",
+                    "metal",
+                    "-Werror",
+                    "-fno-fast-math",
+                    *(
+                        (f"-std=metal{self.language_version}",)
+                        if self.language_version is not None
+                        else ()
+                    ),
+                    "-c",
+                    str(artifact_path),
+                    "-o",
+                    str(air),
+                ),
+                action="compile-metal-for-native-runtime",
+                module_path=air,
+            ),
+            NativeRuntimeValidationCommand(
+                command=(
+                    xcrun,
+                    "--sdk",
+                    "macosx",
+                    "metallib",
+                    str(air),
+                    "-o",
+                    str(library),
+                ),
+                action="link-metal-for-native-runtime",
+                module_path=library,
+            ),
+        )
+
+
 def native_runtime_parity_adapter(
     target: str,
     runtime: Any | None = None,
@@ -1856,6 +1984,7 @@ def native_runtime_parity_adapter(
 
     normalized = _normalize_target(target)
     adapter_classes = {
+        "metal": MetalRuntimeParityAdapter,
         "directx": DirectXRuntimeParityAdapter,
         "opengl": OpenGLRuntimeParityAdapter,
         "vulkan": VulkanRuntimeParityAdapter,
@@ -1893,7 +2022,7 @@ def native_runtime_parity_adapters(
             runtime=runtime_by_target.get(target),
             **kwargs,
         )
-        for target in ("directx", "opengl", "vulkan")
+        for target in ("directx", "opengl", "vulkan", "metal")
     }
 
 
@@ -4394,6 +4523,19 @@ def _parse_runtime_dispatch_geometry(
         return value
     if not isinstance(value, Mapping):
         raise RuntimeVerificationError(f"{field_name} must be an object.")
+    thread_grid_size = ()
+    if "threadGridSize" in value:
+        thread_grid_size = _parse_runtime_vector(
+            value["threadGridSize"],
+            field_name=f"{field_name}.threadGridSize",
+            integer_only=True,
+        )
+        if not 1 <= len(thread_grid_size) <= 3 or any(
+            extent == 0 for extent in thread_grid_size
+        ):
+            raise RuntimeVerificationError(
+                f"{field_name}.threadGridSize must contain one to three positive integers."
+            )
     return RuntimeDispatchGeometry(
         entry_point=_optional_string(
             value.get("entryPoint", value.get("entry_point")),
@@ -4419,6 +4561,7 @@ def _parse_runtime_dispatch_geometry(
             field_name=f"{field_name}.gridSize",
             integer_only=True,
         ),
+        thread_grid_size=thread_grid_size,
         metadata=_parse_runtime_metadata(
             value.get("metadata", {}), field_name=f"{field_name}.metadata"
         ),
@@ -4516,6 +4659,11 @@ def _parse_runtime_value(
     values = value.get("values")
     if "values" not in value and "value" in value:
         values = value.get("value")
+    encoding = value.get("encoding")
+    try:
+        validate_value_encoding(encoding, dtype, values)
+    except ValueError as exc:
+        raise RuntimeVerificationError(f"{field_name}.encoding: {exc}") from exc
     allocation = _parse_runtime_allocation_view(
         value.get("allocation"),
         field_name=f"{field_name}.allocation",
@@ -4529,6 +4677,7 @@ def _parse_runtime_value(
         tolerance=tolerance,
         metadata=metadata,
         allocation=allocation,
+        encoding=encoding,
     )
 
 
@@ -5730,6 +5879,7 @@ def _runtime_dispatch_geometry_from_artifact(
             "workgroupCount",
             "globalSize",
             "gridSize",
+            "threadGridSize",
         )
     ):
         return _parse_runtime_dispatch_geometry(
@@ -5918,6 +6068,7 @@ def _merge_runtime_dispatch(
         workgroup_count=override.workgroup_count or base.workgroup_count,
         global_size=override.global_size or base.global_size,
         grid_size=override.grid_size or base.grid_size,
+        thread_grid_size=override.thread_grid_size or base.thread_grid_size,
         metadata={**dict(base.metadata), **dict(override.metadata)},
     )
 
@@ -6172,6 +6323,7 @@ def _runtime_fixture_values_by_name(
 
 
 _RUNTIME_SCALAR_BYTE_SIZES = {
+    "bfloat16": 2,
     "bool": 1,
     "float16": 2,
     "half": 2,
@@ -6334,13 +6486,36 @@ def _runtime_value_physical_byte_length(
     layout = _runtime_scalar_layout_signature(value.metadata)
     if not layout:
         layout = _runtime_scalar_layout_signature(binding.metadata)
-    vector_width = layout.get("vectorWidth", 1)
+    struct_members = layout.get("structMembers")
+    if "structMembers" in layout and "payloadEncoding" in layout:
+        try:
+            stride = validate_storage_record_layout(layout)
+        except ValueError:
+            return None
+        if (
+            _runtime_compatible_dtype(value.dtype) != "uint32"
+            or element_count * 4 % stride
+        ):
+            return None
+        return element_count * 4
+    is_struct = "structMembers" in layout or "componentCount" in layout
+    vector_width = (
+        layout.get("componentCount") if is_struct else layout.get("vectorWidth", 1)
+    )
     if (
         not isinstance(vector_width, int)
         or isinstance(vector_width, bool)
         or vector_width < 1
-        or vector_width > 4
+        or vector_width > (64 if is_struct else 4)
         or element_count % vector_width
+        or (
+            is_struct
+            and (
+                not isinstance(struct_members, list)
+                or len(struct_members) != vector_width
+                or "vectorWidth" in layout
+            )
+        )
     ):
         return None
     stride = layout.get("elementStrideBytes")
@@ -6449,6 +6624,51 @@ def _validate_runtime_allocations(
                 view = resource.allocation
             if view is None:
                 continue
+            layout = resource.binding.metadata.get("scalarLayout", {})
+            if isinstance(layout, Mapping) and "minimumBindingSizeBytes" in layout:
+                minimum = layout["minimumBindingSizeBytes"]
+                value = (
+                    resource.initial_value or resource.expected_output or resource.value
+                )
+                value_bytes = (
+                    _runtime_value_physical_byte_length(
+                        replace(value, metadata={}), resource.binding
+                    )
+                    if value is not None
+                    else None
+                )
+                if not valid_minimum_binding_size(minimum):
+                    record(
+                        (index,),
+                        _runtime_execution_diagnostic(
+                            "error",
+                            "project.runtime-verification.resource-minimum-binding-size-invalid",
+                            "Minimum binding size must be a positive signed 64-bit byte count.",
+                            artifact,
+                            binding=_runtime_allocation_binding_payload(resource),
+                            minimumBindingSizeBytes=minimum,
+                        ),
+                    )
+                elif (
+                    view.byte_length is None
+                    or view.byte_length < minimum
+                    or value_bytes is None
+                    or value_bytes < minimum
+                ):
+                    record(
+                        (index,),
+                        _runtime_execution_diagnostic(
+                            "error",
+                            "project.runtime-verification.resource-view-too-small",
+                            "Bound resource view is smaller than its proven minimum footprint.",
+                            artifact,
+                            binding=_runtime_allocation_binding_payload(resource),
+                            byteLength=view.byte_length,
+                            valueByteLength=value_bytes,
+                            minimumBindingSizeBytes=minimum,
+                            targetConstraint="minimum-binding-size",
+                        ),
+                    )
             if view.byte_length is not None and allocation_size is not None:
                 end = view.byte_offset + view.byte_length
                 if end > allocation_size:
@@ -6691,6 +6911,10 @@ def _runtime_scalar_layout_signature(metadata: Mapping[str, Any]) -> dict[str, A
         "elementSizeBytes",
         "elementStrideBytes",
         "vectorWidth",
+        "componentCount",
+        "structMembers",
+        "blockMembers",
+        "payloadEncoding",
         "alignmentBytes",
         "memberOffsetBytes",
         "storageLayout",
@@ -6864,7 +7088,9 @@ def _complete_runtime_dispatch_geometry(
     workgroup_size = dispatch.workgroup_size
     if not workgroup_size and entry_point is not None:
         workgroup_size = entry_point.workgroup_size
-    global_size = dispatch.global_size or dispatch.grid_size
+    global_size = (
+        dispatch.global_size or dispatch.grid_size or dispatch.thread_grid_size
+    )
     workgroup_count = dispatch.workgroup_count
     if not workgroup_count and global_size and workgroup_size:
         workgroup_count = _runtime_workgroup_count(global_size, workgroup_size)
@@ -6876,6 +7102,7 @@ def _complete_runtime_dispatch_geometry(
         workgroup_count=workgroup_count,
         global_size=global_size,
         grid_size=dispatch.grid_size,
+        thread_grid_size=dispatch.thread_grid_size,
         metadata=dispatch.metadata,
     )
 
@@ -6926,6 +7153,8 @@ def _runtime_value_reference(value: RuntimeValue) -> dict[str, Any]:
     payload: dict[str, Any] = {"name": value.name, "kind": value.kind}
     if value.dtype is not None:
         payload["dtype"] = value.dtype
+    if value.encoding is not None:
+        payload["encoding"] = value.encoding
     shape = value.shape or _infer_shape(value.values)
     if shape:
         payload["shape"] = list(shape)
@@ -7127,7 +7356,10 @@ def _compare_runtime_value(
     *,
     default_tolerance: RuntimeTolerance,
 ) -> dict[str, Any]:
-    tolerance = expected.tolerance or default_tolerance
+    bitwise = expected.encoding is not None
+    tolerance = (
+        RuntimeTolerance() if bitwise else (expected.tolerance or default_tolerance)
+    )
     comparison = {
         "name": expected.name,
         "kind": expected.kind,
@@ -7148,6 +7380,18 @@ def _compare_runtime_value(
             }
         )
         return comparison
+    if bitwise or actual.encoding is not None:
+        comparison["comparison"] = "bitwise"
+        try:
+            validate_value_encoding(expected.encoding, expected.dtype, expected.values)
+            validate_value_encoding(actual.encoding, actual.dtype, actual.values)
+            if expected.encoding != actual.encoding:
+                raise ValueError("Output storage encoding mismatch.")
+        except ValueError as exc:
+            comparison.update(
+                status=COMPARISON_FAILED, message=str(exc), mismatchCount=1
+            )
+            return comparison
     if (
         expected.dtype is not None
         and actual.dtype is not None
@@ -7195,8 +7439,14 @@ def _compare_runtime_value(
     for index, (expected_item, actual_item) in enumerate(
         zip(expected_flat, actual_flat)
     ):
-        matches, absolute_error, relative_error = _values_match(
-            expected_item, actual_item, tolerance
+        matches, absolute_error, relative_error = (
+            (
+                expected_item == actual_item,
+                0.0 if expected_item == actual_item else 1.0,
+                0.0,
+            )
+            if bitwise
+            else _values_match(expected_item, actual_item, tolerance)
         )
         max_absolute = max(max_absolute, absolute_error)
         if not math.isinf(relative_error):
@@ -7218,7 +7468,11 @@ def _compare_runtime_value(
     comparison["maxRelativeError"] = _json_metric(max_relative)
     if mismatch_count:
         comparison["status"] = COMPARISON_FAILED
-        comparison["message"] = "Output values differ beyond tolerance."
+        comparison["message"] = (
+            "Output storage bits differ."
+            if bitwise
+            else "Output values differ beyond tolerance."
+        )
         comparison["firstMismatch"] = first_mismatch
     return comparison
 
@@ -7229,6 +7483,8 @@ def _value_metadata(value: RuntimeValue | None) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     if value.dtype is not None:
         payload["dtype"] = value.dtype
+    if value.encoding is not None:
+        payload["encoding"] = value.encoding
     shape = value.shape or _infer_shape(value.values)
     if shape:
         payload["shape"] = list(shape)
@@ -7260,6 +7516,9 @@ def _flatten_values(value: Any) -> list[Any]:
 def _values_match(
     expected: Any, actual: Any, tolerance: RuntimeTolerance
 ) -> tuple[bool, float, float]:
+    if isinstance(expected, bool) or isinstance(actual, bool):
+        matches = type(expected) is bool and type(actual) is bool and expected == actual
+        return matches, 0.0 if matches else 1.0, 0.0
     if _is_number(expected) and _is_number(actual):
         expected_number = float(expected)
         actual_number = float(actual)

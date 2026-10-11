@@ -5,176 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 4,
-        "endOffset": 125,
-        "file": "crosstl-out/opengl/default-parameter.glsl",
-        "length": 28,
-        "line": 3,
-        "offset": 97
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 9,
-        "endOffset": 338,
-        "file": "default-parameter.slang",
-        "length": 32,
-        "line": 8,
-        "offset": 306
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 6,
-        "endOffset": 145,
-        "file": "crosstl-out/opengl/default-parameter.glsl",
-        "length": 19,
-        "line": 5,
-        "offset": 126
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 14,
-        "endOffset": 381,
-        "file": "default-parameter.slang",
-        "length": 18,
-        "line": 13,
-        "offset": 363
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 8,
-        "endOffset": 175,
-        "file": "crosstl-out/opengl/default-parameter.glsl",
-        "length": 29,
-        "line": 7,
-        "offset": 146
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 9,
-        "endOffset": 338,
-        "file": "default-parameter.slang",
-        "length": 32,
-        "line": 8,
-        "offset": 306
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 12,
-        "endOffset": 220,
-        "file": "crosstl-out/opengl/default-parameter.glsl",
-        "length": 20,
-        "line": 11,
-        "offset": 200
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 14,
-        "endOffset": 381,
-        "file": "default-parameter.slang",
-        "length": 18,
-        "line": 13,
-        "offset": 363
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 17,
-        "endOffset": 355,
-        "file": "crosstl-out/opengl/default-parameter.glsl",
-        "length": 65,
-        "line": 16,
-        "offset": 290
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 19,
-        "endOffset": 451,
-        "file": "default-parameter.slang",
-        "length": 22,
-        "line": 18,
-        "offset": 429
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 19,
-        "endOffset": 415,
-        "file": "crosstl-out/opengl/default-parameter.glsl",
-        "length": 46,
-        "line": 18,
-        "offset": 369
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
         "endLine": 22,
-        "endOffset": 558,
-        "file": "default-parameter.slang",
-        "length": 42,
-        "line": 21,
-        "offset": 516
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 20,
-        "endOffset": 445,
+        "endOffset": 499,
         "file": "crosstl-out/opengl/default-parameter.glsl",
-        "length": 30,
-        "line": 19,
-        "offset": 415
+        "length": 499,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 23,
-        "endOffset": 588,
+        "endLine": 25,
+        "endOffset": 637,
         "file": "default-parameter.slang",
-        "length": 30,
-        "line": 22,
-        "offset": 558
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 21,
-        "endOffset": 497,
-        "file": "crosstl-out/opengl/default-parameter.glsl",
-        "length": 52,
-        "line": 20,
-        "offset": 445
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 24,
-        "endOffset": 635,
-        "file": "default-parameter.slang",
-        "length": 47,
-        "line": 23,
-        "offset": 588
+        "length": 637,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

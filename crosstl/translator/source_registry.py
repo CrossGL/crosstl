@@ -61,8 +61,10 @@ def _accepts_keyword(callable_obj, keyword: str) -> bool:
     parameter = signature.parameters.get(keyword)
     return (
         parameter is not None
-        and parameter.kind
-        in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+        and parameter.kind in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }
     ) or any(
         parameter.kind == inspect.Parameter.VAR_KEYWORD
         for parameter in signature.parameters.values()
@@ -516,6 +518,22 @@ def _reverse_metal(
     cooperative_matrix_fragment_mapping_provenance=None,
     preserve_pointer_pointee_const=True,
     resolve_standard_remove_cv_aliases=True,
+    preserve_resource_origins=False,
+    binary32_fma_profile=None,
+    binary32_division_profile=None,
+    binary16_remainder_profile=None,
+    binary32_comparison_profile=None,
+    binary32_remainder_profile=None,
+    binary32_additive_profile=None,
+    binary32_multiplication_profile=None,
+    binary32_atan2_profile=None,
+    binary32_log_profile=None,
+    binary32_log2_operand_profile=None,
+    binary32_log2_accuracy_profile=None,
+    binary32_sqrt_profile=None,
+    binary32_rsqrt_profile=None,
+    binary32_power_operand_profile=None,
+    binary32_power_accuracy_profile=None,
 ):
     from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
 
@@ -526,6 +544,22 @@ def _reverse_metal(
         ),
         preserve_pointer_pointee_const=preserve_pointer_pointee_const,
         resolve_standard_remove_cv_aliases=resolve_standard_remove_cv_aliases,
+        preserve_resource_origins=preserve_resource_origins,
+        binary32_fma_profile=binary32_fma_profile,
+        binary32_division_profile=binary32_division_profile,
+        binary16_remainder_profile=binary16_remainder_profile,
+        binary32_comparison_profile=binary32_comparison_profile,
+        binary32_remainder_profile=binary32_remainder_profile,
+        binary32_additive_profile=binary32_additive_profile,
+        binary32_multiplication_profile=binary32_multiplication_profile,
+        binary32_atan2_profile=binary32_atan2_profile,
+        binary32_log_profile=binary32_log_profile,
+        binary32_log2_operand_profile=binary32_log2_operand_profile,
+        binary32_log2_accuracy_profile=binary32_log2_accuracy_profile,
+        binary32_sqrt_profile=binary32_sqrt_profile,
+        binary32_rsqrt_profile=binary32_rsqrt_profile,
+        binary32_power_operand_profile=binary32_power_operand_profile,
+        binary32_power_accuracy_profile=binary32_power_accuracy_profile,
     )
 
 

@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -27,6 +28,7 @@ from crosstl.project.native_runtime_drivers import (
     _prepare_directx_constants,
     _prepare_opengl_buffers,
     _prepare_opengl_specializations,
+    _prepare_sequence_allocations,
     _prepare_vulkan_buffers,
     _read_mapped_memory,
     _validate_directx_register_layout,
@@ -1661,7 +1663,7 @@ def test_prepare_directx_buffers_rejects_views_compushady_cannot_describe(
     assert excinfo.value.details["type"] == type_name
 
 
-def test_prepare_directx_buffers_rejects_allocation_subview_with_constraint(
+def test_prepare_directx_buffers_preserves_allocation_subview(
     tmp_path,
 ):
     request = _directx_dispatch_request(tmp_path)
@@ -1678,15 +1680,44 @@ def test_prepare_directx_buffers_rejects_allocation_subview_with_constraint(
         }
     )
 
-    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
-        _prepare_directx_buffers({"lhs": binding})
+    (prepared,) = _prepare_directx_buffers({"lhs": binding})
+    assert prepared.allocation_id == "working-set"
+    assert prepared.byte_offset == 4
+    assert prepared.byte_length == 8
+    assert prepared.allocation_size == 12
 
-    assert excinfo.value.details["reasonKind"] == "unsupported-allocation-subview"
-    assert excinfo.value.details["allocationId"] == "working-set"
-    assert excinfo.value.details["byteOffset"] == 4
-    assert excinfo.value.details["byteLength"] == 8
-    assert excinfo.value.details["allocationByteLength"] == 12
-    assert excinfo.value.details["targetConstraint"] == ("compushady-buffer-view-range")
+
+@pytest.mark.parametrize("offset", [4, 252, 260])
+def test_directx_constant_subview_fails_before_resource_creation(tmp_path, offset):
+    request = _directx_dispatch_request(tmp_path)
+    constant = replace(
+        request.buffers["params"],
+        allocation=RuntimeAllocationView(
+            allocation_id="parameters",
+            byte_offset=offset,
+            byte_length=4,
+            allocation_byte_length=offset + 256,
+        ),
+    )
+    request = replace(request, buffers={**request.buffers, "params": constant})
+    module = _FakeCompushady()
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: module, platform_name="win32"
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        runtime.dispatch_sequence(None, None, (request,))
+
+    details = excinfo.value.details
+    assert details["reasonKind"] == "allocation-view-misaligned"
+    assert details["targetConstraint"] == "constant-buffer-offset-alignment"
+    assert details["resource"] == "params"
+    assert details["allocationId"] == "parameters"
+    assert details["byteOffset"] == offset
+    assert details["byteLength"] == 4
+    assert details["coordinates"] == {"set": 0, "binding": 0, "index": None}
+    assert not module.buffers
+    assert not module.computes
 
 
 def test_prepare_directx_buffers_rejects_sparse_registers(tmp_path):
@@ -2188,7 +2219,7 @@ def test_directx_compute_runtime_executes_mlx_file_scope_lookup_on_device(tmp_pa
     except ImportError as exc:
         pytest.fail(f"Direct3D lookup runtime dependency is unavailable: {exc}")
 
-    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    fixture_dir = ROOT / "demos/integrations/mlx/fixtures/runtime_verification"
     source_path = fixture_dir / "file_scope_immutable_lookup.metal"
     artifact_report = json.loads(
         (fixture_dir / "file_scope_immutable_lookup.artifacts.json").read_text(
@@ -2528,7 +2559,7 @@ def test_directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device
     ).stdout.strip()
     assert checkout_commit == pinned_commit
 
-    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    fixture_dir = ROOT / "demos/integrations/mlx/fixtures/runtime_verification"
     with tempfile.TemporaryDirectory(
         prefix=".crosstl-arange-directx-", dir=mlx_root
     ) as temporary_directory:
@@ -2716,8 +2747,10 @@ def test_directx_compute_runtime_reports_phase_failure_and_releases_resources(
     )
     error_type = (
         RuntimeAdapterSetupError
-        if reason_kind
-        in {"resource-creation-failed", "compute-pipeline-creation-failed"}
+        if reason_kind in {
+            "resource-creation-failed",
+            "compute-pipeline-creation-failed",
+        }
         else RuntimeAdapterDispatchError
     )
 
@@ -2763,7 +2796,16 @@ class _FakeOpenGLSPIRVBuffer:
         self.released = True
 
 
-class _FakeOpenGLSPIRVContext:
+class _OpenGLTestCapabilities:
+    info = {
+        "GL_MAX_COMPUTE_WORK_GROUP_COUNT": (65535, 65535, 65535),
+        "GL_MAX_COMPUTE_WORK_GROUP_SIZE": (1024, 1024, 64),
+        "GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS": 1024,
+    }
+    error = "GL_NO_ERROR"
+
+
+class _FakeOpenGLSPIRVContext(_OpenGLTestCapabilities):
     version_code = 450
 
     def __init__(self, *, extensions=("GL_ARB_gl_spirv",)):
@@ -2949,7 +2991,7 @@ def test_opengl_compute_runtime_reports_missing_python_binding(tmp_path):
 
 
 def test_opengl_compute_runtime_probes_and_releases_headless_context(tmp_path):
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
 
         def __init__(self):
@@ -2979,7 +3021,7 @@ def test_opengl_compute_runtime_probes_and_releases_headless_context(tmp_path):
 def test_opengl_compute_runtime_probes_exact_subgroup_width(
     tmp_path, reported_width, available
 ):
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
         extensions = {"GL_KHR_shader_subgroup"}
 
@@ -3043,7 +3085,7 @@ def test_opengl_compute_runtime_probes_exact_subgroup_width(
 
 
 def test_opengl_compute_runtime_probe_preserves_caller_owned_context(tmp_path):
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
 
         def __init__(self):
@@ -3074,7 +3116,7 @@ def test_opengl_compute_runtime_probe_preserves_caller_owned_context(tmp_path):
 def test_opengl_compute_runtime_rejects_unknown_or_old_context_version(
     tmp_path, version_code, reported_version
 ):
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         def __init__(self):
             self.version_code = version_code
             self.released = False
@@ -3098,7 +3140,7 @@ def test_opengl_compute_runtime_rejects_unknown_or_old_context_version(
 
 
 def test_opengl_compute_runtime_rechecks_context_version_at_dispatch(tmp_path):
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 420
 
         def __init__(self):
@@ -3128,7 +3170,7 @@ def test_opengl_compute_runtime_rechecks_context_version_at_dispatch(tmp_path):
 def test_opengl_compute_runtime_rejects_subgroup_mismatch_before_setup(tmp_path):
     events = []
 
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
         extensions = {"GL_KHR_shader_subgroup"}
 
@@ -3333,6 +3375,64 @@ def test_opengl_compute_runtime_rejects_truncated_spirv_header(tmp_path):
     assert excinfo.value.details["reasonKind"] == "spirv-artifact-layout-invalid"
     assert excinfo.value.details["byteLength"] == 8
     assert excinfo.value.details["minimumByteLength"] == 20
+
+
+@pytest.mark.parametrize("name", ("compiled.spv", "compiled.bin"))
+def test_opengl_compute_runtime_loads_specialized_glsl_binary(tmp_path, name):
+    artifact_path = tmp_path / name
+    artifact_path.write_bytes(_OPENGL_SPIRV_HEADER)
+    state = SimpleNamespace(
+        request=SimpleNamespace(
+            artifact={"target": "opengl", "artifactFormat": "GLSL source"},
+            adapter_contract=SimpleNamespace(
+                specialization_constants=[SimpleNamespace(kind="function-constant")]
+            ),
+        )
+    )
+    runtime = OpenGLComputeRuntime(module_loader=lambda name: object())
+    assert runtime.load_artifact(None, state, artifact_path) == _OPENGL_SPIRV_HEADER
+
+
+def test_opengl_compute_runtime_does_not_treat_uniforms_as_binary(tmp_path):
+    artifact_path = tmp_path / "compiled.spv"
+    source = "#version 430\nuniform float scale;\nvoid main() {}\n"
+    artifact_path.write_text(source)
+    state = SimpleNamespace(
+        request=SimpleNamespace(
+            artifact={"target": "opengl", "artifactFormat": "GLSL source"},
+            adapter_contract=SimpleNamespace(
+                specialization_constants=[SimpleNamespace(kind="uniform")]
+            ),
+        )
+    )
+    runtime = OpenGLComputeRuntime(module_loader=lambda name: object())
+    assert runtime.load_artifact(None, state, artifact_path) == source
+
+
+@pytest.mark.parametrize(
+    "binary,reason",
+    (
+        (b"short", "spirv-artifact-layout-invalid"),
+        (b"\x00" * 20, "spirv-artifact-magic-invalid"),
+    ),
+)
+def test_opengl_compute_runtime_validates_specialized_binary(tmp_path, binary, reason):
+    artifact_path = tmp_path / "compiled.bin"
+    artifact_path.write_bytes(binary)
+    state = SimpleNamespace(
+        request=SimpleNamespace(
+            artifact={"target": "opengl", "artifactFormat": "GLSL source"},
+            adapter_contract=SimpleNamespace(
+                specialization_constants=[
+                    SimpleNamespace(kind="specialization-constant")
+                ]
+            ),
+        )
+    )
+    runtime = OpenGLComputeRuntime(module_loader=lambda name: object())
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        runtime.load_artifact(None, state, artifact_path)
+    assert excinfo.value.details["reasonKind"] == reason
 
 
 def test_opengl_compute_runtime_specializes_typed_values_and_binds_uniforms(
@@ -3722,7 +3822,7 @@ def test_opengl_compute_runtime_zero_pads_scalar_uniform_block_allocation():
         def bind_to_uniform_block(self, binding, offset=0, size=-1):
             self.uniform_binding = binding
 
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         def __init__(self):
             self.received_payload = None
 
@@ -3911,7 +4011,7 @@ def test_opengl_compute_runtime_dispatches_and_reads_storage_buffer(tmp_path):
         def release(self):
             self.released = True
 
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
 
         def __init__(self):
@@ -4036,7 +4136,7 @@ def test_opengl_compute_runtime_dispatch_preserves_caller_owned_context(tmp_path
         def release(self):
             self.released = True
 
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
 
         def __init__(self):
@@ -4126,9 +4226,12 @@ def test_opengl_compute_runtime_reuses_shared_allocation_subviews(tmp_path):
         def release(self):
             self.released = True
 
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
-        info = {"GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT": 4}
+        info = {
+            **_OpenGLTestCapabilities.info,
+            "GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT": 4,
+        }
 
         def __init__(self):
             self.buffers = []
@@ -4324,7 +4427,7 @@ def test_opengl_compute_runtime_releases_buffer_when_binding_fails(tmp_path):
         def release(self):
             self.released = True
 
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
 
         def __init__(self):
@@ -4380,7 +4483,7 @@ def test_opengl_compute_runtime_reports_synchronization_failure(tmp_path):
         def release(self):
             self.released = True
 
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
 
         def __init__(self):
@@ -4442,7 +4545,7 @@ def test_opengl_compute_runtime_rejects_short_output_readback(tmp_path):
         def release(self):
             self.released = True
 
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
 
         def __init__(self):
@@ -5358,8 +5461,10 @@ def test_mapped_memory_helpers_use_buffer_protocol():
     assert _read_mapped_memory(mapped, 6) == b"abcd\x00\x00"
 
 
+@pytest.mark.parametrize("axis", [0, 1, 2])
 def test_runtime_parity_vulkan_compute_runtime_executes_vector_add_on_device(
     tmp_path,
+    axis,
 ):
     if os.environ.get("CROSTL_RUN_VULKAN_DEVICE_TEST") != "1":
         pytest.skip("set CROSTL_RUN_VULKAN_DEVICE_TEST=1 to run Vulkan device test")
@@ -5386,6 +5491,7 @@ layout(set = 0, binding = 2) writeonly buffer Out {
 } out_buffer;
 void main() {
     uint index = gl_GlobalInvocationID.x;
+    if (index >= 2u) return;
     out_buffer.values[index] = lhs_buffer.values[index] + rhs_buffer.values[index];
 }
 """.lstrip(),
@@ -5398,6 +5504,12 @@ void main() {
         text=True,
     )
 
+    class CapturingRuntime(VulkanComputeRuntime):
+        def dispatch(self, state, buffers, request):
+            self.request = request
+            return super().dispatch(state, buffers, request)
+
+    runtime = CapturingRuntime()
     report = verify_runtime_test_manifest(
         {
             "kind": "crosstl-project-portability-report",
@@ -5460,7 +5572,7 @@ void main() {
         },
         executors={
             "vulkan": VulkanRuntimeParityAdapter(
-                runtime=VulkanComputeRuntime(),
+                runtime=runtime,
                 required_tools=("spirv-val",),
             )
         },
@@ -5471,6 +5583,31 @@ void main() {
     assert report["success"] is True, failure_context
     assert result["status"] == "passed"
     assert result["comparisons"][0]["status"] == "passed", failure_context
+
+    vk = runtime._load_vulkan()
+    instance = runtime._create_instance(vk)
+    try:
+        device, _ = runtime._select_compute_device(vk, instance)
+        limit = vk.vkGetPhysicalDeviceProperties(
+            device
+        ).limits.maxComputeWorkGroupCount[axis]
+    finally:
+        runtime._destroy_instance(vk, instance)
+    counts = [1, 1, 1]
+    counts[axis] = limit + 1
+    request = replace(
+        runtime.request,
+        dispatch=RuntimeDispatchGeometry(workgroup_count=tuple(counts)),
+    )
+    with pytest.raises(RuntimeAdapterSetupError) as caught:
+        runtime.dispatch(None, None, request)
+    details = caught.value.details
+    assert details["reasonKind"] == "dispatch-limit-exceeded"
+    assert details["axis"] == axis and details["maximum"] == limit
+    assert details["requested"] == limit + 1
+    (tmp_path / "dispatch-limit-evidence.json").write_text(
+        json.dumps(details, indent=2), encoding="utf-8"
+    )
 
 
 def _native_dispatch_sequence_requests(tmp_path, target):
@@ -5728,9 +5865,12 @@ class _SequenceOpenGLShader:
         self.release_count += 1
 
 
-class _SequenceOpenGLContext:
+class _SequenceOpenGLContext(_OpenGLTestCapabilities):
     version_code = 460
-    info = {"GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT": 4}
+    info = {
+        **_OpenGLTestCapabilities.info,
+        "GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT": 4,
+    }
 
     def __init__(self):
         self.buffers = []
@@ -5834,6 +5974,116 @@ def test_directx_compute_runtime_dispatch_sequence_cleans_up_after_failure(tmp_p
     assert all(buffer.release_count == 1 for buffer in module.buffers)
     assert all(compute.release_count == 1 for compute in module.computes)
     assert not any(event[0] == "readback" for event in module.events)
+
+
+def _sequence_constant(name="shared_parameters", *, values=(37,), register=0):
+    return NativeRuntimeBufferBinding(
+        name=name,
+        binding=RuntimeResourceBinding(
+            name=name,
+            kind="constant-buffer",
+            set=0,
+            binding=register,
+            access="read",
+            metadata={"scalarLayout": _scalar_block_layout("hlsl-constant-buffer")},
+        ),
+        value=list(values) if values is not None else None,
+        source="input" if values is not None else None,
+        dtype="uint32",
+        shape=(1,),
+        allocation=RuntimeAllocationView(
+            allocation_id="shared_parameters", byte_length=4, allocation_byte_length=256
+        ),
+    )
+
+
+@pytest.mark.parametrize("second_upload", [False, True])
+def test_directx_sequence_reuses_immutable_constant_allocation(tmp_path, second_upload):
+    requests = _native_dispatch_sequence_requests(tmp_path, "directx")
+    constants = (
+        _sequence_constant(),
+        _sequence_constant(
+            "consumer_parameters", values=(37,) if second_upload else None
+        ),
+    )
+    requests = tuple(
+        replace(
+            request,
+            buffers={
+                **request.buffers,
+                constant.name: constant,
+                "region_parameters": replace(
+                    _sequence_constant(
+                        "region_parameters", values=(index + 1,), register=1
+                    ),
+                    allocation=RuntimeAllocationView(
+                        allocation_id=f"region:{index}",
+                        byte_length=4,
+                        allocation_byte_length=256,
+                    ),
+                ),
+            },
+        )
+        for index, (request, constant) in enumerate(zip(requests, constants))
+    )
+    module = _SequenceCompushady()
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: module, platform_name="win32"
+    )
+
+    assert runtime.dispatch_sequence(None, None, requests)["result"]["values"] == [
+        5,
+        7,
+        9,
+        11,
+    ]
+    first, second = (compute.cbv[0] for compute in module.computes)
+    assert first is second
+    assert bytes(first.payload) == struct.pack("<I", 37) + bytes(252)
+    local_first, local_second = (compute.cbv[1] for compute in module.computes)
+    assert local_first is not local_second and local_first is not first
+    assert bytes(local_first.payload) == struct.pack("<I", 1) + bytes(252)
+    assert bytes(local_second.payload) == struct.pack("<I", 2) + bytes(252)
+    assert sum(buffer.heap_type == module.HEAP_UPLOAD for buffer in module.buffers) == 4
+    assert all(buffer.release_count == 1 for buffer in module.buffers)
+
+
+@pytest.mark.parametrize(
+    "change,reason",
+    [
+        ("same-node", "unsupported-shared-allocation"),
+        ("uav", "unsupported-shared-allocation"),
+        ("srv", "unsupported-shared-allocation"),
+        ("dtype", "allocation-layout-incompatible"),
+        ("size", "allocation-layout-incompatible"),
+        ("offset", "allocation-layout-incompatible"),
+        ("allocation", "allocation-size-conflict"),
+        ("upload", "allocation-upload-conflict"),
+    ],
+)
+def test_directx_sequence_rejects_incompatible_constant_reuse(change, reason):
+    (first,) = _prepare_directx_buffers({"shared_parameters": _sequence_constant()})
+    second = replace(
+        first, name="consumer_parameters", payload=b"", upload=False, source=None
+    )
+    if change in {"srv", "uav"}:
+        second = replace(second, namespace=change, writable=change == "uav")
+    elif change == "dtype":
+        second = replace(second, dtype="int32")
+    elif change == "size":
+        second = replace(second, byte_length=8)
+    elif change == "offset":
+        first = replace(first, byte_offset=4)
+        second = replace(second, byte_offset=4)
+    elif change == "allocation":
+        second = replace(second, allocation_size=512)
+    elif change == "upload":
+        second = replace(second, upload=True, payload=struct.pack("<I", 38))
+    nodes = ((first, second),) if change == "same-node" else ((first,), (second,))
+    with pytest.raises(RuntimeAdapterSetupError) as failure:
+        _prepare_sequence_allocations(nodes, target="directx")
+    assert failure.value.details["reasonKind"] == reason
+    assert failure.value.details["allocationId"] == "shared_parameters"
 
 
 def test_opengl_compute_runtime_dispatch_sequence_preserves_temporary_allocation(

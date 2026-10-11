@@ -37,6 +37,7 @@ from .host_reflection import (
     ReflectionDiagnostic,
     reflect_target_host_interface,
 )
+from .metal_runtime import MetalComputeRuntime
 from .native_deferred_compilation import (
     NATIVE_DEFERRED_COMPILATION_KIND,
     NATIVE_DEFERRED_COMPILATION_REQUEST_KIND,
@@ -83,6 +84,10 @@ from .native_loader_abi_package import (
 from .native_loader_dispatch import (
     NativeLoaderDispatchError,
     build_native_loader_dispatch_request,
+)
+from .native_loader_regions import (
+    prepare_native_loader_dispatch_regions,
+    select_native_loader_dispatch_regions,
 )
 from .native_runtime_drivers import (
     DirectXComputeRuntime,
@@ -184,6 +189,7 @@ from .runtime_variant_dispatch import (
 )
 from .runtime_verification import (
     DirectXRuntimeParityAdapter,
+    MetalRuntimeParityAdapter,
     NativeRuntimeBufferBinding,
     NativeRuntimeConstantBinding,
     NativeRuntimeDispatchRequest,
@@ -244,6 +250,7 @@ from .runtime_verification import (
     write_runtime_test_report,
     write_runtime_verification_report,
 )
+from .storage_record_layout import pack_storage_records
 from .test_runner import (
     PROJECT_TEST_RUNNER_INSPECTION_KIND,
     PROJECT_TEST_RUNNER_PLAN_KIND,
@@ -325,6 +332,8 @@ __all__ = [
     "ReflectionDiagnostic",
     "DirectXComputeRuntime",
     "DirectXRuntimeParityAdapter",
+    "MetalComputeRuntime",
+    "MetalRuntimeParityAdapter",
     "NativeRuntimeBufferBinding",
     "NativeRuntimeConstantBinding",
     "NativeRuntimeDispatchRequest",
@@ -395,6 +404,7 @@ __all__ = [
     "RuntimeTestManifest",
     "RuntimeTolerance",
     "RuntimeValue",
+    "pack_storage_records",
     "RuntimeValidationHook",
     "RuntimeVariantDispatchError",
     "RuntimeVerificationError",
@@ -414,6 +424,8 @@ __all__ = [
     "build_native_loader_abi_descriptor",
     "build_native_loader_abi_package",
     "build_native_loader_dispatch_request",
+    "prepare_native_loader_dispatch_regions",
+    "select_native_loader_dispatch_regions",
     "build_runtime_test_manifest",
     "build_runtime_host_loader_scaffolds",
     "build_runtime_host_integration_handoff",

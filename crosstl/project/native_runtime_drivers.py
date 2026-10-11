@@ -12,6 +12,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from crosstl.translator.resource_storage import encoded_storage_dtype
+
+from .runtime_value_encoding import validate_value_encoding
 from .runtime_verification import (
     NativeRuntimeBufferBinding,
     NativeRuntimeDispatchRequest,
@@ -20,7 +23,10 @@ from .runtime_verification import (
     RuntimeExecutionRequest,
     RuntimeExecutorAvailability,
     RuntimeExecutorUnavailable,
+    _NativeRuntimeUploadSnapshot,
 )
+from .storage_record_layout import validate_storage_record_layout
+from .uniform_layout import validate_std140_block_layout
 
 
 @dataclass(frozen=True)
@@ -42,6 +48,7 @@ class _PreparedDirectXBuffer:
     upload: bool = True
     writable: bool = False
     allocation_explicit: bool = False
+    readback_encoding: str | None = None
 
     @property
     def size(self) -> int:
@@ -84,6 +91,7 @@ class _PreparedVulkanBuffer:
     readback: bool
     output_name: str | None
     payload: bytes
+    readback_encoding: str | None = None
 
     @property
     def size(self) -> int:
@@ -115,6 +123,7 @@ class _PreparedOpenGLBuffer:
     upload: bool = True
     writable: bool = False
     allocation_explicit: bool = False
+    readback_encoding: str | None = None
 
     @property
     def size(self) -> int:
@@ -275,9 +284,11 @@ class DirectXComputeRuntime:
         *,
         module_loader: Any | None = None,
         platform_name: str | None = None,
+        buffer_view_executor: Any | None = None,
     ):
         self._module_loader = module_loader or importlib.import_module
         self.platform_name = platform_name or sys.platform
+        self._buffer_view_executor = buffer_view_executor
 
     def is_available(
         self,
@@ -430,6 +441,17 @@ class DirectXComputeRuntime:
         compushady = self._load_compushady()
         prepared_dispatches: list[_PreparedDirectXDispatch] = []
         for node_index, request in enumerate(sequence):
+            counts = _workgroup_count(request, target="DirectX", node_index=node_index)
+            # D3D12_CS_* limits apply to the DXIL compute pipeline.
+            _validate_dispatch_limits(
+                counts,
+                request.dispatch.workgroup_size,
+                target="directx",
+                max_count=(65535, 65535, 65535),
+                max_size=(1024, 1024, 64),
+                max_invocations=1024,
+                node_index=node_index,
+            )
             if (
                 request.dispatch is not None
                 and request.dispatch.entry_point is not None
@@ -459,14 +481,21 @@ class DirectXComputeRuntime:
                     request=request,
                     shader=self._shader_code(request),
                     buffers=prepared,
-                    workgroup_count=_workgroup_count(request, target="DirectX"),
+                    workgroup_count=counts,
                 )
             )
+        ranged = any(
+            view.byte_offset
+            or (view.namespace != "cbv" and view.size != view.allocation_size)
+            for node in prepared_dispatches
+            for view in node.buffers
+        )
         allocation_plan, view_keys = _prepare_sequence_allocations(
             [item.buffers for item in prepared_dispatches],
             target="directx",
+            max_allocation_bytes=256 * 1024 * 1024 if ranged else None,
+            max_total_allocation_bytes=512 * 1024 * 1024 if ranged else None,
         )
-
         owned_objects: list[Any] = []
         node_resources: list[list[_DirectXBufferResource]] = []
         computes: list[Any] = []
@@ -494,6 +523,21 @@ class DirectXComputeRuntime:
                         "reasonKind": "device-selection-failed",
                     },
                 ) from exc
+
+            if ranged:
+                from .directx_runtime import execute_buffer_views
+
+                if self._buffer_view_executor is not None:
+                    return self._buffer_view_executor(
+                        prepared_dispatches, allocation_plan, view_keys, state
+                    )
+                return execute_buffer_views(
+                    prepared_dispatches,
+                    allocation_plan,
+                    view_keys,
+                    state,
+                    device=device,
+                )
 
             physical_resources: dict[tuple[Any, ...], _DirectXBufferResource] = {}
             try:
@@ -767,11 +811,13 @@ class DirectXComputeRuntime:
                         "binding": prepared.binding_index,
                     },
                 ) from exc
-            outputs[prepared.output_name or prepared.name] = {
-                "dtype": prepared.dtype,
-                "shape": list(prepared.shape),
-                "values": _unpack_values(payload, prepared.dtype, target="DirectX"),
-            }
+            outputs[prepared.output_name or prepared.name] = _buffer_readback(
+                payload,
+                prepared.dtype,
+                prepared.shape,
+                target="DirectX",
+                encoding=prepared.readback_encoding,
+            )
         return outputs
 
 
@@ -916,6 +962,13 @@ class OpenGLComputeRuntime:
         is_spirv = artifact_format == "SPIR-V binary" or (
             artifact_format is None and Path(module_path).suffix.lower() == ".spv"
         )
+        request = getattr(state, "request", None)
+        if (
+            request is not None
+            and getattr(request, "adapter_contract", None) is not None
+        ):
+            # GLSL specialization compiles to a binary module before this load.
+            is_spirv = is_spirv or _opengl_request_requires_specialization(request)
         if is_spirv:
             try:
                 binary = Path(module_path).read_bytes()
@@ -978,7 +1031,7 @@ class OpenGLComputeRuntime:
         sequence = _validate_dispatch_sequence_requests(requests, target="opengl")
         moderngl = self._load_moderngl()
         prepared_dispatches: list[_PreparedOpenGLDispatch] = []
-        for request in sequence:
+        for node_index, request in enumerate(sequence):
             if request.entry_point not in (None, "main"):
                 raise RuntimeExecutorUnavailable(
                     "OpenGL compute artifacts expose the selected entry point as main; "
@@ -1002,7 +1055,9 @@ class OpenGLComputeRuntime:
                     specializations=_prepare_opengl_specializations(
                         specialization_bindings
                     ),
-                    workgroup_count=_workgroup_count(request, target="OpenGL"),
+                    workgroup_count=_workgroup_count(
+                        request, target="OpenGL", node_index=node_index
+                    ),
                 )
             )
         required_subgroup_widths = sorted(
@@ -1065,6 +1120,21 @@ class OpenGLComputeRuntime:
                     backend=backend,
                 )
 
+            limits = getattr(context, "info", {})
+            if not isinstance(limits, Mapping):
+                limits = {}
+            for node_index, prepared in enumerate(prepared_dispatches):
+                _validate_dispatch_limits(
+                    prepared.workgroup_count,
+                    prepared.request.dispatch.workgroup_size,
+                    target="opengl",
+                    max_count=limits.get("GL_MAX_COMPUTE_WORK_GROUP_COUNT"),
+                    max_size=limits.get("GL_MAX_COMPUTE_WORK_GROUP_SIZE"),
+                    max_invocations=limits.get("GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS"),
+                    node_index=node_index,
+                )
+            _check_opengl_error(context, phase="context")
+
             try:
                 for allocation in allocation_plan:
                     _validate_opengl_context_view_alignment(
@@ -1112,6 +1182,7 @@ class OpenGLComputeRuntime:
                 zip(prepared_dispatches, shaders, node_resources)
             ):
                 self._bind_sequence_buffer_views(resources, node_index=node_index)
+                _check_opengl_error(context, phase="prepare", node_index=node_index)
                 try:
                     shader.run(
                         group_x=prepared_dispatch.workgroup_count[0],
@@ -1129,6 +1200,7 @@ class OpenGLComputeRuntime:
                             "workgroupCount": list(prepared_dispatch.workgroup_count),
                         },
                     ) from exc
+                _check_opengl_error(context, phase="dispatch", node_index=node_index)
                 try:
                     context.memory_barrier()
                     finish = getattr(context, "finish", None)
@@ -1144,10 +1216,13 @@ class OpenGLComputeRuntime:
                             "nodeIndex": node_index,
                         },
                     ) from exc
+                _check_opengl_error(context, phase="synchronize", node_index=node_index)
             try:
-                return self._read_outputs(
+                outputs = self._read_outputs(
                     [resource for resources in node_resources for resource in resources]
                 )
+                _check_opengl_error(context, phase="readback")
+                return outputs
             except RuntimeAdapterDispatchError:
                 raise
             except Exception as exc:
@@ -1807,11 +1882,13 @@ class OpenGLComputeRuntime:
                         "actualByteLength": len(payload),
                     },
                 )
-            outputs[prepared.output_name or prepared.name] = {
-                "dtype": prepared.dtype,
-                "shape": list(prepared.shape),
-                "values": _unpack_values(payload, prepared.dtype, target="OpenGL"),
-            }
+            outputs[prepared.output_name or prepared.name] = _buffer_readback(
+                payload,
+                prepared.dtype,
+                prepared.shape,
+                target="OpenGL",
+                encoding=prepared.readback_encoding,
+            )
         return outputs
 
 
@@ -1927,6 +2004,7 @@ class VulkanComputeRuntime:
             entry_point=request.entry_point or "main",
             buffers=prepared_buffers,
             workgroup_count=workgroup_count,
+            workgroup_size=request.dispatch.workgroup_size,
         )
         return context.run()
 
@@ -1988,6 +2066,7 @@ class _VulkanDispatchContext:
         entry_point: str,
         buffers: Sequence[_PreparedVulkanBuffer],
         workgroup_count: tuple[int, int, int],
+        workgroup_size: Sequence[int] | None = None,
     ):
         self.vk = vk
         self.runtime = runtime
@@ -1995,6 +2074,7 @@ class _VulkanDispatchContext:
         self.entry_point = entry_point
         self.buffers = tuple(buffers)
         self.workgroup_count = workgroup_count
+        self.workgroup_size = workgroup_size
         self.instance = None
         self.physical_device = None
         self.queue_family = None
@@ -2020,7 +2100,7 @@ class _VulkanDispatchContext:
             self._create_pipeline()
             self._record_and_submit()
             return self._read_outputs()
-        except RuntimeExecutorUnavailable:
+        except (RuntimeExecutorUnavailable, RuntimeAdapterSetupError):
             raise
         except RuntimeAdapterDispatchError:
             raise
@@ -2037,6 +2117,15 @@ class _VulkanDispatchContext:
         self.instance = self.runtime._create_instance(vk)
         self.physical_device, self.queue_family = self.runtime._select_compute_device(
             vk, self.instance
+        )
+        limits = vk.vkGetPhysicalDeviceProperties(self.physical_device).limits
+        _validate_dispatch_limits(
+            self.workgroup_count,
+            self.workgroup_size,
+            target="vulkan",
+            max_count=tuple(limits.maxComputeWorkGroupCount),
+            max_size=tuple(limits.maxComputeWorkGroupSize),
+            max_invocations=limits.maxComputeWorkGroupInvocations,
         )
         priority = [1.0]
         queue_info = vk.VkDeviceQueueCreateInfo(
@@ -2270,11 +2359,13 @@ class _VulkanDispatchContext:
             if not prepared.readback:
                 continue
             payload = self._read_memory(resource.memory, prepared.size)
-            outputs[prepared.output_name or prepared.name] = {
-                "dtype": prepared.dtype,
-                "shape": list(prepared.shape),
-                "values": _unpack_values(payload, prepared.dtype),
-            }
+            outputs[prepared.output_name or prepared.name] = _buffer_readback(
+                payload,
+                prepared.dtype,
+                prepared.shape,
+                target="Vulkan",
+                encoding=prepared.readback_encoding,
+            )
         return outputs
 
     def _cleanup(self) -> None:
@@ -2471,10 +2562,24 @@ def _validate_directx_allocation_views(
     views: Sequence[_PreparedDirectXBuffer],
     *,
     validate_writes: bool = True,
+    allow_constant_reuse: bool = False,
 ) -> None:
     if len(views) < 2:
         return
     if any(view.namespace == "cbv" for view in views):
+        if allow_constant_reuse and all(view.namespace == "cbv" for view in views):
+            layouts = {
+                (view.dtype, view.stride, view.byte_offset, view.size) for view in views
+            }
+            if len(layouts) != 1 or any(view.byte_offset % 256 for view in views):
+                raise _directx_setup_error(
+                    "DirectX sequential constant-buffer views require the same layout and range.",
+                    "allocation-layout-incompatible",
+                    allocationId=allocation_id,
+                    views=[_prepared_allocation_view_payload(view) for view in views],
+                    targetConstraint="constant-buffer-view-layout",
+                )
+            return
         raise _directx_setup_error(
             "DirectX constant-buffer allocations cannot be shared with another binding.",
             "unsupported-shared-allocation",
@@ -2615,6 +2720,8 @@ def _prepare_sequence_allocations(
     prepared_nodes: Sequence[Sequence[Any]],
     *,
     target: str,
+    max_allocation_bytes: int | None = None,
+    max_total_allocation_bytes: int | None = None,
 ) -> tuple[tuple[_PreparedSequenceAllocation, ...], Mapping[int, tuple[Any, ...]]]:
     groups: dict[tuple[Any, ...], list[Any]] = {}
     display_ids: dict[tuple[Any, ...], str] = {}
@@ -2639,10 +2746,43 @@ def _prepare_sequence_allocations(
         for key, views in node_groups.items():
             validate(display_ids[key], views)
 
+    # Bound the physical footprint before constructing any merged host payload.
+    sizes = {
+        key: max(view.allocation_size for view in views)
+        for key, views in groups.items()
+    }
+    error = _directx_setup_error if target == "directx" else _opengl_setup_error
+    if max_allocation_bytes is not None:
+        for key, size in sizes.items():
+            if size > max_allocation_bytes:
+                raise error(
+                    "Native allocation exceeds its bounded execution limit.",
+                    "allocation-size-limit",
+                    allocationId=display_ids[key],
+                    allocationByteLength=size,
+                    maxBufferBytes=max_allocation_bytes,
+                )
+    if (
+        max_total_allocation_bytes is not None
+        and sum(sizes.values()) > max_total_allocation_bytes
+    ):
+        raise error(
+            "Native allocations exceed the bounded request size limit.",
+            "request-size-limit",
+            allocationByteLength=sum(sizes.values()),
+            maxAllocationBytes=max_total_allocation_bytes,
+        )
+
     allocations = []
     for key, views in groups.items():
         allocation_id = display_ids[key]
-        validate(allocation_id, views, validate_writes=False)
+        if target == "directx":
+            # Per-node validation above still rejects simultaneous CBV aliases.
+            _validate_directx_allocation_views(
+                allocation_id, views, validate_writes=False, allow_constant_reuse=True
+            )
+        else:
+            validate(allocation_id, views, validate_writes=False)
         allocations.append(
             _PreparedSequenceAllocation(
                 key=key,
@@ -2767,6 +2907,7 @@ def _prepare_directx_buffers(
             )
 
         dtype = _normalize_directx_dtype(binding.dtype, resource=name)
+        readback_encoding = _buffer_readback_encoding(binding, dtype)
         try:
             shape = tuple(int(value) for value in binding.shape)
         except (TypeError, ValueError) as exc:
@@ -2782,9 +2923,7 @@ def _prepare_directx_buffers(
                 resource=name,
                 shape=list(shape),
             )
-        element_count = (
-            math.prod(shape) if shape else len(_flatten_values(binding.value))
-        )
+        element_count = _native_buffer_element_count(binding)
         if element_count <= 0:
             raise _directx_setup_error(
                 f"DirectX runtime buffer {name!r} has no addressable elements.",
@@ -2797,8 +2936,8 @@ def _prepare_directx_buffers(
             payload = b""
         else:
             try:
-                payload = _pack_values(
-                    binding.value,
+                payload = _native_buffer_payload(
+                    binding,
                     dtype,
                     expected_count=element_count,
                     target="DirectX",
@@ -2813,6 +2952,13 @@ def _prepare_directx_buffers(
                 ) from exc
 
         stride = _directx_buffer_stride(binding, namespace, dtype, payload_size)
+        _native_storage_record_alignment(
+            binding,
+            target="directx",
+            dtype=dtype,
+            payload_size=payload_size,
+            stride=stride,
+        )
         (
             allocation_id,
             byte_offset,
@@ -2835,22 +2981,23 @@ def _prepare_directx_buffers(
             allocation_size = _align_to(max(requested_allocation_size, block_size), 256)
         else:
             allocation_size = requested_allocation_size
-            if byte_offset or byte_length != allocation_size:
-                raise _directx_setup_error(
-                    "DirectX runtime buffer views currently require the complete allocation range.",
-                    "unsupported-allocation-subview",
-                    resource=name,
-                    allocationId=allocation_id,
-                    byteOffset=byte_offset,
-                    byteLength=byte_length,
-                    allocationByteLength=allocation_size,
-                    coordinates={
-                        "set": resource.set,
-                        "binding": resource.binding,
-                        "index": resource.index,
-                    },
-                    targetConstraint="compushady-buffer-view-range",
-                )
+        if namespace == "cbv" and byte_offset % 256:
+            raise _directx_setup_error(
+                "DirectX constant-buffer view offsets must be 256-byte aligned.",
+                "allocation-view-misaligned",
+                resource=name,
+                allocationId=allocation_id,
+                byteOffset=byte_offset,
+                byteLength=byte_length,
+                allocationByteLength=allocation_size,
+                coordinates={
+                    "set": resource.set,
+                    "binding": resource.binding,
+                    "index": resource.index,
+                },
+                targetConstraint="constant-buffer-offset-alignment",
+                alignmentBytes=256,
+            )
         prepared.append(
             _PreparedDirectXBuffer(
                 name=name,
@@ -2870,6 +3017,7 @@ def _prepare_directx_buffers(
                 upload=binding.value is not None,
                 writable=namespace == "uav",
                 allocation_explicit=binding.allocation is not None,
+                readback_encoding=readback_encoding,
             )
         )
     return tuple(
@@ -2893,8 +3041,11 @@ def _prepare_directx_constants(
         constant_kind = str(binding.constant.kind or "").strip().lower()
         if mechanism in {"compiled", "compiled-literal", "static"} or (
             not mechanism
-            and constant_kind
-            in {"scalar-constant", "compile-time-constant", "static-constant"}
+            and constant_kind in {
+                "scalar-constant",
+                "compile-time-constant",
+                "static-constant",
+            }
         ):
             _validate_directx_compiled_constant(name, binding)
             continue
@@ -3245,6 +3396,9 @@ def _directx_buffer_stride(
 
 def _directx_hlsl_element_stride(type_name: str) -> int | None:
     scalar_sizes = {
+        "float16_t": 2,
+        "int16_t": 2,
+        "uint16_t": 2,
         "float": 4,
         "float32_t": 4,
         "int": 4,
@@ -3256,9 +3410,11 @@ def _directx_hlsl_element_stride(type_name: str) -> int | None:
     }
     if type_name in scalar_sizes:
         return scalar_sizes[type_name]
-    match = re.fullmatch(r"(float|int|uint)([1-4])", type_name)
+    match = re.fullmatch(
+        r"(float16_t|int16_t|uint16_t|float|int|uint)([1-4])", type_name
+    )
     if match:
-        return 4 * int(match.group(2))
+        return scalar_sizes[match.group(1)] * int(match.group(2))
     return None
 
 
@@ -3905,15 +4061,14 @@ def _prepare_vulkan_buffers(
             )
         seen_bindings.add(descriptor)
         dtype = _normalize_dtype(binding.dtype, target="Vulkan")
+        readback_encoding = _buffer_readback_encoding(binding, dtype)
         shape = tuple(int(value) for value in binding.shape)
-        element_count = (
-            math.prod(shape) if shape else len(_flatten_values(binding.value))
-        )
+        element_count = _native_buffer_element_count(binding)
         if binding.value is None and readback:
             payload = b"\x00" * (element_count * _dtype_size(dtype))
         else:
-            payload = _pack_values(
-                binding.value,
+            payload = _native_buffer_payload(
+                binding,
                 dtype,
                 expected_count=element_count,
                 target="Vulkan",
@@ -3930,6 +4085,7 @@ def _prepare_vulkan_buffers(
                 readback=readback,
                 output_name=_runtime_value_name(binding),
                 payload=payload,
+                readback_encoding=readback_encoding,
             )
         )
     return tuple(
@@ -3997,16 +4153,15 @@ def _prepare_opengl_buffers(
             )
         seen_bindings.add(descriptor)
         dtype = _normalize_dtype(binding.dtype, target="OpenGL")
+        readback_encoding = _buffer_readback_encoding(binding, dtype)
         shape = tuple(int(value) for value in binding.shape)
-        element_count = (
-            math.prod(shape) if shape else len(_flatten_values(binding.value))
-        )
+        element_count = _native_buffer_element_count(binding)
         payload_size = element_count * _dtype_size(dtype)
         if binding.value is None:
             payload = b""
         else:
-            payload = _pack_values(
-                binding.value,
+            payload = _native_buffer_payload(
+                binding,
                 dtype,
                 expected_count=element_count,
                 target="OpenGL",
@@ -4020,7 +4175,10 @@ def _prepare_opengl_buffers(
             binding,
             payload_size=payload_size,
             target="opengl",
-            alignment=_dtype_size(dtype),
+            alignment=_native_storage_record_alignment(
+                binding, target="opengl", dtype=dtype, payload_size=payload_size
+            )
+            or _dtype_size(dtype),
             allow_padding=namespace == "uniform",
         )
         if namespace == "uniform":
@@ -4069,6 +4227,7 @@ def _prepare_opengl_buffers(
                 upload=binding.value is not None,
                 writable=access in {"write", "read_write", "readwrite"},
                 allocation_explicit=binding.allocation is not None,
+                readback_encoding=readback_encoding,
             )
         )
     return tuple(
@@ -4080,6 +4239,41 @@ def _prepare_opengl_buffers(
             ),
         )
     )
+
+
+def _native_storage_record_alignment(
+    binding: NativeRuntimeBufferBinding,
+    *,
+    target: str,
+    dtype: str,
+    payload_size: int,
+    stride: int | None = None,
+) -> int | None:
+    layout = binding.binding.metadata.get("scalarLayout")
+    if not isinstance(layout, Mapping) or "structMembers" not in layout:
+        return None
+    if "payloadEncoding" not in layout and layout.get("elementType") != "record":
+        return None
+    try:
+        expected_stride = validate_storage_record_layout(layout)
+        if (
+            binding.binding.kind not in {"buffer", "storage-buffer"}
+            or layout["storageLayout"]
+            != {"directx": "hlsl-structured-buffer", "opengl": "std430"}[target]
+            or dtype != "uint32"
+            or binding.encoding is not None
+            or payload_size <= 0
+            or payload_size % expected_stride
+            or (stride is not None and stride != expected_stride)
+        ):
+            raise ValueError(
+                "Mixed storage payload or view does not match its reflected record layout."
+            )
+    except ValueError as exc:
+        raise _scalar_block_error(
+            target, str(exc), "storage-record-layout-invalid", resource=binding.name
+        ) from exc
+    return layout["alignmentBytes"]
 
 
 def _scalar_block_size(
@@ -4107,6 +4301,25 @@ def _scalar_block_size(
             resource=binding.name,
             scalarLayout=raw_layout,
         )
+
+    if "blockMembers" in raw_layout or "payloadEncoding" in raw_layout:
+        try:
+            block_size = validate_std140_block_layout(raw_layout)
+        except ValueError as exc:
+            raise _scalar_block_error(
+                target, str(exc), "uniform-block-layout-invalid", resource=binding.name
+            ) from exc
+        if target != "opengl" or dtype != "uint32" or payload_size != block_size:
+            raise _scalar_block_error(
+                target,
+                "Aggregate uniforms require the complete std140 block as uint32 words, including padding.",
+                "uniform-block-payload-mismatch",
+                resource=binding.name,
+                dtype=dtype,
+                payloadSizeBytes=payload_size,
+                blockSizeBytes=block_size,
+            )
+        return block_size
 
     required_fields = {
         "physicalType",
@@ -4180,20 +4393,37 @@ def _scalar_block_size(
             resource=binding.name,
             vectorWidth=vector_width,
         )
+    try:
+        storage_dtype = encoded_storage_dtype(
+            raw_layout,
+            target=target,
+            resource_kind="constant-buffer",
+            logical_dtype=dtype,
+        )
+    except ValueError as exc:
+        raise _scalar_block_error(
+            target,
+            str(exc),
+            "scalar-block-storage-encoding-invalid",
+            resource=binding.name,
+        ) from exc
     expected_physical_type = {
+        "float16": "float16_t",
+        "int16": "int16_t",
+        "uint16": "uint16_t",
         "float32": "float",
         "int32": "int",
         "uint32": "uint",
         "int64": "int64_t",
         "uint64": "uint64_t",
-    }[dtype]
+    }[storage_dtype]
     if vector_width != 1:
         expected_physical_type = f"{expected_physical_type}{vector_width}"
     expected_element_size = _dtype_size(dtype) * vector_width
     element_size = integer_fields["elementSizeBytes"]
     element_stride = integer_fields["elementStrideBytes"]
     if (
-        element_type != dtype
+        element_type != storage_dtype
         or physical_type != expected_physical_type
         or element_size != expected_element_size
         or element_stride != element_size
@@ -4363,46 +4593,233 @@ def _binding_requires_readback(binding: NativeRuntimeBufferBinding) -> bool:
     return binding.expected_output is not None or binding.source == "expectedOutput"
 
 
+def _buffer_readback_encoding(
+    binding: NativeRuntimeBufferBinding, dtype: str
+) -> str | None:
+    encoding = (
+        binding.expected_output.encoding
+        if binding.expected_output is not None
+        else (binding.encoding if binding.source == "expectedOutput" else None)
+    )
+    try:
+        validate_value_encoding(binding.encoding, dtype)
+        if _binding_requires_readback(binding):
+            validate_value_encoding(encoding, dtype)
+    except ValueError as exc:
+        raise RuntimeAdapterSetupError(
+            str(exc),
+            details={"reasonKind": "value-encoding-invalid", "resource": binding.name},
+        ) from exc
+    return encoding
+
+
 def _workgroup_count(
     request: NativeRuntimeDispatchRequest,
     *,
     target: str = "Vulkan",
+    node_index: int | None = None,
 ) -> tuple[int, int, int]:
     dispatch = request.dispatch
     if dispatch is None:
         raise RuntimeExecutorUnavailable(
             f"{target} compute runtime requires dispatch geometry."
         )
-    if dispatch.workgroup_count:
-        values = tuple(int(value) for value in dispatch.workgroup_count)
-    elif dispatch.global_size and dispatch.workgroup_size:
-        values = tuple(
-            max(1, math.ceil(int(global_value) / int(local_value)))
-            for global_value, local_value in zip(
-                dispatch.global_size,
-                dispatch.workgroup_size,
-            )
+    if getattr(dispatch, "thread_grid_size", ()) != ():
+        raise RuntimeAdapterSetupError(
+            f"{target} runtime does not implement exact thread-grid dispatch.",
+            details={
+                "target": target.lower(),
+                "reasonKind": "exact-thread-grid-unsupported",
+                **({"nodeIndex": node_index} if node_index is not None else {}),
+            },
         )
-    else:
+    counts = _pad3(
+        dispatch.workgroup_count,
+        field_name="workgroupCount",
+        target=target,
+        allow_empty=True,
+        node_index=node_index,
+    )
+    if counts:
+        return counts
+    global_size = _pad3(
+        dispatch.global_size,
+        field_name="globalSize",
+        target=target,
+        allow_empty=True,
+        node_index=node_index,
+    )
+    local_size = _pad3(
+        dispatch.workgroup_size,
+        field_name="workgroupSize",
+        target=target,
+        allow_empty=True,
+        node_index=node_index,
+    )
+    if not global_size or not local_size:
         raise RuntimeExecutorUnavailable(
             f"{target} compute runtime requires workgroupCount or "
             "globalSize/workgroupSize."
         )
-    return _pad3(values, field_name="workgroupCount", target=target)
+    return tuple(
+        (global_value + local_value - 1) // local_value
+        for global_value, local_value in zip(global_size, local_size)
+    )
 
 
 def _pad3(
-    values: Sequence[int],
+    values: Sequence[int] | None,
     *,
     field_name: str,
     target: str = "Vulkan",
-) -> tuple[int, int, int]:
-    if len(values) > 3:
-        raise RuntimeExecutorUnavailable(
-            f"{target} compute runtime {field_name} must have at most three dimensions."
+    allow_empty: bool = False,
+    node_index: int | None = None,
+) -> tuple[int, ...]:
+    sequence = isinstance(values, Sequence) and not isinstance(
+        values, (str, bytes, bytearray)
+    )
+    # RuntimeDispatchGeometry uses an empty tuple for omitted metadata.
+    if allow_empty and (values is None or (sequence and len(values) == 0)):
+        return ()
+    if (
+        not sequence
+        or not 1 <= len(values) <= 3
+        or any(
+            not isinstance(value, int) or isinstance(value, bool) or value <= 0
+            for value in values
         )
-    padded = tuple(max(1, int(value)) for value in values) + (1,) * (3 - len(values))
+    ):
+        details = {
+            "target": target.lower(),
+            "reasonKind": "dispatch-dimensions-invalid",
+            "field": field_name,
+            "requested": list(values) if sequence else repr(values),
+        }
+        if node_index is not None:
+            details["nodeIndex"] = node_index
+        raise RuntimeAdapterSetupError(
+            f"{target} compute runtime {field_name} requires one to three positive integers.",
+            details=details,
+        )
+    padded = tuple(values) + (1,) * (3 - len(values))
     return padded[:3]
+
+
+def _validate_dispatch_limits(
+    counts: Sequence[int],
+    size: Sequence[int] | None,
+    *,
+    target: str,
+    max_count: Any,
+    max_size: Any,
+    max_invocations: Any,
+    node_index: int | None = None,
+) -> None:
+    limits = {
+        "maxWorkgroupCount": max_count,
+        "maxWorkgroupSize": max_size,
+        "maxWorkgroupInvocations": max_invocations,
+    }
+    for name, value in limits.items():
+        values = value if name != "maxWorkgroupInvocations" else (value,)
+        expected = 3 if name != "maxWorkgroupInvocations" else 1
+        if (
+            not isinstance(values, (tuple, list))
+            or len(values) != expected
+            or any(
+                not isinstance(item, int) or isinstance(item, bool) or item <= 0
+                for item in values
+            )
+        ):
+            raise RuntimeAdapterSetupError(
+                f"{target} compute dispatch limits are unavailable or invalid.",
+                details={
+                    "target": target,
+                    "reasonKind": "dispatch-limits-unavailable",
+                    "field": name,
+                },
+            )
+    counts = _pad3(
+        counts, field_name="workgroupCount", target=target, node_index=node_index
+    )
+    size = (
+        _pad3(
+            size,
+            field_name="workgroupSize",
+            target=target,
+            allow_empty=True,
+            node_index=node_index,
+        )
+        or None
+    )
+    details = {
+        "target": target,
+        "reasonKind": "dispatch-limit-exceeded",
+        "workgroupCount": list(counts),
+        "workgroupSize": list(size) if size else None,
+        "limits": {
+            name: list(value) if isinstance(value, (list, tuple)) else value
+            for name, value in limits.items()
+        },
+    }
+    if node_index is not None:
+        details["nodeIndex"] = node_index
+    for field, requested, maximum in (
+        ("workgroupCount", counts, max_count),
+        ("workgroupSize", size, max_size),
+    ):
+        if requested is None:
+            continue
+        for axis, (value, limit) in enumerate(zip(requested, maximum)):
+            if value > limit:
+                raise RuntimeAdapterSetupError(
+                    f"{target} {field}[{axis}] exceeds the native dispatch limit.",
+                    details={
+                        **details,
+                        "field": field,
+                        "axis": axis,
+                        "requested": value,
+                        "maximum": limit,
+                    },
+                )
+    if size and math.prod(size) > max_invocations:
+        raise RuntimeAdapterSetupError(
+            f"{target} workgroup invocation count exceeds the native dispatch limit.",
+            details={
+                **details,
+                "field": "workgroupInvocations",
+                "requested": math.prod(size),
+                "maximum": max_invocations,
+            },
+        )
+
+
+def _check_opengl_error(
+    context: Any, *, phase: str, node_index: int | None = None
+) -> None:
+    details = {"target": "opengl", "phase": phase}
+    if node_index is not None:
+        details["nodeIndex"] = node_index
+    try:
+        error = context.error
+    except Exception as exc:
+        raise RuntimeAdapterDispatchError(
+            "OpenGL error state could not be queried.",
+            details={
+                **details,
+                "reasonKind": "opengl-error-query-failed",
+                "error": str(exc),
+            },
+        ) from exc
+    if error != "GL_NO_ERROR":
+        raise RuntimeAdapterDispatchError(
+            f"OpenGL reported {error} during {phase}.",
+            details={
+                **details,
+                "reasonKind": "opengl-api-error",
+                "glError": str(error),
+            },
+        )
 
 
 def _int_field(value: Any, *, default: int | None = None) -> int:
@@ -4420,6 +4837,24 @@ def _int_field(value: Any, *, default: int | None = None) -> int:
 
 def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
     aliases = {
+        "bfloat": "bfloat16",
+        "bfloat16_t": "bfloat16",
+        "short": "int16",
+        "i16": "int16",
+        "int16_t": "int16",
+        "ushort": "uint16",
+        "u16": "uint16",
+        "uint16_t": "uint16",
+        "half": "float16",
+        "f16": "float16",
+        "float16_t": "float16",
+        "char": "int8",
+        "i8": "int8",
+        "int8_t": "int8",
+        "uchar": "uint8",
+        "u8": "uint8",
+        "uint8_t": "uint8",
+        "boolean": "bool",
         "float": "float32",
         "f32": "float32",
         "float32_t": "float32",
@@ -4438,6 +4873,13 @@ def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
     }
     normalized = str(dtype or "").strip().lower()
     value = aliases.get(normalized, normalized)
+    if value in {"float16", "int16", "uint16"} and target.lower() in {
+        "metal",
+        "directx",
+    }:
+        return value
+    if value in {"bfloat16", "bool", "int8", "uint8"} and target.lower() == "metal":
+        return value
     if value not in {"float32", "uint32", "int32", "uint64", "int64"}:
         raise RuntimeExecutorUnavailable(
             f"{target} compute runtime supports float32, uint32, int32, uint64, "
@@ -4448,6 +4890,13 @@ def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
 
 def _dtype_format(dtype: str) -> str:
     return {
+        "bfloat16": "H",
+        "int16": "h",
+        "uint16": "H",
+        "float16": "e",
+        "int8": "b",
+        "uint8": "B",
+        "bool": "?",
         "float32": "f",
         "uint32": "I",
         "int32": "i",
@@ -4473,29 +4922,157 @@ def _flatten_values(value: Any) -> list[Any]:
     return [value]
 
 
+def _native_buffer_element_count(binding: NativeRuntimeBufferBinding) -> int:
+    if binding.shape:
+        return math.prod(int(value) for value in binding.shape)
+    if binding.upload_snapshot is not None:
+        return binding.upload_snapshot.element_count
+    return len(_flatten_values(binding.value))
+
+
+def _snapshot_native_buffer_binding(
+    binding: NativeRuntimeBufferBinding, *, target: str
+) -> NativeRuntimeBufferBinding:
+    if binding.value is None or binding.binding.kind not in {
+        None,
+        "buffer",
+        "storage-buffer",
+        "constant-buffer",
+        "uniform",
+    }:
+        return binding
+    dtype = _normalize_dtype(binding.dtype, target=target)
+    count = _native_buffer_element_count(binding)
+    if binding.upload_snapshot is not None:
+        _native_buffer_payload(binding, dtype, expected_count=count, target=target)
+        return binding
+    payload = _pack_values(
+        binding.value,
+        dtype,
+        expected_count=count,
+        target=target,
+        encoding=binding.encoding,
+    )
+    return replace(
+        binding,
+        upload_snapshot=_NativeRuntimeUploadSnapshot(
+            dtype=dtype,
+            shape=tuple(binding.shape),
+            encoding=binding.encoding,
+            element_count=count,
+            payload=payload,
+        ),
+    )
+
+
+def _native_buffer_payload(
+    binding: NativeRuntimeBufferBinding,
+    dtype: str,
+    *,
+    expected_count: int,
+    target: str,
+) -> bytes:
+    snapshot = binding.upload_snapshot
+    if snapshot is None:
+        return _pack_values(
+            binding.value,
+            dtype,
+            expected_count=expected_count,
+            target=target,
+            encoding=binding.encoding,
+        )
+    if (
+        snapshot.dtype != dtype
+        or snapshot.shape != tuple(binding.shape)
+        or snapshot.encoding != binding.encoding
+        or snapshot.element_count != expected_count
+        or type(snapshot.payload) is not bytes
+        or len(snapshot.payload) != expected_count * _dtype_size(dtype)
+    ):
+        raise RuntimeAdapterSetupError(
+            "Native buffer upload snapshot does not match its binding.",
+            details={
+                "target": target,
+                "resource": binding.name,
+                "reasonKind": "upload-snapshot-mismatch",
+            },
+        )
+    return snapshot.payload
+
+
 def _pack_values(
     value: Any,
     dtype: str,
     *,
     expected_count: int,
     target: str = "Vulkan",
+    encoding: str | None = None,
 ) -> bytes:
     values = _flatten_values(value)
+    try:
+        validate_value_encoding(encoding, dtype, values)
+    except ValueError as exc:
+        raise RuntimeExecutorUnavailable(str(exc)) from exc
     if len(values) != expected_count:
         raise RuntimeExecutorUnavailable(
             f"{target} compute runtime buffer value count does not match shape."
         )
-    if dtype == "float32":
-        special_bits = {
-            "nan": 0x7FC00000,
-            "+infinity": 0x7F800000,
-            "-infinity": 0xFF800000,
-        }
+    if encoding is not None:
+        return struct.pack(
+            "<" + ("H" if dtype in {"float16", "bfloat16"} else "I") * expected_count,
+            *values,
+        )
+    if dtype == "bool" and any(type(item) is not bool for item in values):
+        raise RuntimeExecutorUnavailable(
+            f"{target} boolean buffer values must be true or false."
+        )
+    if dtype in {"int8", "uint8", "int16", "uint16"}:
+        width = _dtype_size(dtype) * 8
+        low, high = (
+            (-(1 << (width - 1)), (1 << (width - 1)) - 1)
+            if dtype.startswith("int")
+            else (0, (1 << width) - 1)
+        )
+        if any(type(item) is not int or not low <= item <= high for item in values):
+            raise RuntimeExecutorUnavailable(
+                f"{target} narrow integer buffer values must be integers in [{low}, {high}]."
+            )
+    if dtype in {"float16", "float32"}:
+        special_bits = (
+            {
+                "nan": 0x7E00,
+                "+infinity": 0x7C00,
+                "-infinity": 0xFC00,
+            }
+            if dtype == "float16"
+            else {
+                "nan": 0x7FC00000,
+                "+infinity": 0x7F800000,
+                "-infinity": 0xFF800000,
+            }
+        )
         payload = bytearray()
         for item in values:
             bits = special_bits.get(item) if isinstance(item, str) else None
+            if dtype == "float16" and bits is None:
+                try:
+                    valid = (
+                        isinstance(item, (int, float))
+                        and not isinstance(item, bool)
+                        and math.isfinite(item)
+                    )
+                    if valid:
+                        struct.pack("<e", item)
+                except (OverflowError, ValueError, struct.error):
+                    valid = False
+                if not valid:
+                    raise RuntimeExecutorUnavailable(
+                        "Binary16 values must be finite representable numbers or explicit nonfinite tokens."
+                    )
             payload.extend(
-                struct.pack("<I", bits) if bits is not None else struct.pack("<f", item)
+                struct.pack("<H" if dtype == "float16" else "<I", bits)
+                if bits is not None
+                else struct.pack("<" + _dtype_format(dtype), item)
             )
         return bytes(payload)
     return struct.pack("<" + _dtype_format(dtype) * expected_count, *values)
@@ -4506,8 +5083,25 @@ def _unpack_values(
     dtype: str,
     *,
     target: str = "Vulkan",
+    encoding: str | None = None,
 ) -> list[Any]:
+    try:
+        validate_value_encoding(encoding, dtype)
+    except ValueError as exc:
+        raise RuntimeAdapterDispatchError(
+            str(exc),
+            details={"target": target.lower(), "reasonKind": "value-encoding-invalid"},
+        ) from exc
     size = _dtype_size(dtype)
+    if dtype == "bool" and any(byte not in (0, 1) for byte in payload):
+        raise RuntimeAdapterDispatchError(
+            f"{target} boolean output contains a noncanonical storage byte.",
+            details={
+                "target": target.lower(),
+                "reasonKind": "output-layout-invalid",
+                "dtype": dtype,
+            },
+        )
     if len(payload) % size:
         raise RuntimeAdapterDispatchError(
             f"{target} runtime output byte length is not aligned to the dtype size.",
@@ -4521,4 +5115,31 @@ def _unpack_values(
     count = len(payload) // size
     if count == 0:
         return []
-    return list(struct.unpack("<" + _dtype_format(dtype) * count, payload))
+    return list(
+        struct.unpack(
+            "<"
+            + (
+                ("H" if dtype in {"float16", "bfloat16"} else "I")
+                if encoding is not None
+                else _dtype_format(dtype)
+            )
+            * count,
+            payload,
+        )
+    )
+
+
+def _buffer_readback(
+    payload: bytes,
+    dtype: str,
+    shape: Sequence[int],
+    *,
+    target: str,
+    encoding: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "dtype": dtype,
+        "shape": list(shape),
+        "values": _unpack_values(payload, dtype, target=target, encoding=encoding),
+        **({"encoding": encoding} if encoding is not None else {}),
+    }

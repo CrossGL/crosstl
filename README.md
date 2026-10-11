@@ -102,6 +102,10 @@ We maintain first-class, bidirectional support for the three cornerstone graphic
 
 ## Translation Architecture
 
+Repository-scale examples and application-specific host adapters are documented
+in [Translation Demos](demos/README.md). They exercise the translator without
+making any external application a dependency of CrossTL.
+
 CrossTL uses a multi-stage translation pipeline:
 
 1. **Lexical Analysis**: Tokenization

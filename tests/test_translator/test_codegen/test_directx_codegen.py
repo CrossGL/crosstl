@@ -130,6 +130,62 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+@pytest.mark.parametrize(
+    "element, mapped", [("float", "float2"), ("f16", "float16_t2"), ("int", "int2")]
+)
+@pytest.mark.parametrize("entry_only", [False, True])
+def test_hlsl_resolves_vector_type_alias_declarations(
+    tmp_path, element, mapped, entry_only
+):
+    source = f"""shader Alias {{
+        typedef vector<{element}, 2> Pair;
+        typedef Pair Copy;
+        RWStructuredBuffer<float> results;
+        compute {{ void main() {{
+            Copy value = Copy(1, 2);
+            results[0] = float(value.x + value.y);
+        }} }}
+    }}"""
+    generator = HLSLCodeGen()
+    ast = parse_code(tokenize_code(source))
+    hlsl = (
+        generator.generate_entry(ast, "main") if entry_only else generator.generate(ast)
+    )
+    assert generator.map_type("Copy") == mapped
+    assert f"{mapped} value" in hlsl
+    assert " Pair;" not in hlsl and " Copy;" not in hlsl
+    assert_directx_warnings_clean_if_available(hlsl, tmp_path, profile="cs_6_2")
+    generator.generate(parse_code(tokenize_code("shader Empty {}")))
+    assert generator.map_type("Copy") == "Copy"
+
+
+@pytest.mark.parametrize("target", ["Second", "vector<Second, 2>"])
+def test_hlsl_rejects_cyclic_type_alias_declarations(target):
+    generator = HLSLCodeGen()
+    with pytest.raises(ValueError, match="Cyclic HLSL type alias"):
+        generator.generate(
+            parse_code(
+                tokenize_code(
+                    f"shader Alias {{ typedef {target} First; typedef First Second; }}"
+                )
+            )
+        )
+    assert not generator.hlsl_type_alias_resolution_stack
+
+
+def test_hlsl_preserves_builtin_narrow_alias_contracts():
+    generator = HLSLCodeGen()
+    generator.generate(
+        parse_code(
+            tokenize_code(
+                "shader Alias { typedef half bfloat16_t; typedef f16 float16_t; }"
+            )
+        )
+    )
+    assert generator.map_type("bfloat16_t") == "uint"
+    assert generator.map_type("float16_t") == "float16_t"
+
+
 def assert_directx_warnings_clean_if_available(
     hlsl_code,
     tmp_path,
@@ -1164,7 +1220,7 @@ def test_hlsl_metal_union_storage_aliases_exact_bytes_and_side_effects(tmp_path)
     assert "((value.w & 0xffu) << 24u)" in generated
     assert (
         "holder.values[next_index(calls)].CrossGLUnionStorage[1] = "
-        "__crossgl_union_pack_u8x4(uint4(5u, 6u, 7u, 8u));"
+        "__crossgl_union_pack_u8x4((uint4((uint4(uint4(5u, 6u, 7u, 8u)) & 255u)) & 255u));"
     ) in generated
     assert generated.count("holder.values[next_index(calls)].CrossGLUnionStorage") == 2
     assert "output[1] = holder.values[0].CrossGLUnionStorage.y;" in generated
@@ -2692,7 +2748,7 @@ def test_hlsl_codegen_lowers_array_literals_to_expected_vector_arguments():
 
     generated = generate_code(ast)
 
-    assert "elem_to_loc(int64_t3(1, 2, 3))" in generated
+    assert "elem_to_loc(int64_t3(1ll, 2ll, 3ll))" in generated
     assert "elem_to_loc({" not in generated
 
 
@@ -3433,7 +3489,7 @@ def test_hlsl_codegen_lowers_bool_arithmetic_and_compound_assignments(tmp_path):
         source_backend="metal",
     )
 
-    assert "if (exp & 1)" in metal_generated
+    assert "if (int(exp) & 1)" in metal_generated
     assert metal_generated.count("int __crossgl_bool_compound_lhs") == 3
     assert metal_generated.count("int __crossgl_bool_compound_rhs") == 3
     assert "result *= base" not in metal_generated
@@ -4377,11 +4433,14 @@ def test_hlsl_codegen_emits_contextual_floating_narrowing_for_native_16_targets(
         parse_code(tokenize_code(shader))
     )
 
-    assert "return float16_t(wideScalar(value));" in generated
-    assert "return float16_t2(widePair(value));" in generated
-    assert "float16_t localValue = float16_t(wideScalar(2.0));" in generated
-    assert "float16_t2 localPair = float16_t2(widePair(float2(3.0, 4.0)));" in generated
-    assert "localValue = float16_t(wideScalar(5.0));" in generated
+    assert "return __crossgl_round_half1(wideScalar(value));" in generated
+    assert "return __crossgl_round_half2(widePair(value));" in generated
+    assert "float16_t localValue = __crossgl_round_half1(wideScalar(2.0));" in generated
+    assert (
+        "float16_t2 localPair = __crossgl_round_half2(widePair(float2(3.0, 4.0)));"
+        in generated
+    )
+    assert "localValue = __crossgl_round_half1(wideScalar(5.0));" in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
 
@@ -4563,7 +4622,7 @@ def test_hlsl_codegen_narrows_64_bit_initializer_to_declared_int():
 
     generated = generate_code(ast)
 
-    assert "int edge_bytes = int((bytes_per_key % 4u));" in generated
+    assert "int edge_bytes = int((bytes_per_key % uint64_t(4u)));" in generated
 
 
 def test_hlsl_codegen_lowers_metal_simd_shuffle_helpers_to_wave_reads():
@@ -6793,8 +6852,8 @@ def test_hlsl_native_16_bit_arithmetic_applies_metal_promotions(tmp_path):
         parse_code(tokenize_code(shader))
     )
 
-    assert "return (start + (float16_t(index) * step));" in generated
-    assert "return (start + (step * float16_t(index)));" in generated
+    assert "return (start + (__crossgl_round_half1(float(index)) * step));" in generated
+    assert "return (start + (step * __crossgl_round_half1(float(index))));" in generated
     assert generated.count("return (int(lhs) + int(rhs));") == 2
     assert "return (uint(lhs) + rhs);" in generated
     assert "return (int(lhs) + rhs);" in generated
@@ -6803,10 +6862,12 @@ def test_hlsl_native_16_bit_arithmetic_applies_metal_promotions(tmp_path):
     assert "return (int2(lhs) << int2(rhs));" in generated
     assert "return (int2(lhs) >> rhs);" in generated
     assert "return (uint(lhs) << rhs);" not in generated
-    assert "return (float16_t(index) * step);" in generated
+    assert "return (__crossgl_round_half1(float(index)) * step);" in generated
     assert "return (lhs + int16_t(rhs));" in generated
     assert "return (lhs + uint16_t(rhs));" in generated
-    assert "return (float16_t(nextIndex(calls)) * step);" in generated
+    assert (
+        "return (__crossgl_round_half1(float(nextIndex(calls))) * step);" in generated
+    )
     assert generated.count("nextIndex(calls)") == 1
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
@@ -7098,21 +7159,35 @@ def test_hlsl_narrow_integer_aliases_map_to_valid_hlsl_integer_types():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "int signedScalar(int input)" in generated_code
-    assert "int one = int(1);" in generated_code
+    assert (
+        "int one = (int(uint((int(uint(int(1)) << 24u) >> 24)) << 24u) >> 24);"
+        in generated_code
+    )
     assert "uint unsignedScalar(uint input)" in generated_code
-    assert "uint one = uint(1u);" in generated_code
+    assert "uint one = (uint((uint(uint(1u)) & 255u)) & 255u);" in generated_code
     assert "int2 signedPair(int2 input)" in generated_code
-    assert "int2 inc = int2(1, 2);" in generated_code
+    assert (
+        "int2 inc = (int2(uint2((int2(uint2(int2(1, 2)) << 24u) >> 24)) << 24u) >> 24);"
+        in generated_code
+    )
     assert "uint3 unsignedTriple(uint3 input)" in generated_code
-    assert "uint3 inc = uint3(1u, 2u, 3u);" in generated_code
+    assert (
+        "uint3 inc = (uint3((uint3(uint3(1u, 2u, 3u)) & 255u)) & 255u);"
+        in generated_code
+    )
     assert "int16_t2 signedShort(int16_t2 input)" in generated_code
     assert "int16_t2 inc = int16_t2(1, 2);" in generated_code
     assert "uint16_t3 unsignedShort(uint16_t3 input)" in generated_code
     assert "uint16_t3 inc = uint16_t3(1u, 2u, 3u);" in generated_code
     assert "int4 signedChar(int4 input)" in generated_code
-    assert "int4 inc = int4(1, 2, 3, 4);" in generated_code
+    assert (
+        "int4 inc = (int4(uint4((int4(uint4(int4(1, 2, 3, 4)) << 24u) >> 24)) << 24u) >> 24);"
+        in generated_code
+    )
     assert "uint2 unsignedChar(uint2 input)" in generated_code
-    assert "uint2 inc = uint2(1u, 2u);" in generated_code
+    assert (
+        "uint2 inc = (uint2((uint2(uint2(1u, 2u)) & 255u)) & 255u);" in generated_code
+    )
     for invalid_token in (
         "int8",
         "uint8",
@@ -8937,6 +9012,38 @@ def test_hlsl_metal_constant_pointer_helpers_forward_alias_offsets(tmp_path):
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
+@pytest.mark.parametrize("scalar", ["uchar", "char"])
+@pytest.mark.parametrize(
+    "body",
+    [
+        "output[i] = int((values + 3)[i]);",
+        "output[i] = int(*(values + i + 3));",
+        "const device Scalar* cursor = values + 3; output[i] = int(cursor[i]);",
+        "values += 3; output[i] = int(values[i]);",
+    ],
+)
+def test_hlsl_byte_buffer_offsets_keep_logical_element_stride(tmp_path, scalar, body):
+    shader_path = tmp_path / "byte_offsets.metal"
+    shader_path.write_text(f"""
+    #include <metal_stdlib>
+    using namespace metal;
+    using Scalar = {scalar};
+    kernel void byte_offsets(const device Scalar* values [[buffer(0)]],
+                             device int* output [[buffer(1)]],
+                             uint i [[thread_position_in_grid]]) {{
+        {body}
+    }}
+    """)
+    generated = crosstl.translate(
+        str(shader_path), backend="directx", format_output=False
+    )
+    assert "StructuredBuffer<" in generated
+    assert "values[uint(" in generated or "values.Load(uint(" in generated
+    assert "/ 4" not in generated and "% 4" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
 def test_hlsl_metal_narrow_storage_helper_preserves_byte_view_offset(tmp_path):
     shader = """
     #include <metal_stdlib>
@@ -9084,14 +9191,17 @@ def test_hlsl_metal_native_half_constant_params_promote_to_cbuffers(tmp_path):
     )
 
     assert "cbuffer half_step_start_Constants" in generated_code
-    assert "float16_t half_step_start;" in generated_code
+    assert "uint16_t half_step_start;" in generated_code
     assert "cbuffer half_step_step_Constants" in generated_code
-    assert "float16_t half_step_step;" in generated_code
+    assert "uint16_t half_step_step;" in generated_code
     assert "void CSMain(float16_t start" not in generated_code
     assert "void CSMain(uint3 index_dispatchThreadID : SV_DispatchThreadID)" in (
         generated_code
     )
-    assert "half_step_start + (float16_t(index) * half_step_step)" in generated_code
+    assert (
+        "asfloat16(half_step_start) + (__crossgl_round_half1(float(index)) * asfloat16(half_step_step))"
+        in generated_code
+    )
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
     assert_directx_native_16_bit_compute_validates_if_available(
         generated_code,
@@ -9126,7 +9236,7 @@ def test_hlsl_metal_resource_pointer_offsets_apply_to_buffer_helpers(tmp_path):
     assert "out_ +=" not in generated_code
     assert "buffer_store" not in generated_code
     assert "int64_t out__offset = int64_t(0);" in generated_code
-    assert "out__offset += uint((uint64_t(index) * 4));" in generated_code
+    assert "out__offset += uint((uint64_t(index) * uint64_t(4)));" in generated_code
     assert "out_[uint((out__offset + 1))] = 7u;" in generated_code
     assert "out_[uint(out__offset)] = 9u;" in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
@@ -11044,7 +11154,7 @@ def test_hlsl_metal_unsupported_address_space_pointer_arrays_fail_closed(
     ],
     ids=("direct", "one-dimensional", "multidimensional", "typedef-alias"),
 )
-def test_hlsl_metal_struct_pointer_member_fails_closed(
+def test_hlsl_metal_struct_pointer_member_preserves_resource_reference(
     tmp_path,
     alias_definition,
     member_declaration,
@@ -11074,20 +11184,17 @@ def test_hlsl_metal_struct_pointer_member_fails_closed(
         shader_path, tmp_path / "struct_pointer_member.air"
     )
 
-    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
-        crosstl.translate(
-            str(shader_path),
-            backend="directx",
-            format_output=False,
-            source_backend="metal",
-        )
-
-    assert excinfo.value.array_name in {"row", "rows"}
-    assert excinfo.value.address_space == "device"
-    assert excinfo.value.reason == "struct-pointer-member-unsupported"
+    generated = crosstl.translate(
+        str(shader_path), backend="directx", format_output=False, source_backend="metal"
+    )
+    assert "crosstl_resource_ref_float" in generated
+    assert "crosstl_resource_load_float" in generated
+    assert "const device float*" not in generated
 
 
-def test_hlsl_metal_generic_struct_pointer_member_fails_closed(tmp_path):
+def test_hlsl_metal_generic_struct_pointer_member_preserves_resource_reference(
+    tmp_path,
+):
     shader = """
     #include <metal_stdlib>
     using namespace metal;
@@ -11111,17 +11218,12 @@ def test_hlsl_metal_generic_struct_pointer_member_fails_closed(tmp_path):
         shader_path, tmp_path / "generic_struct_pointer_member.air"
     )
 
-    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
-        crosstl.translate(
-            str(shader_path),
-            backend="directx",
-            format_output=False,
-            source_backend="metal",
-        )
-
-    assert excinfo.value.array_name == "value"
-    assert excinfo.value.address_space == "device"
-    assert excinfo.value.reason == "struct-pointer-member-unsupported"
+    generated = crosstl.translate(
+        str(shader_path), backend="directx", format_output=False, source_backend="metal"
+    )
+    assert "crosstl_resource_ref_float" in generated
+    assert "crosstl_resource_load_float" in generated
+    assert "const device float*" not in generated
 
 
 @pytest.mark.parametrize(
@@ -12631,7 +12733,7 @@ def test_hlsl_metal_inferred_or_aliased_private_local_fails_closed(
 @pytest.mark.parametrize(
     "declaration",
     (
-        "thread decltype(value) copy = value;",
+        "decltype(value) copy = value;",
         "thread decltype((value + 1.0f)) copy = value + 1.0f;",
     ),
     ids=("unparenthesized-identifier", "parenthesized-rvalue"),
@@ -13550,7 +13652,7 @@ def test_hlsl_typed_buffer_store_contextually_narrows_wide_integers(tmp_path):
 
     assert (
         "unsignedOutput[index] = "
-        "uint(((packed & 1095216660480ull) >> 32));" in generated_code
+        "uint(((int64_t(packed) & 1095216660480ll) >> 32));" in generated_code
     )
     assert "signedOutput[index] = int((signedWide >> 32));" in generated_code
     assert "unsignedOutput[index] = unsignedSame;" in generated_code
@@ -13591,7 +13693,7 @@ def test_hlsl_typed_resource_assignment_contextually_narrows_wide_integers(
     assert "RWStructuredBuffer<uint> unsignedOutput : register(u0);" in generated_code
     assert (
         "unsignedOutput[index] = "
-        "uint(((packed & 1095216660480ull) >> 32));" in generated_code
+        "uint(((int64_t(packed) & 1095216660480ll) >> 32));" in generated_code
     )
     assert "signedOutput[index] = int((signedWide >> 32));" in generated_code
     assert "unsignedOutput[index] = packed;" in generated_code
@@ -14654,7 +14756,7 @@ def test_directx_typed_buffer_atomics_lift_inside_ternary_conditions():
         "InterlockedAdd(counters[tid.x], 1u, __crossgl_atomic_expr_0);"
         in generated_code
     )
-    assert "if ((__crossgl_atomic_expr_0 != 0u)) {" in generated_code
+    assert "if (__crossgl_atomic_expr_0 != 0u) {" in generated_code
     assert "selected = 11u;" in generated_code
     assert "uint __crossgl_atomic_expr_1;" in generated_code
     assert (
@@ -14913,7 +15015,7 @@ def test_directx_typed_buffer_atomics_lift_in_array_literals():
     assert "atomicCompareExchange(counters" not in generated_code
 
 
-def test_directx_typed_buffer_atomics_reject_non_integer_targets():
+def test_directx_typed_buffer_atomics_reject_unsupported_float_operations():
     shader = """
     shader BadTypedBufferAtomicHLSL {
         RWBuffer<float> values @register(u1);
@@ -14921,7 +15023,7 @@ def test_directx_typed_buffer_atomics_reject_non_integer_targets():
         compute {
             @numthreads(1, 1, 1)
             void main(uvec3 tid @gl_GlobalInvocationID) {
-                float original = atomicAdd(values[tid.x], 1.0);
+                float original = atomicMin(values[tid.x], 1.0);
             }
         }
     }
@@ -14930,7 +15032,7 @@ def test_directx_typed_buffer_atomics_reject_non_integer_targets():
     with pytest.raises(
         ValueError,
         match=(
-            "DirectX typed buffer atomic 'atomicAdd' requires a scalar "
+            "DirectX typed buffer atomic 'atomicMin' requires a scalar "
             "int or uint target, got float"
         ),
     ):
@@ -15717,7 +15819,7 @@ def test_hlsl_large_integer_literals_preserve_64_bit_values():
     shader LargeIntegerLiteralCodegen {
         compute {
             void main() {
-                uint64_t max_unsigned = uint64_t(18446744073709551615);
+                uint64_t max_unsigned = uint64_t(18446744073709551615ul);
                 int64_t max_signed = int64_t(9223372036854775807);
             }
         }
@@ -15727,7 +15829,7 @@ def test_hlsl_large_integer_literals_preserve_64_bit_values():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "18446744073709551615ull" in generated_code
-    assert "9223372036854775807ull" in generated_code
+    assert "9223372036854775807ll" in generated_code
 
 
 def test_hlsl_resource_binding_attributes_are_not_parameter_semantics():
@@ -17657,7 +17759,7 @@ def test_for_in_unknown_or_user_defined_iterables_are_structured_diagnostics(
     assert diagnostic.reason == reason
 
 
-def test_for_in_mutable_reference_binding_is_structured_diagnostic():
+def test_for_in_mutable_reference_binding_updates_original_array():
     shader = """
     shader MutableReferenceForIn {
         void helper() {
@@ -17674,15 +17776,12 @@ def test_for_in_mutable_reference_binding_is_structured_diagnostic():
     )
     loop.binding_type = ReferenceType(PrimitiveType("uint"), is_mutable=True)
 
-    with pytest.raises(DirectXForInIterableError) as exc_info:
-        HLSLCodeGen().generate(ast)
-
-    diagnostic = exc_info.value
-    assert diagnostic.binding_type == "uint&"
-    assert diagnostic.reason == "mutable-reference-binding"
+    generated = HLSLCodeGen().generate(ast)
+    assert "values[value_crossgl_index] += 1u;" in generated
+    assert "value_crossgl_iterable" not in generated
 
 
-def test_for_in_immutable_reference_binding_lowers_to_const_value():
+def test_for_in_immutable_reference_binding_reads_original_array():
     shader = """
     shader ImmutableReferenceForIn {
         void helper() {
@@ -17701,7 +17800,8 @@ def test_for_in_immutable_reference_binding_lowers_to_const_value():
 
     generated_code = HLSLCodeGen().generate(ast)
 
-    assert "const uint value = value_crossgl_iterable[" in generated_code
+    assert "uint copy = values[value_crossgl_index];" in generated_code
+    assert "value_crossgl_iterable" not in generated_code
 
 
 def test_for_in_empty_fixed_array_omits_unreachable_loop_body():
@@ -18807,7 +18907,7 @@ def test_hlsl_renames_collapsed_fixed_width_integer_overloads(tmp_path):
 
     assert "int widen_int8_t(int value)" in generated_code
     assert "int widen_int32_t(int value)" in generated_code
-    assert "return widen_int8_t(value);" in generated_code
+    assert "return widen_int8_t((int(uint(value) << 24u) >> 24));" in generated_code
     assert "return widen_int32_t(value);" in generated_code
     assert_directx_compute_validates_if_available(generated_code, tmp_path)
 
@@ -18883,7 +18983,7 @@ def test_hlsl_mapped_overload_names_avoid_existing_declarations(tmp_path):
     assert "uint adjust(uint value)" in generated_code
     assert "float16_t value = adjust(float16_t(1.0));" in generated_code
     assert (
-        "float16_t narrowValue = float16_t(__crossgl_bfloat16_to_float"
+        "float16_t narrowValue = __crossgl_round_half1(__crossgl_bfloat16_to_float"
         in generated_code
     )
     assert_directx_native_16_bit_compute_validates_if_available(
@@ -18910,12 +19010,13 @@ def test_hlsl_preserves_resource_overloads_with_distinct_bfloat_payloads():
     generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert (
-        "float16_t readValue(StructuredBuffer<float16_t> values, float16_t fallback)"
+        "float16_t readValue(StructuredBuffer<uint16_t> values, float16_t fallback)"
         in generated
     )
     assert (
-        "uint readValue(StructuredBuffer<float16_t> values, uint fallback)" in generated
+        "uint readValue(StructuredBuffer<uint16_t> values, uint fallback)" in generated
     )
+    assert "asfloat16(values[" in generated
     assert "__crossgl_bfloat16_from_float" in generated
     assert "__crossgl_bfloat16_to_float" in generated
 
@@ -18942,7 +19043,8 @@ def test_hlsl_resolves_call_after_bfloat_payload_types_remain_distinct():
     assert "float16_t select(float16_t value)" in generated
     assert "uint select(uint value)" in generated
     assert (
-        "return float16_t(__crossgl_bfloat16_to_float(uint(select(1))));" in generated
+        "return __crossgl_round_half1(__crossgl_bfloat16_to_float(uint(select(1))));"
+        in generated
     )
 
 
@@ -18977,7 +19079,8 @@ def test_hlsl_distinct_bfloat_payload_overload_reaches_project_artifact(tmp_path
     assert "float16_t select(float16_t value)" in generated
     assert "uint select(uint value)" in generated
     assert (
-        "return float16_t(__crossgl_bfloat16_to_float(uint(select(1))));" in generated
+        "return __crossgl_round_half1(__crossgl_bfloat16_to_float(uint(select(1))));"
+        in generated
     )
 
 
@@ -19799,7 +19902,7 @@ def test_hlsl_native_binary16_compound_assignment_promotes_exact_payload(tmp_pat
 
     assert "float16_t value = asfloat16(bits);" in generated
     assert (
-        "value = float16_t((__crossgl_binary16_to_float("
+        "value = __crossgl_round_half1((__crossgl_binary16_to_float("
         "uint(asuint16(value))) * 16384.0));" in generated
     )
     assert (
@@ -19845,7 +19948,7 @@ def test_hlsl_native_binary16_widening_eliminates_native_half_roundtrip(tmp_path
     assert "float value = __crossgl_binary16_to_float(uint(bits));" in generated
     assert "value *= 16384.0;" in generated
     assert "return uint((int(bits) << 23));" in generated
-    assert "-value" in generated
+    assert "asfloat(asuint(value) ^ 0x80000000u)" in generated
     assert "asfloat16(" not in generated
     assert "float16_t value" not in generated
     assert "f16tof32(" not in generated
@@ -20304,7 +20407,7 @@ def test_hlsl_clang_trailing_zero_builtins_preserve_width_and_signedness():
     )
     assert "int unsigned64Count = __crossgl_ctz_uint64_t(unsigned64);" in generated_code
     assert (
-        "int wideLiteralCount = __crossgl_ctz_uint64_t(4294967296ull);"
+        "int wideLiteralCount = __crossgl_ctz_uint64_t(uint64_t(4294967296ll));"
         in generated_code
     )
     assert "__builtin_ctz" not in generated_code
@@ -29177,6 +29280,27 @@ def test_directx_allows_non_resource_shadow_of_global_resource_when_not_used_as_
     assert "Texture2D texNormal : register(t1);" in generated_code
     assert "float Luma = input.uv.x;" in generated_code
     assert "float3 texNormal = float3(input.uv, 1.0);" in generated_code
+
+
+@pytest.mark.parametrize("resource", ["RWStructuredBuffer<int>", "RWByteAddressBuffer"])
+@pytest.mark.parametrize("value_type", ["int", "ivec2", "ivec4"])
+def test_directx_buffer_name_shadow_preserves_value_updates(resource, value_type):
+    shader = f"""
+    shader ResourceShadow {{
+        {resource} value;
+        void adjust(inout {value_type} value) {{
+            value += {value_type}(3);
+        }}
+        {value_type} local_update() {{
+            {value_type} value = {value_type}(2);
+            value += {value_type}(5);
+            return value;
+        }}
+    }}
+    """
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert generated.count("value += ") == 2
+    assert "value_offset" not in generated
 
 
 def test_directx_rejects_texture_call_with_shadowing_non_resource_local():
@@ -47390,9 +47514,16 @@ def test_hlsl_metal_private_scalar_struct_view_materializes_exact_value(tmp_path
         source_backend="metal",
     )
 
-    assert "ByteView direct;" in generated
-    assert "direct.bits = (byte & 0xffu);" in generated
-    assert "consume(ByteView((byte & 0xffu)))" in generated
+    assert (
+        "ByteView direct = _crosstl_metal_load_value_ByteView((uint(byte) & 255u));"
+        in generated
+    )
+    assert "ByteView result;" in generated
+    assert "result.bits = (uint(value) & 255u);" in generated
+    assert "return result;" in generated
+    assert (
+        "consume(_crosstl_metal_load_value_ByteView((uint(byte) & 255u)))" in generated
+    )
     assert "PointerReinterpretNode" not in generated
     assert "&byte" not in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
@@ -47828,8 +47959,14 @@ def test_hlsl_metal_storage_struct_view_preserves_typed_alias_offset(tmp_path):
     )
 
     assert "words_offset += uint((gid * 2));" in generated
-    assert "local.words[0] = packed[uint(((words_offset * 4)) / 4)];" in generated
-    assert "local.words[1] = packed[uint((((words_offset + 1) * 4)) / 4)];" in generated
+    for index in ("(words_offset * 4)", "((words_offset + 1) * 4)"):
+        assert f"uint(packed[uint({index})]) & 255u" in generated
+        for lane in (1, 2, 3):
+            assert (
+                f"(uint(packed[uint(({index} + {lane}))]) & 255u) << {lane * 8}u"
+                in generated
+            )
+    assert "/ 4" not in generated
     assert "local.words[0] = packed[uint(0)]" not in generated
     assert "PointerReinterpretNode" not in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
@@ -50056,12 +50193,6 @@ def test_hlsl_software_subgroup_helper_identity_avoids_local_names():
     "entry_parameter, helper_body, call, reason",
     [
         (
-            "uint index @SV_DispatchThreadID",
-            "return WaveShuffleDown(value, 1u);",
-            "output[index] = shuffled(index);",
-            "invocation-index-unavailable",
-        ),
-        (
             "uint index @gl_LocalInvocationIndex",
             "return WaveShuffleDown(value, 1u);",
             "if (index < 16u) { output[index] = shuffled(index); }",
@@ -50203,6 +50334,39 @@ def test_hlsl_software_subgroup_rejects_mutated_loop_controls(mutation):
     assert excinfo.value.reason == "potentially-divergent-control-flow"
 
 
+@pytest.mark.parametrize("qualifier", ["out", "inout"])
+@pytest.mark.parametrize("rank", [1, 2])
+@pytest.mark.parametrize("effectful", [False, True])
+def test_hlsl_aggregate_reference_indices_are_captured(
+    tmp_path, qualifier, rank, effectful
+):
+    indices = "[index++]" if effectful else "[index]"
+    if rank == 2:
+        indices += "[column++]" if effectful else "[column]"
+    dimensions = "[2]" * rank
+    source = f"""shader IndexedReference {{
+        struct Payload {{ uint value; }}
+        void update({qualifier} Payload target) {{ target.value = 7u; }}
+        compute {{ void main(RWStructuredBuffer<uint> output @buffer(0)) {{
+            Payload values{dimensions};
+            uint index = 0u;
+            uint column = 0u;
+            if (output[0] != 0u) {{ update(values{indices}); }}
+            output[1] = index + column;
+        }} }}
+    }}"""
+    ast = parse_code(tokenize_code(source))
+    generated = HLSLCodeGen().generate(ast)
+    call = next(line for line in generated.splitlines() if "update(values[" in line)
+    assert "update(values[__crossgl_integer_index" in call
+    assert call.count(" = ") == rank
+    assert generated.index("if (") < generated.index(call.strip())
+    if effectful:
+        assert generated.count("index++") == 1
+        assert generated.count("column++") == (rank - 1)
+    assert_directx_warnings_clean_if_available(generated, tmp_path, profile="cs_6_6")
+
+
 def test_hlsl_software_subgroup_helper_cannot_inherit_uniform_parameter_name():
     code = """
     shader ShadowedUniformParameter {
@@ -50236,7 +50400,7 @@ def test_hlsl_software_subgroup_rejects_unsupported_operation():
             @ numthreads(32, 2, 1)
             void main(RWStructuredBuffer<uint> output @buffer(0),
                       uint groupIndex @gl_LocalInvocationIndex) @ WaveSize(32) {
-                output[groupIndex] = WaveActiveSum(groupIndex);
+                output[groupIndex] = WaveActiveBitOr(groupIndex);
             }
         }
     }
@@ -50248,12 +50412,12 @@ def test_hlsl_software_subgroup_rejects_unsupported_operation():
 
     with pytest.raises(
         DirectXSoftwareSubgroupError,
-        match="does not support 'WaveActiveSum'",
+        match="does not support 'WaveActiveBitOr'",
     ) as excinfo:
         codegen.generate(parse_code(tokenize_code(code)))
 
     assert excinfo.value.reason == "operation-unsupported"
-    assert excinfo.value.operation == "WaveActiveSum"
+    assert excinfo.value.operation == "WaveActiveBitOr"
 
 
 def test_hlsl_software_subgroup_rejects_mixed_metal_shuffle_operations():

@@ -1,5 +1,6 @@
 """Formatting helpers for generated shader and compute source code."""
 
+import json
 import logging
 import os
 import shutil
@@ -145,6 +146,19 @@ class CodeFormatter:
             ShaderLanguage.HIP: "Google",
         }
         style = style_map.get(language, "LLVM")
+        if (
+            "// crosstl-resource-origin:" in code
+            or "// crosstl-frozen-specializations:" in code
+        ):
+            # Structured provenance must remain a single parseable comment line.
+            style = json.dumps(
+                {
+                    "BasedOnStyle": style,
+                    "CommentPragmas": (
+                        "^ (IWYU pragma:|crosstl-resource-origin:|crosstl-frozen-specializations:)"
+                    ),
+                }
+            )
 
         try:
             ext_map = {

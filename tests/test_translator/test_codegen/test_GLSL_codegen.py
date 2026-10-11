@@ -52,6 +52,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLCopySignError,
     OpenGLEntryPointSelectionError,
     OpenGLFixedArrayResourceError,
+    OpenGLFloatingRemainderError,
     OpenGLForInIterableError,
     OpenGLGlobalInitializerError,
     OpenGLIndexTypeError,
@@ -223,7 +224,7 @@ def test_glsl_clang_trailing_zero_builtins_preserve_width_and_signedness(
     assert "crossgl_ctz_uint(dynamic32)" in generated
     assert "crossgl_ctz_uint64_t(uint64_t(signed64))" in generated
     assert "crossgl_ctz_uint64_t(dynamic64)" in generated
-    assert "crossgl_ctz_uint64_t(uint64_t(4294967296ul))" in generated
+    assert "crossgl_ctz_uint64_t(uint64_t(4294967296l))" in generated
     assert "crossgl_ctz_uint(0u)" in generated
     assert "__builtin_ctz" not in generated
     assert_glsl_compute_validates_if_available(
@@ -729,6 +730,208 @@ def test_glsl_user_defined_qualified_copysign_name_remains_an_ordinary_call():
     assert "return metal_u3a_u3acopysign(value, (-1.0));" in generated
     assert "0x7fffffffu" not in generated
     assert "0x80000000u" not in generated
+
+
+@pytest.mark.parametrize(
+    "value_type",
+    [
+        "float",
+        "vec2",
+        "vec3",
+        "vec4",
+        "double",
+        "dvec2",
+        "dvec3",
+        "dvec4",
+    ],
+)
+def test_glsl_floating_remainder_uses_integer_significands_and_validates(
+    tmp_path, value_type
+):
+    source = f"""
+    shader FloatingRemainder {{
+        RWStructuredBuffer<{value_type}> result @ binding(0);
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                {value_type} left = {value_type}(-5.5);
+                {value_type} right = {value_type}(2.0);
+                result[0] = fmod(left, right);
+            }}
+        }}
+    }}
+    """
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(source), "compute"
+    )
+    assert "crossgl_fmod_" in generated
+    assert "int shift = x_exponent - y_exponent" in generated
+    assert "remainder >>= uint(1 - y_exponent)" in generated
+    assert " mod(" not in generated
+    assert "floor(" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "floating_remainder_" + value_type
+    )
+
+
+@pytest.mark.parametrize(
+    "left,right,result",
+    [
+        ("float", "vec3", "vec3"),
+        ("vec2", "float", "vec2"),
+        ("double", "dvec4", "dvec4"),
+    ],
+)
+def test_glsl_floating_remainder_broadcasts_scalar_operands(
+    tmp_path, left, right, result
+):
+    source = f"""
+    shader RemainderBroadcast {{
+        RWStructuredBuffer<{result}> output_value @ binding(0);
+        compute {{
+            layout(local_size_x = 1) in;
+            void main() {{
+                {left} a = {left}(-5.5);
+                {right} b = {right}(2.0);
+                output_value[0] = fmod(a, b);
+            }}
+        }}
+    }}
+    """
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(source), "compute"
+    )
+    assert f"crossgl_fmod_{result}(" in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "remainder_broadcast"
+    )
+
+
+@pytest.mark.parametrize("function", ["fmod", "metal_u3a_u3afmod"])
+def test_glsl_floating_remainder_preserves_user_overloads(function):
+    source = f"""
+    shader CustomRemainder {{
+        float {function}(float a, float b) {{ return a + b; }}
+        float apply(float a, float b) {{ return {function}(a, b); }}
+    }}
+    """
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(source))
+    assert f"return {function}(a, b);" in generated
+    assert "crossgl_fmod_" not in generated
+
+
+def test_glsl_floating_remainder_keeps_floor_mod_distinct_and_resets_helpers():
+    generator = GLSLCodeGen()
+    source = "shader Remainder { float apply(float a, float b) { return fmod(a, b); } }"
+    assert "crossgl_fmod_float" in generator.generate(crosstl.translator.parse(source))
+    generated = generator.generate(
+        crosstl.translator.parse(source.replace("fmod(", "mod("))
+    )
+    assert "return mod(a, b);" in generated
+    assert "crossgl_fmod_" not in generated
+
+
+def test_glsl_floating_remainder_helper_names_do_not_capture_user_functions():
+    source = """
+    shader Collision {
+        float crossgl_fmod_float(float a, float b) { return a + b; }
+        float apply(float a, float b) { return fmod(a, b) + crossgl_fmod_float(a, b); }
+    }
+    """
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(source))
+    assert "float crossgl_fmod_float(float a, float b)" in generated
+    assert re.search(
+        r"float crossgl_fmod_float_\d+\(float left, float right\)", generated
+    )
+
+
+@pytest.mark.parametrize(
+    "left,right,reason",
+    [
+        ("int", "int", "unsupported-operand-type"),
+        ("vec2", "vec3", "operand-shape-mismatch"),
+        ("float", "double", "operand-type-mismatch"),
+    ],
+)
+def test_glsl_floating_remainder_rejects_unrepresentable_operands(left, right, reason):
+    source = f"shader InvalidRemainder {{ float apply({left} a, {right} b) {{ return fmod(a, b); }} }}"
+    with pytest.raises(OpenGLFloatingRemainderError) as caught:
+        GLSLCodeGen().generate(crosstl.translator.parse(source))
+    assert (
+        caught.value.project_diagnostic_code
+        == "project.translate.opengl-fmod-unrepresentable"
+    )
+    assert caught.value.reason == reason
+    assert caught.value.operation == "fmod"
+    assert caught.value.operand_types == (left, right)
+
+
+@pytest.mark.parametrize(
+    "value_type", ["half", "float16_t", "half2", "bfloat", "bfloat3"]
+)
+def test_glsl_floating_remainder_rejects_unproven_narrow_profiles(value_type):
+    source = f"shader NarrowRemainder {{ {value_type} apply({value_type} a, {value_type} b) {{ return fmod(a, b); }} }}"
+    with pytest.raises(OpenGLFloatingRemainderError) as caught:
+        GLSLCodeGen().generate(crosstl.translator.parse(source))
+    assert caught.value.reason == "unsupported-narrow-remainder-profile"
+    assert caught.value.operand_types == (value_type, value_type)
+
+
+def test_glsl_floating_remainder_nested_calls_evaluate_operands_once(tmp_path):
+    source = """
+    shader NestedRemainder {
+        RWStructuredBuffer<float> result @ binding(0);
+        compute {
+            layout(local_size_x = 1) in;
+            float next_value(inout float value) {
+                value += 1.0;
+                return value;
+            }
+            void main() {
+                float a = -8.5;
+                float b = 1.0;
+                vec3 values = fmod(fmod(vec3(a), next_value(b)), next_value(a));
+                result[0] = values.y;
+            }
+        }
+    }
+    """
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(source), "compute"
+    )
+    assert generated.count("next_value(a)") == 1
+    assert generated.count("next_value(b)") == 1
+    assert generated.count("float crossgl_fmod_float(") == 1
+    assert generated.count("vec3 crossgl_fmod_vec3(") == 1
+    assert "crossgl_fmod_vec3(crossgl_fmod_vec3(" in generated
+    assert_glsl_compute_validates_if_available(generated, tmp_path, "nested_remainder")
+
+
+@pytest.mark.parametrize("name", ["floatBitsToUint", "uintBitsToFloat"])
+def test_glsl_floating_remainder_rejects_shadowed_bitcast_builtins(name):
+    source = f"""shader ShadowedRemainder {{
+        float {name}(float value) {{ return value; }}
+        float apply(float a, float b) {{ return fmod(a, b); }}
+    }}"""
+    with pytest.raises(OpenGLFloatingRemainderError) as caught:
+        GLSLCodeGen().generate(crosstl.translator.parse(source))
+    assert caught.value.reason == "target-builtin-shadowed"
+
+
+@pytest.mark.parametrize(
+    "version,value_type", [("#version 120", "float"), ("#version 330 core", "double")]
+)
+def test_glsl_floating_remainder_rejects_unsupported_profile(version, value_type):
+    from crosstl.translator.ast import VariableNode
+
+    generator = GLSLCodeGen()
+    generator.current_glsl_version_line = version
+    generator.local_variable_types = {name: value_type for name in ("a", "b")}
+    operands = [VariableNode(name, value_type) for name in ("a", "b")]
+    with pytest.raises(OpenGLFloatingRemainderError) as caught:
+        generator.generate_glsl_floating_remainder_call("fmod", operands)
+    assert caught.value.reason == "unsupported-profile"
+    assert caught.value.target_profile == version
 
 
 def test_glsl_signbit_preserves_negative_zero_and_nan_sign_and_validates(tmp_path):
@@ -5658,7 +5861,7 @@ def test_glsl_buffer_block_nested_and_array_atomically_mutable_members():
             "float value;",
             "data.value",
             "1.0",
-            r"requires a scalar int or uint buffer block member.*got float",
+            r"Cannot preserve OpenGL float atomic storage: unresolved-storage-allocation",
         ),
         (
             "uvec2 value;",
@@ -6485,7 +6688,7 @@ def test_structured_buffer_alias_helper_call_passes_ssbo_data_array():
         in generated
     )
     assert "uint readOne(uint localCounts[], uint index)" in generated
-    assert "return localCounts[index];" in generated
+    assert "return bitfieldExtract(localCounts[index], 0, 16);" in generated
     assert "return readOne(counts[which].data, index);" in generated
     assert "readOne(counts[which], index)" not in generated
     assert "buffer_load" not in generated
@@ -6536,7 +6739,7 @@ def test_structured_buffer_alias_array_helpers_expand_to_data_array_parameters()
         in generated
     )
     assert (
-        "return ((which == 0u) ? localCounts_0[index] : localCounts_1[index]);"
+        "return bitfieldExtract(((which == 0u) ? localCounts_0[index] : localCounts_1[index]), 0, 16);"
         in generated
     )
     assert (
@@ -6663,8 +6866,8 @@ def test_unsized_global_structured_buffer_arrays_infer_static_sizes():
         "uint readCount(uint localCounts_0[], uint localCounts_1[], uint index)"
         in generated
     )
-    assert "return localCounts_1[index];" in generated
-    assert "uint first = counts[0].data[index];" in generated
+    assert "return bitfieldExtract(localCounts_1[index], 0, 16);" in generated
+    assert "uint first = bitfieldExtract(counts[0].data[index], 0, 16);" in generated
     assert (
         "uint second = readCount(counts[0].data, counts[1].data, index);" in generated
     )
@@ -6814,7 +7017,7 @@ def test_structured_buffer_array_helpers_propagate_nested_fixed_sizes():
         "uint readMid(uint midCounts_0[], uint midCounts_1[], "
         "uint midCounts_2[], uint index)" in generated
     )
-    assert "return leafCounts_2[index];" in generated
+    assert "return bitfieldExtract(leafCounts_2[index], 0, 16);" in generated
     assert "return readLeaf(midCounts_0, midCounts_1, midCounts_2, index);" in generated
     assert "readMid(counts[0].data, counts[1].data, counts[2].data, index)" in generated
     assert "readLeaf(midCounts, index)" not in generated
@@ -6875,7 +7078,7 @@ def test_glsl_large_integer_literals_preserve_64_bit_values():
     shader LargeIntegerLiteralCodegen {
         compute {
             void main() {
-                uint64_t max_unsigned = uint64_t(18446744073709551615);
+                uint64_t max_unsigned = uint64_t(18446744073709551615ul);
                 int64_t max_signed = int64_t(9223372036854775807);
             }
         }
@@ -6885,7 +7088,7 @@ def test_glsl_large_integer_literals_preserve_64_bit_values():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "18446744073709551615ul" in generated_code
-    assert "9223372036854775807ul" in generated_code
+    assert "9223372036854775807l" in generated_code
 
 
 def test_glsl_resource_binding_attributes_are_not_parameter_semantics():
@@ -10535,8 +10738,11 @@ def test_glsl_metal_private_scalar_struct_view_materializes_exact_value(tmp_path
         source_backend="metal",
     )
 
-    assert "ByteView direct = ByteView((byte & 0xffu));" in generated
-    assert "consume(ByteView((byte & 0xffu)))" in generated
+    assert "ByteView direct = _crosstl_metal_load_value_ByteView(byte);" in generated
+    assert "ByteView result;" in generated
+    assert "result.bits = value;" in generated
+    assert "return result;" in generated
+    assert "consume(_crosstl_metal_load_value_ByteView(byte))" in generated
     assert "PointerReinterpretNode" not in generated
     assert "&byte" not in generated
     assert_glsl_compute_validates_if_available(
@@ -20440,7 +20646,8 @@ def test_glsl_precision_aliases_lower_to_standard_glsl_types():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "float tone(float input_)" in generated_code
-    assert "float bias = float(0.5);" in generated_code
+    assert "float bias = 0.5;" in generated_code
+    assert "return crossgl_round_half1((input_ + bias));" in generated_code
     assert "vec2 pair(vec2 input_)" in generated_code
     assert "vec2 scale = vec2(1.0, 2.0);" in generated_code
     assert "vec3 tint(vec3 input_)" in generated_code
@@ -20452,7 +20659,7 @@ def test_glsl_precision_aliases_lower_to_standard_glsl_types():
     assert "mat2x3 passMatrix(mat2x3 input_)" in generated_code
     assert "mat2x3 m = mat2x3(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
     for invalid_token in ("half", "min16float", "min16uint", "min12int"):
-        assert invalid_token not in generated_code
+        assert re.search(rf"\b{invalid_token}\b", generated_code) is None
 
 
 def test_glsl_float16_ir_aliases_lower_to_standard_glsl_types():
@@ -20473,7 +20680,8 @@ def test_glsl_float16_ir_aliases_lower_to_standard_glsl_types():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "float tone(float input_)" in generated_code
-    assert "float bias = float(0.5);" in generated_code
+    assert "float bias = 0.5;" in generated_code
+    assert "return crossgl_round_half1((input_ + bias));" in generated_code
     assert "vec2 pair(vec2 input_)" in generated_code
     assert "vec2 scale = vec2(1.0, 2.0);" in generated_code
     assert "float16" not in generated_code
@@ -21293,7 +21501,7 @@ def test_for_statement_preserves_declaration_initializers():
     assert "const float weights[2];" in generated_code
     assert "for (int i = 0; (i < 2); (i++))" in generated_code
     assert "for (i = 0; (i < 4); (i++))" in generated_code
-    assert "for (const int fixed = 0; (fixed < 0); )" in generated_code
+    assert "for (const int fixed_ = 0; (fixed_ < 0); )" in generated_code
     assert "for (; ; )" in generated_code
     assert "continue;" in generated_code
     assert "break;" in generated_code
@@ -21497,7 +21705,7 @@ def test_for_in_unknown_or_user_defined_iterables_are_structured_diagnostics(
     assert diagnostic.reason == reason
 
 
-def test_for_in_mutable_reference_binding_is_structured_diagnostic():
+def test_for_in_mutable_reference_binding_updates_original_array():
     shader = """
     shader MutableReferenceForIn {
         void helper() {
@@ -21514,15 +21722,12 @@ def test_for_in_mutable_reference_binding_is_structured_diagnostic():
     )
     loop.binding_type = ReferenceType(PrimitiveType("uint"), is_mutable=True)
 
-    with pytest.raises(OpenGLForInIterableError) as exc_info:
-        GLSLCodeGen().generate(ast)
-
-    diagnostic = exc_info.value
-    assert diagnostic.binding_type == "uint&"
-    assert diagnostic.reason == "mutable-reference-binding"
+    generated = GLSLCodeGen().generate(ast)
+    assert "values[value_crossgl_index] += 1u;" in generated
+    assert "value_crossgl_iterable" not in generated
 
 
-def test_for_in_immutable_reference_binding_lowers_to_const_value():
+def test_for_in_immutable_reference_binding_reads_original_array():
     shader = """
     shader ImmutableReferenceForIn {
         void helper() {
@@ -21541,7 +21746,8 @@ def test_for_in_immutable_reference_binding_lowers_to_const_value():
 
     generated_code = GLSLCodeGen().generate(ast)
 
-    assert "const uint value = value_crossgl_iterable[" in generated_code
+    assert "uint copy = values[value_crossgl_index];" in generated_code
+    assert "value_crossgl_iterable" not in generated_code
 
 
 def test_for_in_range_statement_lowers_to_counted_loop():
@@ -23811,8 +24017,9 @@ def test_glsl_ray_query_trace_ray_inline_raydesc_lowers_to_initialize_fields():
         "ray.Origin, ray.TMin, ray.Direction, ray.TMax);" in generated_code
     )
     assert (
-        "rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsNoneEXT, 255u, ray);"
-        not in (generated_code)
+        "rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsNoneEXT, 255u, ray);" not in (
+            generated_code
+        )
     )
     assert "bool active_ = rayQueryProceedEXT(rq);" in generated_code
     assert ".TraceRayInline(" not in generated_code
@@ -25897,8 +26104,9 @@ def test_generic_function_call_without_inferred_type_raises_diagnostic():
         GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert (
-        "cannot infer concrete template arguments for generic function 'zero'"
-        in str(exc_info.value)
+        "cannot infer concrete template arguments for generic function 'zero'" in str(
+            exc_info.value
+        )
     )
     assert (
         getattr(exc_info.value, "project_diagnostic_code", None)
@@ -26775,13 +26983,13 @@ def test_glsl_software_subgroup_generated_names_are_collision_safe(tmp_path):
     [
         (
             "float value = WaveActiveMin(1.0);",
-            (16, 1, 1),
+            (0, 1, 1),
             "",
             "workgroup-size-mismatch",
         ),
         (
             "float value = WaveActiveMin(1.0);",
-            (48, 1, 1),
+            (32, 1, 0),
             "",
             "workgroup-size-mismatch",
         ),
@@ -26810,7 +27018,7 @@ def test_glsl_software_subgroup_generated_names_are_collision_safe(tmp_path):
             "operation-set-empty",
         ),
         (
-            "uint value = WaveActiveProduct(gl_LocalInvocationID.x);",
+            "uint value = WaveActiveBitOr(gl_LocalInvocationID.x);",
             (32, 1, 1),
             "",
             "operation-unsupported",
@@ -27151,7 +27359,7 @@ def test_glsl_software_subgroup_rejects_non_top_level_helper_calls(entry_body):
     assert raised.value.operation == "WaveActiveMin"
 
 
-def test_glsl_software_subgroup_rejects_indirect_helper_calls():
+def test_glsl_software_subgroup_accepts_unconditional_indirect_helper_calls(tmp_path):
     code = """
     shader GLSLSoftwareSubgroupIndirectHelperCall {
         float reduceValue(float value) {
@@ -27171,13 +27379,14 @@ def test_glsl_software_subgroup_rejects_indirect_helper_calls():
     }
     """
 
-    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
-        GLSLCodeGen(software_subgroup_width=32).generate(
-            parse_code(tokenize_code(code))
-        )
-
-    assert raised.value.reason == "helper-call-not-uniform"
-    assert raised.value.operation == "WaveActiveMin"
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+    assert "return reduceValue(value);" in generated
+    assert "return crossglSoftwareSubgroupMinFloat(value);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "software_subgroup_indirect_helper", validate_spirv=True
+    )
 
 
 def test_glsl_software_subgroup_accepts_exact_nested_overload_identity(tmp_path):
@@ -42807,6 +43016,32 @@ def test_opengl_widened_float16_as_type_preserves_binary16_payloads(tmp_path):
     assert output_path.is_file()
 
 
+@pytest.mark.parametrize("vector", ["half2", "half3", "half4", "f16vec2"])
+@pytest.mark.parametrize("expression", ["value.x", "value.y", "(-value.x)"])
+def test_opengl_half_component_bitcast_preserves_source_width(
+    tmp_path, vector, expression
+):
+    source = f"""shader HalfComponentBits {{
+        uint16_t encode({vector} value) {{ return as_type<uint16_t>({expression}); }}
+        compute {{ void main() {{}} }}
+    }}"""
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(source))
+    assert "packHalf2x16(vec2(" in generated
+    assert "floatBitsToUint(value." not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "half_component_bits"
+    )
+
+
+@pytest.mark.parametrize("vector", ["half2", "half3", "half4"])
+def test_opengl_half_component_bitcast_rejects_widened_destination(vector):
+    source = f"shader InvalidBits {{ uint encode({vector} value) {{ return as_type<uint>(value.x); }} }}"
+    with pytest.raises(
+        ValueError, match="binary16 requires one exact 16-bit integer result"
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(source))
+
+
 def test_opengl_widened_float16_as_type_rejects_non_16_bit_scalar_payload():
     shader = """
     shader InvalidWidenedFloat16Bitcast {
@@ -42870,6 +43105,105 @@ def test_opengl_bfloat16_as_type_alias_lowers_from_uint_payload():
     assert "bfloat16_t" not in generated_code
     assert "bfloat " not in generated_code
     assert "as_type<" not in generated_code
+
+
+@pytest.mark.parametrize(
+    "function", sorted(GLSLCodeGen.GLSL_COMPONENTWISE_UNARY_FUNCTIONS)
+)
+@pytest.mark.parametrize(
+    "argument_type,result_type", [("float", "vec2"), ("vec2", "vec4")]
+)
+def test_opengl_builtin_result_width_in_vector_initializer(
+    tmp_path, function, argument_type, result_type
+):
+    shader = f"""
+    shader BuiltinAggregate {{
+        {result_type} build({argument_type} theta) {{
+            {result_type} value = {{{function}(theta), {function}(theta)}};
+            return value;
+        }}
+        compute {{ void main() {{}} }}
+    }}
+    """
+    generator = GLSLCodeGen()
+    generated = generator.generate(crosstl.translator.parse(shader))
+    mapped = generator.function_map.get(function, function)
+    assert (
+        f"{result_type} value = {result_type}({mapped}(theta), {mapped}(theta));"
+        in generated
+    )
+    assert_glsl_compute_validates_if_available(generated, tmp_path, "builtin_aggregate")
+
+
+def test_opengl_nested_builtin_result_width_in_vector_initializer(tmp_path):
+    shader = """
+    shader NestedBuiltinAggregate {
+        vec4 build(vec2 theta) {
+            vec4 value = {cos(sin(theta)), exp(sqrt(theta))};
+            return value;
+        }
+        compute { void main() {} }
+    }
+    """
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "vec4 value = vec4(cos(sin(theta)), exp(sqrt(theta)));" in generated
+    assert_glsl_compute_validates_if_available(generated, tmp_path, "nested_builtin")
+
+
+def test_opengl_user_overload_result_width_precedes_builtin(tmp_path):
+    shader = """
+    shader UserBuiltinAggregate {
+        vec2 sin(int value) { return vec2(float(value)); }
+        vec4 build(int value) {
+            vec4 result = {sin(value), sin(value)};
+            return result;
+        }
+        compute { void main() {} }
+    }
+    """
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "vec4 result = vec4(sin(value), sin(value));" in generated
+    assert_glsl_compute_validates_if_available(generated, tmp_path, "user_builtin")
+
+
+def test_metal_builtin_aggregate_translates_to_opengl(tmp_path):
+    from crosstl._crosstl import translate
+
+    source = tmp_path / "twiddle.metal"
+    source.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+        kernel void build(device float2* output [[buffer(0)]],
+                          constant float& theta [[buffer(1)]],
+                          uint index [[thread_position_in_grid]]) {
+            float2 twiddle = {metal::fast::cos(theta), metal::fast::sin(theta)};
+            output[index] = twiddle;
+        }
+        """,
+        encoding="utf-8",
+    )
+    generated = translate(str(source), backend="opengl", format_output=False)
+    assert "vec2 twiddle = vec2(cos(theta), sin(theta));" in generated
+    assert_glsl_compute_validates_if_available(generated, tmp_path, "metal_builtin")
+
+
+@pytest.mark.parametrize(
+    "argument_type,function", [("vec2", "sin"), ("float", "unknown_function")]
+)
+def test_opengl_builtin_inference_retains_invalid_aggregate_diagnostics(
+    argument_type, function
+):
+    shader = f"""
+    shader InvalidBuiltinAggregate {{
+        vec2 build({argument_type} theta) {{
+            vec2 value = {{{function}(theta), {function}(theta)}};
+            return value;
+        }}
+    }}
+    """
+    with pytest.raises(OpenGLAggregateInitializerError):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
 def test_opengl_lowers_contextual_aggregate_initializers(tmp_path):
@@ -43405,8 +43739,7 @@ def test_opengl_static_struct_members_are_excluded_from_instance_layout(tmp_path
     ast = crosstl.translator.parse(shader)
     static_members = ast.structs[0].members[:2]
     assert all(
-        "static"
-        in {
+        "static" in {
             str(getattr(attribute, "name", attribute)).lower()
             for attribute in member.attributes
         }
@@ -44636,8 +44969,11 @@ def test_opengl_renames_collapsed_bfloat_overloads_and_rewrites_nested_calls(
     assert "float adjust_bfloat16_t(float value)" in generated_code
     assert "return adjust_float(adjust_float(value));" in generated_code
     assert "return adjust_bfloat16_t(adjust_bfloat16_t(value));" in generated_code
-    assert "return adjust_bfloat16_t(float(3.0));" in generated_code
-    assert "return adjust_bfloat16_t((left + right));" in generated_code
+    assert "return adjust_bfloat16_t(3.0);" in generated_code
+    assert (
+        "return adjust_bfloat16_t(crossgl_round_bfloat1((left + right)));"
+        in generated_code
+    )
     assert "return adjust_bfloat16_t(values[index]);" in generated_code
     assert "return adjust_bfloat16_t(value);" in generated_code
     assert "float adjust(float value)" not in generated_code
@@ -44780,7 +45116,7 @@ def test_opengl_mapped_overload_names_avoid_existing_declarations(tmp_path):
     assert "float adjust_float_2(float value)" in generated_code
     assert "float adjust_bfloat16_t_2(float value)" in generated_code
     assert "float value = adjust_float_2(1.0);" in generated_code
-    assert "float narrowValue = adjust_bfloat16_t_2(float(2.0));" in generated_code
+    assert "float narrowValue = adjust_bfloat16_t_2(2.0);" in generated_code
     assert_glsl_compute_validates_if_available(
         generated_code, tmp_path, "hygienic_mapped_overloads"
     )
@@ -48653,7 +48989,7 @@ def test_glsl_metal_nested_remove_cv_alias_materializes_bfloat_cast(tmp_path):
     )
 
     assert "remove_cv_t<bfloat>(" not in generated
-    assert "output_[dst_offset] = float(1.0);" in generated
+    assert "output_[dst_offset] = 1.0;" in generated
     assert_glsl_compute_validates_if_available(
         generated,
         tmp_path,

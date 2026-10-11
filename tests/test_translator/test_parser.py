@@ -70,6 +70,36 @@ def parse_code(tokens: List):
     return parser.parse()
 
 
+@pytest.mark.parametrize("space", ["threadgroup", "thread", "device", "constant"])
+@pytest.mark.parametrize("readonly", [False, True])
+@pytest.mark.parametrize("wrapper", ["{}", "shader main {{ {} }}"])
+def test_qualified_pointer_returns_preserve_contract(space, readonly, wrapper):
+    const = "const " if readonly else ""
+    declaration = (
+        f"{const}{space} float* select_value({const}{space} float* p) {{ return p; }}"
+    )
+    parser = Parser(
+        tokenize_code(wrapper.format(declaration)), strict_function_bodies=True
+    )
+    ast = parser.parse()
+    function = next(f for f in ast.functions if f.name == "select_value")
+    assert isinstance(function.return_type, PointerType)
+    assert function.return_type.address_space == space
+    assert function.return_type.is_mutable is (not readonly and space != "constant")
+    assert isinstance(function.body.statements[0], ReturnNode)
+    assert function.body.statements[0].value.name == "p"
+
+
+@pytest.mark.parametrize("suffix, mutable", [("&", False), ("&mut", True)])
+def test_reference_return_preserves_explicit_mutability(suffix, mutable):
+    parser = Parser(
+        tokenize_code(f"float{suffix} read_value(float& p) {{ return p; }}")
+    )
+    function = parser.parse().functions[0]
+    assert isinstance(function.return_type, ReferenceType)
+    assert function.return_type.is_mutable is mutable
+
+
 def test_explicit_compute_stage_entry_preserves_pointer_reinterpretation():
     code = """
     shader main {
@@ -4572,6 +4602,7 @@ def test_method_calls_and_shorthand_path_constructors_parse():
 
     vec_constructor = add_call.arguments[0]
     assert isinstance(vec_constructor, ConstructorNode)
+    assert vec_constructor.is_braced_constructor is True
     assert list(vec_constructor.named_arguments) == ["x", "y", "z"]
 
     x_call = vec_constructor.named_arguments["x"]

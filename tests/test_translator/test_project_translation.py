@@ -44,7 +44,10 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
-from crosstl.project.host_reflection import REFLECTION_TOOL_UNAVAILABLE
+from crosstl.project.host_reflection import (
+    REFLECTION_INCOMPLETE_OUTPUT,
+    REFLECTION_TOOL_UNAVAILABLE,
+)
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 from tests.test_backend.test_SPIRV.test_codegen import (
     SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
@@ -621,6 +624,8 @@ def test_project_package_exposes_public_api_surface():
         "ReflectionDiagnostic",
         "DirectXComputeRuntime",
         "DirectXRuntimeParityAdapter",
+        "MetalComputeRuntime",
+        "MetalRuntimeParityAdapter",
         "NativeRuntimeBufferBinding",
         "NativeRuntimeConstantBinding",
         "NativeRuntimeDispatchRequest",
@@ -703,6 +708,8 @@ def test_project_package_exposes_public_api_surface():
         "build_native_loader_abi_descriptor",
         "build_native_loader_abi_package",
         "build_native_loader_dispatch_request",
+        "prepare_native_loader_dispatch_regions",
+        "select_native_loader_dispatch_regions",
         "build_runtime_host_loader_scaffolds",
         "build_runtime_host_integration_handoff",
         "build_runtime_loader_manifest",
@@ -743,6 +750,7 @@ def test_project_package_exposes_public_api_surface():
         "native_runtime_parity_adapter",
         "native_runtime_parity_adapters",
         "native_loader_target_adapter_targets",
+        "pack_storage_records",
         "parse_runtime_execution_graph",
         "parse_runtime_verification_fixtures",
         "parse_runtime_test_manifest",
@@ -5462,8 +5470,9 @@ def test_scan_project_reports_configured_define_shadowing(tmp_path):
         "project.scan.define-shadowed",
     ]
     assert (
-        "redefines configured define 'MODE' (project define)"
-        in diagnostics[0]["message"]
+        "redefines configured define 'MODE' (project define)" in diagnostics[0][
+            "message"
+        ]
     )
     assert "undefines configured define 'DEBUG_MODE' (variant define: debug)" in (
         diagnostics[1]["message"]
@@ -7004,8 +7013,9 @@ def test_validate_project_report_rejects_malformed_include_dependency_records(
         diagnostic["message"]
     )
     assert (
-        "units[0].includeDependencies[0].resolvedPath must be repository-relative"
-        in (diagnostic["message"])
+        "units[0].includeDependencies[0].resolvedPath must be repository-relative" in (
+            diagnostic["message"]
+        )
     )
     assert "units[0].includeDependencies[0].resolvedHash.algorithm must be sha256" in (
         diagnostic["message"]
@@ -7292,8 +7302,9 @@ def test_validate_project_report_rejects_stale_include_dependency_hashes(
     actual_hash = project_pipeline._source_hash(shader_dir / "local.inc")
     assert (
         f"(expected {expected_hash['algorithm']}:{expected_hash['value']}, "
-        f"actual {actual_hash['algorithm']}:{actual_hash['value']})"
-        in diagnostic["message"]
+        f"actual {actual_hash['algorithm']}:{actual_hash['value']})" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -7361,8 +7372,9 @@ def test_validate_project_report_rejects_stale_include_dependency_sizes(
     expected_size = payload["units"][0]["includeDependencies"][0]["resolvedSizeBytes"]
     actual_size = include_path.stat().st_size
     assert (
-        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
-        in diagnostic["message"]
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -7408,8 +7420,9 @@ def test_validate_project_report_rejects_include_dependency_resolution_mismatche
         "include resolution"
     ) in diagnostic["message"]
     assert (
-        "(expected includes/shared.inc, actual shaders/local.inc)"
-        in diagnostic["message"]
+        "(expected includes/shared.inc, actual shaders/local.inc)" in diagnostic[
+            "message"
+        ]
     )
     assert (
         "units[0].includeDependencies[0].resolvedFrom must match current "
@@ -13906,7 +13919,7 @@ def test_metal_union_storage_aliasing_matches_direct_and_project_directx(tmp_pat
     assert "__crossgl_union_unpack_u8x4(bits.CrossGLUnionStorage[0])" in direct
     assert (
         "bits.CrossGLUnionStorage[1] = "
-        "__crossgl_union_pack_u8x4(uint4(9u, 10u, 11u, 12u));"
+        "__crossgl_union_pack_u8x4((uint4((uint4(uint4(9u, 10u, 11u, 12u)) & 255u)) & 255u));"
     ) in direct
     HLSLParser(HLSLLexer(direct).tokenize()).parse()
     assert_directx_compute_validates_if_available(direct, tmp_path)
@@ -15696,6 +15709,64 @@ def test_metal_expression_type_infers_nested_index_elements():
     )
 
 
+@pytest.mark.parametrize(
+    "declared, expression, expected",
+    [
+        ("const array<int, 2>", "refs.values[i]", "int"),
+        ("metal::array<float, 2>", "refs.values[i]", "float"),
+        ("array<array<int, 2>, 3>", "refs.values[i][j]", "int"),
+        ("float[2][3]", "refs.values[i]", "float[3]"),
+        ("float[2][3]", "refs.values[i][j]", "float"),
+        ("array<const device int*, 2>", "refs.values[i]", "const device int*"),
+        ("array<const device int*, 2>", "refs.values[i][j]", "int"),
+        ("const device int*[2]", "refs.values[i]", "const device int*"),
+        ("const device int*[2]", "refs.values[i][j]", "int"),
+        ("array<const constant int*, 2>", "refs.values[i]", "const constant int*"),
+        ("array<threadgroup uint*, 2>", "refs.values[i]", "threadgroup uint*"),
+        ("array<int, 2>", "refs.values[i][j]", None),
+        ("Other<int, 2>", "refs.values[i]", None),
+        ("array<int, 2>", "refs.values[]", None),
+        ("array<int, 2>", "refs.values[i]garbage[j]", None),
+        ("array<int, 2>", "refs->values[i]", None),
+    ],
+)
+def test_metal_expression_type_preserves_member_array_layers(
+    declared, expression, expected
+):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    assert (
+        project_pipeline._metal_expression_type(
+            MetalPreprocessor(), expression, {"refs.values": declared}, {}
+        )
+        == expected
+    )
+
+
+def test_metal_struct_member_environment_retains_declared_array_types():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = """
+    struct References {
+        int dimensions[2][3];
+        const device float* pointers[2];
+        const array<const constant int*, 2> arrays;
+    };
+    """
+    environments = project_pipeline._metal_struct_field_type_environments(
+        MetalPreprocessor(), source
+    )
+    assert len(environments) == 1
+    assert environments[0][1:] == (
+        "References",
+        {
+            "dimensions": "int[2][3]",
+            "pointers": "const device float*[2]",
+            "arrays": "const array<const constant int*,2>",
+        },
+    )
+
+
 def test_metal_expression_type_infers_vector_components():
     from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 
@@ -17460,12 +17531,8 @@ def test_metal_project_materialization_propagates_local_constexpr_extents(
     assert not re.search(r"values\s*\[\s*values_per_thread\s*\]", materialized.text)
     grouped_stride = "i += (128 /(32 /((32*32)/(128))))"
     ungrouped_stride = "i += 128 / 32 /(32*32)/(128)"
-    if target == "opengl":
-        assert grouped_stride in materialized.text
-        assert ungrouped_stride not in materialized.text
-    else:
-        assert ungrouped_stride in materialized.text
-        assert grouped_stride not in materialized.text
+    assert grouped_stride in materialized.text
+    assert ungrouped_stride not in materialized.text
 
 
 def test_translate_project_materializes_helper_arguments_from_local_type_aliases(
@@ -19171,32 +19238,10 @@ def test_translate_project_opengl_prototypes_later_materialized_steel_helper(
     assert_compute_glsl_validates_if_available(output, tmp_path)
 
     source_map = artifact["sourceMap"]
-    expected_mappings = project_pipeline._derived_line_source_map_mappings(
-        source_path,
-        "shaders/steel_attention.metal",
-        output_path,
-        artifact["path"],
-    )
-    assert source_map["mappingGranularity"] == "line"
-    assert source_map["mappings"] == expected_mappings
-
-    helper_source_line = next(
-        line_number
-        for line_number, line in enumerate(
-            source_path.read_text(encoding="utf-8").splitlines(),
-            start=1,
-        )
-        if "METAL_FUNC SteelTile<T> tile_op(" in line
-    )
-    prototype_line = output.count("\n", 0, prototype.start()) + 1
-    definition_line = output.count("\n", 0, definition.start()) + 1
-    mappings_by_generated_line = {
-        mapping["generated"]["line"]: mapping for mapping in source_map["mappings"]
-    }
-    prototype_mapping = mappings_by_generated_line[prototype_line]
-    definition_mapping = mappings_by_generated_line[definition_line]
-    assert prototype_mapping["source"]["line"] == helper_source_line
-    assert definition_mapping["source"] == prototype_mapping["source"]
+    assert source_map["mappingGranularity"] == "file"
+    assert source_map["mappings"] == [
+        {"source": source_map["source"], "generated": source_map["generated"]}
+    ]
 
     source_remap = artifact["sourceRemap"]
     source_remap_path = repo / source_remap["path"]
@@ -19204,18 +19249,6 @@ def test_translate_project_opengl_prototypes_later_materialized_steel_helper(
     assert source_remap["mappingGranularity"] == source_map["mappingGranularity"]
     assert source_remap["mappingCount"] == len(source_map["mappings"])
     assert source_remap_payload == project_pipeline._source_remap_payload(source_map)
-    remaps_by_generated_line = {
-        mapping["generated"]["line"]: mapping
-        for mapping in source_remap_payload["mappings"]
-    }
-    assert remaps_by_generated_line[prototype_line] == {
-        "generated": prototype_mapping["generated"],
-        "original": prototype_mapping["source"],
-    }
-    assert remaps_by_generated_line[definition_line] == {
-        "generated": definition_mapping["generated"],
-        "original": definition_mapping["source"],
-    }
 
     report_path = repo / "translated" / "issue-1530-report.json"
     report.write_json(report_path)
@@ -19648,8 +19681,9 @@ def test_translate_project_opengl_rejects_unresolved_metal_template_type_before_
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert (
-        f"{expected_name} missing {', '.join(expected_missing)}"
-        in diagnostic["message"]
+        f"{expected_name} missing {', '.join(expected_missing)}" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -20064,8 +20098,9 @@ def test_translate_project_forwards_metal_template_specialization_limit(tmp_path
     assert payload["project"]["sourceOptionCount"] == 1
     assert artifacts["shaders/bad.metal"]["status"] == "failed"
     assert (
-        "template specialization limit exceeded"
-        in artifacts["shaders/bad.metal"]["error"]
+        "template specialization limit exceeded" in artifacts["shaders/bad.metal"][
+            "error"
+        ]
     )
     assert not (repo / "translated" / "cgl" / "shaders" / "bad.cgl").exists()
     assert artifacts["shaders/ok.metal"]["status"] == "translated"
@@ -21566,8 +21601,9 @@ def test_validate_project_report_rejects_artifact_matrix_count_mismatches(tmp_pa
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifactMatrix.expectedArtifactCount must match expected artifact matrix"
-        in (diagnostic["message"])
+        "artifactMatrix.expectedArtifactCount must match expected artifact matrix" in (
+            diagnostic["message"]
+        )
     )
 
 
@@ -21601,8 +21637,9 @@ def test_validate_project_report_rejects_artifact_matrix_variant_mode_mismatches
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifactMatrix.variantMode must match project.variants"
-        in diagnostic["message"]
+        "artifactMatrix.variantMode must match project.variants" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -21985,12 +22022,14 @@ def test_validate_project_report_rejects_unexpected_generated_processing_fields(
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifacts[0].defineProcessing.unexpected is not allowed"
-        in diagnostic["message"]
+        "artifacts[0].defineProcessing.unexpected is not allowed" in diagnostic[
+            "message"
+        ]
     )
     assert (
-        "artifacts[0].includePathProcessing.unexpected is not allowed"
-        in diagnostic["message"]
+        "artifacts[0].includePathProcessing.unexpected is not allowed" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -22156,8 +22195,9 @@ def test_validate_project_report_rejects_artifacts_with_mismatched_source_backen
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifacts[0].sourceBackend must match units[0].sourceBackend"
-        in diagnostic["message"]
+        "artifacts[0].sourceBackend must match units[0].sourceBackend" in diagnostic[
+            "message"
+        ]
     )
     assert "(expected cgl, actual directx)" in diagnostic["message"]
 
@@ -22337,8 +22377,9 @@ def test_validate_project_report_rejects_noncanonical_full_report_targets(tmp_pa
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifacts[0].target must use normalized backend name opengl"
-        in diagnostic["message"]
+        "artifacts[0].target must use normalized backend name opengl" in diagnostic[
+            "message"
+        ]
     )
     assert (
         "artifacts[0].sourceMap.target must use normalized backend name opengl"
@@ -22378,8 +22419,9 @@ def test_validate_project_report_rejects_noncanonical_source_remap_targets(tmp_p
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifacts[0].target must use normalized backend name cgl"
-        in diagnostic["message"]
+        "artifacts[0].target must use normalized backend name cgl" in diagnostic[
+            "message"
+        ]
     )
     assert (
         "artifacts[0].sourceMap.target must use normalized backend name cgl"
@@ -22505,7 +22547,7 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
         "translated/opengl/shaders/graphics/simple.glsl"
     )
     assert payload["summary"]["sourceRemapCount"] == 1
-    assert payload["summary"]["sourceRemapsByGranularity"] == {"line": 1}
+    assert payload["summary"]["sourceRemapsByGranularity"] == {"file": 1}
     assert payload["summary"]["sourceRemapsByTarget"] == {"opengl": 1}
     assert payload["summary"]["sourceRemapsBySourceBackend"] == {"cgl": 1}
     assert payload["summary"]["sourceRemapsByVariant"] == {}
@@ -22657,6 +22699,25 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
     )
     assert set(artifact["provenance"]) == (
         project_pipeline.REPORT_ARTIFACT_PROVENANCE_FIELDS
+        - {
+            "dispatchRegion",
+            "dispatchRegionProgram",
+            "softwareSubgroupPolicy",
+            "binary32DivisionProfile",
+            "binary16RemainderProfile",
+            "binary32ComparisonProfile",
+            "binary32RemainderProfile",
+            "binary32AdditiveProfile",
+            "binary32MultiplicationProfile",
+            "binary32Atan2Profile",
+            "binary32LogProfile",
+            "binary32Log2OperandProfile",
+            "binary32Log2AccuracyProfile",
+            "binary32SqrtProfile",
+            "binary32RsqrtProfile",
+            "binary32PowerOperandProfile",
+            "binary32PowerAccuracyProfile",
+        }
     )
     assert set(artifact["sourceRemap"]) == (
         project_pipeline.REPORT_ARTIFACT_SOURCE_REMAP_FIELDS
@@ -22991,7 +23052,7 @@ def test_translate_project_records_line_maps_across_final_newline_changes(
     assert source_map["mappings"] == expected_mappings
 
 
-def test_translate_project_records_fine_grained_source_maps_for_generated_artifacts(
+def test_translate_project_reserves_line_source_maps_for_line_preserving_artifacts(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -23010,8 +23071,8 @@ def test_translate_project_records_fine_grained_source_maps_for_generated_artifa
     }
 
     assert payload["summary"]["sourceMapCount"] == 5
-    assert payload["summary"]["fineGrainedSourceMapCount"] == 5
-    assert payload["summary"]["sourceMapsByGranularity"] == {"line": 5}
+    assert payload["summary"]["fineGrainedSourceMapCount"] == 1
+    assert payload["summary"]["sourceMapsByGranularity"] == {"line": 1, "file": 4}
     assert payload["summary"]["sourceMapsByTarget"] == {
         "cgl": 1,
         "directx": 1,
@@ -23020,7 +23081,7 @@ def test_translate_project_records_fine_grained_source_maps_for_generated_artifa
         "wgsl": 1,
     }
     assert payload["summary"]["sourceRemapCount"] == 5
-    assert payload["summary"]["sourceRemapsByGranularity"] == {"line": 5}
+    assert payload["summary"]["sourceRemapsByGranularity"] == {"line": 1, "file": 4}
     assert payload["summary"]["sourceRemapsByTarget"] == {
         "cgl": 1,
         "directx": 1,
@@ -23045,7 +23106,9 @@ def test_translate_project_records_fine_grained_source_maps_for_generated_artifa
     )
     for artifact in payload["artifacts"]:
         source_map = artifact["sourceMap"]
-        assert source_map["mappingGranularity"] == "line"
+        assert source_map["mappingGranularity"] == (
+            "line" if artifact["target"] == "cgl" else "file"
+        )
         assert source_map["mappings"]
         assert all(
             mapping["source"]["file"] == artifact["source"]
@@ -23056,13 +23119,9 @@ def test_translate_project_records_fine_grained_source_maps_for_generated_artifa
             for mapping in source_map["mappings"]
         )
         if artifact["target"] != "cgl":
-            expected_mappings = project_pipeline._derived_line_source_map_mappings(
-                repo / artifact["source"],
-                artifact["source"],
-                repo / artifact["path"],
-                artifact["path"],
-            )
-            assert source_map["mappings"] == expected_mappings
+            assert source_map["mappings"] == [
+                {"source": source_map["source"], "generated": source_map["generated"]}
+            ]
         source_remap = artifact["sourceRemap"]
         assert source_remap["target"] == artifact["target"]
         assert source_remap["generatedFile"] == artifact["path"]
@@ -23950,8 +24009,9 @@ def test_translate_project_skips_invalid_external_corpus_targets(tmp_path):
     assert diagnostic["code"] == "project.config.external-corpus-entry-invalid"
     assert "entry 1" in diagnostic["message"]
     assert (
-        "targets must be a non-empty string or list of non-empty strings"
-        in diagnostic["message"]
+        "targets must be a non-empty string or list of non-empty strings" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -26381,8 +26441,9 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert "project.config must be a string or null" in diagnostic["message"]
     assert (
-        "project.configHash must be an object when project.config is set"
-        in diagnostic["message"]
+        "project.configHash must be an object when project.config is set" in diagnostic[
+            "message"
+        ]
     )
     assert "project.sourceRoots must be a list of strings" in diagnostic["message"]
     assert "project.includePatterns must be a list of strings" in (
@@ -26408,8 +26469,9 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     assert "project.defineCount must match project.defines" in diagnostic["message"]
     assert "project.sourceOverrides values must be strings" in (diagnostic["message"])
     assert (
-        "project.sourceOverrideCount must match project.sourceOverrides"
-        in diagnostic["message"]
+        "project.sourceOverrideCount must match project.sourceOverrides" in diagnostic[
+            "message"
+        ]
     )
     assert "project.variants keys must be non-empty strings" in diagnostic["message"]
     assert "project.variants.debug must be an object" in diagnostic["message"]
@@ -27393,8 +27455,9 @@ def test_validate_project_report_rejects_unexpected_generated_unit_and_skipped_f
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert "units[0].unexpected is not allowed" in diagnostic["message"]
     assert (
-        "units[0].includeDependencies[0].unexpected is not allowed"
-        in diagnostic["message"]
+        "units[0].includeDependencies[0].unexpected is not allowed" in diagnostic[
+            "message"
+        ]
     )
     assert (
         "units[0].includeDependencies[0].resolvedHash.unexpected is not allowed"
@@ -27478,13 +27541,15 @@ def test_validate_project_report_rejects_artifact_source_hash_mismatches_unit_so
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifacts[0].sourceHash must match units[0].sourceHash"
-        in diagnostic["message"]
+        "artifacts[0].sourceHash must match units[0].sourceHash" in diagnostic[
+            "message"
+        ]
     )
     assert (
         f"(expected {expected_hash['algorithm']}:{expected_hash['value']}, "
-        f"actual {actual_hash['algorithm']}:{actual_hash['value']})"
-        in diagnostic["message"]
+        f"actual {actual_hash['algorithm']}:{actual_hash['value']})" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -27530,8 +27595,9 @@ def test_validate_project_report_rejects_artifact_source_size_mismatches_unit_so
         in diagnostic["message"]
     )
     assert (
-        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
-        in diagnostic["message"]
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -27584,8 +27650,9 @@ def test_validate_project_report_rejects_artifact_generated_size_mismatches_curr
     expected_size = payload["artifacts"][0]["generatedSizeBytes"]
     actual_size = (repo / payload["artifacts"][0]["path"]).stat().st_size
     assert (
-        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
-        in diagnostic["message"]
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -27633,8 +27700,9 @@ def test_validate_project_report_detects_modified_unit_sources(tmp_path):
     )
     assert (
         f"(expected {expected_hash['algorithm']}:{expected_hash['value']}, "
-        f"actual {actual_hash['algorithm']}:{actual_hash['value']})"
-        in diagnostic["message"]
+        f"actual {actual_hash['algorithm']}:{actual_hash['value']})" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -27660,8 +27728,9 @@ def test_validate_project_report_detects_modified_unit_source_sizes(tmp_path):
         diagnostic["message"]
     )
     assert (
-        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
-        in diagnostic["message"]
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -28533,8 +28602,9 @@ def test_validate_project_report_rejects_inconsistent_toolchain_status(tmp_path)
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "validation.toolchains[0].status must match tools availability"
-        in diagnostic["message"]
+        "validation.toolchains[0].status must match tools availability" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -29379,8 +29449,9 @@ def test_validate_project_report_rejects_toolchain_runs_without_check_kind_in_fu
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "validation.toolchainRuns[0].checkKind must be recorded"
-        in diagnostic["message"]
+        "validation.toolchainRuns[0].checkKind must be recorded" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -30211,8 +30282,9 @@ def test_validate_project_report_rejects_malformed_external_corpus_provenance(
         "40-character hex digest"
     ) in diagnostic["message"]
     assert (
-        "externalCorpus.entries[0].sourceUrl must start with repository"
-        in diagnostic["message"]
+        "externalCorpus.entries[0].sourceUrl must start with repository" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -30837,8 +30909,9 @@ def test_validate_project_report_rejects_translated_artifacts_with_error_metadat
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifacts[0].error must be omitted for translated artifacts"
-        in diagnostic["message"]
+        "artifacts[0].error must be omitted for translated artifacts" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -30908,20 +30981,23 @@ def test_validate_project_report_rejects_failed_artifacts_with_generated_metadat
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifacts[0].generatedHash must be omitted for failed artifacts"
-        in diagnostic["message"]
+        "artifacts[0].generatedHash must be omitted for failed artifacts" in diagnostic[
+            "message"
+        ]
     )
     assert (
         "artifacts[0].generatedSizeBytes must be omitted for failed artifacts"
         in diagnostic["message"]
     )
     assert (
-        "artifacts[0].sourceMap must be omitted for failed artifacts"
-        in diagnostic["message"]
+        "artifacts[0].sourceMap must be omitted for failed artifacts" in diagnostic[
+            "message"
+        ]
     )
     assert (
-        "artifacts[0].sourceRemap must be omitted for failed artifacts"
-        in diagnostic["message"]
+        "artifacts[0].sourceRemap must be omitted for failed artifacts" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -31247,8 +31323,9 @@ def test_validate_project_report_rejects_backslash_report_identity_paths(tmp_pat
     assert "artifacts[0].source must be repository-relative" in diagnostic["message"]
     assert "artifacts[0].path must be repository-relative" in diagnostic["message"]
     assert (
-        "diagnostics[0].location.file must be repository-relative"
-        in diagnostic["message"]
+        "diagnostics[0].location.file must be repository-relative" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -31445,7 +31522,7 @@ def test_validate_project_report_accepts_fine_grained_source_map_contract(tmp_pa
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
 
-    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
     payload = report.to_json()
     source_map = payload["artifacts"][0]["sourceMap"]
     artifact = payload["artifacts"][0]
@@ -31504,8 +31581,9 @@ def test_validate_project_report_rejects_fine_grained_source_map_file_mismatches
         "artifacts[0].sourceMap.generated.file"
     ) in diagnostic["message"]
     assert (
-        "(expected out/cgl/other.cgl, actual out/cgl/simple.cgl)"
-        in diagnostic["message"]
+        "(expected out/cgl/other.cgl, actual out/cgl/simple.cgl)" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -31721,8 +31799,9 @@ def test_validate_project_report_rejects_inconsistent_source_map_anchors(tmp_pat
         diagnostic["message"]
     )
     assert (
-        "(expected out/opengl/other.glsl, actual out/opengl/simple.glsl)"
-        in diagnostic["message"]
+        "(expected out/opengl/other.glsl, actual out/opengl/simple.glsl)" in diagnostic[
+            "message"
+        ]
     )
     assert (
         "artifacts[0].sourceMap.mappings[0].source must match "
@@ -31938,20 +32017,22 @@ def test_validate_project_report_rejects_stale_line_preserving_source_map_span(
     assert f"actual {stale_mapping}" in diagnostic["message"]
 
 
-def test_validate_project_report_rejects_stale_derived_source_map_span(tmp_path):
+def test_validate_project_report_rejects_unproven_line_source_map_span(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
 
     report = translate_project(repo, targets=["opengl"], output_dir="out")
     payload = report.to_json()
-    source_map = payload["artifacts"][0]["sourceMap"]
-    assert source_map["mappingGranularity"] == "line"
-    assert source_map["mappings"]
-    original_mapping = copy.deepcopy(source_map["mappings"][0])
-    source_map["mappings"][0]["generated"]["column"] += 1
-    stale_mapping = source_map["mappings"][0]
-    report_path = repo / "out" / "stale-derived-source-map-span-report.json"
+    artifact = payload["artifacts"][0]
+    source_map = artifact["sourceMap"]
+    assert source_map["mappingGranularity"] == "file"
+    source_map["mappingGranularity"] = "line"
+    artifact["sourceRemap"]["mappingGranularity"] = "line"
+    payload["summary"].update(
+        project_pipeline._source_map_rollups(payload["artifacts"])
+    )
+    report_path = repo / "out" / "unproven-line-source-map-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
     validation = validate_project_report(report_path)
@@ -31967,11 +32048,9 @@ def test_validate_project_report_rejects_stale_derived_source_map_span(tmp_path)
     )
     assert diagnostic["missingCapabilities"] == ["source.provenance"]
     assert (
-        "sourceMap.mappings[0] must match current derived line span"
+        "sourceMap line mappings require line-preserving source and generated files"
         in diagnostic["message"]
     )
-    assert f"expected {original_mapping}" in diagnostic["message"]
-    assert f"actual {stale_mapping}" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
@@ -32297,8 +32376,9 @@ def test_validate_project_report_rejects_source_remap_size_mismatches(tmp_path):
     expected_size = artifact["sourceRemap"]["sizeBytes"]
     actual_size = (repo / artifact["sourceRemap"]["path"]).stat().st_size
     assert (
-        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
-        in diagnostic["message"]
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -32320,8 +32400,9 @@ def test_validate_project_report_rejects_backslash_source_remap_metadata(tmp_pat
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "artifacts[0].sourceRemap.path must be repository-relative"
-        in diagnostic["message"]
+        "artifacts[0].sourceRemap.path must be repository-relative" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -32953,8 +33034,9 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
         diagnostic["message"]
     )
     assert (
-        "summary.sourceRemapMappingCount must match artifact source remap mappings"
-        in (diagnostic["message"])
+        "summary.sourceRemapMappingCount must match artifact source remap mappings" in (
+            diagnostic["message"]
+        )
     )
     assert "summary.sourceRemapsByGranularity must match artifact source remaps" in (
         diagnostic["message"]
@@ -33074,8 +33156,9 @@ def test_validate_project_report_rejects_malformed_runtime_references(tmp_path):
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "migration.actions[0].runtimeReferences[0].extra is not allowed"
-        in diagnostic["message"]
+        "migration.actions[0].runtimeReferences[0].extra is not allowed" in diagnostic[
+            "message"
+        ]
     )
     assert (
         "migration.actions[0].runtimeReferences[0].path must be repository-relative"
@@ -42498,7 +42581,7 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
     payload = inspect_runtime_package(package_dir / "runtime-package.json")
 
     host_interface = payload["bindings"][0]["hostInterface"]
-    assert host_interface["status"] == "ready"
+    assert host_interface["status"] == "incomplete"
     assert host_interface["source"] == "compiled-artifact"
     assert host_interface["parser"] == "opengl-reflection"
     assert host_interface["artifactFormat"] == "GLSL source"
@@ -42529,7 +42612,11 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
             "access": "read",
         },
     ]
-    assert host_interface["diagnostics"] == []
+    assert host_interface["diagnostics"] == [REFLECTION_INCOMPLETE_OUTPUT]
+    assert host_interface["diagnosticRecords"][0]["details"] == {
+        "resource": "Camera",
+        "reasonKind": "uniform-block-layout-unsupported",
+    }
 
 
 def test_inspect_runtime_package_reflects_generated_wgsl_resource_bindings(tmp_path):
@@ -42784,7 +42871,7 @@ def test_inspect_runtime_package_reports_entry_point_parameter_resources(tmp_pat
 
     host_interface = payload["bindings"][0]["hostInterface"]
     assert host_interface["status"] == "ready"
-    assert host_interface["parser"] == "metal"
+    assert host_interface["parser"] == "metal-reflection"
     assert host_interface["entryPoints"] == [
         {
             "name": "fragment_main",
@@ -42796,18 +42883,20 @@ def test_inspect_runtime_package_reports_entry_point_parameter_resources(tmp_pat
         {
             "name": "camera",
             "kind": "constant-buffer",
-            "type": "Camera&",
-            "set": None,
+            "type": "constant Camera&",
+            "set": 0,
             "binding": 0,
             "access": "read",
+            "metadata": {"entryPoint": "fragment_main"},
         },
         {
             "name": "sourceTexture",
             "kind": "texture",
             "type": "texture2d<float>",
-            "set": None,
+            "set": 0,
             "binding": 0,
-            "access": None,
+            "access": "read",
+            "metadata": {"entryPoint": "fragment_main"},
         },
     ]
     assert host_interface["diagnostics"] == []
@@ -48450,9 +48539,10 @@ def test_translate_project_opencl_targets_do_not_leak_resource_parameter_syntax(
     assert ": group" not in combined
     assert "[[group]]" not in combined
 
-    assert "layout(std430, binding = 0) buffer outBuffer { float out[]; };" in (
+    assert "layout(std430, binding = 0) buffer out_Buffer { float out_[]; };" in (
         outputs["opengl"]
     )
+    assert "out_[i] = (in_[i] * factor);" in outputs["opengl"]
     assert "layout(std140, binding = 2) uniform scale_Args" in outputs["opengl"]
     assert "uint i = gl_GlobalInvocationID.x;" in outputs["opengl"]
     assert not re.search(r"\b(?:f32|u32)\b", outputs["opengl"])
@@ -48498,8 +48588,9 @@ def test_translate_project_cuda_pointer_parameters_lower_to_opengl_buffers(
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("opengl", "translated")}
-    assert payload["summary"]["sourceRemapMappingCount"] == 6
-    assert payload["artifacts"][0]["sourceRemap"]["mappingCount"] == 6
+    assert payload["summary"]["sourceRemapMappingCount"] == 1
+    assert payload["artifacts"][0]["sourceRemap"]["mappingCount"] == 1
+    assert payload["artifacts"][0]["sourceRemap"]["mappingGranularity"] == "file"
 
     output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
 
@@ -50229,8 +50320,10 @@ def test_translate_project_metal_matmul_constant_pointer_params_lower_to_resourc
     }
 
     opengl = outputs["opengl"]
-    assert "layout(std140, binding = 0) uniform MatMulParams" in opengl
-    assert "} params;" in opengl
+    assert (
+        "layout(std430, binding = 0) readonly buffer paramsBuffer "
+        "{ MatMulParams params[]; };" in opengl
+    )
     assert (
         "layout(std430, binding = 1) readonly buffer ABuffer { float A[]; };" in opengl
     )
@@ -50238,25 +50331,25 @@ def test_translate_project_metal_matmul_constant_pointer_params_lower_to_resourc
         "layout(std430, binding = 2) readonly buffer BBuffer { float B[]; };" in opengl
     )
     assert "layout(std430, binding = 3) buffer XBuffer { float X[]; };" in opengl
-    assert "params.cols" in opengl
-    assert "params.rows" in opengl
-    assert "params.inner" in opengl
-    assert "paramsBuffer" not in opengl
+    assert "params[0].cols" in opengl
+    assert "params[0].rows" in opengl
+    assert "params[0].inner" in opengl
+    assert "uniform MatMulParams" not in opengl
     assert "void matmul(" not in opengl
     assert "float* A" not in opengl
     assert "float* B" not in opengl
     assert "float* X" not in opengl
 
     directx = outputs["directx"]
-    assert "ConstantBuffer<MatMulParams> params : register(b0);" in directx
+    assert "StructuredBuffer<MatMulParams> params : register(t0);" in directx
     assert "StructuredBuffer<float> A : register(t1);" in directx
     assert "StructuredBuffer<float> B : register(t2);" in directx
     assert "RWStructuredBuffer<float> X : register(u3);" in directx
     assert "void CSMain(uint3 gid : SV_DispatchThreadID)" in directx
-    assert "params.cols" in directx
-    assert "params.rows" in directx
-    assert "params.inner" in directx
-    assert "StructuredBuffer<MatMulParams> params" not in directx
+    assert "params[uint(0)].cols" in directx
+    assert "params[uint(0)].rows" in directx
+    assert "params[uint(0)].inner" in directx
+    assert "ConstantBuffer<MatMulParams> params" not in directx
     assert "float* A" not in directx
     assert "float* B" not in directx
     assert "float* X" not in directx
@@ -50316,7 +50409,9 @@ def test_translate_project_metal_template_member_infers_pointer_struct_field(
     )
     directx = (repo / directx_artifact["path"]).read_text(encoding="utf-8")
     assert "int Identity__apply__int(inout Identity self, int value)" in directx
-    assert "forward_value_int(Identity__apply__int(op, params.stride))" in directx
+    assert (
+        "forward_value_int(Identity__apply__int(op, params[uint(0)].stride))" in directx
+    )
     assert "apply_Params" not in directx
 
 
@@ -50543,8 +50638,9 @@ def test_metal_materialization_resolves_late_member_nested_constexpr_helpers(
     assert "decode_float_4_2_thread_float(" in materialized.text
     assert (
         "inline void decode_float_4_2_thread_float("
-        "const device uchar* source, thread float* destination)"
-        in " ".join(materialized.text.split())
+        "const device uchar* source, thread float* destination)" in " ".join(
+            materialized.text.split()
+        )
     )
     specialization_names = {
         record["name"] for record in materialized.metadata["specializations"]
@@ -52017,8 +52113,9 @@ def test_translate_project_metal_implicit_type_environment_budget_diagnostic(
     assert "implicit-template-materialization/type-environment" in artifact["error"]
     assert (
         "limit 3 from "
-        "project.source_options.metal.max_template_materialization_work"
-        in artifact["error"]
+        "project.source_options.metal.max_template_materialization_work" in artifact[
+            "error"
+        ]
     )
     assert not (repo / artifact["path"]).exists()
 
@@ -52838,7 +52935,7 @@ def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_pat
     intermediate = MetalToCrossGLConverter().generate(
         MetalParser(MetalLexer(source).tokenize()).parse()
     )
-    assert "(const device vec<bfloat16_t, 4>*)(base + offset)" in intermediate
+    assert "(const device bfloat16vec4*)(base + offset)" in intermediate
 
     payload = translate_project(
         repo,
@@ -52864,7 +52961,7 @@ def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_pat
     assert set(artifacts) == {"directx", "opengl"}
     expected_errors = {
         "directx": (
-            "DirectX storage pointer reinterpretation requires a 32-bit scalar "
+            "DirectX storage pointer reinterpretation requires an 8- or 32-bit scalar "
             "backing element and either an 8-, 16-, or 32-bit scalar view or a "
             "2- to 4-lane 32-bit vector view"
         ),
@@ -52908,7 +53005,7 @@ def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_pat
                 "addressSpace": "storage",
                 "reason": "unsupported-scalar-layout",
                 "sourceType": expected_source_types[target],
-                "targetType": "vec<bfloat16_t, 4>",
+                "targetType": "bfloat16vec4",
             },
             "sourcePath": "generic_vector_pointer.metal",
             "targetArtifact": (
@@ -56942,7 +57039,10 @@ def test_metal_simd_shuffle_down_to_directx_lowers_to_wave_read(tmp_path):
         str(shader_path), backend="directx", source_backend="metal"
     )
     assert "simd_shuffle_down" not in generated_hlsl
-    assert "WaveReadLaneAt(v, (WaveGetLaneIndex() + uint(1)))" in generated_hlsl
+    assert (
+        "WaveReadLaneAt(v, (WaveGetLaneIndex() + uint((uint(1) & 65535u))))"
+        in generated_hlsl
+    )
 
     repo = _write_metal_directx_project(
         tmp_path / "repo", "reduce_kernel", METAL_SIMD_SHUFFLE_DOWN_KERNEL
@@ -56955,8 +57055,9 @@ def test_metal_simd_shuffle_down_to_directx_lowers_to_wave_read(tmp_path):
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
     assert (
-        "project.translate.metal-unresolved-construct"
-        not in payload["summary"]["diagnosticsByCode"]
+        "project.translate.metal-unresolved-construct" not in payload["summary"][
+            "diagnosticsByCode"
+        ]
     )
     assert (
         "metal.construct-lowering" not in payload["summary"]["missingCapabilityCounts"]
@@ -56997,7 +57098,10 @@ def test_metal_relative_shuffle_self_policy_propagates_to_directx(tmp_path):
     assert "bool valid = delta < (laneCount - lane);" in generated
     assert "uint laneCount = WaveGetLaneCount();" in generated
     assert "WaveReadLaneAt(value, sourceLane);" in generated
-    assert "__crossgl_wave_shuffle_down_self_float(v, uint(1))" in generated
+    assert (
+        "__crossgl_wave_shuffle_down_self_float(v, uint((uint(1) & 65535u)))"
+        in generated
+    )
     assert "WaveReadLaneAt(v, (WaveGetLaneIndex() + uint(1)))" not in generated
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
@@ -57026,8 +57130,9 @@ def test_metal_elementwise_copy_to_directx_is_not_flagged(tmp_path):
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
     assert (
-        "project.translate.metal-unresolved-construct"
-        not in payload["summary"]["diagnosticsByCode"]
+        "project.translate.metal-unresolved-construct" not in payload["summary"][
+            "diagnosticsByCode"
+        ]
     )
 
     artifact = payload["artifacts"][0]
@@ -58049,12 +58154,14 @@ def test_validate_project_report_rejects_stale_workgroup_execution_identity(tmp_
         "execution.identity must match the execution contract" in diagnostic["message"]
     )
     assert (
-        "execution.provenance.path must be project.workgroup_size"
-        in diagnostic["message"]
+        "execution.provenance.path must be project.workgroup_size" in diagnostic[
+            "message"
+        ]
     )
     assert (
-        "execution.workgroupSize must match project.workgroupSize"
-        in diagnostic["message"]
+        "execution.workgroupSize must match project.workgroupSize" in diagnostic[
+            "message"
+        ]
     )
 
 
@@ -58507,8 +58614,7 @@ def test_translate_project_accepts_shared_source_workgroup_size_for_multi_entry(
             tuple(artifact["execution"]["sourceEntryPoints"]) for artifact in artifacts
         } == {("first",), ("second",)}
         assert all(
-            artifact["entryPoint"]
-            == {
+            artifact["entryPoint"] == {
                 "source": artifact["execution"]["sourceEntryPoints"][0],
                 "target": "main",
                 "stage": "compute",
@@ -58716,6 +58822,42 @@ def test_translate_project_reports_unrepresentable_copysign_types(tmp_path):
     validation = validate_project_report(report_path)
     assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
         {"project.validate.invalid-report"}
+    )
+
+
+@pytest.mark.parametrize(
+    "left,right,reason",
+    [
+        ("vec2", "vec3", "operand-shape-mismatch"),
+        ("half", "half", "unsupported-narrow-remainder-profile"),
+    ],
+)
+def test_translate_project_reports_unrepresentable_floating_remainder(
+    tmp_path, left, right, reason
+):
+    source = tmp_path / "remainder.cgl"
+    source.write_text(
+        f"shader InvalidRemainder {{ float apply({left} a, {right} b) {{ return fmod(a, b); }} }}",
+        encoding="utf-8",
+    )
+    config = project_api.ProjectConfig(root=tmp_path, targets=("opengl",))
+    report = translate_project(config, format_output=False)
+    payload = report.to_json()
+    assert payload["summary"]["failedCount"] == 1
+    (diagnostic,) = payload["diagnostics"]
+    assert diagnostic["code"] == "project.translate.opengl-fmod-unrepresentable"
+    assert diagnostic["missingCapabilities"] == ["opengl.floating-remainder-lowering"]
+    assert diagnostic["details"]["mathIntrinsic"] == {
+        "operation": "fmod",
+        "operandTypes": [left, right],
+        "reason": reason,
+        "targetProfile": "#version 450 core",
+    }
+    report_path = tmp_path / "report.json"
+    report.write_json(report_path)
+    assert not any(
+        item["code"] == "project.validate.invalid-report"
+        for item in validate_project_report(report_path)["diagnostics"]
     )
 
 

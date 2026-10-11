@@ -17440,6 +17440,7 @@ def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics():
     void main() {
         uint readonlyOld = atomicAdd(readAtomicBlock.value, 1u);
         float floatOld = atomicAdd(floatAtomicBlock.value, 1.0);
+        float minimumOld = atomicMin(floatAtomicBlock.value, 1.0);
         uint vectorOld = atomicAdd(vectorAtomicBlock.value, 1u);
         float matrixOld = atomicAdd(matrixAtomicBlock.value, 1.0);
     }
@@ -17484,8 +17485,13 @@ def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics():
         "atomicAdd cannot write readonly device buffer */ 0u;" in metal
     )
     assert (
-        "float floatOld = /* unsupported Metal GLSL buffer block atomic: "
-        "atomicAdd currently supports only int or uint buffer members */ 0;" in metal
+        "float floatOld = atomic_fetch_add_explicit("
+        "reinterpret_cast<device atomic_float*>(floatAtomicBlock + 0), "
+        "1.0, memory_order_relaxed);" in metal
+    )
+    assert (
+        "float minimumOld = /* unsupported Metal GLSL buffer block atomic: "
+        "atomicMin does not support float buffer members */ 0;" in metal
     )
     assert (
         "uint vectorOld = /* unsupported Metal GLSL buffer block atomic: "
@@ -17495,7 +17501,8 @@ def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics():
         "float matrixOld = /* unsupported Metal GLSL buffer block atomic: "
         "atomicAdd requires a scalar int or uint buffer member */ 0;" in metal
     )
-    assert "atomic_fetch_" not in metal
+    assert metal.count("atomic_fetch_add_explicit(") == 1
+    assert "atomic_fetch_min_explicit(" not in metal
     assert "__crossgl_buffer_atomic" not in metal
 
 
@@ -17532,7 +17539,9 @@ def test_codegen_mixed_ssbo_invalid_glsl_atomic_operand_types_raise(
     with pytest.raises(
         ValueError,
         match=(
-            "OpenGL buffer block atomic 'atomicAdd' requires a scalar int or "
+            "Cannot preserve OpenGL float atomic storage: unresolved-storage-allocation"
+            if expected_type == "float"
+            else "OpenGL buffer block atomic 'atomicAdd' requires a scalar int or "
             f"uint buffer block member for block.value: got {expected_type}"
         ),
     ):

@@ -1190,13 +1190,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if stage_name in self.cuda_ray_stage_names() and name == "main":
             return f"{stage_name}_{name}"
         if (
-            stage_name
-            in {
+            stage_name in {
                 "geometry",
                 "tessellation_control",
                 "tessellation_evaluation",
-            }
-            | self.cuda_mesh_task_stage_names()
+            } | self.cuda_mesh_task_stage_names()
             and name == "main"
         ):
             return f"{stage_name}_{name}"
@@ -3923,8 +3921,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
 
         if (
-            operation
-            in {
+            operation in {
                 "WaveActiveSum",
                 "WaveActiveProduct",
                 "WaveActiveMin",
@@ -7020,8 +7017,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         base_name, args = parts
         if (
-            base_name
-            not in {
+            base_name not in {
                 "StructuredBuffer",
                 "RWStructuredBuffer",
                 "AppendStructuredBuffer",
@@ -12213,8 +12209,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
 
         if (
-            func_name
-            in {
+            func_name in {
                 "texture",
                 "textureLod",
                 "textureGrad",
@@ -12252,8 +12247,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return texture_gather
 
         if (
-            func_name
-            in {
+            func_name in {
                 "textureGather",
                 "textureGatherOffset",
                 "textureGatherOffsets",
@@ -12269,8 +12263,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
 
         if (
-            func_name
-            in {
+            func_name in {
                 "textureOffset",
                 "textureLodOffset",
                 "textureGradOffset",
@@ -12280,8 +12273,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return self.generate_texture_offset_call(func_name, raw_args, args)
 
         if (
-            func_name
-            in {
+            func_name in {
                 "textureProj",
                 "textureProjOffset",
                 "textureProjLod",
@@ -12297,8 +12289,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return self.generate_texel_fetch_offset_call(raw_args, args)
 
         if (
-            func_name
-            in {
+            func_name in {
                 "textureOffset",
                 "textureLodOffset",
                 "textureGradOffset",

@@ -2,11 +2,19 @@ import ast
 import copy
 import importlib.util
 import json
+import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
+
+import pytest
+import yaml
+
+from tests.ci_helpers import assert_paths_covered, assert_workflow_triggers
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
@@ -43,11 +51,83 @@ DEMO_GENERATED_OUTPUT_TRIGGER_PATHS = {
 }
 
 
+@pytest.mark.parametrize(
+    "pattern,path,covered",
+    [
+        ("tests/**", "tests/test_example.py", True),
+        ("tests/**", "tests/backend/test_example.py", True),
+        ("tests/*.py", "tests/test_example.py", True),
+        ("tests/*.py", "tests/backend/test_example.py", False),
+        ("tests/**/test_*.py", "tests/test_example.py", True),
+        ("tests/**/test_*.py", "tests/backend/test_example.py", True),
+        ("tests/**/test_*.py", "tests/backend/example.txt", False),
+        ("requirements*.txt", "requirements-dev.txt", True),
+        ("tests/**", "demos/test_example.py", False),
+    ],
+)
+def test_workflow_path_coverage_preserves_directory_boundaries(pattern, path, covered):
+    if covered:
+        assert_paths_covered([pattern], path)
+    else:
+        with pytest.raises(AssertionError):
+            assert_paths_covered([pattern], path)
+
+
+def test_workflow_subtree_coverage_checks_every_existing_file(tmp_path):
+    (tmp_path / "tests/backend").mkdir(parents=True)
+    (tmp_path / "tests/test_top.py").touch()
+    (tmp_path / "tests/backend/test_nested.py").touch()
+    assert_paths_covered(["tests/**"], "tests/**", root=tmp_path)
+    with pytest.raises(AssertionError, match="test_nested"):
+        assert_paths_covered(["tests/*.py"], "tests/**", root=tmp_path)
+    with pytest.raises(AssertionError, match="No files match"):
+        assert_paths_covered(["tests/**"], "missing/**", root=tmp_path)
+    with pytest.raises(AssertionError):
+        assert_paths_covered(["tests/**", "!tests/backend/**"], "tests/test_top.py")
+
+
+def test_workflow_path_coverage_requires_both_events():
+    workflow = """on:
+  pull_request:
+    paths:
+      - "tests/**"
+  push:
+    paths:
+      - "docs/**"
+"""
+    with pytest.raises(AssertionError, match="tests/test_example.py"):
+        assert_workflow_triggers(workflow, "tests/test_example.py")
+
+
 def _workflow_texts():
     return {
         path.name: path.read_text(encoding="utf-8")
         for path in sorted(WORKFLOW_DIR.glob("*.yml"))
     }
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "backend-tests.yml",
+        "translator-tests.yml",
+        "full-tests.yml",
+        "examples-test.yml",
+        "demo.yml",
+    ],
+)
+def test_test_workflows_replace_only_superseded_pull_request_runs(filename):
+    workflow = yaml.safe_load((WORKFLOW_DIR / filename).read_text(encoding="utf-8"))
+    policy = workflow["concurrency"]
+    assert policy == {
+        "group": (
+            "ci-${{ github.workflow }}-${{ github.event_name }}-"
+            "${{ github.event.pull_request.number || github.run_id }}"
+        ),
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+    }
+    for job in workflow["jobs"].values():
+        assert job.get("concurrency", {}).get("group") != policy["group"]
 
 
 def _workflow_job_section(workflow, job_id):
@@ -63,6 +143,102 @@ def _workflow_job_section(workflow, job_id):
 def _local_action_text(name):
     path = ACTIONS_DIR / name / "action.yml"
     return path.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux installer requires POSIX tools")
+@pytest.mark.parametrize(
+    "pinned,failure,success,downloads,checksum",
+    [
+        ("true", "", True, 1, True),
+        ("true", "checksum", False, 1, True),
+        ("true", "download", False, 1, False),
+        ("false", "first-download", True, 2, False),
+        ("invalid", "", False, 0, False),
+    ],
+)
+def test_linux_dxc_installer_pinning(
+    tmp_path, pinned, failure, success, downloads, checksum
+):
+    bash = shutil.which("bash")
+    assert bash is not None
+    mock_bin = tmp_path / "tools"
+    mock_bin.mkdir()
+    script = f"#!{sys.executable}\n" + textwrap.dedent("""\
+        import json
+        import os
+        import sys
+        from pathlib import Path
+
+        tool = Path(sys.argv[0]).name
+        args = sys.argv[1:]
+        failure = os.environ["TEST_FAILURE"]
+        record = {"tool": tool, "args": args}
+        if tool == "sha256sum":
+            record["stdin"] = sys.stdin.read()
+        with Path(os.environ["TEST_LOG"]).open("a") as output:
+            output.write(json.dumps(record) + "\\n")
+        if tool == "curl":
+            if failure == "download" or (
+                failure == "first-download" and "/v1.9.2602.24/" in args[-1]
+            ):
+                sys.exit(1)
+            Path(args[args.index("-fsSLo") + 1]).write_text("archive")
+        elif tool == "sha256sum" and failure == "checksum":
+            sys.exit(1)
+        elif tool == "tar" and args[0] == "-xzf":
+            binary = Path(args[args.index("-C") + 1]) / "bin/dxc"
+            binary.parent.mkdir(parents=True)
+            binary.write_text("#!/bin/sh\\nprintf 'pinned compiler\\n'\\n")
+            binary.chmod(0o755)
+        """)
+    for name in ("curl", "tar", "sha256sum"):
+        tool = mock_bin / name
+        tool.write_text(script, encoding="utf-8")
+        tool.chmod(0o755)
+    output = tmp_path / "runner temp"
+    output.mkdir()
+    log = tmp_path / "calls.jsonl"
+    env = {
+        **os.environ,
+        "PATH": str(mock_bin) + os.pathsep + os.environ["PATH"],
+        "DXC_PINNED": pinned,
+        "RUNNER_TEMP": str(output),
+        "GITHUB_PATH": str(tmp_path / "github-path"),
+        "GITHUB_ENV": str(tmp_path / "github-env"),
+        "TEST_FAILURE": failure,
+        "TEST_LOG": str(log),
+    }
+    body = textwrap.dedent(
+        _local_action_text("install-linux-dxc").split("run: |\n", 1)[1]
+    )
+    result = subprocess.run(
+        [bash, "-c", body], env=env, capture_output=True, text=True, timeout=30
+    )
+    assert (result.returncode == 0) is success, result.stdout + result.stderr
+    calls = (
+        [json.loads(line) for line in log.read_text().splitlines()]
+        if log.exists()
+        else []
+    )
+    assert sum(call["tool"] == "curl" for call in calls) == downloads
+    checksums = [call for call in calls if call["tool"] == "sha256sum"]
+    assert bool(checksums) is checksum
+    if checksum:
+        assert checksums == [
+            {
+                "tool": "sha256sum",
+                "args": ["--check", "--strict"],
+                "stdin": (
+                    "928b3e9986d11dc4279050e02340950c29bcbd1e5efb9d3ded9669dade37639d"
+                    f"  {output / 'dxc.tar.gz'}\n"
+                ),
+            }
+        ]
+    assert (tmp_path / "github-path").exists() is success
+    if not success:
+        assert not any(
+            call["tool"] == "tar" and "-xzf" in call["args"] for call in calls
+        )
 
 
 def _load_ci_coverage_module():
@@ -152,16 +328,23 @@ def _matrix_values(workflow_text, key):
 
 
 def _assert_windows_python_policy(workflow_text, os_key="OS"):
-    assert "runs-on: ${{ matrix.runner || matrix." in workflow_text
-    excluded = f'python-version: "3.8"\n            {os_key}: windows-latest'
-    override = (
-        'python-version: "3.9"\n'
-        f"            {os_key}: windows-latest\n"
-        "            runner: windows-2022"
-    )
+    assert f"runs-on: ${{{{ matrix.{os_key} }}}}" in workflow_text
+    assert _matrix_values(workflow_text, "python-version") == PYTHON_VERSIONS
+    assert _matrix_values(workflow_text, os_key) == RUNNER_OSES
     assert "exclude:" in workflow_text
-    assert excluded in workflow_text
-    assert override in workflow_text
+    for runner in ("windows-latest", "macOS-latest"):
+        for version in ("3.8", "3.9", "3.10", "3.11", "3.12"):
+            assert (
+                f'python-version: "{version}"\n            {os_key}: {runner}'
+                in workflow_text
+            )
+    exclusions = workflow_text.split("        exclude:\n", 1)[1].split(
+        "\n    steps:", 1
+    )[0]
+    assert exclusions.count("- python-version:") == 10
+    assert "ubuntu-latest" not in exclusions
+    assert 'python-version: "3.13"' not in exclusions
+    assert "include:" not in exclusions
 
 
 def _assert_windows_legacy_python_is_excluded(workflow_text, os_key="OS"):
@@ -172,6 +355,152 @@ def _assert_windows_legacy_python_is_excluded(workflow_text, os_key="OS"):
             f"            {os_key}: windows-latest"
         )
         assert excluded in workflow_text
+
+
+def _assert_grouped_native_python_policy(workflow_text, component_key):
+    job = yaml.safe_load(workflow_text)["jobs"]["test"]
+    matrix = job["strategy"]["matrix"]
+    assert set(matrix) == {component_key, "python-version", "OS", "exclude", "include"}
+    assert set(matrix["python-version"]) == PYTHON_VERSIONS
+    assert set(matrix["OS"]) == RUNNER_OSES
+    assert matrix["exclude"] == [
+        {"OS": "windows-latest"},
+        {"OS": "macOS-latest"},
+    ]
+    assert matrix["include"] == [
+        {component_key: "all", "python-version": "3.13", "OS": runner}
+        for runner in ("windows-latest", "macOS-latest")
+    ]
+    assert "all" not in matrix[component_key]
+    expected_runner = (
+        "${{ matrix.OS == 'macOS-latest' && 'xcode-27' || matrix.OS }}"
+        if component_key == "component"
+        else "${{ matrix.OS }}"
+    )
+    assert job["runs-on"] == expected_runner
+    assert job["env"]["PYTEST_XDIST_AUTO_NUM_WORKERS"] == "2"
+    assert job["strategy"]["fail-fast"] is False
+    assert "continue-on-error" not in job and "if" not in job
+    install = next(
+        step for step in job["steps"] if step.get("name") == "Install dependencies"
+    )
+    assert "pip install -r requirements.txt pytest-xdist" in install["run"]
+
+
+def test_metal_fence_jobs_require_a_compatible_toolchain_without_extra_jobs():
+    translator = yaml.safe_load((WORKFLOW_DIR / "translator-tests.yml").read_text())[
+        "jobs"
+    ]["test"]
+    demo = yaml.safe_load((WORKFLOW_DIR / "demo-project-testing.yml").read_text())[
+        "jobs"
+    ]["portable-host"]
+    for job, name in (
+        (translator, "Verify Metal 4.1 toolchain"),
+        (demo, "Verify macOS Metal toolchain"),
+    ):
+        step = next(step for step in job["steps"] if step.get("name") == name)
+        assert step["if"] == "runner.os == 'macOS'"
+        assert step["timeout-minutes"] == 10
+        assert "continue-on-error" not in step
+        command = step["run"]
+        assert "set -euo pipefail" in command
+        assert (
+            "export DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer"
+            in command
+        )
+        assert 'test -d "$DEVELOPER_DIR"' in command
+        assert 'echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"' in command
+        assert "metal -std=metal4.1 -x metal -fsyntax-only /dev/null" in command
+    required_entries = [
+        row
+        for row in demo["strategy"]["matrix"]["include"]
+        if not row.get("warp_qualification")
+    ]
+    assert len(required_entries) == 3
+    assert {"os": "xcode-27", "target": "metal"} in demo["strategy"]["matrix"][
+        "include"
+    ]
+
+
+@pytest.mark.parametrize("exit_code", (0, 7))
+@pytest.mark.parametrize(
+    "workflow,component_key,component,selection",
+    [
+        ("backend", "backend", "all", ["tests/test_backend"]),
+        ("backend", "backend", "directx", ["tests/test_backend/test_directx"]),
+        ("translator", "component", "all", ["tests/test_translator"]),
+        (
+            "translator",
+            "component",
+            "general",
+            ["tests/test_translator", "--ignore=tests/test_translator/test_codegen"],
+        ),
+        (
+            "translator",
+            "component",
+            "GLSL",
+            [
+                "tests/test_translator/test_codegen/test_GLSL_codegen.py",
+                "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
+            ],
+        ),
+        (
+            "translator",
+            "component",
+            "directx",
+            ["tests/test_translator/test_codegen/test_directx_codegen.py"],
+        ),
+    ],
+)
+def test_grouped_platform_test_commands_preserve_coverage_and_failures(
+    tmp_path, workflow, component_key, component, selection, exit_code
+):
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("workflow command checks require bash")
+    job = yaml.safe_load(_workflow_texts()[f"{workflow}-tests.yml"])["jobs"]["test"]
+    step = next(
+        item for item in job["steps"] if item.get("id") == f"run_{workflow}_tests"
+    )
+    assert step["shell"] == "bash"
+    assert "continue-on-error" not in step and "if" not in step
+    command = step["run"]
+    for key, value in {
+        component_key: component,
+        "python-version": "3.13",
+        "OS": "windows-latest",
+    }.items():
+        command = command.replace("${{ matrix." + key + " }}", value)
+    assert "${{" not in command
+    recorder = tmp_path / "record.py"
+    recorder.write_text(
+        "import json, sys\nfrom pathlib import Path\n"
+        "Path('command.json').write_text(json.dumps(sys.argv[1:]))\n"
+        f"sys.exit({exit_code})\n",
+        encoding="utf-8",
+    )
+    command = command.replace(
+        "python ", f"{shlex.quote(sys.executable)} {shlex.quote(str(recorder))} "
+    )
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-eo", "pipefail", "-c", command],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == exit_code, result.stdout + result.stderr
+    args = json.loads((tmp_path / "command.json").read_text())
+    assert args[:2] == ["-m", "pytest"]
+    assert args[-2:] == [
+        "--junitxml",
+        f"support/generated/{workflow}-tests-{component}-3.13-windows-latest.xml",
+    ]
+    test_args = args[2:-2]
+    workers = test_args.index("-n")
+    assert test_args[workers : workers + 2] == ["-n", "auto"]
+    del test_args[workers : workers + 2]
+    assert test_args == selection
 
 
 def test_ci_runs_the_complete_pytest_suite_on_pull_requests_and_pushes():
@@ -302,6 +631,7 @@ def test_full_suite_runs_fail_closed_windows_directx_native_runtime_smoke():
 def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
     workflow = _workflow_texts().get("native-host-loader.yml", "")
     expected_trigger_paths = {
+        "pyproject.toml",
         ".github/workflows/native-host-loader.yml",
         "crosstl/_crosstl.py",
         "crosstl/project/native_directx_adapter.py",
@@ -440,7 +770,9 @@ def test_deferred_native_compilation_workflow_proves_contracts_and_device_dispat
         "crosstl/project/runtime_variant_dispatch.py",
         "crosstl/project/runtime_verification.py",
         "crosstl/project/__init__.py",
-        "setup.py",
+        "pyproject.toml",
+        "conftest.py",
+        "tests/test_toolchain_discovery.py",
         "tests/test_translator/test_native_deferred_compilation*.py",
         "tests/test_translator/test_native_loader_dispatch.py",
         "tests/test_translator/test_native_runtime_drivers.py",
@@ -486,6 +818,7 @@ def test_deferred_native_compilation_workflow_proves_contracts_and_device_dispat
     assert _matrix_values(contract, "os") == RUNNER_OSES
     assert "runs-on: ${{ matrix.os }}" in contract
     assert "timeout-minutes: 30" in contract
+    assert "test_toolchain_discovery.py" in contract
     assert "test_native_deferred_compilation.py" in contract
     assert "test_native_deferred_compilation_package.py" in contract
     assert "test_native_deferred_compilation_cache.py" in contract
@@ -1963,6 +2296,20 @@ def test_ci_coverage_report_summary_reflects_validation_failures():
     assert broken["summary"] == {"ok": False, "errors": 1}
 
 
+def test_support_sync_installs_workflow_test_dependencies():
+    workflow = yaml.safe_load(
+        (WORKFLOW_DIR / "support-issue-sync.yml").read_text(encoding="utf-8")
+    )
+    install = next(
+        step
+        for step in workflow["jobs"]["sync"]["steps"]
+        if step.get("name") == "Install test dependency"
+    )
+    command = shlex.split(install["run"])
+    assert command[:4] == ["python", "-m", "pip", "install"]
+    assert {"pytest", "pypdf", "PyYAML>=6,<7"} <= set(command[4:])
+
+
 def test_ci_coverage_comparison_reports_removed_coverage():
     module = _load_ci_coverage_module()
     baseline = module.build_report()
@@ -1984,6 +2331,192 @@ def test_ci_coverage_comparison_reports_removed_coverage():
             "added": [],
         }
     ]
+
+
+@pytest.fixture
+def consolidated_workflow_reports():
+    module = _load_ci_coverage_module()
+    current = module.build_report()
+    baseline = copy.deepcopy(current)
+    destination = "demo-project-testing.yml"
+    sources = ["demo-source.yml", "demo-runtime.yml", "demo-reference.yml"]
+    jobs = baseline["workflows"]["runtime"]["job_timeouts"].pop(destination)
+    for index, source in enumerate(sources):
+        baseline["workflows"]["runtime"]["job_timeouts"][source] = dict(
+            list(jobs.items())[index :: len(sources)]
+        )
+    for section, fields in {
+        "permissions": (
+            "explicit_permissions",
+            "write_permissions",
+            "unexpected_write_permissions",
+        ),
+        "actions": ("action_refs", "mutable_refs", "node24_opt_in"),
+    }.items():
+        for field in fields:
+            values = baseline["workflows"][section][field]
+            if destination in values:
+                value = values.pop(destination)
+                values.update({source: copy.deepcopy(value) for source in sources})
+    return module, baseline, current, dict.fromkeys(sources, destination)
+
+
+def test_ci_coverage_comparison_preserves_consolidated_workflow_policies(
+    consolidated_workflow_reports,
+):
+    module, baseline, current, migrations = consolidated_workflow_reports
+    original = copy.deepcopy(baseline)
+    assert module.build_ci_coverage_comparison(baseline, current)["shrinks"]
+    comparison = module.build_ci_coverage_comparison(baseline, current, migrations)
+    assert comparison["summary"] == {
+        "ok": True,
+        "shrink_count": 0,
+        "growth_count": 0,
+    }
+    assert comparison["workflow_migrations"] == migrations
+    assert baseline == original
+    assert (
+        module.build_ci_coverage_comparison(current, current, migrations)[
+            "workflow_migrations"
+        ]
+        == {}
+    )
+
+
+@pytest.mark.parametrize(
+    "regression",
+    ["missing_job", "timeout", "permissions", "write_policy", "action_ref", "node24"],
+)
+def test_ci_coverage_workflow_moves_do_not_hide_policy_regressions(
+    consolidated_workflow_reports, regression
+):
+    module, baseline, current, migrations = consolidated_workflow_reports
+    target = "demo-project-testing.yml"
+    workflows = current["workflows"]
+    jobs = workflows["runtime"]["job_timeouts"][target]
+    job = next(iter(jobs))
+    if regression == "missing_job":
+        del jobs[job]
+    elif regression == "timeout":
+        jobs[job] = None
+    elif regression == "permissions":
+        workflows["permissions"]["explicit_permissions"][target] = False
+    elif regression == "write_policy":
+        workflows["permissions"]["unexpected_write_permissions"][target] = [
+            "contents:write"
+        ]
+    elif regression == "action_ref":
+        workflows["actions"]["mutable_refs"][target] = ["actions/checkout@main"]
+    else:
+        workflows["actions"]["node24_opt_in"][target] = False
+    comparison = module.build_ci_coverage_comparison(baseline, current, migrations)
+    assert comparison["summary"]["shrink_count"] == 1
+    assert any(target in key for key in comparison["shrinks"][0]["removed"])
+
+
+def test_ci_coverage_workflow_moves_preserve_unrelated_coverage_checks(
+    consolidated_workflow_reports,
+):
+    module, baseline, current, migrations = consolidated_workflow_reports
+    current["workflows"]["backend_tests"]["components"]["actual"].remove("metal")
+    comparison = module.build_ci_coverage_comparison(baseline, current, migrations)
+    assert comparison["shrinks"] == [
+        {
+            "scope": "backend-tests.yml",
+            "dimension": "components",
+            "removed": ["metal"],
+            "added": [],
+        }
+    ]
+
+
+def test_ci_coverage_consolidation_retains_any_positive_policy():
+    module = _load_ci_coverage_module()
+    assert module.migrated_workflow_policies(
+        {"first.yml": True, "second.yml": False, "destination.yml": False},
+        {"first.yml": "destination.yml", "second.yml": "destination.yml"},
+    ) == {"destination.yml": True}
+
+
+@pytest.mark.parametrize(
+    "migrations",
+    [
+        [],
+        {"demo-source.yml": None},
+        {"demo-source.yml": "../destination.yml"},
+        {"demo-source.yml": "demo-source.yml"},
+        {"first.yml": "second.yml", "second.yml": "third.yml"},
+        {"demo-source.yml": "missing.yml"},
+    ],
+)
+def test_ci_coverage_rejects_invalid_workflow_migrations(
+    consolidated_workflow_reports, migrations
+):
+    module, baseline, current, _ = consolidated_workflow_reports
+    with pytest.raises(module.CiCoverageError):
+        module.build_ci_coverage_comparison(baseline, current, migrations)
+
+
+@pytest.mark.parametrize("retained_source", [False, True])
+def test_ci_coverage_rejects_ambiguous_workflow_migrations(
+    consolidated_workflow_reports, retained_source
+):
+    module, baseline, current, migrations = consolidated_workflow_reports
+    jobs = baseline["workflows"]["runtime"]["job_timeouts"]
+    if retained_source:
+        current["workflows"]["runtime"]["job_timeouts"]["demo-source.yml"] = jobs[
+            "demo-source.yml"
+        ]
+    else:
+        jobs["demo-runtime.yml"].update(jobs["demo-source.yml"])
+    with pytest.raises(module.CiCoverageError):
+        module.build_ci_coverage_comparison(baseline, current, migrations)
+
+
+def test_ci_coverage_compare_command_records_workflow_migrations(
+    consolidated_workflow_reports, tmp_path
+):
+    module, baseline, current, migrations = consolidated_workflow_reports
+    for name, value in (
+        ("base", baseline),
+        ("current", current),
+        ("moves", migrations),
+    ):
+        (tmp_path / f"{name}.json").write_text(json.dumps(value), encoding="utf-8")
+    arguments = [
+        "--root",
+        str(tmp_path),
+        "compare",
+        "--baseline",
+        "base.json",
+        "--current",
+        "current.json",
+        "--workflow-migrations",
+        "moves.json",
+        "--output",
+        "comparison.json",
+        "--fail-on-shrink",
+    ]
+    assert module.main(arguments) == 0
+    result = json.loads((tmp_path / "comparison.json").read_text(encoding="utf-8"))
+    assert result["workflow_migrations"] == migrations
+    current["workflows"]["runtime"]["job_timeouts"][
+        "demo-project-testing.yml"
+    ].popitem()
+    (tmp_path / "current.json").write_text(json.dumps(current), encoding="utf-8")
+    assert module.main(arguments) == 1
+    (tmp_path / "moves.json").write_text("[]", encoding="utf-8")
+    assert module.main(arguments) == 2
+
+
+def test_ci_coverage_checked_in_migrations_name_existing_destination():
+    migrations = json.loads(
+        (ROOT / ".github" / "ci-coverage-migrations.json").read_text(encoding="utf-8")
+    )
+    assert migrations
+    for source, destination in migrations.items():
+        assert not (WORKFLOW_DIR / source).exists()
+        assert (WORKFLOW_DIR / destination).is_file()
 
 
 def test_ci_coverage_comparison_reports_workflow_policy_shrink():
@@ -2279,7 +2812,7 @@ def test_backend_test_matrix_matches_support_catalog_and_platform_policy():
     )
     assert _matrix_values(backend_tests, "python-version") == PYTHON_VERSIONS
     assert _matrix_values(backend_tests, "OS") == RUNNER_OSES
-    _assert_windows_python_policy(backend_tests)
+    _assert_grouped_native_python_policy(backend_tests, "backend")
     assert "fail-fast: false" in backend_tests
     assert "id: setup_python" in backend_tests
     assert "continue-on-error: true" in backend_tests
@@ -2325,7 +2858,7 @@ def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
     assert _matrix_values(translator_tests, "component") == expected_components
     assert _matrix_values(translator_tests, "python-version") == PYTHON_VERSIONS
     assert _matrix_values(translator_tests, "OS") == RUNNER_OSES
-    _assert_windows_python_policy(translator_tests)
+    _assert_grouped_native_python_policy(translator_tests, "component")
     assert "fail-fast: false" in translator_tests
     assert "id: setup_python" in translator_tests
     assert "continue-on-error: true" in translator_tests
@@ -2375,2285 +2908,6 @@ def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
     )
     assert "if-no-files-found: ignore" in translator_tests
     assert "retention-days: 30" in translator_tests
-
-
-def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
-    workflows = _workflow_texts()
-    mlx_porting = workflows.get("mlx-project-porting.yml", "")
-    harness = (
-        ROOT / "demos" / "integrations" / "mlx" / "run_mlx_porting.py"
-    ).read_text(encoding="utf-8")
-    mlx_reference_commit = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
-    mlx_corpus_commit = "846d176227a0ac13d2667e58d2bb68b322109ab0"
-    mlx_current_tree_commit = "d9add9d11f3154111a4c85f267ec2fd307ecd18e"
-
-    assert mlx_porting, "mlx-project-porting.yml must exist"
-    for event_name in ("push", "pull_request"):
-        trigger_paths = set(_workflow_event_paths(mlx_porting, event_name))
-        assert "tools/run_bounded_command.py" in trigger_paths
-        assert "tests/test_run_bounded_command.py" in trigger_paths
-        assert "tools/run_directx_diagnostics.py" in trigger_paths
-        assert "tests/test_run_directx_diagnostics.py" in trigger_paths
-        assert (
-            "tests/test_translator/test_directx_reduction_primitives.py"
-            in trigger_paths
-        )
-    assert "demos/integrations/mlx/run_mlx_porting.py" in mlx_porting
-    assert f'MLX_COMMIT: "{mlx_reference_commit}"' in mlx_porting
-    assert f'MLX_CORPUS_COMMIT: "{mlx_corpus_commit}"' in mlx_porting
-    assert f'MLX_CURRENT_TREE_COMMIT: "{mlx_current_tree_commit}"' in mlx_porting
-    assert 'git -C mlx-upstream checkout "$MLX_COMMIT"' in mlx_porting
-    assert 'git -C mlx-upstream checkout "$MLX_CORPUS_COMMIT"' in mlx_porting
-    current_runtime_checkout = _load_ci_coverage_module().workflow_step_section(
-        mlx_porting,
-        "Checkout current MLX runtime proof corpus",
-    )
-    assert "git clone --filter=blob:none --no-checkout" in current_runtime_checkout
-    assert "mlx-current-upstream" in current_runtime_checkout
-    assert (
-        'git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"'
-        in current_runtime_checkout
-    )
-    assert (
-        'test "$(git -C mlx-current-upstream rev-parse HEAD)" = '
-        '"$MLX_CORPUS_COMMIT"' in current_runtime_checkout
-    )
-    current_tree_checkout = _load_ci_coverage_module().workflow_step_section(
-        mlx_porting,
-        "Checkout current MLX kernel tree",
-    )
-    assert "mlx-current-tree-upstream" in current_tree_checkout
-    assert (
-        "git -C mlx-current-tree-upstream checkout --detach "
-        '"$MLX_CURRENT_TREE_COMMIT"' in current_tree_checkout
-    )
-    assert (
-        'test "$(git -C mlx-current-tree-upstream rev-parse HEAD)" = '
-        '"$MLX_CURRENT_TREE_COMMIT"' in current_tree_checkout
-    )
-    current_census = _load_ci_coverage_module().workflow_step_section(
-        mlx_porting,
-        "Audit current MLX kernel census",
-    )
-    assert "if: runner.os == 'Linux'" in current_census
-    assert '--expected-commit "$MLX_CURRENT_TREE_COMMIT"' in current_census
-    assert "--expected-unit-count 42" in current_census
-    assert "--expected-entry-count 17478" in current_census
-    math_checks = _load_ci_coverage_module().workflow_step_section(
-        mlx_porting, "Validate Direct3D Metal math semantics"
-    )
-    assert mlx_porting.count('"tests/test_translator/test_directx_metal_math.py"') == 2
-    assert "if: runner.os == 'Windows'" in math_checks
-    assert 'CROSTL_REQUIRE_DIRECTX_METAL_MATH: "1"' in math_checks
-    assert "--timeout-seconds 120 --" in math_checks
-    assert "test_directx_metal_math.py::test_directx_metal_math_executes" in math_checks
-    assert "mkdir -p directx-math-results" in math_checks
-    math_upload = _load_ci_coverage_module().workflow_step_section(
-        mlx_porting, "Upload Direct3D Metal math evidence"
-    )
-    assert "if: always() && runner.os == 'Windows'" in math_upload
-    assert "path: directx-math-results" in math_upload
-    assert "if-no-files-found: error" in math_upload
-    opengl_math_checks = _load_ci_coverage_module().workflow_step_section(
-        mlx_porting, "Validate OpenGL Metal math semantics"
-    )
-    assert mlx_porting.count('"tests/test_translator/test_opengl_metal_math.py"') == 2
-    assert "if: runner.os == 'Linux'" in opengl_math_checks
-    assert 'CROSTL_REQUIRE_OPENGL_METAL_MATH: "1"' in opengl_math_checks
-    assert "--timeout-seconds 120 --" in opengl_math_checks
-    assert "pytest -q -n auto" in opengl_math_checks
-    assert "tests/test_translator/test_opengl_metal_math.py" in opengl_math_checks
-    opengl_math_upload = _load_ci_coverage_module().workflow_step_section(
-        mlx_porting, "Upload OpenGL Metal math evidence"
-    )
-    assert "if: always() && runner.os == 'Linux'" in opengl_math_upload
-    assert "path: opengl-math-results" in opengl_math_upload
-    assert "if-no-files-found: error" in opengl_math_upload
-    ownership = _load_ci_coverage_module().workflow_step_section(
-        mlx_porting, "Validate Metal builtin ownership"
-    )
-    assert (
-        mlx_porting.count('"tests/test_translator/test_metal_builtin_ownership.py"')
-        == 2
-    )
-    assert 'CROSTL_REQUIRE_METAL_BUILTIN_OWNERSHIP: "1"' in ownership
-    assert "--timeout-seconds 120 --" in ownership
-    assert "pytest -q -n auto" in ownership
-    assert "if: runner.os" not in ownership
-    ownership_upload = _load_ci_coverage_module().workflow_step_section(
-        mlx_porting, "Upload Metal builtin ownership evidence"
-    )
-    assert "if: always()" in ownership_upload
-    assert "name: metal-builtin-ownership-${{ runner.os }}" in ownership_upload
-    assert "if-no-files-found: error" in ownership_upload
-    primitive_checks = _load_ci_coverage_module().workflow_step_section(
-        mlx_porting, "Validate Direct3D reduction primitives"
-    )
-    assert "if: runner.os == 'Windows'" in primitive_checks
-    assert 'CROSTL_REQUIRE_DIRECTX_REDUCTION_PRIMITIVES: "1"' in primitive_checks
-    assert (
-        "for case in metadata division shuffle combined pair-reduction "
-        "special-values two-phase private-array; do" in primitive_checks
-    )
-    assert "--timeout-seconds 120 --" in primitive_checks
-    assert "test_directx_reduction_primitives_execute[$case]" in primitive_checks
-    assert "|| failed=1" in primitive_checks
-    assert 'exit "$failed"' in primitive_checks
-    primitive_upload = _load_ci_coverage_module().workflow_step_section(
-        mlx_porting, "Upload Direct3D reduction primitive diagnostics"
-    )
-    assert "if: always() && runner.os == 'Windows'" in primitive_upload
-    assert "name: directx-reduction-primitives" in primitive_upload
-    assert "path: mlx-current-results" in primitive_upload
-    assert mlx_porting.index(
-        "Upload Direct3D reduction primitive diagnostics"
-    ) < mlx_porting.index("Prove current MLX arg-reduce native validation")
-    assert mlx_porting.index(
-        "Validate Direct3D reduction primitives"
-    ) < mlx_porting.index("Prove current MLX arg-reduce native validation")
-    current_arg_reduce = _load_ci_coverage_module().workflow_step_section(
-        mlx_porting,
-        "Prove current MLX arg-reduce native validation",
-    )
-    assert (
-        "CROSTL_MLX_CURRENT_ROOT: "
-        "${{ github.workspace }}/mlx-current-tree-upstream" in current_arg_reduce
-    )
-    assert 'CROSTL_REQUIRE_MLX_CURRENT_ARG_REDUCE: "1"' in current_arg_reduce
-    assert 'CROSTL_REQUIRE_MLX_CURRENT_ARG_REDUCE_RUNTIME: "1"' in current_arg_reduce
-    assert "Linux) export CROSTL_MLX_CURRENT_TARGET=opengl" in current_arg_reduce
-    assert "Windows) export CROSTL_MLX_CURRENT_TARGET=directx" in current_arg_reduce
-    assert "macOS) export CROSTL_MLX_CURRENT_TARGET=metal" in current_arg_reduce
-    assert (
-        "python -m pytest -q "
-        "tests/test_translator/test_mlx_current_arg_reduce.py" in current_arg_reduce
-    )
-    assert '"tests/test_translator/test_mlx_current_arg_reduce.py"' in mlx_porting
-    assert '--expected-commit "$MLX_COMMIT"' in mlx_porting
-    assert "--expected-unit-count 40" in mlx_porting
-    assert "--expected-entry-count 16446" in mlx_porting
-    assert "Enumerate current MLX Metal entry points" in mlx_porting
-    assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "timeout-minutes: 360" in matrix_job
-    assert 'if [[ "$RUNNER_OS" == Windows ]]' in current_arg_reduce
-    assert 'export PYTEST_ADDOPTS="-n auto"' not in current_arg_reduce
-    assert "python -m pytest -q -n auto \\" in current_arg_reduce
-    assert (
-        "tests/test_translator/test_mlx_current_arg_reduce.py \\" in current_arg_reduce
-    )
-    assert '-k "not argmin_float32 and not argmax_float32"' in current_arg_reduce
-    assert 'PYTHONUNBUFFERED: "1"' in current_arg_reduce
-    assert "for entry in argmin_float32 argmax_float32; do" in current_arg_reduce
-    assert "python tools/run_bounded_command.py \\" in current_arg_reduce
-    assert '--label "current MLX $entry WARP runtime" \\' in current_arg_reduce
-    assert "--timeout-seconds 900 \\" in current_arg_reduce
-    assert "python tools/run_directx_diagnostics.py \\" in current_arg_reduce
-    assert '--output "mlx-current-results/$entry-directx.jsonl"' in current_arg_reduce
-    assert "--module pytest -- \\" in current_arg_reduce
-    assert "-vv -s --tb=long -o faulthandler_timeout=120 \\" in current_arg_reduce
-    assert '--basetemp="mlx-current-results/$entry"' in current_arg_reduce
-    assert current_arg_reduce.index(
-        "mkdir -p mlx-current-results"
-    ) < current_arg_reduce.index('--basetemp="mlx-current-results/$entry"')
-    assert '--junitxml="mlx-current-results/$entry.xml"' in current_arg_reduce
-    runtime_upload = _load_ci_coverage_module().workflow_step_section(
-        mlx_porting, "Upload current MLX runtime diagnostics"
-    )
-    assert "if: always() && runner.os == 'Windows'" in runtime_upload
-    assert "path: mlx-current-results" in runtime_upload
-    assert "actions/upload-artifact@v4" in runtime_upload
-    assert '-k "$entry"' in current_arg_reduce
-    assert '-k "argmin_float32 or argmax_float32"' not in current_arg_reduce
-    assert "timeout-minutes: 60" in mlx_porting
-    assert re.search(r"\bschedule\s*:", mlx_porting)
-    assert 'cron: "31 4 * * 1"' in mlx_porting
-    assert "github.event_name != 'schedule'" in mlx_porting
-    assert "--mode reduced-frontier" in mlx_porting
-    assert "--require-metal-toolchain" in mlx_porting
-    assert "Install macOS Metal Toolchain" in mlx_porting
-    assert "if: runner.os == 'macOS'" in mlx_porting
-    assert "xcodebuild -downloadComponent MetalToolchain" in mlx_porting
-    for metal_job_name in (
-        "mlx-metal-porting",
-        "mlx-unary-metal-roundtrip",
-        "mlx-binary-complete-metal-roundtrip",
-        "mlx-copy-complete-metal-roundtrip",
-        "mlx-reduce-complete-metal-roundtrip",
-        "mlx-quantized-complete-metal-roundtrip",
-    ):
-        metal_job = _workflow_job_section(mlx_porting, metal_job_name)
-        assert "xcrun --sdk macosx metal --version" in metal_job
-    assert "--require-directx-toolchain" in mlx_porting
-    assert "--require-directx-gemv-compiler-frontier" in mlx_porting
-    assert "--require-opengl-frontier-toolchain" in mlx_porting
-    assert "--require-opengl-gemv-toolchain" in mlx_porting
-    assert "--require-opengl-gemv-frontier" not in mlx_porting
-    assert "--require-vulkan-gemv-toolchain" in mlx_porting
-    assert "--require-vulkan-native-runtime" in mlx_porting
-    assert "--require-opengl-native-runtime" in mlx_porting
-    assert "Install Windows DirectX Shader Compiler" in mlx_porting
-    assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in mlx_porting
-    assert "dxc --version" in mlx_porting
-    assert "glslang-tools" in mlx_porting
-    assert "glslangValidator --version" in mlx_porting
-    assert "moderngl==5.12.0" in mlx_porting
-    assert "libegl1" in mlx_porting
-    assert "libgl1" in mlx_porting
-    assert "libgl1-mesa-dri" in mlx_porting
-    assert "libopengl0" in mlx_porting
-    assert "Validate OpenGL lowering contracts" in mlx_porting
-    assert "opengl_lowers_expected_scalar_and_vector_conversions" in mlx_porting
-    assert "opengl_preserves_metal_arithmetic_conversion_order" in mlx_porting
-    assert "glsl_atomic_thread_fence" in mlx_porting
-    assert "translate_project_reports_unrepresentable_atomic_fence_contract" in (
-        mlx_porting
-    )
-    assert (
-        "python -m pytest -q -n auto "
-        "tests/test_mlx_dispatch_contract_fixture.py "
-        "tests/test_mlx_logsumexp_dispatch_contract_fixture.py" in mlx_porting
-    )
-    assert '"tests/test_mlx_porting_harness.py"' in mlx_porting
-    assert '"tests/test_mlx_logsumexp_dispatch_contract_fixture.py"' in mlx_porting
-    assert '"tests/test_mlx_rms_norm_dispatch_contract_fixture.py"' in mlx_porting
-    assert '"tests/test_translator/test_mlx_softmax_native_loader.py"' in mlx_porting
-    assert "Prove pinned MLX Softmax Direct3D native-loader execution" in mlx_porting
-    assert "CROSTL_REQUIRE_MLX_SOFTMAX_DIRECTX_NATIVE_LOADER" in mlx_porting
-    assert (
-        "test_pinned_mlx_softmax_executes_through_directx_native_loader" in mlx_porting
-    )
-    assert "Prove pinned MLX Softmax OpenGL native-loader execution" in mlx_porting
-    assert "CROSTL_REQUIRE_MLX_SOFTMAX_OPENGL_TOOLCHAIN" in mlx_porting
-    assert "CROSTL_REQUIRE_MLX_SOFTMAX_OPENGL_NATIVE_LOADER" in mlx_porting
-    assert (
-        "test_pinned_mlx_softmax_executes_through_opengl_native_loader" in mlx_porting
-    )
-    assert '"tests/test_translator/test_mlx_rms_norm_native_loader.py"' in mlx_porting
-    assert "Prove pinned MLX RMSNorm Direct3D native-loader execution" in mlx_porting
-    assert "CROSTL_REQUIRE_MLX_RMS_NORM_DIRECTX_NATIVE_LOADER" in mlx_porting
-    assert (
-        "test_pinned_mlx_rms_norm_executes_through_directx_native_loader" in mlx_porting
-    )
-    assert "Prove pinned MLX RMSNorm OpenGL native-loader execution" in mlx_porting
-    assert "CROSTL_REQUIRE_MLX_RMS_NORM_OPENGL_NATIVE_LOADER" in mlx_porting
-    assert (
-        "test_pinned_mlx_rms_norm_executes_through_opengl_native_loader" in mlx_porting
-    )
-    assert '"tests/test_translator/test_mlx_layer_norm_native_loader.py"' in mlx_porting
-    assert '"tests/test_translator/test_mlx_layer_norm_vjp_native_loader.py"' in (
-        mlx_porting
-    )
-    assert "Prove pinned MLX LayerNorm Direct3D native-loader execution" in mlx_porting
-    assert "CROSTL_REQUIRE_MLX_LAYER_NORM_DIRECTX_NATIVE_LOADER" in mlx_porting
-    assert (
-        "test_pinned_mlx_layer_norm_executes_through_directx_native_loader"
-        in mlx_porting
-    )
-    assert "Prove pinned MLX LayerNorm OpenGL native-loader execution" in mlx_porting
-    assert "CROSTL_REQUIRE_MLX_LAYER_NORM_OPENGL_NATIVE_LOADER" in mlx_porting
-    assert (
-        "test_pinned_mlx_layer_norm_executes_through_opengl_native_loader"
-        in mlx_porting
-    )
-    assert '"tests/test_mlx_quantized_directx_proof.py"' in mlx_porting
-    assert '"tests/test_mlx_quantized_opengl_proof.py"' in mlx_porting
-    assert '"tests/test_translator/test_codegen/test_SPIRV_codegen.py"' in mlx_porting
-    assert '"tests/test_translator/test_codegen/test_directx_codegen.py"' in mlx_porting
-    assert (
-        '"tests/test_translator/test_private_pointer_partition_runtime.py"'
-        in mlx_porting
-    )
-    assert '"tests/test_translator/test_project_translation.py"' in mlx_porting
-    assert "Verify MLX frontier accounting" in mlx_porting
-    assert "expected the exact 11-source non-fence MLX frontier" in mlx_porting
-    assert 'scope["nonFenceFrontierSources"]' in mlx_porting
-    assert "cleanFrontierSources" not in mlx_porting
-    assert "MLX summary identity or status is incorrect" in mlx_porting
-    assert "MLX summary check names must be unique" in mlx_porting
-    assert "MLX checkout proof does not match the pinned revision" in mlx_porting
-    assert "fence contract accounting must be 3 failed, 0 emitted" in mlx_porting
-    assert "MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES" in mlx_porting
-    assert "MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT" in mlx_porting
-    assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS" in mlx_porting
-    assert "MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE" in mlx_porting
-    assert "MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE" in mlx_porting
-    assert "MLX_DIRECTX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS" in mlx_porting
-    assert "MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in mlx_porting
-    assert "MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE" in mlx_porting
-    assert "MLX_LAYER_NORM_DISPATCH_VARIANTS" in mlx_porting
-    assert "MLX_LOGSUMEXP_DISPATCH_VARIANTS" in mlx_porting
-    assert "MLX_RMS_NORM_DISPATCH_VARIANTS" in mlx_porting
-    assert 'checks["directx-frontier"]' in mlx_porting
-    assert 'checks["vulkan-frontier"]' in mlx_porting
-    assert 'directx["directxToolchainArtifactCount"]' in mlx_porting
-    assert 'directx["directxToolchainValidatedArtifactCount"]' in mlx_porting
-    assert 'directx["directxToolchainValidatedEntryPointCounts"]' in mlx_porting
-    assert 'directx["directxToolchainValidatedEntryPointCount"]' in mlx_porting
-    assert 'directx["toolchainRuns"] != directx_entry_point_count' in mlx_porting
-    assert "DirectX frontier accounting is incomplete" in mlx_porting
-    assert 'directx["bfloat16LoweringEvidence"]' in mlx_porting
-    assert "DirectX bfloat16 lowering evidence is incomplete" in mlx_porting
-    assert "DirectX workgroup blocker evidence changed" in mlx_porting
-    assert "expected 76 fail-closed DirectX compute entries" in mlx_porting
-    assert "LayerNorm dispatch frontier evidence is incomplete" in mlx_porting
-    assert "LogSumExp dispatch frontier evidence is incomplete" in mlx_porting
-    assert "RMSNorm dispatch frontier evidence is incomplete" in mlx_porting
-    assert "matched-materialized-host-names" in mlx_porting
-    assert "DirectX frontier toolchain must validate every configured" in mlx_porting
-    assert "source artifact and compute entry" in mlx_porting
-    assert "Vulkan frontier accounting is incomplete" in mlx_porting
-    assert "Vulkan frontier toolchain validation is incomplete" in mlx_porting
-    assert 'checks["gemv-directx-compiler-frontier"]' in mlx_porting
-    assert "GEMV_DIRECTX_EXPECTED_ENTRY_POINTS" in mlx_porting
-    assert "GEMV_WORKGROUP_SIZE_RULE" in mlx_porting
-    assert "GEMV_REPORT_WORKGROUP_SIZE_RULE" in mlx_porting
-    assert "GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES" in mlx_porting
-    assert 'gemv_directx["entryProfile"] != "cs_6_2"' in mlx_porting
-    assert 'gemv_directx["compilerArguments"]' in mlx_porting
-    assert 'gemv_directx["minimumShaderModel"] != "6.2"' in mlx_porting
-    assert 'run["profile"] != "cs_6_2"' in mlx_porting
-    assert 'run["compilerArguments"] != ["-enable-16bit-types"]' in mlx_porting
-    assert 'run["minimumShaderModel"] != "6.2"' in mlx_porting
-    assert 'gemv_directx["artifactPackaging"]' in mlx_porting
-    assert 'gemv_directx["hostNamedMaterializationCount"] != 224' in mlx_porting
-    assert 'gemv_directx["reportExecutionEntryCount"] != 224' in mlx_porting
-    assert 'gemv_directx["executionIdentityJoinCount"] != 224' in mlx_porting
-    assert 'gemv_directx["generatedTargetEntryIdentityCount"] != 224' in mlx_porting
-    assert 'gemv_directx["generatedNumthreadsContractCount"] != 224' in mlx_porting
-    assert 'gemv_directx["bareValueDiscardCount"] != 0' in mlx_porting
-    assert 'gemv_directx["entryProfileDiagnosticCount"] != 0' in mlx_porting
-    assert 'gemv_directx["entryProfileUnusedValueWarningCount"] != 0' in mlx_porting
-    assert 'library_run["unusedValueWarningCount"] != 0' in mlx_porting
-    assert 'gemv_directx["libraryProfile"] != "lib_6_6"' in mlx_porting
-    assert 'library_run["profile"] != "lib_6_6"' in mlx_porting
-    assert 'library_run["compilerArguments"]' in mlx_porting
-    assert 'library_run["minimumShaderModel"] != "6.2"' in mlx_porting
-    assert 'gemv_directx["libraryExportCount"] != 224' in mlx_porting
-    assert 'gemv_directx["compilerCoveredEntryPointCount"] != 224' in mlx_porting
-    assert "DirectX GEMV resolved workgroup-size evidence is incomplete" in (
-        mlx_porting
-    )
-    assert "library-profile-numthreads-ignored" in mlx_porting
-    assert "DirectX GEMV compiler warning classification changed" in mlx_porting
-    assert "DirectX GEMV compiler warning evidence changed" in mlx_porting
-    assert "DirectX GEMV execution non-claims changed" in mlx_porting
-    assert "GEMV_OPENGL_WORKGROUP_SIZE_ISSUE" not in mlx_porting
-    assert 'gemv_directx["numthreadsContractEstablished"] is not True' in mlx_porting
-    assert 'gemv_directx["exactWorkgroupSizeEstablished"] is not True' in mlx_porting
-    assert 'checks["gemv-opengl-toolchain"]' in mlx_porting
-    assert 'scope["openglGemvToolchainRequired"]' in mlx_porting
-    assert 'gemv_opengl["workgroupSizeRuleConfigured"] is not True' in mlx_porting
-    assert 'gemv_opengl["runnableArtifactClaimed"] is not False' in mlx_porting
-    assert 'gemv_opengl["toolchainValidatedArtifactCount"]' in mlx_porting
-    assert 'gemv_opengl["compilerValidatedArtifactClaimed"] is not True' in (
-        mlx_porting
-    )
-    assert "OpenGL GEMV toolchain evidence is incomplete" in mlx_porting
-    assert 'checks["reference-accessor-lvalue-identity"]' in mlx_porting
-    assert "reference accessor proof accounting is incomplete" in mlx_porting
-    assert "reference accessor {target} storage evidence is incomplete" in mlx_porting
-    assert (
-        "reference accessor {target} const-read evidence is incomplete" in mlx_porting
-    )
-    assert "reference accessor {target} native validation must be" in mlx_porting
-    assert "MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES" in mlx_porting
-    assert "MLX_OPENGL_INDEX_RANGE_ASSERTIONS" in mlx_porting
-    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS" in mlx_porting
-    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM" in mlx_porting
-    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM" in mlx_porting
-    assert "MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in mlx_porting
-    assert "expected 8 OpenGL attempted frontier sources" in mlx_porting
-    assert "expected 3 OpenGL toolchain frontier sources" in mlx_porting
-    assert "OpenGL target-split frontier accounting is incomplete" in mlx_porting
-    assert "OpenGL workgroup blocker evidence changed" in mlx_porting
-    assert "OpenGL frontier toolchain must validate every emitted source" in (
-        mlx_porting
-    )
-    assert 'opengl["indexRangeAssertionEvidence"]' in mlx_porting
-    assert "OpenGL index-range portability evidence is incomplete" in mlx_porting
-    assert 'opengl["runtimeIntegrationIncluded"] is not False' in mlx_porting
-    assert "mlx/backend/metal/kernels/binary_two.metal" in mlx_porting
-    assert "mesa-vulkan-drivers" in mlx_porting
-    assert "vulkan==1.3.275.1" in mlx_porting
-    assert "vulkaninfo --summary" in mlx_porting
-    assert "mlx-full-corpus-scout:" in mlx_porting
-    assert "MLX full-corpus artifact scout" in mlx_porting
-    assert (
-        "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"
-        in mlx_porting
-    )
-    assert "--mode full-corpus" in mlx_porting
-    assert "full-corpus-summary.json" in mlx_porting
-    assert "out-full-corpus" in mlx_porting
-    assert "name: mlx-full-corpus-scout" in mlx_porting
-    assert "include-hidden-files: true" in mlx_porting
-    assert "retention-days: 30" in mlx_porting
-    assert 'command_name="validate-directx-frontier-toolchain"' in harness
-    assert 'command_name="validate-vulkan-frontier-toolchain"' in harness
-    assert "require_directx_toolchain" in harness
-    assert '"--run-toolchains"' in harness
-    assert '"--validate"' in harness
-    assert "FULL_CORPUS_EXPECTED_ARTIFACT_COUNT" in harness
-    assert "FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT" in harness
-    assert "FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT" in harness
-    assert "FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS = 4096" in harness
-    assert "FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK = 131072" in harness
-    assert "FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS = 900" in harness
-    assert "blocked-by-tracked-issues" in harness
-    assert "without tracked issue references" in harness
-    assert "runtime-readiness" in harness
-    assert "runtime-test-manifest" in harness
-    assert "VulkanComputeRuntime" in harness
-    assert "require_vulkan_native_runtime" in harness
-    for tracked_issue_number in (
-        1312,
-        1376,
-        1388,
-        1392,
-        1394,
-        1471,
-    ):
-        assert f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}" in (
-            harness
-        )
-    for resolved_issue_number in (
-        1661,
-        1184,
-        1203,
-        1204,
-        1206,
-        1205,
-        1207,
-        1218,
-        1222,
-        1238,
-        1239,
-        1240,
-        1246,
-        1248,
-        1249,
-        1250,
-        1259,
-        1260,
-        1261,
-        1274,
-        1287,
-        1329,
-        1338,
-        1340,
-        1346,
-        1355,
-        1354,
-        1362,
-        1396,
-        1452,
-        1453,
-        1454,
-        1300,
-        1317,
-    ):
-        assert (
-            f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
-            not in mlx_porting
-        )
-        assert (
-            f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
-            in harness
-        )
-    for tracked_issue_number in (1317,):
-        assert (
-            f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}"
-            not in mlx_porting
-        )
-        assert (
-            f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}"
-            in harness
-        )
-    assert "MLX_DIRECTX_VULKAN_FRONTIER_SOURCES" in harness
-    assert "MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES" in harness
-    assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS" in harness
-    assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT" in harness
-    assert "MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in harness
-    assert "MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE" in harness
-    assert "MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE" in harness
-    assert '"specializationCount": 39' in harness
-    assert '"sourceEntryPointIdentityStatus"' in harness
-    assert "MLX_BLOCKED_REDUCED_FRONTIER_SOURCES" in harness
-    assert "_check_atomic_fence_contract" in harness
-    assert "project.translate.directx-atomic-fence-unsupported" in harness
-    assert "project.translate.opengl-atomic-fence-unsupported" in harness
-    assert "project.translate.vulkan-atomic-fence-unsupported" in harness
-    assert "directx.atomic-thread-fence-contract-lowering" in harness
-    assert "opengl.atomic-thread-fence-contract-lowering" in harness
-    assert "spirv.atomic-thread-fence-contract-lowering" in harness
-    assert "mlx/backend/metal/kernels/binary_two.metal" in harness
-    assert "mlx/backend/metal/kernels/fence.metal" in harness
-    assert "mlx/backend/metal/kernels/random.metal" in harness
-    assert "mlx/backend/metal/kernels/ternary.metal" in harness
-    assert "arange-opengl" in harness
-    assert "metalIncludesFiltered" in harness
-
-
-def test_mlx_platform_runtime_workflow_preserves_pinned_checkout():
-    workflow = _workflow_texts().get("mlx-platform-runtime.yml", "")
-    mlx_commit = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
-
-    assert workflow, "mlx-platform-runtime.yml must exist"
-    assert f'MLX_COMMIT: "{mlx_commit}"' in workflow
-    assert workflow.count("checkout --detach FETCH_HEAD") == 2
-    assert workflow.count('rev-parse HEAD)" = "$MLX_COMMIT"') == 2
-    assert workflow.count("sparse-checkout set mlx/backend/metal/kernels") == 2
-    assert workflow.count("CROSTL_MLX_SOURCE_ROOT: mlx-upstream") == 2
-    assert '"tests/test_ci_workflows.py"' in workflow
-    assert '"tests/test_tools/test_ci_workflows.py"' not in workflow
-    assert "continue-on-error" not in workflow
-
-
-def test_mlx_frontier_accounting_workflow_imports_available_harness_symbols():
-    workflow = _workflow_texts()["mlx-project-porting.yml"]
-    step_start = workflow.index("- name: Verify MLX frontier accounting")
-    command_marker = "          python - <<'PY'\n"
-    script_start = workflow.index(command_marker, step_start) + len(command_marker)
-    script_end = workflow.index("\n          PY", script_start)
-    script = textwrap.dedent(workflow[script_start:script_end])
-    tree = ast.parse(script)
-    harness_import = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom)
-        and node.module == "demos.integrations.mlx.run_mlx_porting"
-    )
-    harness = __import__(
-        "demos.integrations.mlx.run_mlx_porting",
-        fromlist=["run_mlx_porting"],
-    )
-
-    missing = sorted(
-        alias.name for alias in harness_import.names if not hasattr(harness, alias.name)
-    )
-    assert missing == []
-
-
-def test_mlx_platform_runtime_wires_directx_graph_device_proof():
-    workflow = _workflow_texts().get("mlx-platform-runtime.yml", "")
-    directx = _workflow_job_section(workflow, "directx-dispatch-sequence")
-    node_id = (
-        "tests/test_translator/test_runtime_graph_device.py::"
-        "test_directx_dispatch_sequence_executes_shared_temporary_on_device"
-    )
-
-    assert "runs-on: windows-latest" in directx
-    assert "Install DirectX Shader Compiler" in directx
-    assert "Get-FileHash -Path $archive -Algorithm SHA256" in directx
-    assert "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4" in (
-        directx
-    )
-    assert 'python -m pip install -e ".[directx-runtime]" pytest-xdist' in directx
-    assert 'CROSTL_RUN_DIRECTX_DISPATCH_SEQUENCE_DEVICE_TEST: "1"' in directx
-    assert node_id in directx
-    assert "python -m pytest -q -n auto" in directx
-    assert "-k" not in directx
-
-
-def test_mlx_platform_runtime_wires_opengl_graph_device_proof():
-    workflow = _workflow_texts().get("mlx-platform-runtime.yml", "")
-    opengl = _workflow_job_section(workflow, "opengl-dispatch-sequence")
-    node_id = (
-        "tests/test_translator/test_runtime_graph_device.py::"
-        "test_opengl_dispatch_sequence_executes_shared_temporary_on_device"
-    )
-
-    assert "runs-on: ubuntu-latest" in opengl
-    assert "moderngl==5.12.0" in opengl
-    assert "glslangValidator --version" in opengl
-    assert 'CROSTL_RUN_OPENGL_DISPATCH_SEQUENCE_DEVICE_TEST: "1"' in opengl
-    assert "EGL_PLATFORM: surfaceless" in opengl
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl
-    assert "PYOPENGL_PLATFORM: egl" in opengl
-    assert node_id in opengl
-    assert "python -m pytest -q -n auto" in opengl
-    assert "-k" not in opengl
-
-
-def test_mlx_project_porting_workflow_runs_quantized_directx_proof_on_windows():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-
-    assert "name: Prove pinned MLX quantized DirectX lowering" in mlx_porting
-    assert "name: Prove pinned MLX quantized gather DirectX lowering" in mlx_porting
-    assert "if: runner.os == 'Windows'" in mlx_porting
-    assert "python demos/integrations/mlx/prove_quantized_directx.py" in mlx_porting
-    assert "--work-dir .crosstl-mlx-porting/quantized-directx" in mlx_porting
-    assert "--work-dir .crosstl-mlx-porting/quantized-gather-directx" in mlx_porting
-    assert "--entry-point affine_gather_qmv_fast_float_gs_32_b_2" in mlx_porting
-    assert "--require-directx-toolchain" in mlx_porting
-
-
-def test_mlx_project_porting_workflow_runs_quantized_opengl_proof_on_linux():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-
-    assert "name: Prove pinned MLX quantized OpenGL lowering" in mlx_porting
-    assert "name: Prove pinned MLX quantized gather OpenGL lowering" in mlx_porting
-    assert "if: runner.os == 'Linux'" in mlx_porting
-    assert "python demos/integrations/mlx/prove_quantized_opengl.py" in mlx_porting
-    assert "--work-dir .crosstl-mlx-porting/quantized-opengl" in mlx_porting
-    assert "--work-dir .crosstl-mlx-porting/quantized-gather-opengl" in mlx_porting
-    assert "--entry-point affine_gather_qmv_fast_float_gs_32_b_2" in mlx_porting
-    assert "--require-opengl-toolchain" in mlx_porting
-
-
-def test_mlx_project_porting_workflow_runs_backend_runtime_contracts():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-
-    for name, environment, test_name in (
-        (
-            "Validate Direct3D wave shuffle runtime contract",
-            "CROSTL_RUN_DIRECTX_BOUNDED_WAVE_SHUFFLE_DEVICE_TEST",
-            "directx_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_device",
-        ),
-        (
-            "Validate Direct3D copysign runtime contract",
-            "CROSTL_RUN_DIRECTX_COPYSIGN_DEVICE_TEST",
-            "directx_compute_runtime_executes_copysign_bit_patterns_on_device",
-        ),
-        (
-            "Validate Direct3D inverse-hyperbolic runtime contract",
-            "CROSTL_RUN_DIRECTX_INVERSE_HYPERBOLIC_DEVICE_TEST",
-            "directx_compute_runtime_executes_inverse_hyperbolic_numerics_on_device",
-        ),
-    ):
-        step = ci_coverage.workflow_step_section(mlx_porting, name)
-        assert "if: runner.os == 'Windows'" in step
-        assert f'{environment}: "1"' in step
-        assert test_name in step
-        assert "-n auto" in step
-        assert "mlx-upstream" not in step
-
-    directx_private_pointer_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove Direct3D local-struct byte-view native readback",
-    )
-    assert "if: runner.os == 'Windows'" in directx_private_pointer_step
-    assert (
-        "CROSTL_REQUIRE_PRIVATE_POINTER_RUNTIME: directx"
-        in directx_private_pointer_step
-    )
-    assert (
-        "test_private_pointer_native_readback[local-struct-byte-view-directx]"
-        in directx_private_pointer_step
-    )
-    assert "-k" not in directx_private_pointer_step
-    assert "-n auto" in directx_private_pointer_step
-
-    opengl_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Validate OpenGL copysign runtime contract",
-    )
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert 'CROSTL_RUN_OPENGL_COPYSIGN_DEVICE_TEST: "1"' in opengl_step
-    assert "opengl_compute_runtime_executes_copysign_bit_patterns_on_device" in (
-        opengl_step
-    )
-    assert "EGL_PLATFORM: surfaceless" in opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_step
-    assert "-n auto" in opengl_step
-    assert "mlx-upstream" not in opengl_step
-
-    opengl_private_pointer_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove OpenGL local-struct byte-view native readback",
-    )
-    assert "if: runner.os == 'Linux'" in opengl_private_pointer_step
-    assert (
-        "CROSTL_REQUIRE_PRIVATE_POINTER_RUNTIME: opengl" in opengl_private_pointer_step
-    )
-    assert (
-        "test_private_pointer_native_readback[local-struct-byte-view-opengl]"
-        in opengl_private_pointer_step
-    )
-    assert "-k" not in opengl_private_pointer_step
-    assert "EGL_PLATFORM: surfaceless" in opengl_private_pointer_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_private_pointer_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_private_pointer_step
-    assert "-n auto" in opengl_private_pointer_step
-
-    vulkan_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Validate generated OpenGL subgroup contract through Vulkan",
-    )
-    assert "if: runner.os == 'Linux'" in vulkan_step
-    assert 'CROSTL_RUN_OPENGL_GLSL_VULKAN_DEVICE_TEST: "1"' in vulkan_step
-    assert "opengl_glsl_wave_shuffle_executes_via_vulkan_on_device" in vulkan_step
-    assert "VK_DRIVER_FILES" in vulkan_step
-    assert "VK_ICD_FILENAMES" in vulkan_step
-    assert "lvp_icd*.json" in vulkan_step
-    assert "vulkaninfo --summary" in vulkan_step
-    assert "-n auto" in vulkan_step
-    assert "mlx-upstream" not in vulkan_step
-
-
-def test_mlx_project_porting_workflow_runs_native_loader_dispatch_bridge():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    integration_test = "test_native_loader_dispatch_integration.py"
-
-    assert mlx_porting.count(f'"tests/test_translator/{integration_test}"') == 2
-
-    directx_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove native loader Direct3D dispatch bridge",
-    )
-    assert "if: runner.os == 'Windows'" in directx_step
-    assert 'CROSTL_RUN_NATIVE_LOADER_DIRECTX_DEVICE_TEST: "1"' in directx_step
-    assert (
-        f"tests/test_translator/{integration_test}::"
-        "test_native_loader_descriptor_executes_directx_on_device" in directx_step
-    )
-    assert "-n auto" in directx_step
-    assert "-k" not in directx_step
-    assert "mlx-upstream" not in directx_step
-
-    opengl_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove native loader OpenGL dispatch bridge",
-    )
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert 'CROSTL_RUN_NATIVE_LOADER_OPENGL_DEVICE_TEST: "1"' in opengl_step
-    assert (
-        f"tests/test_translator/{integration_test}::"
-        "test_native_loader_descriptor_executes_opengl_on_device" in opengl_step
-    )
-    assert "EGL_PLATFORM: surfaceless" in opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_step
-    assert "-n auto" in opengl_step
-    assert "-k" not in opengl_step
-    assert "mlx-upstream" not in opengl_step
-
-
-def test_mlx_project_porting_workflow_proves_initialized_read_write_execution():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_initialized_read_write_runtime.py"
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-
-    directx_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove initialized read-write Direct3D native execution",
-    )
-    assert "if: runner.os == 'Windows'" in directx_step
-    assert 'CROSTL_RUN_INITIALIZED_READ_WRITE_DIRECTX_DEVICE_TEST: "1"' in directx_step
-    assert (
-        f"{test_path}::"
-        "test_directx_initialized_read_write_resource_executes_on_device"
-        in directx_step
-    )
-    assert "-n auto" in directx_step
-    assert "-k" not in directx_step
-
-    opengl_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove initialized read-write OpenGL native execution",
-    )
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert 'CROSTL_RUN_INITIALIZED_READ_WRITE_OPENGL_DEVICE_TEST: "1"' in opengl_step
-    assert "EGL_PLATFORM: surfaceless" in opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_step
-    assert (
-        f"{test_path}::"
-        "test_opengl_initialized_read_write_resource_executes_on_device" in opengl_step
-    )
-    assert "-n auto" in opengl_step
-    assert "-k" not in opengl_step
-
-
-def test_mlx_project_porting_workflow_proves_shared_native_allocation_execution():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_shared_native_allocations_runtime.py"
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-
-    directx_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove shared allocation Direct3D native execution",
-    )
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove shared allocation Direct3D native execution",
-        "Install Windows DirectX Shader Compiler",
-    )
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove shared allocation Direct3D native execution",
-        "Install Windows Direct3D runtime dependencies",
-    )
-    assert "if: runner.os == 'Windows'" in directx_step
-    assert (
-        'CROSTL_RUN_SHARED_NATIVE_ALLOCATION_DIRECTX_DEVICE_TEST: "1"' in directx_step
-    )
-    assert (
-        f"{test_path}::test_directx_shared_native_allocation_executes_on_device"
-        in directx_step
-    )
-    assert "-n auto" in directx_step
-    assert "-k" not in directx_step
-    assert "mlx-upstream" not in directx_step
-
-    opengl_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove shared allocation OpenGL native execution",
-    )
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove shared allocation OpenGL native execution",
-        "Install Linux SPIR-V tools",
-    )
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove shared allocation OpenGL native execution",
-        "Install Linux runtime dependencies",
-    )
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert 'CROSTL_RUN_SHARED_NATIVE_ALLOCATION_OPENGL_DEVICE_TEST: "1"' in opengl_step
-    assert "EGL_PLATFORM: surfaceless" in opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_step
-    assert (
-        f"{test_path}::test_opengl_shared_native_allocation_executes_on_device"
-        in opengl_step
-    )
-    assert "-n auto" in opengl_step
-    assert "-k" not in opengl_step
-    assert "mlx-upstream" not in opengl_step
-
-
-def test_mlx_project_porting_workflow_runs_pinned_arange_native_loader_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_arange_native_loader.py"
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-    step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX arange OpenGL native-loader execution",
-    )
-    assert "if: runner.os == 'Linux'" in step
-    assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in step
-    assert 'CROSTL_REQUIRE_MLX_ARANGE_OPENGL_NATIVE_LOADER: "1"' in step
-    assert "EGL_PLATFORM: surfaceless" in step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in step
-    assert "PYOPENGL_PLATFORM: egl" in step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_arange_executes_through_opengl_native_loader" in step
-    )
-    assert "-n auto" in step
-    assert "-k" not in step
-
-    directx_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX arange Direct3D native-loader execution",
-    )
-    assert "if: runner.os == 'Windows'" in directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_ARANGE_DIRECTX_NATIVE_LOADER: "1"' in directx_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_arange_executes_through_directx_native_loader" in directx_step
-    )
-    assert "-n auto" in directx_step
-    assert "-k" not in directx_step
-
-
-def test_mlx_project_porting_workflow_runs_pinned_binary_native_loader_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_binary_native_loader.py"
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-    opengl_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX binary add OpenGL native-loader execution",
-    )
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_BINARY_OPENGL_NATIVE_LOADER: "1"' in opengl_step
-    assert "EGL_PLATFORM: surfaceless" in opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_binary_add_executes_through_opengl_native_loader"
-        in opengl_step
-    )
-    assert "-n auto" in opengl_step
-    assert "-k" not in opengl_step
-
-    directx_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX binary add Direct3D native-loader execution",
-    )
-    assert "if: runner.os == 'Windows'" in directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_BINARY_DIRECTX_NATIVE_LOADER: "1"' in directx_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_binary_add_executes_through_directx_native_loader"
-        in directx_step
-    )
-    assert "-n auto" in directx_step
-    assert "-k" not in directx_step
-
-
-def test_mlx_project_porting_workflow_runs_pinned_copy_native_loader_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_copy_native_loader.py"
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-    opengl_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX copy OpenGL native-loader execution",
-    )
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_COPY_OPENGL_NATIVE_LOADER: "1"' in opengl_step
-    assert "EGL_PLATFORM: surfaceless" in opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_copy_executes_through_opengl_native_loader" in opengl_step
-    )
-    assert "-n auto" in opengl_step
-    assert "-k" not in opengl_step
-
-    directx_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX copy Direct3D native-loader execution",
-    )
-    assert "if: runner.os == 'Windows'" in directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_COPY_DIRECTX_NATIVE_LOADER: "1"' in directx_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_copy_executes_through_directx_native_loader" in directx_step
-    )
-    assert "-n auto" in directx_step
-    assert "-k" not in directx_step
-
-
-def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_logsumexp_native_loader.py"
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-    step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX LogSumExp Direct3D native-loader execution",
-    )
-    assert "if: runner.os == 'Windows'" in step
-    assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in step
-    assert 'CROSTL_REQUIRE_MLX_LOGSUMEXP_DIRECTX_NATIVE_LOADER: "1"' in step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_logsumexp_executes_through_directx_native_loader" in step
-    )
-    assert "-n auto" in step
-    assert "-k" not in step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX LogSumExp Direct3D native-loader execution",
-        "Checkout current MLX runtime proof corpus",
-    )
-    assert mlx_porting.index(
-        "- name: Prove pinned MLX LogSumExp Direct3D native-loader execution"
-    ) < mlx_porting.index("- name: Run MLX project-porting checks")
-
-    runtime_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX LogSumExp OpenGL native-loader execution",
-    )
-    assert "if: runner.os == 'Linux'" in runtime_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in runtime_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_LOGSUMEXP_OPENGL_NATIVE_LOADER: "1"' in runtime_step
-    assert "EGL_PLATFORM: surfaceless" in runtime_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in runtime_step
-    assert "PYOPENGL_PLATFORM: egl" in runtime_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_logsumexp_executes_through_opengl_native_loader"
-        in runtime_step
-    )
-    assert "-n auto" in runtime_step
-    assert "-k" not in runtime_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX LogSumExp OpenGL native-loader execution",
-        "Install Linux runtime dependencies",
-    )
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX LogSumExp OpenGL native-loader execution",
-        "Checkout current MLX runtime proof corpus",
-    )
-
-    opengl_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Validate pinned MLX LogSumExp OpenGL dispatch artifacts",
-    )
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_LOGSUMEXP_OPENGL_TOOLCHAIN: "1"' in opengl_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_logsumexp_translates_to_guarded_opengl_artifacts"
-        in opengl_step
-    )
-    assert "-n auto" in opengl_step
-    assert "-k" not in opengl_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Validate pinned MLX LogSumExp OpenGL dispatch artifacts",
-        "Checkout current MLX runtime proof corpus",
-    )
-
-
-def test_mlx_project_porting_workflow_runs_pinned_rms_norm_native_loader_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_rms_norm_native_loader.py"
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-    directx_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX RMSNorm Direct3D native-loader execution",
-    )
-    assert "if: runner.os == 'Windows'" in directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_RMS_NORM_DIRECTX_NATIVE_LOADER: "1"' in (directx_step)
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_rms_norm_executes_through_directx_native_loader"
-        in directx_step
-    )
-    assert "-n auto" in directx_step
-    assert "-k" not in directx_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX RMSNorm Direct3D native-loader execution",
-        "Checkout current MLX runtime proof corpus",
-    )
-
-    opengl_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX RMSNorm OpenGL native-loader execution",
-    )
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_RMS_NORM_OPENGL_NATIVE_LOADER: "1"' in (opengl_step)
-    assert "EGL_PLATFORM: surfaceless" in opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_rms_norm_executes_through_opengl_native_loader" in opengl_step
-    )
-    assert "-n auto" in opengl_step
-    assert "-k" not in opengl_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX RMSNorm OpenGL native-loader execution",
-        "Install Linux runtime dependencies",
-    )
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX RMSNorm OpenGL native-loader execution",
-        "Checkout current MLX runtime proof corpus",
-    )
-
-
-def test_mlx_project_porting_workflow_runs_pinned_rms_norm_vjp_native_loader_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_rms_norm_vjp_native_loader.py"
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-    directx_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX RMSNorm VJP Direct3D native-loader execution",
-    )
-    assert "if: runner.os == 'Windows'" in directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_RMS_NORM_VJP_DIRECTX_NATIVE_LOADER: "1"' in directx_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_rms_norm_vjp_executes_through_directx_native_loader"
-        in directx_step
-    )
-    assert "-n auto" in directx_step
-    assert "-k" not in directx_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX RMSNorm VJP Direct3D native-loader execution",
-        "Checkout current MLX runtime proof corpus",
-    )
-
-    opengl_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX RMSNorm VJP OpenGL native-loader execution",
-    )
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_RMS_NORM_VJP_OPENGL_NATIVE_LOADER: "1"' in opengl_step
-    assert "EGL_PLATFORM: surfaceless" in opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_rms_norm_vjp_executes_through_opengl_native_loader"
-        in opengl_step
-    )
-    assert "-n auto" in opengl_step
-    assert "-k" not in opengl_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX RMSNorm VJP OpenGL native-loader execution",
-        "Install Linux runtime dependencies",
-    )
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX RMSNorm VJP OpenGL native-loader execution",
-        "Checkout current MLX runtime proof corpus",
-    )
-
-
-def test_mlx_project_porting_workflow_runs_pinned_layer_norm_native_loader_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_layer_norm_native_loader.py"
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-    directx_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX LayerNorm Direct3D native-loader execution",
-    )
-    assert "if: runner.os == 'Windows'" in directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_LAYER_NORM_DIRECTX_NATIVE_LOADER: "1"' in directx_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_layer_norm_executes_through_directx_native_loader"
-        in directx_step
-    )
-    assert "-n auto" in directx_step
-    assert "-k" not in directx_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX LayerNorm Direct3D native-loader execution",
-        "Checkout current MLX runtime proof corpus",
-    )
-
-    opengl_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX LayerNorm OpenGL native-loader execution",
-    )
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_LAYER_NORM_OPENGL_NATIVE_LOADER: "1"' in opengl_step
-    assert "EGL_PLATFORM: surfaceless" in opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_layer_norm_executes_through_opengl_native_loader"
-        in opengl_step
-    )
-    assert "-n auto" in opengl_step
-    assert "-k" not in opengl_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX LayerNorm OpenGL native-loader execution",
-        "Install Linux runtime dependencies",
-    )
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX LayerNorm OpenGL native-loader execution",
-        "Checkout current MLX runtime proof corpus",
-    )
-
-
-def test_mlx_project_porting_workflow_runs_pinned_layer_norm_vjp_native_loader_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_layer_norm_vjp_native_loader.py"
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-    directx_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX LayerNorm VJP Direct3D native-loader execution",
-    )
-    assert "if: runner.os == 'Windows'" in directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
-    )
-    assert (
-        'CROSTL_REQUIRE_MLX_LAYER_NORM_VJP_DIRECTX_NATIVE_LOADER: "1"' in directx_step
-    )
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_layer_norm_vjp_executes_through_directx_native_loader"
-        in directx_step
-    )
-    assert "-n auto" in directx_step
-    assert "-k" not in directx_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX LayerNorm VJP Direct3D native-loader execution",
-        "Checkout current MLX runtime proof corpus",
-    )
-
-    opengl_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX LayerNorm VJP OpenGL native-loader execution",
-    )
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_LAYER_NORM_VJP_OPENGL_NATIVE_LOADER: "1"' in opengl_step
-    assert "EGL_PLATFORM: surfaceless" in opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_layer_norm_vjp_executes_through_opengl_native_loader"
-        in opengl_step
-    )
-    assert "-n auto" in opengl_step
-    assert "-k" not in opengl_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX LayerNorm VJP OpenGL native-loader execution",
-        "Install Linux runtime dependencies",
-    )
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX LayerNorm VJP OpenGL native-loader execution",
-        "Checkout current MLX runtime proof corpus",
-    )
-
-
-def test_mlx_project_porting_workflow_runs_pinned_arg_reduce_native_loader_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_arg_reduce_native_loader.py"
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-    directx_step_name = "Prove pinned MLX arg-reduce Direct3D native-loader execution"
-    directx_step = ci_coverage.workflow_step_section(mlx_porting, directx_step_name)
-    assert "if: runner.os == 'Windows'" in directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_ARG_REDUCE_DIRECTX_NATIVE_LOADER: "1"' in directx_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_arg_reduce_executes_through_directx_native_loader"
-        in directx_step
-    )
-    assert "-n auto" in directx_step
-    assert "-k" not in directx_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        directx_step_name,
-        "Checkout current MLX runtime proof corpus",
-    )
-
-    opengl_step_name = "Prove pinned MLX arg-reduce OpenGL native-loader execution"
-    opengl_step = ci_coverage.workflow_step_section(mlx_porting, opengl_step_name)
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_ARG_REDUCE_OPENGL_TOOLCHAIN: "1"' in opengl_step
-    assert 'CROSTL_REQUIRE_MLX_ARG_REDUCE_OPENGL_NATIVE_LOADER: "1"' in opengl_step
-    assert "EGL_PLATFORM: surfaceless" in opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
-    assert "MESA_LOADER_DRIVER_OVERRIDE: llvmpipe" in opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_arg_reduce_executes_through_opengl_native_loader"
-        in opengl_step
-    )
-    assert "-n auto" in opengl_step
-    assert "-k" not in opengl_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        opengl_step_name,
-        "Install Linux runtime dependencies",
-    )
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        opengl_step_name,
-        "Checkout current MLX runtime proof corpus",
-    )
-
-
-def test_mlx_project_porting_workflow_runs_pinned_attention_native_loader_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = (
-        "tests/test_translator/"
-        "test_mlx_scaled_dot_product_attention_native_loader.py"
-    )
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-    directx_step_name = (
-        "Prove pinned MLX scaled-attention Direct3D native-loader execution"
-    )
-    directx_step = ci_coverage.workflow_step_section(mlx_porting, directx_step_name)
-    assert "if: runner.os == 'Windows'" in directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_ATTENTION_DIRECTX_NATIVE_LOADER: "1"' in directx_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_attention_executes_through_directx_native_loader"
-        in directx_step
-    )
-    assert "-n auto" in directx_step
-    assert "-k" not in directx_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        directx_step_name,
-        "Checkout current MLX runtime proof corpus",
-    )
-
-    opengl_step_name = (
-        "Prove pinned MLX scaled-attention OpenGL native-loader execution"
-    )
-    opengl_step = ci_coverage.workflow_step_section(mlx_porting, opengl_step_name)
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_ATTENTION_OPENGL_NATIVE_LOADER: "1"' in opengl_step
-    assert "EGL_PLATFORM: surfaceless" in opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
-    assert "MESA_LOADER_DRIVER_OVERRIDE: llvmpipe" in opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_attention_executes_through_opengl_native_loader" in opengl_step
-    )
-    assert "-n auto" in opengl_step
-    assert "-k" not in opengl_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        opengl_step_name,
-        "Install Linux runtime dependencies",
-    )
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        opengl_step_name,
-        "Checkout current MLX runtime proof corpus",
-    )
-
-
-def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_dot_native_loader.py"
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-    directx_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX dot Direct3D native-loader execution",
-    )
-    assert "if: runner.os == 'Windows'" in directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_DOT_DIRECTX_NATIVE_LOADER: "1"' in directx_step
-    assert (
-        f"{test_path}::test_pinned_mlx_dot_executes_through_directx_native_loader"
-        in directx_step
-    )
-    assert "-n auto" in directx_step
-    assert "-k" not in directx_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX dot Direct3D native-loader execution",
-        "Checkout current MLX runtime proof corpus",
-    )
-
-    metal_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Record pinned MLX dot Metal round-trip boundary",
-    )
-    assert "if: runner.os == 'macOS'" in metal_step
-    assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in metal_step
-    assert (
-        f"{test_path}::test_pinned_mlx_dot_records_metal_roundtrip_boundary"
-        in metal_step
-    )
-    assert "-n auto" in metal_step
-    assert "-k" not in metal_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Record pinned MLX dot Metal round-trip boundary",
-        "Checkout current MLX runtime proof corpus",
-    )
-
-    opengl_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Validate pinned MLX dot OpenGL artifact",
-    )
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_DOT_OPENGL_TOOLCHAIN: "1"' in opengl_step
-    assert (
-        f"{test_path}::test_pinned_mlx_dot_translates_to_guarded_opengl_artifact"
-        in opengl_step
-    )
-    assert "-n auto" in opengl_step
-    assert "-k" not in opengl_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Validate pinned MLX dot OpenGL artifact",
-        "Checkout current MLX runtime proof corpus",
-    )
-
-    software_step_name = "Prove pinned MLX dot OpenGL software-subgroup execution"
-    software_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        software_step_name,
-    )
-    assert "if: runner.os == 'Linux'" in software_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in software_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_DOT_OPENGL_NATIVE_LOADER: "1"' in software_step
-    assert "EGL_PLATFORM: surfaceless" in software_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in software_step
-    assert "MESA_LOADER_DRIVER_OVERRIDE: llvmpipe" in software_step
-    assert "PYOPENGL_PLATFORM: egl" in software_step
-    assert (
-        f"{test_path}::test_pinned_mlx_dot_executes_with_opengl_software_subgroups"
-        in software_step
-    )
-    assert "-n auto" in software_step
-    assert "-k" not in software_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        software_step_name,
-        "Install Linux runtime dependencies",
-    )
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        software_step_name,
-        "Checkout current MLX runtime proof corpus",
-    )
-
-
-def test_mlx_project_porting_workflow_runs_affine_quantize_opengl_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_quantized_native_loader.py"
-    step_name = "Prove pinned MLX affine quantize OpenGL native-loader execution"
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-    step = ci_coverage.workflow_step_section(mlx_porting, step_name)
-    assert "if: runner.os == 'Linux'" in step
-    assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in step
-    assert 'CROSTL_REQUIRE_MLX_QUANTIZED_OPENGL_NATIVE_LOADER: "1"' in step
-    assert "EGL_PLATFORM: surfaceless" in step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in step
-    assert "PYOPENGL_PLATFORM: egl" in step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_quantized_affine_executes_through_opengl_native_loader" in step
-    )
-    assert "-n auto" in step
-    assert "-k" not in step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        step_name,
-        "Checkout current MLX runtime proof corpus",
-    )
-
-
-def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_unary_native_loader.py"
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-    translation_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Translate pinned MLX unary Square entry",
-    )
-    assert "if: runner.os" not in translation_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in translation_step
-    )
-    assert (
-        f"{test_path}::test_pinned_mlx_unary_square_translates_to_selected_target"
-        in translation_step
-    )
-    assert "-n auto" in translation_step
-    assert "-k" not in translation_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Translate pinned MLX unary Square entry",
-        "Checkout current MLX runtime proof corpus",
-    )
-
-    directx_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX unary Square Direct3D native-loader execution",
-    )
-    assert "if: runner.os == 'Windows'" in directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_UNARY_DIRECTX_NATIVE_LOADER: "1"' in directx_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_unary_square_executes_through_directx_native_loader"
-        in directx_step
-    )
-    assert "-n auto" in directx_step
-    assert "-k" not in directx_step
-
-    metal_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX unary Square Metal round-trip",
-    )
-    assert "if: runner.os == 'macOS'" in metal_step
-    assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in metal_step
-    assert 'CROSTL_REQUIRE_MLX_UNARY_METAL_ROUNDTRIP: "1"' in metal_step
-    assert (
-        f"{test_path}::test_pinned_mlx_unary_square_roundtrips_through_metal"
-        in metal_step
-    )
-    assert "-n auto" in metal_step
-    assert "-k" not in metal_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX unary Square Metal round-trip",
-        "Checkout current MLX runtime proof corpus",
-    )
-
-    arccos_metal_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX unary ArcCos Metal round-trip",
-    )
-    assert "if: runner.os == 'macOS'" in arccos_metal_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in arccos_metal_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_UNARY_METAL_ROUNDTRIP: "1"' in arccos_metal_step
-    assert (
-        f"{test_path}::test_pinned_mlx_unary_arccos_roundtrips_through_metal"
-        in arccos_metal_step
-    )
-    assert "-n auto" in arccos_metal_step
-    assert "-k" not in arccos_metal_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove pinned MLX unary ArcCos Metal round-trip",
-        "Checkout current MLX runtime proof corpus",
-    )
-
-    family_metal_job = _workflow_job_section(
-        mlx_porting,
-        "mlx-unary-metal-roundtrip",
-    )
-    assert (
-        "name: MLX complete unary Metal round-trip "
-        "(shard ${{ matrix.shard_index }} of 5)" in family_metal_job
-    )
-    assert "if: github.event_name != 'schedule'" in family_metal_job
-    assert "runs-on: macOS-latest" in family_metal_job
-    assert "timeout-minutes: 75" in family_metal_job
-    assert "fail-fast: false" in family_metal_job
-    assert _matrix_values(family_metal_job, "shard_index") == {
-        "0",
-        "1",
-        "2",
-        "3",
-        "4",
-    }
-    assert 'python-version: "3.12"' in family_metal_job
-    assert "python -m pip install -e . pytest-xdist" in family_metal_job
-    assert "xcrun --sdk macosx metal --version" in family_metal_job
-    assert "Checkout current MLX unary corpus" in family_metal_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in family_metal_job
-
-    family_metal_step = ci_coverage.workflow_step_section(
-        family_metal_job,
-        "Prove current MLX complete unary family Metal round-trips",
-    )
-    assert "if: runner.os" not in family_metal_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in family_metal_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_UNARY_METAL_ROUNDTRIP: "1"' in family_metal_step
-    assert (
-        "CROSTL_MLX_UNARY_METAL_SHARD_INDEX: ${{ matrix.shard_index }}"
-        in family_metal_step
-    )
-    assert 'CROSTL_MLX_UNARY_METAL_SHARD_COUNT: "5"' in family_metal_step
-    assert (
-        f"{test_path}::"
-        "test_current_mlx_unary_family_roundtrips_through_metal" in family_metal_step
-    )
-    assert "-n auto" in family_metal_step
-    assert "-k" not in family_metal_step
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX complete unary family Metal round-trips" not in matrix_job
-
-    opengl_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX unary Square OpenGL native-loader execution",
-    )
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_UNARY_OPENGL_NATIVE_LOADER: "1"' in opengl_step
-    assert "EGL_PLATFORM: surfaceless" in opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_unary_square_executes_through_opengl_native_loader"
-        in opengl_step
-    )
-    assert "-n auto" in opengl_step
-    assert "-k" not in opengl_step
-
-    arccos_translation_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Translate pinned MLX unary ArcCos entry",
-    )
-    assert "if: runner.os" not in arccos_translation_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in arccos_translation_step
-    )
-    assert (
-        f"{test_path}::test_pinned_mlx_unary_arccos_translates_to_selected_target"
-        in arccos_translation_step
-    )
-    assert "-n auto" in arccos_translation_step
-    assert "-k" not in arccos_translation_step
-
-    arccos_directx_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX unary ArcCos Direct3D native-loader execution",
-    )
-    assert "if: runner.os == 'Windows'" in arccos_directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in arccos_directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_UNARY_DIRECTX_NATIVE_LOADER: "1"' in (
-        arccos_directx_step
-    )
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_unary_arccos_executes_through_directx_native_loader"
-        in arccos_directx_step
-    )
-    assert "-n auto" in arccos_directx_step
-    assert "-k" not in arccos_directx_step
-
-    arccos_opengl_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        "Prove pinned MLX unary ArcCos OpenGL native-loader execution",
-    )
-    assert "if: runner.os == 'Linux'" in arccos_opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in arccos_opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_UNARY_OPENGL_NATIVE_LOADER: "1"' in (arccos_opengl_step)
-    assert "EGL_PLATFORM: surfaceless" in arccos_opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in arccos_opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in arccos_opengl_step
-    assert (
-        f"{test_path}::"
-        "test_pinned_mlx_unary_arccos_executes_through_opengl_native_loader"
-        in arccos_opengl_step
-    )
-    assert "-n auto" in arccos_opengl_step
-    assert "-k" not in arccos_opengl_step
-
-
-def test_mlx_project_porting_workflow_runs_unary_complete_opengl_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_unary_complete_opengl.py"
-
-    opengl_job = _workflow_job_section(
-        mlx_porting,
-        "mlx-unary-complete-opengl-translation",
-    )
-    assert (
-        "name: MLX complete unary OpenGL translation "
-        "(shard ${{ matrix.shard_index }} of 5)" in opengl_job
-    )
-    assert "if: github.event_name != 'schedule'" in opengl_job
-    assert "runs-on: ubuntu-latest" in opengl_job
-    assert "timeout-minutes: 120" in opengl_job
-    assert "fail-fast: false" in opengl_job
-    assert _matrix_values(opengl_job, "shard_index") == {
-        "0",
-        "1",
-        "2",
-        "3",
-        "4",
-    }
-    assert 'python-version: "3.12"' in opengl_job
-    assert "sudo apt-get install -y glslang-tools spirv-tools" in opengl_job
-    assert "python -m pip install -e . pytest-xdist" in opengl_job
-    assert "glslangValidator --version" in opengl_job
-    assert "spirv-val --version" in opengl_job
-    assert "Checkout current MLX unary corpus" in opengl_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in opengl_job
-
-    opengl_step = ci_coverage.workflow_step_section(
-        opengl_job,
-        "Prove current MLX complete unary family OpenGL translation",
-    )
-    assert "if: runner.os" not in opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_UNARY_OPENGL_TRANSLATION: "1"' in opengl_step
-    assert (
-        "CROSTL_MLX_UNARY_OPENGL_SHARD_INDEX: ${{ matrix.shard_index }}" in opengl_step
-    )
-    assert 'CROSTL_MLX_UNARY_OPENGL_SHARD_COUNT: "5"' in opengl_step
-    assert (
-        f"{test_path}::test_current_mlx_unary_family_translates_to_opengl"
-        in opengl_step
-    )
-    assert "-n auto" in opengl_step
-    assert "-k" not in opengl_step
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX complete unary family OpenGL translation" not in (
-        matrix_job
-    )
-
-
-def test_mlx_project_porting_workflow_runs_unary_complete_directx_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_unary_complete_directx.py"
-
-    directx_job = _workflow_job_section(
-        mlx_porting,
-        "mlx-unary-complete-directx-translation",
-    )
-    assert (
-        "name: MLX complete unary DirectX translation "
-        "(shard ${{ matrix.shard_index }} of 5)" in directx_job
-    )
-    assert "if: github.event_name != 'schedule'" in directx_job
-    assert "runs-on: windows-latest" in directx_job
-    assert "timeout-minutes: 180" in directx_job
-    assert "fail-fast: false" in directx_job
-    assert _matrix_values(directx_job, "shard_index") == {
-        "0",
-        "1",
-        "2",
-        "3",
-        "4",
-    }
-    assert 'python-version: "3.12"' in directx_job
-    assert "python -m pip install -e . pytest-xdist" in directx_job
-    assert "Install pinned Windows DirectX Shader Compiler" in directx_job
-    assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in directx_job
-    assert "dxc_2026_05_27.zip" in directx_job
-    assert "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4" in (
-        directx_job
-    )
-    assert "Get-FileHash -Path $archive -Algorithm SHA256" in directx_job
-    assert "DXC archive checksum mismatch" in directx_job
-    assert "dxc.exe" in directx_job
-    assert "--version" in directx_job
-    assert "Checkout current MLX unary corpus" in directx_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in directx_job
-
-    directx_step = ci_coverage.workflow_step_section(
-        directx_job,
-        "Prove current MLX complete unary family DirectX translation",
-    )
-    assert "if: runner.os" not in directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_UNARY_DIRECTX_TRANSLATION: "1"' in directx_step
-    assert (
-        "CROSTL_MLX_UNARY_DIRECTX_SHARD_INDEX: ${{ matrix.shard_index }}"
-        in directx_step
-    )
-    assert 'CROSTL_MLX_UNARY_DIRECTX_SHARD_COUNT: "5"' in directx_step
-    assert (
-        f"{test_path}::test_current_mlx_unary_family_translates_to_directx"
-        in directx_step
-    )
-    assert "-n auto" in directx_step
-    assert "-k" not in directx_step
-    assert mlx_porting.count(f'- "{test_path}"') == 2
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX complete unary family DirectX translation" not in (
-        matrix_job
-    )
-
-
-def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_binary_complete_metal_roundtrip.py"
-
-    binary_metal_job = _workflow_job_section(
-        mlx_porting,
-        "mlx-binary-complete-metal-roundtrip",
-    )
-    assert (
-        "name: MLX complete binary Metal round-trip "
-        "(shard ${{ matrix.shard_index }} of 24)" in binary_metal_job
-    )
-    assert "if: github.event_name != 'schedule'" in binary_metal_job
-    assert "runs-on: macOS-latest" in binary_metal_job
-    assert "timeout-minutes: 180" in binary_metal_job
-    assert "fail-fast: false" in binary_metal_job
-    assert _matrix_values(binary_metal_job, "shard_index") == {
-        str(index) for index in range(24)
-    }
-    assert 'python-version: "3.12"' in binary_metal_job
-    assert "python -m pip install -e . pytest-xdist" in binary_metal_job
-    assert "xcrun --sdk macosx metal --version" in binary_metal_job
-    assert "Checkout current MLX binary corpus" in binary_metal_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in binary_metal_job
-
-    binary_metal_step = ci_coverage.workflow_step_section(
-        binary_metal_job,
-        "Prove current MLX complete binary family Metal round-trips",
-    )
-    assert "if: runner.os" not in binary_metal_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in binary_metal_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_BINARY_METAL_ROUNDTRIP: "1"' in binary_metal_step
-    assert (
-        "CROSTL_MLX_BINARY_METAL_SHARD_INDEX: ${{ matrix.shard_index }}"
-        in binary_metal_step
-    )
-    assert 'CROSTL_MLX_BINARY_METAL_SHARD_COUNT: "24"' in binary_metal_step
-    assert (
-        f"{test_path}::test_current_mlx_binary_family_roundtrips_through_metal"
-        in binary_metal_step
-    )
-    assert "-n auto" in binary_metal_step
-    assert "-k" not in binary_metal_step
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX complete binary family Metal round-trips" not in (
-        matrix_job
-    )
-
-
-def test_mlx_project_porting_workflow_runs_binary_complete_opengl_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_binary_complete_opengl.py"
-
-    binary_opengl_job = _workflow_job_section(
-        mlx_porting,
-        "mlx-binary-complete-opengl-translation",
-    )
-    assert (
-        "name: MLX complete binary OpenGL translation "
-        "(shard ${{ matrix.shard_index }} of 24)" in binary_opengl_job
-    )
-    assert "if: github.event_name != 'schedule'" in binary_opengl_job
-    assert "runs-on: ubuntu-latest" in binary_opengl_job
-    assert "timeout-minutes: 240" in binary_opengl_job
-    assert "fail-fast: false" in binary_opengl_job
-    assert _matrix_values(binary_opengl_job, "shard_index") == {
-        str(index) for index in range(24)
-    }
-    assert 'python-version: "3.12"' in binary_opengl_job
-    assert "sudo apt-get install -y glslang-tools spirv-tools" in binary_opengl_job
-    assert "python -m pip install -e . pytest-xdist" in binary_opengl_job
-    assert "glslangValidator --version" in binary_opengl_job
-    assert "spirv-val --version" in binary_opengl_job
-    assert "Checkout current MLX binary corpus" in binary_opengl_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in binary_opengl_job
-
-    binary_opengl_step = ci_coverage.workflow_step_section(
-        binary_opengl_job,
-        "Prove current MLX complete binary family OpenGL translation",
-    )
-    assert "if: runner.os" not in binary_opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in binary_opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_BINARY_OPENGL_TRANSLATION: "1"' in binary_opengl_step
-    assert (
-        "CROSTL_MLX_BINARY_OPENGL_SHARD_INDEX: ${{ matrix.shard_index }}"
-        in binary_opengl_step
-    )
-    assert 'CROSTL_MLX_BINARY_OPENGL_SHARD_COUNT: "24"' in binary_opengl_step
-    assert (
-        f"{test_path}::test_current_mlx_binary_family_translates_to_opengl"
-        in binary_opengl_step
-    )
-    assert "-n auto" in binary_opengl_step
-    assert "-k" not in binary_opengl_step
-    assert mlx_porting.count(f'- "{test_path}"') == 2
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX complete binary family OpenGL translation" not in (
-        matrix_job
-    )
-
-
-def test_mlx_project_porting_workflow_runs_binary_complete_directx_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_binary_complete_directx.py"
-
-    directx_job = _workflow_job_section(
-        mlx_porting,
-        "mlx-binary-complete-directx-translation",
-    )
-    assert (
-        "name: MLX complete binary DirectX translation "
-        "(shard ${{ matrix.shard_index }} of 24)" in directx_job
-    )
-    assert "if: github.event_name != 'schedule'" in directx_job
-    assert "runs-on: windows-latest" in directx_job
-    assert "timeout-minutes: 240" in directx_job
-    assert "fail-fast: false" in directx_job
-    assert _matrix_values(directx_job, "shard_index") == {
-        str(index) for index in range(24)
-    }
-    assert 'python-version: "3.12"' in directx_job
-    assert "python -m pip install -e . pytest-xdist" in directx_job
-    assert "persist-credentials: false" in directx_job
-    assert "continue-on-error" not in directx_job
-    assert "Install pinned Windows DirectX Shader Compiler" in directx_job
-    assert '$ProgressPreference = "SilentlyContinue"' in directx_job
-    assert "for ($attempt = 1; $attempt -le 5; $attempt++)" in directx_job
-    assert "Invoke-WebRequest -Uri $dxcUri -OutFile $archive" in directx_job
-    assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in directx_job
-    assert "dxc_2026_05_27.zip" in directx_job
-    assert "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4" in (
-        directx_job
-    )
-    assert "Get-FileHash -Path $archive -Algorithm SHA256" in directx_job
-    assert "DXC archive checksum mismatch" in directx_job
-    assert r"\\bin\\x64\\dxc.exe$" in directx_job
-    assert "Select-Object -First 1" in directx_job
-    assert "$dxc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH" in directx_job
-    assert "dxc.exe" in directx_job
-    assert "--version" in directx_job
-    assert "Checkout current MLX binary corpus" in directx_job
-    assert "config core.autocrlf false" in directx_job
-    assert "sparse-checkout init --cone" in directx_job
-    assert "sparse-checkout set mlx/backend/metal/kernels" in directx_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in directx_job
-
-    directx_step = ci_coverage.workflow_step_section(
-        directx_job,
-        "Prove current MLX complete binary family DirectX translation",
-    )
-    assert "if: runner.os" not in directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_BINARY_DIRECTX_TRANSLATION: "1"' in directx_step
-    assert (
-        "CROSTL_MLX_BINARY_DIRECTX_SHARD_INDEX: ${{ matrix.shard_index }}"
-        in directx_step
-    )
-    assert 'CROSTL_MLX_BINARY_DIRECTX_SHARD_COUNT: "24"' in directx_step
-    assert (
-        f"{test_path}::test_current_mlx_binary_family_translates_to_directx"
-        in directx_step
-    )
-    assert "-n auto" in directx_step
-    assert "-k" not in directx_step
-    assert mlx_porting.count(f'- "{test_path}"') == 2
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX complete binary family DirectX translation" not in (
-        matrix_job
-    )
-
-
-def test_mlx_project_porting_workflow_runs_current_fft_runtime_proofs():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    step_name = "Prove current MLX FFT Direct3D native-loader execution"
-    step = ci_coverage.workflow_step_section(mlx_porting, step_name)
-
-    assert "if: runner.os == 'Windows'" in step
-    assert (
-        "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-upstream" in step
-    )
-    assert 'CROSTL_REQUIRE_MLX_FFT_DIRECTX_NATIVE_LOADER: "1"' in step
-    assert "python -m pytest -q -n auto" in step
-    assert (
-        "tests/test_translator/test_mlx_fft_native_loader.py::"
-        "test_current_mlx_fft_executes_through_directx_native_loader" in step
-    )
-    assert "-k" not in step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        step_name,
-        "Checkout current MLX runtime proof corpus",
-    )
-
-    opengl_step_name = "Prove current MLX FFT OpenGL native-loader execution"
-    opengl_step = ci_coverage.workflow_step_section(mlx_porting, opengl_step_name)
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert (
-        "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_FFT_OPENGL_NATIVE_LOADER: "1"' in opengl_step
-    assert "EGL_PLATFORM: surfaceless" in opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
-    assert "MESA_LOADER_DRIVER_OVERRIDE: llvmpipe" in opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_step
-    assert "python -m pytest -q -n auto" in opengl_step
-    assert (
-        "tests/test_translator/test_mlx_fft_native_loader.py::"
-        "test_current_mlx_fft_executes_through_opengl_native_loader" in opengl_step
-    )
-    assert "-k" not in opengl_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        opengl_step_name,
-        "Install Linux runtime dependencies",
-    )
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        opengl_step_name,
-        "Checkout current MLX runtime proof corpus",
-    )
-
-
-def test_mlx_project_porting_workflow_runs_current_gemv_runtime_proofs():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_gemv_native_loader.py"
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-    directx_step_name = "Prove current MLX GEMV Direct3D native-loader execution"
-    directx_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        directx_step_name,
-    )
-    assert "if: runner.os == 'Windows'" in directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_GEMV_DIRECTX_NATIVE_LOADER: "1"' in directx_step
-    assert "python -m pytest -q -n auto" in directx_step
-    assert (
-        f"{test_path}::"
-        "test_current_mlx_gemv_executes_through_directx_native_loader" in directx_step
-    )
-    assert "-k" not in directx_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        directx_step_name,
-        "Checkout current MLX runtime proof corpus",
-    )
-
-    software_step_name = "Validate Direct3D software subgroup shuffle execution"
-    software_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        software_step_name,
-    )
-    assert "if: runner.os == 'Windows'" in software_step
-    assert 'CROSTL_RUN_DIRECTX_SOFTWARE_SUBGROUP_DEVICE_TEST: "1"' in software_step
-    assert "python -m pytest -q -n auto" in software_step
-    assert (
-        "tests/test_translator/test_native_runtime_drivers.py::"
-        "test_directx_compute_runtime_executes_software_subgroup_shuffle_on_device"
-        in software_step
-    )
-    assert "-k" not in software_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        software_step_name,
-        "Checkout current MLX runtime proof corpus",
-    )
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        directx_step_name,
-        software_step_name,
-    )
-
-    opengl_step_name = "Prove current MLX GEMV OpenGL native-loader execution"
-    opengl_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        opengl_step_name,
-    )
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_GEMV_OPENGL_NATIVE_LOADER: "1"' in opengl_step
-    assert "EGL_PLATFORM: surfaceless" in opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
-    assert "MESA_LOADER_DRIVER_OVERRIDE: llvmpipe" in opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_step
-    assert "python -m pytest -q -n auto" in opengl_step
-    assert (
-        f"{test_path}::"
-        "test_current_mlx_gemv_executes_with_opengl_software_subgroups" in opengl_step
-    )
-    assert "-k" not in opengl_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        opengl_step_name,
-        "Install Linux runtime dependencies",
-    )
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        opengl_step_name,
-        "Checkout current MLX runtime proof corpus",
-    )
-
-
-def test_mlx_project_porting_workflow_runs_current_mxfp4_runtime_proofs():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_fp_quantized_native_loader.py"
-
-    assert mlx_porting.count(f'"{test_path}"') == 2
-    directx_step_name = "Prove current MLX MXFP4 Direct3D native-loader execution"
-    directx_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        directx_step_name,
-    )
-    assert "if: runner.os == 'Windows'" in directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_MXFP4_DIRECTX_NATIVE_LOADER: "1"' in directx_step
-    assert "python -m pytest -q -n auto" in directx_step
-    assert (
-        f"{test_path}::"
-        "test_current_mlx_mxfp4_executes_through_directx_native_loader" in directx_step
-    )
-    assert "-k" not in directx_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        directx_step_name,
-        "Checkout current MLX runtime proof corpus",
-    )
-
-    opengl_step_name = "Prove current MLX MXFP4 OpenGL native-loader execution"
-    opengl_step = ci_coverage.workflow_step_section(
-        mlx_porting,
-        opengl_step_name,
-    )
-    assert "if: runner.os == 'Linux'" in opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_MXFP4_OPENGL_NATIVE_LOADER: "1"' in opengl_step
-    assert "EGL_PLATFORM: surfaceless" in opengl_step
-    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
-    assert "MESA_LOADER_DRIVER_OVERRIDE: llvmpipe" in opengl_step
-    assert "PYOPENGL_PLATFORM: egl" in opengl_step
-    assert "python -m pytest -q -n auto" in opengl_step
-    assert (
-        f"{test_path}::"
-        "test_current_mlx_mxfp4_executes_with_opengl_software_subgroups" in opengl_step
-    )
-    assert "-k" not in opengl_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        opengl_step_name,
-        "Install Linux runtime dependencies",
-    )
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        opengl_step_name,
-        "Checkout current MLX runtime proof corpus",
-    )
-
-
-def test_mlx_project_porting_workflow_installs_pinned_warp_runtime():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    step_name = "Install pinned Windows WARP runtime"
-    step = ci_coverage.workflow_step_section(mlx_porting, step_name)
-
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        step_name,
-        "Install Windows Direct3D runtime dependencies",
-    )
-    assert "if: runner.os == 'Windows'" in step
-    assert 'warpVersion = "1.0.21"' in step
-    assert "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681" in step
-    assert "api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp" in step
-    assert "Get-FileHash -Path $archive -Algorithm SHA256" in step
-    assert '"build\\native\\bin\\x64\\d3d10warp.dll"' in step
-    assert 'Join-Path $env:pythonLocation "d3d10warp.dll"' in step
-    assert "Get-FileHash -Path $pythonWarp -Algorithm SHA256" in step
 
 
 def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():
@@ -4828,6 +3082,8 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
     assert "python tools/ci_coverage.py compare" in issue_sync
     assert "--baseline support/generated/ci-coverage-base-report.json" in issue_sync
     assert "--current support/generated/ci-coverage-report.json" in issue_sync
+    assert "--workflow-migrations .github/ci-coverage-migrations.json" in issue_sync
+    assert '".github/ci-coverage-migrations.json"' in issue_sync
     assert "--output support/generated/ci-coverage-comparison.json" in issue_sync
     assert "--fail-on-shrink" in issue_sync
     assert "actions/upload-artifact@v4" in issue_sync
@@ -4986,124 +3242,6 @@ def test_pr_issue_link_workflow_assigns_closing_keywords_and_gates_traceability(
     assert "path: support/generated/pr-issue-link-summary.json" in pr_issue_links
 
 
-def test_mlx_project_porting_workflow_runs_copy_complete_opengl_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_copy_complete_opengl.py"
-
-    copy_opengl_job = _workflow_job_section(
-        mlx_porting,
-        "mlx-copy-complete-opengl-translation",
-    )
-    assert (
-        "name: MLX complete copy OpenGL translation "
-        "(shard ${{ matrix.shard_index }} of 24)" in copy_opengl_job
-    )
-    assert "if: github.event_name != 'schedule'" in copy_opengl_job
-    assert "runs-on: ubuntu-latest" in copy_opengl_job
-    assert "timeout-minutes: 180" in copy_opengl_job
-    assert "fail-fast: false" in copy_opengl_job
-    assert _matrix_values(copy_opengl_job, "shard_index") == {
-        str(index) for index in range(24)
-    }
-    assert 'python-version: "3.12"' in copy_opengl_job
-    assert "sudo apt-get install -y glslang-tools spirv-tools" in copy_opengl_job
-    assert "python -m pip install -e . pytest-xdist" in copy_opengl_job
-    assert "glslangValidator --version" in copy_opengl_job
-    assert "spirv-val --version" in copy_opengl_job
-    assert "Checkout current MLX copy corpus" in copy_opengl_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in copy_opengl_job
-
-    copy_opengl_step = ci_coverage.workflow_step_section(
-        copy_opengl_job,
-        "Prove current MLX complete copy family OpenGL translation",
-    )
-    assert "if: runner.os" not in copy_opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in copy_opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_COPY_OPENGL_TRANSLATION: "1"' in copy_opengl_step
-    assert (
-        "CROSTL_MLX_COPY_OPENGL_SHARD_INDEX: ${{ matrix.shard_index }}"
-        in copy_opengl_step
-    )
-    assert 'CROSTL_MLX_COPY_OPENGL_SHARD_COUNT: "24"' in copy_opengl_step
-    assert (
-        f"{test_path}::test_current_mlx_copy_family_translates_to_opengl"
-        in copy_opengl_step
-    )
-    assert "-n auto" in copy_opengl_step
-    assert "-k" not in copy_opengl_step
-    assert mlx_porting.count(f'- "{test_path}"') == 2
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX complete copy family OpenGL translation" not in (
-        matrix_job
-    )
-
-
-def test_mlx_project_porting_workflow_runs_copy_complete_directx_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_copy_complete_directx.py"
-
-    copy_directx_job = _workflow_job_section(
-        mlx_porting,
-        "mlx-copy-complete-directx-translation",
-    )
-    assert (
-        "name: MLX complete copy DirectX translation "
-        "(shard ${{ matrix.shard_index }} of 24)" in copy_directx_job
-    )
-    assert "if: github.event_name != 'schedule'" in copy_directx_job
-    assert "runs-on: windows-latest" in copy_directx_job
-    assert "timeout-minutes: 180" in copy_directx_job
-    assert "fail-fast: false" in copy_directx_job
-    assert _matrix_values(copy_directx_job, "shard_index") == {
-        str(index) for index in range(24)
-    }
-    assert 'python-version: "3.12"' in copy_directx_job
-    assert "python -m pip install -e . pytest-xdist" in copy_directx_job
-    assert "Install pinned Windows DirectX Shader Compiler" in copy_directx_job
-    assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in (copy_directx_job)
-    assert (
-        'dxcSha256 = "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4"'
-        in copy_directx_job
-    )
-    assert "for ($attempt = 1; $attempt -le 5; $attempt++)" in copy_directx_job
-    assert "Get-FileHash -Path $archive -Algorithm SHA256" in copy_directx_job
-    assert "& $dxc.FullName --version" in copy_directx_job
-    assert "Checkout current MLX copy corpus" in copy_directx_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in copy_directx_job
-
-    copy_directx_step = ci_coverage.workflow_step_section(
-        copy_directx_job,
-        "Prove current MLX complete copy family DirectX translation",
-    )
-    assert "if: runner.os" not in copy_directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in copy_directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_COPY_DIRECTX_TRANSLATION: "1"' in (copy_directx_step)
-    assert (
-        "CROSTL_MLX_COPY_DIRECTX_SHARD_INDEX: ${{ matrix.shard_index }}"
-        in copy_directx_step
-    )
-    assert 'CROSTL_MLX_COPY_DIRECTX_SHARD_COUNT: "24"' in copy_directx_step
-    assert (
-        f"{test_path}::test_current_mlx_copy_family_translates_to_directx"
-        in copy_directx_step
-    )
-    assert "-n auto" in copy_directx_step
-    assert "-k" not in copy_directx_step
-    assert mlx_porting.count(f'- "{test_path}"') == 2
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX complete copy family DirectX translation" not in (
-        matrix_job
-    )
-
-
 def test_windows_validator_install_retries_and_uses_direct_lunarg_fallback():
     workflows = _workflow_texts()
     full_suite = workflows.get("full-tests.yml", "")
@@ -5123,315 +3261,210 @@ def test_windows_validator_install_retries_and_uses_direct_lunarg_fallback():
     assert "$global:LASTEXITCODE = 0" not in full_suite
 
 
-def test_mlx_project_porting_workflow_runs_copy_complete_metal_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_copy_complete_metal_roundtrip.py"
+@pytest.mark.parametrize("job,overhead", [("opengl", 300), ("portable-host", 1800)])
+def test_project_native_job_deadlines_fit_runner_limit(job, overhead):
+    workflow = yaml.safe_load((WORKFLOW_DIR / "demo-project-testing.yml").read_text())
+    definition = workflow["jobs"][job]
 
-    copy_metal_job = _workflow_job_section(
-        mlx_porting,
-        "mlx-copy-complete-metal-roundtrip",
+    def deadline(step):
+        return sum(
+            int(value)
+            for value in re.findall(r"--timeout-seconds (\d+)", step.get("run", ""))
+        )
+
+    steps = definition["steps"]
+    failure_steps = [step for step in steps if "failure()" in step.get("if", "")]
+    normal_deadline = sum(deadline(step) for step in steps if step not in failure_steps)
+    paths = [normal_deadline]
+    if job == "portable-host":
+        assert len(failure_steps) == 1
+        comparison = failure_steps[0]
+        assert (
+            comparison["if"]
+            == "failure() && runner.os == 'Windows' && !matrix.warp_qualification && steps.collective-helpers.outcome == 'failure'"
+        )
+        failed_index = next(
+            index
+            for index, step in enumerate(steps)
+            if step.get("id") == "collective-helpers"
+        )
+        assert steps.index(comparison) > failed_index
+        # Later success-only tests cannot run on this diagnostic failure path.
+        paths.append(
+            sum(deadline(step) for step in steps[: failed_index + 1])
+            + comparison["timeout-minutes"] * 60
+        )
+    else:
+        assert not failure_steps
+    assert normal_deadline
+    assert max(paths) + overhead < definition["timeout-minutes"] * 60 <= 360 * 60
+
+
+def test_directx_runtime_comparison_preserves_required_runtime_and_workload():
+    workflow = yaml.safe_load((WORKFLOW_DIR / "demo-project-testing.yml").read_text())
+    steps = workflow["jobs"]["portable-host"]["steps"]
+    comparison = next(step for step in steps if "failure()" in step.get("if", ""))
+    assert comparison["timeout-minutes"] == 8
+    assert comparison["shell"] == "pwsh"
+    required_gate = next(
+        step for step in steps if step.get("id") == "collective-helpers"
     )
+    expected_env = dict(required_gate["env"])
+    expected_env["CROSTL_REQUIRE_DIRECTX_COOPERATIVE_MATRIX"] = "1"
+    assert comparison["env"] == expected_env
+    assert not comparison.get("continue-on-error")
+    script = comparison["run"]
+    for value in (
+        'version = "1.0.13"',
+        "63231c48b0573ba4c078f69cd10a4059a0fee3427107b8219e5e80ab75bd304b",
+        "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638",
+        "$remaining = 360 - [int][Math]::Ceiling($clock.Elapsed.TotalSeconds)",
+        "--timeout-seconds $remaining",
+        "python -m pytest -q -n auto",
+        "@tests",
+        "$PSNativeCommandUseErrorActionPreference = $false",
+        "$caseResult = $LASTEXITCODE",
+        "if ($caseResult -ne 0) { $result = $caseResult }",
+        "replacesRequiredGate = $false",
+        "exit $result",
+    ):
+        assert value in script
+    resource_command = required_gate["run"].split(
+        '--label "Resource values and project execution"', 1
+    )[1]
+    required_tests = re.findall(r"tests/[^\s\\]+", resource_command)
+    compared_tests = re.findall(r'"(tests/[^"\s]+)"', script)
+    assert len(required_tests) == 23
+    assert compared_tests == required_tests
+    pytest_arguments = script.split("-- python -m pytest", 1)[1].splitlines()[0]
+    assert not re.search(
+        r"(?:^|\s)(?:-k|-m|--keyword|--markexpr)(?:\s|=|$)", pytest_arguments
+    )
+    assert re.findall(r'@\{ version = "([^"]+)"', script) == ["1.0.13"]
+    assert 'version = "1.0.14"' not in script
+    assert script.index("archive checksum mismatch") < script.index(
+        "Copy-Item $installed $backup"
+    )
+    assert script.index("library checksum mismatch") < script.index(
+        "Copy-Item $installed $backup"
+    )
+    restoration = script.split("} finally {", 1)[1]
+    assert "Copy-Item $backup $installed -Force" in restoration
+    assert "$restoredDigest -ne $originalDigest" in restoration
+    assert "restoration.json" in restoration
+    required = next(
+        step for step in steps if step.get("name") == "Install pinned DirectX tools"
+    )
+    assert "microsoft.direct3d.warp/1.0.21/" in required["run"]
+    assert "e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3" in script
+
+
+def test_native_arithmetic_selection_retains_every_device_test():
+    from tools import ci_coverage
+
+    workflow = (WORKFLOW_DIR / "demo-project-testing.yml").read_text()
+    step = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Validate binary32 arithmetic"
+    )
+    expression = "execute or original_metal or modules_link_together"
+    assert f'-k "{expression}"' in step
+    assert '-m "not extended_power"' in step
+    power_step = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Validate pinned real power"
+    )
+    assert "-m extended_power" in power_step
+    assert "tests/test_translator/test_metal_power.py" in power_step
+    assert 'CROSTL_REQUIRE_METAL_POWER: "1"' in power_step
+    assert "--timeout-seconds 180" in power_step
+    assert "--timeout-seconds 120" in step
+    modules = re.findall(r"tests/test_translator/test_[a-z_]+\.py", step)
+    assert len(modules) == len(set(modules)) == 9
+    assert 'CROSTL_REQUIRE_METAL_POWER: "1"' in step
+    assert "tests/test_translator/test_metal_power.py" in modules
+    assert 'CROSTL_REQUIRE_MULTIPLICATION_PROFILE: "1"' in step
+    assert "tests/test_translator/test_metal_multiplication_profile.py" in modules
+    selected = set()
+    required = set()
+    for module in modules:
+        tree = ast.parse((ROOT / module).read_text())
+        for function in tree.body:
+            if not isinstance(
+                function, ast.FunctionDef
+            ) or not function.name.startswith("test_"):
+                continue
+            identity = (module, function.name)
+            if any(term in function.name for term in expression.split(" or ")):
+                selected.add(identity)
+            if any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "environ"
+                and any(
+                    isinstance(argument, ast.Name) and argument.id == "REQUIRE_ENV"
+                    for argument in node.args
+                )
+                for node in ast.walk(function)
+            ):
+                required.add(identity)
+    assert len(required) == 16
     assert (
-        "name: MLX complete copy Metal round-trip "
-        "(shard ${{ matrix.shard_index }} of 24)" in copy_metal_job
+        "tests/test_translator/test_metal_power.py",
+        "test_power_executes_exact_identity",
+    ) in required
+    assert (
+        "tests/test_translator/test_metal_power.py",
+        "test_power_executes_profiled_subnormal_operands",
+    ) in required
+    assert (
+        "tests/test_translator/test_metal_power.py",
+        "test_power_accuracy_profile_executes_unchanged_metal_range_boundaries",
+    ) in required
+    assert selected == required
+    power_tree = ast.parse(
+        (ROOT / "tests/test_translator/test_metal_power.py").read_text()
     )
-    assert "if: github.event_name != 'schedule'" in copy_metal_job
-    assert "runs-on: macOS-latest" in copy_metal_job
-    assert "timeout-minutes: 180" in copy_metal_job
-    assert "fail-fast: false" in copy_metal_job
-    assert _matrix_values(copy_metal_job, "shard_index") == {
-        str(index) for index in range(24)
+    functions = {
+        node.name: node for node in power_tree.body if isinstance(node, ast.FunctionDef)
     }
-    assert 'python-version: "3.12"' in copy_metal_job
-    assert "python -m pip install -e . pytest-xdist" in copy_metal_job
-    assert "xcrun --sdk macosx metal --version" in copy_metal_job
-    assert "Checkout current MLX copy corpus" in copy_metal_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in copy_metal_job
-
-    copy_metal_step = ci_coverage.workflow_step_section(
-        copy_metal_job,
-        "Prove current MLX complete copy family Metal round-trips",
+    boundary = functions[
+        "test_power_accuracy_profile_executes_unchanged_metal_range_boundaries"
+    ]
+    assert any(
+        isinstance(node, ast.Attribute) and node.attr == "extended_power"
+        for node in boundary.decorator_list
     )
-    assert "if: runner.os" not in copy_metal_step
+    domain = functions["test_power_executes_native_domains"]
+    grouped = next(
+        node.args[1]
+        for node in domain.decorator_list
+        if isinstance(node, ast.Call)
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "dataset,source_control"
+    )
+    assert [
+        ast.literal_eval(node) for node in grouped.elts if isinstance(node, ast.Tuple)
+    ] == [("domain", False), ("domain", True)]
+    extended = [node for node in grouped.elts if isinstance(node, ast.Call)]
+    assert [tuple(ast.literal_eval(arg) for arg in node.args) for node in extended] == [
+        ("finite", False),
+        ("finite", True),
+        ("extended", False),
+        ("portable-domain", False),
+    ]
+    assert all(
+        any(
+            keyword.arg == "marks"
+            and isinstance(keyword.value, ast.Attribute)
+            and keyword.value.attr == "extended_power"
+            for keyword in node.keywords
+        )
+        for node in extended
+    )
+    full_suite = (WORKFLOW_DIR / "full-tests.yml").read_text()
+    assert "runs-on: ubuntu-latest" in full_suite
     assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in copy_metal_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_COPY_METAL_ROUNDTRIP: "1"' in copy_metal_step
-    assert (
-        "CROSTL_MLX_COPY_METAL_SHARD_INDEX: ${{ matrix.shard_index }}"
-        in copy_metal_step
-    )
-    assert 'CROSTL_MLX_COPY_METAL_SHARD_COUNT: "24"' in copy_metal_step
-    assert (
-        f"{test_path}::test_current_mlx_copy_family_roundtrips_through_metal"
-        in copy_metal_step
-    )
-    assert "-n auto" in copy_metal_step
-    assert "-k" not in copy_metal_step
-    assert mlx_porting.count(f'- "{test_path}"') == 2
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX complete copy family Metal round-trips" not in (
-        matrix_job
-    )
-
-
-def test_mlx_project_porting_workflow_runs_reduce_complete_metal_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_reduce_complete_metal_roundtrip.py"
-
-    reduce_metal_job = _workflow_job_section(
-        mlx_porting,
-        "mlx-reduce-complete-metal-roundtrip",
-    )
-    assert (
-        "name: MLX complete reduce Metal round-trip "
-        "(shard ${{ matrix.shard_index }} of 24)" in reduce_metal_job
-    )
-    assert "if: github.event_name != 'schedule'" in reduce_metal_job
-    assert "runs-on: macOS-latest" in reduce_metal_job
-    assert "timeout-minutes: 180" in reduce_metal_job
-    assert "fail-fast: false" in reduce_metal_job
-    assert _matrix_values(reduce_metal_job, "shard_index") == {
-        str(index) for index in range(24)
-    }
-    assert 'python-version: "3.12"' in reduce_metal_job
-    assert "python -m pip install -e . pytest-xdist" in reduce_metal_job
-    assert "xcrun --sdk macosx metal --version" in reduce_metal_job
-    assert "Checkout current MLX reduce corpus" in reduce_metal_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in reduce_metal_job
-
-    reduce_metal_step = ci_coverage.workflow_step_section(
-        reduce_metal_job,
-        "Prove current MLX complete reduce family Metal round-trips",
-    )
-    assert "if: runner.os" not in reduce_metal_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in reduce_metal_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_REDUCE_METAL_ROUNDTRIP: "1"' in reduce_metal_step
-    assert (
-        "CROSTL_MLX_REDUCE_METAL_SHARD_INDEX: ${{ matrix.shard_index }}"
-        in reduce_metal_step
-    )
-    assert 'CROSTL_MLX_REDUCE_METAL_SHARD_COUNT: "24"' in reduce_metal_step
-    assert (
-        f"{test_path}::test_current_mlx_reduce_family_roundtrips_through_metal"
-        in reduce_metal_step
-    )
-    assert "-n auto" in reduce_metal_step
-    assert "-k" not in reduce_metal_step
-    assert mlx_porting.count(f'- "{test_path}"') == 2
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX complete reduce family Metal round-trips" not in (
-        matrix_job
-    )
-
-
-def test_mlx_project_porting_workflow_runs_quantized_complete_metal_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_quantized_complete_metal_roundtrip.py"
-
-    quantized_metal_job = _workflow_job_section(
-        mlx_porting,
-        "mlx-quantized-complete-metal-roundtrip",
-    )
-    assert (
-        "name: MLX complete quantized Metal round-trip "
-        "(shard ${{ matrix.shard_index }} of 24)" in quantized_metal_job
-    )
-    assert "if: github.event_name != 'schedule'" in quantized_metal_job
-    assert "runs-on: macOS-latest" in quantized_metal_job
-    assert "timeout-minutes: 180" in quantized_metal_job
-    assert "fail-fast: false" in quantized_metal_job
-    assert _matrix_values(quantized_metal_job, "shard_index") == {
-        str(index) for index in range(24)
-    }
-    assert 'python-version: "3.12"' in quantized_metal_job
-    assert "python -m pip install -e . pytest-xdist" in quantized_metal_job
-    assert "persist-credentials: false" in quantized_metal_job
-    assert "continue-on-error" not in quantized_metal_job
-    assert "xcrun --sdk macosx metal --version" in quantized_metal_job
-    assert "xcodebuild -downloadComponent MetalToolchain" in quantized_metal_job
-    assert "Checkout current MLX quantized corpus" in quantized_metal_job
-    assert "config core.autocrlf false" in quantized_metal_job
-    assert "sparse-checkout init --cone" in quantized_metal_job
-    assert "sparse-checkout set mlx/backend/metal/kernels" in quantized_metal_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in quantized_metal_job
-
-    quantized_metal_step = ci_coverage.workflow_step_section(
-        quantized_metal_job,
-        "Prove current MLX complete quantized family Metal round-trips",
-    )
-    assert "if: runner.os" not in quantized_metal_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in quantized_metal_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_QUANTIZED_METAL_ROUNDTRIP: "1"' in quantized_metal_step
-    assert (
-        "CROSTL_MLX_QUANTIZED_METAL_SHARD_INDEX: ${{ matrix.shard_index }}"
-        in quantized_metal_step
-    )
-    assert 'CROSTL_MLX_QUANTIZED_METAL_SHARD_COUNT: "24"' in quantized_metal_step
-    assert (
-        f"{test_path}::test_current_mlx_quantized_metal_discovery_matches_contract"
-        in quantized_metal_step
-    )
-    assert (
-        f"{test_path}::test_current_mlx_quantized_family_roundtrips_through_metal"
-        in quantized_metal_step
-    )
-    assert "-n auto" in quantized_metal_step
-    assert "-k" not in quantized_metal_step
-    assert mlx_porting.count(f'- "{test_path}"') == 2
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX complete quantized family Metal round-trips" not in (
-        matrix_job
-    )
-
-
-def test_mlx_project_porting_workflow_requires_quantized_wide_opengl_compilation():
-    workflow = _workflow_texts()["mlx-project-porting.yml"]
-    job = _workflow_job_section(workflow, "mlx-quantized-wide-opengl")
-    test_path = "tests/test_translator/test_mlx_quantized_wide_opengl.py"
-
-    assert "runs-on: ubuntu-latest" in job
-    assert "timeout-minutes: 60" in job
-    assert "persist-credentials: false" in job
-    assert "continue-on-error" not in job
-    assert "sudo apt-get install -y glslang-tools spirv-tools" in job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in job
-    assert 'CROSTL_REQUIRE_MLX_QUANTIZED_WIDE_OPENGL: "1"' in job
-    assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in job
-    assert "python -m pytest -q -n auto" in job
-    assert test_path in job
-    assert "--junitxml=quantized-wide-junit.xml" in job
-    assert "--basetemp=quantized-wide-results" in job
-    assert "if: always()" in job
-    assert "if-no-files-found: error" in job
-    assert workflow.count(f'- "{test_path}"') == 2
-
-
-def test_mlx_project_porting_workflow_runs_reduce_complete_opengl_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_reduce_complete_opengl.py"
-
-    reduce_opengl_job = _workflow_job_section(
-        mlx_porting,
-        "mlx-reduce-complete-opengl-translation",
-    )
-    assert (
-        "name: MLX complete reduce OpenGL translation "
-        "(shard ${{ matrix.shard_index }} of 24)" in reduce_opengl_job
-    )
-    assert "if: github.event_name != 'schedule'" in reduce_opengl_job
-    assert "runs-on: ubuntu-latest" in reduce_opengl_job
-    assert "timeout-minutes: 180" in reduce_opengl_job
-    assert "fail-fast: false" in reduce_opengl_job
-    assert _matrix_values(reduce_opengl_job, "shard_index") == {
-        str(index) for index in range(24)
-    }
-    assert 'python-version: "3.12"' in reduce_opengl_job
-    assert "sudo apt-get install -y glslang-tools spirv-tools" in reduce_opengl_job
-    assert "python -m pip install -e . pytest-xdist" in reduce_opengl_job
-    assert "glslangValidator --version" in reduce_opengl_job
-    assert "spirv-val --version" in reduce_opengl_job
-    assert "Checkout current MLX reduce corpus" in reduce_opengl_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in reduce_opengl_job
-
-    reduce_opengl_step = ci_coverage.workflow_step_section(
-        reduce_opengl_job,
-        "Prove current MLX complete reduce family OpenGL translation",
-    )
-    assert "if: runner.os" not in reduce_opengl_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in reduce_opengl_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_REDUCE_OPENGL_TRANSLATION: "1"' in reduce_opengl_step
-    assert (
-        "CROSTL_MLX_REDUCE_OPENGL_SHARD_INDEX: ${{ matrix.shard_index }}"
-        in reduce_opengl_step
-    )
-    assert 'CROSTL_MLX_REDUCE_OPENGL_SHARD_COUNT: "24"' in reduce_opengl_step
-    assert (
-        f"{test_path}::test_current_mlx_reduce_family_translates_to_opengl"
-        in reduce_opengl_step
-    )
-    assert "-n auto" in reduce_opengl_step
-    assert "-k" not in reduce_opengl_step
-    assert mlx_porting.count(f'- "{test_path}"') == 2
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX complete reduce family OpenGL translation" not in (
-        matrix_job
-    )
-
-
-def test_mlx_project_porting_workflow_runs_reduce_complete_directx_proof():
-    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
-    ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_reduce_complete_directx.py"
-
-    reduce_directx_job = _workflow_job_section(
-        mlx_porting,
-        "mlx-reduce-complete-directx-translation",
-    )
-    assert (
-        "name: MLX complete reduce DirectX translation "
-        "(shard ${{ matrix.shard_index }} of 24)" in reduce_directx_job
-    )
-    assert "if: github.event_name != 'schedule'" in reduce_directx_job
-    assert "runs-on: windows-latest" in reduce_directx_job
-    assert "timeout-minutes: 240" in reduce_directx_job
-    assert "fail-fast: false" in reduce_directx_job
-    assert _matrix_values(reduce_directx_job, "shard_index") == {
-        str(index) for index in range(24)
-    }
-    assert 'python-version: "3.12"' in reduce_directx_job
-    assert "python -m pip install -e . pytest-xdist" in reduce_directx_job
-    assert "Install pinned Windows DirectX Shader Compiler" in reduce_directx_job
-    assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in (
-        reduce_directx_job
-    )
-    assert (
-        'dxcSha256 = "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4"'
-        in reduce_directx_job
-    )
-    assert "for ($attempt = 1; $attempt -le 5; $attempt++)" in reduce_directx_job
-    assert "Get-FileHash -Path $archive -Algorithm SHA256" in reduce_directx_job
-    assert "& $dxc.FullName --version" in reduce_directx_job
-    assert "Checkout current MLX reduce corpus" in reduce_directx_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in reduce_directx_job
-
-    reduce_directx_step = ci_coverage.workflow_step_section(
-        reduce_directx_job,
-        "Prove current MLX complete reduce family DirectX translation",
-    )
-    assert "if: runner.os" not in reduce_directx_step
-    assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in reduce_directx_step
-    )
-    assert 'CROSTL_REQUIRE_MLX_REDUCE_DIRECTX_TRANSLATION: "1"' in (reduce_directx_step)
-    assert (
-        "CROSTL_MLX_REDUCE_DIRECTX_SHARD_INDEX: ${{ matrix.shard_index }}"
-        in reduce_directx_step
-    )
-    assert 'CROSTL_MLX_REDUCE_DIRECTX_SHARD_COUNT: "24"' in reduce_directx_step
-    assert (
-        f"{test_path}::test_current_mlx_reduce_family_translates_to_directx"
-        in reduce_directx_step
-    )
-    assert "-n auto" in reduce_directx_step
-    assert "-k" not in reduce_directx_step
-    assert mlx_porting.count(f'- "{test_path}"') == 2
-    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX complete reduce family DirectX translation" not in (
-        matrix_job
+        "python -m pytest tests demos/integrations --durations=25 -n auto" in full_suite
     )

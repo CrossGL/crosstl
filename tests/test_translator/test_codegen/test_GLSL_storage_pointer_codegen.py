@@ -43,6 +43,34 @@ def test_structured_buffer_vector_component_index_is_not_pointer_offset(tmp_path
     )
 
 
+def test_entry_reference_updates_values_while_pointer_updates_offsets(tmp_path):
+    shader = """
+    shader ReferenceAndPointer {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main(device int& value @buffer(0), device int* cursor @buffer(1)) {
+                value += 3;
+                ++value;
+                value -= 1;
+                cursor += 1;
+                cursor[0] = value;
+            }
+        }
+    }
+    """
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "value_offset" not in generated
+    assert "value[0] += 3;" in generated
+    assert "value[0] -= 1;" in generated
+    assert "++value[0]" in generated
+    assert "int cursor_offset = int(0);" in generated
+    assert "cursor_offset += int(1);" in generated
+    assert "cursor[cursor_offset] = value[0];" in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "entry_reference_and_pointer"
+    )
+
+
 def test_storage_pointer_dereferences_preserve_mutable_offsets(tmp_path):
     shader = """
     shader StoragePointerDereference {
