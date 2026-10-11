@@ -36,6 +36,11 @@ REFERENCE_SHA256 = "8302e4268f6ed3bcbed4ffed60ba9749aaec1279085a96c4e122f80e23e8
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_SCAN"
 AXES = (1, 3, 31, 32, 33, 127, 128, 129, 257, 513)
 DTYPES = ("float32", "bfloat16")
+WIDE_AXES = (1, 31, 33, 129, 511, 512, 513, 1023, 1024, 1025)
+WIDE_REFERENCE = REFERENCE.with_name("scan_subgroup_reference.json")
+WIDE_REFERENCE_SHA256 = (
+    "8e8162d7423789ef90411d3df2f1efebc6eb98695d112de363262083152e1c12"
+)
 
 
 def _entry(dtype):
@@ -106,6 +111,66 @@ def _packet(dtype, target, words):
     }
 
 
+def _wide_references():
+    data = WIDE_REFERENCE.read_bytes()
+    assert hashlib.sha256(data).hexdigest() == WIDE_REFERENCE_SHA256
+    reference = json.loads(data)
+    assert reference["upstreamCommit"] == MLX_COMMIT
+    assert reference["source"] == SOURCE and reference["sourceSha256"] == SOURCE_SHA256
+    assert reference["reference"] == "original-metal"
+    assert reference["compileFlags"] == ["-std=metal3.2", "-fno-fast-math"]
+    assert reference["workgroupCount"] == [1, 3, 1] and reference["guardElements"] == 32
+    cases = {
+        (case["workgroupWidth"], case["dtype"], case["axisSize"]): case
+        for case in reference["cases"]
+    }
+    assert len(cases) == len(reference["cases"]) == 40
+    assert set(cases) == {
+        (width, dtype, axis)
+        for width in (128, 256)
+        for dtype in DTYPES
+        for axis in WIDE_AXES
+    }
+    for (_, dtype, axis), case in cases.items():
+        words = case["outputWords"]
+        assert len(words) == 3 * axis + 32
+        assert words[-32:] == [_guard(dtype)] * 32
+        assert all(
+            type(word) is int and 0 <= word < 2 ** (32 if dtype == "float32" else 16)
+            for word in words
+        )
+    return cases
+
+
+def test_multisubgroup_scan_reference_preserves_native_launch_boundaries():
+    cases = _wide_references()
+    assert {key[0] for key in cases} == {128, 256}
+    for width in (128, 256):
+        assert {width * 4 - 1, width * 4, width * 4 + 1} <= set(WIDE_AXES)
+
+
+def test_scan_references_keep_exact_bytes_with_windows_checkout_settings(tmp_path):
+    run(["git", "init", str(tmp_path)], tmp_path, "init")
+    git = ["git", "-C", str(tmp_path)]
+    run([*git, "config", "core.autocrlf", "true"], tmp_path, "line-endings")
+    (tmp_path / ".gitattributes").write_bytes((ROOT / ".gitattributes").read_bytes())
+    for source in (REFERENCE, WIDE_REFERENCE):
+        destination = tmp_path / source.relative_to(ROOT)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+    run([*git, "add", ".gitattributes", "demos"], tmp_path, "index")
+    for source in (REFERENCE, WIDE_REFERENCE):
+        (tmp_path / source.relative_to(ROOT)).unlink()
+    run([*git, "checkout-index", "--all"], tmp_path, "checkout")
+    for source, digest in (
+        (REFERENCE, REFERENCE_SHA256),
+        (WIDE_REFERENCE, WIDE_REFERENCE_SHA256),
+    ):
+        actual = (tmp_path / source.relative_to(ROOT)).read_bytes()
+        assert b"\r" not in actual
+        assert hashlib.sha256(actual).hexdigest() == digest
+
+
 def _check_words(actual, expected):
     assert len(actual) == len(expected)
     assert all(type(word) is int for word in actual)
@@ -164,11 +229,13 @@ def test_scan_transport_preserves_word_identity(dtype, target):
 
 
 @pytest.fixture(scope="module")
-def scan_package(tmp_path_factory):
+def scan_package(tmp_path_factory, request):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for pinned complete scan execution")
     root = Path(os.environ["CROSTL_MLX_CURRENT_ROOT"]).resolve()
     target = os.environ["CROSTL_MLX_CURRENT_TARGET"]
+    width = getattr(request, "param", 32)
+    assert width in {32, 128, 256}
     assert target in {"metal", "opengl", "directx"}
     assert (
         subprocess.check_output(
@@ -202,7 +269,7 @@ def scan_package(tmp_path_factory):
             targets=(target,),
             output_dir=Path(directory).name + "/out",
             entry_points={SOURCE: tuple(_entry(dtype) for dtype in DTYPES)},
-            workgroup_size_rules={SOURCE: (32, 1, 1)},
+            workgroup_size_rules={SOURCE: (width, 1, 1)},
             source_options={
                 "metal": {
                     "preserve_resource_origins": True,
@@ -279,12 +346,13 @@ def scan_package(tmp_path_factory):
                 "build-runner",
             )
             original = runner, library
-        yield target, package, descriptors, modules, original
+        yield target, package, descriptors, modules, original, width
 
 
+@pytest.mark.parametrize("scan_package", (32, 128, 256), indirect=True)
 @pytest.mark.parametrize("dtype", DTYPES)
 def test_complete_scan_package_retains_source_buffer_layout(scan_package, dtype):
-    target, _, descriptors, _, _ = scan_package
+    target, _, descriptors, _, _, _ = scan_package
     descriptor = descriptors[_entry(dtype)]
     assert descriptor["target"] == target
     bindings = {
@@ -313,7 +381,7 @@ def test_complete_scan_package_retains_source_buffer_layout(scan_package, dtype)
         )
 
 
-def _original_readback(work, original, dtype, axis, expected):
+def _original_readback(work, original, dtype, axis, expected, width=32):
     runner, library = original
     code = "I" if dtype == "float32" else "H"
     values = (
@@ -334,7 +402,7 @@ def _original_readback(work, original, dtype, axis, expected):
             {
                 "buffers": paths,
                 "workgroupCount": [1, 3, 1],
-                "workgroupSize": [32, 1, 1],
+                "workgroupSize": [width, 1, 1],
                 "simdWidth": 32,
             },
             indent=2,
@@ -349,13 +417,26 @@ def _original_readback(work, original, dtype, axis, expected):
         assert (output / f"buffer-{index}.bin").read_bytes() == payloads[index]
 
 
+@pytest.mark.parametrize("scan_package", (32,), indirect=True)
 @pytest.mark.parametrize("dtype", DTYPES)
 @pytest.mark.parametrize("axis", AXES)
 def test_complete_scan_executes_natively(scan_package, tmp_path, dtype, axis):
-    target, package, descriptors, modules, original = scan_package
     expected = _references()[dtype, axis]["outputWords"]
+    _execute_scan_case(scan_package, tmp_path, dtype, axis, expected)
+
+
+@pytest.mark.parametrize("scan_package", (128, 256), indirect=True)
+@pytest.mark.parametrize("dtype", DTYPES)
+@pytest.mark.parametrize("axis", WIDE_AXES)
+def test_multisubgroup_scan_executes_natively(scan_package, tmp_path, dtype, axis):
+    expected = _wide_references()[scan_package[-1], dtype, axis]["outputWords"]
+    _execute_scan_case(scan_package, tmp_path, dtype, axis, expected)
+
+
+def _execute_scan_case(scan_package, tmp_path, dtype, axis, expected):
+    target, package, descriptors, modules, original, width = scan_package
     if original:
-        _original_readback(tmp_path, original, dtype, axis, expected)
+        _original_readback(tmp_path, original, dtype, axis, expected, width)
     descriptor = descriptors[_entry(dtype)]
     names = {
         binding["provenance"]["sourceResource"]["parameter"]: binding["name"]
@@ -376,7 +457,7 @@ def test_complete_scan_executes_natively(scan_package, tmp_path, dtype, axis):
         package,
         inputs,
         outputs,
-        {"workgroupSize": [32, 1, 1], "workgroupCount": [1, 3, 1]},
+        {"workgroupSize": [width, 1, 1], "workgroupCount": [1, 3, 1]},
         expected_target=target,
     )
     assert not request.execution_plan.diagnostics, request.execution_plan.diagnostics

@@ -292,6 +292,16 @@ effectful calls, mutation, division and unknown control flow are not speculated.
 Native mode keeps the original branch. Required native checks retain NaNs in
 different subgroups, both return paths, repeated calls and buffer guards.
 
+Scalar declarations initialized by pure forwarding subgroup wrappers can also
+be lifted out of a proven subgroup-ID condition. Input loads and argument
+effects remain conditional; all workgroup invocations execute the wrapper,
+using zero inputs for inactive subgroups, and stores keep their original guard.
+Only immutable, unescaped subgroup-ID predicates and single-return scalar
+wrappers qualify. Else branches, resource-reading wrappers, scalar reference
+effects, ambiguous overloads and unproven participation remain diagnostic.
+Native controls include partial groups, inactive subgroups and repeated calls,
+including side effects in unused arguments. This is not general if-conversion.
+
 A separate required Windows gate translates eight pinned MLX gated-delta
 backward configurations with software subgroups and dispatches the generated
 DXIL using the upstream ``(32, 4, 1)`` workgroup shape. All six gradients are

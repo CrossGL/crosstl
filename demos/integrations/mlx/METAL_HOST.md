@@ -211,9 +211,26 @@ failure. Its Windows execution must pass before complete-entry DirectX parity
 can be claimed; it does not waive the separate upstream `test_scans` failure
 or establish full MLX cumulative-operation routing.
 
-Those complete-entry comparisons use 32-thread workgroups. They do not qualify
-the larger launches selected by the upstream host. A separate survey of twelve
-unchanged entries per target at revision `8d4cec0a` identified three blockers:
+The original twenty complete-entry comparisons use 32-thread workgroups.
+Forty additional comparisons now cover 128- and 256-thread launches for both
+float32 and bfloat16, using axis lengths 1, 31, 33, 129, 511, 512, 513, 1023,
+1024 and 1025. This includes both sides of each launch's four-items-per-thread
+boundary. `tests/fixtures/scan_subgroup_reference.json` records fresh unchanged
+original-Metal outputs at each actual launch width; references from the
+32-thread launch are not reused. Local original/generated Metal and OpenGL
+checks pass. The existing complete-scan CI step includes these cases with its
+unchanged 240-second deadline and no added runner jobs. Windows native results
+remain required; neither these selected entries nor their references establish
+complete scan host routing.
+
+These larger launches use guarded-input lowering for pure scalar subgroup
+wrappers. Source loads and argument effects execute only in the selected
+subgroup, all workgroup invocations reach the software barriers, and stores
+retain the original predicate. The proof does not admit arbitrary conditional
+collectives, resource-reading wrappers or unresolved overloads.
+
+A separate survey of twelve unchanged entries per target at revision
+`8d4cec0a` identified three blockers:
 subgroup-only conditional scans at 128 threads
 ([#2207](https://github.com/CrossGL/crosstl/issues/2207)), absolute lane reads in
 256-thread strided scans ([#2208](https://github.com/CrossGL/crosstl/issues/2208)),

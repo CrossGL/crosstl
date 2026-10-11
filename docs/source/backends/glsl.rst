@@ -183,6 +183,15 @@ results. Only safe by-value operands are speculated, and unproven effects or
 participation remain diagnostic. Original Metal controls use fast math disabled,
 matching the generated native runtime's NaN-sensitive compilation contract.
 
+Pure scalar forwarding wrappers may also initialize a local inside a proven
+subgroup-ID condition. Software lowering stages scalar arguments under that
+guard, executes the wrapper with converged workgroup barriers, and guards the
+remaining source statements. Inactive subgroups use private zero inputs, never
+speculative resource loads. Immutable subgroup-ID predicates are required;
+mutation, alias escape, else branches, effectful wrappers and unresolved
+overloads stay diagnostic. Required native controls retain guarded effects,
+partial subgroups and repeated calls, including unused argument evaluation.
+
 Uniform bounds-check exits also retain immutable local facts and individual
 invocation components whose workgroup extent is one. Mutation, reference
 escape, shadowing and unknown calls invalidate those facts. A uniform ``y``

@@ -363,7 +363,10 @@ from .stage_utils import (
     should_emit_qualified_function,
     stage_matches,
 )
-from .subgroup_control_flow import converge_subgroup_guarded_returns
+from .subgroup_control_flow import (
+    converge_subgroup_conditional_calls,
+    converge_subgroup_guarded_returns,
+)
 from .uniform_returns import UniformReturnAnalysis
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
@@ -7306,6 +7309,12 @@ class GLSLCodeGen:
         if self.software_subgroup_width is not None:
             ast = converge_subgroup_guarded_returns(
                 ast, self.walk_ast, self.map_operator
+            )
+            ast = converge_subgroup_conditional_calls(
+                ast,
+                self.glsl_software_subgroup_stage_entries(ast, target_stage),
+                self.walk_ast,
+                self.map_operator,
             )
         target_stage = normalize_stage_name(target_stage)
         self.glsl_stage_reachable_function_names = self.stage_reachable_function_names(

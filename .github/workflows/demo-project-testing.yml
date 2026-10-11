@@ -1268,6 +1268,7 @@ jobs:
           CROSTL_REQUIRE_SOFTWARE_SUBGROUP_SCAN: "1"
           CROSTL_REQUIRE_SOFTWARE_SUBGROUP_LANE_READ: "1"
           CROSTL_REQUIRE_SOFTWARE_SUBGROUP_SHUFFLE_FILL: "1"
+          CROSTL_REQUIRE_SUBGROUP_CONDITIONAL_CALLS: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
@@ -1282,6 +1283,7 @@ jobs:
               tests/test_translator/test_software_subgroup_scan.py \
               tests/test_translator/test_software_subgroup_lane_read.py \
               tests/test_translator/test_software_subgroup_shuffle_fill.py \
+              tests/test_translator/test_subgroup_conditional_calls.py \
               2>&1 | tee .mlx-portable-host/subgroup-products.log
       - name: Validate subgroup-guarded returns
         env:

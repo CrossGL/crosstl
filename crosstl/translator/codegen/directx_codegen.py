@@ -368,7 +368,10 @@ from .stage_utils import (
     stage_layout_entry_value,
     stage_matches,
 )
-from .subgroup_control_flow import converge_subgroup_guarded_returns
+from .subgroup_control_flow import (
+    converge_subgroup_conditional_calls,
+    converge_subgroup_guarded_returns,
+)
 from .uniform_returns import UniformReturnAnalysis
 from .union_layout import UnionLayoutCollector
 from .workgroup_access_contracts import parse_workgroup_access_assertions
@@ -3138,6 +3141,12 @@ class HLSLCodeGen:
         if self.software_subgroup_width is not None:
             ast = converge_subgroup_guarded_returns(
                 ast, self.walk_ast, self.map_operator
+            )
+            ast = converge_subgroup_conditional_calls(
+                ast,
+                self.hlsl_software_subgroup_stage_entries(ast, target_stage),
+                self.walk_ast,
+                self.map_operator,
             )
 
         self.texture_variables = set()
