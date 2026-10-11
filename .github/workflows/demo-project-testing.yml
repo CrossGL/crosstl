@@ -3981,7 +3981,7 @@ jobs:
           mkdir -p mlx-unary-fma-results
           python tools/run_bounded_command.py --timeout-seconds 300 --label "Pinned unary fused arithmetic" -- \
             python -m pytest -q -n auto -vv -s --durations=20 \
-              -o faulthandler_timeout=60 \
+              -o faulthandler_timeout=0 \
               --basetemp=mlx-unary-fma-results/pytest \
               --junitxml=mlx-unary-fma-results/results.xml \
               demos/integrations/mlx/tests/kernels/test_current_unary_fma.py \

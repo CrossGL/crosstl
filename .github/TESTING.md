@@ -3,14 +3,16 @@
 The CI suite separates portable Python compatibility from native GPU toolchain
 and runtime checks.
 
-Backend, translator, complete-suite, example and demo workflows replace a
+Backend, translator, complete-suite, example and open-source demo workflows replace a
 superseded pull-request run when a new revision arrives. The concurrency key
 includes the workflow name, event and PR number, so unrelated workflows and PRs
 do not cancel each other. Main, scheduled and manually dispatched runs use their
 unique run IDs and are not cancelled by this policy. Workflow-level keys are
-distinct from native job-level queues. Project demo jobs retain their independent
-queues, but a newer PR revision cancels the superseded run, including its active
-native jobs, so stale revisions do not occupy Windows and macOS runners.
+distinct from native job-level queues. The Project Demo Testing workflow instead
+uses independent job and matrix-leg concurrency groups with
+`cancel-in-progress: false`. Active native checks finish; a newer pending job
+can replace an older pending job in the same group. This does not guarantee
+first-in, first-out execution.
 Cancelling an obsolete run is not a test pass; the replacement revision must
 satisfy the same checks. This follows
 [GitHub's concurrency policy](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).

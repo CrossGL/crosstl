@@ -363,5 +363,5 @@ def test_ci_requires_current_half_fp8():
     assert "pytest -q -n auto" in step
     assert 'PYTHONUNBUFFERED: "1"' in step
     assert "-vv -s --durations=20" in step
-    assert "-o faulthandler_timeout=60" in step
+    assert "-o faulthandler_timeout=0" in step
     assert "--timeout-seconds 300" in step

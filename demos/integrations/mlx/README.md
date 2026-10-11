@@ -42,12 +42,23 @@ See the [CI coverage policy](../../../.github/TESTING.md) for the platform split
 Scheduled runs cover the existing corpus audits; changes to translation code,
 tests, demo inputs or toolchain configuration run the complete workflow on pull
 requests and main-branch pushes. Each job and matrix leg has its own queue.
-A newer PR revision cancels the superseded workflow run, including active native
-jobs, to free runners for the current code. Main, scheduled and manually
-dispatched runs are not cancelled by this PR policy. No test matrix or numerical
-gate is removed. A previous revision's successful proof does not satisfy the
-current revision's required checks.
+Active project-demo jobs finish even when a newer revision arrives. The pending
+job in each concurrency group can be replaced by a newer pending job; these
+groups are not first-in, first-out queues. No test matrix or numerical gate is
+removed. A previous revision's successful proof does not satisfy the current
+revision's required checks.
 Core and demo tests also remain part of the complete test suite.
+
+The pinned unary arithmetic batch retains its 300-second process deadline,
+two workers, per-test progress, duration report and native execution requirements.
+Its timed Python stack dump is disabled: an isolated x86-64 Python 3.12.15
+translation reproduced a segmentation fault while writing that dump, without
+loading a graphics runtime. The same translation completed with the timer off.
+This isolates the diagnostic path, not a shader correctness failure, and does
+not replace the numerical checks. A related
+[CPython watchdog race](https://github.com/python/cpython/issues/158200) is under
+investigation upstream; the reproduction does not establish that it is the
+same defect.
 
 ### Full-Entry GEMM Execution
 
