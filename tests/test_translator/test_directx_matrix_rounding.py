@@ -130,8 +130,9 @@ def test_project_matrix_rounding_package_records_profile(tmp_path, profile):
         assert "cooperativeMatrixMmaProfile" in json.dumps(result["diagnostics"])
 
 
+@pytest.mark.parametrize("target", ["directx", "opengl"])
 def test_matrix_rounding_participates_in_dispatch_region_identity(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, target
 ):
     from crosstl.project import pipeline
     from crosstl.translator.dispatch_regions import plan_dispatch_regions
@@ -148,8 +149,8 @@ def test_matrix_rounding_participates_in_dispatch_region_identity(
     hashes = []
     region = plan_dispatch_regions([32], [32])[0]
     for profile in (None, *PROFILES):
-        config = _config(tmp_path / str(profile), "directx", region)
-        config.source_options["metal"]["target_options"]["directx"][
+        config = _config(tmp_path / str(profile), target, region)
+        config.source_options["metal"]["target_options"][target][
             "cooperative_matrix_mma_profile"
         ] = profile
         report = translate_project(config, format_output=False).to_json()
@@ -165,20 +166,21 @@ def test_matrix_rounding_participates_in_dispatch_region_identity(
 
 
 @pytest.mark.parametrize("profile", [True, 32, "", "native", [], {}])
-def test_project_matrix_rounding_rejects_invalid_profiles(tmp_path, profile):
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_project_matrix_rounding_rejects_invalid_profiles(tmp_path, profile, target):
     (tmp_path / "plain.cgl").write_text("shader Plain { void helper() {} }")
     if isinstance(profile, (list, dict)):
         with pytest.raises(ValueError, match="strings, integers, or booleans"):
             ProjectConfig(
                 root=tmp_path,
-                targets=("directx",),
+                targets=(target,),
                 source_options={"crossgl": {"cooperative_matrix_mma_profile": profile}},
             )
         return
     report = translate_project(
         ProjectConfig(
             root=tmp_path,
-            targets=("directx",),
+            targets=(target,),
             source_options={"crossgl": {"cooperative_matrix_mma_profile": profile}},
         ),
         format_output=False,
@@ -329,7 +331,7 @@ def test_matrix_rounding_keeps_required_native_ci():
     assert not step.get("continue-on-error")
 
 
-@pytest.mark.parametrize("target", ["metal", "opengl"])
+@pytest.mark.parametrize("target", ["metal", "vulkan"])
 def test_project_matrix_rounding_rejects_other_targets(tmp_path, target):
     (tmp_path / "plain.cgl").write_text("shader Plain { void helper() {} }")
     report = translate_project(

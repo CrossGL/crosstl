@@ -27242,8 +27242,10 @@ def _project_cooperative_matrix_mma_profile(
     option = COOPERATIVE_MATRIX_MMA_PROFILE_SOURCE_OPTION
     if option not in source_options:
         return None
-    if target != "directx":
-        raise ValueError(f"{option} is supported only by the DirectX target")
+    if target not in {"directx", "opengl"}:
+        raise ValueError(
+            f"{option} is supported only by the DirectX and OpenGL targets"
+        )
     profile = source_options[option]
     if profile is not None and (
         not isinstance(profile, str)
@@ -46780,8 +46782,10 @@ def _provenance_contract_reasons(
                 f"{prefix}.softwareSubgroupPolicy requires DirectX or OpenGL"
             )
     if "cooperativeMatrixMmaProfile" in provenance:
-        if artifact.get("target") != "directx":
-            reasons.append(f"{prefix}.cooperativeMatrixMmaProfile requires DirectX")
+        if artifact.get("target") not in {"directx", "opengl"}:
+            reasons.append(
+                f"{prefix}.cooperativeMatrixMmaProfile requires DirectX or OpenGL"
+            )
         if provenance["cooperativeMatrixMmaProfile"] not in (
             "rne-gradual",
             "rne-flush",

@@ -2369,12 +2369,30 @@ class GLSLCodeGen:
             )
         self.private_pointer_out_of_bounds_read = policy
 
+    def set_cooperative_matrix_mma_profile(self, profile):
+        """Select explicit binary32 rounding for cooperative matrix products."""
+        if profile is not None and (
+            not isinstance(profile, str)
+            or profile not in {
+                "rne-gradual",
+                "rne-flush",
+                "fma-rne-gradual",
+                "fma-rne-flush",
+            }
+        ):
+            raise ValueError(
+                "cooperative_matrix_mma_profile must be 'rne-gradual', 'rne-flush', "
+                "'fma-rne-gradual', 'fma-rne-flush', or None"
+            )
+        self.cooperative_matrix_mma_profile = profile
+
     def __init__(
         self,
         *,
         cooperative_matrix_software_lowering=False,
         software_subgroup_width=None,
         private_pointer_out_of_bounds_read="error",
+        cooperative_matrix_mma_profile=None,
     ):
         """Initialize GLSL type maps and per-generation stage/resource state."""
         self.float_atomic_storage = FloatAtomicStorage(self)
@@ -2382,6 +2400,7 @@ class GLSLCodeGen:
             cooperative_matrix_software_lowering
         )
         self.set_private_pointer_out_of_bounds_read(private_pointer_out_of_bounds_read)
+        self.set_cooperative_matrix_mma_profile(cooperative_matrix_mma_profile)
         self.software_subgroup_width = None
         self.set_software_subgroup_width(software_subgroup_width)
         self.required_glsl_software_subgroup_helpers = set()
@@ -29603,6 +29622,18 @@ class GLSLCodeGen:
 
     def generate_glsl_cooperative_matrix_multiply_accumulate(self, node):
         operation = self.glsl_cooperative_matrix_multiply_accumulate_contracts(node)
+        if self.cooperative_matrix_mma_profile is not None:
+            for name in ("floatBitsToUint", "uintBitsToFloat"):
+                if (
+                    name in self.function_return_types
+                    or name in self.global_variable_types
+                    or name in self.structs_by_name
+                ):
+                    self.glsl_cooperative_matrix_operation_error(
+                        node,
+                        f"OpenGL matrix rounding requires the unshadowed '{name}' builtin",
+                        reason="rounding-builtin-shadowed",
+                    )
         helper_name = self.glsl_cooperative_matrix_multiply_accumulate_helper_name(
             operation["result_contract"],
             operation["left_contract"],
@@ -29822,8 +29853,13 @@ class GLSLCodeGen:
                 )
             )
         lines.append(f"    {result_type} result = accumulator;")
+        rounded = self.cooperative_matrix_mma_profile is not None
 
         for element in range(mapping.elements_per_lane):
+            if rounded:
+                lines.append(
+                    f"    uint sum{element} = floatBitsToUint(accumulator.elements[{element}]);"
+                )
             lines.extend(
                 [
                     f"    uint crossglOutputCoordinate{element} = "
@@ -29874,12 +29910,84 @@ class GLSLCodeGen:
                         f"    {component_type} {prefix}RightValue = "
                         f"crossglOwnerElements[{prefix}RightIndex] == 0u ? "
                         f"{right_values};",
-                        f"    result.elements[{element}] += "
-                        f"{prefix}LeftValue * {prefix}RightValue;",
                     ]
+                )
+                if rounded:
+                    lines.extend(
+                        self.glsl_cooperative_matrix_rounded_term(
+                            f"{prefix}LeftValue",
+                            f"{prefix}RightValue",
+                            f"sum{element}",
+                            prefix,
+                        )
+                    )
+                else:
+                    lines.append(
+                        f"    result.elements[{element}] += "
+                        f"{prefix}LeftValue * {prefix}RightValue;"
+                    )
+            if rounded:
+                lines.append(
+                    f"    result.elements[{element}] = uintBitsToFloat(sum{element});"
                 )
         lines.extend(["    return result;", "}"])
         return "\n".join(lines) + "\n"
+
+    def glsl_cooperative_matrix_rounding_names(self):
+        from ..fused_math import FMA_HELPER_KEYS
+
+        return {
+            key: self.glsl_generated_module_identifier(
+                ("cooperative-matrix-rounding", key), f"crossgl_matrix_round_{key}"
+            )
+            for key in FMA_HELPER_KEYS
+        }
+
+    def glsl_cooperative_matrix_rounded_term(self, left, right, accumulator, prefix):
+        helper = self.glsl_cooperative_matrix_rounding_names()["bits"]
+        flush = (
+            "true"
+            if self.cooperative_matrix_mma_profile.endswith("-flush")
+            else "false"
+        )
+        lines = [
+            f"    uint {prefix}LeftBits = floatBitsToUint({left});",
+            f"    uint {prefix}RightBits = floatBitsToUint({right});",
+        ]
+        if self.cooperative_matrix_mma_profile.startswith("fma-"):
+            lines.append(
+                f"    {accumulator} = {helper}({prefix}LeftBits, {prefix}RightBits, "
+                f"{accumulator}, {flush});"
+            )
+        else:
+            # Preserve the product's signed zero across separate rounding boundaries.
+            lines.extend(
+                [
+                    f"    uint {prefix}Product = {helper}({prefix}LeftBits, {prefix}RightBits, "
+                    f"({prefix}LeftBits ^ {prefix}RightBits) & 0x80000000u, {flush});",
+                    f"    {accumulator} = {helper}({accumulator}, 0x3f800000u, {prefix}Product, {flush});",
+                ]
+            )
+        return lines
+
+    def generate_glsl_cooperative_matrix_rounding_support(self):
+        from ..fused_math import binary32_fma_support
+        from ..lexer import Lexer
+        from ..parser import Parser
+
+        source = (
+            "shader MatrixRounding {\n"
+            + binary32_fma_support(self.glsl_cooperative_matrix_rounding_names())
+            + "\n}"
+        )
+        ast = Parser(Lexer(source).tokens).parse()
+        generator = GLSLCodeGen()
+        # Initialize a separate module so source declarations cannot capture helper calls.
+        generator.generate(ast)
+        return source_license_comments(ast, "opengl") + "".join(
+            generator.generate_function(function)
+            for function in generator.collect_functions(ast)
+        )
 
     def generate_glsl_software_matrix_multiply_accumulate_helper(
         self,
@@ -29898,6 +30006,7 @@ class GLSLCodeGen:
             for operand in ("left", "right")
         ]
         count = self.glsl_software_subgroup_workgroup_invocation_count
+        rounded = self.cooperative_matrix_mma_profile is not None
         lines = [f"shared vec2 {name}[{count}];" for name in scratch]
         lines.extend(
             [
@@ -29932,7 +30041,11 @@ class GLSLCodeGen:
                 [
                     f"    uint row{element} = coordinates{element}[lane] / 8u;",
                     f"    uint column{element} = coordinates{element}[lane] % 8u;",
-                    f"    precise float sum{element} = accumulator.elements[{element}];",
+                    (
+                        f"    uint sum{element} = floatBitsToUint(accumulator.elements[{element}]);"
+                        if rounded
+                        else f"    precise float sum{element} = accumulator.elements[{element}];"
+                    ),
                 ]
             )
             for inner in range(8):
@@ -29941,13 +30054,25 @@ class GLSLCodeGen:
                     [
                         f"    uint {prefix}A = row{element} * 8u + {inner}u;",
                         f"    uint {prefix}B = {inner}u * 8u + column{element};",
-                        f"    precise float {prefix} = "
-                        f"{scratch[0]}[subgroupBase + ownerLanes[{prefix}A]][ownerElements[{prefix}A]] * "
-                        f"{scratch[1]}[subgroupBase + ownerLanes[{prefix}B]][ownerElements[{prefix}B]];",
-                        f"    sum{element} = sum{element} + {prefix};",
                     ]
                 )
-            lines.append(f"    result.elements[{element}] = sum{element};")
+                left = f"{scratch[0]}[subgroupBase + ownerLanes[{prefix}A]][ownerElements[{prefix}A]]"
+                right = f"{scratch[1]}[subgroupBase + ownerLanes[{prefix}B]][ownerElements[{prefix}B]]"
+                if rounded:
+                    lines.extend(
+                        self.glsl_cooperative_matrix_rounded_term(
+                            left, right, f"sum{element}", prefix
+                        )
+                    )
+                else:
+                    lines.extend(
+                        [
+                            f"    precise float {prefix} = {left} * {right};",
+                            f"    sum{element} = sum{element} + {prefix};",
+                        ]
+                    )
+            value = f"uintBitsToFloat(sum{element})" if rounded else f"sum{element}"
+            lines.append(f"    result.elements[{element}] = {value};")
         # Every invocation finishes reading before a subsequent call reuses storage.
         lines.extend(["    barrier();", "    return result;", "}"])
         return "\n".join(lines) + "\n"
@@ -29956,6 +30081,11 @@ class GLSLCodeGen:
         if not self.cooperative_matrix_software_lowering:
             return ""
         blocks = []
+        if self.cooperative_matrix_mma_profile is not None and any(
+            record[1] == "multiply_accumulate"
+            for record in self.required_glsl_cooperative_matrix_helpers
+        ):
+            blocks.append(self.generate_glsl_cooperative_matrix_rounding_support())
         for type_name, contract in sorted(
             self.glsl_cooperative_matrix_fragment_contracts.items()
         ):

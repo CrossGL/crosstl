@@ -673,13 +673,18 @@ def test_software_matrix_sdk_comparison_executes(
     assert actual == expected
 
 
-def _metal_source():
+def _metal_source(*, single_product=False):
     loads = "\n".join(
         f"metal::simdgroup_matrix<float, 8, 8> {name};\n"
         f"reinterpret_cast<thread float2&>({name}.thread_elements()) = "
         f"as_type<float2>(uint2(inputWords[index * 6u + {offset}u], "
         f"inputWords[index * 6u + {offset + 1}u]));"
         for name, offset in (("left", 0), ("right", 2), ("accumulator", 4))
+    )
+    second_product = (
+        ""
+        if single_product
+        else "simdgroup_multiply_accumulate(accumulator, right, left, accumulator);"
     )
     return f"""#include <metal_stdlib>
 #include <metal_simdgroup_matrix>
@@ -691,7 +696,7 @@ kernel void matrix_products(const device uint* inputWords [[buffer(0)]],
     uint index = group.x * 128u + invocation;
     {loads}
     simdgroup_multiply_accumulate(accumulator, left, right, accumulator);
-    simdgroup_multiply_accumulate(accumulator, right, left, accumulator);
+    {second_product}
     outputWords[index * 2u] = as_type<uint>(accumulator.thread_elements()[0]);
     outputWords[index * 2u + 1u] = as_type<uint>(accumulator.thread_elements()[1]);
 }}
@@ -699,9 +704,16 @@ kernel void matrix_products(const device uint* inputWords [[buffer(0)]],
 
 
 def _project_request(
-    root, target, *, shape=(32, 4, 1), rounding=False, mma_profile=None, word_case=None
+    root,
+    target,
+    *,
+    shape=(32, 4, 1),
+    rounding=False,
+    mma_profile=None,
+    word_case=None,
+    single_product=False,
 ):
-    source = _metal_source()
+    source = _metal_source(single_product=single_product)
     (root / "matrix.metal").write_text(source)
     options = {
         "cooperative_matrix_fragment_mapping": "tile_4x4_row_pair",
@@ -719,10 +731,10 @@ def _project_request(
             options["target_options"][target][
                 "relative_wave_shuffle_out_of_range"
             ] = "self"
-            if mma_profile is not None:
-                options["target_options"][target][
-                    "cooperative_matrix_mma_profile"
-                ] = mma_profile
+        if mma_profile is not None:
+            options["target_options"][target][
+                "cooperative_matrix_mma_profile"
+            ] = mma_profile
     report = translate_project(
         ProjectConfig(
             root=root,

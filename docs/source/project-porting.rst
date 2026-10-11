@@ -2045,8 +2045,8 @@ of the hardware wave width. Workgroup dimensions must be concrete and all
 barriers, including those reached through helpers, must have proven uniform
 control flow. Divergent calls and incomplete subgroups are rejected.
 
-DirectX's optional ``cooperative_matrix_mma_profile`` selects ``"rne-gradual"``
-or ``"rne-flush"`` for this software multiply-accumulate path. Each product and
+The optional ``cooperative_matrix_mma_profile`` on DirectX and OpenGL selects
+``"rne-gradual"`` or ``"rne-flush"`` for software multiply-accumulate. Each product and
 sum is rounded separately to binary32, in increasing inner-dimension order,
 using integer arithmetic with round-to-nearest, ties-to-even. The gradual
 profile preserves subnormals; the flush profile flushes subnormal operands and
@@ -2075,11 +2075,17 @@ OpenGL supports the same float 8-by-8 mapping with
 workgroup memory partitioned by logical subgroup, without native subgroup
 intrinsics or a hardware-width requirement. The software applicability policy
 records matrix products even when no other subgroup operation is present.
-Products and sums are separately rounded binary32 operations in increasing
-inner-dimension order. This is not a promise of arbitrary-input bitwise Metal
+By default, products and sums use separately rounded binary32 instructions in
+increasing inner-dimension order. The four explicit MMA profiles described above
+instead use integer-word arithmetic and retain the selected policy in packages.
+They also apply to OpenGL matrix exchange under an explicit hardware-width
+contract; the policy does not establish that the device satisfies that width.
+This is not a promise of arbitrary-input bitwise Metal
 parity. Linux execution controls check both fragment elements, multiple logical
 subgroups, repeated products, nonzero accumulators, rounding-sensitive inputs
-and output guards. These controls do not establish complete MLX GEMM execution.
+and output guards. Profiled controls additionally check signed zero, subnormals,
+ties, overflow and canonical NaNs against an independent integer reference.
+These controls do not establish complete MLX GEMM execution.
 
 DirectX and OpenGL software-subgroup control-flow analysis follows resolved read-only
 helper returns through scalar values, value-only aggregate fields, immutable
