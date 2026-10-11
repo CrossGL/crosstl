@@ -1725,10 +1725,12 @@ a bounded 330-minute platform job. Small-row host workloads run in separate
 translated empty-reduction, bitwise, concatenation, selection and integer
 absolute-value execution and retain their packages and readbacks.
 
-The workflow preserves an active native run when a branch changes and keeps only
-the newest pending run for that ref. This lets long reduction jobs finish without
-building a queue of superseded revisions. Retained evidence identifies its source
-revision; results from an earlier commit do not establish that a newer one passes.
+Each job and matrix leg preserves its active execution when a branch changes
+and keeps only one pending execution for that ref. The workflow has no parent
+concurrency rule that could cancel active jobs or serialize unrelated matrix
+legs. This lets long reduction jobs finish without building a queue of
+superseded revisions. Retained evidence identifies its source revision;
+results from an earlier commit do not establish that a newer one passes.
 
 The evidence directory retains before/after adaptation hashes, command status,
 stdout/stderr, upstream test logs, dispatch traces and numerical results. The

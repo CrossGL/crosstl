@@ -380,16 +380,14 @@ def test_project_demo_triggers_cover_code_without_root_documentation():
         assert not any(fnmatchcase(path, pattern) for pattern in paths), path
 
 
+def test_project_demo_has_no_parent_cancellation_or_serialization():
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    assert "concurrency" not in yaml.safe_load(workflow)
+
+
 def test_project_demo_queues_each_job_and_matrix_leg_independently():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     coverage = _load_ci_coverage_module()
-    assert yaml.safe_load(workflow)["concurrency"] == {
-        "group": (
-            "ci-${{ github.workflow }}-${{ github.event_name }}-"
-            "${{ github.event.pull_request.number || github.run_id }}"
-        ),
-        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
-    }
     jobs = coverage.workflow_job_names(workflow)
     assert len(jobs) == 37
     groups = set()
