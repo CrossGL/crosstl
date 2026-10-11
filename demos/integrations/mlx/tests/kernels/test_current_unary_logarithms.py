@@ -1,4 +1,4 @@
-"""Original-source complex logarithms with an explicit atan2 underflow policy."""
+"""Original-source logarithms with explicit operand-underflow policies."""
 
 import ast
 import hashlib
@@ -20,6 +20,7 @@ from crosstl.project import (
     reflect_target_host_interface,
     translate_project,
 )
+from demos.integrations.mlx.tests.kernels import test_current_unary_roots as roots
 from demos.integrations.mlx.tests.kernels import test_unary_native_loader as unary
 from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
     _metal_library,
@@ -40,10 +41,11 @@ from tests.test_translator.test_metal_precise_trig import _bits, _float
 from tools import ci_coverage
 
 ROOT = Path(__file__).resolve().parents[5]
-REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_LOGARITHM"
-OPERATIONS = ("Log2", "Log10")
+REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_UNARY_LOGARITHMS"
+OPERATIONS = ("Log", "Log2", "Log10")
 PROFILE = {"binary32_atan2_profile": "flush-subnormals"}
-# The pinned test_log2/test_log10 use numpy.allclose without overriding these.
+LOG_PROFILE = {"binary32_log_profile": "flush-subnormals"}
+# The pinned logarithm tests use numpy.allclose without overriding these.
 RTOL, ATOL = 1e-5, 1e-8
 
 
@@ -200,10 +202,12 @@ def test_complex_logarithm_contracts_record_entry_policy(path):
         for operation in OPERATIONS
     }
     assert unary.COMPLEX_LOG_SOURCE_OPTIONS == PROFILE
+    assert contract["sourceOptionsByOperator"]["Log"] == LOG_PROFILE
+    assert unary.LOG_SOURCE_OPTIONS == LOG_PROFILE
 
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
-@pytest.mark.parametrize("operation", (*OPERATIONS, "Log", "Log1p", "Sqrt"))
+@pytest.mark.parametrize("operation", (*OPERATIONS, "Log1p", "Sqrt"))
 @pytest.mark.parametrize("dtype", ("float16", "bfloat16", "float32", "complex64"))
 def test_complex_logarithm_policy_is_scoped_to_metal_complex_entries(
     tmp_path, target, operation, dtype
@@ -222,6 +226,9 @@ def test_complex_logarithm_policy_is_scoped_to_metal_complex_entries(
         else {}
     )
     assert actual == expected
+    assert {key: options[key] for key in LOG_PROFILE if key in options} == (
+        LOG_PROFILE if target == "metal" and operation == "Log" else {}
+    )
 
 
 def test_ci_requires_complex_logarithm_source_comparison():
@@ -240,7 +247,7 @@ def test_ci_requires_complex_logarithm_source_comparison():
     assert "if:" not in step and "continue-on-error" not in step
     assert f'{REQUIRE_ENV}: "1"' in step
     assert (
-        "demos/integrations/mlx/tests/kernels/test_current_complex_logarithm.py" in step
+        "demos/integrations/mlx/tests/kernels/test_current_unary_logarithms.py" in step
     )
     assert "--timeout-seconds 300" in step and "pytest -q -n auto" in step
     assert "--basetemp=" in step and "--junitxml=" in step
@@ -249,7 +256,7 @@ def test_ci_requires_complex_logarithm_source_comparison():
 @pytest.fixture(scope="module")
 def logarithm_source():
     if os.environ.get(REQUIRE_ENV) != "1":
-        pytest.skip(f"set {REQUIRE_ENV}=1 for original-source complex logarithms")
+        pytest.skip(f"set {REQUIRE_ENV}=1 for original-source logarithms")
     target = os.environ.get("CROSTL_MLX_CURRENT_TARGET")
     assert target in {"metal", "directx", "opengl"}, "Missing or invalid target"
     if target != "metal":
@@ -286,7 +293,7 @@ def logarithm_source():
         for node in ast.walk(module)
         if isinstance(node, ast.FunctionDef)
     }
-    for name in ("test_log2", "test_log10"):
+    for name in ("test_log", "test_log2", "test_log10"):
         calls = [
             node
             for node in ast.walk(functions[name])
@@ -380,6 +387,11 @@ def test_current_complex_logarithm_native_comparison(
                 assert (
                     artifact["provenance"]["binary32Atan2Profile"] == "flush-subnormals"
                 )
+                if operation == "Log":
+                    assert (
+                        artifact["provenance"]["binary32LogProfile"]
+                        == "flush-subnormals"
+                    )
                 assert artifact["sourceHash"]["value"] == unary.MLX_UNARY_SHA256
                 assert artifact["templateMaterialization"][
                     "specializations"
@@ -441,7 +453,10 @@ def test_current_complex_logarithm_native_comparison(
                             "complexOutputsPerInitialization": len(indices),
                             "initializations": len(SENTINELS),
                             "guardWordsPerPath": len(GUARDS) * len(SENTINELS),
-                            "sourceOptions": PROFILE,
+                            "sourceOptions": {
+                                **PROFILE,
+                                **(LOG_PROFILE if operation == "Log" else {}),
+                            },
                             "rtol": RTOL,
                             "atol": ATOL,
                             "maximumFiniteUlpDifference": maximum,
@@ -464,5 +479,186 @@ def test_current_complex_logarithm_native_comparison(
                     + "\n",
                     encoding="utf-8",
                 )
+        finally:
+            shutil.copytree(work, tmp_path / "evidence", dirs_exist_ok=True)
+
+
+def _real_inputs(dtype):
+    if dtype in {"float16", "bfloat16"}:
+        return list(range(65536))
+    assert dtype == "float32"
+    words = [
+        0,
+        0x80000000,
+        1,
+        0x80000001,
+        0x7FFFFF,
+        0x807FFFFF,
+        0x800000,
+        0x80800000,
+        0x7F7FFFFF,
+        0xFF7FFFFF,
+        0x7F800000,
+        0xFF800000,
+        0x7F800001,
+        0xFF800001,
+        0x7FC01234,
+        0xFFC01234,
+    ]
+    for value in (0.927734375, 1, 2, 0.5, 4, 10, 16, 64, 80, 87, 88, 89, 90, 100):
+        center = _bits(value)
+        words.extend(
+            word | sign
+            for word in range(center - 16, center + 17)
+            for sign in (0, 0x80000000)
+        )
+    generator = random.Random(3404)
+    words.extend(generator.getrandbits(32) for _ in range(65536))
+    return words
+
+
+@pytest.mark.parametrize("dtype", ("float16", "bfloat16", "float32"))
+def test_real_logarithm_inputs_cover_storage_domain(dtype):
+    words = _real_inputs(dtype)
+    assert words == _real_inputs(dtype)
+    if dtype == "float32":
+        assert len(words) == 66476
+        assert {
+            0,
+            0x80000000,
+            1,
+            0x80000001,
+            0x7FFFFF,
+            0x800000,
+            _bits(1),
+            _bits(100),
+            0x7F800000,
+            0xFF800000,
+            0x7FC01234,
+        } <= set(words)
+    else:
+        assert words == list(range(65536))
+
+
+@pytest.mark.parametrize("dtype", ("float16", "bfloat16", "float32"))
+def test_current_real_logarithm_native_comparison(
+    logarithm_source, logarithm_reference, tmp_path, dtype
+):
+    root = logarithm_source
+    runner, original = logarithm_reference
+    entry = f"v_Log{dtype}{dtype}"
+    workload = next(
+        row for row in unary.UNARY_METAL_WORKLOADS if row.entry_point == entry
+    )
+    with tempfile.TemporaryDirectory(
+        prefix=".current-real-logarithm-", dir=root
+    ) as path:
+        work = Path(path)
+        try:
+            config_path = work / "crosstl.toml"
+            config_path.write_text(
+                unary._project_config("metal", workload), encoding="utf-8"
+            )
+            config = replace(
+                load_project_config(root, config_path), output_dir=work / "out"
+            )
+            report = translate_project(config, format_output=False)
+            report.write_json(work / "report.json")
+            data = report.to_json()
+            assert (
+                data["summary"]["translatedCount"] == 1
+                and not data["summary"]["failedCount"]
+            ), data["diagnostics"]
+            assert not [
+                row for row in data["diagnostics"] if row["severity"] == "error"
+            ]
+            (artifact,) = data["artifacts"]
+            assert artifact["entryPoint"]["source"] == entry
+            assert artifact["sourceHash"]["value"] == unary.MLX_UNARY_SHA256
+            assert artifact["templateMaterialization"][
+                "specializations"
+            ] == unary._expected_unary_materializations(workload)
+            assert artifact["provenance"]["binary32LogProfile"] == "flush-subnormals"
+            assert "binary32Atan2Profile" not in artifact["provenance"]
+            source = root / artifact["path"]
+            assert (
+                hashlib.sha256(source.read_bytes()).hexdigest()
+                == artifact["generatedHash"]["value"]
+            )
+            interface = reflect_target_host_interface(source, target="metal")
+            assert interface["status"] == "ready" and not interface["diagnostics"]
+            resources = sorted(interface["resources"], key=lambda row: row["binding"])
+            library = _metal_library(source, work / "generated.metallib", root)
+            values, guards = _real_inputs(dtype), list(roots._guards(dtype))
+            previous = {}
+            maximum = 0
+            for trial, sentinel in enumerate(roots._fills(dtype)):
+                payloads = {
+                    "in_": roots._pack(values + guards, dtype),
+                    "out_": roots._pack([sentinel] * len(values) + guards, dtype),
+                    "size": struct.pack("<I", len(values)),
+                }
+                outputs = {}
+                for label, module, name in (
+                    ("original", original, entry),
+                    ("translated", library, artifact["entryPoint"]["target"]),
+                ):
+                    outputs[label] = roots._execute(
+                        runner,
+                        module,
+                        name,
+                        work / str(trial) / label,
+                        payloads,
+                        len(values),
+                        resources,
+                        dtype,
+                    )
+                    if label in previous:
+                        roots._assert_words(outputs[label], previous[label], dtype)
+                if dtype == "float32":
+                    maximum = max(
+                        maximum,
+                        _check_values(outputs["translated"], outputs["original"]),
+                    )
+                else:
+                    roots._assert_words(
+                        outputs["translated"], outputs["original"], dtype
+                    )
+                previous = outputs
+            (work / "evidence.json").write_text(
+                json.dumps(
+                    {
+                        "commit": MLX_COMMIT,
+                        "entryPoint": entry,
+                        "outputsPerInitialization": len(values),
+                        "initializations": 2,
+                        "guardWordsPerPath": len(guards) * 2,
+                        "sourceOptions": LOG_PROFILE,
+                        "comparison": (
+                            "source-tolerance"
+                            if dtype == "float32"
+                            else "exact-words-except-nan-payloads"
+                        ),
+                        "rtol": RTOL if dtype == "float32" else 0,
+                        "atol": ATOL if dtype == "float32" else 0,
+                        "maximumFiniteUlpDifference": maximum,
+                        "readonlyBuffersUnchanged": True,
+                        "generatedSourceSHA256": (
+                            hashlib.sha256(source.read_bytes()).hexdigest()
+                        ),
+                        "generatedLibrarySHA256": (
+                            hashlib.sha256(library.read_bytes()).hexdigest()
+                        ),
+                        "originalLibrarySHA256": (
+                            hashlib.sha256(original.read_bytes()).hexdigest()
+                        ),
+                        "fullUpstreamSuite": False,
+                        "fullTranslatedBackend": False,
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         finally:
             shutil.copytree(work, tmp_path / "evidence", dirs_exist_ok=True)

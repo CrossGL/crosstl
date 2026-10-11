@@ -858,15 +858,16 @@ The current harness verifies:
   establish exhaustive complex Log1p accuracy or qualify another target.
   Eight complex Log2/Log10 references record the explicit
   `binary32_atan2_profile = "flush-subnormals"` option in
-  `sourceOptionsByEntryPoint`. It applies only to these Metal corpus entries;
-  translator defaults, real-valued operations and other target contracts are
-  unchanged. At both pins, audits cover 101,220 complex outputs per path and
-  initialization, two initializations, 512 guard words per path and unchanged
+  `sourceOptionsByEntryPoint`. For Log2/Log10 it applies only to complex Metal
+  corpus entries; translator defaults, their real-valued entries and other
+  target contracts are unchanged. At both pins, audits cover 101,220 complex
+  outputs per path and initialization, two initializations, 512 guard words
+  per path and unchanged
   input/constants. The profile removes the observed sign and classification
   mismatches. Sampled finite component differences from original Metal reach
   two float32 ULPs at the current pin and three at the historical pin. They
   are not bit-identical results or a new ULP tolerance.
-  A current-pin regression translates all eight entries and compares their
+  A current-pin regression translates these entries and compares their
   native readbacks using the pinned upstream logarithm tests' existing
   `numpy.allclose` tolerances (`rtol=1e-5`, `atol=1e-8`). It additionally
   requires exact zero signs, matching non-finite classifications, unchanged
@@ -876,7 +877,27 @@ The current harness verifies:
   five-minute unary step without additional jobs or longer deadlines, retaining
   reports, modules and raw readbacks. The precise log and atan2 helpers retain
   their separate independent high-precision oracle checks and unchanged bounds.
-  The remaining 132 arithmetic-changing references stay
+  Nineteen natural-log references additionally select
+  `binary32_log_profile = "flush-subnormals"` through `sourceOptionsByOperator`.
+  Their four complex entries also select the explicit atan2 policy above.
+  All 19 accepted predecessors reconstruct to their recorded identities and
+  compile with warnings fatal; fresh default/profiled sources compile at both
+  pins with unchanged reflected interfaces and source-owned indexing.
+  Independent native audits cover 694,296 output words per implementation and
+  initialization at each pin, across five layouts, two initializations and
+  1,216 guard words per implementation. Contiguous half/bfloat cases cover all
+  65,536 storage patterns. Profiled outputs preserve zero signs and non-finite
+  classifications; half/bfloat outputs match original Metal exactly apart from
+  NaN payloads. Float32 and complex components satisfy the existing upstream
+  tolerance, with sampled differences of at most one and two float32 ULPs,
+  respectively. Three half inputs previously differed by one half ULP in the
+  accepted artifacts; the updated artifacts match original Metal.
+  The required current-pin regression adds all four complex Log layouts and
+  contiguous real Log checks, including both complete 16-bit input domains.
+  It remains in the existing five-minute step, with the original-source
+  comparison limited to Metal. Other target contracts are not updated from
+  this evidence, and complete unary-family numerical parity remains unproven.
+  The remaining 113 arithmetic-changing references stay
   unchanged under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
   The historical pin and complete entry selection are preserved.
   At current pin `9c3d3557`, Abs and Sign use upstream's scaled `hypot`

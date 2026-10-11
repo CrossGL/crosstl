@@ -157,7 +157,9 @@ def _execute(runner, library, entry, directory, payloads, count, resources, dtyp
 )
 def test_root_contracts_record_explicit_operand_policy(path):
     contract = json.loads(path.read_text())
-    assert contract["sourceOptionsByOperator"] == {"Sqrt": PROFILES, "Rsqrt": PROFILES}
+    assert {
+        name: contract["sourceOptionsByOperator"][name] for name in ("Sqrt", "Rsqrt")
+    } == {"Sqrt": PROFILES, "Rsqrt": PROFILES}
     assert unary.ROOT_SOURCE_OPTIONS == PROFILES
 
 

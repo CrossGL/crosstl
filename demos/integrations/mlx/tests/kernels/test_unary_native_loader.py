@@ -57,19 +57,20 @@ SCALAR_UNARY_METAL_CONTRACT_PATH = (
     / "unary.scalar-metal-roundtrip.json"
 )
 SCALAR_UNARY_METAL_CONTRACT_SHA256 = (
-    "2c512bbe3ef6e81f8828d432e4d786eb2f19a1fb864036bc4cfa6b9cf01ac476"
+    "892140f6acf1b231e7368afe7bbdc828f5731859fa27c04806a12efb64b9524e"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "5aa0f1612e64ba71d46ddf08d7f0eb401e5811f5340c9b764483bc514b729c08"
+    "6a4a39c2c0a828b89f70c289aba67deec57ebfe73486624241502b24a9926f51"
 )
 ROOT_SOURCE_OPTIONS = {
     "binary32_sqrt_profile": "flush-subnormals",
     "binary32_rsqrt_profile": "flush-subnormals",
 }
 COMPLEX_LOG_SOURCE_OPTIONS = {"binary32_atan2_profile": "flush-subnormals"}
+LOG_SOURCE_OPTIONS = {"binary32_log_profile": "flush-subnormals"}
 
 
 @dataclass(frozen=True)
@@ -771,9 +772,9 @@ def test_current_mlx_unary_metal_contract_is_complete_and_classified():
         "intermediate": "crossgl",
         "hostInterfaceStatus": "ready",
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 2031779,
+        "generatedSizeBytesTotal": 2092654,
         "generatedSizeRange": {
-            "minimum": {"entryPoint": "v_Logfloat16float16", "sizeBytes": 1052},
+            "minimum": {"entryPoint": "v_Absfloat16float16", "sizeBytes": 1076},
             "maximum": {
                 "entryPoint": "gn4large_Log10complex64complex64",
                 "sizeBytes": 12076,
@@ -969,10 +970,12 @@ def _project_config(target: str, workload: UnaryWorkload) -> str:
     source_options = {}
     if target == "metal" and workload.operator_type in {"Sqrt", "Rsqrt"}:
         source_options.update(ROOT_SOURCE_OPTIONS)
+    if target == "metal" and workload.operator_type == "Log":
+        source_options.update(LOG_SOURCE_OPTIONS)
     if (
         target == "metal"
         and workload.input_type == "complex64_t"
-        and workload.operator_type in {"Log2", "Log10"}
+        and workload.operator_type in {"Log", "Log2", "Log10"}
     ):
         source_options.update(COMPLEX_LOG_SOURCE_OPTIONS)
     options = "\n".join(f'{key} = "{value}"' for key, value in source_options.items())
@@ -1096,10 +1099,12 @@ def _translate_unary_artifact(
     if target == "metal" and workload.operator_type in {"Sqrt", "Rsqrt"}:
         assert artifact["provenance"]["binary32SqrtProfile"] == "flush-subnormals"
         assert artifact["provenance"]["binary32RsqrtProfile"] == "flush-subnormals"
+    if target == "metal" and workload.operator_type == "Log":
+        assert artifact["provenance"]["binary32LogProfile"] == "flush-subnormals"
     if (
         target == "metal"
         and workload.input_type == "complex64_t"
-        and workload.operator_type in {"Log2", "Log10"}
+        and workload.operator_type in {"Log", "Log2", "Log10"}
     ):
         assert artifact["provenance"]["binary32Atan2Profile"] == "flush-subnormals"
     assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [1, 1, 1]

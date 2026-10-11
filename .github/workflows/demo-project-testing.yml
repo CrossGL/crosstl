@@ -3965,7 +3965,7 @@ jobs:
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_FMA: "1"
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_TRIG: "1"
           CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_MAGNITUDE: "1"
-          CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_LOGARITHM: "1"
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_LOGARITHMS: "1"
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_ROOTS: "1"
           CROSTL_REQUIRE_MLX_CURRENT_FP8: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
@@ -3990,7 +3990,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_current_unary_fma.py \
               demos/integrations/mlx/tests/kernels/test_current_unary_trig.py \
               demos/integrations/mlx/tests/kernels/test_current_complex_magnitude.py \
-              demos/integrations/mlx/tests/kernels/test_current_complex_logarithm.py \
+              demos/integrations/mlx/tests/kernels/test_current_unary_logarithms.py \
               demos/integrations/mlx/tests/kernels/test_current_unary_roots.py \
               demos/integrations/mlx/tests/kernels/test_current_unary_fp8.py
 

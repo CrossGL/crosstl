@@ -1137,7 +1137,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "5aa0f1612e64ba71d46ddf08d7f0eb401e5811f5340c9b764483bc514b729c08",
+      "sha256": "6a4a39c2c0a828b89f70c289aba67deec57ebfe73486624241502b24a9926f51",
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -1281,11 +1281,11 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 2031779,
+      "generated_size_bytes_total": 2092654,
       "generated_size_range": {
         "minimum": {
-          "entryPoint": "v_Logfloat16float16",
-          "sizeBytes": 1052
+          "entryPoint": "v_Absfloat16float16",
+          "sizeBytes": 1076
         },
         "maximum": {
           "entryPoint": "gn4large_Log10complex64complex64",

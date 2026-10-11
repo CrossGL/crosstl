@@ -1057,8 +1057,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "43a4c1417e386c335aff0082e4402d9d47ae58baceb728311f7e4ce9efac0505",
-      "sizeBytes": 1123
+      "sha256": "5723af24fc40fbb208335476182ae3d2a47d6a4091e93a2fb91c79365fce2535",
+      "sizeBytes": 2764
     },
     {
       "entryPoint": "v_Logcomplex64complex64",
@@ -1066,8 +1066,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "7992666d98883a733904b8d93e9f03d11e9dba21a90e176a12d1b72513a7dfdf",
-      "sizeBytes": 1957
+      "sha256": "1e8bcdee52dfc9c4afe215c2123add4bb37b5b804bf6c062a030aa4feeb57248",
+      "sizeBytes": 11022
     },
     {
       "entryPoint": "v_Logfloat16float16",
@@ -1075,8 +1075,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "4228d79f27166a4c1a744bca1130d6a6d7466818acc9597f4406cabb605f2d93",
-      "sizeBytes": 1052
+      "sha256": "64f72bca824bcc6e1b008478183b3caa129697482f9bfbd02483e575a505e867",
+      "sizeBytes": 2693
     },
     {
       "entryPoint": "v_Logfloat32float32",
@@ -1084,8 +1084,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "ddad940bbd0b4b90125646c722d064f17ac8993a4b67a05ab3c208dc7e2cf93c",
-      "sizeBytes": 1065
+      "sha256": "f51a1c4de4051210bc5314211af2eef1665a7c462728ffa48f04f49c5fa8dcf8",
+      "sizeBytes": 2706
     },
     {
       "entryPoint": "v_LogicalNotbool_bool_",
@@ -1771,6 +1771,9 @@
     "Rsqrt": {
       "binary32_sqrt_profile": "flush-subnormals",
       "binary32_rsqrt_profile": "flush-subnormals"
+    },
+    "Log": {
+      "binary32_log_profile": "flush-subnormals"
     }
   },
   "sourceOptionsByEntryPoint": {
@@ -1778,6 +1781,9 @@
       "binary32_atan2_profile": "flush-subnormals"
     },
     "v_Log2complex64complex64": {
+      "binary32_atan2_profile": "flush-subnormals"
+    },
+    "v_Logcomplex64complex64": {
       "binary32_atan2_profile": "flush-subnormals"
     }
   }
