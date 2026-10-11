@@ -897,6 +897,20 @@ The current harness verifies:
   It remains in the existing five-minute step, with the original-source
   comparison limited to Metal. Other target contracts are not updated from
   this evidence, and complete unary-family numerical parity remains unproven.
+  A separate required test runs current-pin `v_Logfloat32float32` through
+  project translation, runtime packaging and the native loader on each target.
+  Its 28,024 inputs cover every binary32 exponent, signed pairs, special values
+  and 8,193 consecutive values around one. It checks a 120-digit Decimal
+  logarithm oracle with the existing four-ULP bound, exact zero/infinity signs
+  and NaN classification. The report, artifact manifest and runtime package
+  must retain the explicit logarithm policy; the executed source identity must
+  match the generated artifact. Oracle words and native execution receipts are
+  retained with the test evidence. Local Metal and Linux software-OpenGL runs
+  pass; Windows execution is required in CI and is not inferred from these
+  results. This value-based package test does not preserve NaN payloads or
+  retain input-device readbacks or guard regions. It supplements, rather than
+  replaces, the guarded original-Metal comparisons above and does not establish
+  complete host routing or upstream-suite parity.
   The remaining 113 arithmetic-changing references stay
   unchanged under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
   The historical pin and complete entry selection are preserved.

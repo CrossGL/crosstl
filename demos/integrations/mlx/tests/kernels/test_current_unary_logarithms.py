@@ -1,4 +1,4 @@
-"""Original-source logarithms with explicit operand-underflow policies."""
+"""Native logarithm packages and original-source operand-underflow checks."""
 
 import ast
 import hashlib
@@ -37,6 +37,10 @@ from demos.integrations.mlx.tests.kernels.test_current_complex_magnitude import 
     _execute,
 )
 from demos.integrations.mlx.tests.kernels.test_current_complex_power import MLX_COMMIT
+from demos.integrations.mlx.tests.kernels.test_current_unary_fma import (
+    _run_current_unary,
+)
+from tests.test_translator import test_metal_precise_log as logarithm
 from tests.test_translator.test_metal_precise_trig import _bits, _float
 from tools import ci_coverage
 
@@ -256,11 +260,9 @@ def test_ci_requires_complex_logarithm_source_comparison():
 @pytest.fixture(scope="module")
 def logarithm_source():
     if os.environ.get(REQUIRE_ENV) != "1":
-        pytest.skip(f"set {REQUIRE_ENV}=1 for original-source logarithms")
+        pytest.skip(f"set {REQUIRE_ENV}=1 for pinned logarithm execution")
     target = os.environ.get("CROSTL_MLX_CURRENT_TARGET")
     assert target in {"metal", "directx", "opengl"}, "Missing or invalid target"
-    if target != "metal":
-        pytest.skip("Original-source comparison requires native Metal")
     root = Path(os.environ["CROSTL_MLX_CURRENT_ROOT"]).resolve()
     assert (
         subprocess.check_output(
@@ -322,6 +324,8 @@ def test_complex_logarithm_requires_valid_target(monkeypatch, target):
 
 @pytest.fixture(scope="module")
 def logarithm_reference(logarithm_source, tmp_path_factory):
+    if os.environ["CROSTL_MLX_CURRENT_TARGET"] != "metal":
+        pytest.skip("Original-source comparison requires native Metal")
     work = tmp_path_factory.mktemp("complex-logarithm-source")
     runner = work / "readback"
     _run(
@@ -342,6 +346,91 @@ def logarithm_reference(logarithm_source, tmp_path_factory):
         upstream=True,
     )
     return runner, original
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_logarithm_original_reference_requires_metal(monkeypatch, target):
+    monkeypatch.setenv("CROSTL_MLX_CURRENT_TARGET", target)
+    with pytest.raises(pytest.skip.Exception, match="requires native Metal"):
+        logarithm_reference.__wrapped__(None, None)
+
+
+def test_logarithm_package_oracle_covers_source_domain():
+    inputs = logarithm._inputs()
+    assert len(inputs) == 28024
+    assert {(word >> 23) & 255 for word in inputs} == set(range(256))
+    assert {word ^ 0x80000000 for word in inputs} == set(inputs)
+    assert set(range(_bits(1) - 4096, _bits(1) + 4097)) <= set(inputs)
+    assert logarithm._oracle(_bits(1), "flush-subnormals") == 0
+    for word in (0, 0x80000000, 1, 0x80000001, 0x7FFFFF, 0x807FFFFF):
+        assert logarithm._oracle(word, "flush-subnormals") == 0xFF800000
+
+
+def test_current_logarithm_native_loader(logarithm_source, tmp_path):
+    inputs = logarithm._inputs()
+    expected = [logarithm._oracle(word, "flush-subnormals") for word in inputs]
+    actual = _run_current_unary(
+        tmp_path,
+        "Log",
+        [_float(word) for word in inputs],
+        [_float(word) for word in expected],
+        RTOL,
+        ATOL,
+        "metal_precise_log_float",
+        source_options=LOG_PROFILE,
+    )
+    actual_words = [_bits(value) for value in actual]
+    assert len(actual_words) == len(expected)
+    maximum = max(
+        logarithm._check_value(got, want)
+        for got, want in zip(actual_words, expected, strict=True)
+    )
+    evidence = tmp_path / "evidence"
+    target = os.environ["CROSTL_MLX_CURRENT_TARGET"]
+    for path in (
+        evidence / "report.json",
+        evidence / "artifacts.json",
+        evidence / "package/runtime-package.json",
+    ):
+        (artifact,) = json.loads(path.read_text())["artifacts"]
+        assert artifact["target"] == target
+        assert artifact["provenance"]["binary32LogProfile"] == "flush-subnormals"
+    report = json.loads((evidence / "report.json").read_text())
+    (artifact,) = report["artifacts"]
+    parts = Path(artifact["path"]).parts
+    source = evidence.joinpath(*parts[parts.index("out") :])
+    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    assert artifact["generatedHash"]["value"] == source_hash
+    parity = json.loads((evidence / "parity.json").read_text())
+    identity = parity["runtime"]["artifactIdentityVerification"]
+    assert identity["verificationStatus"] == "verified"
+    assert identity["observedIdentity"] == identity["expectedIdentity"]
+    assert identity["observedIdentity"]["hash"]["value"] == source_hash
+    (evidence / "logarithm-oracle.json").write_text(
+        json.dumps(
+            {
+                "commit": MLX_COMMIT,
+                "entryPoint": "v_Logfloat32float32",
+                "target": target,
+                "sourceOptions": parity["sourceOptions"],
+                "generatedSourceSHA256": source_hash,
+                "oracle": "120-digit Decimal ln, nearest-even binary32",
+                "maximumAllowedUlps": 4,
+                "maximumObservedUlps": maximum,
+                "requestedInputWords": inputs,
+                "expectedWords": expected,
+                "actualWords": actual_words,
+                "inputEncoding": "float32 values; NaN payloads are not preserved",
+                "guardRegionsChecked": False,
+                "inputDeviceReadbacksRetained": False,
+                "fullUpstreamSuite": False,
+                "fullTranslatedBackend": False,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 @pytest.mark.parametrize("operation", OPERATIONS)
