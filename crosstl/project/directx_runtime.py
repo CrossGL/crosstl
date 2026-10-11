@@ -5,6 +5,7 @@ from __future__ import annotations
 import atexit
 import hashlib
 import io
+import json
 import os
 import shutil
 import struct
@@ -21,6 +22,20 @@ _BUILD_LOCK = threading.Lock()
 _WORKERS = {}
 _MAX_BUFFER_BYTES = 256 * 1024 * 1024
 _MAX_SDK_BYTES = 64 * 1024 * 1024
+_MAX_DIAGNOSTIC_BYTES = 8192
+_PROGRESS_PREFIX = "CROSSTL_DIRECTX_PROGRESS "
+_WORKER_PHASES = {
+    "device-create",
+    "allocations",
+    "upload-submit",
+    "root-signature",
+    "pipeline-create",
+    "descriptors",
+    "dispatch-submit",
+    "readback-submit",
+    "readback-map",
+    "complete",
+}
 
 
 @dataclass(frozen=True)
@@ -96,8 +111,48 @@ def _run(command, *, timeout, env=None):
                 "operation-timeout",
                 timeoutSeconds=timeout,
                 command=command if isinstance(command, str) else list(command),
+                **_output_details(stdout, stderr),
             ) from exc
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def _output_details(stdout, stderr):
+    result = {}
+    for name, payload in (("stdout", stdout), ("stderr", stderr)):
+        result[name] = payload[-_MAX_DIAGNOSTIC_BYTES:].decode(errors="replace")
+        result[name + "Truncated"] = len(payload) > _MAX_DIAGNOSTIC_BYTES
+    return result
+
+
+def _worker_progress(stderr):
+    """Read the last complete phase marker, not proof that its operation finished."""
+    for line in reversed(stderr.splitlines(keepends=True)):
+        if not line.endswith("\n") or not line.startswith(_PROGRESS_PREFIX):
+            continue
+        try:
+            value = json.loads(line[len(_PROGRESS_PREFIX) :])
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(value, dict) or set(value) != {
+            "phase",
+            "dispatchIndex",
+            "elapsedMilliseconds",
+        }:
+            continue
+        phase, index, elapsed = (
+            value["phase"],
+            value["dispatchIndex"],
+            value["elapsedMilliseconds"],
+        )
+        if (
+            isinstance(phase, str)
+            and phase in _WORKER_PHASES
+            and (index is None or (type(index) is int and 0 <= index < 65536))
+            and type(elapsed) is int
+            and 0 <= elapsed < 2**64
+        ):
+            return value
+    return None
 
 
 def _compiler_environment():
@@ -446,23 +501,38 @@ def execute_buffer_views(
         output = Path(directory) / "readbacks.bin"
         runtime_path = output.with_name(output.name + ".runtime")
         request.write_bytes(payload)
-        result = _run(
-            [
-                str(executable),
-                str(request),
-                str(output),
-                identity["name"],
-                str(int(identity["isHardware"])),
-                str(identity["vendorId"]),
-                str(identity["dedicatedVideoMemory"]),
-                str(identity["dedicatedSystemMemory"]),
-                str(identity["sharedSystemMemory"]),
-            ],
-            timeout=120,
-        )
-        runtime_identity = (
-            _worker_runtime_identity(runtime_path) if runtime_path.is_file() else None
-        )
+        failure = None
+        try:
+            result = _run(
+                [
+                    str(executable),
+                    str(request),
+                    str(output),
+                    identity["name"],
+                    str(int(identity["isHardware"])),
+                    str(identity["vendorId"]),
+                    str(identity["dedicatedVideoMemory"]),
+                    str(identity["dedicatedSystemMemory"]),
+                    str(identity["sharedSystemMemory"]),
+                ],
+                timeout=120,
+            )
+            diagnostics = _output_details(result.stdout, result.stderr)
+        except RuntimeAdapterSetupError as exc:
+            failure = exc
+            diagnostics = {
+                key: exc.details[key]
+                for key in ("stdout", "stderr", "stdoutTruncated", "stderrTruncated")
+                if key in exc.details
+            }
+        runtime_identity = None
+        identity_error = None
+        try:
+            if runtime_path.is_file():
+                runtime_identity = _worker_runtime_identity(runtime_path)
+        except (OSError, RuntimeAdapterSetupError) as exc:
+            # A partially written receipt must not replace the original timeout.
+            identity_error = exc
         runtime_details = {
             "runtime": "native-buffer-views",
             "timeoutSeconds": 120,
@@ -470,24 +540,34 @@ def execute_buffer_views(
             "adapterIdentity": identity,
             "requestSHA256": hashlib.sha256(payload).hexdigest(),
             "workerRuntime": runtime_identity,
+            "workerProgress": _worker_progress(diagnostics.get("stderr", "")),
+            **diagnostics,
         }
+        if identity_error is not None:
+            runtime_details["workerRuntimeError"] = str(identity_error)
         if sdk:
             runtime_details["requestedSDK"] = sdk.identity()
         if isinstance(getattr(state, "details", None), dict):
             state.details["directxRuntime"] = runtime_details
+        if failure is not None:
+            failure.details.update(runtime_details)
+            raise failure
         if result.returncode or not output.is_file():
             raise RuntimeAdapterDispatchError(
                 "DirectX buffer-view execution failed.",
                 details={
                     "target": "directx",
                     "reasonKind": "native-buffer-view-failed",
-                    "stderr": result.stderr.decode(errors="replace"),
                     "returnCode": result.returncode,
-                    "adapterIdentity": identity,
-                    "workerRuntime": runtime_identity,
-                    **({"requestedSDK": sdk.identity()} if sdk else {}),
+                    **runtime_details,
                 },
             )
+        if identity_error is not None:
+            raise _error(
+                "DirectX worker runtime identity could not be read.",
+                "worker-output-invalid",
+                **runtime_details,
+            ) from identity_error
         if runtime_identity is None:
             raise _error(
                 "DirectX worker did not report its runtime identity.",

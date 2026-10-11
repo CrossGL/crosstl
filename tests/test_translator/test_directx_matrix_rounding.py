@@ -210,7 +210,8 @@ def _multiply_words(left, right, accumulator, profile):
     return result
 
 
-def _profile_case(profile, *, rounding=True):
+def _profile_case(profile, *, rounding=True, products=2):
+    assert products in (1, 2)
     words, _ = _case(rounding=rounding)
     expected = []
     for subgroup in range(12):
@@ -222,9 +223,9 @@ def _profile_case(profile, *, rounding=True):
                         (subgroup * 32 + lane) * 6 + operand * 2 + element
                     ]
         left, right, accumulator = matrices
-        result = _multiply_words(
-            right, left, _multiply_words(left, right, accumulator, profile), profile
-        )
+        result = _multiply_words(left, right, accumulator, profile)
+        if products == 2:
+            result = _multiply_words(right, left, result, profile)
         expected.extend(
             result[row][column]
             for lane in range(32)
@@ -288,7 +289,8 @@ def test_matrix_rounding_edge_oracle_distinguishes_profiles_and_contraction():
 
 
 @pytest.mark.parametrize("profile", PROFILES)
-def test_matrix_rounding_native_edges(tmp_path, monkeypatch, profile):
+@pytest.mark.parametrize("inputs", ["edges", "quarter", "rounding"])
+def test_matrix_rounding_native_edges(tmp_path, monkeypatch, profile, inputs):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for DirectX matrix execution")
     assert sys.platform == "win32", "DirectX matrix execution requires Windows"
@@ -299,7 +301,11 @@ def test_matrix_rounding_native_edges(tmp_path, monkeypatch, profile):
     generated = _codegen(cooperative_matrix_mma_profile=profile).generate_stage(
         parse(_source(body)), "compute"
     )
-    words, expected = _edge_case(profile)
+    words, expected = (
+        _edge_case(profile)
+        if inputs == "edges"
+        else _profile_case(profile, rounding=inputs == "rounding", products=1)
+    )
     assert (
         _execute_words(
             tmp_path,

@@ -11787,6 +11787,9 @@
             "tests/test_translator/test_shared_native_allocations_runtime.py::def test_directx_shared_native_allocation_executes_on_device",
             "tests/test_translator/test_directx_buffer_views.py::def test_directx_buffer_views_execute",
             "tests/test_translator/test_directx_buffer_views.py::def test_shared_allocations_execute",
+            "tests/test_translator/test_directx_buffer_views.py::def test_worker_failures_keep_phase_and_child_runtime",
+            "tests/test_translator/test_directx_buffer_views.py::def test_worker_timeout_keeps_bounded_output_from_real_child",
+            "tests/test_translator/test_directx_buffer_views.py::def test_worker_progress_ignores_partial_or_invalid_markers",
             "tests/test_translator/test_directx_buffer_views.py::def test_ranged_execution_rejects_mixed_access_states"
           ]
         },

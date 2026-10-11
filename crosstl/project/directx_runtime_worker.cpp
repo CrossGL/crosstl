@@ -1,5 +1,6 @@
 // Bounded Direct3D execution over shared allocations and explicit buffer views.
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -11,6 +12,20 @@
 #include <vector>
 
 namespace {
+class Progress {
+    std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
+public:
+    void enter(const char* phase, uint32_t dispatch = UINT32_MAX) const {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started).count();
+        std::cerr << "CROSSTL_DIRECTX_PROGRESS {\"phase\":\"" << phase
+                  << "\",\"dispatchIndex\":";
+        if (dispatch == UINT32_MAX) std::cerr << "null";
+        else std::cerr << dispatch;
+        std::cerr << ",\"elapsedMilliseconds\":" << elapsed << "}\n" << std::flush;
+    }
+};
+
 struct View {
     uint32_t kind, slot, allocation, stride;
     uint64_t offset, length;
@@ -300,9 +315,12 @@ struct Device {
 
 void execute(const Request& request, std::ostream& output, const AdapterIdentity& identity,
              const std::filesystem::path& runtime_path) {
+    Progress progress;
+    progress.enter("device-create");
     Device runtime(identity);
     // Inspect this process after device creation, not the Python launcher.
     write_runtime_libraries(runtime_path);
+    progress.enter("allocations");
     std::vector<ComPtr<ID3D12Resource>> buffers, uploads;
     std::vector<D3D12_RESOURCE_STATES> states(request.allocations.size(), D3D12_RESOURCE_STATE_COPY_DEST);
     for (const auto& payload : request.allocations) {
@@ -318,10 +336,13 @@ void execute(const Request& request, std::ostream& output, const AdapterIdentity
         uploads.push_back(std::move(upload));
         buffers.push_back(std::move(buffer));
     }
+    progress.enter("upload-submit");
     runtime.submit();
     // Buffers decay to COMMON after an ExecuteCommandLists submission completes.
     std::fill(states.begin(), states.end(), D3D12_RESOURCE_STATE_COMMON);
-    for (const auto& dispatch : request.dispatches) {
+    for (uint32_t dispatch_index = 0; dispatch_index < request.dispatches.size(); ++dispatch_index) {
+        const auto& dispatch = request.dispatches[dispatch_index];
+        progress.enter("root-signature", dispatch_index);
         std::vector<D3D12_DESCRIPTOR_RANGE> ranges(dispatch.views.size());
         std::vector<D3D12_ROOT_PARAMETER> parameters(dispatch.views.size());
         std::vector<D3D12_RESOURCE_STATES> wanted(buffers.size(), D3D12_RESOURCE_STATE_COMMON);
@@ -358,7 +379,9 @@ void execute(const Request& request, std::ostream& output, const AdapterIdentity
         pipeline_desc.pRootSignature = root.Get();
         pipeline_desc.CS = {dispatch.shader.data(), dispatch.shader.size()};
         ComPtr<ID3D12PipelineState> pipeline;
+        progress.enter("pipeline-create", dispatch_index);
         check(runtime.device->CreateComputePipelineState(&pipeline_desc, IID_PPV_ARGS(&pipeline)), "CreateComputePipelineState");
+        progress.enter("descriptors", dispatch_index);
         runtime.list->SetPipelineState(pipeline.Get());
         runtime.list->SetComputeRootSignature(root.Get());
         ComPtr<ID3D12DescriptorHeap> heap;
@@ -403,11 +426,13 @@ void execute(const Request& request, std::ostream& output, const AdapterIdentity
                 gpu.ptr += stride;
             }
         }
+        progress.enter("dispatch-submit", dispatch_index);
         runtime.list->Dispatch(dispatch.groups[0], dispatch.groups[1], dispatch.groups[2]);
         runtime.submit();
         std::fill(states.begin(), states.end(), D3D12_RESOURCE_STATE_COMMON);
     }
     std::vector<ComPtr<ID3D12Resource>> readbacks;
+    progress.enter("readback-submit");
     for (size_t index = 0; index < buffers.size(); ++index) {
         runtime.transition(buffers[index].Get(), states[index], D3D12_RESOURCE_STATE_COPY_SOURCE);
         auto readback = runtime.buffer(request.allocations[index].size(), D3D12_HEAP_TYPE_READBACK,
@@ -418,6 +443,7 @@ void execute(const Request& request, std::ostream& output, const AdapterIdentity
     }
     runtime.submit();
     write_integer(output, 0x31525844u, 4);
+    progress.enter("readback-map");
     write_integer(output, buffers.size(), 4);
     for (size_t index = 0; index < buffers.size(); ++index) {
         auto size = request.allocations[index].size();
@@ -430,6 +456,9 @@ void execute(const Request& request, std::ostream& output, const AdapterIdentity
         D3D12_RANGE no_writes = {0, 0};
         readbacks[index]->Unmap(0, &no_writes);
     }
+    output.flush();
+    if (!output) throw std::runtime_error("cannot write output");
+    progress.enter("complete");
 }
 
 uint64_t adapter_number(const wchar_t* argument) {

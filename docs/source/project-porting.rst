@@ -3362,9 +3362,19 @@ The worker records its own process ID and loaded ``d3d12.dll``,
 launcher's runtime information. The launcher hashes the files at those observed
 paths; these are disk-file identities, not hashes of mapped executable memory.
 Unloaded libraries, path-inspection errors and unreadable files remain explicit.
-The receipt is retained when a later dispatch returns an error; failures before
+The receipt is retained when a later dispatch fails or exceeds its deadline; failures before
 device creation can have no receipt. Successful worker execution requires a
 well-formed receipt. Numerical readbacks and guards remain independent checks.
+
+``directxRuntime.workerProgress`` records the last complete worker phase marker,
+its zero-based dispatch index when applicable, and elapsed milliseconds since
+worker execution began. Markers precede device creation, upload submission,
+pipeline creation, dispatch submission and readback; they identify the last
+observed phase, not the precise instruction or cause of a failure. Standard
+output and error tails are retained with truncation flags, bounded to 8 KiB per
+stream. A malformed or partially written runtime receipt is reported separately
+and never replaces the original timeout or dispatch error. These diagnostics do
+not extend the execution deadline or establish numerical correctness.
 
 For controlled runtime comparisons, ``execute_buffer_views`` accepts an explicit
 ``sdk_directory`` containing ``D3D12Core.dll`` and an integer ``sdk_version``.

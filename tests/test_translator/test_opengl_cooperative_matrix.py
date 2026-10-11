@@ -386,7 +386,8 @@ def test_project_matrix_rounding_native_package(tmp_path, profile, shape):
 
 
 @pytest.mark.parametrize("profile", PROFILES)
-def test_project_matrix_rounding_native_edges(tmp_path, profile):
+@pytest.mark.parametrize("inputs", ["edges", "quarter", "rounding"])
+def test_project_matrix_rounding_native_edges(tmp_path, profile, inputs):
     if os.environ.get("CROSTL_REQUIRE_COOPERATIVE_MATRIX_RUNTIME") != "1":
         pytest.skip(
             "set CROSTL_REQUIRE_COOPERATIVE_MATRIX_RUNTIME=1 for native matrix execution"
@@ -397,7 +398,11 @@ def test_project_matrix_rounding_native_edges(tmp_path, profile):
         tmp_path,
         "opengl",
         mma_profile=profile,
-        word_case=_edge_case(profile),
+        word_case=(
+            _edge_case(profile)
+            if inputs == "edges"
+            else _profile_case(profile, rounding=inputs == "rounding", products=1)
+        ),
         single_product=True,
     )
     _execute(request, expected, tmp_path)

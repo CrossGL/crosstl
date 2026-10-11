@@ -375,6 +375,142 @@ def _device(**overrides):
     )
 
 
+def _progress(phase="pipeline-create", dispatch=0, elapsed=125):
+    return (
+        directx_runtime._PROGRESS_PREFIX
+        + json.dumps(
+            {"phase": phase, "dispatchIndex": dispatch, "elapsedMilliseconds": elapsed}
+        )
+        + "\n"
+    )
+
+
+@pytest.mark.parametrize("receipt", ["valid", "missing", "truncated", "unreadable"])
+@pytest.mark.parametrize("failure", ["timeout", "exit"])
+def test_worker_failures_keep_phase_and_child_runtime(
+    tmp_path, monkeypatch, receipt, failure
+):
+    nodes, allocations, keys = _plan((_request(tmp_path),))
+    monkeypatch.setattr(directx_runtime, "_worker", lambda: Path("worker.exe"))
+    original_error = directx_runtime._error(
+        "deadline",
+        "operation-timeout",
+        timeoutSeconds=120,
+        stderr=_progress(),
+        stdout="worker output",
+        stdoutTruncated=False,
+        stderrTruncated=False,
+    )
+
+    def execute(command, **kwargs):
+        assert kwargs["timeout"] == 120
+        path = Path(command[2] + ".runtime")
+        if receipt != "missing":
+            path.write_bytes(_runtime_packet() if receipt != "truncated" else b"DX")
+        if failure == "timeout":
+            raise original_error
+        return subprocess.CompletedProcess(command, 1, b"", _progress().encode())
+
+    monkeypatch.setattr(directx_runtime, "_run", execute)
+    if receipt == "unreadable":
+
+        def unavailable(path):
+            raise OSError("receipt cannot be read")
+
+        monkeypatch.setattr(directx_runtime, "_worker_runtime_identity", unavailable)
+    state = SimpleNamespace(details={})
+    with pytest.raises(
+        (RuntimeAdapterSetupError, RuntimeAdapterDispatchError)
+    ) as caught:
+        directx_runtime.execute_buffer_views(
+            nodes, allocations, keys, state, device=_device()
+        )
+    details = caught.value.details
+    if failure == "timeout":
+        assert caught.value is original_error
+        assert details["reasonKind"] == "operation-timeout"
+    else:
+        assert details["reasonKind"] == "native-buffer-view-failed"
+        assert details["returnCode"] == 1
+    assert details["workerProgress"] == {
+        "phase": "pipeline-create",
+        "dispatchIndex": 0,
+        "elapsedMilliseconds": 125,
+    }
+    assert (
+        details["requestSHA256"]
+        == hashlib.sha256(
+            directx_runtime.encode_dispatches(nodes, allocations, keys)[0]
+        ).hexdigest()
+    )
+    assert details["timeoutSeconds"] == 120
+    assert details["adapterIdentity"] == directx_runtime._device_identity(_device())
+    assert (
+        state.details["directxRuntime"]["workerProgress"] == details["workerProgress"]
+    )
+    if receipt == "valid":
+        assert details["workerRuntime"]["processId"] == 123
+    else:
+        assert details["workerRuntime"] is None
+        assert ("workerRuntimeError" in details) == (receipt != "missing")
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "driver error\n",
+        _progress()[:-1],
+        "CROSSTL_DIRECTX_PROGRESS {\n",
+        "CROSSTL_DIRECTX_PROGRESS []\n",
+        "CROSSTL_DIRECTX_PROGRESS {}\n",
+        _progress(phase="unknown"),
+        _progress(phase=[]),
+        _progress(dispatch=True),
+        _progress(dispatch=-1),
+        _progress(dispatch=65536),
+        _progress(elapsed=True),
+        _progress(elapsed=-1),
+        _progress(elapsed=2**64),
+        _progress(elapsed=1.5),
+    ],
+)
+def test_worker_progress_ignores_partial_or_invalid_markers(suffix):
+    prior = _progress("upload-submit", None, 0)
+    assert directx_runtime._worker_progress(suffix) is None
+    assert directx_runtime._worker_progress(prior + suffix) == {
+        "phase": "upload-submit",
+        "dispatchIndex": None,
+        "elapsedMilliseconds": 0,
+    }
+    assert directx_runtime._worker_progress(prior + suffix + "\n" + _progress()) == {
+        "phase": "pipeline-create",
+        "dispatchIndex": 0,
+        "elapsedMilliseconds": 125,
+    }
+
+
+def test_worker_timeout_keeps_bounded_output_from_real_child():
+    marker = _progress()
+    source = (
+        "import sys, time; "
+        "sys.stdout.buffer.write(b'x' * 9000 + b'output end\\xff'); sys.stdout.flush(); "
+        f"sys.stderr.buffer.write(b'y' * 9000 + b'\\n' + {marker.encode()!r}); sys.stderr.flush(); "
+        "time.sleep(30)"
+    )
+    with pytest.raises(RuntimeAdapterSetupError) as caught:
+        directx_runtime._run([sys.executable, "-c", source], timeout=2)
+    details = caught.value.details
+    assert details["reasonKind"] == "operation-timeout"
+    assert details["timeoutSeconds"] == 2
+    assert details["stdoutTruncated"] and details["stderrTruncated"]
+    assert len(details["stderr"].encode()) == 8192
+    assert details["stdout"].endswith("output end\ufffd")
+    assert (
+        directx_runtime._worker_progress(details["stderr"])["phase"]
+        == "pipeline-create"
+    )
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
@@ -438,6 +574,10 @@ int main() {
     if (expected.matches(other)) return 6;
     other = expected; other.shared_memory = 1;
     if (expected.matches(other)) return 7;
+    Progress progress;
+    progress.enter("device-create");
+    progress.enter("pipeline-create", 17);
+    progress.enter("complete");
     return 0;
 }
 """,
@@ -480,6 +620,19 @@ int main() {
         [str(executable)], capture_output=True, text=True, timeout=10
     )
     assert result.returncode == 0, result.stdout + result.stderr
+    phases = [
+        directx_runtime._worker_progress(line + "\n")
+        for line in result.stderr.splitlines()
+    ]
+    assert [row["phase"] for row in phases] == [
+        "device-create",
+        "pipeline-create",
+        "complete",
+    ]
+    assert [row["dispatchIndex"] for row in phases] == [None, 17, None]
+    assert [row["elapsedMilliseconds"] for row in phases] == sorted(
+        row["elapsedMilliseconds"] for row in phases
+    )
 
 
 def test_adapter_selection_failures_retain_requested_identity(tmp_path, monkeypatch):
@@ -543,6 +696,9 @@ def test_directx_buffer_views_execute(tmp_path, constant_offset, retain_native_p
     }
     assert by_id["params"]["views"][0]["byteOffset"] == constant_offset
     identity = state.details["directxRuntime"]["workerRuntime"]
+    progress = state.details["directxRuntime"]["workerProgress"]
+    assert progress["phase"] == "complete" and progress["dispatchIndex"] is None
+    assert progress["elapsedMilliseconds"] >= 0
     assert identity["processId"] != os.getpid()
     assert identity["observedAt"] == "device-created"
     libraries = {item["name"]: item for item in identity["libraries"]}
