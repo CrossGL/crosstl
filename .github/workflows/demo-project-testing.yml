@@ -3922,6 +3922,41 @@ jobs:
             --expected-unit-count 49 \
             --expected-entry-count 17832
 
+      - name: Validate pinned complete scans
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_SCAN: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          PYTHONUNBUFFERED: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          LP_NUM_THREADS: "2"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-scan-results
+          python tools/run_bounded_command.py --timeout-seconds 240 --label "Pinned complete scans" -- \
+            python -m pytest -q -n auto -vv --durations=10 \
+              --basetemp=mlx-scan-results/pytest \
+              --junitxml=mlx-scan-results/results.xml \
+              demos/integrations/mlx/tests/kernels/test_current_scan.py
+
+      - name: Upload complete scan evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-scan-${{ runner.os }}
+          path: mlx-scan-results
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Validate pinned unary arithmetic
         shell: bash
         env:
