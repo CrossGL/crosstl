@@ -715,8 +715,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "01c06748b59caea568ce9bab29323945fc263219ac6013a6ead22799f39585fb",
-      "sizeBytes": 2827
+      "sha256": "04a2516a4c6e46bc65788b6a4a68e1aed1df11ae06c32b0ee616a3f465689a9b",
+      "sizeBytes": 4504
     },
     {
       "entryPoint": "v_Erffloat16float16",
@@ -724,8 +724,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "1f2fee101170fa920c7bc01b2c0bee791690515686d0b31984fa1facbdb9a26b",
-      "sizeBytes": 2769
+      "sha256": "dc84ff83f91066cad98727c4b03a76ea33b76f61c8c8aa3c9fdec16890917fab",
+      "sizeBytes": 4446
     },
     {
       "entryPoint": "v_Erffloat32float32",
@@ -733,8 +733,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "0dd976f299d924669b5a757a2364718b1f72077f014139cc93b75f0c7c18fdaf",
-      "sizeBytes": 2783
+      "sha256": "ea83d08a3957b6f8884be270514ead285b80bfe7ae3631b424c4771717c0f096",
+      "sizeBytes": 4460
     },
     {
       "entryPoint": "v_Expbfloat16bfloat16",
@@ -778,8 +778,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "fa70083639548cde49161393c1baf78a6f5322fa7b2381eac35cefabfb5589ac",
-      "sizeBytes": 2123
+      "sha256": "c341c8be2b4da98981f15a36b87186d1500398be2cdb4cb387d857ecc885fe6c",
+      "sizeBytes": 3800
     },
     {
       "entryPoint": "v_Expm1float16float16",
@@ -787,8 +787,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "348c32a9d55c5fe39034fa72ac0fe56b8b8e22dc9ccd6946bd280ab15fc67fe8",
-      "sizeBytes": 2065
+      "sha256": "44973c63dcb9b60514a5bcff776996eb3f6f67cdbdc8000c8fcc45471f18a6cd",
+      "sizeBytes": 3742
     },
     {
       "entryPoint": "v_Expm1float32float32",
@@ -796,8 +796,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "8e96b88930b9827bc714e255c848c71faf2659cd27190ddbf04afde08af6226d",
-      "sizeBytes": 2079
+      "sha256": "feecceb2d20bcb9defdde95532f7aaf7629178796e1d10952097431de6e4861a",
+      "sizeBytes": 3756
     },
     {
       "entryPoint": "v_Floorbfloat16bfloat16",

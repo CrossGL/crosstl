@@ -792,7 +792,26 @@ The current harness verifies:
   explicitly in the independent rounding oracle, not treated as a tolerance.
   These are Metal results, not DirectX/OpenGL numerical qualification or a
   complete upstream-suite result.
-  The remaining 197 arithmetic-changing references stay
+  A further 30 Expm1/Erf references, including six scalar entries, retain
+  source-owned power semantics in their shared exponential helper. Their exact
+  accepted sources are reproduced, all 60 old/new sources pass strict Metal
+  compile/link checks, and fresh historical/current translations preserve the
+  selected interfaces and materializations. The compiled libraries differ;
+  compiler success alone is not the basis for accepting these references.
+  Independent readback audits compare original, accepted and updated historical
+  output, plus original and generated current-pin output. At each pin they cover
+  1,186,152 values per path and initialization across five layouts and three
+  storage types, with two output initializations, 64 guard words per entry and
+  unchanged read-only buffers. Twelve contiguous cases exhaust all 65,536
+  half/bfloat16 storage patterns. Finite values, infinities and signed zeros
+  match exactly; NaNs are compared by classification, not payload.
+  Historical `vn` evidence used a wildcard workgroup rule; fresh runs select
+  the exact entry. Both resolve to `[1, 1, 1]` with identical specialization
+  parameters, and their different rule identities are verified separately.
+  Existing per-entry corpus CI retains the updated source identities and strict
+  compiler checks. These bounded Metal experiments do not establish exhaustive
+  float32 accuracy or native DirectX/OpenGL parity for all 30 entries.
+  The remaining 167 arithmetic-changing references stay
   unchanged under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
   The historical pin and complete entry selection are preserved.
   At current pin `9c3d3557`, Abs and Sign use upstream's scaled `hypot`
