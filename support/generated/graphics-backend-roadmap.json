@@ -1894,6 +1894,10 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_wave_and_rayquery_intrinsics_codegen",
+            "tests/test_translator/test_software_subgroup_scan.py::def test_scan_compiles_and_evaluates_operand_once",
+            "tests/test_translator/test_software_subgroup_scan.py::def test_scan_rejects_unsupported_source_widths",
+            "tests/test_translator/test_software_subgroup_scan.py::def test_scan_rejects_unproven_barrier_participation",
+            "tests/test_translator/test_software_subgroup_scan.py::def test_scan_executes_on_device",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_wave_intrinsics_reject_wrong_arity",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_wave_intrinsics_validate_argument_types",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_codegen_lowers_canonical_shuffle_and_fill_up_wave_op",
@@ -1949,6 +1953,10 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins",
+            "tests/test_translator/test_software_subgroup_scan.py::def test_scan_compiles_and_evaluates_operand_once",
+            "tests/test_translator/test_software_subgroup_scan.py::def test_scan_rejects_unsupported_source_widths",
+            "tests/test_translator/test_software_subgroup_scan.py::def test_scan_rejects_unproven_barrier_participation",
+            "tests/test_translator/test_software_subgroup_scan.py::def test_scan_executes_on_device",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsic_invalid_arities_and_wave_match_lowering",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_shuffle_and_fill_up_lowers_scalar_vector_and_bool",
