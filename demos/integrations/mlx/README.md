@@ -745,7 +745,24 @@ The current harness verifies:
   and 256 guards per path. Non-NaN words, including signed zero, match exactly.
   Different output initializations detect unwritten results without excluding
   legitimate values from the exhaustive domains.
-  The remaining 212 arithmetic-changing references stay
+  A further 15 `ToFP8` references, including three scalar entries, change only
+  the sign mask's unsigned literal suffix and an unused-parameter annotation.
+  Fresh translation with the original translator reproduces every accepted
+  source. Accepted/current historical sources and separate current-pin sources
+  pass 45 warnings-fatal compile/link checks and produce byte-identical Metal
+  libraries for each entry. Re-reflection with the same implementation preserves
+  all resource layouts; historical materializations are unchanged. The current
+  pin has 878 additional pruned candidates, not additional selected entries.
+  Bounded raw-buffer checks at each pin cover 592,758 outputs per path and
+  initialization across all five layouts, two output initializations, six
+  exhaustive 16-bit cases, 960 guard bytes per path and unchanged read-only
+  buffers. Original Metal and translated output match exactly. A separate
+  65,536-pattern source-device control establishes half-to-float NaN
+  canonicalization before FP8 saturation; that conversion is accounted for
+  explicitly in the independent rounding oracle, not treated as a tolerance.
+  These are Metal results, not DirectX/OpenGL numerical qualification or a
+  complete upstream-suite result.
+  The remaining 197 arithmetic-changing references stay
   unchanged under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
   The historical pin and complete entry selection are preserved.
   At current pin `9c3d3557`, Abs and Sign use upstream's scaled `hypot`

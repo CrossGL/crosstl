@@ -1741,8 +1741,8 @@
       "inputType": "bfloat16_t",
       "outputType": "uint8_t",
       "family": "fp8-encode",
-      "sha256": "49e6808694f089bc6d5d90f9b12c61cf0c4dfd0cbdb4051ceb68e5a9577396a7",
-      "sizeBytes": 2200
+      "sha256": "bf6f45f55ea3cf4193f9b4872b751056b8429e3ae8e557886cb694c78f0607af",
+      "sizeBytes": 2225
     },
     {
       "entryPoint": "v_ToFP8float16uint8",
@@ -1750,8 +1750,8 @@
       "inputType": "float16_t",
       "outputType": "uint8_t",
       "family": "fp8-encode",
-      "sha256": "c617d8aa1fd47e69f8031c15114ad411e1a256288062e543a6e697e5fd4d5a71",
-      "sizeBytes": 2182
+      "sha256": "14910d6556217e422368771cc3d1b3c2b673e980d380bbeb2b15265965a5f13d",
+      "sizeBytes": 2207
     },
     {
       "entryPoint": "v_ToFP8float32uint8",
@@ -1759,8 +1759,8 @@
       "inputType": "float",
       "outputType": "uint8_t",
       "family": "fp8-encode",
-      "sha256": "47463848c43cf3bf5cd439842603fa83a69bf91edfd88e049050eba7b9f1d35f",
-      "sizeBytes": 2168
+      "sha256": "c8f7ce7a0e4841da273f9643f67dc41cc9e643a611fb0332095a991979879ca3",
+      "sizeBytes": 2193
     }
   ],
   "sourceOptionsByOperator": {
