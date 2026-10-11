@@ -828,8 +828,24 @@ The current harness verifies:
   A complete source review accounts for narrow-conversion helpers in 308
   changed artifacts; 2,188 artifacts are byte-identical. All interfaces and
   indexing remain unchanged, and 61 fresh translation checks cover every
-  changed conversion pair and shape. This is compiler and reference evidence,
-  not full numerical execution or MLX host runtime redirection;
+  changed conversion pair and shape. A subsequent full review preserves 2,482
+  artifacts and updates only the 14 bfloat16-to-Boolean entries. Their sole
+  change explicitly extracts the unsigned 16-bit word and promotes it to
+  `int` before the unchanged sign-bit mask. Exact accepted-source reconstruction
+  and 2,510 compiler/validator runs cover the whole family and both versions
+  of those 14 entries. The compiled modules differ; this is not a claim of
+  byte-identical compiler output. The conversion is checked over every bfloat16
+  word, while all resource interfaces, materializations and index preconditions
+  remain unchanged.
+  Separately, `test_current_copy.py` executes current-pin contiguous and strided
+  bfloat16-to-Boolean copies over all 65,536 bit patterns per entry, including
+  signed zero, subnormals, infinities and NaNs. Generated Metal and OpenGL match
+  unmodified original Metal across 131,072 computed values and 128 output guards
+  per target. Inputs use lossless bit-pattern transport; output buffers start
+  with the opposite expected value. The same tests are required in the existing
+  Windows native job; local strict DXC checks pass, but Windows numerical
+  execution of these additions remains unverified. These two entries do not
+  establish whole-family numerical parity or complete MLX host redirection;
 - selected-entry translation of all 2,496 discovered historical
   `copy.metal` entries to DirectX at revision
   `846d176227a0ac13d2667e58d2bb68b322109ab0`. The compact schema-v2

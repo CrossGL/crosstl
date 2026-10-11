@@ -18,6 +18,8 @@ from crosstl.project import (
     load_project_config,
     translate_project,
 )
+from demos.integrations.mlx.portable_host import bfloat_storage
+from demos.integrations.mlx.portable_host.runtime import boolean_values, physical_dtype
 from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
     _metal_library,
     _run,
@@ -37,7 +39,14 @@ from tests.test_translator.test_native_loader_dispatch_integration import _execu
 SOURCE = "mlx/backend/metal/kernels/copy.metal"
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_COPY"
 GUARD = struct.unpack("<f", struct.pack("<I", 0x6A15BEEF))[0]
-FORMATS = {"float32": "f", "uint16": "H", "uint32": "I", "int32": "i", "int64": "q"}
+FORMATS = {
+    "bool": "?",
+    "float32": "f",
+    "uint16": "H",
+    "uint32": "I",
+    "int32": "i",
+    "int64": "q",
+}
 CASES = {
     "vector": ("v_copy", [17], [1]),
     "scalar": ("s_copy", [17], [0]),
@@ -301,11 +310,15 @@ def copy_executor(current_copy_source):
             executor.runtime_adapter.runtime.close()
 
 
-def _original_metal(work, workload, reference, dtype="float32"):
+def _original_metal(work, workload, reference, dtype="float32", output_dtype=None):
     runner, library = reference
+    output_dtype = output_dtype or dtype
     bindings = {
         0: (dtype, workload["source"]),
-        1: (dtype, workload.get("initial", [GUARD] * len(workload["expected"]))),
+        1: (
+            output_dtype,
+            workload.get("initial", [GUARD] * len(workload["expected"])),
+        ),
     }
     bindings.update(
         {
@@ -339,11 +352,13 @@ def _original_metal(work, workload, reference, dtype="float32"):
         )
     )
     raw = (output / "buffer-1.bin").read_bytes()
-    actual = [value for (value,) in struct.iter_unpack("<" + FORMATS[dtype], raw)]
-    if dtype == "float32":
+    actual = [
+        value for (value,) in struct.iter_unpack("<" + FORMATS[output_dtype], raw)
+    ]
+    if output_dtype == "float32":
         _check(actual, workload["expected"])
     else:
-        assert raw == _bytes(dtype, workload["expected"])
+        assert raw == _bytes(output_dtype, workload["expected"])
     for index, filename in enumerate(files):
         if index != 1:
             assert (output / f"buffer-{index}.bin").read_bytes() == Path(
@@ -495,6 +510,143 @@ def _half_workload(prefix, start):
             else {"size": ("uint32", [len(words)], 2)}
         ),
     }
+
+
+def _bfloat_boolean_workload(prefix, start):
+    workload = _half_workload(prefix, start)
+    words = list(range(start, start + 32768))
+    expected = [word not in (0x0000, 0x8000) for word in words]
+    guards = [index % 2 == 0 for index in range(32)]
+    workload.update(
+        entry=prefix + "bfloat16bool_",
+        expected=expected + guards,
+        initial=[not value for value in expected] + guards,
+    )
+    return workload
+
+
+def test_bfloat_boolean_copy_covers_every_payload_and_preserves_guards():
+    for prefix in ("v_copy", "g1_copy"):
+        observed, converted = [], []
+        for start in (0, 32768):
+            workload = _bfloat_boolean_workload(prefix, start)
+            stride = 3 if prefix == "g1_copy" else 1
+            words = workload["source"][::stride]
+            count = workload["grid"][0]
+            assert count == len(words) == 32768
+            assert workload["expected"][:count] == [
+                word not in (0x0000, 0x8000) for word in words
+            ]
+            assert workload["initial"][:count] == [
+                not value for value in workload["expected"][:count]
+            ]
+            assert workload["initial"][count:] == workload["expected"][count:]
+            assert workload["expected"][count:] == [i % 2 == 0 for i in range(32)]
+            observed.extend(words)
+            converted.extend(workload["expected"][:count])
+        assert observed == list(range(65536))
+        assert [index for index, value in enumerate(converted) if not value] == [
+            0x0000,
+            0x8000,
+        ]
+
+
+@pytest.mark.parametrize("prefix", ("v_copy", "g1_copy"))
+@pytest.mark.parametrize("start", (0, 32768))
+def test_current_bfloat_boolean_copy_preserves_all_payloads(
+    current_copy_source, copy_executor, tmp_path, prefix, start
+):
+    root, target, reference = current_copy_source
+    workload = _bfloat_boolean_workload(prefix, start)
+    with tempfile.TemporaryDirectory(
+        prefix=".current-bfloat-boolean-copy-", dir=root
+    ) as directory:
+        work = Path(directory)
+        try:
+            descriptor, package, source = _copy_package(root, target, work, workload)
+            encoding = bfloat_storage.encoding(target)
+            output_dtype = physical_dtype("bool_", target)
+            inputs = {
+                "src": {
+                    "dtype": physical_dtype("bfloat16", target),
+                    "shape": [len(workload["source"])],
+                    "values": bfloat_storage.pack(workload["source"], target),
+                    **({"encoding": encoding} if encoding else {}),
+                },
+                "dst": {
+                    "dtype": output_dtype,
+                    "shape": [len(workload["initial"])],
+                    "values": [
+                        bool(value) if output_dtype == "bool" else int(value)
+                        for value in workload["initial"]
+                    ],
+                },
+            }
+            for name, (dtype, values, _) in workload["constants"].items():
+                if target == "directx":
+                    name = workload["entry"] + "_" + name
+                inputs[name] = {
+                    "dtype": dtype,
+                    "shape": [len(values)],
+                    "values": values,
+                }
+            outputs = {
+                "dst": {
+                    **inputs["dst"],
+                    "values": [
+                        bool(value) if output_dtype == "bool" else int(value)
+                        for value in workload["expected"]
+                    ],
+                }
+            }
+            (work / "workload.json").write_text(json.dumps(workload, indent=2))
+            (work / "values.json").write_text(
+                json.dumps({"inputs": inputs, "outputs": outputs}, indent=2)
+            )
+            request = _request(
+                descriptor, package, inputs, outputs, workload["grid"][0]
+            )
+            assert not request.execution_plan.diagnostics
+            availability = copy_executor.is_available(request)
+            assert availability.available, availability.reason
+            result = copy_executor.run(request)
+            (work / "result.json").write_text(
+                json.dumps(
+                    {
+                        "status": result.status,
+                        "outputs": result.outputs,
+                        "details": result.details,
+                    },
+                    indent=2,
+                )
+            )
+            assert result.status == "ok"
+            assert result.outputs == _bound_values(descriptor, outputs)
+            (actual,) = result.outputs.values()
+            boolean_values(actual["values"], output_dtype)
+            (work / "readback.bin").write_bytes(_bytes(output_dtype, actual["values"]))
+            (work / "expected.bin").write_bytes(
+                _bytes(output_dtype, outputs["dst"]["values"])
+            )
+            evidence = {
+                "commit": MLX_COMMIT,
+                "target": target,
+                "entry": workload["entry"],
+                "firstPayload": start,
+                "payloadCount": 32768,
+                "guardCount": 32,
+                "sourceSha256": (
+                    hashlib.sha256((root / SOURCE).read_bytes()).hexdigest()
+                ),
+                "artifactSha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            }
+            if reference:
+                evidence["original"] = _original_metal(
+                    work, workload, reference, "uint16", "bool"
+                )
+            (work / "evidence.json").write_text(json.dumps(evidence, indent=2))
+        finally:
+            shutil.copytree(work, tmp_path / "evidence", dirs_exist_ok=True)
 
 
 def _half_payload(target, words):

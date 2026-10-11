@@ -3364,7 +3364,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/copy.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "571a4b6a8c5b5e6a58a8dd91ac4987d83b6a5c57775b50b03496b78caf36c0c0",
+      "sha256": "82b597827181fdc5b62df6c6a9f76efeedbb48c139701352583260bcd2135bbc",
       "size_bytes": 874494,
       "entry_identity_fields": [
         "entryPoint",
@@ -3533,7 +3533,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 6029750,
+      "generated_size_bytes_total": 6030156,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "s_copybool_bool_",
