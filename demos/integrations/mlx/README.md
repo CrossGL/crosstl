@@ -3427,11 +3427,37 @@ complete complex input coverage, MLX host redirection or full upstream-suite
 execution. The historical artifact contracts remain pinned to `846d1762`.
 
 The 54 floating `ArcTan2` entries have also been reviewed with an explicit
-source underflow policy, as described below. The remaining 54 floating `Power`
-references are unchanged pending arithmetic review. Their generated helpers
-differ beyond annotations and are not covered by the equivalence result above.
-The complete current binary family is not yet qualified; remaining cases are
-tracked in
+source underflow policy, as described below. The final 54 floating `Power`
+references now have a separate numerical review. Their accepted predecessors
+reconstruct to the recorded source identities, and fresh project translation
+reproduces every reviewed current artifact with unchanged interfaces and
+materializations. All 108 old/new sources pass strict Metal compilation and
+linking. The historical pin, 4,122 entries and all non-Power identities remain
+unchanged by this final reference update.
+
+The Power review executes original MLX, accepted output and updated output
+across 162 layout controls and three vector stress domains. Each path checks
+171,068 values per initialization, using two different finite output fills to
+reject unwritten results, and 2,640 guards in total. Every read-only buffer
+remains unchanged. Non-NaN words agree exactly, including zero signs; NaN
+payloads are compared by classification. The identity cases include every
+binary16 and bfloat16 storage word with exponent one. This is sampled argument
+coverage, not exhaustive coverage of all base/exponent pairs.
+
+Current-pin `test_current_real_power.py` separately checks 224,534 values and
+48 guards on each generated Metal/OpenGL path, with original Metal source
+controls, across its identity, operand-underflow and portable-finite profiles.
+The existing oracles and precision bounds remain unchanged; the finite profile
+is not claimed bit-identical to native power. Both local target runs pass eight
+tests, and independent audits recheck the actual output words and artifact
+identities. Original Metal input readbacks are verified; generated input
+readbacks are not available through these executors. Those cases already run
+in the existing native host matrix on all three targets. This local review
+does not establish a Windows execution pass.
+
+All known changed binary Metal references are now reviewed. Whole-family
+numerical parity, complete host redirection and full upstream-suite execution
+remain unproven. Other Metal corpus work remains tracked in
 [#1966](https://github.com/CrossGL/crosstl/issues/1966).
 
 The same selected-entry pipeline translates all 4,122 binary entries to

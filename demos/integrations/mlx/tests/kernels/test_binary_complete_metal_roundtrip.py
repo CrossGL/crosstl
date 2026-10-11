@@ -42,7 +42,7 @@ BINARY_SCALAR_METAL_CONTRACT_PATH = (
     / "binary.scalar-metal-roundtrip.json"
 )
 BINARY_SCALAR_METAL_CONTRACT_SHA256 = (
-    "2c3d81cd232c695f77517ce7a8bea5ab268772a439f34131908449173beb89e9"
+    "85ed57d2452a0912ce87ed4936bef91fced438622835e0efaa1ddc118833e150"
 )
 BINARY_METAL_CONTRACT_PATH = (
     ROOT
@@ -53,7 +53,7 @@ BINARY_METAL_CONTRACT_PATH = (
     / "binary.metal-roundtrip.json"
 )
 BINARY_METAL_CONTRACT_SHA256 = (
-    "2adcf4b297490da205ef1eee4949805609dd0f17d96feb2277cf2678e2afe225"
+    "4100c2b01edc56979d8af29e1b85df6d0c5cb66f284e2630ede2708286203d9e"
 )
 
 
@@ -449,7 +449,7 @@ def test_current_mlx_binary_metal_contract_is_complete_and_classified():
         "reflectedResourceCount": 19106,
         "reflectedResourceCountsByShape": resource_counts,
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 5970644,
+        "generatedSizeBytesTotal": 6060680,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "ss_Addfloat16", "sizeBytes": 772},
             "maximum": {"entryPoint": "gn4large_ArcTan2bfloat16", "sizeBytes": 7895},
