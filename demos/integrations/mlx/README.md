@@ -811,7 +811,22 @@ The current harness verifies:
   Existing per-entry corpus CI retains the updated source identities and strict
   compiler checks. These bounded Metal experiments do not establish exhaustive
   float32 accuracy or native DirectX/OpenGL parity for all 30 entries.
-  The remaining 167 arithmetic-changing references stay
+  Fifteen ArcCosh references, including three scalar entries, now retain
+  function-scoped precision directives and the unused-parameter annotation.
+  Every recorded predecessor is reproduced byte-for-byte. Accepted and updated
+  sources compile to identical Metal libraries with matching interfaces;
+  fresh historical and current-pin translations preserve the selected entries
+  and parameters. Native audits at each pin cover 617,565 output values per
+  implementation and initialization, all five layouts, two initializations,
+  unchanged read-only buffers and 64 guard words per entry. Six contiguous
+  cases exhaust the half/bfloat16 storage domains. Accepted and updated output
+  agree exactly apart from NaN payloads; narrow results also match original
+  Metal under that comparison. Float32 is not bit-identical to original Metal:
+  both remain within two ULP of a 90-digit decimal reference on these inputs,
+  inside the existing four-ULP bound. That bound and the native gates are
+  unchanged; this review does not establish exhaustive float32 or cross-target
+  numerical parity.
+  The remaining 152 arithmetic-changing references stay
   unchanged under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
   The historical pin and complete entry selection are preserved.
   At current pin `9c3d3557`, Abs and Sign use upstream's scaled `hypot`

@@ -274,8 +274,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "45c00e199b97c6a78b5aa04060b5ea55ab054c4d1aa0dba5526e87dfc5b848f1",
-      "sizeBytes": 2577
+      "sha256": "487a8e7ae2065bce4b443fb239e882771c02de1c630c8a0f46cb1d5ca9c61726",
+      "sizeBytes": 2545
     },
     {
       "entryPoint": "v_ArcCoshfloat16float16",
@@ -283,8 +283,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "cb81c75e1ac44f45c5104c13910790742d860908ac6b4dc779a1103811297d05",
-      "sizeBytes": 2506
+      "sha256": "c734139d9411517ea2891386421f8e1295f49dad55ea442c478a0d76366ff35c",
+      "sizeBytes": 2474
     },
     {
       "entryPoint": "v_ArcCoshfloat32float32",
@@ -292,8 +292,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "a9af8b6687a4d59f8999a9ec89686f5cf1676fd83497f5dd818199c48c8aa499",
-      "sizeBytes": 2519
+      "sha256": "fac88288ea7a391fced0f346d03b8089d7e9f9a8298b81e312bf145238bb9fe9",
+      "sizeBytes": 2487
     },
     {
       "entryPoint": "v_ArcSinbfloat16bfloat16",
