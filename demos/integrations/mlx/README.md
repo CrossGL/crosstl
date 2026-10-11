@@ -3065,7 +3065,7 @@ and bounded workload set with:
 
 The checked-in
 [`contracts/softmax.native-loader.dispatch.json`](contracts/softmax.native-loader.dispatch.json)
-fixture selects current-pinned `block_softmax_float32` and records two
+fixture selects `block_softmax_float32` at historical commit `846d1762` and records two
 host-derived block workloads. Axis size 32 with two rows uses `[32, 1, 1]` and
 dispatches two workgroups. Axis size 2049 with one row uses `[544, 1, 1]` and
 dispatches one workgroup; 2049 is directly represented in the pinned upstream
@@ -3077,14 +3077,16 @@ resources: float32 input and output buffers plus the int32 axis-size block.
 DirectX emits one guarded `CSMain` artifact for each workgroup size, retaining
 `[WaveSize(32)]`. Official DXC 1.9.2602.24 accepts both under `cs_6_6` with
 `-enable-16bit-types` and warnings as errors. Their SHA-256 values are
-`8dd346e61bc18a553119caa1b409487f512e520f87cad9678bcd936bfe10f4d8`
-and `0d3a924e407847c1cfc0825af8bbffeed69ea4558bc19160c53ea166d5715cc8`.
-Both complete bodies were compared against hash-verified originals recovered
-with translator revision `22a8f69f`. Their only differences are explicit
-source-width index conversions and sign-bit negation of the negative sentinels.
+`2da9311be17e763b0c422fe07a677efeb4ae21e3a87f2fe54a08acf933b353f7`
+and `f7d69880528cb189ccc81a3a4913230e84aef798b85d59f4aed482e2f442c14c`,
+with sizes 4,655 and 5,226 bytes, respectively. Both complete bodies were
+compared against hash-verified accepted sources reproduced with translator
+revision `1ea183f4`. Each adds one dummy member to 13 unused empty structs;
+removing only those declarations recovers the accepted source byte for byte.
+No executable statement changes.
 The pinned compiler produces byte-identical DXIL for each old/new pair;
 reflected resources, materialization and launch contracts are unchanged.
-The current MLX pin produces the same shaders and compiled modules, with 142
+The current MLX pin `9c3d3557` produces the same shaders, with 142
 pruned candidates rather than the historical pin's 131. This is compiler and
 contract evidence, not a new Windows numerical result. Required native tests
 retain their original workloads and tolerances. CI preserves their project

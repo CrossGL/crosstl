@@ -2086,16 +2086,16 @@ MLX_SOFTMAX_NATIVE_RUNTIME_EVIDENCE = {
         "directx": {
             "block-float32-axis-32-two-rows": {
                 "sha256": (
-                    "8dd346e61bc18a553119caa1b409487f512e520f87cad9678bcd936bfe10f4d8"
+                    "2da9311be17e763b0c422fe07a677efeb4ae21e3a87f2fe54a08acf933b353f7"
                 ),
-                "size_bytes": 4343,
+                "size_bytes": 4655,
                 "subgroup_id_lowering": "fixed-single-wave-group-index-quotient",
             },
             "block-float32-axis-2049": {
                 "sha256": (
-                    "0d3a924e407847c1cfc0825af8bbffeed69ea4558bc19160c53ea166d5715cc8"
+                    "f7d69880528cb189ccc81a3a4913230e84aef798b85d59f4aed482e2f442c14c"
                 ),
-                "size_bytes": 4914,
+                "size_bytes": 5226,
                 "subgroup_id_lowering": (
                     "workgroup-synchronized-physical-wave-allocation"
                 ),
