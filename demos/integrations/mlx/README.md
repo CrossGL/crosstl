@@ -911,7 +911,26 @@ The current harness verifies:
   retain input-device readbacks or guard regions. It supplements, rather than
   replaces, the guarded original-Metal comparisons above and does not establish
   complete host routing or upstream-suite parity.
-  The remaining 113 arithmetic-changing references stay
+  Nineteen ArcTan references have a separate two-pin native audit. The accepted
+  sources reproduce exactly with their historical translator. All 15 real-valued
+  entries retain byte-identical compiled libraries and matching non-NaN output
+  words; their source changes only precision-pragma scope and unused-parameter
+  annotations. The four complex entries instead use the updated square-root,
+  logarithm and atan2 helpers, so their changed computations are checked by
+  execution rather than compiler identity alone.
+  The audit reopens 190 dispatches across five layouts, two initializations,
+  694,296 output words per path and initialization at each pin, 1,216 guard words
+  per path and unchanged read-only buffers. Complete half/bfloat storage domains
+  are covered in the contiguous layouts. Real-valued differences from original
+  Metal are unchanged from the accepted artifacts: original Metal can return
+  positive zero for negative zero or flush binary32 subnormals, while the
+  generated precise helper preserves those bits. Other sampled float32 results
+  differ by at most one ULP. Complex components retain non-finite classification
+  and zero signs and satisfy the existing upstream `numpy.allclose` tolerance,
+  with sampled differences of at most two ULPs at both pins. The independent
+  precise-atan oracle and current-pin native-package tests retain their existing
+  bounds. No source policy, tolerance or whole-family parity status is changed.
+  The remaining 94 arithmetic-changing references stay
   unchanged under [#1966](https://github.com/CrossGL/crosstl/issues/1966).
   The historical pin and complete entry selection are preserved.
   At current pin `9c3d3557`, Abs and Sign use upstream's scaled `hypot`

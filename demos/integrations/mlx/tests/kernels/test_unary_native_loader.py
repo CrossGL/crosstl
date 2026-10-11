@@ -57,13 +57,13 @@ SCALAR_UNARY_METAL_CONTRACT_PATH = (
     / "unary.scalar-metal-roundtrip.json"
 )
 SCALAR_UNARY_METAL_CONTRACT_SHA256 = (
-    "892140f6acf1b231e7368afe7bbdc828f5731859fa27c04806a12efb64b9524e"
+    "c9865ed3d8b4a1af49b87394538593decbd86da04c214bda83b1396106f7ba6c"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "6a4a39c2c0a828b89f70c289aba67deec57ebfe73486624241502b24a9926f51"
+    "9ad52bf6fb4a0d7ada6b7801ba575ff4b2a716ee38fb91946f8ac483ba93d3cd"
 )
 ROOT_SOURCE_OPTIONS = {
     "binary32_sqrt_profile": "flush-subnormals",
@@ -772,12 +772,12 @@ def test_current_mlx_unary_metal_contract_is_complete_and_classified():
         "intermediate": "crossgl",
         "hostInterfaceStatus": "ready",
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 2092654,
+        "generatedSizeBytesTotal": 2128962,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absfloat16float16", "sizeBytes": 1076},
             "maximum": {
-                "entryPoint": "gn4large_Log10complex64complex64",
-                "sizeBytes": 12076,
+                "entryPoint": "gn4large_ArcTancomplex64complex64",
+                "sizeBytes": 13837,
             },
         },
         "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",
