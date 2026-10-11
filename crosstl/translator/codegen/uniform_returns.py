@@ -54,6 +54,86 @@ class UniformReturnAnalysis:
         self.resource_effects = {}
         self.resource_visiting = set()
 
+    def pointer_argument_write_roots(self, argument, source_types):
+        """Separate addressed storage from effect-free address calculations.
+
+        Types belong to the call's lexical scope. Unknown pointer producers,
+        casts and effectful selectors retain the caller's conservative fallback.
+        This does not establish purity of the callee or immutability of aliases.
+        """
+        values = {
+            name: frozenset()
+            for name, type_ in source_types.items()
+            if self.value_type(
+                type_.referenced_type if isinstance(type_, ReferenceType) else type_
+            )
+            and not isinstance(type_, ArrayType)
+        }
+
+        def value_only(expression):
+            return self._expression(expression, values, frozenset()) is not None
+
+        def buffer_type(type_):
+            return (
+                isinstance(type_, NamedType)
+                and type_.name in {"StructuredBuffer", "RWStructuredBuffer"}
+                and len(type_.generic_args) == 1
+            )
+
+        def lvalue(expression):
+            if isinstance(expression, IdentifierNode):
+                type_ = source_types.get(expression.name)
+                return (type_, {expression.name}) if type_ is not None else (None, None)
+            if isinstance(expression, (ArrayAccessNode, MemberAccessNode)):
+                owner = (
+                    expression.array_expr
+                    if isinstance(expression, ArrayAccessNode)
+                    else expression.object_expr
+                )
+                type_, roots = lvalue(owner)
+                if isinstance(type_, ReferenceType):
+                    type_ = type_.referenced_type
+                if isinstance(expression, ArrayAccessNode):
+                    if not value_only(expression.index_expr):
+                        return None, None
+                    if isinstance(type_, ArrayType):
+                        return type_.element_type, roots
+                    if isinstance(type_, PointerType):
+                        return type_.pointee_type, roots
+                    if buffer_type(type_):
+                        return type_.generic_args[0], roots
+                elif isinstance(type_, NamedType) and type_.name in self.structs:
+                    for member in self.structs[type_.name].members:
+                        if member.name == expression.member:
+                            return member.member_type, roots
+            return None, None
+
+        def pointer_roots(expression):
+            type_, roots = lvalue(expression)
+            if isinstance(type_, (PointerType, ArrayType)) or buffer_type(type_):
+                return roots
+            if isinstance(expression, UnaryOpNode) and expression.operator == "&":
+                return lvalue(expression.operand)[1]
+            if isinstance(expression, BinaryOpNode) and expression.operator in {
+                "+",
+                "-",
+            }:
+                left = pointer_roots(expression.left)
+                if left is not None and value_only(expression.right):
+                    return left
+                if expression.operator == "+" and value_only(expression.left):
+                    return pointer_roots(expression.right)
+            if isinstance(expression, TernaryOpNode) and value_only(
+                expression.condition
+            ):
+                left = pointer_roots(expression.true_expr)
+                right = pointer_roots(expression.false_expr)
+                if left is not None and right is not None:
+                    return left | right
+            return None
+
+        return pointer_roots(argument)
+
     def read_only_resource_parameter(self, function, index):
         """Check each use of a storage parameter, including forwarding calls.
 

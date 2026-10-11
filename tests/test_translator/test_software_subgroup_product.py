@@ -155,6 +155,7 @@ def _package(
     index_range_assertions=(),
     workgroup_access_assertions=(),
     source_backend="metal",
+    preserve_resource_origins=False,
 ):
     if source is None:
         source = _source(kind, math.prod(shape))
@@ -166,6 +167,8 @@ def _package(
         if target == "directx":
             target_options["relative_wave_shuffle_out_of_range"] = "self"
         options = {source_backend: {"target_options": {target: target_options}}}
+    if preserve_resource_origins:
+        options.setdefault(source_backend, {})["preserve_resource_origins"] = True
     report = translate_project(
         ProjectConfig(
             root=root,

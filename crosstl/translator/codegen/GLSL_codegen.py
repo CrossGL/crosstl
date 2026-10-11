@@ -4666,6 +4666,7 @@ class GLSLCodeGen:
         )
         self.glsl_software_subgroup_uniform_returns = analysis
         for function in functions:
+            lexical = self.glsl_scalar_array_view_lexical_bindings(function)
             for call in self.walk_ast(getattr(function, "body", None)):
                 if not isinstance(call, FunctionCallNode):
                     continue
@@ -4690,10 +4691,16 @@ class GLSLCodeGen:
                     for index, argument in enumerate(arguments):
                         if analysis.read_only_resource_parameter(target, index):
                             continue
-                        if index >= len(parameters) or isinstance(
-                            parameters[index].param_type, PointerType
-                        ):
+                        if index >= len(parameters):
                             mutations.append(argument)
+                        elif isinstance(parameters[index].param_type, PointerType):
+                            roots = analysis.pointer_argument_write_roots(
+                                argument, lexical["call_source_types"].get(id(call), {})
+                            )
+                            if roots is None:
+                                mutations.append(argument)
+                            else:
+                                written_roots.update(roots)
                         elif isinstance(
                             parameters[index].param_type, ReferenceType
                         ) or set(self.glsl_parameter_qualifiers(parameters[index])) & {

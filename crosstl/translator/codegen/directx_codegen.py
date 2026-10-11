@@ -5315,9 +5315,11 @@ class HLSLCodeGen:
         }
         resolved_calls = {}
         unresolved_calls = []
+        call_source_types = {}
         edges = {id(function): [] for function in functions}
         for function in functions:
             lexical = self.hlsl_function_lexical_type_bindings(function)
+            call_source_types.update(lexical["call_source_types"])
             for call in self.walk_ast(getattr(function, "body", None)):
                 if not isinstance(call, FunctionCallNode):
                     continue
@@ -5471,10 +5473,16 @@ class HLSLCodeGen:
                         callee, index
                     ):
                         continue
-                    if index >= len(parameters) or isinstance(
-                        parameters[index].param_type, PointerType
-                    ):
+                    if index >= len(parameters):
                         mutations.append(argument)
+                    elif isinstance(parameters[index].param_type, PointerType):
+                        roots = self.hlsl_software_subgroup_uniform_returns.pointer_argument_write_roots(
+                            argument, call_source_types.get(id(node), {})
+                        )
+                        if roots is None:
+                            mutations.append(argument)
+                        else:
+                            written_roots.update(roots)
                     elif isinstance(parameters[index].param_type, ReferenceType) or set(
                         self.hlsl_parameter_qualifiers(parameters[index])
                     ) & {"out", "inout"}:

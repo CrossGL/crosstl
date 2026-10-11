@@ -2085,6 +2085,16 @@ record members, repeated collectives, uniform early returns and untouched guards
 on each target's existing operating-system job. These controls do not establish
 full-kernel or upstream-suite parity.
 
+Resolved pointer arguments follow the same distinction using source types from
+the call's lexical scope. A write through ``output + count - lane`` invalidates
+the destination storage, not the scalar address values. Nested offsets,
+addressed array elements and conditional destinations retain their storage
+roots; unknown pointer producers, casts and effectful selectors remain
+conservative. This is a write-location proof, not a purity or alias-immutability
+proof. Required native tests cover forwarded pointers and array parameters,
+zero and varying uniform loop counts, multiple and partial logical subgroups,
+uniform early returns and output guards without additional CI runners.
+
 The DirectX fallback accumulates in increasing inner-dimension order using
 separately rounded binary32 products and sums; ``precise`` prevents contraction
 and reassociation. Metal does not specify a bitwise accumulation order for its
