@@ -269,6 +269,22 @@ class MetalHalfRemainderProfileError(ValueError):
         )
 
 
+class MetalHalfWideningProfileError(ValueError):
+    """Raised when a selected half conversion policy cannot be represented."""
+
+    project_diagnostic_code = (
+        "project.translate.metal-half-widening-profile-unsupported"
+    )
+    missing_capabilities = ("metal.half-widening-profile-lowering",)
+
+    def __init__(self, operand_type, source_location=None):
+        self.source_location = source_location
+        super().__init__(
+            "Metal canonical-NaN half widening requires a function and one to four "
+            f"lanes, got '{operand_type}'"
+        )
+
+
 class MetalStandardLibraryWrapperLoweringError(ValueError):
     """Raised when a materialized Metal standard-library wrapper has no target op."""
 
@@ -1344,6 +1360,7 @@ class MetalToCrossGLConverter:
         binary32_fma_profile=None,
         binary32_division_profile=None,
         binary16_remainder_profile=None,
+        binary16_widening_profile=None,
         binary32_comparison_profile=None,
         binary32_remainder_profile=None,
         binary32_additive_profile=None,
@@ -1386,6 +1403,11 @@ class MetalToCrossGLConverter:
                 "binary16_remainder_profile must be 'binary32-quotient' or None"
             )
         self.binary16_remainder_profile = binary16_remainder_profile
+        if binary16_widening_profile not in (None, "canonical-nan"):
+            raise ValueError(
+                "binary16_widening_profile must be 'canonical-nan' or None"
+            )
+        self.binary16_widening_profile = binary16_widening_profile
         if binary32_comparison_profile not in (
             None,
             "preserve-subnormals",
@@ -1884,6 +1906,7 @@ class MetalToCrossGLConverter:
         self.required_metal_fma_widths = set()
         self.required_metal_division_widths = set()
         self.required_metal_half_remainder_widths = set()
+        self.required_metal_half_widening_widths = set()
         self.required_metal_comparisons = set()
         self.required_metal_remainder_widths = set()
         self.required_metal_additive_operations = set()
@@ -3105,6 +3128,7 @@ class MetalToCrossGLConverter:
         self.required_metal_fma_widths = set()
         self.required_metal_division_widths = set()
         self.required_metal_half_remainder_widths = set()
+        self.required_metal_half_widening_widths = set()
         self.required_metal_comparisons = set()
         self.required_metal_remainder_widths = set()
         self.required_metal_additive_operations = set()
@@ -3555,6 +3579,7 @@ class MetalToCrossGLConverter:
             self.generate_metal_division_support_code(indent=1)
             + self.generate_metal_fma_support_code(indent=1)
             + self.generate_metal_half_remainder_support_code(indent=1)
+            + self.generate_metal_half_widening_support_code(indent=1)
             + self.generate_metal_comparison_support_code(indent=1)
             + self.generate_metal_remainder_support_code(indent=1)
             + self.generate_metal_additive_support_code(indent=1)
@@ -9832,6 +9857,7 @@ class MetalToCrossGLConverter:
                                 )
                                 is not None
                                 or isinstance(stmt.value, ArrayAccessNode)
+                                or self.binary16_widening_profile is not None
                             ):
                                 value = self.generate_initializer_value(
                                     stmt.value,
@@ -10897,6 +10923,8 @@ class MetalToCrossGLConverter:
                 initializer_type = self.expression_metal_type(node.left)
         elif isinstance(node.right, InitializerListNode):
             initializer_type = self.expression_metal_type(node.left)
+        if self.binary16_widening_profile is not None and not initializer_type:
+            initializer_type = self.expression_metal_type(node.left)
         try:
             rhs = self.generate_initializer_value(
                 node.right,
@@ -11137,7 +11165,15 @@ class MetalToCrossGLConverter:
             return self.generate_initializer_list(
                 expr, is_main, expected_type, expected_array
             )
-        return self.generate_expression(expr, is_main)
+        value = self.generate_expression(expr, is_main)
+        if self.binary16_widening_profile is not None and not expected_array:
+            value = self.render_metal_half_widening(
+                value,
+                self.expression_metal_type(expr),
+                expected_type,
+                getattr(expr, "source_location", None),
+            )
+        return value
 
     def generate_initializer_list(
         self, node, is_main=False, expected_type=None, expected_array=False
@@ -11167,7 +11203,7 @@ class MetalToCrossGLConverter:
 
         named_elements = []
         positional_elements = []
-        for element in node.elements:
+        for index, element in enumerate(node.elements):
             if isinstance(element, DesignatedInitializerNode):
                 named_elements.append(
                     self.generate_designated_initializer(
@@ -11178,8 +11214,19 @@ class MetalToCrossGLConverter:
                     )
                 )
             else:
+                element_type = None
+                if self.binary16_widening_profile is not None:
+                    vector = self.metal_small_vector_type_parts(expected_type)
+                    if expected_array:
+                        element_type = expected_type
+                    elif vector is not None:
+                        element_type = vector[0]
+                    elif index < len(member_types):
+                        element_type = list(member_types.values())[index]
+                    else:
+                        element_type = expected_type
                 positional_elements.append(
-                    self.generate_initializer_value(element, is_main)
+                    self.generate_initializer_value(element, is_main, element_type)
                 )
 
         elements = named_elements + positional_elements
@@ -11342,6 +11389,29 @@ class MetalToCrossGLConverter:
                 self.expression_metal_type(operand)
                 for operand in (expr.left, expr.right)
             ]
+            if self.binary16_widening_profile is not None and expr.op in {
+                "+",
+                "-",
+                "*",
+                "/",
+                "==",
+                "!=",
+                "<",
+                "<=",
+                ">",
+                ">=",
+            }:
+                computation = (
+                    self.metal_binary_expression_type(expr)
+                    if expr.op in {"+", "-", "*", "/"}
+                    else self.metal_scalar_binary_result_type("+", *source_types)
+                )
+                left = self.render_metal_half_widening(
+                    left, source_types[0], computation
+                )
+                right = self.render_metal_half_widening(
+                    right, source_types[1], computation
+                )
             bfloat_plan = self.metal_bfloat_arithmetic_plan(
                 expr.op, *source_types, getattr(expr, "source_location", None)
             )
@@ -11389,6 +11459,11 @@ class MetalToCrossGLConverter:
                         right = f"int({right})"
             return f"{left} {expr.op} {right}"
         elif isinstance(expr, FunctionCallNode):
+            profiled_constructor = self.generate_metal_half_widening_constructor(
+                expr.name, expr.args, is_main
+            )
+            if profiled_constructor is not None:
+                return profiled_constructor
             lowered_static_call = self.generate_lowered_static_struct_method_call(
                 expr, is_main
             )
@@ -11534,6 +11609,38 @@ class MetalToCrossGLConverter:
             wrapper_arguments = self.generate_storage_wrapper_call_arguments(
                 materialized_name, expr, is_main
             )
+            if self.binary16_widening_profile is not None:
+                selected = self.selected_metal_callable(expr)
+                if selected is None:
+                    candidates = self.metal_user_function_overloads(
+                        materialized_name, source_offset=self.alias_source_offset(expr)
+                    )
+                    signatures = {
+                        self.metal_function_source_signature(candidate)
+                        for candidate in candidates
+                    }
+                    if len(signatures) == 1 and len(candidates[0].params) == len(
+                        expr.args
+                    ):
+                        candidate = candidates[0]
+                        if all(
+                            self.metal_source_overload_argument_match_rank(
+                                argument,
+                                self.expression_metal_type(argument),
+                                parameter,
+                            )
+                            is not None
+                            for argument, parameter in zip(expr.args, candidate.params)
+                        ):
+                            selected = candidate
+                if selected is not None:
+                    for index, parameter in enumerate(selected.params):
+                        if index not in wrapper_arguments and index < len(expr.args):
+                            wrapper_arguments[index] = (
+                                self.generate_metal_value_argument(
+                                    expr.args[index], parameter, is_main
+                                )
+                            )
             materialized_name = self.transported_metal_source_overload_name(
                 materialized_name,
                 expr.args,
@@ -11810,8 +11917,21 @@ class MetalToCrossGLConverter:
                 self.conditional_precedence,
                 is_main,
             )
+            if self.binary16_widening_profile is not None:
+                result_type = self.expression_metal_type(expr)
+                true_expr = self.render_metal_half_widening(
+                    true_expr, self.expression_metal_type(expr.true_expr), result_type
+                )
+                false_expr = self.render_metal_half_widening(
+                    false_expr, self.expression_metal_type(expr.false_expr), result_type
+                )
             return f"{condition} ? {true_expr} : {false_expr}"
         elif isinstance(expr, CastNode):
+            profiled_constructor = self.generate_metal_half_widening_constructor(
+                expr.target_type, [expr.expression], is_main
+            )
+            if profiled_constructor is not None:
+                return profiled_constructor
             cooperative_fragment = self.generate_cooperative_matrix_fragment_read(
                 expr, is_main
             )
@@ -11863,6 +11983,11 @@ class MetalToCrossGLConverter:
                 )
             return f"{self.sanitize_identifier(mapped_type)}({value})"
         elif isinstance(expr, VectorConstructorNode):
+            profiled_constructor = self.generate_metal_half_widening_constructor(
+                expr.type_name, expr.args, is_main
+            )
+            if profiled_constructor is not None:
+                return profiled_constructor
             size_query = self.texture_size_constructor_expression(expr, is_main)
             if size_query is not None:
                 return size_query
@@ -12792,7 +12917,8 @@ class MetalToCrossGLConverter:
             return None
         function_name = self.sanitize_identifier(self.function_output_name(selected))
         arguments = ", ".join(
-            self.generate_expression(argument, is_main) for argument in expression.args
+            self.generate_metal_value_argument(argument, parameter, is_main)
+            for argument, parameter in zip(expression.args, selected.params)
         )
         return f"{function_name}({arguments})"
 
@@ -12985,7 +13111,10 @@ class MetalToCrossGLConverter:
         arguments = [receiver]
         arguments.extend(self.render_identifier(param.name) for param in transported)
         arguments.extend(
-            self.generate_expression(argument, is_main) for argument in expression.args
+            self.generate_metal_value_argument(argument, parameter, is_main)
+            for argument, parameter in zip(
+                expression.args, selected.params[1 + len(transported) :]
+            )
         )
         function_name = self.sanitize_identifier(self.function_output_name(selected))
         return f"{function_name}({', '.join(arguments)})"
@@ -13989,7 +14118,8 @@ class MetalToCrossGLConverter:
             return None
         function_name = self.sanitize_identifier(self.function_output_name(selected))
         rendered_arguments = ", ".join(
-            self.generate_expression(argument, is_main) for argument in arguments
+            self.generate_metal_value_argument(argument, parameter, is_main)
+            for argument, parameter in zip(arguments, selected.params)
         )
         return f"{function_name}({rendered_arguments})"
 
@@ -15227,6 +15357,10 @@ float {scalar}(float base, float exponent) {{
                 value = f"{name}({value})"
             if narrow is not None and narrow[1][index] is not None:
                 value = f"{self.map_type(narrow[1][index])}({value})"
+            if self.binary16_widening_profile is not None:
+                value = self.render_metal_half_widening(
+                    value, types[index], result_type
+                )
             rendered.append(value)
         return self.render_profiled_metal_arithmetic(
             *rendered, result_type, operator=operator
@@ -15693,6 +15827,107 @@ float {scalar}(float base, float exponent) {{
                 f"(half{width} a, half{width} b) {{\n"
                 f"    return half{width}({arguments});\n"
                 "}\n"
+            )
+        pad = "    " * indent
+        return "".join(pad + line + "\n" for line in code.strip().splitlines())
+
+    def generate_metal_value_argument(self, argument, parameter, is_main):
+        if self.binary16_widening_profile is not None and isinstance(
+            argument, InitializerListNode
+        ):
+            return self.generate_initializer_value(
+                argument, is_main, self.metal_source_overload_parameter_type(parameter)
+            )
+        value = self.generate_expression(argument, is_main)
+        if self.binary16_widening_profile is not None:
+            value = self.render_metal_half_widening(
+                value,
+                self.expression_metal_type(argument),
+                self.metal_source_overload_parameter_type(parameter),
+                getattr(argument, "source_location", None),
+            )
+        return value
+
+    def render_metal_half_widening(
+        self, value, source_type, target_type, source_location=None
+    ):
+        if self.binary16_widening_profile is None or target_type is None:
+            return value
+        source = self.metal_math_builtin_type_info(
+            self.metal_source_overload_value_type(source_type)
+        )
+        target = self.metal_math_builtin_type_info(
+            self.metal_source_overload_value_type(target_type)
+        )
+        if source is None or target is None:
+            return value
+        if (
+            self.normalized_metal_type(self.resolve_type_alias(source["element_type"]))
+            != "half"
+            or self.normalized_metal_type(
+                self.resolve_type_alias(target["element_type"])
+            )
+            != "float"
+        ):
+            return value
+        width = source["width"]
+        if width not in {1, 2, 3, 4} or self.current_function is None:
+            raise MetalHalfWideningProfileError(source_type, source_location)
+        self.required_metal_half_widening_widths.add(width)
+        return f"{self.metal_half_widening_helper_name(width)}({value})"
+
+    def generate_metal_half_widening_constructor(self, target_type, arguments, is_main):
+        if self.binary16_widening_profile is None:
+            return None
+        target = self.metal_math_builtin_type_info(target_type)
+        if (
+            target is None
+            or self.normalized_metal_type(
+                self.resolve_type_alias(target["element_type"])
+            )
+            != "float"
+        ):
+            return None
+        rendered = []
+        for argument in arguments:
+            value = self.generate_expression(argument, is_main)
+            rendered.append(
+                self.render_metal_half_widening(
+                    value,
+                    self.expression_metal_type(argument),
+                    target_type,
+                    getattr(argument, "source_location", None),
+                )
+            )
+        return f"{self.map_type(target_type)}({', '.join(rendered)})"
+
+    def metal_half_widening_helper_name(self, width):
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            f"widen-half{suffix}", f"__crossgl_metal_widen_half{suffix}"
+        )
+
+    def generate_metal_half_widening_support_code(self, indent=0):
+        if not self.required_metal_half_widening_widths:
+            return ""
+        scalar = self.metal_half_widening_helper_name(1)
+        # Classify the stored half before widening. Copies and bitcasts do not
+        # use this helper, so their sign and payload bits remain untouched.
+        code = (
+            f"@metal_static\nfloat {scalar}(float16 value) {{\n"
+            "    uint bits = uint(as_type<uint16>(value));\n"
+            "    if ((bits & 0x7c00u) == 0x7c00u && (bits & 0x03ffu) != 0u) {\n"
+            "        return asfloat(0x7fc00000u);\n"
+            "    }\n"
+            "    return float(value);\n"
+            "}\n"
+        )
+        for width in sorted(self.required_metal_half_widening_widths - {1}):
+            lanes = ", ".join(f"{scalar}(value.{lane})" for lane in "xyzw"[:width])
+            code += (
+                f"@metal_static\nvec{width} {self.metal_half_widening_helper_name(width)}"
+                f"(half{width} value) {{\n"
+                f"    return vec{width}({lanes});\n}}\n"
             )
         pad = "    " * indent
         return "".join(pad + line + "\n" for line in code.strip().splitlines())
@@ -21064,6 +21299,8 @@ float {scalar}(float value) {{
             false_descriptor = self.metal_source_overload_type_descriptor(false_type)
             if true_descriptor == false_descriptor:
                 return true_type
+            if self.binary16_widening_profile is not None:
+                return self.metal_scalar_binary_result_type("+", true_type, false_type)
             return None
         if isinstance(expr, PostfixOpNode):
             return self.expression_metal_type(expr.operand)
@@ -21357,6 +21594,13 @@ float {scalar}(float value) {{
         )
         index = self.generate_expression(access.index, is_main)
         rendered_value = self.generate_expression(value, is_main)
+        if self.binary16_widening_profile is not None:
+            rendered_value = self.render_metal_half_widening(
+                rendered_value,
+                self.expression_metal_type(value),
+                self.expression_metal_type(access),
+                getattr(value, "source_location", None),
+            )
         if operator != "=":
             compound_ops = {
                 "+=": "+",

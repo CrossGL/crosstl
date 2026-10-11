@@ -2566,6 +2566,7 @@ class GLSLCodeGen:
         self.required_glsl_boolean_order_helpers = set()
         self.required_glsl_metal_math_helpers = set()
         self.glsl_half_helper_names = {}
+        self.glsl_half_bitcast_helper_names = {}
         self.glsl_bfloat_helper_names = {}
         self.glsl_bfloat_integer_helper_name = None
         self.glsl_bfloat_wide_integer_helper_required = False
@@ -7465,6 +7466,7 @@ class GLSLCodeGen:
         self.required_glsl_boolean_order_helpers = set()
         self.required_glsl_metal_math_helpers = set()
         self.glsl_half_helper_names = {}
+        self.glsl_half_bitcast_helper_names = {}
         self.glsl_bfloat_helper_names = {}
         self.glsl_bfloat_integer_helper_name = None
         self.glsl_bfloat_wide_integer_helper_required = False
@@ -8669,6 +8671,7 @@ class GLSLCodeGen:
             + self.generate_glsl_boolean_order_helpers()
             + self.generate_glsl_metal_math_helpers()
             + self.generate_glsl_half_helpers()
+            + self.generate_glsl_half_bitcast_helpers()
             + self.generate_glsl_bfloat_helpers()
             + self.generate_glsl_bfloat_integer_helpers()
             + self.generate_glsl_float_selection_helpers()
@@ -30053,6 +30056,78 @@ class GLSLCodeGen:
             )
         return ("\n".join(helpers) + "\n") if helpers else ""
 
+    def glsl_half_bitcast_helper(self, operation):
+        for builtin in ("floatBitsToUint", "uintBitsToFloat", "findMSB"):
+            if (
+                builtin in self.function_return_types
+                or builtin in self.global_variable_types
+            ):
+                raise ValueError(f"OpenGL half bitcasts require unshadowed {builtin}")
+        operations = {
+            "decode": ("decode",),
+            "encode": ("encode",),
+            "unpack": ("decode", "unpack"),
+            "pack": ("encode", "pack"),
+        }[operation]
+        for required in operations:
+            if required not in self.glsl_half_bitcast_helper_names:
+                used_names = set(self.glsl_module_used_identifier_names)
+                used_names.update(
+                    getattr(self, "glsl_numeric_helper_reserved_names", set())
+                )
+                name = self.glsl_unique_identifier(
+                    f"crossgl_half_bits_{required}", used_names
+                )
+                self.glsl_half_bitcast_helper_names[required] = name
+                self.glsl_module_used_identifier_names.add(name)
+        return self.glsl_half_bitcast_helper_names[operation]
+
+    def generate_glsl_half_bitcast_helpers(self):
+        names = self.glsl_half_bitcast_helper_names
+        code = ""
+        # The physical float32 carrier retains each binary16 sign and payload.
+        # Floating pack/unpack builtins may quiet or canonicalize these NaNs.
+        if "decode" in names:
+            code += f"""float {names["decode"]}(uint value) {{
+    uint sign = (value & 0x8000u) << 16u;
+    uint exponent = (value >> 10u) & 31u;
+    uint fraction = value & 1023u;
+    if (exponent == 0u) {{
+        if (fraction == 0u) {{ return uintBitsToFloat(sign); }}
+        uint leading = uint(findMSB(fraction));
+        uint bits = ((leading + 103u) << 23u) | ((fraction << (23u - leading)) & 0x7fffffu);
+        return uintBitsToFloat(sign | bits);
+    }}
+    uint wideExponent = exponent == 31u ? 255u : exponent + 112u;
+    return uintBitsToFloat(sign | (wideExponent << 23u) | (fraction << 13u));
+}}
+"""
+        if "encode" in names:
+            code += f"""uint {names["encode"]}(float value) {{
+    uint bits = floatBitsToUint(value);
+    uint sign = (bits >> 16u) & 0x8000u;
+    uint exponent = (bits >> 23u) & 255u;
+    uint fraction = bits & 0x7fffffu;
+    if (exponent == 255u) {{ return sign | 0x7c00u | (fraction >> 13u); }}
+    if (exponent < 103u) {{ return sign; }}
+    if (exponent < 113u) {{ return sign | ((fraction | 0x800000u) >> (126u - exponent)); }}
+    return sign | ((exponent - 112u) << 10u) | (fraction >> 13u);
+}}
+"""
+        if "unpack" in names:
+            code += (
+                f'vec2 {names["unpack"]}(uint value) {{\n'
+                f'    return vec2({names["decode"]}(value), {names["decode"]}(value >> 16u));\n'
+                "}\n"
+            )
+        if "pack" in names:
+            code += (
+                f'uint {names["pack"]}(vec2 value) {{\n'
+                f'    return {names["encode"]}(value.x) | ({names["encode"]}(value.y) << 16u);\n'
+                "}\n"
+            )
+        return code
+
     def generate_glsl_half_helpers(self):
         if not self.glsl_half_helper_names:
             return ""
@@ -37182,7 +37257,7 @@ complex64_t crossgl_complex64_mod_assign(
                 and source_narrow["width"] == 1
             ):
                 payload = value if not source_narrow["signed"] else f"uint({value})"
-                return f"unpackHalf2x16(({payload} & 0xffffu)).x"
+                return f"{self.glsl_half_bitcast_helper('decode')}({payload})"
             source_display = source_name or self.map_type(source_type)
             raise ValueError(
                 f"OpenGL as_type<{target_name}> cannot bitcast from "
@@ -37196,7 +37271,7 @@ complex64_t crossgl_complex64_mod_assign(
                 and target_narrow["bits"] == 16
                 and target_narrow["width"] == 1
             ):
-                payload = f"packHalf2x16(vec2({value}, 0.0))"
+                payload = f"{self.glsl_half_bitcast_helper('encode')}({value})"
                 if target_narrow["signed"]:
                     return f"bitfieldExtract(int({payload}), 0, 16)"
                 return f"bitfieldExtract({payload}, 0, 16)"
@@ -37211,7 +37286,7 @@ complex64_t crossgl_complex64_mod_assign(
             source_mapped = self.map_type(source_type)
             if source_mapped in {"int", "uint"} and source_narrow is None:
                 payload = value if source_mapped == "uint" else f"uint({value})"
-                return f"unpackHalf2x16({payload})"
+                return f"{self.glsl_half_bitcast_helper('unpack')}({payload})"
             raise ValueError(
                 f"OpenGL as_type<{target_name}> requires one exact 32-bit "
                 "integer payload"
@@ -37220,7 +37295,7 @@ complex64_t crossgl_complex64_mod_assign(
         if source_name in {"f16vec2", "float16_t2", "half2"}:
             target_mapped = self.map_type(target_type)
             if target_mapped in {"int", "uint"} and target_narrow is None:
-                payload = f"packHalf2x16({value})"
+                payload = f"{self.glsl_half_bitcast_helper('pack')}({value})"
                 return payload if target_mapped == "uint" else f"int({payload})"
             raise ValueError(
                 f"OpenGL as_type<{target_name}> cannot bitcast from "

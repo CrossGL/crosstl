@@ -19915,6 +19915,53 @@ def test_hlsl_native_binary16_compound_assignment_promotes_exact_payload(tmp_pat
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
 
 
+@pytest.mark.parametrize("scalar", ["uint", "int", "float"])
+@pytest.mark.parametrize("pair", ["uint16_t2", "int16_t2", "float16_t2"])
+def test_hlsl_packed_16bit_pairs_preserve_total_width(tmp_path, scalar, pair):
+    shader = f"""shader PackedWords {{
+        {pair} unpack({scalar} word) {{ return as_type<{pair}>(word); }}
+        {scalar} pack({pair} value) {{ return as_type<{scalar}>(value); }}
+        compute {{ @numthreads(1, 1, 1) void main() {{}} }}
+    }}"""
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "__crossgl_bitcast_uint_to_uint16x2(" in generated
+    assert "__crossgl_bitcast_uint16x2_to_uint(" in generated
+    assert "uint(value.x) | (uint(value.y) << 16u)" in generated
+    assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_packed_half_widening_and_reverse_diagnostic(tmp_path):
+    source = """shader PackedHalf {
+        half2 decode(uint value) { return as_type<half2>(value); }
+        compute { @numthreads(1, 1, 1) void main() {} }
+    }"""
+    generated = HLSLCodeGen(widen_native_float16=True).generate(
+        crosstl.translator.parse(source)
+    )
+    assert (
+        "__crossgl_binary16_to_float(uint2(__crossgl_bitcast_uint_to_uint16x2(value)))"
+        in generated
+    )
+    assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
+    with pytest.raises(ValueError, match="cannot repack widened float16"):
+        HLSLCodeGen(widen_native_float16=True).generate(
+            crosstl.translator.parse(
+                "shader Reverse { uint encode(half2 value) { return as_type<uint>(value); } }"
+            )
+        )
+
+
+@pytest.mark.parametrize("helper", ["uint_to_uint16x2", "uint16x2_to_uint"])
+def test_hlsl_packed_half_helpers_reject_name_capture(helper):
+    source = f"""shader Conflict {{
+        uint __crossgl_bitcast_{helper}(uint value) {{ return value; }}
+        half2 decode(uint value) {{ return as_type<half2>(value); }}
+        uint encode(half2 value) {{ return as_type<uint>(value); }}
+    }}"""
+    with pytest.raises(ValueError, match="require unshadowed"):
+        HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+
 def test_hlsl_native_binary16_widening_eliminates_native_half_roundtrip(tmp_path):
     shader = """
     shader HlslWidenNativeBinary16 {
@@ -19982,9 +20029,9 @@ def test_hlsl_native_binary16_widening_eliminates_native_half_roundtrip(tmp_path
             id="total-width",
         ),
         pytest.param(
-            "uint",
-            "float16_t2",
-            "DirectX explicit bitcast lowering does not support uint to float16_t2",
+            "uint64_t",
+            "float16_t4",
+            "DirectX explicit bitcast lowering does not support uint64_t to float16_t4",
             id="lane-shape",
         ),
     ],

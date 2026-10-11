@@ -1847,6 +1847,7 @@ REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(
         "softwareSubgroupPolicy",
         "binary32DivisionProfile",
         "binary16RemainderProfile",
+        "binary16WideningProfile",
         "binary32ComparisonProfile",
         "binary32RemainderProfile",
         "binary32AdditiveProfile",
@@ -28638,6 +28639,15 @@ def _translate_project_impl(
                             "binary16RemainderProfile"
                         ] = remainder_profile
                     dispatch_region = _project_dispatch_region(target, source_options)
+                    widening_profile = source_options.get("binary16_widening_profile")
+                    if unit.source_backend == "metal" and widening_profile is not None:
+                        if widening_profile != "canonical-nan":
+                            raise ValueError(
+                                "binary16_widening_profile must be 'canonical-nan' or None"
+                            )
+                        artifact["provenance"][
+                            "binary16WideningProfile"
+                        ] = widening_profile
                     if dispatch_region is not None:
                         artifact["provenance"][
                             "dispatchRegion"
@@ -46721,6 +46731,11 @@ def _provenance_contract_reasons(
             reasons.append(
                 f"{prefix}.binary32DivisionProfile must be rne-gradual or rne-flush"
             )
+    if "binary16WideningProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(f"{prefix}.binary16WideningProfile requires a Metal source")
+        if provenance["binary16WideningProfile"] != "canonical-nan":
+            reasons.append(f"{prefix}.binary16WideningProfile must be canonical-nan")
     if "binary16RemainderProfile" in provenance:
         if artifact.get("sourceBackend") != "metal":
             reasons.append(f"{prefix}.binary16RemainderProfile requires a Metal source")
@@ -46899,6 +46914,15 @@ def _provenance_contract_reasons(
         if provenance.get("binary16RemainderProfile") != expected_remainder_profile:
             reasons.append(
                 f"{prefix}.binary16RemainderProfile must match the resolved project source options"
+            )
+        expected_widening_profile = (
+            options.get("binary16_widening_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("binary16WideningProfile") != expected_widening_profile:
+            reasons.append(
+                f"{prefix}.binary16WideningProfile must match the resolved project source options"
             )
         expected_remainder_profile = (
             options.get("binary32_remainder_profile")

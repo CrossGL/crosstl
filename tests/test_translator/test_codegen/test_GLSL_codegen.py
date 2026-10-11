@@ -42978,13 +42978,13 @@ def test_opengl_widened_float16_as_type_preserves_binary16_payloads(tmp_path):
 
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "return unpackHalf2x16((bits & 0xffffu)).x;" in generated_code
-    assert "return unpackHalf2x16((uint(bits) & 0xffffu)).x;" in generated_code
-    assert "packHalf2x16(vec2(value, 0.0))" in generated_code
-    assert "return unpackHalf2x16(bits);" in generated_code
-    assert "return packHalf2x16(value);" in generated_code
-    assert "uintBitsToFloat(bits)" not in generated_code
-    assert "floatBitsToUint(value)" not in generated_code
+    assert "return crossgl_half_bits_decode(bits);" in generated_code
+    assert "return crossgl_half_bits_decode(uint(bits));" in generated_code
+    assert "crossgl_half_bits_encode(value)" in generated_code
+    assert "return crossgl_half_bits_unpack(bits);" in generated_code
+    assert "return crossgl_half_bits_pack(value);" in generated_code
+    assert "unpackHalf2x16(" not in generated_code
+    assert "packHalf2x16(" not in generated_code
     assert "float16_t" not in generated_code
     assert "half " not in generated_code
 
@@ -43026,7 +43026,7 @@ def test_opengl_half_component_bitcast_preserves_source_width(
         compute {{ void main() {{}} }}
     }}"""
     generated = GLSLCodeGen().generate(crosstl.translator.parse(source))
-    assert "packHalf2x16(vec2(" in generated
+    assert "crossgl_half_bits_encode(" in generated
     assert "floatBitsToUint(value." not in generated
     assert_glsl_compute_validates_if_available(
         generated, tmp_path, "half_component_bits"

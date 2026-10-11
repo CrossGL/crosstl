@@ -406,6 +406,25 @@ reproduces the source-profile gap tracked in
 lossless-copy defect or permission to canonicalize uploads. These local probes
 do not establish Windows FP8 execution or expand the required CI runtime set.
 
+The current-pin `v2_ToFP8float16uint8` package regression now selects the
+explicit `binary16_widening_profile = "canonical-nan"` source policy.
+All 65,536 half encodings match the unchanged original Metal kernel and an
+independent FP8 rounding oracle on generated Metal and OpenGL, including the
+1,023 negative NaNs above. Two output initializations, exact tail guards,
+the two-dimensional launch, and the selected policy are retained in the
+package evidence. No upstream code or host input values are changed.
+The existing unary CI step requires this case on all three target platforms;
+native Windows execution remains a separate required result.
+
+Generic controls separately exhaust half encodings for numeric widening,
+same-type copies, and integer reinterpretation. OpenGL bitcasts retain NaN
+sign and payload bits through integer-based physical-carrier conversion
+([#2117](https://github.com/CrossGL/crosstl/issues/2117)); numeric conversion
+uses the selected profile instead. DirectX packed 16-bit pair support is
+tracked in [#2201](https://github.com/CrossGL/crosstl/issues/2201). These
+checks do not resolve the other source NaN-policy questions in #2081 or
+establish complete FP8-family or upstream-suite coverage.
+
 The arithmetic correction for
 [crosstl#2082](https://github.com/CrossGL/crosstl/issues/2082) retains bfloat
 intermediates instead of inferring half precision from their storage width.

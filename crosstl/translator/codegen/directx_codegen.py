@@ -6855,6 +6855,16 @@ uint __crossgl_bfloat16_from_uint16({uint16_type} value) {{
 
     def generate_hlsl_explicit_bitcast_helpers(self):
         helper_sources = {
+            "uint_to_uint16x2": (
+                "uint16_t2 __crossgl_bitcast_uint_to_uint16x2(uint value) {\n"
+                "    return uint16_t2(uint16_t(value & 65535u), uint16_t(value >> 16u));\n"
+                "}\n"
+            ),
+            "uint16x2_to_uint": (
+                "uint __crossgl_bitcast_uint16x2_to_uint(uint16_t2 value) {\n"
+                "    return uint(value.x) | (uint(value.y) << 16u);\n"
+                "}\n"
+            ),
             "binary16_to_float": (
                 """
 float __crossgl_binary16_to_float(uint value) {
@@ -25162,6 +25172,53 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         if target_info["type"] == source_info["type"]:
             return argument_code
+
+        if target_info["width"] == 32 and {
+            source_info["component_width"],
+            target_info["component_width"],
+        } == {16, 32}:
+            unpack = target_info["component_width"] == 16
+            narrow = target_info if unpack else source_info
+            helper = "uint_to_uint16x2" if unpack else "uint16x2_to_uint"
+            name = f"__crossgl_bitcast_{helper}"
+            if name in self.function_return_types or name in self.global_variable_types:
+                raise ValueError(
+                    f"DirectX packed 16-bit bitcasts require unshadowed {name}"
+                )
+            if (
+                self.widen_native_float16
+                and narrow["component"] == "float16_t"
+                and not unpack
+            ):
+                raise ValueError(
+                    "DirectX cannot repack widened float16 values without binary16 rounding"
+                )
+            self.require_hlsl_explicit_bitcast_helper(helper)
+            self.requires_hlsl_native_16_bit_types = True
+            if unpack:
+                payload = argument_code
+                if source_info["component"] != "uint":
+                    payload = f"asuint({payload})"
+                payload = f"{name}({payload})"
+                if narrow["component"] == "uint16_t":
+                    return payload
+                if self.widen_native_float16 and narrow["component"] == "float16_t":
+                    self.require_hlsl_explicit_bitcast_helper("binary16_to_float")
+                    return f"__crossgl_binary16_to_float(uint2({payload}))"
+                intrinsic = (
+                    "asfloat16" if narrow["component"] == "float16_t" else "asint16"
+                )
+                return f"{intrinsic}({payload})"
+            payload = (
+                argument_code
+                if narrow["component"] == "uint16_t"
+                else f"asuint16({argument_code})"
+            )
+            packed = f"{name}({payload})"
+            if target_info["component"] == "uint":
+                return packed
+            intrinsic = "asfloat" if target_info["component"] == "float" else "asint"
+            return f"{intrinsic}({packed})"
 
         if target_info["width"] == 64:
             payload = self.hlsl_explicit_bitcast_uint2_payload(

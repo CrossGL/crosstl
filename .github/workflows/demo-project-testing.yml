@@ -3892,6 +3892,7 @@ jobs:
         env:
           CROSTL_REQUIRE_FUSED_MATH: "1"
           CROSTL_REQUIRE_HALF_REMAINDER: "1"
+          CROSTL_REQUIRE_HALF_WIDENING: "1"
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER: llvmpipe
           EGL_PLATFORM: surfaceless
@@ -3906,6 +3907,9 @@ jobs:
               tests/test_translator/test_fused_math.py \
               tests/test_translator/test_metal_fma.py \
               tests/test_translator/test_metal_half_remainder.py::test_half_remainder_profile_executes \
+              tests/test_translator/test_metal_half_widening.py::test_half_widening_profile_executes \
+              tests/test_translator/test_half_bitcast_identity.py::test_half_bitcasts_execute \
+              tests/test_translator/test_half_bitcast_identity.py::test_half_buffer_bitcasts_execute \
               tests/test_translator/test_metal_arithmetic_ownership.py::test_arithmetic_builtin_ownership_executes
 
       - name: Upload binary32 arithmetic evidence
@@ -3960,7 +3964,9 @@ jobs:
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_TRIG: "1"
           CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_MAGNITUDE: "1"
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_ROOTS: "1"
+          CROSTL_REQUIRE_MLX_CURRENT_FP8: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          PYTHONUNBUFFERED: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
@@ -3974,13 +3980,15 @@ jobs:
           esac
           mkdir -p mlx-unary-fma-results
           python tools/run_bounded_command.py --timeout-seconds 300 --label "Pinned unary fused arithmetic" -- \
-            python -m pytest -q -n auto \
+            python -m pytest -q -n auto -vv -s --durations=20 \
+              -o faulthandler_timeout=60 \
               --basetemp=mlx-unary-fma-results/pytest \
               --junitxml=mlx-unary-fma-results/results.xml \
               demos/integrations/mlx/tests/kernels/test_current_unary_fma.py \
               demos/integrations/mlx/tests/kernels/test_current_unary_trig.py \
               demos/integrations/mlx/tests/kernels/test_current_complex_magnitude.py \
-              demos/integrations/mlx/tests/kernels/test_current_unary_roots.py
+              demos/integrations/mlx/tests/kernels/test_current_unary_roots.py \
+              demos/integrations/mlx/tests/kernels/test_current_unary_fp8.py
 
       - name: Upload pinned unary fused arithmetic evidence
         if: always()

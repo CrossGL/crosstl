@@ -913,6 +913,28 @@ Metal is a required macOS control; this does not promise that all Metal devices
 or compiler modes implement the same profile. Half-vector component bitcasts
 use their logical 16-bit width rather than the widened GLSL representation.
 
+Metal sources can also select
+``binary16_widening_profile = "canonical-nan"`` after characterizing their
+source execution environment. Numeric half-to-float conversions then map every
+binary16 NaN to positive binary32 ``0x7fc00000``. Finite values, subnormals,
+infinities and signed zeros widen exactly. The option is not a universal Metal
+default: other devices or compiler modes may require different policies.
+It covers explicit scalar/vector constructors and implicit conversions in
+initializers, assignments, function arguments, returns and conditional expressions.
+Helper parameters preserve single evaluation. Reports and runtime artifact
+manifests retain ``binary16WideningProfile`` and reject inconsistent provenance.
+Unrepresentable global conversions fail with a structured diagnostic.
+
+Bitcasts and same-type half copies are not numeric widening. OpenGL represents
+these values with lossless binary32 carriers and uses integer bit manipulations
+for scalar binary16 and packed binary16-pair bitcasts; floating pack/unpack
+builtins are not used because they may change NaN payloads. Actual float-to-half
+rounding remains a separate operation. Native conversion controls exhaust all
+65,536 half encodings, check scalar/vector and implicit conversions, count
+side effects, and verify exact output and guards with two initializations.
+The unchanged Metal control characterizes the selected profile, not every
+possible Metal implementation.
+
 Metal normalization retains qualified math builtin ownership when source helpers
 share the same name. Source overloads receive deterministic, collision-safe
 internal names before namespace qualification is removed. Explicit global calls,
