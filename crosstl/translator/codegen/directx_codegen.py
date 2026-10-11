@@ -22401,6 +22401,39 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     f"    uint column{element} = coordinates{element}[lane] % 8u;",
                 ]
             )
+            if rounded:
+                # Keep integer rounding in an ordered loop instead of duplicating
+                # its control flow eight times per fragment component.
+                prefix = f"term{element}"
+                lines.extend(
+                    [
+                        "    [loop]",
+                        f"    for (uint {prefix}Index = 0u; {prefix}Index < 8u; ++{prefix}Index) {{",
+                        f"        uint {prefix}A = row{element} * 8u + {prefix}Index;",
+                        f"        uint {prefix}B = {prefix}Index * 8u + column{element};",
+                        f"        uint {prefix}Left = asuint({scratch[0]}[subgroupBase + "
+                        f"ownerLanes[{prefix}A]][ownerElements[{prefix}A]]);",
+                        f"        uint {prefix}Right = asuint({scratch[1]}[subgroupBase + "
+                        f"ownerLanes[{prefix}B]][ownerElements[{prefix}B]]);",
+                    ]
+                )
+                if self.cooperative_matrix_mma_profile.startswith("fma-"):
+                    lines.append(
+                        f"        result[{element}] = {names['bits']}({prefix}Left, "
+                        f"{prefix}Right, result[{element}], {flush});"
+                    )
+                else:
+                    # Separate rounding boundaries retain the product's signed zero.
+                    lines.extend(
+                        [
+                            f"        uint {prefix} = {names['bits']}({prefix}Left, {prefix}Right, "
+                            f"({prefix}Left ^ {prefix}Right) & 0x80000000u, {flush});",
+                            f"        result[{element}] = {names['bits']}(result[{element}], "
+                            f"0x3f800000u, {prefix}, {flush});",
+                        ]
+                    )
+                lines.append("    }")
+                continue
             for inner in range(8):
                 prefix = f"term{element}_{inner}"
                 lines.extend(
@@ -22411,35 +22444,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 left = f"{scratch[0]}[subgroupBase + ownerLanes[{prefix}A]][ownerElements[{prefix}A]]"
                 right = f"{scratch[1]}[subgroupBase + ownerLanes[{prefix}B]][ownerElements[{prefix}B]]"
-                if rounded:
-                    lines.extend(
-                        [
-                            f"    uint {prefix}Left = asuint({left});",
-                            f"    uint {prefix}Right = asuint({right});",
-                        ]
-                    )
-                    if self.cooperative_matrix_mma_profile.startswith("fma-"):
-                        lines.append(
-                            f"    result[{element}] = {names['bits']}({prefix}Left, "
-                            f"{prefix}Right, result[{element}], {flush});"
-                        )
-                    else:
-                        # Separate rounding boundaries retain the product's signed zero.
-                        lines.extend(
-                            [
-                                f"    uint {prefix} = {names['bits']}({prefix}Left, {prefix}Right, "
-                                f"({prefix}Left ^ {prefix}Right) & 0x80000000u, {flush});",
-                                f"    result[{element}] = {names['bits']}(result[{element}], "
-                                f"0x3f800000u, {prefix}, {flush});",
-                            ]
-                        )
-                else:
-                    lines.extend(
-                        [
-                            f"    precise float {prefix} = {left} * {right};",
-                            f"    result[{element}] = result[{element}] + {prefix};",
-                        ]
-                    )
+                lines.extend(
+                    [
+                        f"    precise float {prefix} = {left} * {right};",
+                        f"    result[{element}] = result[{element}] + {prefix};",
+                    ]
+                )
         lines.extend(
             [
                 "    GroupMemoryBarrierWithGroupSync();",

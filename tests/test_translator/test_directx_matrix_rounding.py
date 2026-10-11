@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -36,24 +37,42 @@ PROFILES = ("rne-gradual", "rne-flush", "fma-rne-gradual", "fma-rne-flush")
 
 
 @pytest.mark.parametrize("profile", PROFILES)
-def test_matrix_rounding_compiles_integer_intermediates(tmp_path, profile):
+@pytest.mark.parametrize("shape", [(32, 4), (16, 8)])
+def test_matrix_rounding_compiles_integer_intermediates(tmp_path, profile, shape):
     generated = _codegen(cooperative_matrix_mma_profile=profile).generate_stage(
-        parse(_source()), "compute"
+        parse(_source(width=shape[0], height=shape[1])), "compute"
     )
     assert "SoftFloat" in generated
     assert "uint2 result = asuint(accumulator);" in generated
     assert "return asfloat(result);" in generated
     assert "precise float term" not in generated
     assert generated.count("GroupMemoryBarrierWithGroupSync();") == 2
+    assert generated.count("[loop]") == 2
+    for element in range(2):
+        prefix = f"term{element}"
+        assert (
+            f"for (uint {prefix}Index = 0u; {prefix}Index < 8u; ++{prefix}Index)"
+            in generated
+        )
+        assert f"uint {prefix}A = row{element} * 8u + {prefix}Index;" in generated
+        assert f"uint {prefix}B = {prefix}Index * 8u + column{element};" in generated
+        assert f"ownerLanes[{prefix}A]][ownerElements[{prefix}A]]" in generated
+        assert f"ownerLanes[{prefix}B]][ownerElements[{prefix}B]]" in generated
     if profile.startswith("fma-"):
-        assert generated.count("uint term") == 64
-        assert "term0_0Left, term0_0Right, result[0]," in generated
-        assert "(term0_0Left ^ term0_0Right)" not in generated
+        assert generated.count("uint term") == 10
+        assert "term0Left, term0Right, result[0]," in generated
+        assert "(term0Left ^ term0Right)" not in generated
     else:
-        assert generated.count("uint term") == 80
-        assert "(term0_0Left ^ term0_0Right) & 0x80000000u" in generated
-        assert "result[0], 0x3f800000u, term0_0," in generated
-    _compile(generated, tmp_path)
+        assert generated.count("uint term") == 12
+        assert "(term0Left ^ term0Right) & 0x80000000u" in generated
+        assert "result[0], 0x3f800000u, term0," in generated
+    listing = tmp_path / "translated.ll"
+    _compile(generated, tmp_path, flags=("-Fc", str(listing)))
+    assembly = listing.read_text()
+    assert "llvm.loop.unroll.disable" in assembly
+    assert len(re.findall(r"br .*?!llvm.loop", assembly)) >= 4
+    assert len(re.findall(r"call void @dx.op.barrier", assembly)) == 4
+    assert not re.search(r"= f(?:add|mul|sub|div)\b", assembly)
 
 
 @pytest.mark.parametrize("profile", [True, 32, "", "nearest", [], {}])
@@ -335,6 +354,17 @@ def test_matrix_rounding_keeps_required_native_ci():
     assert "tests/test_translator/test_directx_cooperative_matrix.py" in step["run"]
     assert step["env"][REQUIRE_ENV] == "${{ runner.os == 'Windows' && '1' || '0' }}"
     assert not step.get("continue-on-error")
+    comparison = next(
+        s
+        for s in workflow["jobs"]["portable-host"]["steps"]
+        if s.get("name") == "Compare WARP arithmetic across codegen revisions"
+    )
+    # Run the expensive control before the batch can exhaust its remaining time.
+    for selected in (step, comparison):
+        command = selected["run"]
+        assert command.index(
+            "tests/test_translator/test_directx_matrix_rounding.py"
+        ) < command.index("tests/test_translator/test_static_resource_aggregates.py")
 
 
 @pytest.mark.parametrize("target", ["metal", "vulkan"])

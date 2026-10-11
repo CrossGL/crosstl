@@ -2069,6 +2069,13 @@ Reports and runtime packages retain the selected policy as
 This records configuration, not proof that an entry uses matrix multiplication.
 No rounding helpers are emitted for entries without a software matrix product.
 
+DirectX emits a fixed eight-iteration loop for each fragment component, with
+unrolling disabled for the integer arithmetic profiles. This retains the
+inner-dimension order and both shared-memory barriers while avoiding repeated
+copies of the rounding helper's control flow. Smaller compiled artifacts are
+not evidence of native correctness: repeated products, special values and
+package execution still require the Windows numerical gates.
+
 OpenGL supports the same float 8-by-8 mapping with
 ``cooperative_matrix_software_lowering = true`` and
 ``software_subgroup_width = 32``. Matrix operands are exchanged through bounded
