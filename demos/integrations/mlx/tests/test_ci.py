@@ -3233,7 +3233,21 @@ def test_fft_native_evidence_upload_follows_required_execution(
     assert "continue-on-error" not in proof
     upload_name = f"Upload FFT {platform} evidence"
     upload = coverage.workflow_step_section(workflow, upload_name)
-    assert f"if: always() && runner.os == '{runner}'" in upload
+    condition = " ".join(upload.split())
+    assert f"always() && runner.os == '{runner}'" in condition
+    if target == "directx":
+        assert f"id: fft_{revision}_directx" in proof
+        for producer in ("pinned", "current"):
+            assert (
+                'contains(fromJSON(\'["success","failure","cancelled"]\'), '
+                f"steps.fft_{producer}_directx.outcome)"
+            ) in condition
+    else:
+        assert "id: fft_current_opengl" in proof
+        assert (
+            'contains(fromJSON(\'["success","failure","cancelled"]\'), '
+            "steps.fft_current_opengl.outcome)"
+        ) in condition
     assert f"{root}/.crosstl-corpus-evidence/fft-{target}-*/**" in upload
     assert "demo-results/fft/" in upload
     assert "include-hidden-files: true" in upload

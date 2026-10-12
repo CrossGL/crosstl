@@ -62,8 +62,8 @@ MLX_MXFP4_VARIANT_ID = (
 )
 MLX_MXFP4_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "8d2c5257a8d90310d9a96051bd4243c694bd6fa32ec2a80b4f221a6ef287ea37",
-        "sizeBytes": 10335,
+        "sha256": "c05226f8c415d1e7cb6b25e9eccaed3f4c8afda750aac21fed03c82fb6569d33",
+        "sizeBytes": 10476,
     },
     "opengl": {
         "sha256": "3aae7fd8aede237351ea9eeaff8b22bcecb49f920c91451ab021cf1f1ff52451",

@@ -4640,6 +4640,7 @@ jobs:
           demos/integrations/mlx/tests/kernels/test_dot_native_loader.py::test_pinned_mlx_dot_records_metal_roundtrip_boundary
 
       - name: Prove pinned MLX FFT Direct3D native-loader execution
+        id: fft_pinned_directx
         if: runner.os == 'Windows'
         env:
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
@@ -4651,6 +4652,7 @@ jobs:
           demos/integrations/mlx/tests/kernels/test_fft_native_loader.py::test_pinned_mlx_fft_executes_through_directx_native_loader
 
       - name: Prove current MLX FFT Direct3D native-loader execution
+        id: fft_current_directx
         if: runner.os == 'Windows'
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-upstream
@@ -4662,7 +4664,10 @@ jobs:
           demos/integrations/mlx/tests/kernels/test_fft_native_loader.py::test_current_mlx_fft_executes_through_directx_native_loader
 
       - name: Upload FFT Direct3D evidence
-        if: always() && runner.os == 'Windows'
+        if: >-
+          always() && runner.os == 'Windows' &&
+          (contains(fromJSON('["success","failure","cancelled"]'), steps.fft_pinned_directx.outcome) ||
+          contains(fromJSON('["success","failure","cancelled"]'), steps.fft_current_directx.outcome))
         uses: actions/upload-artifact@v4
         with:
           name: mlx-fft-directx
@@ -5127,6 +5132,7 @@ jobs:
           demos/integrations/mlx/tests/kernels/test_fp_quantized_native_loader.py::test_current_mlx_mxfp4_executes_with_opengl_software_subgroups
 
       - name: Prove current MLX FFT OpenGL native-loader execution
+        id: fft_current_opengl
         if: runner.os == 'Linux'
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-upstream
@@ -5142,7 +5148,9 @@ jobs:
           demos/integrations/mlx/tests/kernels/test_fft_native_loader.py::test_current_mlx_fft_executes_through_opengl_native_loader
 
       - name: Upload FFT OpenGL evidence
-        if: always() && runner.os == 'Linux'
+        if: >-
+          always() && runner.os == 'Linux' &&
+          contains(fromJSON('["success","failure","cancelled"]'), steps.fft_current_opengl.outcome)
         uses: actions/upload-artifact@v4
         with:
           name: mlx-fft-opengl

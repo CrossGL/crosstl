@@ -10722,9 +10722,9 @@ def test_rms_norm_native_runtime_evidence_records_bounded_cross_target_proof():
         "selected_parameters": {"N_READS": "RMS_N_READS", "T": "float"},
     }
     assert status["artifacts"]["directx"]["sha256"] == (
-        "a7e7c7da1c51a42cff5e2bdb9bb1955bc1ee302552130e291f3158c5cc7846da"
+        "eb21d6e723d5e46874d33c013e4d92fbeaf2c2bade653aa4afb68969a398fa61"
     )
-    assert status["artifacts"]["directx"]["size_bytes"] == 5856
+    assert status["artifacts"]["directx"]["size_bytes"] == 6207
     assert status["artifacts"]["directx"]["native_runtime"]["status"] == (
         "required-on-ci"
     )
@@ -10882,9 +10882,9 @@ def test_rms_norm_vjp_native_runtime_evidence_records_deferred_cross_target_proo
 
     directx = status["artifacts"]["directx"]
     assert directx["sha256"] == (
-        "1820e6a8454f4a44fc0c8998950c0469596a8318fb2b7efa250794bfd21d2ab8"
+        "6edd8154b624ca1d66302dbb657f8d8a356b7d5e5824018e88e9630074eac83f"
     )
-    assert directx["size_bytes"] == 9175
+    assert directx["size_bytes"] == 9526
     assert directx["wave_active_sum_call_count"] == 4
     assert directx["native_runtime"]["status"] == "required-on-ci"
     opengl = status["artifacts"]["opengl"]
@@ -11026,9 +11026,9 @@ def test_layer_norm_native_runtime_evidence_records_bounded_cross_target_proof()
         },
     }
     assert status["artifacts"]["directx"]["sha256"] == (
-        "33852efe1e1c48a45ec3e25e4c9d271142e2ac8aecfbd01ae4dd0c5704464a5c"
+        "9cea1326d7cfc74b4c824809a2f72022931da16bcc63e58855bd34cac52711f7"
     )
-    assert status["artifacts"]["directx"]["size_bytes"] == 7586
+    assert status["artifacts"]["directx"]["size_bytes"] == 7937
     assert status["artifacts"]["directx"]["wave_active_sum_call_count"] == 2
     assert status["artifacts"]["directx"]["native_runtime"]["status"] == (
         "required-on-ci"
@@ -11220,9 +11220,9 @@ def test_layer_norm_vjp_native_runtime_evidence_records_deferred_cross_target_pr
 
     directx = status["artifacts"]["directx"]
     assert directx["sha256"] == (
-        "e1d1a2c741e0aed892413adc1b2d99db444878f5981effca373091b46f61b54e"
+        "3b1ef17b831c0cbdca7509fd6eb01e678f67293be10f1c13812428b328bdf615"
     )
-    assert directx["size_bytes"] == 9452
+    assert directx["size_bytes"] == 9728
     assert directx["wave_active_sum_call_count"] == 4
     assert directx["native_runtime"]["status"] == "required-on-ci"
     opengl = status["artifacts"]["opengl"]
@@ -14263,9 +14263,9 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "8d2c5257a8d90310d9a96051bd4243c694bd6fa32ec2a80b4f221a6ef287ea37"
+                "c05226f8c415d1e7cb6b25e9eccaed3f4c8afda750aac21fed03c82fb6569d33"
             ),
-            "size_bytes": 10335,
+            "size_bytes": 10476,
             "workgroup_size": [32, 1, 1],
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
@@ -14390,9 +14390,9 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         },
         "corrected_dxil_contract": {
             "artifact_sha256": (
-                "8d2c5257a8d90310d9a96051bd4243c694bd6fa32ec2a80b4f221a6ef287ea37"
+                "c05226f8c415d1e7cb6b25e9eccaed3f4c8afda750aac21fed03c82fb6569d33"
             ),
-            "artifact_size_bytes": 10335,
+            "artifact_size_bytes": 10476,
             "source_bitcast": "integer-ieee754-binary16-to-float32",
             "subnormal_decode": "integer-ieee754-binary16-to-float32",
             "arithmetic": "fmul-float",

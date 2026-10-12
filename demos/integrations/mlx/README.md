@@ -2681,8 +2681,8 @@ and
 
 Entry-scoped translation materializes only the selected specialization with
 `T=float`, `group_size=32`, `bits=4`, and `has_global_scale=false`. The
-10,335-byte HLSL has SHA-256
-`8d2c5257a8d90310d9a96051bd4243c694bd6fa32ec2a80b4f221a6ef287ea37`,
+10,476-byte HLSL has SHA-256
+`c05226f8c415d1e7cb6b25e9eccaed3f4c8afda750aac21fed03c82fb6569d33`,
 retains `[numthreads(32, 1, 1)]` and `[WaveSize(32)]`, and passes DXC under
 `cs_6_6`, `-enable-16bit-types`, and warnings as errors. Its compiled DXIL is
 4,836 bytes. This artifact explicitly enables the DirectX-only
@@ -2694,6 +2694,16 @@ Optimized DXIL contains `uitofp i32` and `fmul float`, with no
 `LegacyF16ToF32`, `half`, `fptrunc`, or `fpext`. Default DirectX native
 binary16 lowering remains exact `asfloat16`/`asint16`/`asuint16` and is
 unchanged unless this source-scoped option is enabled.
+
+The previously accepted 10,335-byte source had SHA-256
+`8d2c5257a8d90310d9a96051bd4243c694bd6fa32ec2a80b4f221a6ef287ea37`.
+The complete source difference introduces an explicit `fp4_e2m1` construction
+helper and uses it at the single dequantization call. Strict DXC compilation
+of both sources produces byte-identical modules under SHA-256
+`acf03bcb4138c46ac5fc68bcb0f7ce84795f6e47a2c0260f99c281bffacd3569`.
+The source pin, materialization, bindings, dispatch contract and numerical
+workload are unchanged. This source-identity refresh allows the required Windows
+native-loader test to reach execution; compilation is not a new numerical pass.
 
 Four rejected Windows artifacts establish why every native-half boundary must
 be absent. The 7,809-byte HLSL under SHA-256
@@ -3234,21 +3244,30 @@ proof into the repository-level project report; it does not add runtime
 execution or numerical parity for those historical axis-size-4099 forward and
 axis-size-8192 VJP records.
 
-The reviewed forward artifact is 8,085 bytes with SHA-256
-`13a622a8984e91be7d612505b170d225bdbcdefe4443994578670ae97b427be1`;
-the VJP artifact is 9,952 bytes with SHA-256
-`4590a5c4b587c5546dbcec1d0d4e91978e7d6485cfd7592af826a2f88fc4c10d`.
+The reviewed forward artifact is 8,436 bytes with SHA-256
+`71b6c501a7ecdb44afcd0cbf8378fedf92ac92fae13127c73671af7e63e18216`;
+the VJP artifact is 10,228 bytes with SHA-256
+`15412a4ec3aeaeda0ec9b1ab50180e4d28da85c24c2821c0993ee613baa3c3bd`.
 Their complete body changes preserve the source's precise reciprocal-square-root
 and square-root operations, respectively. Resource interfaces, host dispatch
 contracts and source-map origins are unchanged. Both pass strict DXC compilation;
 the shared helpers have independent native arithmetic checks, but those checks
 do not establish execution or numerical parity for these larger workloads.
-The subsequent dispatch-reference review covers these two artifacts, both
-LogSumExp variants and all twelve RMSNorm variants. The only new source change
-is padding in unused empty structs. Every previous source identity is reproduced,
-resource interfaces are unchanged, and strict old/new DXC compilations produce
-byte-identical executables for all sixteen artifacts. Dispatch contracts,
-specialization constants and subgroup requirements are unchanged.
+An earlier compatibility review covered these two artifacts, both LogSumExp
+variants and all twelve RMSNorm variants. That update added only padding in
+unused empty structs. It reproduced every previous source identity and retained
+resource interfaces, with byte-identical strict DXC output for all sixteen
+artifacts. Dispatch contracts, specialization constants and subgroup requirements
+were unchanged.
+
+A later precision update materializes helper return values explicitly in the two
+LayerNorm and twelve RMSNorm HLSL dispatch artifacts. Removing only those return
+locals reconstructs every accepted source; interfaces, source-map origins and
+dispatch contracts remain unchanged. All old and current sources pass strict
+DXC compilation. Their fourteen compiled modules differ and still require native
+execution; both LogSumExp artifacts remain byte-identical. The four selected
+normalization loaders receive the same reviewed return-local update, with all
+inputs, reference values, guards and tolerances retained.
 
 A separate historical proof selects the forward `layer_normfloat32` entry at
 commit `846d176227a0ac13d2667e58d2bb68b322109ab0` through
@@ -3264,8 +3283,8 @@ Materialization emits the forward entry plus `initialize_buffer<1>` and
 `threadgroup_sum<1>` from six reachable specializations while pruning 194
 candidates.
 
-The generated HLSL artifact is 7,586 bytes with SHA-256
-`33852efe1e1c48a45ec3e25e4c9d271142e2ac8aecfbd01ae4dd0c5704464a5c`.
+The generated HLSL artifact is 7,937 bytes with SHA-256
+`9cea1326d7cfc74b4c824809a2f72022931da16bcc63e58855bd34cac52711f7`.
 It retains `[WaveSize(32)]`, two `WaveActiveSum` calls, and compiles as
 `cs_6_6` with `-enable-16bit-types`; Windows CI requires Direct3D 12 WARP
 execution. The generated GLSL artifact is 8,403 bytes with SHA-256
@@ -3278,11 +3297,11 @@ Linux OpenGL execution and an independent 100-digit calculation checked all 256
 returned values within unchanged tolerances, with maximum absolute error below
 `1.36e-7`. Windows execution remains required separately.
 
-The latest HLSL reference adds thirteen unused placeholder fields in helper
-structs. Removing those declarations reproduces the previous accepted source
-hash, and both complete shaders compile to byte-identical DXIL with warnings
-fatal. The numerical test, resource layout and dispatch requirements are
-unchanged; no other normalization reference is updated by this review.
+An earlier HLSL compatibility update added thirteen unused placeholder fields
+in helper structs. Removing those declarations reproduced its previous accepted
+source, and both complete shaders compiled to byte-identical DXIL with warnings
+fatal. The numerical test, resource layout and dispatch requirements were
+unchanged. The later precise-return update is reviewed separately above.
 
 The forward LayerNorm references now retain the source's explicit precise
 reciprocal-square-root helper. Complete body review found only that helper, its
@@ -3337,8 +3356,8 @@ shape and weighted-gradient provenance. Materialization selects
 `threadgroup_sum<3>`, and `threadgroup_sum<1>` from seven reachable
 specializations while pruning 194 candidates.
 
-The generated HLSL is 9,452 bytes with SHA-256
-`e1d1a2c741e0aed892413adc1b2d99db444878f5981effca373091b46f61b54e`.
+The generated HLSL is 9,728 bytes with SHA-256
+`3b1ef17b831c0cbdca7509fd6eb01e678f67293be10f1c13812428b328bdf615`.
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, compiles as `cs_6_6` with `-enable-16bit-types`, and
 must execute numerically through Direct3D 12 WARP on Windows CI. The generated
@@ -4484,8 +4503,8 @@ preserving reachable constants, resolving
 materializes one `rms_single_row<float, RMS_N_READS>` specialization from four
 reachable specializations while pruning 168 unrelated candidates.
 
-The generated HLSL artifact is 5,856 bytes with SHA-256
-`a7e7c7da1c51a42cff5e2bdb9bb1955bc1ee302552130e291f3158c5cc7846da`;
+The generated HLSL artifact is 6,207 bytes with SHA-256
+`eb21d6e723d5e46874d33c013e4d92fbeaf2c2bade653aa4afb68969a398fa61`;
 it retains `[WaveSize(32)]` and compiles as `cs_6_6` with
 `-enable-16bit-types`. The generated GLSL
 artifact is 6,882 bytes with SHA-256
@@ -4525,8 +4544,8 @@ input and cotangent views. Materialization selects
 `vjp_rms_single_row<float, RMS_N_READS>` from four reachable specializations
 while pruning 168 unrelated candidates.
 
-The generated HLSL is 9,175 bytes with SHA-256
-`1820e6a8454f4a44fc0c8998950c0469596a8318fb2b7efa250794bfd21d2ab8`.
+The generated HLSL is 9,526 bytes with SHA-256
+`6edd8154b624ca1d66302dbb657f8d8a356b7d5e5824018e88e9630074eac83f`.
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, and compiles as `cs_6_6` with
 `-enable-16bit-types`. The generated software-subgroup GLSL is 10,257 bytes
