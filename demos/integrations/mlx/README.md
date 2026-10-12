@@ -1119,11 +1119,16 @@ The current harness verifies:
   accounts for 875 changed references and two unchanged sources, totaling
   5,159,617 bytes. Of the changed artifacts, 756 compile to byte-identical DXIL;
   the remaining 119 incorporate reviewed precise math or conversion corrections.
-  All 877 current artifacts compile with warnings fatal. Source pins,
-  classifications, materializations, resource bindings and dispatch contracts
-  remain unchanged. The required Windows Square and ArcCos numerical tests retain
-  their existing shader identities, inputs and tolerances. Other historical
-  HLSL families remain under review in
+  A follow-up review updates 230 bodies for explicit precise helper returns
+  and FP8 record construction, bringing the source total to 5,264,433 bytes.
+  Of those bodies, 35 retain identical DXIL and 195 preserve additional
+  precision constraints. All 877 current artifacts compile with warnings fatal.
+  Source pins, classifications, materializations, resource bindings and dispatch
+  contracts remain unchanged. The required Windows Square and ArcCos numerical tests retain
+  their existing inputs, expected values and tolerances; the ArcCos source
+  identity now includes the explicit precise returns. Windows execution remains
+  a required check, separate from this source and compiler review. Other
+  historical HLSL families remain under review in
   [crosstl#2071](https://github.com/CrossGL/crosstl/issues/2071). Whole-family
   numerical parity is not claimed; bit-observable floating conversions also
   require the source-policy work tracked in
@@ -1442,7 +1447,7 @@ The current harness verifies:
   materialization, workgroup metadata, and reflected ABI, and compile with
   checksum-pinned DXC using `-enable-16bit-types -WX -T cs_6_2 -E CSMain`,
   requiring 2,396 non-empty DXIL modules. The reviewed references total
-  37,811,299 HLSL bytes and 24,236,412 DXIL bytes. Source references preserve
+  37,811,091 HLSL bytes and 24,236,412 DXIL bytes. Source references preserve
   the original integer-product grouping. The subsequent half-selection review
   reproduces all 78 previous half minimum/maximum sources and DXIL identities,
   compares complete bodies and interfaces, and updates 76 changed references;
@@ -1459,7 +1464,11 @@ The current harness verifies:
   storage element per logical element instead of unpacking four values from
   it. Existing required native tests cover the shared value-load and floating
   classification rules, without establishing execution of every reduction
-  kernel. All materialization and resource-interface identities are unchanged.
+  kernel. A subsequent formatting review removes redundant condition
+  parentheses from 104 artifacts; all 104 retain their exact DXIL identities.
+  The other 2,292 sources are unchanged, and 71 fresh local translations
+  independently reproduce the retained sources. All materialization and
+  resource-interface identities are unchanged.
   This records complete
   translation, reflection and compiler coverage for this historical HLSL corpus,
   not numerical execution or MLX host runtime redirection. Other target reference
@@ -4280,12 +4289,16 @@ These compiler-only shards do not require a Windows runner. Direct3D 12
 execution and readback checks remain on Windows; compiling DXIL on Linux is
 not a substitute for those runtime tests.
 
-The current HLSL references total 16,200,087 bytes. Complete comparisons cover
+The current HLSL references total 16,242,567 bytes. Complete comparisons cover
 all 4,122 predecessor and generated bodies, all 21,248 reflected resources,
 and strict compilation of both sets. Adding legal empty-record padding leaves
 4,053 DXIL modules byte-identical. The remaining 69 artifacts incorporate
 power-domain or precise complex-magnitude corrections and compile successfully;
 their changed binaries are retained as such, not treated as equivalent.
+A follow-up review preserves explicit precise returns in 69 sources: 54
+retain identical DXIL and 15 retain additional precision constraints. All
+4,122 sources compile with warnings fatal. Numerical references and tolerances
+remain unchanged; these compiler checks do not qualify Windows execution.
 Bindings, dispatch contracts, source pins and specialization counts remain
 unchanged. The contract preserves earlier review provenance and records this
 follow-up separately. These checks do not establish numerical execution of the

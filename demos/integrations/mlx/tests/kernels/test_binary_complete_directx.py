@@ -44,12 +44,12 @@ BINARY_DIRECTX_CONTRACT_PATH = (
     / "binary.directx-translation.json"
 )
 BINARY_DIRECTX_CONTRACT_SHA256 = (
-    "553d8a63d32f8e995d598f772fbc4e599ab92ba491148e846930a6a150570364"
+    "3bdf5d7c406bad823695d3524efa773f9218bd0bad1e780ac5c072fb993a123a"
 )
-BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1472029
-BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 16200087
+BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1472709
+BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 16242567
 BINARY_DIRECTX_GENERATED_SIZE_MINIMUM = ("ss_Addint32", 2784)
-BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_ArcTan2float16", 13871)
+BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_ArcTan2float16", 14581)
 INDEX_RANGE_ASSERTIONS = (
     ("offset + i", 0, 2147483647),
     ("a_idx", 0, 2147483647),
@@ -497,6 +497,23 @@ def test_binary_atan2_artifact_refresh_preserves_corpus_scope():
                 "byteIdenticalDxilCount": 4053,
                 "reviewedResourceCount": 21248,
                 "unchangedSourceAndInterfaceContracts": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            },
+            {
+                "reason": "Retain precise helper return expressions in HLSL.",
+                "previousContractSha256": (
+                    "553d8a63d32f8e995d598f772fbc4e599ab92ba491148e846930a6a150570364"
+                ),
+                "changedEntryCount": 69,
+                "unaffectedEntryCount": 4053,
+                "reviewedBodyCount": 4122,
+                "nativeCompiledChangedEntryCount": 69,
+                "nativeCompiledEntryCount": 4122,
+                "byteIdenticalDxilChangedEntryCount": 54,
+                "precisionConstrainedDxilChangedEntryCount": 15,
+                "unchangedSourceAndInterfaceContracts": True,
+                "numericalReferencesUnchanged": True,
                 "numericalExecution": False,
                 "fullUpstreamSuite": False,
             },

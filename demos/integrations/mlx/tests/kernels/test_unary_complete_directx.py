@@ -38,7 +38,7 @@ UNARY_DIRECTX_CONTRACT_PATH = (
     / "unary.directx-translation.json"
 )
 UNARY_DIRECTX_CONTRACT_SHA256 = (
-    "6f13a8e6b775c1c5d3b6ed55172a05fd8a6680c055f29cd39edd5186aaf305d8"
+    "7f90c60115a934c49cc7cb588f8a2dca84541a2960694ed04133bf2554bfbdf9"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
@@ -259,12 +259,12 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
             "gn4large": 1098,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 5159617,
+        "generatedSizeBytesTotal": 5264433,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3462},
             "maximum": {
                 "entryPoint": "gn4large_ArcTancomplex64complex64",
-                "sizeBytes": 17536,
+                "sizeBytes": 18719,
             },
         },
         "nativeCompiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
@@ -298,13 +298,13 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 5159617
+    assert sum(entry["sizeBytes"] for entry in entries) == 5264433
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
         3462,
         "v_Absint32int32",
     )
     assert max((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
-        17536,
+        18719,
         "gn4large_ArcTancomplex64complex64",
     )
 
@@ -582,6 +582,26 @@ def test_unary_artifact_refresh_preserves_corpus_scope():
                 "byteIdenticalDxilChangedEntryCount": 756,
                 "reviewedResourceCount": 3912,
                 "unchangedSourceAndInterfaceContracts": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            },
+            {
+                "reason": (
+                    "Retain precise helper return expressions and explicit "
+                    "FP8 record construction in HLSL."
+                ),
+                "previousContractSha256": (
+                    "6f13a8e6b775c1c5d3b6ed55172a05fd8a6680c055f29cd39edd5186aaf305d8"
+                ),
+                "changedEntryCount": 230,
+                "unaffectedEntryCount": 647,
+                "reviewedBodyCount": 877,
+                "nativeCompiledChangedEntryCount": 230,
+                "nativeCompiledEntryCount": 877,
+                "byteIdenticalDxilChangedEntryCount": 35,
+                "precisionConstrainedDxilChangedEntryCount": 195,
+                "unchangedSourceAndInterfaceContracts": True,
+                "numericalReferencesUnchanged": True,
                 "numericalExecution": False,
                 "fullUpstreamSuite": False,
             },

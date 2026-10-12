@@ -142,9 +142,9 @@ ARCCOS_WORKLOAD = UnaryWorkload(
     generated_artifacts={
         "directx": {
             "sha256": (
-                "650f82a01efe37a49d223a4ba2ccf3f5f595c80e8ec14619ad1ff0fb3406b05d"
+                "ee08807642ea064d9a841ff71323871b8b5b15d77f8c88455ff1d8ace12603b5"
             ),
-            "sizeBytes": 5630,
+            "sizeBytes": 6129,
         },
         "metal": {
             "sha256": (

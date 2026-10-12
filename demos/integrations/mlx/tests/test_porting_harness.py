@@ -11685,8 +11685,8 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     }
     assert arccos["artifacts"]["directx"] == {
         "target_entry_point": "CSMain",
-        "sha256": "650f82a01efe37a49d223a4ba2ccf3f5f595c80e8ec14619ad1ff0fb3406b05d",
-        "size_bytes": 5630,
+        "sha256": "ee08807642ea064d9a841ff71323871b8b5b15d77f8c88455ff1d8ace12603b5",
+        "size_bytes": 6129,
         "native_runtime": {
             "platform": "windows-latest",
             "runtime": "direct3d-12-warp",
@@ -12228,8 +12228,8 @@ def test_unary_directx_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
         "schema_version": 2,
-        "sha256": "6f13a8e6b775c1c5d3b6ed55172a05fd8a6680c055f29cd39edd5186aaf305d8",
-        "size_bytes": 320517,
+        "sha256": "7f90c60115a934c49cc7cb588f8a2dca84541a2960694ed04133bf2554bfbdf9",
+        "size_bytes": 321231,
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12345,12 +12345,12 @@ def test_unary_directx_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 5159617,
+        "generated_size_bytes_total": 5264433,
         "generated_size_range": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3462},
             "maximum": {
                 "entryPoint": "gn4large_ArcTancomplex64complex64",
-                "sizeBytes": 17536,
+                "sizeBytes": 18719,
             },
         },
     }

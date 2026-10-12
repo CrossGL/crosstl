@@ -54,17 +54,17 @@ REDUCE_DIRECTX_CONTRACT_PATH = (
     / "reduce.directx-translation.json"
 )
 REDUCE_DIRECTX_CONTRACT_SHA256 = (
-    "2522d73a8626cbe529b5a42ad2d554618f13e2217d7ea2ce6d918445eb79a9a7"
+    "9cf9dafe373d770be867700f1ae32c05635f5465ad4c90c4e09a650759ddd6f8"
 )
-REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1795466
+REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1796057
 REDUCE_DIRECTX_SPECIALIZATION_COUNT = 9216
 REDUCE_DIRECTX_REFLECTED_RESOURCE_COUNT = 27382
-REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 37811299
+REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 37811091
 REDUCE_DIRECTX_DXIL_SIZE_BYTES_TOTAL = 24236412
 REDUCE_DIRECTX_GENERATED_SIZE_MINIMUM = ("init_reduce_minbool_", 1976)
 REDUCE_DIRECTX_GENERATED_SIZE_MAXIMUM = (
     "row_reduce_looped_large_5_reduce_mincomplex64",
-    30904,
+    30902,
 )
 REDUCE_DIRECTX_DXIL_SIZE_MINIMUM = ("init_reduce_andbool_", 2852)
 REDUCE_DIRECTX_DXIL_SIZE_MAXIMUM = (
@@ -202,6 +202,7 @@ def test_current_mlx_reduce_directx_contract_is_complete_and_classified() -> Non
         "classifications",
         "artifactContract",
         "entries",
+        "artifactIdentityRefresh",
     }
     assert contract["schemaVersion"] == 2
     assert contract["kind"] == "crosstl-mlx-reduce-directx-translation-contract"
@@ -301,6 +302,25 @@ def test_current_mlx_reduce_directx_contract_is_complete_and_classified() -> Non
     assert artifact["requiresNonemptyDxilArtifact"] is True
     assert artifact["independentNativeRecompileCount"] == 2396
     assert artifact["independentDxilByteMatchCount"] == 2396
+
+
+def test_reduce_artifact_refresh_preserves_compiled_identities() -> None:
+    assert REDUCE_DIRECTX_CONTRACT["artifactIdentityRefresh"] == {
+        "reason": "Remove redundant enclosing parentheses from HLSL conditions.",
+        "previousContractSha256": (
+            "2522d73a8626cbe529b5a42ad2d554618f13e2217d7ea2ce6d918445eb79a9a7"
+        ),
+        "changedEntryCount": 104,
+        "unaffectedEntryCount": 2292,
+        "reviewedBodyCount": 2396,
+        "nativeCompiledEntryCount": 2396,
+        "byteIdenticalDxilChangedEntryCount": 104,
+        "freshTranslationCrosscheckCount": 71,
+        "unchangedSourceAndInterfaceContracts": True,
+        "numericalReferencesUnchanged": True,
+        "numericalExecution": False,
+        "fullUpstreamSuite": False,
+    }
 
 
 def _shard_parameters():
