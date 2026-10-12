@@ -1183,6 +1183,63 @@ def test_native_metadata_pointer_identifier_bounds(tmp_path):
                 } == {"index": index, "offset": offset}
 
 
+def test_native_metadata_control_flow(tmp_path):
+
+    if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":
+        pytest.skip("native metadata checks are opt-in")
+    from tests.runtime_helpers import _validate
+    from tests.test_translator.test_control_flow_reachability import NATIVE_BODIES
+    from tests.test_translator.test_loop_updates import _execute
+    from tests.test_translator.test_metadata_index_bounds import (
+        CONDITIONS,
+        GUARD,
+        SOURCE,
+        _index_config,
+        _index_request,
+    )
+    from tests.test_translator.test_project_metadata_entry_scope import _packages
+
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    for number, body in enumerate(NATIVE_BODIES):
+        root = tmp_path / str(number)
+        source = SOURCE.replace(
+            "result[0] = values[offset + index];", "values += index; " + body
+        )
+        conditions = (CONDITIONS[0], {**CONDITIONS[1], "minimum": 16, "maximum": 16})
+        _, package, (descriptor,) = _packages(
+            _index_config(root, source=source, conditions=conditions, target=target)
+        )
+        for index in (0, 3):
+            request, expected = _index_request(descriptor, package, index, 16)
+            words = [GUARD] * 8
+            words[1] = 7
+            if number == 2:
+                words[0] = 17 + 13 * index
+            elif number == 3:
+                words[3] = 11
+            elif number == 4:
+                words[3:5] = [13, 11]
+            elif number in (5, 6):
+                words[3] = 1
+            for packet in expected.values():
+                packet["values"] = words
+            work = root / f"native-{index}"
+            work.mkdir()
+            _execute(
+                request,
+                expected,
+                work,
+                validate=_validate,
+                original_source=source if target == "metal" else None,
+                original_entry="read_value",
+            )
+            evidence = json.loads((work / "evidence.json").read_text())
+            for record in evidence["records"].values():
+                observations = record["details"]["inputObservations"]
+                assert len(observations) == 3
+                assert all(item["unchanged"] for item in observations.values())
+
+
 def test_native_metadata_integer_shifts(tmp_path):
     if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":
         pytest.skip(

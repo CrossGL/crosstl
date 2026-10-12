@@ -10163,6 +10163,80 @@ class GLSLCodeGen:
             getattr(function, "body", []),
             self.glsl_workgroup_proof_initial_intervals(function),
         )
+        for node in self.walk_ast(getattr(function, "body", [])):
+            if isinstance(node, ForNode):
+                node._glsl_checked_zero_trip = self.glsl_control_flow_zero_trip_for(
+                    node, lexical
+                )
+            elif isinstance(node, IfNode):
+                node._glsl_checked_static_if = self.glsl_control_flow_static_if_body(
+                    node, lexical
+                )
+
+    def glsl_control_flow_signed_constants(self, expressions, intervals, lexical):
+        """Use exact flow facts only for visible, non-volatile signed scalars."""
+        cast_names = {
+            id(node.function)
+            for node in self.walk_ast(expressions)
+            if isinstance(node, FunctionCallNode)
+            and self.glsl_software_subgroup_proof_int_type(
+                self.function_call_name(node)
+            )
+        }
+        constants = {}
+        for node in self.walk_ast(expressions):
+            if not isinstance(node, IdentifierNode) or id(node) in cast_names:
+                continue
+            binding = lexical["declarations"].get(
+                lexical["reference_bindings"].get(id(node))
+            )
+            if binding is None or not self.glsl_software_subgroup_proof_int_type(
+                binding["source_type"]
+            ):
+                return None
+            if "volatile" in {
+                str(qualifier).lower()
+                for qualifier in getattr(binding["node"], "qualifiers", ())
+            }:
+                return None
+            interval = intervals.get(node.name)
+            if interval is not None and interval[0] == interval[1]:
+                constants[node.name] = interval[0]
+        return constants
+
+    def glsl_control_flow_zero_trip_for(self, node, lexical):
+        initializer = getattr(node, "init", None)
+        if not self.glsl_software_subgroup_integral_variable(initializer):
+            return False
+        if getattr(initializer, "qualifiers", None):
+            return False
+        constants = self.glsl_control_flow_signed_constants(
+            [initializer.initial_value, node.condition],
+            getattr(node, "_glsl_control_flow_intervals", {}),
+            lexical,
+        )
+        return (
+            constants is not None
+            and self.glsl_software_subgroup_proven_zero_trip_for(node, constants)
+        )
+
+    def glsl_control_flow_static_if_body(self, node, lexical):
+        conditions = [node.condition, *(node.else_if_conditions or [])]
+        bodies = [node.if_body, *(node.else_if_bodies or [])]
+        for condition, body in zip(conditions, bodies):
+            constants = self.glsl_control_flow_signed_constants(
+                condition, getattr(node, "_glsl_control_flow_intervals", {}), lexical
+            )
+            value = (
+                None
+                if constants is None
+                else self.glsl_software_subgroup_safe_int_value(condition, constants)
+            )
+            if value is None:
+                return False, None
+            if value:
+                return True, body
+        return True, node.else_body
 
     def prepare_glsl_resource_function_specializations(self, ast, target_stage=None):
         """Create GLSL helper variants for concrete storage image arguments."""
@@ -34629,7 +34703,11 @@ complex64_t crossgl_complex64_mod_assign(
 
     def generate_if(self, node, indent, is_main=False):
         indent_str = "    " * indent
-        static_branch_known, static_body = self.glsl_static_if_body(node)
+        static_branch_known, static_body = getattr(
+            node, "_glsl_checked_static_if", (False, None)
+        )
+        if not static_branch_known:
+            static_branch_known, static_body = self.glsl_static_if_body(node)
         if static_branch_known:
             if not self.statement_body_has_statements(static_body):
                 return ""
@@ -34749,6 +34827,8 @@ complex64_t crossgl_complex64_mod_assign(
         return code
 
     def generate_for(self, node, indent, is_main=False):
+        if getattr(node, "_glsl_checked_zero_trip", False):
+            return ""
         if id(node) in getattr(
             self, "glsl_software_subgroup_zero_trip_for_node_ids", set()
         ):

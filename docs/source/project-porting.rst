@@ -1244,6 +1244,11 @@ Checked unsigned 32-bit and 64-bit shifts retain range facts when every shift
 count fits the operand width and left shifts cannot wrap. Signed shifts and
 narrow operands requiring integer promotion do not acquire this proof. Source
 declaration types remain lexical when propagating shift results through locals.
+Exact checked facts for non-volatile signed 32-bit scalars can also prove that
+a loop never starts or select a conditional branch. The proof preserves lexical
+scope and requires effect-free, non-wrapping condition evaluation. Unknown
+values, unsigned coercions, and observable initializer or condition effects
+remain reachable; no unsupported live computation is discarded.
 
 These are conditional integer-range proofs, not allocation bounds checks. They do
 not establish bounds for arbitrary dispatches or helper state. An exact
