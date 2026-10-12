@@ -1240,7 +1240,11 @@ These are conditional integer-range proofs, not allocation bounds checks. They d
 not establish bounds for arbitrary dispatches or helper state. An exact
 ``dispatch_region`` contract can additionally bound the selected entry's physical
 group and invocation coordinates. These facts remain entry-scoped and must be
-enforced together with scalar metadata requirements. A custom caller must retain
+enforced together with scalar metadata requirements. Scalar, two-component and
+three-component coordinates are rebuilt component by component, preserving
+range proofs through partial-group offsets without nested vector swizzles.
+Changing a coordinate or removing either contract still invalidates the proof.
+A custom caller must retain
 the artifact's obligations even when
 the emitted source uses a narrower index type.
 Record fields, GPU-produced metadata, shared allocations and C execution wrappers

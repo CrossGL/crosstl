@@ -179,6 +179,7 @@ def test_region_entry_coordinates_preserve_parameter_widths(tmp_path, target, ki
     )
     _compile(generated, target, tmp_path)
     assert "37" in generated and "32" in generated
+    assert ".xy.x" not in generated and ".xy.y" not in generated
 
 
 @pytest.mark.parametrize("target", ["directx", "opengl"])

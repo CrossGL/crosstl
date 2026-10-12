@@ -96,20 +96,22 @@ def _expression(kind, physical, value_type, region):
         return _constant(region.source_workgroup_count, value_type)
     offset = region.thread_offset if kind == "thread" else region.workgroup_offset
     scalar, width = _coordinate_type(value_type)
+
+    def component(index):
+        value = MemberAccessNode(physical, "xyz"[index])
+        if scalar == "int":
+            value = FunctionCallNode(IdentifierNode("int"), [value])
+        return BinaryOpNode(
+            value, "+", LiteralNode(offset[index], PrimitiveType(scalar))
+        )
+
     if width > 1:
         name = ("uvec" if scalar == "uint" else "ivec") + str(width)
         return FunctionCallNode(
             IdentifierNode(name),
-            [
-                BinaryOpNode(
-                    MemberAccessNode(physical, "xyz"[index]),
-                    "+",
-                    LiteralNode(offset[index], PrimitiveType(scalar)),
-                )
-                for index in range(width)
-            ],
+            [component(index) for index in range(width)],
         )
-    return BinaryOpNode(physical, "+", _constant(offset, value_type))
+    return component(0)
 
 
 def _rewrite_builtins(value, bound, region, memo, capture):
@@ -283,11 +285,6 @@ def specialize_dispatch_region(ast, region: DispatchRegion):
                     "Dispatch coordinate exceeds the signed parameter range"
                 )
             physical = capture(kind)
-            if width < 3:
-                physical = MemberAccessNode(physical, "xyz"[:width])
-            if scalar == "int":
-                constructor = "int" if width == 1 else f"ivec{width}"
-                physical = FunctionCallNode(IdentifierNode(constructor), [physical])
         prologue.append(
             VariableNode(
                 parameter.name,

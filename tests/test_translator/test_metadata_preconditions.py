@@ -1058,3 +1058,62 @@ def test_native_region_metadata_indices(tmp_path):
                 evidence["records"]["generated"]["details"]["dispatchRegion"]
                 == descriptor["provenance"]["dispatchRegion"]
             )
+
+
+def test_native_region_metadata_coordinate_widths(tmp_path):
+    if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":
+        pytest.skip(
+            "set CROSTL_REQUIRE_METADATA_PRECONDITIONS=1 for native metadata checks"
+        )
+    from crosstl.translator.dispatch_regions import plan_dispatch_regions
+    from tests.runtime_helpers import _validate
+    from tests.test_translator.test_dispatch_coordinate_bounds import (
+        _coordinate_config,
+        _coordinate_request,
+        _coordinate_source,
+    )
+    from tests.test_translator.test_loop_updates import _execute
+    from tests.test_translator.test_project_metadata_entry_scope import _packages
+
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    cases = [
+        (kind, plan_dispatch_regions(grid, (1, 1, 1))[0])
+        for kind, grid in (
+            ("uint", (3, 1, 1)),
+            ("uint2", (3, 2, 1)),
+            ("uint3", (3, 2, 2)),
+        )
+    ]
+    if target != "metal":
+        cases.extend(
+            ("uint2", region) for region in plan_dispatch_regions((5, 3, 1), (4, 2, 1))
+        )
+    for number, (kind, region) in enumerate(cases):
+        grid = region.thread_grid_size
+        root = tmp_path / f"{kind}-{number}"
+        _, package, (descriptor,) = _packages(
+            _coordinate_config(root, target, kind, region)
+        )
+        request, outputs = _coordinate_request(descriptor, package, region)
+        work = root / "native"
+        work.mkdir()
+        _execute(
+            request,
+            outputs,
+            work,
+            validate=_validate,
+            original_source=(
+                _coordinate_source(kind, grid) if target == "metal" else None
+            ),
+            original_entry="read_value",
+        )
+        evidence = json.loads((work / "evidence.json").read_text())
+        for record in evidence["records"].values():
+            observations = record["details"]["inputObservations"]
+            assert len(observations) == 1
+            assert all(item["unchanged"] for item in observations.values())
+        generated = evidence["records"]["generated"]
+        checks = generated["details"]["metadataPreconditions"]
+        assert len(checks) == 1 and checks[0]["value"] == 16
+        if target != "metal":
+            assert generated["details"]["dispatchRegion"] == region.to_json()
