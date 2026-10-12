@@ -323,6 +323,7 @@ if ($env:CROSTL_WARP_TEST_FAILURE -eq "selection") {
         pythonLocation=str(python_root),
         CROSTL_WARP_TEST_ARCHIVE=str(archive),
         CROSTL_WARP_TEST_FAILURE=failure or "",
+        GITHUB_EVENT_NAME="workflow_dispatch",
     )
     result = subprocess.run(
         [
@@ -355,6 +356,65 @@ if ($env:CROSTL_WARP_TEST_FAILURE -eq "selection") {
         "qualificationDLLSHA256": digest(qualified),
         "replacesRequiredGate": False,
     }
+
+
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell is not installed")
+@pytest.mark.parametrize("event", ["pull_request", "push", "schedule"])
+@pytest.mark.parametrize("exit_code", [0, 1, 124])
+def test_automatic_windows_comparison_keeps_runtime_and_failure_status(
+    tmp_path, event, exit_code
+):
+    workflow = yaml.safe_load(_workflow_texts()["demo-project-testing.yml"])
+    step = next(
+        item
+        for item in workflow["jobs"]["portable-host"]["steps"]
+        if item.get("name") == "Compare WARP arithmetic across codegen revisions"
+    )
+    assert step["timeout-minutes"] == 8 and not step.get("continue-on-error")
+    bootstrap = r"""
+function Invoke-WebRequest { throw "Automatic comparison must not download a runtime." }
+function Copy-Item { throw "Automatic comparison must not replace a runtime." }
+function python {
+    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
+    if ($env:CROSTL_REQUIRE_DIRECTX_TOOL_DEBUG_COMPARISON -ne "1") { throw "Missing native gate." }
+    $Arguments | ConvertTo-Json | Set-Content "arguments.json"
+    $global:LASTEXITCODE = [int]$env:CROSTL_TEST_EXIT_CODE
+}
+"""
+    script = tmp_path / "compare.ps1"
+    script.write_text(bootstrap + step["run"])
+    result = subprocess.run(
+        [shutil.which("pwsh"), "-NoProfile", "-NonInteractive", "-File", str(script)],
+        cwd=tmp_path,
+        env=dict(
+            os.environ, GITHUB_EVENT_NAME=event, CROSTL_TEST_EXIT_CODE=str(exit_code)
+        ),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == exit_code, result.stdout + result.stderr
+    arguments = json.loads(
+        (tmp_path / "arguments.json").read_text(encoding="utf-8-sig")
+    )
+    assert arguments == [
+        "tools/run_bounded_command.py",
+        "--timeout-seconds",
+        "180",
+        "--label",
+        "WARP pipeline mode comparison",
+        "--",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-n",
+        "auto",
+        "--basetemp=.mlx-portable-host/warp-pipeline-comparison/pytest",
+        "--junitxml=.mlx-portable-host/warp-pipeline-comparison/results.xml",
+        "tests/test_translator/test_directx_pipeline_debug.py",
+    ]
+    assert not (tmp_path / ".mlx-portable-host/warp-codegen-comparison").exists()
 
 
 @pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell is not installed")

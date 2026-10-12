@@ -3508,6 +3508,18 @@ an OS fallback, unreadable core or different loaded library fails with
 worker still uses the same DXIL, adapter selection, descriptors and numerical
 checks. SDK selection alone does not establish arithmetic correctness.
 
+The same executor accepts ``tool_debug=True`` for an explicit WARP pipeline
+comparison. The worker checks the selected adapter's LUID against the WARP
+adapter before setting ``D3D12_PIPELINE_STATE_FLAG_TOOL_DEBUG``. Hardware
+adapters are rejected; the default remains ``D3D12_PIPELINE_STATE_FLAG_NONE``.
+Receipts retain ``requestedPipelineStateFlags`` and require the worker's
+``workerPipelineStateFlags`` confirmation for successful debug dispatches.
+Shader bytes, buffer descriptors and execution limits do not change. Microsoft's
+`pipeline flag contract <https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_pipeline_state_flags>`_
+describes additional debugging information, not an arithmetic workaround or
+a guarantee that optimizations are disabled. A passing diagnostic does not
+qualify default execution.
+
 Ranged execution supports shared read-only views, disjoint UAV views and
 cross-dispatch read/write reuse. Simultaneous SRV/CBV reads and UAV writes to one
 allocation within a dispatch remain unsupported by the worker's classic

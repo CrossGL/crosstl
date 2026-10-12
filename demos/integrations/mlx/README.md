@@ -82,6 +82,15 @@ at two. Their complete module selections and separate 360-second deadlines
 remain unchanged; per-test progress and durations make timeout diagnosis visible.
 
 If the required Windows collective checks fail, the existing job compares the
+same precise scalar and cooperative-matrix controls with default pipeline flags
+and WARP's `TOOL_DEBUG` flag. Each pair shares one compiled shader, identical
+request bytes, inputs and exact expected words. Both modes execute even if the
+first fails. The comparison retains requested and observed flags and fails on
+either numerical failure; it is diagnostic, not a replacement for the required
+gate. Its process limit is 180 seconds within the existing eight-minute step.
+Debug information is not a documented guarantee of different arithmetic.
+
+For manually dispatched workflow runs, that diagnostic instead compares the
 same precise scalar, cooperative-matrix and narrow-buffer controls on the
 system WARP library and checksum-pinned stable releases: 1.0.13, 1.0.14.1,
 1.0.14.2, 1.0.15, 1.0.15.1, 1.0.16, 1.0.16.1, 1.0.17, 1.0.18 and 1.0.19.

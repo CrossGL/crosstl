@@ -659,12 +659,17 @@ def test_worker_runtime_identity_rejects_malformed_receipts(tmp_path, payload, r
 
 
 @pytest.mark.parametrize("failure", [False, True])
-def test_view_executor_reads_the_requested_output_slice(tmp_path, monkeypatch, failure):
+@pytest.mark.parametrize("tool_debug", [False, True])
+def test_view_executor_reads_the_requested_output_slice(
+    tmp_path, monkeypatch, failure, tool_debug
+):
     nodes, allocations, keys = _plan((_request(tmp_path),))
     monkeypatch.setattr(directx_runtime, "_worker", lambda: Path("worker.exe"))
 
     def execute(command, **kwargs):
-        assert command[3:] == ["selected adapter", "0", "5140", "0", "0", "1024"]
+        assert command[3:] == ["selected adapter", "0", "5140", "0", "0", "1024"] + (
+            ["--warp-tool-debug"] if tool_debug else []
+        )
         payload = bytearray(_response(allocations))
         offset = 8
         for allocation in allocations:
@@ -675,7 +680,10 @@ def test_view_executor_reads_the_requested_output_slice(tmp_path, monkeypatch, f
         Path(command[2]).write_bytes(payload)
         Path(command[2] + ".runtime").write_bytes(_runtime_packet())
         return subprocess.CompletedProcess(
-            command, int(failure), b"", b"dispatch failed" if failure else b""
+            command,
+            int(failure),
+            b'{"pipelineStateFlags":1}\n' if tool_debug else b"",
+            b"dispatch failed" if failure else b"",
         )
 
     monkeypatch.setattr(directx_runtime, "_run", execute)
@@ -683,15 +691,19 @@ def test_view_executor_reads_the_requested_output_slice(tmp_path, monkeypatch, f
     if failure:
         with pytest.raises(RuntimeAdapterDispatchError) as caught:
             directx_runtime.execute_buffer_views(
-                nodes, allocations, keys, state, device=_device()
+                nodes, allocations, keys, state, device=_device(), tool_debug=tool_debug
             )
         assert caught.value.details["workerRuntime"]["processId"] == 123
+        assert caught.value.details["requestedPipelineStateFlags"] == int(tool_debug)
         assert state.details["directxRuntime"]["workerRuntime"]["processId"] == 123
         return
     result = directx_runtime.execute_buffer_views(
-        nodes, allocations, keys, state, device=_device()
+        nodes, allocations, keys, state, device=_device(), tool_debug=tool_debug
     )
     assert result["result"]["values"] == [3.0, 6.0]
+    details = state.details["directxRuntime"]
+    assert details["requestedPipelineStateFlags"] == int(tool_debug)
+    assert details.get("workerPipelineStateFlags") == (1 if tool_debug else None)
     assert state.details["directxRuntime"]["workerRuntime"]["processId"] == 123
     assert len(state.details["directxRuntime"]["allocations"]) == 3
     assert state.details["directxRuntime"][
@@ -711,6 +723,89 @@ def _device(**overrides):
             **overrides,
         }
     )
+
+
+@pytest.mark.parametrize("value", [0, 1, "true", "false", None, [], {}])
+def test_pipeline_debug_rejects_non_boolean_before_execution(monkeypatch, value):
+    def unexpected(*args, **kwargs):
+        pytest.fail("Invalid pipeline flags reached request preparation")
+
+    monkeypatch.setattr(directx_runtime, "encode_dispatches", unexpected)
+    with pytest.raises(RuntimeAdapterSetupError) as error:
+        directx_runtime.execute_buffer_views(
+            None, None, None, None, device=_device(), tool_debug=value
+        )
+    assert error.value.details["reasonKind"] == "pipeline-flags-invalid"
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        b"",
+        b"not-json",
+        b"\xff",
+        b"null",
+        b"[]",
+        b"1",
+        b"{}",
+        b'{"pipelineStateFlags":0}',
+        b'{"pipelineStateFlags":true}',
+        b'{"pipelineStateFlags":1.0}',
+        b'{"pipelineStateFlags":1,"other":0}',
+    ],
+)
+@pytest.mark.parametrize("failure", [False, True])
+def test_pipeline_debug_requires_observed_flags_without_hiding_worker_failure(
+    tmp_path, monkeypatch, receipt, failure
+):
+    nodes, allocations, keys = _plan((_request(tmp_path),))
+    monkeypatch.setattr(directx_runtime, "_worker", lambda: Path("worker.exe"))
+
+    def execute(command, **kwargs):
+        assert command[-1] == "--warp-tool-debug"
+        Path(command[2]).write_bytes(_response(allocations))
+        Path(command[2] + ".runtime").write_bytes(_runtime_packet())
+        return subprocess.CompletedProcess(
+            command, int(failure), receipt, b"failed" if failure else b""
+        )
+
+    monkeypatch.setattr(directx_runtime, "_run", execute)
+    state = SimpleNamespace(details={})
+    error_type = RuntimeAdapterDispatchError if failure else RuntimeAdapterSetupError
+    with pytest.raises(error_type) as error:
+        directx_runtime.execute_buffer_views(
+            nodes, allocations, keys, state, device=_device(), tool_debug=True
+        )
+    assert error.value.details["reasonKind"] == (
+        "native-buffer-view-failed" if failure else "pipeline-flags-mismatch"
+    )
+    assert state.details["directxRuntime"]["requestedPipelineStateFlags"] == 1
+    assert "workerPipelineStateFlags" not in state.details["directxRuntime"]
+
+
+def test_worker_rejects_unknown_pipeline_option(tmp_path, protocol_worker):
+    nodes, allocations, keys = _plan((_request(tmp_path),))
+    packet = tmp_path / "request.bin"
+    packet.write_bytes(directx_runtime.encode_dispatches(nodes, allocations, keys)[0])
+    result = subprocess.run(
+        [
+            str(protocol_worker),
+            str(packet),
+            "--validate",
+            "adapter",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "--unknown",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 1
+    assert "invalid pipeline debug option" in result.stderr
 
 
 def _progress(phase="pipeline-create", dispatch=0, elapsed=125):

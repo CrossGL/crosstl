@@ -1411,6 +1411,13 @@ jobs:
           $ErrorActionPreference = "Stop"
           $ProgressPreference = "SilentlyContinue"
           $PSNativeCommandUseErrorActionPreference = $false
+          if ($env:GITHUB_EVENT_NAME -ne "workflow_dispatch") {
+            $env:CROSTL_REQUIRE_DIRECTX_TOOL_DEBUG_COMPARISON = "1"
+            $evidence = ".mlx-portable-host/warp-pipeline-comparison"
+            New-Item -ItemType Directory -Force $evidence | Out-Null
+            python tools/run_bounded_command.py --timeout-seconds 180 --label "WARP pipeline mode comparison" -- python -m pytest -q -n auto --basetemp="$evidence/pytest" --junitxml="$evidence/results.xml" tests/test_translator/test_directx_pipeline_debug.py
+            exit $LASTEXITCODE
+          }
           $tests = @(
             "tests/test_translator/test_directx_cooperative_matrix.py::test_precise_scalar_control_executes",
             "tests/test_translator/test_directx_cooperative_matrix.py::test_software_matrix_executes",

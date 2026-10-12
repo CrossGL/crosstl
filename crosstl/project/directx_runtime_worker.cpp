@@ -179,6 +179,8 @@ __declspec(dllexport) const char* D3D12SDKPath = ".\\D3D12\\";
 
 namespace {
 using Microsoft::WRL::ComPtr;
+// Older SDK headers name TOOL_DEBUG (0x1) DEBUG.
+constexpr auto tool_debug_flag = static_cast<D3D12_PIPELINE_STATE_FLAGS>(0x1);
 void check(HRESULT status, const char* operation) {
     if (FAILED(status)) {
         std::ostringstream message;
@@ -222,7 +224,7 @@ struct Device {
     ComPtr<ID3D12GraphicsCommandList> list;
     HANDLE event = nullptr;
     uint64_t serial = 0;
-    explicit Device(const AdapterIdentity& identity) {
+    explicit Device(const AdapterIdentity& identity, bool tool_debug) {
         ComPtr<IDXGIFactory4> factory;
         check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "CreateDXGIFactory1");
         ComPtr<IDXGIAdapter1> selected;
@@ -251,6 +253,16 @@ struct Device {
             if (!matches(identity, description))
                 throw std::runtime_error("selected Direct3D adapter identity was not found");
             selected = warp;
+        }
+        if (tool_debug) {
+            ComPtr<IDXGIAdapter1> warp;
+            check(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp)), "EnumWarpAdapter debug");
+            DXGI_ADAPTER_DESC1 selected_desc = {}, warp_desc = {};
+            check(selected->GetDesc1(&selected_desc), "GetDesc1 debug adapter");
+            check(warp->GetDesc1(&warp_desc), "GetDesc1 debug WARP");
+            if (selected_desc.AdapterLuid.LowPart != warp_desc.AdapterLuid.LowPart ||
+                selected_desc.AdapterLuid.HighPart != warp_desc.AdapterLuid.HighPart)
+                throw std::runtime_error("tool debugging requires the WARP adapter");
         }
         check(D3D12CreateDevice(selected.Get(), D3D_FEATURE_LEVEL_12_0,
                                IID_PPV_ARGS(&device)), "D3D12CreateDevice");
@@ -322,10 +334,10 @@ struct Device {
 };
 
 void execute(const Request& request, std::ostream& output, const AdapterIdentity& identity,
-             const std::filesystem::path& runtime_path) {
+             const std::filesystem::path& runtime_path, bool tool_debug) {
     Progress progress;
     progress.enter("device-create");
-    Device runtime(identity);
+    Device runtime(identity, tool_debug);
     // Inspect this process after device creation, not the Python launcher.
     write_runtime_libraries(runtime_path);
     progress.enter("allocations");
@@ -386,6 +398,8 @@ void execute(const Request& request, std::ostream& output, const AdapterIdentity
         D3D12_COMPUTE_PIPELINE_STATE_DESC pipeline_desc = {};
         pipeline_desc.pRootSignature = root.Get();
         pipeline_desc.CS = {dispatch.shader.data(), dispatch.shader.size()};
+        pipeline_desc.Flags = tool_debug ? tool_debug_flag
+                                        : D3D12_PIPELINE_STATE_FLAG_NONE;
         ComPtr<ID3D12PipelineState> pipeline;
         progress.enter("pipeline-create", dispatch_index);
         check(runtime.device->CreateComputePipelineState(&pipeline_desc, IID_PPV_ARGS(&pipeline)), "CreateComputePipelineState");
@@ -488,7 +502,11 @@ int wmain(int argc, wchar_t** argv) {
 int main(int argc, char** argv) {
 #endif
     try {
-        if (argc != 3 && argc != 9) throw std::runtime_error("expected request, output and adapter identity");
+        if (argc != 3 && argc != 9 && argc != 10)
+            throw std::runtime_error("expected request, output and adapter identity");
+        bool tool_debug = argc == 10;
+        if (tool_debug && std::filesystem::path(argv[9]) != "--warp-tool-debug")
+            throw std::runtime_error("invalid pipeline debug option");
         std::ifstream input(std::filesystem::path(argv[1]), std::ios::binary);
         if (!input) throw std::runtime_error("cannot open request");
         auto request = read_request(input);
@@ -498,7 +516,7 @@ int main(int argc, char** argv) {
             return 0;
         }
 #ifdef _WIN32
-        if (argc != 9) throw std::runtime_error("selected adapter identity is required");
+        if (argc != 9 && argc != 10) throw std::runtime_error("selected adapter identity is required");
         auto hardware = adapter_number(argv[4]);
         auto vendor = adapter_number(argv[5]);
         if (hardware > 1 || vendor > UINT32_MAX)
@@ -509,8 +527,9 @@ int main(int argc, char** argv) {
         if (!output) throw std::runtime_error("cannot open output");
         auto runtime_path = std::filesystem::path(argv[2]);
         runtime_path += ".runtime";
-        execute(request, output, identity, runtime_path);
+        execute(request, output, identity, runtime_path, tool_debug);
         if (!output) throw std::runtime_error("cannot write output");
+        if (tool_debug) std::cout << "{\"pipelineStateFlags\":1}\n";
 #else
         throw std::runtime_error("Direct3D 12 execution requires Windows");
 #endif

@@ -489,10 +489,15 @@ def execute_buffer_views(
     device,
     sdk_directory=None,
     sdk_version=None,
+    tool_debug=False,
 ):
     """Run unchanged DXIL using native CBV/SRV/UAV descriptors and shared buffers."""
     from .native_runtime_drivers import _buffer_readback
 
+    if type(tool_debug) is not bool:
+        raise _error(
+            "WARP tool debugging requires a boolean.", "pipeline-flags-invalid"
+        )
     payload, descriptions = encode_dispatches(dispatches, allocations, view_keys)
     identity = _device_identity(device)
     sdk = _sdk_snapshot(sdk_directory, sdk_version)
@@ -515,6 +520,7 @@ def execute_buffer_views(
                     str(identity["dedicatedVideoMemory"]),
                     str(identity["dedicatedSystemMemory"]),
                     str(identity["sharedSystemMemory"]),
+                    *(["--warp-tool-debug"] if tool_debug else []),
                 ],
                 timeout=120,
             )
@@ -540,6 +546,7 @@ def execute_buffer_views(
             "device": identity["name"],
             "adapterIdentity": identity,
             "requestSHA256": hashlib.sha256(payload).hexdigest(),
+            "requestedPipelineStateFlags": int(tool_debug),
             "workerRuntime": runtime_identity,
             "workerProgress": _worker_progress(diagnostics.get("stderr", "")),
             **diagnostics,
@@ -574,6 +581,27 @@ def execute_buffer_views(
                 "DirectX worker did not report its runtime identity.",
                 "worker-output-invalid",
             )
+        if tool_debug:
+            try:
+                pipeline = json.loads(result.stdout)
+            except (ValueError, UnicodeError) as exc:
+                raise _error(
+                    "DirectX worker did not report its pipeline flags.",
+                    "pipeline-flags-mismatch",
+                    **runtime_details,
+                ) from exc
+            if (
+                not isinstance(pipeline, dict)
+                or set(pipeline) != {"pipelineStateFlags"}
+                or type(pipeline["pipelineStateFlags"]) is not int
+                or pipeline["pipelineStateFlags"] != 1
+            ):
+                raise _error(
+                    "DirectX worker did not use the requested pipeline flags.",
+                    "pipeline-flags-mismatch",
+                    **runtime_details,
+                )
+            runtime_details["workerPipelineStateFlags"] = pipeline["pipelineStateFlags"]
         if sdk and not any(
             item["name"] == "D3D12Core.dll"
             and item["loaded"]
