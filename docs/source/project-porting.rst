@@ -1229,6 +1229,9 @@ and subsequent subscripts must also prove the complete signed logical offset;
 proving the delta or subscript separately is insufficient. Unproved conversions
 remain structured errors. Native controls cover direct and rebased reads at all
 configured endpoints, unchanged inputs and guarded outputs.
+Pointer-offset proofs retain source identifier ownership when GLSL emission
+renames a reserved word. A similarly named local variable cannot supply bounds
+for that pointer; composed offsets still undergo overflow and scope checks.
 
 Division proofs use exact integer arithmetic with truncation toward zero, including
 64-bit endpoints. Checked nonzero divisor intervals can bound division and

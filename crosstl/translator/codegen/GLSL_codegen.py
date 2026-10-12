@@ -47833,7 +47833,12 @@ complex64_t crossgl_complex64_mod_assign(
         value = self.literal_int_value(expression, constants)
         if value is not None:
             return value, value
-        name = self.expression_name(expression)
+        # Flow facts belong to source identifiers, not emitted GLSL aliases.
+        name = (
+            expression.name
+            if isinstance(expression, IdentifierNode)
+            else self.expression_name(expression)
+        )
         if name in intervals:
             return intervals[name]
         if isinstance(expression, UnaryOpNode):

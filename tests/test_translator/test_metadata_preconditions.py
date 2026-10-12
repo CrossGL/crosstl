@@ -1117,3 +1117,57 @@ def test_native_region_metadata_coordinate_widths(tmp_path):
         assert len(checks) == 1 and checks[0]["value"] == 16
         if target != "metal":
             assert generated["details"]["dispatchRegion"] == region.to_json()
+
+
+def test_native_metadata_pointer_identifier_bounds(tmp_path):
+    if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":
+        pytest.skip(
+            "set CROSTL_REQUIRE_METADATA_PRECONDITIONS=1 for native metadata checks"
+        )
+    from tests.runtime_helpers import _validate
+    from tests.test_translator.test_loop_updates import _execute
+    from tests.test_translator.test_metadata_index_bounds import _index_config
+    from tests.test_translator.test_pointer_interval_identity import (
+        _pointer_request,
+        _pointer_source,
+    )
+    from tests.test_translator.test_project_metadata_entry_scope import _packages
+
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    bodies = (
+        "values += offset; result[2] = values[index];",
+        "values += offset; result[2] = read_at(values, index);",
+    )
+    for name in ("output", "input", "destination"):
+        for number, body in enumerate(bodies):
+            root = tmp_path / f"{name}-{number}"
+            source = _pointer_source(name, body)
+            _, package, (descriptor,) = _packages(
+                _index_config(root, target=target, source=source)
+            )
+            for index, offset in ((0, 0), (3, 4)):
+                request, expected = _pointer_request(
+                    descriptor, package, name, index, offset
+                )
+                work = root / f"native-{index}-{offset}"
+                work.mkdir()
+                _execute(
+                    request,
+                    expected,
+                    work,
+                    validate=_validate,
+                    original_source=source if target == "metal" else None,
+                    original_entry="read_value",
+                )
+                evidence = json.loads((work / "evidence.json").read_text())
+                for record in evidence["records"].values():
+                    observations = record["details"]["inputObservations"]
+                    assert len(observations) == 3
+                    assert all(item["unchanged"] for item in observations.values())
+                checks = evidence["records"]["generated"]["details"][
+                    "metadataPreconditions"
+                ]
+                assert {
+                    item["requirement"]["sourceResource"]["parameter"]: item["value"]
+                    for item in checks
+                } == {"index": index, "offset": offset}

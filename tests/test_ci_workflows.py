@@ -3785,7 +3785,7 @@ def test_resource_selection_retains_every_native_opt_in():
                 required.add(identity)
             if any(term in name for term in expression.split(" or ")):
                 selected.add(identity)
-    assert len(required) == 49
+    assert len(required) == 50
     assert required <= selected
     assert (
         "tests/test_translator/test_metadata_preconditions.py",
