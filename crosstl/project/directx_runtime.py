@@ -333,7 +333,8 @@ def encode_dispatches(dispatches, allocations, view_keys):
             stream.write(
                 struct.pack(
                     "<4I2Q",
-                    {"cbv": 0, "srv": 1, "uav": 2}[view.namespace],
+                    {"cbv": 0, "srv": 1, "uav": 2}[view.namespace]
+                    | (4 if view.raw else 0),
                     view.binding_index,
                     indices[view_keys[id(view)]],
                     view.stride,

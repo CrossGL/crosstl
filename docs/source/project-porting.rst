@@ -3446,7 +3446,7 @@ uniform-block and storage-buffer ranges, subject to the offset-alignment limits
 reported by the active context. It rejects mixed uniform/storage groups,
 incompatible overlapping scalar layouts, and overlapping writable ranges.
 
-DirectX requests containing allocation subranges use a process-isolated D3D12
+DirectX requests containing allocation subranges or raw byte-address buffers use a process-isolated D3D12
 worker. MSVC with the Windows SDK is required to build this worker; unchanged
 builds are reused within the Python process. The selected adapter must match
 the caller's device. Each allocation ID creates one physical buffer, while
@@ -3457,6 +3457,20 @@ range from a complete allocation readback, retaining its hash and GPU address
 in runtime evidence. Execution is bounded to 120 seconds, with a 256 MiB limit
 per allocation and 512 MiB per request. No shader rewriting, host evaluation or
 independent zero-offset copies substitute for ranged binding.
+
+``ByteAddressBuffer`` and ``RWByteAddressBuffer`` use explicit raw SRV/UAV
+descriptors with ``R32_TYPELESS`` format, zero structured stride, and bounds
+measured in 32-bit words. Offsets must be multiples of 16 bytes and lengths
+multiples of four bytes; backing-allocation padding does not enlarge the view.
+The public package loader accepts these resources as ``uint32`` words without
+a scalar layout or value encoding. It does not infer a structure from untyped
+storage. Runtime evidence identifies raw views separately from structured
+views. Typed ``Buffer<T>`` resources remain unsupported by the reference driver.
+The existing Windows buffer-view checks include exact raw bounds, output guards
+and complete allocation readbacks. Local protocol validation alone does not
+establish native execution or resolve a device's structured-buffer or arithmetic
+defects. The alignment and descriptor rules follow the
+`Direct3D view specification <https://github.com/microsoft/DirectX-Specs/blob/master/d3d/D3D12RevisedCreateViews.md>`_.
 
 The worker records its own process ID and loaded ``d3d12.dll``,
 ``D3D12Core.dll`` and ``d3d10warp.dll`` paths immediately after device creation.

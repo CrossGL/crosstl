@@ -1181,7 +1181,13 @@ def _resource_bindings(
             )
         if access == "read_write" and initial_value is not None:
             _validate_read_write_value_contract(initial_value, expected_value)
-        scalar_layout = _validated_scalar_layout(
+        raw = (
+            target == "directx"
+            and kind == "buffer"
+            and binding["type"] in {"ByteAddressBuffer", "RWByteAddressBuffer"}
+        )
+        validate_layout = _validated_raw_layout if raw else _validated_scalar_layout
+        scalar_layout = validate_layout(
             binding.get("scalarLayout"),
             runtime_value=value,
             target=target,
@@ -1189,7 +1195,7 @@ def _resource_bindings(
             path=f"{path}.scalarLayout",
         )
         if access == "read_write" and initial_value is not None:
-            _validated_scalar_layout(
+            validate_layout(
                 binding.get("scalarLayout"),
                 runtime_value=initial_value,
                 target=target,
@@ -1211,8 +1217,8 @@ def _resource_bindings(
                     "bindingNamespace": binding["namespace"],
                     "namespace": binding["namespace"],
                     "coordinates": copy.deepcopy(coordinates),
-                    "scalarLayout": scalar_layout,
-                    "byteStride": scalar_layout["elementStrideBytes"],
+                    **({"scalarLayout": scalar_layout} if not raw else {}),
+                    "byteStride": 0 if raw else scalar_layout["elementStrideBytes"],
                     "provenance": copy.deepcopy(binding["provenance"]),
                 },
             )
@@ -1262,6 +1268,27 @@ def _validate_read_write_value_contract(
                     list(output_value) if field_name == "shape" else output_value
                 ),
             },
+        )
+
+
+def _validated_raw_layout(
+    layout: Any,
+    *,
+    runtime_value: RuntimeValue,
+    target: str,
+    resource_kind: str,
+    path: str,
+) -> None:
+    if (
+        layout is not None
+        or runtime_value.dtype != "uint32"
+        or runtime_value.encoding is not None
+    ):
+        raise NativeLoaderDispatchError(
+            "resource-layout-mismatch",
+            "DirectX byte-address buffers require uint32 words without a scalar layout or value encoding.",
+            path=path,
+            details={"binding": runtime_value.name},
         )
 
 

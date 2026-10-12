@@ -29,6 +29,9 @@ public:
 struct View {
     uint32_t kind, slot, allocation, stride;
     uint64_t offset, length;
+    uint32_t resource_kind() const { return kind & ~4u; }
+    bool raw() const { return (kind & 4u) != 0; }
+    uint32_t element_size() const { return raw() ? 4u : stride; }
 };
 struct Dispatch {
     std::vector<char> shader;
@@ -119,7 +122,8 @@ Request read_request(std::istream& input) {
             view.stride = read_u32(input);
             view.offset = read_integer(input, 8);
             view.length = read_integer(input, 8);
-            if (view.kind > 2 || view.allocation >= request.allocations.size() || !view.length)
+            if ((view.kind > 2 && view.kind != 5 && view.kind != 6) ||
+                view.allocation >= request.allocations.size() || !view.length)
                 throw std::runtime_error("invalid buffer view");
             auto size = request.allocations[view.allocation].size();
             if (view.offset > size || view.length > size - view.offset)
@@ -128,17 +132,21 @@ Request read_request(std::istream& input) {
                 if (view.offset % 256 || view.length > 65536 ||
                     ((view.length + 255) & ~uint64_t(255)) > size - view.offset)
                     throw std::runtime_error("invalid constant-buffer view alignment or extent");
+            } else if (view.raw()) {
+                if (view.stride || view.offset % 16 || view.length % 4 ||
+                    view.length / 4 > UINT32_MAX)
+                    throw std::runtime_error("invalid raw-buffer view");
             } else if (!view.stride || view.stride > 2048 || view.offset % view.stride ||
                        view.length % view.stride || view.length / view.stride > UINT32_MAX) {
                 throw std::runtime_error("invalid structured-buffer view");
             }
             for (const auto& previous : dispatch.views) {
-                if (previous.kind == view.kind && previous.slot == view.slot)
+                if (previous.resource_kind() == view.resource_kind() && previous.slot == view.slot)
                     throw std::runtime_error("duplicate register");
                 if (previous.allocation != view.allocation) continue;
-                if ((previous.kind == 2) != (view.kind == 2))
+                if ((previous.resource_kind() == 2) != (view.resource_kind() == 2))
                     throw std::runtime_error("simultaneous SRV/CBV and UAV access requires enhanced barriers");
-                if (view.kind == 2 && previous.offset < view.offset + view.length &&
+                if (view.resource_kind() == 2 && previous.offset < view.offset + view.length &&
                     view.offset < previous.offset + previous.length)
                     throw std::runtime_error("overlapping writable views");
             }
@@ -348,16 +356,16 @@ void execute(const Request& request, std::ostream& output, const AdapterIdentity
         std::vector<D3D12_RESOURCE_STATES> wanted(buffers.size(), D3D12_RESOURCE_STATE_COMMON);
         for (size_t index = 0; index < dispatch.views.size(); ++index) {
             const auto& view = dispatch.views[index];
-            ranges[index].RangeType = view.kind == 0 ? D3D12_DESCRIPTOR_RANGE_TYPE_CBV
-                : view.kind == 1 ? D3D12_DESCRIPTOR_RANGE_TYPE_SRV : D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+            ranges[index].RangeType = view.resource_kind() == 0 ? D3D12_DESCRIPTOR_RANGE_TYPE_CBV
+                : view.resource_kind() == 1 ? D3D12_DESCRIPTOR_RANGE_TYPE_SRV : D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
             ranges[index].NumDescriptors = 1;
             ranges[index].BaseShaderRegister = view.slot;
             parameters[index].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
             parameters[index].DescriptorTable.NumDescriptorRanges = 1;
             parameters[index].DescriptorTable.pDescriptorRanges = &ranges[index];
             parameters[index].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-            auto state = view.kind == 0 ? D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
-                : view.kind == 1 ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+            auto state = view.resource_kind() == 0 ? D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
+                : view.resource_kind() == 1 ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
                 : D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
             wanted[view.allocation] = static_cast<D3D12_RESOURCE_STATES>(wanted[view.allocation] | state);
         }
@@ -395,24 +403,28 @@ void execute(const Request& request, std::ostream& output, const AdapterIdentity
             auto cpu = heap->GetCPUDescriptorHandleForHeapStart();
             for (const auto& view : dispatch.views) {
                 auto buffer = buffers[view.allocation].Get();
-                if (view.kind == 0) {
+                if (view.resource_kind() == 0) {
                     D3D12_CONSTANT_BUFFER_VIEW_DESC descriptor = {};
                     descriptor.BufferLocation = buffer->GetGPUVirtualAddress() + view.offset;
                     descriptor.SizeInBytes = static_cast<UINT>((view.length + 255) & ~uint64_t(255));
                     runtime.device->CreateConstantBufferView(&descriptor, cpu);
-                } else if (view.kind == 1) {
+                } else if (view.resource_kind() == 1) {
                     D3D12_SHADER_RESOURCE_VIEW_DESC descriptor = {};
                     descriptor.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
                     descriptor.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-                    descriptor.Buffer.FirstElement = view.offset / view.stride;
-                    descriptor.Buffer.NumElements = static_cast<UINT>(view.length / view.stride);
+                    descriptor.Format = view.raw() ? DXGI_FORMAT_R32_TYPELESS : DXGI_FORMAT_UNKNOWN;
+                    descriptor.Buffer.Flags = view.raw() ? D3D12_BUFFER_SRV_FLAG_RAW : D3D12_BUFFER_SRV_FLAG_NONE;
+                    descriptor.Buffer.FirstElement = view.offset / view.element_size();
+                    descriptor.Buffer.NumElements = static_cast<UINT>(view.length / view.element_size());
                     descriptor.Buffer.StructureByteStride = view.stride;
                     runtime.device->CreateShaderResourceView(buffer, &descriptor, cpu);
                 } else {
                     D3D12_UNORDERED_ACCESS_VIEW_DESC descriptor = {};
                     descriptor.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-                    descriptor.Buffer.FirstElement = view.offset / view.stride;
-                    descriptor.Buffer.NumElements = static_cast<UINT>(view.length / view.stride);
+                    descriptor.Format = view.raw() ? DXGI_FORMAT_R32_TYPELESS : DXGI_FORMAT_UNKNOWN;
+                    descriptor.Buffer.Flags = view.raw() ? D3D12_BUFFER_UAV_FLAG_RAW : D3D12_BUFFER_UAV_FLAG_NONE;
+                    descriptor.Buffer.FirstElement = view.offset / view.element_size();
+                    descriptor.Buffer.NumElements = static_cast<UINT>(view.length / view.element_size());
                     descriptor.Buffer.StructureByteStride = view.stride;
                     runtime.device->CreateUnorderedAccessView(buffer, nullptr, &descriptor, cpu);
                 }

@@ -1399,6 +1399,54 @@ def test_rejects_incomplete_or_incompatible_physical_layouts(
     assert caught.value.code.endswith(f".{code}")
 
 
+def _raw_descriptor(tmp_path, target="directx"):
+    descriptor = _write_descriptor(tmp_path, target)
+    for binding, type_name in zip(
+        descriptor["bindings"], ("ByteAddressBuffer", "RWByteAddressBuffer")
+    ):
+        binding["type"] = type_name
+        binding["scalarLayout"] = None
+    descriptor["scalarLayout"]["bindings"] = []
+    return descriptor
+
+
+def test_builds_raw_word_buffer_request_without_inventing_a_scalar_layout(tmp_path):
+    descriptor = _raw_descriptor(tmp_path)
+    inputs, outputs = _inputs(), _outputs()
+    inputs["input_values"].update(dtype="uint32", values=[0, 1, 0x80000000, 0xFFFFFFFF])
+    outputs["output_values"]["dtype"] = "uint32"
+    request = _build(
+        tmp_path, descriptor=descriptor, input_values=inputs, output_values=outputs
+    )
+    assert not request.execution_plan.diagnostics
+    for resource in request.execution_plan.resource_bindings:
+        assert resource.binding.metadata["byteStride"] == 0
+        assert "scalarLayout" not in resource.binding.metadata
+
+
+@pytest.mark.parametrize("dtype", ("float32", "int32", "uint16", "uint64"))
+def test_raw_loader_requires_explicit_unsigned_words(tmp_path, dtype):
+    inputs = _inputs()
+    inputs["input_values"].update(dtype=dtype, values=[0, 1, 2, 3])
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(tmp_path, descriptor=_raw_descriptor(tmp_path), input_values=inputs)
+    assert caught.value.code.endswith(".resource-layout-mismatch")
+
+
+def test_raw_loader_rejects_a_contradictory_scalar_layout(tmp_path):
+    descriptor = _write_descriptor(tmp_path)
+    descriptor["bindings"][0]["type"] = "ByteAddressBuffer"
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(tmp_path, descriptor=descriptor)
+    assert caught.value.code.endswith(".resource-layout-mismatch")
+
+
+def test_raw_layout_exception_does_not_apply_to_other_targets(tmp_path):
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(tmp_path, "opengl", descriptor=_raw_descriptor(tmp_path, "opengl"))
+    assert caught.value.code.endswith(".resource-layout-unsupported")
+
+
 def test_missing_scalar_layout_remains_fail_closed(tmp_path):
     descriptor = _write_descriptor(tmp_path)
     descriptor["bindings"][0]["scalarLayout"] = None

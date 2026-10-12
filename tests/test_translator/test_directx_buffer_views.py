@@ -16,12 +16,18 @@ from types import SimpleNamespace
 import pytest
 
 from crosstl.project import directx_runtime
-from crosstl.project.native_runtime_drivers import DirectXComputeRuntime
+from crosstl.project.native_runtime_drivers import (
+    DirectXComputeRuntime,
+    _prepare_directx_buffers,
+)
 from crosstl.project.runtime_verification import (
+    DirectXRuntimeParityAdapter,
     RuntimeAdapterDispatchError,
     RuntimeAdapterSetupError,
     RuntimeAllocationView,
+    RuntimeExecutionState,
     RuntimeExecutorUnavailable,
+    RuntimeValue,
 )
 from tests.test_translator.test_native_runtime_drivers import (
     _directx_dispatch_request,
@@ -169,6 +175,338 @@ def _response(allocations):
         + bytes(allocation.views[0].allocation_size)
         for index, allocation in enumerate(allocations)
     )
+
+
+def _raw_request(tmp_path, *, offset=16, count=7):
+    request = _directx_dispatch_request(tmp_path)
+    words = [0x12340000 + index * 37 for index in range(count)]
+    buffers = {}
+    for name, type_name, values in (
+        ("lhs", "ByteAddressBuffer", words),
+        ("out", "RWByteAddressBuffer", [0xBAD01234] * (count + 4)),
+    ):
+        original = request.buffers[name]
+        size = len(values) * 4
+        buffers[name] = replace(
+            original,
+            binding=replace(original.binding, type_name=type_name),
+            dtype="uint32",
+            shape=(len(values),),
+            value=values,
+            allocation=RuntimeAllocationView(name, offset, size, offset + size + 16),
+        )
+    return replace(
+        request,
+        buffers=buffers,
+        dispatch=replace(request.dispatch, workgroup_count=(count + 1, 1, 1)),
+    )
+
+
+def _guarded_raw_request(tmp_path, *, offset, count):
+    request = _raw_request(tmp_path, offset=offset, count=count)
+    source = request.buffers["lhs"]
+    size = source.allocation.allocation_byte_length
+    words = [0xCDEF0123] * (size // 4)
+    words[offset // 4 : offset // 4 + count] = source.value
+    guard = replace(
+        source,
+        name="input_guard",
+        binding=replace(source.binding, name="input_guard", binding=1),
+        value=words,
+        shape=(len(words),),
+        allocation=RuntimeAllocationView("lhs", 0, size, size),
+    )
+    return replace(
+        request, buffers={**request.buffers, "input_guard": guard}
+    ), struct.pack(f"<{len(words)}I", *words)
+
+
+def test_raw_read_bounds_control_has_nonzero_physical_padding(
+    tmp_path, protocol_worker
+):
+    request, expected = _guarded_raw_request(tmp_path, offset=16, count=7)
+    nodes, allocations, keys = _plan((request,))
+    source = next(item for item in allocations if item.allocation_id == "lhs")
+    assert source.upload_payload == expected
+    assert struct.unpack_from("<I", expected, 16 + 7 * 4)[0] == 0xCDEF0123
+    assert len(source.views) == 2
+    payload, _ = directx_runtime.encode_dispatches(nodes, allocations, keys)
+    packet = tmp_path / "guarded-raw.bin"
+    packet.write_bytes(payload)
+    result = subprocess.run(
+        [str(protocol_worker), str(packet), "--validate"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("offset", (0, 16, 32))
+@pytest.mark.parametrize("count", (1, 7, 105))
+def test_raw_buffer_packet_preserves_word_extents(
+    tmp_path, protocol_worker, offset, count
+):
+    request = _raw_request(tmp_path, offset=offset, count=count)
+    nodes, allocations, keys = _plan((request,))
+    assert [(item.namespace, item.raw, item.stride) for item in nodes[0].buffers] == [
+        ("srv", True, 0),
+        ("uav", True, 0),
+    ]
+    payload, _ = directx_runtime.encode_dispatches(nodes, allocations, keys)
+    start = len(payload) - 64
+    assert struct.unpack_from("<4I2Q", payload, start) == (
+        5,
+        0,
+        0,
+        0,
+        offset,
+        count * 4,
+    )
+    assert struct.unpack_from("<4I2Q", payload, start + 32) == (
+        6,
+        0,
+        1,
+        0,
+        offset,
+        (count + 4) * 4,
+    )
+    packet = tmp_path / "raw-request.bin"
+    packet.write_bytes(payload)
+    result = subprocess.run(
+        [str(protocol_worker), str(packet), "--validate"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "2 allocations, 1 dispatches\n"
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    (
+        "offset",
+        "length",
+        "stride",
+        "kind",
+        "constant",
+        "register",
+        "mixed-access",
+        "overlap",
+    ),
+)
+def test_raw_buffer_protocol_rejects_invalid_views(
+    tmp_path, protocol_worker, corruption
+):
+    nodes, allocations, keys = _plan((_raw_request(tmp_path),))
+    payload, _ = directx_runtime.encode_dispatches(nodes, allocations, keys)
+    payload = bytearray(payload)
+    start = len(payload) - 64
+    if corruption == "offset":
+        struct.pack_into("<Q", payload, start + 16, 4)
+    elif corruption == "length":
+        struct.pack_into("<Q", payload, start + 24, 27)
+    elif corruption == "stride":
+        struct.pack_into("<I", payload, start + 12, 4)
+    elif corruption in {"kind", "constant"}:
+        struct.pack_into("<I", payload, start, 7 if corruption == "kind" else 4)
+    elif corruption == "register":
+        struct.pack_into("<I", payload, start + 32, 1)
+        struct.pack_into("<I", payload, start + 44, 4)
+    else:
+        payload[start + 40 : start + 44] = payload[start + 8 : start + 12]
+        struct.pack_into("<Q", payload, start + 56, 28)
+        if corruption == "overlap":
+            struct.pack_into("<I", payload, start, 6)
+            struct.pack_into("<I", payload, start + 36, 1)
+    packet = tmp_path / "invalid-raw.bin"
+    packet.write_bytes(payload)
+    result = subprocess.run(
+        [str(protocol_worker), str(packet), "--validate"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 1 and result.stderr.strip()
+
+
+@pytest.mark.parametrize("offset", (4, 8, 12, 20))
+def test_raw_buffer_rejects_misaligned_offsets_before_device_setup(tmp_path, offset):
+    request = _raw_request(tmp_path, offset=offset)
+    module = _FakeCompushady()
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: module, platform_name="win32"
+    )
+    with pytest.raises(RuntimeAdapterSetupError) as error:
+        runtime.dispatch(None, None, request)
+    assert error.value.details["reasonKind"] == "raw-buffer-view-misaligned"
+    assert not module.buffers and not module.computes
+
+
+@pytest.mark.parametrize("count", (1, 3, 5))
+def test_raw_buffer_rejects_partial_words(tmp_path, count):
+    binding = _raw_request(tmp_path).buffers["lhs"]
+    binding = replace(
+        binding, dtype="uint16", shape=(count,), value=[1] * count, allocation=None
+    )
+    with pytest.raises(RuntimeAdapterSetupError) as error:
+        _prepare_directx_buffers({"lhs": binding})
+    assert error.value.details["reasonKind"] == "raw-buffer-view-misaligned"
+
+
+@pytest.mark.parametrize("field", ("byteStride", "elementStride", "stride"))
+@pytest.mark.parametrize("value", (4, -1, False, "0", None))
+def test_raw_buffer_rejects_structured_stride_metadata(tmp_path, field, value):
+    binding = _raw_request(tmp_path).buffers["lhs"]
+    binding = replace(
+        binding, binding=replace(binding.binding, metadata={field: value})
+    )
+    with pytest.raises(RuntimeAdapterSetupError) as error:
+        _prepare_directx_buffers({"lhs": binding})
+    assert error.value.details["reasonKind"] == "raw-buffer-stride-invalid"
+
+
+def test_raw_whole_buffers_still_use_explicit_native_descriptors(tmp_path):
+    request = _raw_request(tmp_path)
+    request = replace(
+        request,
+        buffers={
+            name: replace(
+                binding,
+                allocation=None,
+                binding=replace(binding.binding, metadata={"byteStride": 0}),
+            )
+            for name, binding in request.buffers.items()
+        },
+    )
+    nodes, allocations, _ = _plan((request,))
+    assert len(allocations) == 2
+    assert all(
+        view.raw and view.byte_offset == 0 and view.size == view.allocation_size
+        for view in nodes[0].buffers
+    )
+
+
+def _raw_package_request(tmp_path):
+    from crosstl.project import build_native_loader_dispatch_request
+    from tests.test_translator.test_software_subgroup_product import _package
+
+    source = """shader RawValues {
+        ByteAddressBuffer inputs @register(t0);
+        RWByteAddressBuffer outputs @register(u0);
+        compute { @numthreads(1, 1, 1) void main() {
+            outputs.Store(0u, inputs.Load(0u));
+        } }
+    }"""
+    _, descriptor, package = _package(
+        tmp_path,
+        "directx",
+        "uint",
+        (1, 1, 1),
+        source=source,
+        source_backend="crossgl",
+        software_subgroups=False,
+    )
+    inputs = RuntimeValue(
+        name="inputs",
+        dtype="uint32",
+        shape=(1,),
+        values=[0x89ABCDEF],
+        allocation=RuntimeAllocationView("inputs", 16, 4, 36),
+    )
+    outputs = RuntimeValue(
+        name="outputs",
+        dtype="uint32",
+        shape=(1,),
+        values=[0x89ABCDEF],
+        allocation=RuntimeAllocationView("outputs", 16, 4, 36),
+    )
+    return build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        {"inputs": inputs, "outputs": replace(outputs, values=[0])},
+        {"outputs": outputs},
+        {"workgroupCount": [1, 1, 1]},
+        expected_target="directx",
+    )
+
+
+def test_raw_views_keep_public_translation_package_and_dispatch_contracts(tmp_path):
+    from tests.test_translator.test_metal_builtin_ownership import _compile
+
+    request = _raw_package_request(tmp_path)
+    assert not request.execution_plan.diagnostics
+    state = RuntimeExecutionState(request=request, plan=request.execution_plan)
+    adapter = DirectXRuntimeParityAdapter(runtime=SimpleNamespace())
+    native = adapter._prepare_dispatch_request(
+        state, request.artifact_path, tmp_path / "raw.dxil"
+    )
+    prepared = _prepare_directx_buffers(native.buffers)
+    assert [
+        (item.namespace, item.raw, item.stride, item.size) for item in prepared
+    ] == [("srv", True, 0, 4), ("uav", True, 0, 4)]
+    _compile(request.artifact_path.read_text(), "directx", tmp_path)
+
+
+def test_raw_public_package_executes_on_device(tmp_path, retain_native_packets):
+    from tests.test_translator.test_native_loader_dispatch_integration import _executor
+
+    if os.environ.get("CROSTL_REQUIRE_DIRECTX_BUFFER_VIEWS") != "1":
+        pytest.skip("set CROSTL_REQUIRE_DIRECTX_BUFFER_VIEWS=1 for native buffer views")
+    assert sys.platform == "win32", "native buffer view proof requires Windows"
+    request = _raw_package_request(tmp_path)
+    executor = _executor("directx")
+    availability = executor.is_available(request)
+    assert availability.available, availability.reason or availability.details
+    result = executor.run(request)
+    assert result.status == "ok"
+    assert result.outputs["outputs"]["values"] == [0x89ABCDEF]
+    payload = bytes(16) + struct.pack("<I", 0x89ABCDEF) + bytes(16)
+    _assert_allocations(
+        tmp_path,
+        SimpleNamespace(details=result.details),
+        {"inputs": payload, "outputs": payload},
+    )
+
+
+@pytest.mark.parametrize("offset,count", ((0, 1), (16, 7), (32, 105)))
+def test_raw_buffer_views_execute_with_exact_bounds(
+    tmp_path, offset, count, retain_native_packets
+):
+    source = f"""
+ByteAddressBuffer lhs : register(t0);
+RWByteAddressBuffer out_values : register(u0);
+[numthreads(1, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {{
+    if (id.x < {count}u) {{
+        out_values.Store(id.x * 4u, lhs.Load(id.x * 4u) ^ 0xABCDEF01u);
+    }} else {{
+        out_values.Store({count * 4}u, lhs.Load({count * 4}u));
+        out_values.Store({(count + 4) * 4}u, 0xFFFFFFFFu);
+    }}
+}}
+"""
+    module = _compile_native(tmp_path, source, "raw-views")
+    request, input_allocation = _guarded_raw_request(
+        tmp_path, offset=offset, count=count
+    )
+    request = replace(request, loaded_artifact=module)
+    state = SimpleNamespace(details={})
+    outputs = DirectXComputeRuntime().dispatch(None, state, request)
+    expected = [word ^ 0xABCDEF01 for word in request.buffers["lhs"].value] + [
+        0,
+        *([0xBAD01234] * 3),
+    ]
+    assert outputs["result"]["values"] == expected
+    allocations = {}
+    for name, values in (("lhs", request.buffers["lhs"].value), ("out", expected)):
+        allocation = bytearray(request.buffers[name].allocation.allocation_byte_length)
+        allocation[offset : offset + len(values) * 4] = struct.pack(
+            f"<{len(values)}I", *values
+        )
+        allocations[name] = allocation
+    allocations["lhs"] = input_allocation
+    _assert_allocations(tmp_path, state, allocations)
 
 
 @pytest.mark.parametrize(

@@ -1632,7 +1632,6 @@ def test_prepare_directx_buffers_rejects_unsupported_resource_kind(tmp_path):
 @pytest.mark.parametrize(
     ("type_name", "metadata"),
     [
-        ("ByteAddressBuffer", {}),
         ("RWBuffer<float>", {"byteStride": 4}),
     ],
 )

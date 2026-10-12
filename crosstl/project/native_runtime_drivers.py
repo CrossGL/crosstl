@@ -49,6 +49,7 @@ class _PreparedDirectXBuffer:
     writable: bool = False
     allocation_explicit: bool = False
     readback_encoding: str | None = None
+    raw: bool = False
 
     @property
     def size(self) -> int:
@@ -485,7 +486,8 @@ class DirectXComputeRuntime:
                 )
             )
         ranged = any(
-            view.byte_offset
+            view.raw
+            or view.byte_offset
             or (view.namespace != "cbv" and view.size != view.allocation_size)
             for node in prepared_dispatches
             for view in node.buffers
@@ -2855,6 +2857,9 @@ def _prepared_allocation_view_payload(view: Any) -> dict[str, Any]:
     resource_kind = getattr(view, "resource_kind", None)
     if resource_kind is not None:
         payload["resourceKind"] = resource_kind
+    if getattr(view, "raw", False):
+        payload["bufferViewKind"] = "raw"
+        payload["format"] = "R32_TYPELESS"
     return payload
 
 
@@ -2968,9 +2973,24 @@ def _prepare_directx_buffers(
             binding,
             payload_size=payload_size,
             target="directx",
-            alignment=stride or _dtype_size(dtype),
+            alignment=(
+                4
+                if namespace != "cbv" and stride == 0
+                else stride or _dtype_size(dtype)
+            ),
             allow_padding=namespace == "cbv",
         )
+        raw = namespace != "cbv" and stride == 0
+        if raw and (byte_offset % 16 or byte_length % 4):
+            raise _directx_setup_error(
+                "DirectX raw views require a 16-byte offset and a whole number of 32-bit words.",
+                "raw-buffer-view-misaligned",
+                resource=name,
+                byteOffset=byte_offset,
+                byteLength=byte_length,
+                offsetAlignmentBytes=16,
+                elementSizeBytes=4,
+            )
         if namespace == "cbv":
             block_size = _scalar_block_size(
                 binding,
@@ -3018,6 +3038,7 @@ def _prepare_directx_buffers(
                 writable=namespace == "uav",
                 allocation_explicit=binding.allocation is not None,
                 readback_encoding=readback_encoding,
+                raw=raw,
             )
         )
     return tuple(
@@ -3333,6 +3354,27 @@ def _directx_buffer_stride(
     type_name = str(resource.type_name or "").strip()
     normalized_type = re.sub(r"\s+", "", type_name).lower()
     if namespace == "cbv":
+        return 0
+    if normalized_type in {"byteaddressbuffer", "rwbyteaddressbuffer"}:
+        if any(
+            type(metadata[key]) is not int or metadata[key] != 0
+            for key in ("byteStride", "elementStride", "stride")
+            if key in metadata
+        ):
+            raise _directx_setup_error(
+                f"DirectX raw buffer {binding.name!r} cannot have a structured stride.",
+                "raw-buffer-stride-invalid",
+                resource=binding.name,
+                type=resource.type_name,
+            )
+        if payload_size % 4:
+            raise _directx_setup_error(
+                f"DirectX raw buffer {binding.name!r} must contain complete 32-bit words.",
+                "raw-buffer-view-misaligned",
+                resource=binding.name,
+                byteLength=payload_size,
+                elementSizeBytes=4,
+            )
         return 0
     if namespace != "cbv" and (
         "byteaddressbuffer" in normalized_type
