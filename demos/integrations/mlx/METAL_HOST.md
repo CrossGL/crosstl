@@ -252,6 +252,24 @@ algorithm with a native target min/max scan, change the upstream source, or
 establish reverse, strided, complex or log-add-exp scan host routing. Native
 Windows execution remains required before claiming DirectX parity.
 
+The `Validate pinned complex scans` step covers the complete complex64
+inclusive-sum entry at 64, 128 and 256 threads. Twenty-one cases retain both
+components, cancellation, signed zeros, row boundaries, the two-items-per-thread
+launch boundary and 32 complex output guards. The exact original-Metal words
+are in `tests/fixtures/scan_complex_reference.json`; macOS also executes the
+unchanged original and verifies its read-only buffers. Interleaved components
+must match the reflected eight-byte struct stride. Generated complete-scan
+input readbacks are not claimed.
+
+Conditional wrappers now accept flat private scalar-field structs. Constructor
+fields must be initialized before they are read, overload resolution must be
+unambiguous, and unused argument effects remain guarded. Inactive inputs use
+typed zero fields. The bounded native helper controls include partial and
+inactive subgroups, repeated calls and input readbacks. The complete scan step
+uses the existing platform jobs and two workers, groups package builds by launch
+width, retains failure evidence and keeps a separate 240-second bound. Native
+Windows execution and complete host routing remain separate qualification gates.
+
 A separate survey of twelve unchanged entries per target at revision
 `8d4cec0a` identified three blockers:
 subgroup-only conditional scans at 128 threads
@@ -277,8 +295,8 @@ partial groups and repeated calls through wrappers; Metal also executes the
 original source. This adds no runner jobs. The earlier shuffle-only survey
 reached the conditional-collective restriction in #2207 for minimum, maximum,
 log-add-exp and complex scans. The scalar extrema controls above extend that
-proof to selected complete entries; complex and log-add-exp wrappers remain
-unqualified. No complete host-routing claim follows from isolated operation
+proof to selected complete entries, followed by the complex-sum controls above.
+Log-add-exp wrappers remain unqualified. No complete host-routing claim follows from isolated operation
 tests. Native Windows readbacks remain a required qualification.
 
 ### Half-Precision Divmod

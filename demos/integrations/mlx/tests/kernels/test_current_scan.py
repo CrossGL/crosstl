@@ -55,7 +55,27 @@ def _guard(dtype):
     return 0x3EAB if dtype == "bfloat16" else 0xC7F12000
 
 
+def _guard_words(dtype):
+    return [_guard(dtype)] * (64 if dtype == "complex64" else 32)
+
+
 def _input_words(dtype, axis, operation="sum"):
+    if dtype == "complex64":
+        assert operation == "sum"
+        patterns = (
+            [
+                ((index % 19 - 9) * 0.125, (index % 7 - 3) * -0.25)
+                for index in range(19)
+            ],
+            [(2.0**24, 1.0), (1.0, -(2.0**24)), (-(2.0**24), 1.0), (1.0, 2.0**24)],
+            [(-0.0, 0.0), (0.0, -0.0), (0.125, -0.125), (-0.125, 0.125)],
+        )
+        return [
+            struct.unpack("<I", struct.pack("<f", value))[0]
+            for pattern in patterns
+            for index in range(axis)
+            for value in pattern[index % len(pattern)]
+        ]
     if operation != "sum":
         assert operation in {"min", "max"} and dtype in {"float32", "int32"}
         patterns = (
@@ -123,9 +143,10 @@ def _packet(dtype, target, words):
             "shape": [len(words)],
             "values": [word if word < 1 << 31 else word - (1 << 32) for word in words],
         }
-    if dtype == "float32":
+    if dtype in {"float32", "complex64"}:
+        assert dtype != "complex64" or len(words) % 2 == 0
         return {
-            "dtype": dtype,
+            "dtype": "float32",
             "encoding": FLOAT32_BITS,
             "shape": [len(words)],
             "values": list(words),
@@ -268,7 +289,7 @@ def scan_package(tmp_path_factory, request):
     entries = tuple(_entry(dtype) for dtype in DTYPES)
     if isinstance(width, tuple):
         width, entries = width
-    assert width in {32, 128, 256}
+    assert width in {32, 64, 128, 256}
     assert target in {"metal", "opengl", "directx"}
     assert (
         subprocess.check_output(
@@ -420,7 +441,7 @@ def _original_readback(
     runner, library = original
     code = "H" if dtype == "bfloat16" else "I"
     values = (
-        _input_words(dtype, axis, operation) + [_guard(dtype)] * 32,
+        _input_words(dtype, axis, operation) + _guard_words(dtype),
         [_guard(dtype)] * len(expected),
         [axis],
     )
@@ -485,7 +506,7 @@ def _execute_scan_case(scan_package, tmp_path, dtype, axis, expected, operation=
     assert set(names) == {"in", "out", "axis_size"}, names
     inputs = {
         names["in"]: _packet(
-            dtype, target, _input_words(dtype, axis, operation) + [_guard(dtype)] * 32
+            dtype, target, _input_words(dtype, axis, operation) + _guard_words(dtype)
         ),
         names["out"]: _packet(dtype, target, [_guard(dtype)] * len(expected)),
         names["axis_size"]: {"dtype": "uint64", "shape": [1], "values": [axis]},

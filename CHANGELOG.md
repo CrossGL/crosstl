@@ -21,6 +21,7 @@ All notable changes to CrossTL are documented in this file.
 ### Improved
 
 - Preserve private scalar accumulators and comparison helpers in subgroup-conditional software execution, with checked geometric loop termination and complete pinned extrema-scan controls. Unsupported effects, arithmetic and barrier participation remain diagnostic.
+- Preserve private scalar-field structs through conditional collective wrappers, including checked field initialization, typed inactive values and unambiguous nested overloads. Add complete pinned complex-scan controls with original-Metal component references and unchanged launch geometry.
 - Project-specific manifests, test fixtures, adapters and reports now live under `demos/integrations/mlx`, with project validation consolidated in `demo-project-testing.yml`.
 - Python compatibility matrices run on Ubuntu, with grouped Windows and macOS suites retaining platform coverage. Compiler-only DirectX checks run on Ubuntu; Metal artifact generation is separated from native compilation. Required numerical execution remains on the corresponding native platforms.
 - Native demo checks reuse compatible translation and source-library setup, retain per-test progress and preserve numerical cases, guards and evidence when a check fails.

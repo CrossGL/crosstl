@@ -128,7 +128,8 @@ def _unsigned_original(work, entry, workload, runner, library):
             assert (output / f"buffer-{index}.bin").read_bytes() == payload
 
 
-def test_current_unsigned_sign_shapes_native_loader(tmp_path):
+@pytest.mark.parametrize("shape", UNSIGNED_SHAPES)
+def test_current_unsigned_sign_shapes_native_loader(tmp_path, shape):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for pinned Sign execution")
     root = Path(os.environ["CROSTL_MLX_CURRENT_ROOT"]).resolve()
@@ -160,8 +161,10 @@ def test_current_unsigned_sign_shapes_native_loader(tmp_path):
         for w in UNARY_OPENGL_WORKLOADS
         if w.operator_type == "Sign" and w.input_type == "uint32_t"
     ]
+    assert len(workloads) == 5 and {w.shape for w in workloads} == set(UNSIGNED_SHAPES)
+    workloads = [w for w in workloads if w.shape == shape]
     entries = [w.entry_point for w in workloads]
-    assert len(entries) == 5 and {w.shape for w in workloads} == set(UNSIGNED_SHAPES)
+    assert len(entries) == 1
     executor = _executor(target)
     with tempfile.TemporaryDirectory(
         prefix=".current-unsigned-sign-", dir=root
@@ -183,14 +186,14 @@ def test_current_unsigned_sign_shapes_native_loader(tmp_path):
             )
             report.write_json(work / "report.json")
             data = report.to_json()
-            assert not data["diagnostics"] and data["summary"]["translatedCount"] == 5
+            assert not data["diagnostics"] and data["summary"]["translatedCount"] == 1
             manifest = build_runtime_artifact_manifest(work / "report.json")
             assert manifest["success"], manifest
             (work / "artifacts.json").write_text(json.dumps(manifest))
             package = work / "package"
             assert build_runtime_package(work / "artifacts.json", package)["success"]
             loader = build_runtime_loader_manifest(package / "runtime-package.json")
-            assert loader["success"] and len(loader["loadUnits"]) == 5
+            assert loader["success"] and len(loader["loadUnits"]) == 1
             units = {unit["entryPoint"]["source"]: unit for unit in loader["loadUnits"]}
             assert set(units) == set(entries)
             runner = library = None

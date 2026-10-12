@@ -1284,6 +1284,7 @@ jobs:
               tests/test_translator/test_software_subgroup_lane_read.py \
               tests/test_translator/test_software_subgroup_shuffle_fill.py \
               tests/test_translator/test_subgroup_conditional_calls.py \
+              tests/test_translator/test_subgroup_value_structs.py \
               2>&1 | tee .mlx-portable-host/subgroup-products.log
       - name: Validate subgroup-guarded returns
         env:
@@ -3996,6 +3997,42 @@ jobs:
         with:
           name: mlx-extrema-scan-${{ runner.os }}
           path: mlx-extrema-scan-results
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Validate pinned complex scans
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_SCAN: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          PYTHONUNBUFFERED: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          LP_NUM_THREADS: "2"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-complex-scan-results
+          python tools/run_bounded_command.py --timeout-seconds 240 --label "Pinned complex scans" -- \
+            python -m pytest -q -n auto --dist=loadgroup -vv --durations=10 \
+              --basetemp=mlx-complex-scan-results/pytest \
+              --junitxml=mlx-complex-scan-results/results.xml \
+              demos/integrations/mlx/tests/kernels/test_current_complex_scan.py
+
+      - name: Upload complex scan evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-complex-scan-${{ runner.os }}
+          path: mlx-complex-scan-results
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14

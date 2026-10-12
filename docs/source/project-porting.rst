@@ -697,6 +697,15 @@ convergence analysis still checks the transformed program. Required native
 controls retain original Metal comparisons, partial groups, inactive groups,
 repeated calls, input readbacks and output guards.
 
+The wrapper proof also supports flat private structs of scalar fields. It
+tracks straight-line constructor field initialization, rejects reads of
+uninitialized fields or incomplete whole values, and preserves typed zero
+initializers for inactive subgroups. Nested overloads require a unique
+compatible signature. Storage-qualified or reference parameters, resource
+effects and unsupported aggregate layouts remain diagnostic. Complete pinned
+complex scans have separate native demo controls at 64, 128 and 256 threads;
+those controls do not establish full cumulative-operation host routing.
+
 The bounded Windows test also records live Direct3D 12 debug-layer messages
 through ``tools/run_directx_diagnostics.py``. Each entry's JSON-lines log is
 stored outside pytest's temporary directory and uploaded with the runtime

@@ -197,6 +197,12 @@ initial, visited and terminating values; control mutation and early exits
 remain diagnostic. The purity proof rejects unsafe integer arithmetic,
 floating-to-integer conversions and unchecked runtime bounds. It does not
 replace the subsequent barrier-participation checks.
+Flat by-value structs with supported scalar fields retain the same proof.
+Private constructor helpers require complete field initialization before whole
+values can be read, and inactive values use typed zero fields, including
+Boolean ``false``. Nested overloads must resolve uniquely from their argument
+types. References, storage-qualified parameters, aggregate resource accesses,
+partially initialized returns and unsupported layouts are not speculated.
 
 Uniform bounds-check exits also retain immutable local facts and individual
 invocation components whose workgroup extent is one. Mutation, reference

@@ -305,6 +305,12 @@ predicates are required. Else branches, resource-reading wrappers, scalar refere
 effects, ambiguous overloads and unproven participation remain diagnostic.
 Native controls include partial groups, inactive subgroups and repeated calls,
 including side effects in unused arguments. This is not general if-conversion.
+Flat by-value structs of supported scalar fields are also admitted. Constructor
+helpers must initialize every field before the complete value is read; member
+reads and writes stay private. Inactive structs receive typed zero fields,
+including Boolean ``false``. Nested calls require a unique compatible overload.
+Reference or storage-qualified parameters, aggregate resource access, partially
+initialized returns and unsupported layouts remain diagnostic.
 
 A separate required Windows gate translates eight pinned MLX gated-delta
 backward configurations with software subgroups and dispatches the generated

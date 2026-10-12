@@ -5,6 +5,7 @@ from copy import deepcopy
 from ..arithmetic_conversions import ArithmeticScalarKind, source_integer_shape
 from ..ast import (
     ArrayAccessNode,
+    ArrayLiteralNode,
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
@@ -18,10 +19,12 @@ from ..ast import (
     IfNode,
     LiteralNode,
     MemberAccessNode,
+    NamedType,
     PointerType,
     PrimitiveType,
     ReferenceType,
     ReturnNode,
+    StructMemberNode,
     StructNode,
     TernaryOpNode,
     UnaryOpNode,
@@ -321,6 +324,40 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
         }
     )
     summaries = {}
+    scalar_types = _SCALARS | {
+        "char",
+        "uchar",
+        "short",
+        "ushort",
+        "int8",
+        "uint8",
+        "int16",
+        "uint16",
+        "int8_t",
+        "uint8_t",
+        "int16_t",
+        "uint16_t",
+    }
+    value_structs = {
+        node.name: {
+            member.name: _type_name(member.member_type) for member in node.members
+        }
+        for node in nodes
+        if isinstance(node, StructNode)
+        and node.members
+        and not (node.generic_params or node.inheritance or node.attributes)
+        and len({member.name for member in node.members}) == len(node.members)
+        and all(
+            isinstance(member, StructMemberNode)
+            and _type_name(member.member_type) in scalar_types
+            and not (
+                member.attributes or member.resource_qualifiers or member.default_value
+            )
+            and not getattr(member.member_type, "qualifiers", [])
+            for member in node.members
+        )
+    }
+    value_types = scalar_types | set(value_structs)
     empty_types = {
         node.name for node in nodes if isinstance(node, StructNode) and not node.members
     }
@@ -328,6 +365,10 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
     def value_type(node, types):
         if isinstance(node, IdentifierNode):
             return types.get(node.name)
+        if isinstance(node, MemberAccessNode):
+            return value_structs.get(value_type(node.object_expr, types), {}).get(
+                node.member
+            )
         if isinstance(node, LiteralNode):
             return _type_name(node.literal_type)
         if isinstance(node, CastNode):
@@ -373,15 +414,9 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
             return left if left == right else None
         operation = _operation(node)
         if operation in functions:
-            candidates = [
-                function
-                for function in functions[operation]
-                if len(function.parameters) == len(node.arguments)
-            ]
-            return (
-                _type_name(candidates[0].return_type) if len(candidates) == 1 else None
-            )
-        if operation in _SCALARS:
+            function = resolve_function(node, types)
+            return _type_name(function.return_type) if function is not None else None
+        if operation in value_types:
             return operation
         if operation in {"isnan", "isinf"} | _VOTES:
             return "bool"
@@ -415,8 +450,10 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
 
     def converts_safely(target, value, types):
         source = value_type(value, types)
+        if target in value_structs:
+            return source == target
         constant = integer_constant(value)
-        if constant is not None and target in _SCALARS:
+        if constant is not None and target in scalar_types:
             if target in _FLOATS | {"bool"}:
                 return True
             shape = source_integer_shape(target)
@@ -427,16 +464,61 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                 <= (1 << (shape[1] - (not unsigned))) - 1
             )
         return (
-            source in _SCALARS
-            and target in _SCALARS
+            source in scalar_types
+            and target in scalar_types
             and (target in _FLOATS | {"bool"} or source not in _FLOATS)
         )
 
-    def expression_inputs(node, parameters, types, visiting):
+    def resolve_function(call, types):
+        candidates = [
+            function
+            for function in functions.get(_operation(call), ())
+            if len(function.parameters) == len(call.arguments)
+        ]
+        if len(candidates) > 1:
+            candidates = [
+                function
+                for function in candidates
+                if all(
+                    (
+                        _type_name(parameter.param_type) in scalar_types
+                        and value_type(argument, types) in scalar_types
+                    )
+                    or (
+                        _type_name(parameter.param_type) in value_types | empty_types
+                        and value_type(argument, types)
+                        == _type_name(parameter.param_type)
+                    )
+                    for parameter, argument in zip(function.parameters, call.arguments)
+                )
+            ]
+        return candidates[0] if len(candidates) == 1 else None
+
+    def expression_inputs(node, parameters, types, visiting, initialized):
+        if (
+            isinstance(node, FunctionCallNode)
+            and _operation(node) in value_structs
+            and _operation(node) not in functions
+            and not node.generic_args
+        ):
+            node = ConstructorNode(NamedType(_operation(node)), node.arguments)
         if isinstance(node, IdentifierNode) and node.name in parameters:
             return (
-                (parameters[node.name], False) if types[node.name] in _SCALARS else None
+                (parameters[node.name], False)
+                if types[node.name] in value_types and node.name in initialized
+                else None
             )
+        if isinstance(node, MemberAccessNode) and isinstance(
+            node.object_expr, IdentifierNode
+        ):
+            name = node.object_expr.name
+            if (
+                name in parameters
+                and value_type(node, types) in scalar_types
+                and (name in initialized or (name, node.member) in initialized)
+            ):
+                return parameters[name], False
+            return None
         if isinstance(node, LiteralNode):
             return frozenset(), False
         if integer_constant(node) is not None:
@@ -449,7 +531,9 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
         if isinstance(node, CastNode) and converts_safely(
             _type_name(node.target_type), node.expression, types
         ):
-            return expression_inputs(node.expression, parameters, types, visiting)
+            return expression_inputs(
+                node.expression, parameters, types, visiting, initialized
+            )
         if (
             isinstance(node, ConstructorNode)
             and not node.named_arguments
@@ -458,7 +542,32 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                 _type_name(node.constructor_type), node.arguments[0], types
             )
         ):
-            return expression_inputs(node.arguments[0], parameters, types, visiting)
+            return expression_inputs(
+                node.arguments[0], parameters, types, visiting, initialized
+            )
+        if (
+            isinstance(node, ConstructorNode)
+            and _type_name(node.constructor_type) in value_structs
+        ):
+            fields = value_structs[_type_name(node.constructor_type)]
+            if (
+                node.named_arguments
+                or len(fields) != len(node.arguments)
+                or not all(
+                    converts_safely(field_type, argument, types)
+                    for field_type, argument in zip(fields.values(), node.arguments)
+                )
+            ):
+                return None
+            proofs = [
+                expression_inputs(argument, parameters, types, visiting, initialized)
+                for argument in node.arguments
+            ]
+            if any(proof is None for proof in proofs):
+                return None
+            return frozenset().union(*(proof[0] for proof in proofs)), any(
+                proof[1] for proof in proofs
+            )
         children = None
         if isinstance(node, UnaryOpNode):
             operator = map_operator(node.operator)
@@ -471,7 +580,7 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                     or checked_induction_value(node, {}) is not None
                 )
                 or operator == "~"
-                and operand_type in _SCALARS - _FLOATS
+                and operand_type in scalar_types - _FLOATS
             ):
                 children = [node.operand]
         elif isinstance(node, BinaryOpNode):
@@ -492,7 +601,7 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                     "^",
                 }
                 or operator in {"+", "-", "*"}
-                and operands <= _SCALARS
+                and operands <= scalar_types
                 and operands & _FLOATS
             ):
                 children = [node.left, node.right]
@@ -500,7 +609,7 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
             children = [node.condition, node.true_expr, node.false_expr]
         if children is not None:
             proofs = [
-                expression_inputs(child, parameters, types, visiting)
+                expression_inputs(child, parameters, types, visiting, initialized)
                 for child in children
             ]
             if any(proof is None for proof in proofs):
@@ -511,13 +620,15 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
         operation = _operation(node)
         if (
             isinstance(node, FunctionCallNode)
-            and operation in _SCALARS
+            and operation in scalar_types
             and operation not in functions
             and len(node.arguments) == 1
             and not node.generic_args
             and converts_safely(operation, node.arguments[0], types)
         ):
-            return expression_inputs(node.arguments[0], parameters, types, visiting)
+            return expression_inputs(
+                node.arguments[0], parameters, types, visiting, initialized
+            )
         if (
             isinstance(node, FunctionCallNode)
             and operation in {"isnan", "isinf", "asfloat", "asint", "asuint"}
@@ -527,17 +638,19 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
             and value_type(node.arguments[0], types)
             in {"float", "float32_t", "int", "int32_t", "uint", "uint32_t"}
         ):
-            return expression_inputs(node.arguments[0], parameters, types, visiting)
+            return expression_inputs(
+                node.arguments[0], parameters, types, visiting, initialized
+            )
         if operation in operations and operation not in functions:
             required = range(len(node.arguments))
             collective = True
         elif isinstance(node, FunctionCallNode):
-            proof = wrapper(node, visiting, allow_pure=True)
+            proof = wrapper(node, visiting, allow_pure=True, types=types)
             if proof is None:
                 return None
             _function, required, collective = proof
             if any(
-                _type_name(parameter.param_type) in _SCALARS
+                _type_name(parameter.param_type) in value_types
                 and not converts_safely(
                     _type_name(parameter.param_type), argument, types
                 )
@@ -556,7 +669,9 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                 ):
                     return None
                 continue
-            proof = expression_inputs(argument, parameters, types, visiting)
+            proof = expression_inputs(
+                argument, parameters, types, visiting, initialized
+            )
             if proof is None:
                 return None
             if operation in operations and index == 0 and not proof[0]:
@@ -573,7 +688,10 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
         result_type,
         constants=None,
         controls=frozenset(),
+        initialized=None,
     ):
+        # Names mark whole values; (name, field) tracks partial local construction.
+        initialized = set(parameters if initialized is None else initialized)
         parameters, types, constants = (
             dict(parameters),
             dict(types),
@@ -581,12 +699,13 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
         )
         dependencies, collective = set(), False
         for statement in _statements(body):
+            member = None
             if isinstance(statement, ExpressionStatementNode):
                 statement = statement.expression
             if isinstance(statement, (VariableNode, AssignmentNode, ReturnNode)):
                 if isinstance(statement, VariableNode):
                     if (
-                        statement.name in parameters
+                        statement.name in types
                         or statement.name in controls
                         or statement.attributes
                         or set(statement.qualifiers or []) - {"const", "thread"}
@@ -599,19 +718,35 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                         _type_name(statement.var_type),
                         statement.initial_value,
                     )
+                    if value is None and target in value_structs:
+                        parameters[name], types[name] = frozenset(), target
+                        initialized.discard(name)
+                        continue
                 elif isinstance(statement, AssignmentNode):
+                    destination = statement.target
+                    if isinstance(destination, MemberAccessNode):
+                        member = destination.member
+                        destination = destination.object_expr
                     if (
-                        not isinstance(statement.target, IdentifierNode)
-                        or statement.target.name not in parameters
-                        or statement.target.name in controls
+                        not isinstance(destination, IdentifierNode)
+                        or destination.name not in parameters
+                        or destination.name in controls
                         or map_operator(statement.operator) != "="
                     ):
                         return None
-                    name = statement.target.name
+                    name = destination.name
                     target, value = types[name], statement.value
+                    if member is not None:
+                        target = value_structs.get(target, {}).get(member)
+                        if target is None:
+                            return None
                 else:
                     name, target, value = None, result_type, statement.value
-                proof = expression_inputs(value, parameters, types, visiting)
+                if isinstance(value, ArrayLiteralNode) and target in value_structs:
+                    value = ConstructorNode(NamedType(target), value.elements)
+                proof = expression_inputs(
+                    value, parameters, types, visiting, initialized
+                )
                 if (
                     proof is None
                     or target is not None
@@ -619,7 +754,17 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                 ):
                     return None
                 if name is not None:
-                    parameters[name], types[name] = proof[0], target
+                    if member is None:
+                        parameters[name], types[name] = proof[0], target
+                        initialized.add(name)
+                    else:
+                        parameters[name] |= proof[0]
+                        initialized.add((name, member))
+                        if all(
+                            (name, field) in initialized
+                            for field in value_structs[types[name]]
+                        ):
+                            initialized.add(name)
                     constants.pop(name, None)
                     if isinstance(statement, VariableNode) and "const" in set(
                         statement.qualifiers or []
@@ -652,7 +797,9 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                     ]
                     conditions = [statement.condition, *statement.else_if_conditions]
                 proofs = [
-                    expression_inputs(condition, parameters, types, visiting)
+                    expression_inputs(
+                        condition, parameters, types, visiting, initialized
+                    )
                     for condition in conditions
                 ]
                 results = [
@@ -664,6 +811,7 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                         result_type,
                         constants,
                         controls,
+                        initialized,
                     )
                     for branch in branches
                 ]
@@ -679,6 +827,7 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                     parameters[name] |= frozenset().union(
                         *(result[2][name] for result in results)
                     )
+                initialized.intersection_update(*(result[4] for result in results))
                 constants = {
                     name: value
                     for name, value in constants.items()
@@ -750,12 +899,14 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                     result_type,
                     constants,
                     loop_controls,
+                    initialized | {initial.name},
                 )
                 if result is None:
                     return None
                 proof = result[:2]
                 for name in parameters:
                     parameters[name] |= result[2][name]
+                initialized.intersection_update(result[4])
                 constants = {
                     name: value
                     for name, value in constants.items()
@@ -765,19 +916,14 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                 return None
             dependencies.update(proof[0])
             collective |= proof[1]
-        return frozenset(dependencies), collective, parameters, constants
+        return frozenset(dependencies), collective, parameters, constants, initialized
 
-    def wrapper(call, visiting=frozenset(), *, allow_pure=False):
+    def wrapper(call, visiting=frozenset(), *, allow_pure=False, types=None):
         if getattr(call, "generic_args", None):
             return None
-        candidates = [
-            function
-            for function in functions.get(_operation(call), ())
-            if len(function.parameters) == len(call.arguments)
-        ]
-        if len(candidates) != 1:
+        function = resolve_function(call, types or {})
+        if function is None:
             return None
-        function = candidates[0]
         key = id(function)
         if key in visiting:
             return None
@@ -787,7 +933,7 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
             if (
                 statements
                 and isinstance(statements[-1], ReturnNode)
-                and _type_name(function.return_type) in _SCALARS
+                and _type_name(function.return_type) in value_types
                 and not getattr(function, "generic_params", None)
                 and not any(
                     set(parameter.qualifiers or []) & {"out", "volatile"}
@@ -816,13 +962,18 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                         and _type_name(parameter.param_type) in empty_types
                     ):
                         continue
-                    if (
-                        _type_name(parameter.param_type) not in _SCALARS
-                        or set(parameter.qualifiers or [])
-                        & {"out", "inout", "volatile"}
-                        or set(getattr(parameter.param_type, "qualifiers", []) or [])
-                        & {"volatile"}
-                    ):
+                    if _type_name(parameter.param_type) not in value_types or (
+                        set(parameter.qualifiers or [])
+                        | set(getattr(parameter.param_type, "qualifiers", []) or [])
+                    ) & {
+                        "out",
+                        "inout",
+                        "volatile",
+                        "device",
+                        "constant",
+                        "threadgroup",
+                        "groupshared",
+                    }:
                         proof = None
                         break
             summaries[key] = proof[:2] if proof is not None else None
@@ -894,7 +1045,7 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                 continue
             declaration = body[0]
             if (
-                _type_name(declaration.var_type) not in _SCALARS
+                _type_name(declaration.var_type) not in value_types
                 or declaration.attributes
                 or set(declaration.qualifiers or []) - {"const", "thread"}
                 or set(getattr(declaration.var_type, "qualifiers", []) or [])
@@ -911,7 +1062,7 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
             staged = {
                 index
                 for index, parameter in enumerate(function.parameters)
-                if _type_name(parameter.param_type) in _SCALARS
+                if _type_name(parameter.param_type) in value_types
             }
             if any(
                 not isinstance(argument, IdentifierNode)
@@ -944,6 +1095,18 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
         reserved.add(name)
         return name
 
+    def zero_value(type_):
+        fields = value_structs.get(_type_name(type_))
+        if fields:
+            return ConstructorNode(
+                type_,
+                [
+                    zero_value(PrimitiveType(field_type))
+                    for field_type in fields.values()
+                ],
+            )
+        return LiteralNode(False if _type_name(type_) == "bool" else 0, type_)
+
     for node, function, required in plans:
         branch = memo[id(node)]
         body = _statements(branch.then_branch)
@@ -963,11 +1126,9 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                 arguments.append(argument)
                 continue
             name = fresh("__crossgl_subgroup_input")
-            type_ = PrimitiveType(_type_name(function.parameters[index].param_type))
+            type_ = deepcopy(function.parameters[index].param_type)
             statements.append(
-                VariableNode(
-                    name, type_, LiteralNode(0, type_), source_location=location
-                )
+                VariableNode(name, type_, zero_value(type_), source_location=location)
             )
             inputs.append(
                 AssignmentNode(IdentifierNode(name), argument, source_location=location)
