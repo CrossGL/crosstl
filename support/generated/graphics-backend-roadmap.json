@@ -4284,6 +4284,11 @@
             "tests/test_translator/test_metadata_preconditions.py::def test_project_package_dispatch_roundtrip",
             "tests/test_translator/test_metadata_preconditions.py::def test_metadata_source_types_survive_lowering",
             "tests/test_translator/test_metadata_preconditions.py::def test_out_of_range_input_is_rejected",
+            "tests/test_translator/test_metadata_index_bounds.py::def test_checked_metadata_composes_with_source_index_proofs",
+            "tests/test_translator/test_metadata_index_bounds.py::def test_metadata_does_not_authorize_unproved_or_overflowed_indices",
+            "tests/test_translator/test_metadata_index_bounds.py::def test_rebased_index_checks_the_sum_not_only_each_operand",
+            "tests/test_translator/test_metadata_index_bounds.py::def test_index_proofs_do_not_survive_removed_contracts",
+            "tests/test_translator/test_metadata_preconditions.py::def test_native_metadata_bounded_indices",
             "tests/test_translator/test_metadata_loop_bounds.py::def test_runtime_proof_does_not_accept_shadowing_or_divergence",
             "tests/test_translator/test_metadata_loop_bounds.py::def test_checked_runtime_bound_retains_loop_and_package_contract",
             "tests/test_translator/test_metadata_preconditions.py::def test_native_metadata_bounded_collective_loop",
@@ -4296,7 +4301,7 @@
             "tests/test_translator/test_artifact_contracts.py::def test_combined_records_retain_individual_validation",
             "tests/test_translator/test_metadata_preconditions.py::def test_native_checked_metadata"
           ],
-          "notes": "Checked original scalar parameters are matched to reflected GLSL uniform layouts and validated against immutable native upload bytes. Descriptor mutations, out-of-range values and shared allocations are rejected. Native Linux controls cover boundary values, nonzero metadata offsets, outputs and guards. Software collective loops consume only immutable source-owned scalar bounds and check final-update overflow; native cases include zero-trip and maximum-bound loops. Composed index proofs, integer narrowing, record metadata and custom runtime enforcement remain separate contracts.",
+          "notes": "Checked original scalar parameters are matched to reflected GLSL uniform layouts and validated against immutable native upload bytes. Descriptor mutations, out-of-range values and shared allocations are rejected. Software collective loops consume immutable source-owned scalar bounds and check final-update overflow. Selected-entry index proofs use those bounds for composed arithmetic, local variables, guards and loops without source overflow. Wide pointer updates and rebased indices check the complete signed logical offset, retaining structured rejection when unproved. Required native controls cover direct and rebased endpoint reads, exact input observations and output guards. These conditional integer ranges do not prove allocation bounds, arbitrary helper state or global dispatch coordinates. Record metadata and custom runtime enforcement remain separate contracts.",
           "status": "supported"
         }
       }

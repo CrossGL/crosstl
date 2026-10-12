@@ -123,6 +123,13 @@ entries and helpers. The proof retains declaration scope and representable
 intermediate arithmetic, rejects mutable or escaped values, and checks the
 terminating increment. Runtime bounds without a checked range remain diagnostic.
 
+Checked original scalar metadata can also establish index ranges in the selected
+entry. Composed arithmetic, guarded subtraction and local index variables retain
+source overflow checks. Wide pointer rebases require both the converted delta and
+the complete offset at each indexed use to fit the signed target offset domain.
+Source-owned upload requirements stay in the artifact header and native package;
+these proofs do not establish allocation sizes or global dispatch bounds.
+
 Execution-only ``subgroupExecutionBarrier()`` calls lower to ``barrier()`` in
 software mode only after the same workgroup-participation proof. Barrier-only
 entries and nested helpers do not require an unrelated reduction to activate

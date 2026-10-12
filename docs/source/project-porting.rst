@@ -1222,7 +1222,18 @@ The loop remains runtime-controlled; the bounds are not substituted as constants
 Direct code-generator entry points also validate source identity and retain the
 obligation header, and dispatch-region program identities include the contracts.
 
-These checks do not authorize integer narrowing or composed buffer-index proofs.
+OpenGL index lowering also uses these immutable scalar bounds in source arithmetic,
+local variables, guards and fixed-stride loops. Narrowing requires the computed
+range to fit the target index type without source overflow. Wide pointer updates
+and subsequent subscripts must also prove the complete signed logical offset;
+proving the delta or subscript separately is insufficient. Unproved conversions
+remain structured errors. Native controls cover direct and rebased reads at all
+configured endpoints, unchanged inputs and guarded outputs.
+
+These are conditional integer-range proofs, not allocation bounds checks. They do
+not establish bounds for dispatch-derived global coordinates or arbitrary helper
+state. A custom caller must retain the artifact's metadata obligations even when
+the emitted source uses a narrower index type.
 Record fields, GPU-produced metadata, shared allocations and C execution wrappers
 remain unsupported. C wrapper generation rejects descriptors carrying these
 requirements rather than silently dropping enforcement. A custom runtime that

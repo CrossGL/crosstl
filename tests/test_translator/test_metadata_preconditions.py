@@ -926,3 +926,54 @@ def test_native_metadata_bounded_collective_loop(tmp_path):
             assert all(item["unchanged"] for item in observations.values())
         checks = evidence["records"]["generated"]["details"]["metadataPreconditions"]
         assert len(checks) == 1 and checks[0]["value"] == count
+
+
+def test_native_metadata_bounded_indices(tmp_path):
+    if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":
+        pytest.skip(
+            "set CROSTL_REQUIRE_METADATA_PRECONDITIONS=1 for native metadata checks"
+        )
+    from tests.runtime_helpers import _validate
+    from tests.test_translator.test_loop_updates import _execute
+    from tests.test_translator.test_metadata_index_bounds import (
+        SOURCE,
+        _index_config,
+        _index_request,
+        _packages,
+    )
+
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    for mode, body in (
+        ("composed", "result[2] = values[offset + index];"),
+        ("rebased", "values += offset; result[2] = values[index];"),
+    ):
+        root = tmp_path / mode
+        root.mkdir()
+        source = SOURCE.replace("result[0] = values[offset + index];", body)
+        _, package, (descriptor,) = _packages(
+            _index_config(root, source=source, target=target)
+        )
+        for index, offset in ((0, 0), (3, 0), (0, 4), (3, 4)):
+            request, outputs = _index_request(descriptor, package, index, offset)
+            work = root / f"native-index-{index}-{offset}"
+            work.mkdir()
+            _execute(
+                request,
+                outputs,
+                work,
+                validate=_validate,
+                original_source=source if target == "metal" else None,
+                original_entry="read_value",
+            )
+            evidence = json.loads((work / "evidence.json").read_text())
+            for record in evidence["records"].values():
+                observations = record["details"]["inputObservations"]
+                assert len(observations) == 3
+                assert all(item["unchanged"] for item in observations.values())
+            checks = evidence["records"]["generated"]["details"][
+                "metadataPreconditions"
+            ]
+            assert {
+                item["requirement"]["sourceResource"]["parameter"]: item["value"]
+                for item in checks
+            } == {"index": index, "offset": offset}

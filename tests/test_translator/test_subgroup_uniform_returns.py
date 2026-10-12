@@ -631,7 +631,7 @@ def test_generated_handle_uniformity_does_not_authorize_index_narrowing(tmp_path
     assert report["summary"]["translatedCount"] == 0
     assert (
         report["diagnostics"][0]["details"]["indexConversion"]["reason"]
-        == "index-range-unproven"
+        == "composed-pointer-index-range-unproven"
     )
 
 

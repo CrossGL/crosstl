@@ -8548,7 +8548,7 @@ class GLSLCodeGen:
         previous_enforce_concrete_glsl_types = self.enforce_concrete_glsl_types
         self.enforce_concrete_glsl_types = False
         try:
-            self.prepare_glsl_resource_function_specializations(ast)
+            self.prepare_glsl_resource_function_specializations(ast, target_stage)
         finally:
             self.enforce_concrete_glsl_types = previous_enforce_concrete_glsl_types
         generated_helper_insertion_index = len(code)
@@ -9047,6 +9047,22 @@ class GLSLCodeGen:
         intervals = dict(
             getattr(function, "_glsl_workgroup_proof_parameter_intervals", {}) or {}
         )
+        for name in getattr(self, "glsl_entry_pointer_parameters", {}).get(
+            id(function), ()
+        ):
+            intervals[name] = (0, 0)
+        for name, binding in getattr(
+            function, "_glsl_storage_pointer_aliases", {}
+        ).items():
+            offset = binding.get("offset")
+            if isinstance(offset, str) and offset in intervals:
+                intervals[name] = intervals[offset]
+        for name, record in (
+            getattr(self, "glsl_metadata_entry_bounds", {})
+            .get(id(function), {})
+            .items()
+        ):
+            intervals[name] = (record["minimum"], record["maximum"])
         constants = self.initial_literal_int_constants(function)
         for name, value in constants.items():
             literal = self.literal_int_value(value, constants)
@@ -9668,6 +9684,20 @@ class GLSLCodeGen:
                     interval = self.glsl_checked_private_pointer_interval(
                         initial_value, intervals, constants
                     )
+                    if (
+                        interval is None
+                        and self.glsl_storage_pointer_element_type(value) is not None
+                    ):
+                        asserted = self.glsl_index_asserted_range(
+                            initial_value,
+                            function_name=(
+                                getattr(function, "_glsl_resource_source_name", None)
+                                or getattr(function, "_generic_source_name", None)
+                                or getattr(function, "name", None)
+                            ),
+                        )
+                        if asserted is not None:
+                            interval = (asserted.minimum, asserted.maximum)
                     if interval is None:
                         intervals.pop(name, None)
                     else:
@@ -10068,8 +10098,35 @@ class GLSLCodeGen:
             self.glsl_workgroup_proof_initial_intervals(function),
         )
 
-    def prepare_glsl_resource_function_specializations(self, ast):
+    def prepare_glsl_resource_function_specializations(self, ast, target_stage=None):
         """Create GLSL helper variants for concrete storage image arguments."""
+        self.glsl_metadata_entry_bounds = {}
+        entries = self.glsl_software_subgroup_stage_entries(ast, target_stage)
+        self.glsl_entry_pointer_parameters = {
+            id(function): {
+                parameter.name
+                for parameter in (
+                    getattr(function, "parameters", getattr(function, "params", []))
+                    or []
+                )
+                if self.glsl_stage_entry_storage_pointer_binding(
+                    parameter, parameter.name
+                )
+                is not None
+            }
+            for _stage, function, _execution in entries
+        }
+        if self.metadata_preconditions:
+            records = validate_codegen_metadata_preconditions(
+                entries, self.metadata_preconditions
+            )
+            function = entries[0][1]
+            self.glsl_metadata_entry_bounds[id(function)] = metadata_loop_bindings(
+                function,
+                records,
+                self.glsl_function_mutated_interval_names(function),
+                self.walk_ast,
+            )
         self.glsl_resource_function_specializations = {}
         self.glsl_resource_function_call_names = {}
         self.glsl_resource_specialized_source_names = set()
@@ -14340,6 +14397,15 @@ class GLSLCodeGen:
                 }
                 with self.glsl_lexical_source_type_scope(lexical_source_types):
                     offset_range = self.glsl_storage_pointer_offset_range(binding, arg)
+                    offset_info = self.glsl_value_type_info(
+                        self.glsl_source_expression_type(binding.get("offset", 0))
+                    )
+                if (
+                    offset_info is not None
+                    and offset_info["width"] == 1
+                    and offset_info["bits"] > 32
+                ):
+                    binding["wide_offset"] = True
                 binding["source_offset_interval"] = (
                     (offset_range.minimum, offset_range.maximum)
                     if offset_range is not None
@@ -14356,6 +14422,7 @@ class GLSLCodeGen:
                         required_access,
                         offset_direction,
                         binding.get("source_offset_interval"),
+                        binding.get("wide_offset", False),
                         self.glsl_storage_pointer_specialization_view_key(binding),
                     )
                 )
@@ -14399,6 +14466,7 @@ class GLSLCodeGen:
                             binding["root"],
                             storage_element_type,
                             required_access,
+                            binding.get("wide_offset", False),
                             self.glsl_storage_pointer_specialization_view_key(binding),
                         )
                     )
@@ -24043,6 +24111,15 @@ class GLSLCodeGen:
                 candidates[name] = (node, contract)
 
         for name, (declaration, contract) in candidates.items():
+            if getattr(declaration, "initial_value", None) is not None:
+                raise OpenGLStoragePointerError(
+                    "OpenGL local storage pointer-array aggregate initializers are "
+                    "not supported",
+                    function_name=getattr(function, "name", None),
+                    parameter_name=name,
+                    reason="pointer-array-aggregate-initializer-unsupported",
+                    source_location=getattr(declaration, "source_location", None),
+                )
             if declaration_counts.get(name) != 1:
                 continue
             extent = contract.get("extent")
@@ -24805,6 +24882,11 @@ class GLSLCodeGen:
                 binding["offset"] = self.glsl_pointer_offset_sum(
                     binding.get("offset"), operand.index
                 )
+                info = self.glsl_value_type_info(
+                    self.glsl_source_expression_type(operand.index)
+                )
+                if info is not None and info["width"] == 1 and info["bits"] > 32:
+                    binding["wide_offset"] = True
                 return binding
             return None
 
@@ -24819,6 +24901,9 @@ class GLSLCodeGen:
                 delta = expression.left
             if binding is None:
                 return None
+            info = self.glsl_value_type_info(self.glsl_source_expression_type(delta))
+            if info is not None and info["width"] == 1 and info["bits"] > 32:
+                binding["wide_offset"] = True
             if operator == "-":
                 delta = UnaryOpNode("-", delta)
             binding["offset"] = self.glsl_pointer_offset_sum(
@@ -27205,6 +27290,41 @@ class GLSLCodeGen:
         indent_str = "    " * indent
         if operator in {"+=", "-="}:
             rendered_delta = self.generate_expression(right)
+            info = self.glsl_value_type_info(self.glsl_source_expression_type(right))
+            if info is not None and info["width"] == 1 and info["bits"] > 32:
+                current["wide_offset"] = True
+                intervals = getattr(node, "_glsl_control_flow_intervals", {})
+                base = intervals.get(target_name)
+                delta = self.glsl_checked_private_pointer_interval(
+                    right,
+                    intervals,
+                    self.glsl_active_literal_int_constants(),
+                    require_arithmetic_types=True,
+                )
+                combined = None
+                accepted = IntegerRange(-(1 << 31), (1 << 31) - 1)
+                delta_fits = delta is not None and IntegerRange(*delta).is_within(
+                    accepted
+                )
+                if base is not None and delta is not None:
+                    if operator == "-=":
+                        delta = (-delta[1], -delta[0])
+                    combined = IntegerRange(base[0] + delta[0], base[1] + delta[1])
+                if (
+                    not delta_fits
+                    or combined is None
+                    or not combined.is_within(accepted)
+                ):
+                    self.glsl_index_type_error(
+                        right,
+                        target,
+                        self.glsl_source_expression_type(right),
+                        "int",
+                        "pointer-offset-range-unproven",
+                        range_status="unproven",
+                        source_range=combined,
+                        accepted_range=accepted,
+                    )
             return f"{indent_str}{offset_name} {operator} int({rendered_delta});\n"
         if operator != "=":
             raise OpenGLStoragePointerError(
@@ -38987,14 +39107,14 @@ complex64_t crossgl_complex64_mod_assign(
             profile.scalar_types,
         )
 
-    def glsl_index_asserted_range(self, expression):
+    def glsl_index_asserted_range(self, expression, *, function_name=None):
         expression_name = expression_debug_name(expression)
         matches = [
             assertion
             for assertion in self.index_range_assertions
             if assertion.applies_to(
                 expression_name,
-                self.current_glsl_source_function_name,
+                function_name or self.current_glsl_source_function_name,
             )
         ]
         if not matches:
@@ -39052,6 +39172,10 @@ complex64_t crossgl_complex64_mod_assign(
                 key = field_key
             if key not in intervals:
                 key = expression_debug_name(expression)
+        elif isinstance(expression, ArrayAccessNode):
+            key = self.glsl_private_pointer_interval_key(
+                expression, intervals, self.glsl_active_literal_int_constants()
+            )
         else:
             key = self.expression_name(expression)
         interval = intervals.get(key) if key is not None else None
@@ -39435,6 +39559,51 @@ complex64_t crossgl_complex64_mod_assign(
         )
         if source_range is None:
             source_range = self.glsl_index_value_range(index_expr)
+        if indexed_expr is not None and not isinstance(indexed_expr, str):
+            binding = self.glsl_storage_pointer_binding(
+                indexed_expr, self.glsl_storage_pointer_aliases()
+            )
+            if (
+                binding is not None
+                and binding.get("offset", 0) not in (0, "0", "0u")
+                and (source_bits > 32 or binding.get("wide_offset"))
+            ):
+                intervals = getattr(indexed_expr, "_glsl_control_flow_intervals", {})
+                base = self.glsl_checked_private_pointer_interval(
+                    indexed_expr, intervals, self.glsl_active_literal_int_constants()
+                )
+                if base is None:
+                    base = self.glsl_checked_private_pointer_interval(
+                        binding.get("offset"),
+                        intervals,
+                        self.glsl_active_literal_int_constants(),
+                    )
+                combined = (
+                    IntegerRange(
+                        base[0] + source_range.minimum, base[1] + source_range.maximum
+                    )
+                    if base is not None and source_range is not None
+                    else None
+                )
+                accepted = IntegerRange(0, (1 << 31) - 1)
+                if (
+                    combined is None
+                    or not combined.is_within(accepted)
+                    or not source_range.is_within(
+                        IntegerRange(-(1 << 31), (1 << 31) - 1)
+                    )
+                ):
+                    self.glsl_index_type_error(
+                        index_expr,
+                        indexed_expr,
+                        index_type,
+                        "int",
+                        "composed-pointer-index-range-unproven",
+                        range_status="unproven",
+                        source_range=combined,
+                        accepted_range=accepted,
+                    )
+                target_signed = True
         decision = decide_index_narrowing(
             source_signed=index_info["family"] == "int",
             source_bits=source_bits,
@@ -47605,6 +47774,7 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if key is not None and key in intervals:
                 return key
+            return None
         name = self.expression_name(expression)
         return name if name in intervals else None
 
@@ -47617,6 +47787,8 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if key is not None:
                 return intervals[key]
+            if isinstance(expression, ArrayAccessNode):
+                return None
         integer_cast = self.glsl_integer_scalar_cast_call(expression)
         if integer_cast is not None:
             function_name, arguments = integer_cast
