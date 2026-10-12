@@ -422,7 +422,11 @@ def test_large_copy_ci_is_required_on_each_native_platform():
         for step in job["steps"]
         if step.get("name") == "Execute upstream tests on the translated backend"
     )
-    assert not step.get("if") and not step.get("continue-on-error")
+    assert " ".join(step["if"].split()) == (
+        "${{ !cancelled() && steps.host-build.outcome == 'success' && "
+        "steps.host-packages.outcome == 'success' }}"
+    )
+    assert not step.get("continue-on-error")
     assert "set -euo pipefail" in step["run"]
     assert "--timeout-seconds 4000" in step["run"]
     assert "--cast-batches --large-copies" in step["run"]

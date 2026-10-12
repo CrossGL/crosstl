@@ -57,7 +57,11 @@ def test_pinned_binary_step_selects_every_native_case_without_portable_duplicate
     command = step["run"]
     assert "--dist load --maxschedchunk=1" in command
     assert "--timeout-seconds 900" in command
-    assert "-n auto" in command and "if" not in step
+    assert "-n auto" in command
+    assert (
+        step["if"]
+        == "${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}"
+    )
     tokens = shlex.split(command.replace("\\\n", " "))
     selected = [token for token in tokens if ".py::test_" in token]
     assert len(selected) == len(set(selected)) == 11
@@ -157,7 +161,11 @@ def test_precise_atan2_uses_existing_native_arctangent_gate():
     assert step["env"]["PYTEST_XDIST_AUTO_NUM_WORKERS"] == "2"
     assert "--timeout-seconds 180" in step["run"]
     assert "pytest -q -n auto" in step["run"]
-    assert "if" not in step and "continue-on-error" not in step
+    assert (
+        step["if"]
+        == "${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}"
+    )
+    assert "continue-on-error" not in step
 
 
 def test_windows_host_qualification_preserves_required_workloads():
@@ -227,11 +235,7 @@ def test_windows_host_qualification_preserves_required_workloads():
         assert "continue-on-error" not in step
         if step not in (selection, comparison, identity, upload):
             assert "warp_qualification" not in json.dumps(step)
-    for name in (
-        "Validate collective helper arguments",
-        "Validate pinned native binary math",
-    ):
-        assert "if" not in steps[name]
+    assert "if" not in steps["Validate collective helper arguments"]
 
 
 def test_host_pipeline_uses_explicit_prerequisites_without_waiving_other_failures():
@@ -298,6 +302,76 @@ def test_host_pipeline_uses_explicit_prerequisites_without_waiving_other_failure
     )
     assert all("continue-on-error" not in step for step in job["steps"])
     assert steps["Retain native execution evidence"]["if"] == "always()"
+
+
+def test_independent_native_batches_require_setup_not_other_numerical_results():
+    job = yaml.safe_load(_workflow_texts()["demo-project-testing.yml"])["jobs"][
+        "portable-host"
+    ]
+    steps = job["steps"]
+    by_name = {step.get("name"): step for step in steps}
+    identity = by_name["Verify Windows host runtime identity"]
+    prepare = by_name["Checkout and prepare pinned upstream MLX"]
+    comparison = by_name["Compare WARP arithmetic across codegen revisions"]
+    assert steps.index(comparison) + 1 == steps.index(identity)
+    general = steps[steps.index(identity) + 1 : steps.index(prepare)]
+    assert [step["name"] for step in general] == [
+        "Validate exact partial subgroup execution",
+        "Validate source wave argument conversions",
+        "Validate exact dispatch regions",
+        "Validate lossless float storage",
+        "Validate ordered loop updates",
+        "Validate member array deduction",
+        "Validate generic vector constructors",
+        "Validate mixed-width integer arithmetic",
+        "Validate Metal argument inference",
+        "Validate native scalar math",
+        "Validate DirectX half conversions",
+        "Validate DirectX float atomics",
+        "Validate DirectX software reductions",
+        "Validate binary32 arithmetic",
+    ]
+    for step in general:
+        if step["name"].startswith("Validate DirectX"):
+            assert step["if"] == (
+                "${{ !cancelled() && runner.os == 'Windows' && "
+                "steps.host-warp-identity.outcome == 'success' }}"
+            )
+        else:
+            assert " ".join(step["if"].split()) == " ".join(prepare["if"].split())
+    pinned = steps[
+        steps.index(prepare) + 1 : steps.index(by_name["Build adapted upstream MLX"])
+    ]
+    selected = {
+        "Validate pinned gather loops": None,
+        "Compile pinned DirectX gated-delta backward entry": "Windows",
+        "Execute pinned DirectX gated-delta gradients": "Windows",
+        "Execute pinned portable attention row dots": None,
+        "Execute pinned OpenGL attention derivatives": "Linux",
+        "Execute pinned DirectX attention derivatives": "Windows",
+        "Validate pinned unary arithmetic": None,
+        "Validate pinned inverse hyperbolic cosine": None,
+        "Validate pinned arctangent": None,
+        "Validate pinned comparison arithmetic": None,
+        "Validate pinned copy layouts": None,
+        "Validate pinned native binary math": None,
+        "Validate pinned real power": None,
+        "Execute pinned resident attention reductions": None,
+    }
+    assert [step["name"] for step in pinned] == list(selected)
+    for step in pinned:
+        target_os = selected[step["name"]]
+        platform = f"runner.os == '{target_os}' && " if target_os else ""
+        assert step["if"] == (
+            "${{ !cancelled() && "
+            + platform
+            + "steps.pinned-upstream.outcome == 'success' }}"
+        )
+    for step in [*general, *pinned]:
+        assert "continue-on-error" not in step
+        assert "tools/run_bounded_command.py --timeout-seconds" in step["run"]
+        assert "-n auto" in step["run"] and "set -euo pipefail" in step["run"]
+        assert any(key.startswith("CROSTL_REQUIRE_") for key in step["env"])
 
 
 @pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell is not installed")
@@ -506,6 +580,7 @@ function Copy-Item { throw "Automatic comparison must not replace a runtime." }
         "import json, os, sys\n"
         "from pathlib import Path\n"
         "assert os.environ['CROSTL_REQUIRE_DIRECTX_TOOL_DEBUG_COMPARISON'] == '1'\n"
+        "assert os.environ['CROSTL_REQUIRE_DIRECTX_WAVE_SIZE_COMPARISON'] == '1'\n"
         "Path('arguments.json').write_text(json.dumps(sys.argv))\n"
         "raise SystemExit(int(os.environ['CROSTL_TEST_EXIT_CODE']))\n"
     )
@@ -541,6 +616,7 @@ function Copy-Item { throw "Automatic comparison must not replace a runtime." }
         "--basetemp=.mlx-portable-host/warp-pipeline-comparison/pytest",
         "--junitxml=.mlx-portable-host/warp-pipeline-comparison/results.xml",
         "tests/test_translator/test_directx_pipeline_debug.py",
+        "tests/test_translator/test_directx_wave_size.py",
     ]
     assert not (tmp_path / ".mlx-portable-host/warp-codegen-comparison").exists()
 

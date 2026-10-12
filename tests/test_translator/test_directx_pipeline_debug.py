@@ -107,9 +107,12 @@ def warp_adapter(tmp_path_factory):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for WARP pipeline comparison")
     assert sys.platform == "win32", "WARP pipeline comparison requires Windows"
+    return _query_warp_adapter(tmp_path_factory.mktemp("warp-adapter"))
+
+
+def _query_warp_adapter(work):
     from crosstl.project.directx_runtime import _compiler_environment, _run
 
-    work = tmp_path_factory.mktemp("warp-adapter")
     source, executable, receipt = (
         work / "adapter.cpp",
         work / "adapter.exe",

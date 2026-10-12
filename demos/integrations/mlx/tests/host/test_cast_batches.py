@@ -308,7 +308,11 @@ def test_cast_ci_requires_native_execution_on_all_three_platforms():
         for step in job["steps"]
         if step.get("name") == "Execute upstream tests on the translated backend"
     )
-    assert not step.get("if") and not step.get("continue-on-error")
+    assert " ".join(step["if"].split()) == (
+        "${{ !cancelled() && steps.host-build.outcome == 'success' && "
+        "steps.host-packages.outcome == 'success' }}"
+    )
+    assert not step.get("continue-on-error")
     assert "set -euo pipefail" in step["run"]
     assert "--timeout-seconds 4000" in step["run"]
     assert "portable_host.verify --mlx-root mlx-upstream" in step["run"]

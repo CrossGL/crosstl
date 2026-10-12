@@ -49,15 +49,28 @@ removed. A previous revision's successful proof does not satisfy the current
 revision's required checks.
 Core and demo tests also remain part of the complete test suite.
 
-The portable host build, package translation and upstream test execution use
-explicit prerequisites, so an earlier independent regression does not hide
-their results. Preparation requires successful host contract or ABI checks.
+Independent native regression batches, the portable host build, package
+translation and upstream test execution use explicit prerequisites, so an
+earlier numerical failure does not hide unrelated results. General batches and
+source preparation require successful host contract or ABI checks.
 Windows additionally rechecks the selected WARP library's pinned digest after
-any runtime comparison; a missing or changed library prevents preparation.
-Build and translation both require successful source preparation, and native
-upstream tests require both products. Cancellation stops this work. Earlier
+any runtime comparison; a missing or changed library prevents the subsequent
+batches and source preparation. Pinned kernel batches, the build and translation
+require successful source preparation, and native upstream tests require both
+build and translation products. Cancellation stops this work. Earlier
 failures remain fatal to the job, all numerical checks and deadlines are
 unchanged, and no extra runner is added.
+
+At translator revision `f1eda50bcc7242e71576f2f9a4cec0e9167809c5`, the
+[Windows host artifact](https://github.com/CrossGL/crosstl/actions/runs/38223366797/artifacts/11736927297)
+records 34 selected upstream tests passing on both CPU and translated DirectX
+paths, with no skips, failures or errors. Its base trace contains 1,210 native
+dispatches across all 93 configured entries, plus 18 checked rejection cases.
+Four boundary batches cover 112 cases per path and another 194 native dispatches.
+Independent checks verify artifact identities, retained boundary modules,
+before/after source preparation, exact result hashes and input preservation.
+The same job still fails the separate precise multiply-add controls. This
+selected host proof is not a complete upstream-suite or backend qualification.
 
 Complete DirectX scan tests select the translator's `native-precise` binary32
 addition policy. The generated helpers materialize a precise result to preserve
@@ -121,6 +134,20 @@ contains complete messages for all ten attempts. Identical source, module,
 request, input, reference and default-readback identities bind this result to
 the preceding comparison. A clean validation queue does not establish correct
 arithmetic, and this flag is not a usable workaround on the captured runtime.
+
+The same bounded diagnostic also compares unannotated Shader Model 6.6 controls
+with explicit wave sizes 4, 8, 16, 32, 64 and 128. Each variant preserves the
+scalar or matrix arithmetic, dispatch dimensions, exact inputs and reference
+words, offset buffer views and trailing guards. Separate lane-count witnesses
+check that execution honors each requested width. Compiler listings retain the
+wave-size annotation and verify separate, non-fast scalar multiply/add operations.
+The comparison explicitly selects WARP and retains runtime identities and
+failure receipts; it does not select a production wave width or replace the
+required unannotated controls. WARP's documented
+[width-dependent code generation](https://www.nuget.org/packages/Microsoft.Direct3D.WARP/1.0.16.1)
+motivates this comparison, but compilation alone does not establish a numerical
+fix. Unsupported widths must retain a pipeline failure, not a passing numerical
+result. No additional runner or longer diagnostic deadline is required.
 
 For manually dispatched workflow runs, that diagnostic instead compares the
 same precise scalar, cooperative-matrix and narrow-buffer controls on the

@@ -2075,7 +2075,15 @@ def test_ci_preserves_upstream_checkout_bytes_in_every_job(job_name):
         < commands.index("git -C mlx-upstream config core.autocrlf false")
         < commands.index("git -C mlx-upstream checkout --detach FETCH_HEAD")
     )
-    assert "if" not in step and "continue-on-error" not in step
+    if job_name == "portable-host":
+        assert " ".join(step["if"].split()) == (
+            "${{ !cancelled() && (steps.portable-host-contracts.outcome == 'success' || "
+            "(runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') || "
+            "steps.host-warp-identity.outcome == 'success') }}"
+        )
+    else:
+        assert "if" not in step
+    assert "continue-on-error" not in step
 
 
 @pytest.mark.parametrize("content", [b"unchanged\n", b"unchanged\r\n", b"modified\n"])
@@ -2219,9 +2227,18 @@ def test_ci_limits_portable_contracts_without_removing_platform_abi_checks():
         "Validate pinned native binary math",
         "Build adapted upstream MLX",
         "Translate unchanged upstream kernels",
-        "Execute upstream tests on the translated backend",
     ):
-        assert "if" not in steps[name] and "continue-on-error" not in steps[name]
+        assert (
+            steps[name]["if"]
+            == "${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}"
+        )
+        assert "continue-on-error" not in steps[name]
+    execution = steps["Execute upstream tests on the translated backend"]
+    assert " ".join(execution["if"].split()) == (
+        "${{ !cancelled() && steps.host-build.outcome == 'success' && "
+        "steps.host-packages.outcome == 'success' }}"
+    )
+    assert "continue-on-error" not in execution
     assert steps["Retain native execution evidence"]["if"] == "always()"
 
 
@@ -2529,7 +2546,19 @@ def test_ci_requires_native_math_before_building_mlx():
         ),
     ):
         step = ci_coverage.workflow_job_step_section(workflow, "portable-host", name)
-        assert "if:" not in step and "continue-on-error" not in step
+        condition = " ".join(yaml.safe_load(step)[0]["if"].split())
+        if name == "Validate native scalar math":
+            assert condition == (
+                "${{ !cancelled() && (steps.portable-host-contracts.outcome == 'success' || "
+                "(runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') || "
+                "steps.host-warp-identity.outcome == 'success') }}"
+            )
+        else:
+            assert (
+                condition
+                == "${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}"
+            )
+        assert "continue-on-error" not in step
         assert f"--timeout-seconds {seconds}" in step
         assert "pytest -q -n auto" in step
         assert "set -euo pipefail" in step
@@ -2598,7 +2627,10 @@ def test_ci_requires_native_math_before_building_mlx():
             assert "if:" not in step
             assert 'PYTEST_XDIST_AUTO_NUM_WORKERS: "2"' in step
         else:
-            assert "if: runner.os == 'Linux'" in step
+            assert yaml.safe_load(step)[0]["if"] == (
+                "${{ !cancelled() && runner.os == 'Linux' && "
+                "steps.pinned-upstream.outcome == 'success' }}"
+            )
         assert "continue-on-error" not in step
         assert f'{flag}: "1"' in step
         assert "EGL_PLATFORM: surfaceless" in step
@@ -2621,7 +2653,10 @@ def test_ci_requires_native_math_before_building_mlx():
     assert (
         "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream" in derivatives
     )
-    assert "if: runner.os == 'Windows'" in directx_half
+    assert yaml.safe_load(directx_half)[0]["if"] == (
+        "${{ !cancelled() && runner.os == 'Windows' && "
+        "steps.host-warp-identity.outcome == 'success' }}"
+    )
     assert "continue-on-error" not in directx_half
     assert 'CROSTL_REQUIRE_HALF_CONVERSION_RUNTIME: "1"' in directx_half
     assert "CROSTL_HALF_CONVERSION_TARGET: directx" in directx_half
@@ -2663,7 +2698,11 @@ def test_ci_requires_resident_attention_reductions():
     step = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Execute pinned resident attention reductions"
     )
-    assert "if:" not in step and "continue-on-error" not in step
+    assert (
+        yaml.safe_load(step)[0]["if"]
+        == "${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}"
+    )
+    assert "continue-on-error" not in step
     assert 'CROSTL_REQUIRE_MLX_ATTENTION_REDUCE_RUNTIME: "1"' in step
     assert "CROSTL_MLX_ATTENTION_REDUCE_TARGET: ${{ matrix.target }}" in step
     assert "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream" in step
@@ -2744,7 +2783,15 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
         ),
     ):
         step = ci_coverage.workflow_job_step_section(workflow, "portable-host", name)
-        assert "if: runner.os == 'Windows'" in step
+        prerequisite = (
+            "host-warp-identity"
+            if name.startswith("Validate DirectX")
+            else "pinned-upstream"
+        )
+        assert yaml.safe_load(step)[0]["if"] == (
+            "${{ !cancelled() && runner.os == 'Windows' && "
+            f"steps.{prerequisite}.outcome == 'success' " + "}}"
+        )
         assert "continue-on-error" not in step
         assert f'{flag}: "1"' in step
         assert "pytest -q -n auto" in step
@@ -2777,7 +2824,11 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
     attention = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Execute pinned portable attention row dots"
     )
-    assert "if:" not in attention and "continue-on-error" not in attention
+    assert (
+        yaml.safe_load(attention)[0]["if"]
+        == "${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}"
+    )
+    assert "continue-on-error" not in attention
     assert 'CROSTL_REQUIRE_MLX_ATTENTION_RUNTIME: "1"' in attention
     assert "CROSTL_MLX_ATTENTION_TARGET: ${{ matrix.target }}" in attention
     assert "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream" in attention

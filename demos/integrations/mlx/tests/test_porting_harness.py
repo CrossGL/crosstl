@@ -6196,7 +6196,14 @@ static const bool inv_ = false;
 static const bool is_power_of_2_ = true;
 static const int elems_per_thread_ = 4;
 static const int radix_4_steps_ = 4;
-groupshared float2 fft_mem_256_float2_float2_shared_in[256];
+groupshared float2 crosstl_workgroup_shared_in[256];
+struct crosstl_resource_ref_vec2 { uint offset; };
+float2 crosstl_workgroup_load_vec2(crosstl_resource_ref_vec2 ref, uint index) {
+    return crosstl_workgroup_shared_in[ref.offset + index];
+}
+void crosstl_workgroup_store_vec2(crosstl_resource_ref_vec2 ref, uint index, float2 value) {
+    crosstl_workgroup_shared_in[ref.offset + index] = value;
+}
 uint3 crossglNumWorkGroups;
 int consume_native_short(int16_t value) {
     return int(value);
@@ -6204,6 +6211,8 @@ int consume_native_short(int16_t value) {
 [numthreads(1, 1, 64)]
 void CSMain() {
     uint3 grid = (crossglNumWorkGroups * uint3(1, 1, 64));
+    crosstl_resource_ref_vec2 crosstl_ptr_buf = {0};
+    crosstl_workgroup_store_vec2(crosstl_ptr_buf, 0, crosstl_workgroup_load_vec2(crosstl_ptr_buf, 0));
 }
 """.lstrip(),
         encoding="utf-8",
@@ -6342,15 +6351,55 @@ void CSMain() {
     )
 
 
+@pytest.mark.parametrize(
+    "damage", [None, "storage", "reference", "load", "store", "pointer", "null"]
+)
 def test_fft_directx_toolchain_records_host_plan_and_native_validation(
     tmp_path,
     monkeypatch,
+    damage,
 ):
     module = _load_harness()
     paths, artifact_path, expected_workgroup_assertions = (
         _prepare_fft_directx_toolchain_check(module, tmp_path)
     )
     generated = artifact_path.read_text(encoding="utf-8")
+    changes = {
+        "storage": (
+            "groupshared float2 crosstl_workgroup_shared_in[256];",
+            "groupshared float2 legacy_shared_in[256];",
+        ),
+        "reference": (
+            "crosstl_resource_ref_vec2 crosstl_ptr_buf",
+            "uint crosstl_ptr_buf",
+        ),
+        "load": (
+            "crosstl_workgroup_load_vec2(crosstl_ptr_buf,",
+            "unchecked_load(crosstl_ptr_buf,",
+        ),
+        "store": (
+            "crosstl_workgroup_store_vec2(crosstl_ptr_buf,",
+            "unchecked_store(crosstl_ptr_buf,",
+        ),
+        "pointer": (
+            "uint3 crossglNumWorkGroups;",
+            "groupshared float2* raw_pointer;\nuint3 crossglNumWorkGroups;",
+        ),
+        "null": (
+            "uint3 crossglNumWorkGroups;",
+            "uint3 crossglNumWorkGroups; // nullptr",
+        ),
+    }
+    if damage is not None:
+        old, new = changes[damage]
+        assert generated.count(old) == 1
+        generated = generated.replace(old, new)
+        artifact_path.write_text(generated, encoding="utf-8")
+        report_path = paths[3] / "fft-directx-toolchain.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report["artifacts"][0]["generatedHash"]["value"] = module._sha256(artifact_path)
+        report["artifacts"][0]["generatedSizeBytes"] = artifact_path.stat().st_size
+        report_path.write_text(json.dumps(report), encoding="utf-8")
     monkeypatch.setattr(
         module,
         "FFT_DIRECTX_GENERATED_SHA256",
@@ -6383,6 +6432,16 @@ def test_fft_directx_toolchain_records_host_plan_and_native_validation(
         "which",
         lambda name: f"C:/tools/{name}.exe" if name == "dxc" else None,
     )
+
+    if damage is not None:
+        with pytest.raises(module.PortingCheckError, match="contract changed"):
+            module._check_fft_directx_toolchain(
+                *paths, "python", require_toolchain=True
+            )
+        assert [name for name, _command, _kwargs in commands] == [
+            "translate-fft-directx"
+        ]
+        return
 
     result = module._check_fft_directx_toolchain(
         *paths,

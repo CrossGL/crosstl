@@ -7870,7 +7870,7 @@ def _check_fft_directx_toolchain(
     generated = generated_path.read_text(encoding="utf-8")
     _require(
         len(re.findall(r"\bvoid\s+CSMain\s*\(", generated)) == 1
-        and "groupshared float2 fft_mem_256_float2_float2_shared_in[256];" in generated
+        and "groupshared float2 crosstl_workgroup_shared_in[256];" in generated
         and "[numthreads(1, 1, 64)]" in generated
         and "crossglNumWorkGroups * uint3(1, 1, 64)" in generated
         and "static const bool inv_ = false;" in generated
@@ -7882,9 +7882,11 @@ def _check_fft_directx_toolchain(
     )
     _require(
         re.search(r"\bgroupshared\s+[^;]*\*", generated) is None
-        and re.search(r"\bcrosstl_ptr_buf\s*[,)]", generated) is None
+        and "crosstl_resource_ref_vec2 crosstl_ptr_buf" in generated
+        and "crosstl_workgroup_store_vec2(crosstl_ptr_buf," in generated
+        and "crosstl_workgroup_load_vec2(crosstl_ptr_buf," in generated
         and "nullptr" not in generated,
-        "DirectX FFT artifact retained a first-class workgroup pointer",
+        "DirectX FFT workgroup reference contract changed",
     )
 
     dxc = shutil.which("dxc")

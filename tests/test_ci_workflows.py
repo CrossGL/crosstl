@@ -3445,12 +3445,28 @@ def test_windows_validator_install_retries_and_uses_direct_lunarg_fallback():
     assert "$global:LASTEXITCODE = 0" not in full_suite
 
 
-@pytest.mark.parametrize("job,overhead", [("opengl", 300), ("portable-host", 1800)])
-def test_project_native_job_deadlines_fit_runner_limit(job, overhead):
+@pytest.mark.parametrize(
+    "job,overhead,runner_os",
+    [
+        ("opengl", 300, "Linux"),
+        ("portable-host", 1800, "Linux"),
+        ("portable-host", 1800, "macOS"),
+        ("portable-host", 1800, "Windows"),
+    ],
+)
+def test_project_native_job_deadlines_fit_runner_limit(job, overhead, runner_os):
     workflow = yaml.safe_load((WORKFLOW_DIR / "demo-project-testing.yml").read_text())
     definition = workflow["jobs"][job]
 
     def deadline(step):
+        condition = step.get("if", "")
+        # Only exclude explicit platform constraints; count disjunctions conservatively.
+        if "||" not in condition:
+            for operator, platform in re.findall(
+                r"runner\.os (==|!=) '([^']+)'", condition
+            ):
+                if (runner_os == platform) != (operator == "=="):
+                    return 0
         return sum(
             int(value)
             for value in re.findall(r"--timeout-seconds (\d+)", step.get("run", ""))
@@ -3473,22 +3489,21 @@ def test_project_native_job_deadlines_fit_runner_limit(job, overhead):
             if step.get("id") == "collective-helpers"
         )
         assert steps.index(comparison) > failed_index
-        # Host build and dispatch use their own prerequisites after a regression fails.
+        # Independent numerical and host batches retain their deadlines after a failure.
         independent = [
             step
             for step in steps[failed_index + 1 :]
             if "!cancelled()" in step.get("if", "")
         ]
-        assert {step["name"] for step in independent} == {
-            "Verify Windows host runtime identity",
-            "Checkout and prepare pinned upstream MLX",
-            "Build adapted upstream MLX",
-            "Translate unchanged upstream kernels",
-            "Execute upstream tests on the translated backend",
-        }
+        assert len(independent) == 33
+        assert independent == [
+            step for step in steps[failed_index + 1 : -1] if step != comparison
+        ]
+        assert steps[-1]["name"] == "Retain native execution evidence"
+        assert steps[-1]["if"] == "always()"
         paths.append(
             sum(deadline(step) for step in steps[: failed_index + 1])
-            + comparison["timeout-minutes"] * 60
+            + (comparison["timeout-minutes"] * 60 if runner_os == "Windows" else 0)
             + sum(deadline(step) for step in independent)
         )
     else:

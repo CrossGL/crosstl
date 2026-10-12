@@ -363,7 +363,11 @@ def test_binary_batches_are_required_in_existing_three_platform_job():
         for s in job["steps"]
         if s.get("name") == "Execute upstream tests on the translated backend"
     )
-    assert not step.get("if") and not step.get("continue-on-error")
+    assert " ".join(step["if"].split()) == (
+        "${{ !cancelled() && steps.host-build.outcome == 'success' && "
+        "steps.host-packages.outcome == 'success' }}"
+    )
+    assert not step.get("continue-on-error")
     assert "--cast-batches --large-copies --binary-batches" in step["run"]
     assert "--timeout-seconds 4000" in step["run"]
     contracts = next(

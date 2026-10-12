@@ -1418,9 +1418,10 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $false
           if ($env:GITHUB_EVENT_NAME -ne "workflow_dispatch") {
             $env:CROSTL_REQUIRE_DIRECTX_TOOL_DEBUG_COMPARISON = "1"
+            $env:CROSTL_REQUIRE_DIRECTX_WAVE_SIZE_COMPARISON = "1"
             $evidence = ".mlx-portable-host/warp-pipeline-comparison"
             New-Item -ItemType Directory -Force $evidence | Out-Null
-            python tools/run_bounded_command.py --timeout-seconds 180 --label "WARP pipeline mode comparison" -- python -m pytest -q -n auto --basetemp="$evidence/pytest" --junitxml="$evidence/results.xml" tests/test_translator/test_directx_pipeline_debug.py
+            python tools/run_bounded_command.py --timeout-seconds 180 --label "WARP pipeline mode comparison" -- python -m pytest -q -n auto --basetemp="$evidence/pytest" --junitxml="$evidence/results.xml" tests/test_translator/test_directx_pipeline_debug.py tests/test_translator/test_directx_wave_size.py
             exit $LASTEXITCODE
           }
           $tests = @(
@@ -1510,7 +1511,30 @@ jobs:
             if ($restoredDigest -ne $originalDigest) { throw "Required WARP runtime was not restored." }
           }
           exit $result
+      - name: Verify Windows host runtime identity
+        id: host-warp-identity
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.platform-host-abi.outcome == 'success' }}
+        shell: pwsh
+        timeout-minutes: 1
+        env:
+          EXPECTED_WARP_SHA256: ${{ matrix.warp_qualification == '1.0.13' && '0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638' || 'e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3' }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $library = Join-Path $env:pythonLocation "d3d10warp.dll"
+          if (-not (Test-Path $library -PathType Leaf)) { throw "Host WARP library is missing." }
+          $digest = (Get-FileHash $library -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($digest -ne $env:EXPECTED_WARP_SHA256) { throw "Host WARP library identity does not match." }
+          @{
+            library = $library
+            sha256 = $digest
+            replacesRequiredGate = $false
+          } | ConvertTo-Json | Set-Content ".mlx-portable-host/host-runtime-identity.json"
       - name: Validate exact partial subgroup execution
+        if: >-
+          ${{ !cancelled() &&
+              (steps.portable-host-contracts.outcome == 'success' ||
+               (runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') ||
+               steps.host-warp-identity.outcome == 'success') }}
         env:
           CROSTL_REQUIRE_PARTIAL_SUBGROUP_READBACKS: "1"
           CROSTL_REQUIRE_INTEGER_SHUFFLE_RUNTIME: "1"
@@ -1530,6 +1554,11 @@ jobs:
               tests/test_translator/test_directx_subgroup_overloads.py \
               2>&1 | tee .mlx-portable-host/subgroup-partial.log
       - name: Validate source wave argument conversions
+        if: >-
+          ${{ !cancelled() &&
+              (steps.portable-host-contracts.outcome == 'success' ||
+               (runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') ||
+               steps.host-warp-identity.outcome == 'success') }}
         env:
           CROSTL_REQUIRE_WAVE_ARGUMENT_READBACKS: "1"
           EGL_PLATFORM: surfaceless
@@ -1545,6 +1574,11 @@ jobs:
               tests/test_translator/test_metal_wave_arguments.py \
               2>&1 | tee .mlx-portable-host/wave-arguments.log
       - name: Validate exact dispatch regions
+        if: >-
+          ${{ !cancelled() &&
+              (steps.portable-host-contracts.outcome == 'success' ||
+               (runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') ||
+               steps.host-warp-identity.outcome == 'success') }}
         env:
           CROSTL_REQUIRE_DISPATCH_REGIONS: "1"
           EGL_PLATFORM: surfaceless
@@ -1561,6 +1595,11 @@ jobs:
               tests/test_translator/test_dispatch_region_project.py \
               2>&1 | tee .mlx-portable-host/dispatch-regions.log
       - name: Validate lossless float storage
+        if: >-
+          ${{ !cancelled() &&
+              (steps.portable-host-contracts.outcome == 'success' ||
+               (runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') ||
+               steps.host-warp-identity.outcome == 'success') }}
         env:
           CROSTL_REQUIRE_FLOAT_STORAGE_RUNTIME: "1"
           EGL_PLATFORM: surfaceless
@@ -1576,6 +1615,11 @@ jobs:
               tests/test_translator/test_float_storage_encoding.py \
               2>&1 | tee .mlx-portable-host/float-storage.log
       - name: Validate ordered loop updates
+        if: >-
+          ${{ !cancelled() &&
+              (steps.portable-host-contracts.outcome == 'success' ||
+               (runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') ||
+               steps.host-warp-identity.outcome == 'success') }}
         env:
           CROSTL_REQUIRE_LOOP_UPDATE_RUNTIME: "1"
           EGL_PLATFORM: surfaceless
@@ -1591,6 +1635,11 @@ jobs:
               tests/test_translator/test_loop_updates.py \
               2>&1 | tee .mlx-portable-host/loop-updates.log
       - name: Validate member array deduction
+        if: >-
+          ${{ !cancelled() &&
+              (steps.portable-host-contracts.outcome == 'success' ||
+               (runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') ||
+               steps.host-warp-identity.outcome == 'success') }}
         env:
           CROSTL_REQUIRE_MEMBER_ARRAY_RUNTIME: "1"
           EGL_PLATFORM: surfaceless
@@ -1606,6 +1655,11 @@ jobs:
               tests/test_translator/test_metal_member_array_inference.py \
               2>&1 | tee .mlx-portable-host/member-arrays.log
       - name: Validate generic vector constructors
+        if: >-
+          ${{ !cancelled() &&
+              (steps.portable-host-contracts.outcome == 'success' ||
+               (runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') ||
+               steps.host-warp-identity.outcome == 'success') }}
         env:
           CROSTL_REQUIRE_VECTOR_CONSTRUCTOR_RUNTIME: "1"
           EGL_PLATFORM: surfaceless
@@ -1621,6 +1675,11 @@ jobs:
               tests/test_translator/test_metal_vector_constructors.py \
               2>&1 | tee .mlx-portable-host/vector-constructors.log
       - name: Validate mixed-width integer arithmetic
+        if: >-
+          ${{ !cancelled() &&
+              (steps.portable-host-contracts.outcome == 'success' ||
+               (runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') ||
+               steps.host-warp-identity.outcome == 'success') }}
         env:
           CROSTL_REQUIRE_WIDE_INTEGER_ARITHMETIC: "1"
           EGL_PLATFORM: surfaceless
@@ -1637,6 +1696,11 @@ jobs:
               tests/test_translator/test_metal_vector_scalar_arithmetic.py \
               2>&1 | tee .mlx-portable-host/integer-arithmetic.log
       - name: Validate Metal argument inference
+        if: >-
+          ${{ !cancelled() &&
+              (steps.portable-host-contracts.outcome == 'success' ||
+               (runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') ||
+               steps.host-warp-identity.outcome == 'success') }}
         env:
           CROSTL_REQUIRE_METAL_ARGUMENT_INFERENCE: "1"
           EGL_PLATFORM: surfaceless
@@ -1652,6 +1716,11 @@ jobs:
               tests/test_translator/test_project_metal_discovery.py \
               2>&1 | tee .mlx-portable-host/argument-inference.log
       - name: Validate native scalar math
+        if: >-
+          ${{ !cancelled() &&
+              (steps.portable-host-contracts.outcome == 'success' ||
+               (runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') ||
+               steps.host-warp-identity.outcome == 'success') }}
         env:
           CROSTL_REQUIRE_DIRECTX_ATAN2: ${{ runner.os == 'Windows' && '1' || '0' }}
           CROSTL_REQUIRE_METAL_PRECISE_ASIN: "1"
@@ -1669,7 +1738,7 @@ jobs:
               tests/test_translator/test_metal_precise_asin.py \
               2>&1 | tee .mlx-portable-host/scalar-math.log
       - name: Validate DirectX half conversions
-        if: runner.os == 'Windows'
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.host-warp-identity.outcome == 'success' }}
         env:
           CROSTL_REQUIRE_HALF_CONVERSION_RUNTIME: "1"
           CROSTL_HALF_CONVERSION_TARGET: directx
@@ -1683,7 +1752,7 @@ jobs:
               tests/test_translator/test_directx_half_conversion.py \
               2>&1 | tee .mlx-portable-host/half-conversions.log
       - name: Validate DirectX float atomics
-        if: runner.os == 'Windows'
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.host-warp-identity.outcome == 'success' }}
         env:
           CROSTL_REQUIRE_DIRECTX_FLOAT_ATOMICS: "1"
         run: |
@@ -1696,7 +1765,7 @@ jobs:
               tests/test_translator/test_directx_float_atomics.py \
               2>&1 | tee .mlx-portable-host/float-atomics.log
       - name: Validate DirectX software reductions
-        if: runner.os == 'Windows'
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.host-warp-identity.outcome == 'success' }}
         env:
           CROSTL_REQUIRE_DIRECTX_SOFTWARE_REDUCTIONS: "1"
         run: |
@@ -1712,6 +1781,11 @@ jobs:
               tests/test_translator/test_directx_subgroup_components.py \
               2>&1 | tee .mlx-portable-host/software-reductions.log
       - name: Validate binary32 arithmetic
+        if: >-
+          ${{ !cancelled() &&
+              (steps.portable-host-contracts.outcome == 'success' ||
+               (runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') ||
+               steps.host-warp-identity.outcome == 'success') }}
         env:
           CROSTL_REQUIRE_FUSED_MATH: "1"
           CROSTL_REQUIRE_DIVISION_MATH: "1"
@@ -1743,24 +1817,6 @@ jobs:
               tests/test_translator/test_metal_multiplication_profile.py \
               tests/test_translator/test_metal_power.py \
               2>&1 | tee .mlx-portable-host/fused-math.log
-      - name: Verify Windows host runtime identity
-        id: host-warp-identity
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.platform-host-abi.outcome == 'success' }}
-        shell: pwsh
-        timeout-minutes: 1
-        env:
-          EXPECTED_WARP_SHA256: ${{ matrix.warp_qualification == '1.0.13' && '0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638' || 'e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3' }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $library = Join-Path $env:pythonLocation "d3d10warp.dll"
-          if (-not (Test-Path $library -PathType Leaf)) { throw "Host WARP library is missing." }
-          $digest = (Get-FileHash $library -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($digest -ne $env:EXPECTED_WARP_SHA256) { throw "Host WARP library identity does not match." }
-          @{
-            library = $library
-            sha256 = $digest
-            replacesRequiredGate = $false
-          } | ConvertTo-Json | Set-Content ".mlx-portable-host/host-runtime-identity.json"
       - name: Checkout and prepare pinned upstream MLX
         id: pinned-upstream
         if: >-
@@ -1778,6 +1834,7 @@ jobs:
           mkdir -p .mlx-portable-host
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-host/adaptation.json
       - name: Validate pinned gather loops
+        if: ${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}
         env:
           CROSTL_REQUIRE_MLX_CURRENT_GATHER: "1"
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
@@ -1795,7 +1852,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_current_gather.py \
               2>&1 | tee .mlx-portable-host/gather.log
       - name: Compile pinned DirectX gated-delta backward entry
-        if: runner.os == 'Windows'
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.pinned-upstream.outcome == 'success' }}
         env:
           CROSTL_REQUIRE_MLX_GATED_DELTA_DIRECTX: "1"
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
@@ -1809,7 +1866,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_gated_delta_directx.py \
               2>&1 | tee .mlx-portable-host/gated-delta.log
       - name: Execute pinned DirectX gated-delta gradients
-        if: runner.os == 'Windows'
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.pinned-upstream.outcome == 'success' }}
         env:
           CROSTL_REQUIRE_MLX_GATED_DELTA_DIRECTX_RUNTIME: "1"
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
@@ -1823,6 +1880,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_gated_delta_directx_runtime.py \
               2>&1 | tee .mlx-portable-host/gated-delta-runtime.log
       - name: Execute pinned portable attention row dots
+        if: ${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}
         env:
           CROSTL_REQUIRE_MLX_ATTENTION_RUNTIME: "1"
           CROSTL_MLX_ATTENTION_TARGET: ${{ matrix.target }}
@@ -1840,7 +1898,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_attention_odo_runtime.py \
               2>&1 | tee .mlx-portable-host/attention-odo.log
       - name: Execute pinned OpenGL attention derivatives
-        if: runner.os == 'Linux'
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.pinned-upstream.outcome == 'success' }}
         env:
           CROSTL_REQUIRE_MLX_ATTENTION_DS_OPENGL: "1"
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
@@ -1856,7 +1914,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_attention_ds_opengl.py \
               2>&1 | tee .mlx-portable-host/attention-ds.log
       - name: Execute pinned DirectX attention derivatives
-        if: runner.os == 'Windows'
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.pinned-upstream.outcome == 'success' }}
         env:
           CROSTL_REQUIRE_MLX_ATTENTION_DS_RUNTIME: "1"
           CROSTL_MLX_ATTENTION_DS_TARGET: directx
@@ -1871,6 +1929,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_attention_ds_runtime.py \
               2>&1 | tee .mlx-portable-host/attention-ds.log
       - name: Validate pinned unary arithmetic
+        if: ${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
@@ -1910,6 +1969,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_current_unary_trig.py \
               2>&1 | tee .mlx-portable-host/unary-fma.log
       - name: Validate pinned inverse hyperbolic cosine
+        if: ${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
@@ -1930,6 +1990,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_current_unary_acosh.py \
               2>&1 | tee .mlx-portable-host/acosh.log
       - name: Validate pinned arctangent
+        if: ${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
@@ -1955,6 +2016,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_current_unary_atan.py \
               2>&1 | tee .mlx-portable-host/atan.log
       - name: Validate pinned comparison arithmetic
+        if: ${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
@@ -1979,6 +2041,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_current_unary_sign.py \
               2>&1 | tee .mlx-portable-host/boolean-promotion.log
       - name: Validate pinned copy layouts
+        if: ${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
@@ -1997,6 +2060,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_current_copy.py \
               2>&1 | tee .mlx-portable-host/copy-layouts.log
       - name: Validate pinned native binary math
+        if: ${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
@@ -2032,6 +2096,7 @@ jobs:
               tests/test_translator/test_native_loader_dispatch_integration.py::test_native_loader_descriptor_executes_opengl_on_device \
               2>&1 | tee .mlx-portable-host/binary-math.log
       - name: Validate pinned real power
+        if: ${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
@@ -2053,6 +2118,7 @@ jobs:
               tests/test_translator/test_metal_power.py \
               2>&1 | tee .mlx-portable-host/real-power.log
       - name: Execute pinned resident attention reductions
+        if: ${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}
         env:
           CROSTL_REQUIRE_MLX_ATTENTION_REDUCE_RUNTIME: "1"
           CROSTL_MLX_ATTENTION_REDUCE_TARGET: ${{ matrix.target }}
