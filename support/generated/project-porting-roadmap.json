@@ -6858,6 +6858,8 @@
             "tests/test_translator/test_pointer_interval_identity.py::def test_pointer_bounds_survive_identifier_aliases",
             "tests/test_translator/test_pointer_interval_identity.py::def test_emitted_alias_cannot_borrow_another_source_interval",
             "tests/test_translator/test_pointer_interval_identity.py::def test_renamed_pointer_cannot_hide_overflow_or_shadowing",
+            "tests/test_translator/test_identifier_collisions.py::def test_resource_alias_does_not_capture_local_declaration",
+            "tests/test_translator/test_identifier_collisions.py::def test_local_name_allocation_keeps_another_sources_alias",
             "tests/test_translator/test_metadata_preconditions.py::def test_native_metadata_pointer_identifier_bounds",
             "tests/test_translator/test_metadata_index_bounds.py::def test_index_proofs_do_not_survive_removed_contracts",
             "tests/test_translator/test_integer_interval_division.py::def test_rounded_division_cannot_authorize_an_invalid_index",

@@ -1232,6 +1232,8 @@ configured endpoints, unchanged inputs and guarded outputs.
 Pointer-offset proofs retain source identifier ownership when GLSL emission
 renames a reserved word. A similarly named local variable cannot supply bounds
 for that pointer; composed offsets still undergo overflow and scope checks.
+Local-name allocation keeps emitted resource aliases reserved, including when
+a local uses the preferred escaped spelling or shadows another local in a block.
 
 Division proofs use exact integer arithmetic with truncation toward zero, including
 64-bit endpoints. Checked nonzero divisor intervals can bound division and

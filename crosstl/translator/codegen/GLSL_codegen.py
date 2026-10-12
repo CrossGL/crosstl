@@ -23041,6 +23041,12 @@ class GLSLCodeGen:
         used_names.update(self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS)
         if preallocated:
             used_names.discard(emitted_name)
+            # Releasing this local's reservation must not release another alias.
+            used_names.update(
+                alias
+                for source, alias in self.current_identifier_aliases.items()
+                if source != name
+            )
         if emitted_name in used_names or emitted_name in reserved_names:
             emitted_name = self.glsl_unique_identifier(
                 emitted_name,

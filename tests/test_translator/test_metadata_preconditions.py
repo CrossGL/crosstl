@@ -1125,6 +1125,7 @@ def test_native_metadata_pointer_identifier_bounds(tmp_path):
             "set CROSTL_REQUIRE_METADATA_PRECONDITIONS=1 for native metadata checks"
         )
     from tests.runtime_helpers import _validate
+    from tests.test_translator.test_identifier_collisions import _collision_body
     from tests.test_translator.test_loop_updates import _execute
     from tests.test_translator.test_metadata_index_bounds import _index_config
     from tests.test_translator.test_pointer_interval_identity import (
@@ -1134,12 +1135,16 @@ def test_native_metadata_pointer_identifier_bounds(tmp_path):
     from tests.test_translator.test_project_metadata_entry_scope import _packages
 
     target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
-    bodies = (
-        "values += offset; result[2] = values[index];",
-        "values += offset; result[2] = read_at(values, index);",
-    )
     for name in ("output", "input", "destination"):
-        for number, body in enumerate(bodies):
+        bodies = [
+            ("values += offset; result[2] = values[index];", None),
+            ("values += offset; result[2] = read_at(values, index);", None),
+        ]
+        bodies.extend(
+            (_collision_body(name, kind), kind)
+            for kind in ("helper", "nested", "suffix")
+        )
+        for number, (body, kind) in enumerate(bodies):
             root = tmp_path / f"{name}-{number}"
             source = _pointer_source(name, body)
             _, package, (descriptor,) = _packages(
@@ -1149,6 +1154,11 @@ def test_native_metadata_pointer_identifier_bounds(tmp_path):
                 request, expected = _pointer_request(
                     descriptor, package, name, index, offset
                 )
+                if kind is not None:
+                    for packet in expected.values():
+                        packet["values"][3] = 29
+                        if kind != "helper":
+                            packet["values"][4] = 31
                 work = root / f"native-{index}-{offset}"
                 work.mkdir()
                 _execute(
