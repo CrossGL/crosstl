@@ -8,7 +8,6 @@ import hashlib
 import json
 import math
 import os
-import re
 import shutil
 import signal
 import subprocess
@@ -295,13 +294,48 @@ def parse_trace(path):
     return dispatches
 
 
-def unittest_counts(path):
-    text = Path(path).read_text(encoding="utf-8")
-    totals = re.findall(r"^Ran (\d+) tests? in ", text, re.MULTILINE)
-    successful = re.findall(r"^OK(?: \(skipped=(\d+)\))?$", text, re.MULTILINE)
-    if len(totals) != 1 or len(successful) != 1 or int(totals[0]) <= 0:
-        raise ValueError("Missing successful upstream unittest accounting")
-    return {"total": int(totals[0]), "skipped": int(successful[0] or 0)}
+def unittest_result(path, command):
+    """Require complete test accounting consistent with the process outcome."""
+    result = json.loads(Path(path).read_text(encoding="utf-8"))
+    lists = (
+        "testIds",
+        "failures",
+        "errors",
+        "skipped",
+        "expectedFailures",
+        "unexpectedSuccesses",
+    )
+    if (
+        not isinstance(result, dict)
+        or type(result.get("schemaVersion")) is not int
+        or result["schemaVersion"] != 1
+        or type(result.get("successful")) is not bool
+        or type(result.get("total")) is not int
+        or result["total"] <= 0
+        or any(
+            not isinstance(result.get(key), list)
+            or any(not isinstance(item, str) or not item for item in result[key])
+            for key in lists
+        )
+    ):
+        raise ValueError("Invalid upstream unittest accounting")
+    ids = Counter(result["testIds"])
+    if len(result["testIds"]) != result["total"] or any(
+        Counter(result[key]) - ids
+        for key in ("skipped", "expectedFailures", "unexpectedSuccesses")
+    ):
+        raise ValueError("Incomplete upstream unittest inventory")
+    successful = not any(
+        result[key] for key in ("failures", "errors", "unexpectedSuccesses")
+    )
+    if (
+        result["successful"] != successful
+        or type(command.get("returncode")) is not int
+        or command["returncode"] != (0 if successful else 1)
+        or command.get("timedOut")
+    ):
+        raise ValueError("Upstream unittest outcome disagrees with command result")
+    return result
 
 
 def verify_host_workloads(results, dispatches, dataset):
@@ -378,39 +412,95 @@ def verify(root, python, output):
         or root not in Path(identity["module"]).resolve().parents
     ):
         raise ValueError("MLX runtime is not the adapted checkout on a Metal device")
-    tests = [str(python), str(HERE / "unittest_evidence.py"), "--evidence-dir"]
     cwd = root / "python/tests"
-    run(
-        [*tests, output / "upstream-original-failures", "test_ops"],
-        output,
-        "upstream-original",
-        cwd=cwd,
-        env=env,
-        timeout=1800,
-    )
-    baseline = unittest_counts(output / "upstream-original.stderr")
+    evidence = {
+        "kind": "mlx-selected-metal-host-redirection",
+        "schemaVersion": 3,
+        "status": "running",
+        "commit": MLX_COMMIT,
+        "upstreamModule": "test_ops",
+        "runtime": identity,
+        "upstreamTestSourceSha256": digest(cwd / "test_ops.py"),
+        "original": None,
+        "translated": None,
+        "dispatches": [],
+        "hostWorkloads": [],
+        "hostWorkloadDispatches": [],
+        "artifacts": artifacts,
+        "missingRequiredLibraryRejected": False,
+        "fullUpstreamSuite": False,
+        "fullTranslatedBackend": False,
+        "checks": [],
+    }
+
+    def check(name, operation):
+        record = {"name": name, "status": "running"}
+        evidence["checks"].append(record)
+        save_json(output / "evidence.json", evidence)
+        try:
+            operation()
+        except Exception as error:
+            record.update(status="failed", error=f"{type(error).__name__}: {error}")
+        else:
+            record["status"] = "passed"
+        finally:
+            save_json(output / "evidence.json", evidence)
+
+    def upstream(name):
+        failures = output / f"upstream-{name}-failures"
+        command = run(
+            [
+                python,
+                HERE / "unittest_evidence.py",
+                "--evidence-dir",
+                failures,
+                "test_ops",
+            ],
+            output,
+            f"upstream-{name}",
+            cwd=cwd,
+            env=env,
+            timeout=1800,
+            check=False,
+        )
+        result = unittest_result(failures / "summary.json", command)
+        evidence[name] = result
+        if not result["successful"]:
+            raise ValueError(f"Original upstream assertions failed in the {name} run")
+
+    check("upstream-original", lambda: upstream("original"))
     trace = output / "translated-dispatch.tsv"
     trace.touch(exist_ok=False)
     env.update(
         CROSTL_METAL_LIBRARY_OVERRIDES=str(libraries),
         CROSTL_METAL_LIBRARY_TRACE=str(trace),
     )
-    run(
-        [*tests, output / "upstream-translated-failures", "test_ops"],
-        output,
-        "upstream-translated",
-        cwd=cwd,
-        env=env,
-        timeout=1800,
-    )
-    translated = unittest_counts(output / "upstream-translated.stderr")
-    if baseline != translated:
-        raise ValueError("Upstream test or skip accounting changed with translation")
-    dispatches = parse_trace(trace)
-    if "ss_Powercomplex64" not in {item["entry"] for item in dispatches}:
-        raise ValueError("Upstream complex-power test did not use translated code")
-    host_results, host_dispatches = [], []
-    for dataset in HOST_DATASETS:
+    check("upstream-translated", lambda: upstream("translated"))
+
+    def inventory():
+        original, translated = evidence["original"], evidence["translated"]
+        if (
+            original is None
+            or translated is None
+            or any(
+                Counter(original[key]) != Counter(translated[key])
+                for key in ("testIds", "skipped", "expectedFailures")
+            )
+        ):
+            raise ValueError(
+                "Upstream test or skip accounting changed with translation"
+            )
+
+    def translated_dispatches():
+        dispatches = parse_trace(trace)
+        evidence["dispatches"] = dispatches
+        if "ss_Powercomplex64" not in {item["entry"] for item in dispatches}:
+            raise ValueError("Upstream complex-power test did not use translated code")
+
+    check("upstream-inventory", inventory)
+    check("upstream-dispatches", translated_dispatches)
+
+    def workload(dataset):
         workload_trace = output / f"host-workloads-{dataset}.tsv"
         workload_trace.touch(exist_ok=False)
         env["CROSTL_METAL_LIBRARY_TRACE"] = str(workload_trace)
@@ -430,53 +520,55 @@ def verify(root, python, output):
         records = json.loads(workload_values.read_text())
         dispatch_records = parse_trace(workload_trace)
         verify_host_workloads(records, dispatch_records, dataset)
-        host_results.extend(records)
-        host_dispatches.extend(dict(item, dataset=dataset) for item in dispatch_records)
-    missing = output / "missing-library"
-    missing.mkdir()
-    (missing / "libraries.txt").write_text("ss_Powercomplex64\n", encoding="utf-8")
-    env["CROSTL_METAL_LIBRARY_OVERRIDES"] = str(missing)
-    negative = run(
-        [str(python), "-m", "unittest", "test_ops.TestOps.test_complex_power"],
-        output,
-        "missing-required-library",
-        cwd=cwd,
-        env=env,
-        check=False,
-    )
-    error = (output / "missing-required-library.stderr").read_text(encoding="utf-8")
-    if (
-        not negative["returncode"]
-        or "Cannot load required translated Metal library" not in error
-    ):
-        raise ValueError("A missing required library did not fail closed")
-    for artifact in artifacts:
+        evidence["hostWorkloads"].extend(records)
+        evidence["hostWorkloadDispatches"].extend(
+            dict(item, dataset=dataset) for item in dispatch_records
+        )
+
+    for dataset in HOST_DATASETS:
+        check(f"host-workloads-{dataset}", lambda: workload(dataset))
+
+    def missing_library():
+        missing = output / "missing-library"
+        missing.mkdir()
+        (missing / "libraries.txt").write_text("ss_Powercomplex64\n", encoding="utf-8")
+        env["CROSTL_METAL_LIBRARY_OVERRIDES"] = str(missing)
+        negative = run(
+            [str(python), "-m", "unittest", "test_ops.TestOps.test_complex_power"],
+            output,
+            "missing-required-library",
+            cwd=cwd,
+            env=env,
+            check=False,
+        )
+        error = (output / "missing-required-library.stderr").read_text(encoding="utf-8")
         if (
-            digest(libraries / (artifact["entry"] + ".metallib"))
-            != artifact["librarySha256"]
+            not negative["returncode"]
+            or "Cannot load required translated Metal library" not in error
         ):
-            raise ValueError("Compiled library changed during upstream execution")
-    verify_checkout(root, patched=True)
-    save_json(
-        output / "evidence.json",
-        {
-            "kind": "mlx-selected-metal-host-redirection",
-            "schemaVersion": 2,
-            "commit": MLX_COMMIT,
-            "upstreamModule": "test_ops",
-            "runtime": identity,
-            "upstreamTestSourceSha256": digest(cwd / "test_ops.py"),
-            "original": baseline,
-            "translated": translated,
-            "dispatches": dispatches,
-            "hostWorkloads": host_results,
-            "hostWorkloadDispatches": host_dispatches,
-            "artifacts": artifacts,
-            "missingRequiredLibraryRejected": True,
-            "fullUpstreamSuite": False,
-            "fullTranslatedBackend": False,
-        },
-    )
+            raise ValueError("A missing required library did not fail closed")
+        evidence["missingRequiredLibraryRejected"] = True
+
+    def library_integrity():
+        for artifact in artifacts:
+            if (
+                digest(libraries / (artifact["entry"] + ".metallib"))
+                != artifact["librarySha256"]
+            ):
+                raise ValueError("Compiled library changed during upstream execution")
+
+    check("missing-required-library", missing_library)
+    check("library-integrity", library_integrity)
+    check("source-integrity", lambda: verify_checkout(root, patched=True))
+    failed = [
+        record["name"] for record in evidence["checks"] if record["status"] != "passed"
+    ]
+    evidence["status"] = "failed" if failed else "passed"
+    save_json(output / "evidence.json", evidence)
+    if failed:
+        raise ValueError(
+            f"Metal host verification failed: {', '.join(failed)}; inspect {output / 'evidence.json'}"
+        )
 
 
 def main():

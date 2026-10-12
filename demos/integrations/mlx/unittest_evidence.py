@@ -102,6 +102,24 @@ class EvidenceResult(unittest.TextTestResult):
         self.output = output
         self.source_root = source_root
         self.receipt_count = 0
+        self.test_ids = []
+
+    def startTest(self, test):
+        super().startTest(test)
+        self.test_ids.append(test.id())
+
+    def summary(self):
+        return {
+            "schemaVersion": 1,
+            "successful": self.wasSuccessful(),
+            "total": self.testsRun,
+            "testIds": self.test_ids,
+            "failures": [test.id() for test, _ in self.failures],
+            "errors": [test.id() for test, _ in self.errors],
+            "skipped": [test.id() for test, _ in self.skipped],
+            "expectedFailures": [test.id() for test, _ in self.expectedFailures],
+            "unexpectedSuccesses": [test.id() for test in self.unexpectedSuccesses],
+        }
 
     def record_failure(self, test, error):
         self.receipt_count += 1
@@ -153,6 +171,9 @@ def main(argv=None):
     program = unittest.main(
         module=None, argv=[sys.argv[0], *tests], testRunner=Runner, exit=False
     )
+    with (output / "summary.json").open("x", encoding="utf-8") as stream:
+        json.dump(program.result.summary(), stream, indent=2, allow_nan=False)
+        stream.write("\n")
     return 0 if program.result.wasSuccessful() else 1
 
 

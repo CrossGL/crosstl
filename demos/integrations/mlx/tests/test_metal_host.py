@@ -15,6 +15,21 @@ from demos.integrations.mlx import unittest_evidence
 from tests.ci_helpers import assert_paths_covered
 
 
+def upstream_summary(count=3, *, failure=False):
+    ids = [f"upstream.Test.test_{index}" for index in range(count)]
+    return {
+        "schemaVersion": 1,
+        "successful": not failure,
+        "total": count,
+        "testIds": ids,
+        "failures": ids[:1] if failure else [],
+        "errors": [],
+        "skipped": [],
+        "expectedFailures": [],
+        "unexpectedSuccesses": [],
+    }
+
+
 def workload_records(dataset):
     base = complex(2, 1)
     if dataset != "ordinary":
@@ -96,7 +111,17 @@ def test_upstream_failure_evidence_preserves_unittest_results(tmp_path, mode, re
     assert result.returncode == (1 if receipts else 0), result.stderr
     assert "Ran 3 tests" in result.stderr and "skipped=1" in result.stderr
     assert source.read_bytes() == original
-    captured = sorted(output.glob("*.json"))
+    summary = host.unittest_result(
+        output / "summary.json", {"returncode": result.returncode}
+    )
+    assert summary["total"] == 3
+    assert len(summary["testIds"]) == 3
+    assert summary["successful"] is (receipts == 0)
+    assert summary["skipped"] == ["upstream.Upstream.test_skip"]
+    assert len(summary["errors"]) == int(mode == "error")
+    assert len(summary["failures"]) == (receipts if mode != "error" else 0)
+    assert summary["expectedFailures"] == summary["unexpectedSuccesses"] == []
+    captured = sorted(output.glob("[0-9]*.json"))
     assert len(captured) == receipts
     for path in captured:
         payload = json.loads(path.read_text())
@@ -166,6 +191,38 @@ def test_upstream_failure_capture_errors_do_not_change_test_failure(
     assert "original failure" in result.failures[0][1]
     assert "evidence storage unavailable" in runner.stream.getvalue()
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("unexpected_success", [False, True])
+def test_structured_summary_retains_expected_failure_semantics(
+    tmp_path, unexpected_success
+):
+    import io
+    import unittest
+
+    class Upstream(unittest.TestCase):
+        @unittest.expectedFailure
+        def test_operation(self):
+            self.assertTrue(unexpected_success)
+
+    runner = unittest.TextTestRunner(stream=io.StringIO())
+    result = unittest_evidence.EvidenceResult(
+        runner.stream, True, 1, output=tmp_path, source_root=tmp_path
+    )
+    test = Upstream("test_operation")
+    test.run(result)
+    summary = result.summary()
+    host.save_json(tmp_path / "summary.json", summary)
+    assert (
+        host.unittest_result(
+            tmp_path / "summary.json", {"returncode": int(unexpected_success)}
+        )
+        == summary
+    )
+    assert summary["testIds"] == [test.id()]
+    assert summary["expectedFailures"] == ([] if unexpected_success else [test.id()])
+    assert summary["unexpectedSuccesses"] == ([test.id()] if unexpected_success else [])
+    assert summary["successful"] is not unexpected_success
 
 
 @pytest.mark.parametrize("dataset", host.HOST_DATASETS)
@@ -251,27 +308,78 @@ def test_host_numerical_evidence_recomputes_expected_values():
 
 
 @pytest.mark.parametrize("count,skipped", [(1, 0), (287, 0), (287, 3)])
-def test_upstream_test_accounting(tmp_path, count, skipped):
-    path = tmp_path / "result"
-    suffix = f" (skipped={skipped})" if skipped else ""
-    path.write_text(f"Ran {count} tests in 12.3s\n\nOK{suffix}\n")
-    assert host.unittest_counts(path) == {"total": count, "skipped": skipped}
+@pytest.mark.parametrize("failure", [False, True])
+def test_upstream_test_accounting(tmp_path, count, skipped, failure):
+    path = tmp_path / "result.json"
+    summary = upstream_summary(count, failure=failure)
+    summary["skipped"] = summary["testIds"][-skipped:] if skipped else []
+    host.save_json(path, summary)
+    assert host.unittest_result(path, {"returncode": int(failure)}) == summary
 
 
 @pytest.mark.parametrize(
-    "text",
+    "field,value",
     [
-        "",
-        "Ran 0 tests in 0s\nOK\n",
-        "Ran 1 test in 1s\nFAILED\n",
-        "Ran 1 test in 1s\nOK\nRan 1 test in 1s\nOK\n",
+        ("schemaVersion", True),
+        ("schemaVersion", 2),
+        ("successful", 1),
+        ("successful", False),
+        ("total", 0),
+        ("total", 2),
+        ("total", True),
+        ("testIds", []),
+        ("testIds", ["", "second", "third"]),
+        ("testIds", [1, 2, 3]),
+        ("testIds", "not a list"),
+        ("skipped", ["unknown"]),
+        ("skipped", ["upstream.Test.test_0"] * 2),
+        ("expectedFailures", ["unknown"]),
+        ("unexpectedSuccesses", ["unknown"]),
+        ("failures", ["upstream.Test.test_0"]),
+        ("errors", None),
     ],
 )
-def test_incomplete_upstream_accounting_is_rejected(tmp_path, text):
-    path = tmp_path / "result"
-    path.write_text(text)
+def test_incomplete_upstream_accounting_is_rejected(tmp_path, field, value):
+    path = tmp_path / "result.json"
+    summary = upstream_summary()
+    summary[field] = value
+    host.save_json(path, summary)
     with pytest.raises(ValueError):
-        host.unittest_counts(path)
+        host.unittest_result(path, {"returncode": 0})
+
+
+@pytest.mark.parametrize("payload", [None, [], 1, {}, "not a result"])
+def test_invalid_upstream_summary_is_rejected(tmp_path, payload):
+    path = tmp_path / "result.json"
+    host.save_json(path, payload)
+    with pytest.raises(ValueError):
+        host.unittest_result(path, {"returncode": 0})
+
+
+@pytest.mark.parametrize("failure", [False, True])
+@pytest.mark.parametrize(
+    "command",
+    [
+        {},
+        {"returncode": True},
+        {"returncode": -9},
+        {"returncode": 2},
+        {"returncode": 0, "timedOut": True},
+    ],
+)
+def test_upstream_command_failure_cannot_be_reclassified(tmp_path, failure, command):
+    path = tmp_path / "result.json"
+    host.save_json(path, upstream_summary(failure=failure))
+    with pytest.raises(ValueError, match="command result"):
+        host.unittest_result(path, command)
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_upstream_process_status_must_agree_with_assertions(tmp_path, failure):
+    path = tmp_path / "result.json"
+    host.save_json(path, upstream_summary(failure=failure))
+    with pytest.raises(ValueError, match="command result"):
+        host.unittest_result(path, {"returncode": int(not failure)})
 
 
 def test_dispatch_trace_requires_loaded_entry_and_dimensions(tmp_path):
@@ -694,7 +802,26 @@ def test_checkout_rejects_wrong_pin_or_unrelated_edits(
         host.verify_checkout(tmp_path, patched=False)
 
 
-@pytest.mark.parametrize("corruption", [None, "readback", "trace"])
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        None,
+        "readback",
+        "trace",
+        "original",
+        "translated",
+        "both",
+        "inventory",
+        "skipped",
+        "summary-missing",
+        "exit-code",
+        "timeout",
+        "missing-library",
+        "library-integrity",
+        "source-integrity",
+        "interrupt",
+    ],
+)
 def test_host_evidence_requires_complete_command_and_numerical_records(
     tmp_path, monkeypatch, corruption
 ):
@@ -702,13 +829,30 @@ def test_host_evidence_requires_complete_command_and_numerical_records(
     test_source = root / "python/tests/test_ops.py"
     test_source.parent.mkdir(parents=True)
     test_source.write_text("unchanged upstream test")
-    monkeypatch.setattr(host, "verify_checkout", lambda *args, **kwargs: None)
+    verifications = []
+    commands = []
+
+    def verify_checkout(*args, **kwargs):
+        verifications.append(kwargs)
+        if len(verifications) == 2 and corruption == "source-integrity":
+            raise ValueError("Tracked source changed")
+
+    monkeypatch.setattr(host, "verify_checkout", verify_checkout)
+    library = output / "combined-libraries/ss_Powercomplex64.metallib"
+    library.parent.mkdir(parents=True)
+    library.write_bytes(b"compiled library")
     monkeypatch.setattr(
-        host, "compile_libraries", lambda *args: (output / "combined-libraries", [])
+        host,
+        "compile_libraries",
+        lambda *args: (
+            library.parent,
+            [{"entry": "ss_Powercomplex64", "librarySha256": host.digest(library)}],
+        ),
     )
     shapes = tuple(host.HOST_LAYOUTS)
 
     def fake_run(command, directory, name, **kwargs):
+        commands.append(name)
         result = {"returncode": 0, "command": list(map(str, command))}
         env = kwargs["env"]
         if name in {"runtime-identity", "upstream-original"}:
@@ -732,7 +876,28 @@ def test_host_evidence_requires_complete_command_and_numerical_records(
                 "test_ops",
             ]
             assert kwargs["timeout"] == 1800
+            assert kwargs["check"] is False
+            if name == "upstream-original" and corruption == "interrupt":
+                raise KeyboardInterrupt
             (directory / f"{name}.stderr").write_text("Ran 163 tests in 1.0s\nOK\n")
+            summary = upstream_summary(163)
+            if corruption == "both" or name == f"upstream-{corruption}":
+                summary["failures"] = summary["testIds"][:1]
+                summary["successful"] = False
+                result["returncode"] = 1
+            if name == "upstream-original" and corruption == "timeout":
+                raise RuntimeError("upstream-original timed out")
+            if name == "upstream-translated":
+                if corruption == "inventory":
+                    summary["testIds"][-1] = "different.Test.test_replacement"
+                if corruption == "skipped":
+                    summary["skipped"] = summary["testIds"][:1]
+                if corruption == "exit-code":
+                    result["returncode"] = 2
+            summary_path = directory / f"{name}-failures/summary.json"
+            summary_path.parent.mkdir()
+            if not (name == "upstream-original" and corruption == "summary-missing"):
+                host.save_json(summary_path, summary)
         if name == "upstream-translated" or name.startswith("execute-host-workloads-"):
             assert env["CROSTL_METAL_LIBRARY_OVERRIDES"] == str(
                 output / "combined-libraries"
@@ -754,10 +919,12 @@ def test_host_evidence_requires_complete_command_and_numerical_records(
                 records[-1]["actual"][-1][1] *= -1
             host.save_json(command[-1], records)
         if name == "missing-required-library":
+            if corruption == "library-integrity":
+                library.write_bytes(b"replaced compiled library")
             assert env["CROSTL_METAL_LIBRARY_OVERRIDES"] == str(
                 output / "missing-library"
             )
-            result["returncode"] = 1
+            result["returncode"] = 0 if corruption == "missing-library" else 1
             (directory / f"{name}.stderr").write_text(
                 "Cannot load required translated Metal library"
             )
@@ -765,23 +932,57 @@ def test_host_evidence_requires_complete_command_and_numerical_records(
         return result
 
     monkeypatch.setattr(host, "run", fake_run)
-    if corruption:
-        with pytest.raises(ValueError):
+    if corruption == "interrupt":
+        with pytest.raises(KeyboardInterrupt):
             host.verify(root, Path(sys.executable), output)
-        assert not (output / "evidence.json").exists()
-        assert (output / "host-workloads-negative-zero.json").exists()
+        evidence = json.loads((output / "evidence.json").read_text())
+        assert evidence["status"] == "running"
+        assert evidence["checks"] == [
+            {"name": "upstream-original", "status": "running"}
+        ]
+        assert evidence["original"] is evidence["translated"] is None
+        assert commands == ["runtime-identity", "upstream-original"]
         return
-    host.verify(root, Path(sys.executable), output)
+    if corruption:
+        with pytest.raises(ValueError, match="Metal host verification failed"):
+            host.verify(root, Path(sys.executable), output)
+    else:
+        host.verify(root, Path(sys.executable), output)
     evidence = json.loads((output / "evidence.json").read_text())
-    assert evidence["schemaVersion"] == 2
-    assert len(evidence["hostWorkloads"]) == 24
-    assert sum(item["outputs"] for item in evidence["hostWorkloads"]) == 402
-    assert len(evidence["hostWorkloadDispatches"]) == 24
-    assert {item["dataset"] for item in evidence["hostWorkloadDispatches"]} == set(
-        host.HOST_DATASETS
+    assert evidence["schemaVersion"] == 3
+    assert evidence["status"] == ("failed" if corruption else "passed")
+    checks = {record["name"]: record for record in evidence["checks"]}
+    assert len(checks) == 10
+    assert all(record["status"] != "running" for record in checks.values())
+    assert commands == [
+        "runtime-identity",
+        "upstream-original",
+        "upstream-translated",
+        *[f"execute-host-workloads-{dataset}" for dataset in host.HOST_DATASETS],
+        "missing-required-library",
+    ]
+    assert len(verifications) == 2
+    assert (output / "host-workloads-negative-zero.json").exists()
+    if corruption in {"original", "translated", "both"}:
+        for name in ("original", "translated"):
+            failed = corruption in {name, "both"}
+            assert checks[f"upstream-{name}"]["status"] == (
+                "failed" if failed else "passed"
+            )
+            assert evidence[name]["successful"] is not failed
+        assert checks["upstream-inventory"]["status"] == "passed"
+    if corruption not in {"readback", "trace"}:
+        assert len(evidence["hostWorkloads"]) == 24
+        assert sum(item["outputs"] for item in evidence["hostWorkloads"]) == 402
+        assert len(evidence["hostWorkloadDispatches"]) == 24
+        assert {item["dataset"] for item in evidence["hostWorkloadDispatches"]} == set(
+            host.HOST_DATASETS
+        )
+    assert evidence["missingRequiredLibraryRejected"] is (
+        corruption != "missing-library"
     )
-    assert evidence["missingRequiredLibraryRejected"] is True
     assert evidence["fullTranslatedBackend"] is False
+    assert evidence["fullUpstreamSuite"] is False
 
 
 @pytest.mark.parametrize("link_failure", [False, True])

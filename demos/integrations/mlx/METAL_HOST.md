@@ -386,9 +386,19 @@ python demos/integrations/mlx/run_metal_host.py verify \
   --output-dir /path/to/proof/execution
 ```
 
-Use a fresh execution directory for each run. The final `evidence.json` is written
-only after both upstream runs, all three host datasets, dispatch verification,
-library integrity checks and the missing-library negative test succeed. The
-schema-version-2 report includes per-dataset readbacks and dispatch records.
-Intermediate logs, partial numerical records and translation reports remain
-available when a step fails.
+Use a fresh execution directory for each run. The schema-version-3
+`evidence.json` records each check as `running`, `passed` or `failed` and retains
+both upstream results, per-dataset readbacks and dispatch records. Each upstream
+run also writes a structured `summary.json` with the executed test inventory,
+failures, errors, skips, expected failures and unexpected successes. The verifier
+checks that these outcomes agree with the process exit status and that original
+and translated runs execute the same test and skip inventories.
+
+A failure in the original suite does not prevent the translated suite, the three
+host datasets, the missing-library negative test or integrity checks from running
+in their own processes. Every failed check still makes the final command fail,
+including matching failures in both suites. No original assertion, random input,
+tolerance, skip or deadline is changed. An interrupted run remains `running`, not
+`passed`; intermediate logs and receipts remain available. A `passed` report
+requires every check to finish successfully and still represents only the
+selected host routes, not the full translated backend.
