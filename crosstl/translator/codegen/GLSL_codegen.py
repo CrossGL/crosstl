@@ -9394,6 +9394,30 @@ class GLSLCodeGen:
     def annotate_glsl_control_flow_intervals(self, function):
         constants = self.initial_literal_int_constants(function)
         lexical = self.glsl_scalar_array_view_lexical_bindings(function)
+
+        def checked_interval(expression, intervals):
+            nodes = list(self.walk_ast(expression))
+            source_types = {}
+            if any(
+                isinstance(node, BinaryOpNode)
+                and self.map_operator(node.op) in {"<<", ">>"}
+                for node in nodes
+            ):
+                for node in nodes:
+                    if not isinstance(node, IdentifierNode):
+                        continue
+                    binding = lexical["declarations"].get(
+                        lexical["reference_bindings"].get(id(node))
+                    )
+                    if binding is not None:
+                        if binding["source_type"] is None:
+                            return None
+                        source_types[node.name] = binding["source_type"]
+            with self.glsl_lexical_source_type_scope(source_types):
+                return self.glsl_checked_private_pointer_interval(
+                    expression, intervals, constants
+                )
+
         escaped_names = set()
         for node in self.walk_ast(getattr(function, "body", [])):
             if isinstance(node, UnaryOpNode) and self.map_operator(node.op) == "&":
@@ -9704,9 +9728,7 @@ class GLSLCodeGen:
                 name = getattr(value, "name", None)
                 if name:
                     clear_interval_targets(intervals, {name})
-                    interval = self.glsl_checked_private_pointer_interval(
-                        initial_value, intervals, constants
-                    )
+                    interval = checked_interval(initial_value, intervals)
                     if (
                         interval is None
                         and self.glsl_storage_pointer_element_type(value) is not None
@@ -9768,9 +9790,7 @@ class GLSLCodeGen:
                 if target_name and isinstance(
                     target, (str, IdentifierNode, VariableNode)
                 ):
-                    assigned_interval = self.glsl_checked_private_pointer_interval(
-                        assigned, intervals, constants
-                    )
+                    assigned_interval = checked_interval(assigned, intervals)
                     assigned_components = (
                         self.glsl_static_integer_vector_component_intervals(
                             assigned,
@@ -39247,6 +39267,24 @@ complex64_t crossgl_complex64_mod_assign(
         domain = self.glsl_integer_type_domain(expression, allow_wide=True)
         return candidate if domain is None or candidate.is_within(domain) else None
 
+    def glsl_unsigned_shift_interval(self, expression, left, right):
+        domain = self.glsl_integer_type_domain(expression.left, allow_wide=True)
+        if domain is None or domain.minimum != 0:
+            return None
+        bits = domain.maximum.bit_length()
+        # Narrow operands require source-language integer promotion first.
+        if bits not in {32, 64} or not (
+            0 <= left[0] <= left[1] <= domain.maximum
+            and 0 <= right[0] <= right[1] < bits
+        ):
+            return None
+        if self.map_operator(expression.op) == "<<":
+            result = left[0] << right[0], left[1] << right[1]
+            return result if result[1] <= domain.maximum else None
+        if self.map_operator(expression.op) == ">>":
+            return left[0] >> right[1], left[1] >> right[0]
+        return None
+
     def glsl_index_value_range(self, expression, _active=None, *, intervals=None):
         if expression is None:
             return None
@@ -39368,6 +39406,14 @@ complex64_t crossgl_complex64_mod_assign(
                         else nonnegative_remainder_interval
                     )
                     bounds = operation(
+                        (left.minimum, left.maximum),
+                        (right.minimum, right.maximum),
+                    )
+                    if bounds is None:
+                        return None
+                elif operator_name in {"<<", ">>"}:
+                    bounds = self.glsl_unsigned_shift_interval(
+                        expression,
                         (left.minimum, left.maximum),
                         (right.minimum, right.maximum),
                     )
@@ -47875,6 +47921,8 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if left is None or right is None:
                 return None
+            if self.map_operator(expression.op) in {"<<", ">>"}:
+                return self.glsl_unsigned_shift_interval(expression, left, right)
             if expression.op == "+":
                 return left[0] + right[0], left[1] + right[1]
             if expression.op == "-":

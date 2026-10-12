@@ -1240,6 +1240,10 @@ Division proofs use exact integer arithmetic with truncation toward zero, includ
 non-negative remainder expressions without substituting a constant divisor.
 Ranges containing zero establish no proof, and source overflow is checked
 separately from target index representability.
+Checked unsigned 32-bit and 64-bit shifts retain range facts when every shift
+count fits the operand width and left shifts cannot wrap. Signed shifts and
+narrow operands requiring integer promotion do not acquire this proof. Source
+declaration types remain lexical when propagating shift results through locals.
 
 These are conditional integer-range proofs, not allocation bounds checks. They do
 not establish bounds for arbitrary dispatches or helper state. An exact
