@@ -100,6 +100,78 @@
       "status": "partial"
     },
     {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "project",
+      "feature": "Native read-only input observations",
+      "feature_id": "project.native_input_observations",
+      "notes": "The public loader selects uploaded read-only bindings independently of writable outputs. Structured, raw and constant-buffer observations preserve register classes, allocation identities and view bounds. Exact bytes are compared with upload snapshots; malformed, missing or changed readbacks fail. Windows native observation qualification is pending; protocol and request tests alone do not prove device input preservation.",
+      "status": "partial"
+    },
+    {
+      "backend": "WebGL / GLSL ES",
+      "backend_id": "webgl",
+      "category": "project",
+      "feature": "Native read-only input observations",
+      "feature_id": "project.native_input_observations",
+      "notes": "No support status has been audited for this backend.",
+      "status": "unknown"
+    },
+    {
+      "backend": "WebGPU / WGSL",
+      "backend_id": "wgsl",
+      "category": "project",
+      "feature": "Native read-only input observations",
+      "feature_id": "project.native_input_observations",
+      "notes": "No support status has been audited for this backend.",
+      "status": "unknown"
+    },
+    {
+      "backend": "CUDA",
+      "backend_id": "cuda",
+      "category": "project",
+      "feature": "Native read-only input observations",
+      "feature_id": "project.native_input_observations",
+      "notes": "No support status has been audited for this backend.",
+      "status": "unknown"
+    },
+    {
+      "backend": "HIP",
+      "backend_id": "hip",
+      "category": "project",
+      "feature": "Native read-only input observations",
+      "feature_id": "project.native_input_observations",
+      "notes": "No support status has been audited for this backend.",
+      "status": "unknown"
+    },
+    {
+      "backend": "Mojo",
+      "backend_id": "mojo",
+      "category": "project",
+      "feature": "Native read-only input observations",
+      "feature_id": "project.native_input_observations",
+      "notes": "No support status has been audited for this backend.",
+      "status": "unknown"
+    },
+    {
+      "backend": "Rust",
+      "backend_id": "rust",
+      "category": "project",
+      "feature": "Native read-only input observations",
+      "feature_id": "project.native_input_observations",
+      "notes": "No support status has been audited for this backend.",
+      "status": "unknown"
+    },
+    {
+      "backend": "Slang",
+      "backend_id": "slang",
+      "category": "project",
+      "feature": "Native read-only input observations",
+      "feature_id": "project.native_input_observations",
+      "notes": "No support status has been audited for this backend.",
+      "status": "unknown"
+    },
+    {
       "backend": "WebGL / GLSL ES",
       "backend_id": "webgl",
       "category": "project",
@@ -6721,6 +6793,87 @@
     },
     {
       "category": "project",
+      "description": "Read selected input views after native execution without changing shader access, and compare exact device bytes with immutable upload snapshots.",
+      "id": "project.native_input_observations",
+      "name": "Native read-only input observations",
+      "support": {
+        "cuda": {
+          "evidence": [],
+          "notes": "No support status has been audited for this backend.",
+          "status": "unknown"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_runtime_input_observations.py::def test_loader_observations_do_not_create_outputs",
+            "tests/test_translator/test_runtime_input_observations.py::def test_adapter_requires_exact_observation_bytes",
+            "tests/test_translator/test_runtime_input_observations.py::def test_driver_observations_preserve_access_constraints",
+            "tests/test_translator/test_runtime_input_observations.py::def test_readonly_inputs_execute_with_observations",
+            "tests/test_translator/test_runtime_input_observations.py::def test_input_observations_are_required_in_native_ci"
+          ],
+          "notes": "The public loader selects uploaded read-only bindings independently of writable outputs. Structured, raw and constant-buffer observations preserve register classes, allocation identities and view bounds. Exact bytes are compared with upload snapshots; malformed, missing or changed readbacks fail. Windows native observation qualification is pending; protocol and request tests alone do not prove device input preservation.",
+          "status": "partial"
+        },
+        "hip": {
+          "evidence": [],
+          "notes": "No support status has been audited for this backend.",
+          "status": "unknown"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_runtime_input_observations.py::def test_readonly_inputs_execute_with_observations",
+            "tests/test_translator/test_runtime_input_observations.py::def test_adapter_requires_exact_observation_bytes",
+            "demos/integrations/mlx/tests/kernels/test_current_scan.py::def test_multisubgroup_scan_executes_natively",
+            "demos/integrations/mlx/tests/kernels/test_current_complex_scan.py::def test_"
+          ],
+          "notes": "Explicit observations use the same bound Metal storage and constant buffers, with unchanged access and allocation offsets. Native scalar, record and offset controls and complete pinned scan comparisons retain input and launch-metadata bytes alongside output guards. Observations compare immutable upload bytes, not mutable host lists or tolerances. This is post-dispatch input preservation for selected views, not full repository host routing or proof of immutable memory during execution.",
+          "status": "supported"
+        },
+        "mojo": {
+          "evidence": [],
+          "notes": "No support status has been audited for this backend.",
+          "status": "unknown"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_runtime_input_observations.py::def test_loader_observations_do_not_create_outputs",
+            "tests/test_translator/test_runtime_input_observations.py::def test_adapter_requires_exact_observation_bytes",
+            "tests/test_translator/test_runtime_input_observations.py::def test_readonly_inputs_execute_with_observations",
+            "tests/test_translator/test_runtime_input_observations.py::def test_observations_exclude_uniform_alignment_padding"
+          ],
+          "notes": "Explicit observations read selected storage and uniform views without writable permissions. Native scalar, metadata-record and nonzero-offset controls retain exact upload/readback bytes and output checks. Missing, truncated, malformed or changed observations fail; encoded NaNs and signed zeros are compared as bytes. Alignment padding outside the validated payload is not claimed, and post-dispatch equality does not establish immutability during execution or authorize index narrowing.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [],
+          "notes": "No support status has been audited for this backend.",
+          "status": "unknown"
+        },
+        "slang": {
+          "evidence": [],
+          "notes": "No support status has been audited for this backend.",
+          "status": "unknown"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_runtime_input_observations.py::def test_observations_fail_before_dispatch_on_unsupported_driver"
+          ],
+          "notes": "The Vulkan reference driver does not implement input observations. Observation requests fail explicitly before dispatch rather than claiming input preservation from uploads alone.",
+          "status": "validated_rejection"
+        },
+        "webgl": {
+          "evidence": [],
+          "notes": "No support status has been audited for this backend.",
+          "status": "unknown"
+        },
+        "wgsl": {
+          "evidence": [],
+          "notes": "No support status has been audited for this backend.",
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Represent fixture resources as typed byte-range views of stable native allocations, reject unsafe relationships before dispatch, and reuse compatible allocations in supported native reference runtimes.",
       "id": "project.shared_native_allocation_views",
       "name": "Shared native allocation views",
@@ -12332,45 +12485,45 @@
   "summary": {
     "backend_count": 11,
     "backlog": {
-      "backlog_count": 38,
+      "backlog_count": 46,
       "by_backend": {
-        "cuda": 4,
-        "directx": 1,
-        "hip": 4,
+        "cuda": 5,
+        "directx": 2,
+        "hip": 5,
         "metal": 4,
-        "mojo": 4,
+        "mojo": 5,
         "opengl": 1,
-        "rust": 4,
-        "slang": 4,
+        "rust": 5,
+        "slang": 5,
         "vulkan": 4,
-        "webgl": 4,
-        "wgsl": 4
+        "webgl": 5,
+        "wgsl": 5
       },
       "by_category": {
-        "project": 38
+        "project": 46
       },
       "by_status": {
         "diagnostic": 0,
-        "partial": 11,
+        "partial": 12,
         "supported": 0,
-        "unknown": 0,
+        "unknown": 7,
         "unsupported": 27,
         "validated_rejection": 0
       }
     },
-    "feature_count": 43,
+    "feature_count": 44,
     "status_counts": {
       "cuda": {
         "diagnostic": 1,
         "partial": 1,
         "supported": 30,
-        "unknown": 0,
+        "unknown": 1,
         "unsupported": 3,
         "validated_rejection": 8
       },
       "directx": {
         "diagnostic": 1,
-        "partial": 1,
+        "partial": 2,
         "supported": 41,
         "unknown": 0,
         "unsupported": 0,
@@ -12380,14 +12533,14 @@
         "diagnostic": 1,
         "partial": 1,
         "supported": 30,
-        "unknown": 0,
+        "unknown": 1,
         "unsupported": 3,
         "validated_rejection": 8
       },
       "metal": {
         "diagnostic": 1,
         "partial": 1,
-        "supported": 32,
+        "supported": 33,
         "unknown": 0,
         "unsupported": 3,
         "validated_rejection": 6
@@ -12396,14 +12549,14 @@
         "diagnostic": 1,
         "partial": 1,
         "supported": 30,
-        "unknown": 0,
+        "unknown": 1,
         "unsupported": 3,
         "validated_rejection": 8
       },
       "opengl": {
         "diagnostic": 1,
         "partial": 1,
-        "supported": 41,
+        "supported": 42,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -12412,7 +12565,7 @@
         "diagnostic": 1,
         "partial": 1,
         "supported": 30,
-        "unknown": 0,
+        "unknown": 1,
         "unsupported": 3,
         "validated_rejection": 8
       },
@@ -12420,7 +12573,7 @@
         "diagnostic": 1,
         "partial": 1,
         "supported": 30,
-        "unknown": 0,
+        "unknown": 1,
         "unsupported": 3,
         "validated_rejection": 8
       },
@@ -12430,13 +12583,13 @@
         "supported": 30,
         "unknown": 0,
         "unsupported": 3,
-        "validated_rejection": 8
+        "validated_rejection": 9
       },
       "webgl": {
         "diagnostic": 1,
         "partial": 1,
         "supported": 30,
-        "unknown": 0,
+        "unknown": 1,
         "unsupported": 3,
         "validated_rejection": 8
       },
@@ -12444,7 +12597,7 @@
         "diagnostic": 1,
         "partial": 1,
         "supported": 30,
-        "unknown": 0,
+        "unknown": 1,
         "unsupported": 3,
         "validated_rejection": 8
       }

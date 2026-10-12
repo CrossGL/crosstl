@@ -4572,6 +4572,26 @@ still require a separate checked contract. Custom runtime drivers must consume
 the snapshot to provide the same upload guarantee. Construct a new request or
 a fresh low-level binding when supplying different data.
 
+Pass ``observe_inputs=("input_values", "axis_size")`` to
+``build_native_loader_dispatch_request`` to verify selected read-only inputs
+after execution. Names must identify uploaded, reflected read-only bindings;
+they cannot also become writable outputs. The built-in Metal, DirectX and
+OpenGL drivers read the same bound buffers, preserving their resource classes,
+allocation identities, offsets and logical views. Storage buffers and
+constant/uniform buffers are supported. Unsupported drivers fail explicitly
+before dispatch rather than reporting an unobserved input as unchanged.
+
+Observations compare exact device bytes against the immutable upload snapshot,
+including encoded floating-point words and caller-supplied guard elements.
+There is no numerical tolerance or NaN canonicalization. Results retain
+``inputObservations`` separately from writable outputs, with observed bytes,
+upload and readback hashes, binding provenance and allocation metadata.
+Missing, malformed, truncated or changed observations fail execution.
+Uniform alignment padding outside the validated input payload is not claimed
+as observed caller data. This opt-in post-dispatch check does not establish
+immutability during execution, authorize index-range assumptions or observe
+every allocation automatically.
+
 Flat mixed-scalar storage records retain each field's name, physical type, byte
 offset, size and alignment, together with the padded record stride. This
 contract applies to Metal pointer buffers, HLSL structured buffers and OpenGL

@@ -638,6 +638,7 @@ class NativeRuntimeBufferBinding:
     allocation: RuntimeAllocationView | None = None
     encoding: str | None = None
     upload_snapshot: _NativeRuntimeUploadSnapshot | None = None
+    observe_input: bool = False
 
     def to_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -660,6 +661,8 @@ class NativeRuntimeBufferBinding:
             payload["allocation"] = self.allocation.to_json()
         if self.upload_snapshot is not None:
             payload["uploadSnapshot"] = self.upload_snapshot.to_json()
+        if self.observe_input:
+            payload["observeInput"] = True
         return payload
 
 
@@ -896,6 +899,7 @@ class RuntimeExecutionRequest:
     diagnostics: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
     execution_plan: RuntimeExecutionPlan | None = None
     artifact_identity: RuntimeArtifactIdentity | None = None
+    observed_inputs: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -1258,8 +1262,24 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
             raise RuntimeExecutorUnavailable(
                 f"No native runtime driver is configured for {self.target} dispatch."
             )
+        observed = {
+            name: binding
+            for name, binding in prepared_buffers.buffers.items()
+            if binding.observe_input
+        }
+        if observed and not getattr(self.runtime, "supports_input_observations", False):
+            raise RuntimeAdapterSetupError(
+                "Native runtime driver does not support input observations.",
+                details={
+                    "reasonKind": "input-observation-unsupported",
+                    "target": self.target,
+                },
+            )
         try:
-            return dispatch(self, state, prepared_buffers)
+            result = dispatch(self, state, prepared_buffers)
+            if not observed:
+                return result
+            return self._collect_input_observations(state, observed, result)
         except RuntimeExecutionError:
             raise
         except Exception as exc:
@@ -1271,6 +1291,72 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                     "entryPoint": getattr(prepared_buffers, "entry_point", None),
                 },
             ) from exc
+
+    def _collect_input_observations(
+        self,
+        state: RuntimeExecutionState,
+        bindings: Mapping[str, NativeRuntimeBufferBinding],
+        result: Any,
+    ) -> dict[str, Any]:
+        if not isinstance(result, Mapping):
+            raise RuntimeAdapterDispatchError(
+                "Native input observations require named readbacks.",
+                details={"reasonKind": "input-observation-missing"},
+            )
+        outputs = dict(result)
+        observations = {}
+        state.details["inputObservations"] = observations
+        for name, binding in bindings.items():
+            value_name = binding.metadata.get("runtimeValueName", name)
+            packet = outputs.pop(value_name, None)
+            snapshot = binding.upload_snapshot
+            try:
+                if not isinstance(packet, Mapping) or set(packet) != {
+                    "observationBytes"
+                }:
+                    raise ValueError(
+                        "Input observation is missing or has an invalid schema."
+                    )
+                encoded = packet["observationBytes"]
+                if (
+                    not isinstance(encoded, str)
+                    or len(encoded) != len(snapshot.payload) * 2
+                ):
+                    raise ValueError("Input observation has an invalid byte length.")
+                actual = bytes.fromhex(encoded)
+                if len(actual) != len(snapshot.payload):
+                    raise ValueError("Input observation has an invalid byte length.")
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise RuntimeAdapterDispatchError(
+                    str(exc),
+                    details={
+                        "reasonKind": "input-observation-invalid",
+                        "resource": name,
+                    },
+                ) from exc
+            receipt = {
+                "binding": binding.binding.to_json(),
+                "uploadSnapshot": snapshot.to_json(),
+                "observedBytes": actual.hex(),
+                "observedSHA256": hashlib.sha256(actual).hexdigest(),
+                "unchanged": actual == snapshot.payload,
+            }
+            if binding.allocation is not None:
+                receipt["allocation"] = binding.allocation.to_json()
+            observations[value_name] = receipt
+        changed = [
+            name for name, receipt in observations.items() if not receipt["unchanged"]
+        ]
+        if changed:
+            raise RuntimeAdapterDispatchError(
+                "Read-only inputs changed during native execution.",
+                details={
+                    "reasonKind": "input-observation-changed",
+                    "resources": changed,
+                    "inputObservations": observations,
+                },
+            )
+        return outputs
 
     def collect_outputs(
         self, state: RuntimeExecutionState, dispatch_result: Any
@@ -1596,6 +1682,17 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
         from .native_runtime_drivers import _snapshot_native_buffer_binding
 
         bindings: dict[str, NativeRuntimeBufferBinding] = {}
+        observed = state.request.observed_inputs
+        if (
+            not isinstance(observed, tuple)
+            or any(not isinstance(name, str) or not name for name in observed)
+            or len(set(observed)) != len(observed)
+        ):
+            raise RuntimeAdapterSetupError(
+                "Observed inputs must be unique binding names.",
+                details={"reasonKind": "input-observation-invalid"},
+            )
+        remaining = set(observed)
         for resource in state.plan.resource_bindings:
             binding = resource.binding
             key = _native_resource_key(binding)
@@ -1606,6 +1703,17 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
             if expected_output is None and resource.source == "expectedOutput":
                 expected_output = resource.value
             allocation_value = upload_value or expected_output or resource.value
+            observe_input = upload_value is not None and upload_value.name in remaining
+            if observe_input:
+                if binding.access != "read" or expected_output is not None:
+                    raise RuntimeAdapterSetupError(
+                        "Only read-only inputs can be observed without output permissions.",
+                        details={
+                            "reasonKind": "input-observation-access",
+                            "resource": key,
+                        },
+                    )
+                remaining.remove(upload_value.name)
             bindings[key] = NativeRuntimeBufferBinding(
                 name=key,
                 binding=replace(binding, metadata=copy.deepcopy(binding.metadata)),
@@ -1623,6 +1731,7 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                 ),
                 expected_output=expected_output,
                 allocation=resource.allocation,
+                observe_input=observe_input,
                 encoding=(
                     allocation_value.encoding if allocation_value is not None else None
                 ),
@@ -1631,6 +1740,14 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                 bindings[key] = _snapshot_native_buffer_binding(
                     bindings[key], target=self.target
                 )
+        if remaining:
+            raise RuntimeAdapterSetupError(
+                "Observed input names do not identify uploaded resources.",
+                details={
+                    "reasonKind": "input-observation-missing",
+                    "resources": sorted(remaining),
+                },
+            )
         return bindings
 
     def _native_constant_bindings(

@@ -1193,7 +1193,7 @@ The current harness verifies:
   [Windows evidence](https://github.com/CrossGL/crosstl/actions/runs/38107583878/artifacts/11691531710)
   verifies all 131,072 bfloat-to-Boolean results and 128 guards against the
   conversion oracle and original Metal readbacks, alongside the HLSL identities
-  and strict DXC receipts. Generated input readbacks are unavailable, so this
+  and strict DXC receipts. These cases do not request generated input observations, so this
   does not establish input immutability. The copy harness uses the
   existing host-runtime entry-name normalization for reflected HLSL constants,
   including exported names ending in an underscore. This changes test bindings,
@@ -3893,8 +3893,8 @@ controls, across its identity, operand-underflow and portable-finite profiles.
 The existing oracles and precision bounds remain unchanged; the finite profile
 is not claimed bit-identical to native power. Both local target runs pass eight
 tests, and independent audits recheck the actual output words and artifact
-identities. Original Metal input readbacks are verified; generated input
-readbacks are not available through these executors. Those cases already run
+identities. Original Metal input readbacks are verified; these generated cases
+do not request the optional read-only input observations. Those cases already run
 in the existing native host matrix on all three targets. This local review
 does not establish a Windows execution pass.
 

@@ -25,9 +25,11 @@ from .native_runtime_drivers import (
     _buffer_readback,
     _buffer_readback_encoding,
     _dtype_size,
+    _input_observation_readback,
     _native_buffer_payload,
     _normalize_dtype,
     _runtime_value_name,
+    _validate_input_observation_binding,
 )
 from .runtime_verification import (
     RuntimeAdapterDispatchError,
@@ -144,6 +146,7 @@ class MetalComputeRuntime:
     """
 
     name = "metal-compute-runtime"
+    supports_input_observations = True
     supported_platforms = ("darwin",)
 
     def __init__(
@@ -401,10 +404,18 @@ class MetalComputeRuntime:
             if not isinstance(raw_outputs, dict) or set(raw_outputs) != set(outputs):
                 raise ValueError("Metal readback names do not match the request.")
             values = {}
+            observed_names = {
+                _runtime_value_name(binding) or name
+                for name, binding in request.buffers.items()
+                if binding.observe_input
+            }
             for name, (dtype, shape, size, encoding) in outputs.items():
                 data = base64.b64decode(raw_outputs[name], validate=True)
                 if len(data) != size:
                     raise ValueError(f"Metal readback size does not match {name}.")
+                if name in observed_names:
+                    values[name] = _input_observation_readback(data, size, size)
+                    continue
                 values[name] = _buffer_readback(
                     data, dtype, shape, target="Metal", encoding=encoding
                 )
@@ -474,6 +485,7 @@ class MetalComputeRuntime:
         outputs = {}
         indices = set()
         for name, binding in request.buffers.items():
+            _validate_input_observation_binding(binding)
             resource = binding.binding
             index = resource.binding
             if (
@@ -594,7 +606,7 @@ class MetalComputeRuntime:
                     resource=name,
                 )
             output_name = _runtime_value_name(binding) or name
-            if readback:
+            if readback or binding.observe_input:
                 if output_name in outputs:
                     raise _setup_error(
                         "Metal readback names must be unique.", "output-name-ambiguous"
@@ -607,7 +619,9 @@ class MetalComputeRuntime:
                     "offset": offset,
                     "length": length,
                     "alignment": layout["alignmentBytes"],
-                    "output": output_name if readback else None,
+                    "output": (
+                        output_name if readback or binding.observe_input else None
+                    ),
                 }
             )
         if sum(a["length"] for a in allocations.values()) > self.max_buffer_bytes:

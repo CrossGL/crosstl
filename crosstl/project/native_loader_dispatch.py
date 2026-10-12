@@ -228,6 +228,7 @@ def build_native_loader_dispatch_request(
     specialization_values: Mapping[int, Any] | None = None,
     *,
     expected_target: str | None = None,
+    observe_inputs: Sequence[str] = (),
 ) -> RuntimeExecutionRequest:
     """Build and preflight one DirectX, OpenGL or Metal native runtime request.
 
@@ -238,6 +239,8 @@ def build_native_loader_dispatch_request(
     dispatch geometry rather than supplied as ordinary fixture values.
     Buffer payloads are copied before validation so subsequent caller mutations
     cannot change the values retained by this request.
+    ``observe_inputs`` selects read-only bindings for exact post-dispatch byte
+    comparisons with those copied inputs, without adding writable outputs.
     """
 
     normalized = _validated_descriptor(descriptor)
@@ -307,6 +310,29 @@ def build_native_loader_dispatch_request(
         target=target,
     )
     _validate_value_names(inputs, outputs, normalized["bindings"])
+    if (
+        not isinstance(observe_inputs, (tuple, list))
+        or any(not isinstance(name, str) or not name for name in observe_inputs)
+        or len(set(observe_inputs)) != len(observe_inputs)
+    ):
+        raise NativeLoaderDispatchError(
+            "observation-names-invalid",
+            "Input observations require unique binding names.",
+            path="$.observeInputs",
+        )
+    read_only = {
+        binding["name"]
+        for binding in normalized["bindings"]
+        if binding.get("access") == "read"
+    }
+    invalid_observations = sorted(set(observe_inputs) - (read_only & set(inputs)))
+    if invalid_observations:
+        raise NativeLoaderDispatchError(
+            "observation-binding-invalid",
+            "Only uploaded read-only inputs can be observed.",
+            path="$.observeInputs",
+            details={"bindings": invalid_observations},
+        )
     resource_bindings = _resource_bindings(
         normalized["bindings"],
         target=target,
@@ -381,6 +407,7 @@ def build_native_loader_dispatch_request(
             hash_algorithm=normalized["artifact"]["hash"]["algorithm"],
             artifact_id=normalized["unitId"],
         ),
+        observed_inputs=tuple(observe_inputs),
     )
     plan = prepare_runtime_execution(request)
     setup_errors = [

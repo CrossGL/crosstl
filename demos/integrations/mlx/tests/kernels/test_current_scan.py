@@ -525,6 +525,7 @@ def _execute_scan_case(scan_package, tmp_path, dtype, axis, expected, operation=
         outputs,
         {"workgroupSize": [width, 1, 1], "workgroupCount": [1, 3, 1]},
         expected_target=target,
+        observe_inputs=(names["in"], names["axis_size"]),
     )
     assert not request.execution_plan.diagnostics, request.execution_plan.diagnostics
     (tmp_path / "descriptor.json").write_text(json.dumps(descriptor, indent=2))

@@ -50,6 +50,7 @@ class _PreparedDirectXBuffer:
     allocation_explicit: bool = False
     readback_encoding: str | None = None
     raw: bool = False
+    observe_input: bool = False
 
     @property
     def size(self) -> int:
@@ -125,6 +126,7 @@ class _PreparedOpenGLBuffer:
     writable: bool = False
     allocation_explicit: bool = False
     readback_encoding: str | None = None
+    observe_input: bool = False
 
     @property
     def size(self) -> int:
@@ -278,6 +280,7 @@ class DirectXComputeRuntime:
     """
 
     name = "directx-compute-runtime"
+    supports_input_observations = True
     supported_platforms = ("win32",)
 
     def __init__(
@@ -791,7 +794,7 @@ class DirectXComputeRuntime:
         outputs: dict[str, Mapping[str, Any]] = {}
         for resource in resources:
             prepared = resource.prepared
-            if not prepared.readback:
+            if not (prepared.readback or prepared.observe_input):
                 continue
             try:
                 readback = compushady.Buffer(
@@ -813,6 +816,13 @@ class DirectXComputeRuntime:
                         "binding": prepared.binding_index,
                     },
                 ) from exc
+            if prepared.observe_input:
+                outputs[prepared.output_name or prepared.name] = (
+                    _input_observation_readback(
+                        payload, prepared.size, len(prepared.payload)
+                    )
+                )
+                continue
             outputs[prepared.output_name or prepared.name] = _buffer_readback(
                 payload,
                 prepared.dtype,
@@ -832,6 +842,7 @@ class OpenGLComputeRuntime:
     """
 
     name = "opengl-compute-runtime"
+    supports_input_observations = True
 
     def __init__(
         self,
@@ -1863,7 +1874,7 @@ class OpenGLComputeRuntime:
     ) -> dict[str, Mapping[str, Any]]:
         outputs: dict[str, Mapping[str, Any]] = {}
         for prepared, buffer in resources:
-            if not prepared.readback:
+            if not (prepared.readback or prepared.observe_input):
                 continue
             if prepared.byte_offset:
                 payload = bytes(
@@ -1884,6 +1895,13 @@ class OpenGLComputeRuntime:
                         "actualByteLength": len(payload),
                     },
                 )
+            if prepared.observe_input:
+                outputs[prepared.output_name or prepared.name] = (
+                    _input_observation_readback(
+                        payload, prepared.size, len(prepared.payload)
+                    )
+                )
+                continue
             outputs[prepared.output_name or prepared.name] = _buffer_readback(
                 payload,
                 prepared.dtype,
@@ -2868,6 +2886,7 @@ def _prepare_directx_buffers(
 ) -> tuple[_PreparedDirectXBuffer, ...]:
     prepared = []
     for name, binding in bindings.items():
+        _validate_input_observation_binding(binding)
         resource = binding.binding
         readback = _binding_requires_readback(binding)
         namespace = _directx_resource_namespace(name, binding)
@@ -3039,6 +3058,7 @@ def _prepare_directx_buffers(
                 allocation_explicit=binding.allocation is not None,
                 readback_encoding=readback_encoding,
                 raw=raw,
+                observe_input=binding.observe_input,
             )
         )
     return tuple(
@@ -4078,6 +4098,14 @@ def _prepare_vulkan_buffers(
     prepared = []
     seen_bindings: set[tuple[int, int]] = set()
     for name, binding in bindings.items():
+        if binding.observe_input:
+            raise RuntimeAdapterSetupError(
+                "Vulkan input observations are not implemented.",
+                details={
+                    "reasonKind": "input-observation-unsupported",
+                    "resource": name,
+                },
+            )
         resource = binding.binding
         readback = _binding_requires_readback(binding)
         if resource.kind not in (
@@ -4141,6 +4169,7 @@ def _prepare_opengl_buffers(
     prepared = []
     seen_bindings: set[tuple[str, int]] = set()
     for name, binding in bindings.items():
+        _validate_input_observation_binding(binding)
         resource = binding.binding
         readback = _binding_requires_readback(binding)
         if resource.kind not in (
@@ -4270,6 +4299,7 @@ def _prepare_opengl_buffers(
                 writable=access in {"write", "read_write", "readwrite"},
                 allocation_explicit=binding.allocation is not None,
                 readback_encoding=readback_encoding,
+                observe_input=binding.observe_input,
             )
         )
     return tuple(
@@ -4633,6 +4663,45 @@ def _runtime_value_name(binding: NativeRuntimeBufferBinding) -> str | None:
 
 def _binding_requires_readback(binding: NativeRuntimeBufferBinding) -> bool:
     return binding.expected_output is not None or binding.source == "expectedOutput"
+
+
+def _validate_input_observation_binding(binding: NativeRuntimeBufferBinding) -> None:
+    if type(binding.observe_input) is not bool:
+        raise RuntimeAdapterSetupError(
+            "Input observation selection must be a boolean.",
+            details={
+                "reasonKind": "input-observation-invalid",
+                "resource": binding.name,
+            },
+        )
+    if binding.observe_input and (
+        binding.binding.access != "read"
+        or binding.value is None
+        or _binding_requires_readback(binding)
+    ):
+        raise RuntimeAdapterSetupError(
+            "Input observations require an uploaded read-only resource, not an output.",
+            details={
+                "reasonKind": "input-observation-access",
+                "resource": binding.name,
+            },
+        )
+
+
+def _input_observation_readback(
+    payload: bytes, view_size: int, input_size: int
+) -> dict[str, str]:
+    if len(payload) != view_size or not 0 < input_size <= view_size:
+        raise RuntimeAdapterDispatchError(
+            "Input observation readback does not match its allocation view.",
+            details={
+                "reasonKind": "input-observation-size-mismatch",
+                "expectedByteLength": view_size,
+                "actualByteLength": len(payload),
+            },
+        )
+    # Alignment padding is not part of the caller's validated input value.
+    return {"observationBytes": payload[:input_size].hex()}
 
 
 def _buffer_readback_encoding(

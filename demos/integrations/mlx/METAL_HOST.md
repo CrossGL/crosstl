@@ -205,8 +205,10 @@ On macOS the same step freshly compiles the unchanged upstream source with
 Metal 3.2 and `-fno-fast-math`, checks its outputs against those references,
 and verifies its input and axis-size buffers remain unchanged. Each target
 retains packages, strict compiler results, native requests, readbacks and 32
-output guards per case. Generated execution does not claim device readback of
-read-only input buffers. The step adds no runner jobs and retains evidence on
+output guards per case. Generated execution now requests explicit read-only
+observations for the input data (including its guards) and `axis_size`.
+Each receipt compares exact device bytes with the upload snapshot without
+changing binding access. The step adds no runner jobs and retains evidence on
 failure. Its Windows execution must pass before complete-entry DirectX parity
 can be claimed; it does not waive the separate upstream `test_scans` failure
 or establish full MLX cumulative-operation routing.
@@ -236,7 +238,8 @@ four-items-per-thread boundary. `tests/fixtures/scan_extrema_reference.json`
 retains fresh original-Metal results, including signed zeros, infinities,
 signaling and quiet NaN inputs, integer extrema and 32 output guards per case.
 macOS re-executes the unchanged original source and checks its input buffers.
-Generated read-only input readbacks are not claimed. The new step shares the
+Generated execution uses the same explicit input and launch-metadata
+observations as the sum scans. The new step shares the
 existing three project jobs, keeps its evidence on failure and has a separate
 240-second bound; no runner job or existing deadline is changed.
 The scan steps group cases by launch configuration so each worker builds a
@@ -258,8 +261,8 @@ components, cancellation, signed zeros, row boundaries, the two-items-per-thread
 launch boundary and 32 complex output guards. The exact original-Metal words
 are in `tests/fixtures/scan_complex_reference.json`; macOS also executes the
 unchanged original and verifies its read-only buffers. Interleaved components
-must match the reflected eight-byte struct stride. Generated complete-scan
-input readbacks are not claimed.
+must match the reflected eight-byte struct stride. Generated execution also
+observes the interleaved input words, input guards and axis-size buffer.
 
 Conditional wrappers now accept flat private scalar-field structs. Constructor
 fields must be initialized before they are read, overload resolution must be

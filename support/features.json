@@ -11830,6 +11830,52 @@
       }
     },
     {
+      "id": "project.native_input_observations",
+      "category": "project",
+      "name": "Native read-only input observations",
+      "description": "Read selected input views after native execution without changing shader access, and compare exact device bytes with immutable upload snapshots.",
+      "support": {
+        "directx": {
+          "status": "partial",
+          "notes": "The public loader selects uploaded read-only bindings independently of writable outputs. Structured, raw and constant-buffer observations preserve register classes, allocation identities and view bounds. Exact bytes are compared with upload snapshots; malformed, missing or changed readbacks fail. Windows native observation qualification is pending; protocol and request tests alone do not prove device input preservation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_input_observations.py::def test_loader_observations_do_not_create_outputs",
+            "tests/test_translator/test_runtime_input_observations.py::def test_adapter_requires_exact_observation_bytes",
+            "tests/test_translator/test_runtime_input_observations.py::def test_driver_observations_preserve_access_constraints",
+            "tests/test_translator/test_runtime_input_observations.py::def test_readonly_inputs_execute_with_observations",
+            "tests/test_translator/test_runtime_input_observations.py::def test_input_observations_are_required_in_native_ci"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Explicit observations read selected storage and uniform views without writable permissions. Native scalar, metadata-record and nonzero-offset controls retain exact upload/readback bytes and output checks. Missing, truncated, malformed or changed observations fail; encoded NaNs and signed zeros are compared as bytes. Alignment padding outside the validated payload is not claimed, and post-dispatch equality does not establish immutability during execution or authorize index narrowing.",
+          "evidence": [
+            "tests/test_translator/test_runtime_input_observations.py::def test_loader_observations_do_not_create_outputs",
+            "tests/test_translator/test_runtime_input_observations.py::def test_adapter_requires_exact_observation_bytes",
+            "tests/test_translator/test_runtime_input_observations.py::def test_readonly_inputs_execute_with_observations",
+            "tests/test_translator/test_runtime_input_observations.py::def test_observations_exclude_uniform_alignment_padding"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Explicit observations use the same bound Metal storage and constant buffers, with unchanged access and allocation offsets. Native scalar, record and offset controls and complete pinned scan comparisons retain input and launch-metadata bytes alongside output guards. Observations compare immutable upload bytes, not mutable host lists or tolerances. This is post-dispatch input preservation for selected views, not full repository host routing or proof of immutable memory during execution.",
+          "evidence": [
+            "tests/test_translator/test_runtime_input_observations.py::def test_readonly_inputs_execute_with_observations",
+            "tests/test_translator/test_runtime_input_observations.py::def test_adapter_requires_exact_observation_bytes",
+            "demos/integrations/mlx/tests/kernels/test_current_scan.py::def test_multisubgroup_scan_executes_natively",
+            "demos/integrations/mlx/tests/kernels/test_current_complex_scan.py::def test_"
+          ]
+        },
+        "vulkan": {
+          "status": "validated_rejection",
+          "notes": "The Vulkan reference driver does not implement input observations. Observation requests fail explicitly before dispatch rather than claiming input preservation from uploads alone.",
+          "evidence": [
+            "tests/test_translator/test_runtime_input_observations.py::def test_observations_fail_before_dispatch_on_unsupported_driver"
+          ]
+        }
+      }
+    },
+    {
       "id": "project.shared_native_allocation_views",
       "category": "project",
       "name": "Shared native allocation views",

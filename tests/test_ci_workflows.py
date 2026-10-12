@@ -3520,7 +3520,8 @@ def test_directx_runtime_comparison_preserves_required_runtime_and_workload():
     )[1]
     required_tests = re.findall(r"tests/[^\s\\]+", resource_command)
     compared_tests = re.findall(r'"(tests/[^"\s]+)"', script)
-    assert len(required_tests) == 24
+    assert len(required_tests) == 25
+    assert "tests/test_translator/test_runtime_input_observations.py" in required_tests
     assert compared_tests == [
         "tests/test_translator/test_directx_cooperative_matrix.py::test_precise_scalar_control_executes",
         "tests/test_translator/test_directx_cooperative_matrix.py::test_software_matrix_executes",
@@ -3583,7 +3584,7 @@ def test_native_collective_batches_limit_software_driver_threads():
     assert step["run"].count("-n auto -vv --durations=25") == 2
     batches = step["run"].split("python -m pytest ")[1:]
     assert len(batches) == 2
-    for batch, count in zip(batches, (16, 24)):
+    for batch, count in zip(batches, (16, 25)):
         selectors = re.findall(r"tests/[^\s\\]+", batch)
         assert len(selectors) == len(set(selectors)) == count
         assert not re.search(r"(?:^|\s)(?:-k|-m|--maxfail)(?:\s|=|$)", batch)

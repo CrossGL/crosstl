@@ -492,7 +492,7 @@ def execute_buffer_views(
     tool_debug=False,
 ):
     """Run unchanged DXIL using native CBV/SRV/UAV descriptors and shared buffers."""
-    from .native_runtime_drivers import _buffer_readback
+    from .native_runtime_drivers import _buffer_readback, _input_observation_readback
 
     if type(tool_debug) is not bool:
         raise _error(
@@ -619,9 +619,14 @@ def execute_buffer_views(
     results = {}
     for node in dispatches:
         for view in node.buffers:
-            if view.readback:
+            if view.readback or view.observe_input:
                 index = indices[view_keys[id(view)]]
                 data = readbacks[index][view.byte_offset : view.byte_offset + view.size]
+                if view.observe_input:
+                    results[view.output_name or view.name] = (
+                        _input_observation_readback(data, view.size, len(view.payload))
+                    )
+                    continue
                 results[view.output_name or view.name] = _buffer_readback(
                     data,
                     view.dtype,
