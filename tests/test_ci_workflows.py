@@ -3877,7 +3877,7 @@ def test_project_arithmetic_selection_retains_every_device_test():
                 for node in ast.walk(function)
             ):
                 required.add(identity)
-    assert len(required) == 12
+    assert len(required) == 13
     assert selected == required
 
 
@@ -3930,7 +3930,7 @@ def test_native_arithmetic_selection_retains_every_device_test():
                 for node in ast.walk(function)
             ):
                 required.add(identity)
-    assert len(required) == 18
+    assert len(required) == 19
     assert (
         "tests/test_translator/test_metal_power.py",
         "test_power_executes_exact_identity",

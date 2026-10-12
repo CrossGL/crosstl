@@ -277,7 +277,7 @@ def test_formatter_preserves_resource_metadata_comments(monkeypatch):
     assert style == {
         "BasedOnStyle": "Microsoft",
         "CommentPragmas": (
-            "^ (IWYU pragma:|crosstl-resource-origin:|crosstl-resource-storage:|crosstl-frozen-specializations:|crosstl-metadata-preconditions:)"
+            "^ (IWYU pragma:|crosstl-resource-origin:|crosstl-resource-storage:|crosstl-frozen-specializations:|crosstl-metadata-preconditions:|crosstl-dispatch-region:)"
         ),
     }
 

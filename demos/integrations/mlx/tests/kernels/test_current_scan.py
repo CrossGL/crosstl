@@ -21,6 +21,7 @@ from crosstl.project import (
     translate_project,
 )
 from crosstl.project.runtime_value_encoding import FLOAT32_BITS
+from crosstl.translator.dispatch_regions import plan_dispatch_regions
 from demos.integrations.mlx.portable_host import bfloat_storage
 from demos.integrations.mlx.tests.kernels.test_current_complex_power import MLX_COMMIT
 from tests.runtime_helpers import compile_metal, run
@@ -315,6 +316,7 @@ def scan_package(tmp_path_factory, request):
     assert hashlib.sha256((root / SOURCE).read_bytes()).hexdigest() == SOURCE_SHA256
     work = tmp_path_factory.mktemp("complete-scan-package")
     with tempfile.TemporaryDirectory(prefix=".crosstl-scan-", dir=root) as directory:
+        region = plan_dispatch_regions((width, 3, 1), (width, 1, 1))[0].to_json()
         config = ProjectConfig(
             root=root,
             source_roots=("mlx/backend/metal/kernels",),
@@ -324,6 +326,16 @@ def scan_package(tmp_path_factory, request):
             output_dir=Path(directory).name + "/out",
             entry_points={SOURCE: entries},
             workgroup_size_rules={SOURCE: (width, 1, 1)},
+            metadata_preconditions=[
+                dict(
+                    source=SOURCE,
+                    entryPoint=entry,
+                    parameter="axis_size",
+                    minimum=1,
+                    maximum=max(AXES + WIDE_AXES),
+                )
+                for entry in entries
+            ],
             source_options={
                 "metal": {
                     "preserve_resource_origins": True,
@@ -334,8 +346,12 @@ def scan_package(tmp_path_factory, request):
                             "software_subgroup_width": 32,
                             "relative_wave_shuffle_out_of_range": "self",
                             "binary32_additive_profile": "native-precise",
+                            "dispatch_region": region,
                         },
-                        "opengl": {"software_subgroup_width": 32},
+                        "opengl": {
+                            "software_subgroup_width": 32,
+                            "dispatch_region": region,
+                        },
                     },
                 }
             },
@@ -412,7 +428,7 @@ def scan_package(tmp_path_factory, request):
 @pytest.mark.parametrize("scan_package", SCAN_LAUNCHES, indirect=True)
 @pytest.mark.parametrize("dtype", DTYPES)
 def test_complete_scan_package_retains_source_buffer_layout(scan_package, dtype):
-    target, _, descriptors, _, _, _ = scan_package
+    target, _, descriptors, _, _, workgroup_width = scan_package
     descriptor = descriptors[_entry(dtype)]
     assert descriptor["target"] == target
     bindings = {
@@ -422,6 +438,19 @@ def test_complete_scan_package_retains_source_buffer_layout(scan_package, dtype)
     }
     assert set(bindings) == {"in", "out", "axis_size"}
     assert len(descriptor["bindings"]) == (4 if target == "directx" else 3)
+    assert bindings["axis_size"]["provenance"]["metadataPrecondition"] == {
+        "dtype": "uint64",
+        "minimum": 1,
+        "maximum": max(AXES + WIDE_AXES),
+        "sourceResource": bindings["axis_size"]["provenance"]["sourceResource"],
+    }
+    assert descriptor["provenance"].get("dispatchRegion") == (
+        None
+        if target == "metal"
+        else plan_dispatch_regions((workgroup_width, 3, 1), (workgroup_width, 1, 1))[
+            0
+        ].to_json()
+    )
     for parameter, slot in (("in", 0), ("out", 1), ("axis_size", 2)):
         binding = bindings[parameter]
         origin = binding["provenance"]["sourceResource"]

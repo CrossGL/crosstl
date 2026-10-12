@@ -1741,6 +1741,13 @@ operators keep their dispatch; arithmetic inside their bodies follows the
 selected policy. Integer, half-only, binary64 and pointer arithmetic, increment,
 decrement, unary negation and stored operand words are unchanged.
 
+One-dimensional C-style arrays retain built-in array-to-pointer conversion
+when combined with an integral offset, including commuted addition and nested
+offsets. The pointer retains the array's element type and address space; only
+numeric arithmetic on loaded values uses the selected floating-point policy.
+This does not infer pointer-to-array or pointer-to-pointer conversions, decay
+``metal::array`` objects, or admit non-integral pointer offsets.
+
 Reports, runtime manifests and packages retain ``binary32AdditiveProfile`` and
 validate it against resolved source, target and path-specific options. Saved
 CrossGL retains the implementation. Native controls characterize only the

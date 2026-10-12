@@ -20798,14 +20798,28 @@ float {scalar}(float value) {{
 
         return self.metal_scalar_binary_result_type(expr.op, left_type, right_type)
 
+    def metal_pointer_arithmetic_operand_type(self, metal_type):
+        element = self.split_outer_metal_declarator_array_type(metal_type)
+        if (
+            element is not None
+            and self.split_outer_metal_declarator_array_type(element) is None
+            and self.metal_pointer_pointee_type_once(element) is None
+        ):
+            return f"{element}*"
+        return metal_type
+
     def metal_builtin_pointer_arithmetic_operand_index(
         self, operator, left_type, right_type
     ):
         """Return the pointer operand for a proven built-in pointer operation."""
         if operator not in {"+", "-"}:
             return None
-        left_pointer = self.metal_pointer_pointee_type_once(left_type)
-        right_pointer = self.metal_pointer_pointee_type_once(right_type)
+        left_pointer = self.metal_pointer_pointee_type_once(
+            self.metal_pointer_arithmetic_operand_type(left_type)
+        )
+        right_pointer = self.metal_pointer_pointee_type_once(
+            self.metal_pointer_arithmetic_operand_type(right_type)
+        )
 
         if left_pointer is not None and right_pointer is None:
             right_info = self.metal_scalar_arithmetic_type_info(right_type)
@@ -20828,9 +20842,9 @@ float {scalar}(float value) {{
             expr.op, left_type, right_type
         )
         if pointer_operand == 0:
-            return expr.left, left_type
+            return expr.left, self.metal_pointer_arithmetic_operand_type(left_type)
         if pointer_operand == 1:
-            return expr.right, right_type
+            return expr.right, self.metal_pointer_arithmetic_operand_type(right_type)
         return None
 
     def metal_member_type_qualifiers(self, expression):

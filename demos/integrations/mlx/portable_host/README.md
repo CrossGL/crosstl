@@ -113,17 +113,32 @@ selection, and the complete MLX suite are not covered here.
 `Scan::eval_gpu` now reaches the translated-package callback. Its source entry,
 scalar types, axis extent, storage stride and workgroup geometry are checked
 before native execution. Packages retain the unchanged pinned `scan.metal` and
-its headers, with an exact workgroup width in the cache identity. No prefix
-arithmetic is performed on the host, and translation failures remain errors.
+its headers. The cache identity binds the complete launch, checked scalar values,
+source revision and translation implementation. Scalar bounds remain obligations
+on uploaded metadata, not substitutions into the source. DirectX and OpenGL
+packages also retain an artifact-owned dispatch-region contract. Cache reloads
+verify these contracts against the package, and native preparation checks them
+again before submission. No prefix arithmetic is performed on the host, and
+translation failures remain errors.
 
 The required `--scans` host verification runs in the existing Metal, OpenGL and
 DirectX jobs, within the existing 4,000-second host-verification deadline. Its
-24 API cases cover inclusive sum, minimum and maximum for float32 and int32,
+54 API cases cover inclusive sum, minimum and maximum for float32 and int32,
 nonzero input offsets, row- and column-major contiguous views, and axis lengths
 1, 33, 129 and 257. Those lengths select 32-, 64- and 96-thread workgroups.
+Thirty cases use the actual strided entries with 33 columns, 256-thread
+workgroups, a partial second column block, and axis lengths 1, 31, 32, 33 and 65.
 Each case checks an independent exact reference, CPU/native agreement, unchanged
 host input, device input and metadata observations, 32 input and output guards,
-and the identities of the packaged source and compiled native modules.
+and the identities of the packaged source and compiled native modules. The
+metadata audit matches each source parameter and ordinal, exact bound, checked
+value and upload digest to the corresponding device observation. The scan
+subprocess retains its 900-second deadline; no additional runner is allocated.
+
+The separate complete-kernel scan tests retain their original sum, extrema and
+complex references. Their packages declare the exercised axis interval 1..1025
+and three-row launch geometry as checked contracts; the original inputs,
+workgroup widths, guards and 240-second per-batch deadlines remain unchanged.
 
 ```bash
 python -m demos.integrations.mlx.portable_host.verify_scans \
@@ -138,8 +153,9 @@ other layouts require the existing translated-copy path. Unsupported complex
 and narrow-integer host storage is rejected explicitly.
 
 This is not complete cumulative-operation coverage. Reverse scans currently
-encounter unproved wide pointer offsets on OpenGL. Strided entries encounter
-unproved runtime-bound collective loops on the software-subgroup path.
+encounter unproved wide pointer offsets on OpenGL. Forward strided entries use
+checked scalar and dispatch bounds for the software-subgroup path; their
+qualification is limited to the cases above.
 Product, log-add-exp, additional scalar types and full unchanged upstream scan
 tests require separate numerical qualification. The independently captured
 original bfloat16 scan-versus-reduction failure in

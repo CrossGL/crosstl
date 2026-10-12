@@ -27,31 +27,91 @@ def cases():
             "dtype": dtype,
             "axisSize": axis,
             "layout": layout,
-            "entry": f"contig_scan_inclusive_{operation}_{dtype}_{dtype}",
+            "entry": (
+                f"{'strided' if layout == 'strided-column' else 'contig'}"
+                f"_scan_inclusive_{operation}_{dtype}_{dtype}"
+            ),
         }
         for dtype in ("float32", "int32")
         for operation in OPERATIONS
-        for axis, layout in ((1, "row"), (33, "row"), (129, "row"), (257, "column"))
+        for axis, layout in (
+            (1, "row"),
+            (33, "row"),
+            (129, "row"),
+            (257, "column"),
+            *((axis, "strided-column") for axis in (1, 31, 32, 33, 65)),
+        )
     ]
 
 
 def operand(np, case):
-    size = 3 * case["axisSize"]
+    strided = case["layout"] == "strided-column"
+    size = (33 if strided else 3) * case["axisSize"]
     storage = ((np.arange(size + 12, dtype=np.int32) * 7) % 19 - 9).astype(
         case["dtype"]
     )
     if case["dtype"] == "float32":
         storage *= np.float32(0.125)
-    view = storage[7 : 7 + size].reshape(3, case["axisSize"])
+    shape = (case["axisSize"], 33) if strided else (3, case["axisSize"])
+    view = storage[7 : 7 + size].reshape(shape)
     if case["layout"] == "column":
         view = view.T
     return storage, view
 
 
 def reference(np, case, source):
-    axis = 0 if case["layout"] == "column" else 1
+    axis = 1 if case["layout"] == "row" else 0
     op = {"sum": np.add, "min": np.minimum, "max": np.maximum}[case["operation"]]
     return op.accumulate(source, axis=axis, dtype=source.dtype)
+
+
+def audit_metadata(event, names, axis, stride):
+    values = {"axis_size": (2, axis)}
+    if stride > 1:
+        values.update(stride=(3, stride), stride_blocks=(4, (stride + 31) // 32))
+    conditions = event["details"].get("metadataPreconditions", [])
+    require(
+        len(conditions) == len(values)
+        and {item["binding"] for item in conditions}
+        == {names[name] for name in values},
+        "Scan checked metadata receipts are incomplete",
+    )
+    for name, (ordinal, value) in values.items():
+        (receipt,) = (item for item in conditions if item["binding"] == names[name])
+        requirement = {
+            "dtype": "uint64",
+            "minimum": value,
+            "maximum": value,
+            "sourceResource": {
+                "schemaVersion": 1,
+                "backend": "metal",
+                "entryPoint": event["entry"],
+                "parameter": name,
+                "parameterIndex": ordinal,
+            },
+        }
+        metadata = event["details"]["request"]["buffers"][names[name]]["binding"][
+            "metadata"
+        ]
+        observed = event["details"]["inputObservations"][names[name]]["uploadSnapshot"]
+        require(
+            receipt["requirement"]
+            == metadata["provenance"].get("metadataPrecondition")
+            == requirement
+            and type(receipt["value"]) is int
+            and receipt["value"] == value,
+            "Scan checked metadata differs from its source contract",
+        )
+        snapshot = receipt["uploadSnapshot"]
+        require(
+            snapshot["dtype"] == "uint64"
+            and snapshot["shape"] == [1]
+            and snapshot.get("encoding") is None
+            and snapshot["elementCount"] == 1
+            and snapshot["sizeBytes"] == observed["sizeBytes"] == 8
+            and snapshot["sha256"] == observed["sha256"],
+            "Scan checked metadata differs from its observed upload",
+        )
 
 
 def audit_event(np, case, event, saved):
@@ -68,7 +128,8 @@ def audit_event(np, case, event, saved):
         "Scan result differs from its independent reference",
     )
     entry = case["entry"]
-    execution = scan_layout.execution(entry, view.size, case["axisSize"])
+    stride = 33 if case["layout"] == "strided-column" else 1
+    execution = scan_layout.execution(entry, view.size, case["axisSize"], stride)
     request = event["details"]["request"]
     require(
         event["entry"] == entry
@@ -94,8 +155,8 @@ def audit_event(np, case, event, saved):
     require(
         event["scanMetadata"] == {
             "axisSize": case["axisSize"],
-            "stride": 1,
-            "strideBlocks": 1,
+            "stride": stride,
+            "strideBlocks": (stride + 31) // 32,
             "storageElements": view.size,
             "operation": case["operation"],
             "sourceType": case["dtype"],
@@ -131,25 +192,33 @@ def audit_event(np, case, event, saved):
         if dtype == "float32"
         else storage[7 : 7 + view.size].tolist()
     )
+    expected_inputs = {
+        "in": scan_dispatch.packet(
+            dtype, event["target"], words + scan_dispatch.guard(dtype)
+        ),
+        "out": scan_dispatch.packet(
+            dtype,
+            event["target"],
+            [scan_dispatch.guard(dtype)[0]] * (view.size + 32),
+        ),
+        "axis_size": scan_dispatch.packet(
+            "uint64", event["target"], [case["axisSize"]]
+        ),
+    }
+    if stride > 1:
+        expected_inputs.update(
+            stride=scan_dispatch.packet("uint64", event["target"], [stride]),
+            stride_blocks=scan_dispatch.packet(
+                "uint64", event["target"], [(stride + 31) // 32]
+            ),
+        )
     require(
-        inputs == {
-            "in": scan_dispatch.packet(
-                dtype, event["target"], words + scan_dispatch.guard(dtype)
-            ),
-            "out": scan_dispatch.packet(
-                dtype,
-                event["target"],
-                [scan_dispatch.guard(dtype)[0]] * (view.size + 32),
-            ),
-            "axis_size": scan_dispatch.packet(
-                "uint64", event["target"], [case["axisSize"]]
-            ),
-        },
+        inputs == expected_inputs,
         "Scan upload does not belong to its workload",
     )
     observations = event["details"]["inputObservations"]
     require(
-        set(observations) == {names["in"], names["axis_size"]},
+        set(observations) == {names[name] for name in expected_inputs if name != "out"},
         "Scan input observations are incomplete",
     )
     for name, receipt in observations.items():
@@ -173,6 +242,7 @@ def audit_event(np, case, event, saved):
             and snapshot.get("encoding") == value.get("encoding"),
             "Scan observed input differs from its upload",
         )
+    audit_metadata(event, names, case["axisSize"], stride)
     ordered = np.ascontiguousarray(
         expected.T if case["layout"] == "column" else expected
     )
@@ -207,7 +277,7 @@ def run_cases(mx, np, output, host=None):
         saved = {"before": np.array(source, copy=True)}
         start = host.dispatch_count if host else 0
         result = getattr(mx, OPERATIONS[case["operation"]])(
-            value, axis=0 if case["layout"] == "column" else 1
+            value, axis=1 if case["layout"] == "row" else 0
         )
         exposed = np.asarray(result)
         saved.update(actual=exposed.copy(), after=np.array(source, copy=True))

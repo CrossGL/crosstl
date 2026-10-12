@@ -1,4 +1,4 @@
-"""Cache unchanged pinned scan entries for an exact source workgroup width."""
+"""Cache unchanged scan entries with checked metadata and launch contracts."""
 
 import hashlib
 import json
@@ -17,10 +17,70 @@ from crosstl.project import (
     translate_project,
 )
 from crosstl.translator.dispatch_region_identity import translation_implementation_hash
+from crosstl.translator.dispatch_regions import plan_dispatch_regions
 from demos.integrations.mlx.portable_host import scan_layout
 from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
 
 SOURCE = "mlx/backend/metal/kernels/scan.metal"
+METADATA_PARAMETERS = {"axis_size": 2, "stride": 3, "stride_blocks": 4}
+
+
+def _dispatch_contract(entry, metadata, execution):
+    layout, operation, source, destination = scan_layout.signature(entry)
+    required = {
+        "axisSize",
+        "stride",
+        "strideBlocks",
+        "storageElements",
+        "operation",
+        "sourceType",
+        "outputType",
+    }
+    if not isinstance(metadata, dict) or set(metadata) != required:
+        raise ValueError("Scan cache requires complete checked metadata")
+    launch = scan_layout.execution(
+        entry, metadata["storageElements"], metadata["axisSize"], metadata["stride"]
+    )
+    if (
+        metadata["operation"] != operation
+        or metadata["sourceType"] != source
+        or metadata["outputType"] != destination
+        or type(metadata["strideBlocks"]) is not int
+        or metadata["strideBlocks"] != (metadata["stride"] + 31) // 32
+        or execution != launch
+        or any(type(n) is not int for values in execution.values() for n in values)
+    ):
+        raise ValueError(
+            "Scan cache metadata or launch differs from the source contract"
+        )
+    values = {"axis_size": metadata["axisSize"]}
+    if layout == "strided":
+        values.update(stride=metadata["stride"], stride_blocks=metadata["strideBlocks"])
+    return values, launch
+
+
+def _region(launch):
+    grid = [n * w for n, w in zip(launch["workgroupCount"], launch["workgroupSize"])]
+    (region,) = plan_dispatch_regions(grid, launch["workgroupSize"])
+    return region.to_json()
+
+
+def _metadata_contracts(identity):
+    return [
+        {
+            "dtype": "uint64",
+            "minimum": value,
+            "maximum": value,
+            "sourceResource": {
+                "schemaVersion": 1,
+                "backend": "metal",
+                "entryPoint": identity["entry"],
+                "parameter": name,
+                "parameterIndex": METADATA_PARAMETERS[name],
+            },
+        }
+        for name, value in identity["metadataValues"].items()
+    ]
 
 
 class ScanPackageCache:
@@ -49,20 +109,18 @@ class ScanPackageCache:
         if dirty.strip():
             raise ValueError("Scan translation requires unchanged pinned kernels")
 
-    def get(self, entry, width):
-        scan_layout.signature(entry)
-        if type(width) is not int or not 32 <= width <= 1024 or width % 32:
-            raise ValueError(
-                "Scan workgroups require complete 32-lane source subgroups"
-            )
+    def get(self, entry, metadata, execution):
+        values, launch = _dispatch_contract(entry, metadata, execution)
         with self._lock:
             self._require_source()
             identity = {
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "revision": COMMIT,
                 "target": self.target,
                 "entry": entry,
-                "workgroupSize": [width, 1, 1],
+                "workgroupSize": launch["workgroupSize"],
+                "dispatchGeometry": launch,
+                "metadataValues": values,
                 "implementationHash": translation_implementation_hash(),
                 "recipeHash": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 "sourceHash": (
@@ -108,6 +166,12 @@ class ScanPackageCache:
         if not loader["success"] or len(loader["loadUnits"]) != 1:
             raise ValueError(f"Invalid scan runtime package: {loader['diagnostics']}")
         descriptor = build_native_loader_abi_descriptor(loader)
+        conditions = [
+            binding["provenance"]["metadataPrecondition"]
+            for binding in descriptor["bindings"]
+            if "metadataPrecondition" in binding.get("provenance", {})
+        ]
+        expected_conditions = _metadata_contracts(identity)
         if (
             descriptor != record.get("descriptor")
             or descriptor["target"] != self.target
@@ -117,6 +181,17 @@ class ScanPackageCache:
                 "value": identity["sourceHash"],
             }
             or loader["loadUnits"][0]["entryPoint"]["source"] != identity["entry"]
+            or sorted(conditions, key=lambda item: item["sourceResource"]["parameter"])
+            != sorted(
+                expected_conditions,
+                key=lambda item: item["sourceResource"]["parameter"],
+            )
+            or descriptor["provenance"].get("dispatchRegion")
+            != (
+                None
+                if self.target == "metal"
+                else _region(identity["dispatchGeometry"])
+            )
         ):
             raise ValueError("Scan cache descriptor does not match its package")
         return descriptor, directory / "package"
@@ -125,6 +200,7 @@ class ScanPackageCache:
         target_options = {}
         if self.target != "metal":
             target_options["software_subgroup_width"] = 32
+            target_options["dispatch_region"] = _region(identity["dispatchGeometry"])
         if self.target == "directx":
             target_options.update(
                 {
@@ -146,6 +222,16 @@ class ScanPackageCache:
                     output_dir=f"{work.name}/out",
                     entry_points={SOURCE: (identity["entry"],)},
                     workgroup_size_rules={SOURCE: tuple(identity["workgroupSize"])},
+                    metadata_preconditions=[
+                        dict(
+                            source=SOURCE,
+                            entryPoint=identity["entry"],
+                            parameter=name,
+                            minimum=value,
+                            maximum=value,
+                        )
+                        for name, value in identity["metadataValues"].items()
+                    ],
                     source_options={
                         "metal": {
                             "preserve_resource_origins": True,

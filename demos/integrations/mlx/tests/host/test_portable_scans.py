@@ -337,15 +337,21 @@ def test_scan_cache_keys_bind_launch_source_and_implementation(tmp_path, monkeyp
     monkeypatch.setattr(scan_packages.ScanPackageCache, "_build", build)
     monkeypatch.setattr(scan_packages.ScanPackageCache, "_load", load)
     cache = scan_packages.ScanPackageCache(root, tmp_path / "cache", "metal")
-    entry = "contig_scan_inclusive_sum_int32_int32"
-    first = cache.get(entry, 32)
-    assert cache.get(entry, 32) == first and len(built) == 1
-    assert cache.get(entry, 64) != first
+    entry, supplied, memory, size, geometry = buffers("int32", axis=1)
+    metadata = scan_layout.validate(entry, supplied, size, geometry)
+    first = cache.get(entry, metadata, geometry)
+    assert cache.get(entry, metadata, geometry) == first and len(built) == 1
+    wider = dict(metadata, axisSize=129, storageElements=387)
+    assert cache.get(entry, wider, scan_layout.execution(entry, 387, 129)) != first
+    second = dict(metadata, axisSize=2, storageElements=6)
+    assert cache.get(entry, second, geometry) != first
+    more_rows = dict(metadata, storageElements=4)
+    assert cache.get(entry, more_rows, scan_layout.execution(entry, 4, 1)) != first
     implementation[0] = "b" * 64
-    assert cache.get(entry, 32) != first
+    assert cache.get(entry, metadata, geometry) != first
     source.write_text("changed")
-    assert cache.get(entry, 32) != first
-    assert len(built) == 4
+    assert cache.get(entry, metadata, geometry) != first
+    assert len(built) == 6
 
 
 @pytest.mark.parametrize("fault", ("implementation", "recipe"))
@@ -371,16 +377,18 @@ def test_scan_cache_does_not_publish_during_source_changes(
 
     monkeypatch.setattr(scan_packages.ScanPackageCache, "_build", build)
     cache = scan_packages.ScanPackageCache(tmp_path, tmp_path / "cache", "metal")
+    entry, supplied, memory, size, geometry = buffers("int32", axis=1)
+    metadata = scan_layout.validate(entry, supplied, size, geometry)
     with pytest.raises(ValueError, match="changed during translation"):
-        cache.get("contig_scan_inclusive_sum_int32_int32", 32)
+        cache.get(entry, metadata, geometry)
     assert not list(cache.directory.iterdir())
 
 
 def test_scan_verifier_cases_cover_storage_and_launch_boundaries():
     cases = verify_scans.cases()
-    assert len(cases) == len({case["id"] for case in cases}) == 24
-    assert {case["layout"] for case in cases} == {"row", "column"}
-    assert {case["axisSize"] for case in cases} == {1, 33, 129, 257}
+    assert len(cases) == len({case["id"] for case in cases}) == 54
+    assert {case["layout"] for case in cases} == {"row", "column", "strided-column"}
+    assert {case["axisSize"] for case in cases} == {1, 31, 32, 33, 65, 129, 257}
     assert {case["operation"] for case in cases} == {"sum", "min", "max"}
 
 
@@ -401,7 +409,13 @@ def synthetic_event(case, target):
         ),
         "axis_size": scan_dispatch.packet("uint64", target, [case["axisSize"]]),
     }
-    bindings, observations = {}, {}
+    stride = 33 if case["layout"] == "strided-column" else 1
+    if stride > 1:
+        inputs.update(
+            stride=scan_dispatch.packet("uint64", target, [stride]),
+            stride_blocks=scan_dispatch.packet("uint64", target, [2]),
+        )
+    bindings, observations, conditions = {}, {}, []
     for name, value in inputs.items():
         bindings[name] = {
             **{key: item for key, item in value.items() if key != "values"},
@@ -438,7 +452,37 @@ def synthetic_event(case, target):
                     **{key: item for key, item in value.items() if key != "values"},
                 },
             }
-    geometry = scan_layout.execution(case["entry"], view.size, case["axisSize"])
+            if name != "in":
+                requirement = {
+                    "dtype": "uint64",
+                    "minimum": value["values"][0],
+                    "maximum": value["values"][0],
+                    "sourceResource": {
+                        "schemaVersion": 1,
+                        "backend": "metal",
+                        "entryPoint": case["entry"],
+                        "parameter": name,
+                        "parameterIndex": {
+                            "axis_size": 2,
+                            "stride": 3,
+                            "stride_blocks": 4,
+                        }[name],
+                    },
+                }
+                bindings[name]["binding"]["metadata"]["provenance"][
+                    "metadataPrecondition"
+                ] = copy.deepcopy(requirement)
+                conditions.append(
+                    {
+                        "binding": name,
+                        "value": value["values"][0],
+                        "requirement": requirement,
+                        "uploadSnapshot": dict(
+                            observations[name]["uploadSnapshot"], elementCount=1
+                        ),
+                    }
+                )
+    geometry = scan_layout.execution(case["entry"], view.size, case["axisSize"], stride)
     native = {"metal": case["entry"], "opengl": "main", "directx": "CSMain"}[target]
     ordered = np.ascontiguousarray(
         expected.T if case["layout"] == "column" else expected
@@ -452,8 +496,8 @@ def synthetic_event(case, target):
         **copy.deepcopy(geometry),
         "scanMetadata": {
             "axisSize": case["axisSize"],
-            "stride": 1,
-            "strideBlocks": 1,
+            "stride": stride,
+            "strideBlocks": (stride + 31) // 32,
             "storageElements": view.size,
             "operation": case["operation"],
             "sourceType": dtype,
@@ -465,6 +509,7 @@ def synthetic_event(case, target):
         "outputHash": hashlib.sha256(ordered.tobytes()).hexdigest(),
         "details": {
             "inputObservations": observations,
+            "metadataPreconditions": conditions,
             "request": {
                 "target": target,
                 "entryPoint": native,
@@ -510,10 +555,18 @@ def test_scan_audit_checks_every_case_and_requires_native_receipts(
         "observation-hash",
         "snapshot",
         "receipt",
+        "missing-precondition",
+        "precondition-bound",
+        "precondition-origin",
+        "precondition-value",
+        "precondition-upload",
+        "precondition-duplicate",
+        "precondition-binding",
     ),
 )
-def test_scan_audit_rejects_corrupt_evidence(monkeypatch, fault):
-    case = next(case for case in verify_scans.cases() if case["layout"] == "column")
+@pytest.mark.parametrize("layout", ("column", "strided-column"))
+def test_scan_audit_rejects_corrupt_evidence(monkeypatch, fault, layout):
+    case = next(case for case in verify_scans.cases() if case["layout"] == layout)
     event, saved = synthetic_event(case, "directx")
     monkeypatch.setattr(verify_scans, "audit_native_execution", lambda event: None)
     if fault == "entry":
@@ -557,6 +610,24 @@ def test_scan_audit_rejects_corrupt_evidence(monkeypatch, fault):
             observation["observedSHA256"] = "0" * 64
         else:
             observation["uploadSnapshot"]["shape"] = [1]
+    elif fault.startswith("precondition-") or fault == "missing-precondition":
+        conditions = event["details"]["metadataPreconditions"]
+        if fault == "missing-precondition":
+            conditions.pop()
+        elif fault == "precondition-bound":
+            conditions[0]["requirement"]["maximum"] += 1
+        elif fault == "precondition-origin":
+            conditions[0]["requirement"]["sourceResource"]["parameterIndex"] += 1
+        elif fault == "precondition-value":
+            conditions[0]["value"] = float(conditions[0]["value"])
+        elif fault == "precondition-upload":
+            conditions[0]["uploadSnapshot"]["sha256"] = "0" * 64
+        elif fault == "precondition-binding":
+            event["details"]["request"]["buffers"]["axis_size"]["binding"]["metadata"][
+                "provenance"
+            ].pop("metadataPrecondition")
+        else:
+            conditions.append(copy.deepcopy(conditions[0]))
     else:
 
         def reject(event):
@@ -608,8 +679,8 @@ def test_scan_bounded_verification_requires_complete_result_records(
             "passed": True,
             "commit": verify_scans.COMMIT,
             "target": "metal",
-            "casesPerPath": 24,
-            "dispatchCount": 24,
+            "casesPerPath": len(records),
+            "dispatchCount": len(records),
             "fullUpstreamSuite": False,
             "fullScanRouting": False,
             "cpu": copy.deepcopy(records),

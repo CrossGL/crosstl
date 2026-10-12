@@ -449,6 +449,28 @@ def test_native_precise_additive_executes_cancellation_boundaries(
         assert actual == expected
 
 
+def test_native_precise_array_offsets_execute_with_numeric_addition(tmp_path):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for native additive policies")
+    from tests.runtime_helpers import _validate
+    from tests.test_translator.test_loop_updates import _execute
+    from tests.test_translator.test_metal_array_offset_profiles import (
+        SOURCE as ARRAY_SOURCE,
+    )
+    from tests.test_translator.test_metal_array_offset_profiles import native_request
+
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    request, expected = native_request(tmp_path, target)
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        validate=_validate,
+        original_source=ARRAY_SOURCE if target == "metal" else None,
+        original_entry="array_offset",
+    )
+
+
 def test_native_precise_additive_ci_requires_all_target_execution():
     from tools import ci_coverage
 

@@ -82,7 +82,7 @@ def dispatch(host, entry, buffers, count, size, launch):
         supplied[name] = buffer
     execution = launch.execution()
     metadata = scan_layout.validate(entry, supplied, size, execution)
-    descriptor, directory = host.scans.get(entry, execution["workgroupSize"][0])
+    descriptor, directory = host.scans.get(entry, metadata, execution)
     inputs, outputs, observed, matched = {}, {}, [], set()
     for binding in descriptor["bindings"]:
         provenance = binding.get("provenance", {})
