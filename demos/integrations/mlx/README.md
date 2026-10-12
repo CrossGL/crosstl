@@ -54,10 +54,23 @@ addition policy. The generated helpers materialize a precise result to preserve
 each addition and subtraction through optimization. The pinned upstream source,
 original-Metal reference words, buffer layouts and guard checks are unchanged.
 Reports and packages retain the arithmetic policy. This is a target translation
-configuration, not an upstream source patch or a relaxed comparison; native
-Windows parity is required before closing the record-scan defect in #2215.
+configuration, not an upstream source patch or a relaxed comparison.
 The mode does not select software IEEE emulation or resolve the separate WARP
 multiply-add defect in #2193.
+
+At translator revision `6305687879bb6f707c5b07ea002abfcc374fec9a`, native
+Windows and macOS evidence covers all 121 configured sum, extrema and complex
+scan cases per target: 149,328 computed scalar words and 4,544 guard words.
+Independent receipt checks verify the original-Metal reference words, inputs,
+launch dimensions, generated source identity and validated/executed module
+hashes. The 21 complex cases at widths 64, 128 and 256 resolve the reproduced
+cancellation failures in [#2215](https://github.com/CrossGL/crosstl/issues/2215).
+[Windows complex-scan evidence](https://github.com/CrossGL/crosstl/actions/runs/38198627802/artifacts/11724483886)
+and [macOS original/generated evidence](https://github.com/CrossGL/crosstl/actions/runs/38198627802/artifacts/11724523773)
+retain every numerical case and guard. macOS additionally checks unchanged
+read-only inputs after original-source execution. Generated scan input
+readbacks and complete host routing remain unqualified; these results do not
+establish whole-family coverage or a complete MLX backend.
 
 The project-porting binary32 step selects every native execution and Metal
 linking case without repeating portable parser and compiler checks from the

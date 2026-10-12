@@ -362,9 +362,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .mlx-float-metal
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
+          python tools/ensure_metal_toolchain.py
           xcodebuild -version | tee .mlx-float-metal/xcode-version.txt
           xcrun --sdk macosx metal --version | tee .mlx-float-metal/metal-version.txt
       - name: Install CrossTL and test dependencies
@@ -587,9 +585,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .mlx-metal-host/toolchain
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
+          python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal --version | tee .mlx-metal-host/toolchain/metal-version.txt
           xcrun --sdk macosx swiftc --version | tee .mlx-metal-host/toolchain/swift-version.txt
           xcrun --sdk macosx metal -std=metal3.1 -Werror -c \
@@ -1160,9 +1156,7 @@ jobs:
           test -d "$DEVELOPER_DIR"
           echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
           xcodebuild -version | tee .mlx-portable-host/xcode-version.txt
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
+          python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal --version | tee .mlx-portable-host/metal-version.txt
           xcrun --sdk macosx metal -std=metal4.1 -x metal -fsyntax-only /dev/null
           xcrun --sdk macosx swiftc --version | tee .mlx-portable-host/swift-version.txt
@@ -2124,9 +2118,7 @@ jobs:
         timeout-minutes: 10
         run: |
           set -euo pipefail
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
+          python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal --version | tee .mlx-portable-small-rows/metal-version.txt
           xcrun --sdk macosx swiftc --version | tee .mlx-portable-small-rows/swift-version.txt
       - name: Install pinned DirectX tools
@@ -2376,9 +2368,7 @@ jobs:
         timeout-minutes: 10
         run: |
           set -euo pipefail
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
+          python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal --version | tee .mlx-portable-half/metal-version.txt
           xcrun --sdk macosx swiftc --version | tee .mlx-portable-half/swift-version.txt
       - name: Install pinned DirectX tools
@@ -2642,9 +2632,7 @@ jobs:
         timeout-minutes: 10
         run: |
           set -euo pipefail
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
+          python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal --version | tee .mlx-portable-integer64/metal-version.txt
           xcrun --sdk macosx swiftc --version | tee .mlx-portable-integer64/swift-version.txt
       - name: Install pinned DirectX tools
@@ -2829,9 +2817,7 @@ jobs:
         timeout-minutes: 10
         run: |
           set -euo pipefail
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
+          python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal --version | tee .mlx-portable-slice-update/metal-version.txt
           xcrun --sdk macosx swiftc --version | tee .mlx-portable-slice-update/swift-version.txt
       - name: Install pinned DirectX tools
@@ -3034,9 +3020,7 @@ jobs:
         timeout-minutes: 10
         run: |
           set -euo pipefail
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
+          python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal --version | tee .mlx-portable-scatter/metal-version.txt
           xcrun --sdk macosx swiftc --version | tee .mlx-portable-scatter/swift-version.txt
       - name: Install pinned DirectX tools
@@ -3280,9 +3264,7 @@ jobs:
         timeout-minutes: 10
         run: |
           set -euo pipefail
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
+          python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal --version | tee .mlx-portable-reductions/metal-version.txt
           xcrun --sdk macosx swiftc --version | tee .mlx-portable-reductions/swift-version.txt
       - name: Install pinned DirectX tools
@@ -3463,9 +3445,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
+          python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal --version
 
       - name: Validate bounded MLX dispatch contracts
@@ -6187,9 +6167,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
+          python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal --version
 
       - name: Download all unary Metal source shards
@@ -6475,9 +6453,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
+          python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal --version
 
       - name: Download all binary Metal source shards
@@ -6612,9 +6588,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
+          python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal --version
 
       - name: Download all copy Metal source shards
@@ -6749,9 +6723,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
+          python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal --version
 
       - name: Download all reduce Metal source shards
@@ -6888,9 +6860,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
+          python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal --version
 
       - name: Checkout original quantized kernels

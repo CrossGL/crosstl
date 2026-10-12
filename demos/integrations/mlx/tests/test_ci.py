@@ -1084,7 +1084,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "--require-metal-toolchain" in mlx_porting
     assert "Install macOS Metal Toolchain" in mlx_porting
     assert "if: runner.os == 'macOS'" in mlx_porting
-    assert "xcodebuild -downloadComponent MetalToolchain" in mlx_porting
+    assert "python tools/ensure_metal_toolchain.py" in mlx_porting
     for metal_job_name in (
         "mlx-metal-porting",
         "mlx-unary-metal-roundtrip",

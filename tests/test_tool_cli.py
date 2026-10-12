@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TOOLS = [
     "tools/ci_coverage.py",
     "tools/compile_artifact_bundle.py",
+    "tools/ensure_metal_toolchain.py",
     "tools/refresh_artifact_contract.py",
     "tools/pytest_failure_summary.py",
     "tools/support_matrix.py",

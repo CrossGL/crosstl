@@ -436,8 +436,7 @@ def test_ci_prepares_metal_before_required_native_tests():
     assert "if:" not in step and "continue-on-error" not in step
     assert "timeout-minutes: 10" in step
     assert "set -euo pipefail" in step
-    assert "if ! xcrun --sdk macosx metal --version; then" in step
-    assert "xcodebuild -downloadComponent MetalToolchain" in step
+    assert "python tools/ensure_metal_toolchain.py" in step
     assert "metal --version | tee .mlx-metal-host/toolchain/metal-version.txt" in step
     assert "swiftc --version | tee .mlx-metal-host/toolchain/swift-version.txt" in step
     assert "metal -std=metal3.1 -Werror -c" in step

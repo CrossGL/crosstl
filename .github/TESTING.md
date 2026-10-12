@@ -77,6 +77,14 @@ download from an available compiler or mounted toolchain. Diagnostics preserve
 the original failure status even if a diagnostic command fails. They do not
 retry the download, select another compiler or bypass the language probe.
 
+Metal setup uses `tools/ensure_metal_toolchain.py` in each existing download
+step. A completed download may precede executable toolchain activation on a
+fresh runner. After one successful download, the helper retries only the
+explicit missing-toolchain error, at most ten probes within sixty seconds.
+Download, command and activation waits are bounded. Other compiler errors fail
+immediately, and the existing language-version and native compilation probes
+still run unchanged. No runner, test deadline or compiler fallback is added.
+
 The open-source porting demo runs its portable tests and all-target reference
 comparison once on Ubuntu, using two pytest workers. Windows and macOS retain
 every target-specific regeneration, comparison and compiler check, without
@@ -91,22 +99,25 @@ checksum and does not fall back to another release. These jobs do not execute
 Direct3D; WARP numerical execution and Windows host integration remain required.
 
 If the required Windows collective/resource gate fails, its existing runner
-replays the complete 23-selection resource/project batch on WARP 1.0.13.
-The diagnostic retains every test and required-runtime setting from that batch;
-there is no expression-based test filter. The archive and x64 DLL are checked
-before selection. Execution has the same 360-second bound as the required batch,
-inside an eight-minute preparation/execution/restoration step. Required test
-deadlines are unchanged, and no runner is added.
+compares twenty precise-scalar, cooperative-matrix and narrow-buffer controls
+across the system WARP library and ten checksum-pinned stable releases from
+1.0.13 through 1.0.19. These are focused diagnostic controls, not substitutes
+for either complete native host job. The archive and x64 DLL are checked
+before selection. Downloads and execution share a 360-second deadline inside
+an eight-minute preparation/execution/restoration step. Required test deadlines
+are unchanged, and no runner is added.
 
 The required WARP 1.0.21 DLL is restored in a finally block, with its identity
 verified and recorded even when the comparison fails. The system Direct3D core,
 DXC version, shaders, inputs, numerical oracles and guards are unchanged.
-Earlier eight-case controls pass on 1.0.13 but fail on 1.0.14 and 1.0.21;
-independent scalar and matrix readback audits confirm the discrepancy
-([runtime investigation](https://github.com/CrossGL/crosstl/issues/2193)).
-The expanded diagnostic tests broader compatibility; it cannot replace or
-excuse the required 1.0.21 gate's failure. No historical runtime is adopted as
-a supported default, and passing this batch does not establish full MLX parity.
+Independent scalar and matrix readback audits confirm arithmetic differences
+([runtime investigation](https://github.com/CrossGL/crosstl/issues/2193)), while
+earlier runtimes fail exact odd-length narrow-buffer views
+([buffer-view investigation](https://github.com/CrossGL/crosstl/issues/2197)).
+The completed eleven-runtime comparison qualifies no replacement satisfying
+both contracts. No historical runtime is adopted as a supported default, and
+the diagnostic cannot excuse the required native gates or establish full MLX
+parity.
 
 One additional, explicitly labelled Windows host matrix entry qualifies WARP
 1.0.13 against every step of the existing native host job. It shares all test

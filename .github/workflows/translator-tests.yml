@@ -105,9 +105,7 @@ jobs:
           test -d "$DEVELOPER_DIR"
           echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
           xcodebuild -version
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
+          python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal -std=metal4.1 -x metal -fsyntax-only /dev/null
 
       - name: Install dependencies

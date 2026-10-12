@@ -411,6 +411,7 @@ def test_metal_fence_jobs_require_a_compatible_toolchain_without_extra_jobs():
         assert 'test -d "$DEVELOPER_DIR"' in command
         assert 'echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"' in command
         assert "metal -std=metal4.1 -x metal -fsyntax-only /dev/null" in command
+        assert "python tools/ensure_metal_toolchain.py" in command
     required_entries = [
         row
         for row in demo["strategy"]["matrix"]["include"]
@@ -435,6 +436,8 @@ def test_metal_fence_jobs_require_a_compatible_toolchain_without_extra_jobs():
     [
         ("", False, 0, 0),
         ("missing", False, 0, 1),
+        ("activation", False, 0, 1),
+        ("late-activation", False, 0, 1),
         ("download", False, 19, 1),
         ("unavailable", False, 17, 1),
         ("language", False, 23, 0),
@@ -460,6 +463,7 @@ def test_metal_setup_diagnostics_preserve_failures(
     script = f"#!{sys.executable}\n" + textwrap.dedent("""\
         import json
         import os
+        import runpy
         import sys
         from pathlib import Path
 
@@ -486,16 +490,28 @@ def test_metal_setup_diagnostics_preserve_failures(
                 sys.exit(19)
             state.touch()
         elif tool == "xcrun" and "metal" in args:
+            pending = False
+            if failure in {"activation", "late-activation"} and state.exists():
+                probes = state.with_suffix(".probes")
+                count = int(probes.read_text()) + 1 if probes.exists() else 1
+                probes.write_text(str(count))
+                pending = count <= (9 if failure == "late-activation" else 2)
             if failure == "unavailable" or (
-                failure in {"missing", "download"} and not state.exists()
-            ):
+                failure in {"missing", "download", "activation", "late-activation"}
+                and not state.exists()
+            ) or pending:
                 print("missing Metal Toolchain", file=sys.stderr)
                 sys.exit(17)
             if failure == "language" and "-std=metal4.1" in args:
                 print("unsupported Metal language version", file=sys.stderr)
                 sys.exit(23)
+        elif tool == "python":
+            assert args == ["tools/ensure_metal_toolchain.py"]
+            helper = runpy.run_path(os.environ["TEST_HELPER"])
+            helper["time"].sleep = lambda seconds: None
+            sys.exit(helper["main"]([]))
         """)
-    for name in ("xcodebuild", "xcrun", "mount"):
+    for name in ("xcodebuild", "xcrun", "mount", "python"):
         path = tools / name
         path.write_text(script, encoding="utf-8")
         path.chmod(0o755)
@@ -517,6 +533,7 @@ def test_metal_setup_diagnostics_preserve_failures(
             "TEST_DIAGNOSTIC_FAILURE": "1" if diagnostic_failure else "0",
             "TEST_INSTALLED": str(tmp_path / "installed"),
             "TEST_LOG": str(log),
+            "TEST_HELPER": str(ROOT / "tools/ensure_metal_toolchain.py"),
         },
         capture_output=True,
         text=True,
@@ -546,15 +563,47 @@ def test_metal_setup_diagnostics_preserve_failures(
     )
     assert any("-std=metal4.1" in row["args"] for row in calls) is (
         failure not in {"download", "unavailable"}
-        or workflow == "translator-tests.yml"
-        and failure == "unavailable"
     )
+    if failure in {"activation", "late-activation"}:
+        assert "Waiting for downloaded Metal toolchain activation" in result.stderr
     if exit_code:
         assert "::group::Metal toolchain failure diagnostics" in result.stdout
     if failure == "unavailable" and not diagnostic_failure:
         assert '"status": "installed"' in result.stdout
     if failure == "language":
         assert "unsupported Metal language version" in result.stderr
+        assert sum("-std=metal4.1" in row["args"] for row in calls) == 1
+
+
+def test_all_metal_downloads_use_the_bounded_readiness_check():
+    helper = "python tools/ensure_metal_toolchain.py"
+    counts = {}
+    for name in ("translator-tests.yml", "demo-project-testing.yml"):
+        text = (WORKFLOW_DIR / name).read_text()
+        assert "-downloadComponent MetalToolchain" not in text
+        workflow = yaml.safe_load(text)
+        events = workflow.get("on", workflow.get(True))
+        for event in ("push", "pull_request"):
+            assert "paths-ignore" not in events[event]
+            if "paths" in events[event]:
+                assert_paths_covered(
+                    events[event]["paths"],
+                    "tools/ensure_metal_toolchain.py",
+                    "tests/test_metal_toolchain_setup.py",
+                )
+            else:
+                assert events[event] == {"branches": ["main"]}
+        jobs = workflow["jobs"]
+        counts[name] = sum(
+            helper in step.get("run", "")
+            for job in jobs.values()
+            for step in job["steps"]
+        )
+        for job in jobs.values():
+            for step in job["steps"]:
+                if helper in step.get("run", ""):
+                    assert "continue-on-error" not in step
+    assert counts == {"translator-tests.yml": 1, "demo-project-testing.yml": 15}
 
 
 @pytest.mark.parametrize("exit_code", (0, 7))
