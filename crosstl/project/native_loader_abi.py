@@ -279,6 +279,12 @@ def generate_native_loader_execution_abi(descriptor: Mapping[str, Any]) -> str:
     """Render a deterministic, allocation-free C execution wrapper for one unit."""
 
     normalized = _validate_descriptor(descriptor)
+    if "dispatchRegion" in normalized["provenance"]:
+        raise NativeLoaderABIError(
+            "execution-dispatch-region-unsupported",
+            "C execution wrappers do not yet enforce specialized dispatch regions.",
+            path="$.provenance.dispatchRegion",
+        )
     if any(
         "metadataPrecondition" in binding.get("provenance", {})
         for binding in normalized["bindings"]

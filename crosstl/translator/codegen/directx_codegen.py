@@ -62,6 +62,10 @@ from ..ast import (
     WhileNode,
 )
 from ..cooperative_matrix import get_cooperative_matrix_fragment_mapping
+from ..dispatch_region_contract import (
+    codegen_dispatch_region,
+    with_dispatch_region_header,
+)
 from ..metadata_preconditions import (
     checked_metadata_preconditions,
     validate_codegen_metadata_preconditions,
@@ -337,6 +341,7 @@ from .image_access_contracts import (
     unsupported_texture_samples_query_call_expression,
     validate_texture_operation_arity,
 )
+from .index_range_contracts import truncating_division_interval
 from .loop_induction import (
     fixed_stride_loop_terminates,
     geometric_loop_terminates,
@@ -3135,12 +3140,17 @@ class HLSLCodeGen:
         self.metadata_preconditions = checked_metadata_preconditions(records)
 
     def generate_program(self, ast, target_stage=None):
+        region = codegen_dispatch_region(
+            ast, self.hlsl_software_subgroup_stage_entries(ast, target_stage)
+        )
         records = validate_codegen_metadata_preconditions(
             self.hlsl_software_subgroup_stage_entries(ast, target_stage),
             self.metadata_preconditions,
         )
         code = self._generate_program(ast, target_stage)
-        return with_metadata_precondition_header(code, records) if records else code
+        if records:
+            code = with_metadata_precondition_header(code, records)
+        return with_dispatch_region_header(code, region)
 
     def _generate_program(self, ast, target_stage=None):
         """Render an AST to HLSL, optionally filtering stage entry points."""
@@ -38468,8 +38478,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 return min(products), max(products)
             if expression.op == "/" and right[0] == right[1] and right[0] > 0:
-                divisor = right[0]
-                return int(left[0] / divisor), int(left[1] / divisor)
+                return truncating_division_interval(left, right)
             return None
         if isinstance(expression, TernaryOpNode):
             condition = self.hlsl_private_pointer_condition_value(

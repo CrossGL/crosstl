@@ -1253,8 +1253,39 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
         )
         state.loaded_artifact = self._load_artifact(state, module_path)
         prepared = self._prepare_dispatch_request(state, artifact_path, module_path)
+        from crosstl.translator.dispatch_region_contract import (
+            DISPATCH_REGION_PREFIX,
+            check_dispatch_region_geometry,
+            parse_dispatch_region_header,
+        )
+
         from .metadata_preconditions import check_native_metadata_snapshots
 
+        try:
+            artifact_content = artifact_snapshot.path.read_bytes()
+            region = (
+                parse_dispatch_region_header(artifact_content.decode("utf-8"))
+                if DISPATCH_REGION_PREFIX.rstrip().encode("ascii") in artifact_content
+                else None
+            )
+            if region is not None and self.target not in {"directx", "opengl"}:
+                raise ValueError(
+                    "Dispatch region artifacts require DirectX or OpenGL execution."
+                )
+            check_dispatch_region_geometry(region, prepared.dispatch)
+        except (ValueError, UnicodeError) as exc:
+            raise RuntimeAdapterSetupError(
+                str(exc),
+                details={
+                    "reasonKind": "dispatch-region-contract-invalid",
+                    "target": self.target,
+                },
+            ) from exc
+        if region is not None:
+            state.details["dispatchRegion"] = region.to_json()
+            state.record_step(
+                "bind", "check-native-dispatch-region", details=region.to_json()
+            )
         try:
             receipts = check_native_metadata_snapshots(
                 artifact_snapshot.path, self.target, prepared.buffers

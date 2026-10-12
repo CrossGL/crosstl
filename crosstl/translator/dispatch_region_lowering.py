@@ -95,6 +95,20 @@ def _expression(kind, physical, value_type, region):
     if kind == "count":
         return _constant(region.source_workgroup_count, value_type)
     offset = region.thread_offset if kind == "thread" else region.workgroup_offset
+    scalar, width = _coordinate_type(value_type)
+    if width > 1:
+        name = ("uvec" if scalar == "uint" else "ivec") + str(width)
+        return FunctionCallNode(
+            IdentifierNode(name),
+            [
+                BinaryOpNode(
+                    MemberAccessNode(physical, "xyz"[index]),
+                    "+",
+                    LiteralNode(offset[index], PrimitiveType(scalar)),
+                )
+                for index in range(width)
+            ],
+        )
     return BinaryOpNode(physical, "+", _constant(offset, value_type))
 
 

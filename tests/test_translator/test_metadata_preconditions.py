@@ -977,3 +977,84 @@ def test_native_metadata_bounded_indices(tmp_path):
                 item["requirement"]["sourceResource"]["parameter"]: item["value"]
                 for item in checks
             } == {"index": index, "offset": offset}
+
+
+def test_native_metadata_bounded_division(tmp_path):
+    if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":
+        pytest.skip(
+            "set CROSTL_REQUIRE_METADATA_PRECONDITIONS=1 for native metadata checks"
+        )
+    from tests.runtime_helpers import _validate
+    from tests.test_translator.test_integer_interval_division import (
+        DIVISION_CASES,
+        DIVISION_SOURCE,
+        _division_config,
+        _division_request,
+    )
+    from tests.test_translator.test_loop_updates import _execute
+    from tests.test_translator.test_project_metadata_entry_scope import _packages
+
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    _, package, (descriptor,) = _packages(_division_config(tmp_path, target))
+    for numerator, divisor in DIVISION_CASES:
+        request, outputs = _division_request(descriptor, package, numerator, divisor)
+        work = tmp_path / f"native-division-{numerator}-{divisor}"
+        work.mkdir()
+        _execute(
+            request,
+            outputs,
+            work,
+            validate=_validate,
+            original_source=DIVISION_SOURCE if target == "metal" else None,
+            original_entry="read_value",
+        )
+        evidence = json.loads((work / "evidence.json").read_text())
+        for record in evidence["records"].values():
+            observations = record["details"]["inputObservations"]
+            assert len(observations) == 3
+            assert all(item["unchanged"] for item in observations.values())
+        checks = evidence["records"]["generated"]["details"]["metadataPreconditions"]
+        assert {
+            item["requirement"]["sourceResource"]["parameter"]: item["value"]
+            for item in checks
+        } == {"index": numerator, "offset": divisor}
+
+
+def test_native_region_metadata_indices(tmp_path):
+    if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":
+        pytest.skip(
+            "set CROSTL_REQUIRE_METADATA_PRECONDITIONS=1 for native metadata checks"
+        )
+    from tests.runtime_helpers import _validate
+    from tests.test_translator.test_dispatch_region_contract import (
+        REGION_INDEX_SOURCE,
+        _region_index_config,
+        _region_index_request,
+    )
+    from tests.test_translator.test_loop_updates import _execute
+    from tests.test_translator.test_project_metadata_entry_scope import _packages
+
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    _, package, (descriptor,) = _packages(_region_index_config(tmp_path, target))
+    for index, offset in ((1, 1), (1, 2), (16, 1), (16, 2)):
+        request, outputs = _region_index_request(descriptor, package, index, offset)
+        work = tmp_path / f"native-region-index-{index}-{offset}"
+        work.mkdir()
+        _execute(
+            request,
+            outputs,
+            work,
+            validate=_validate,
+            original_source=REGION_INDEX_SOURCE if target == "metal" else None,
+            original_entry="read_value",
+        )
+        evidence = json.loads((work / "evidence.json").read_text())
+        for record in evidence["records"].values():
+            observations = record["details"]["inputObservations"]
+            assert len(observations) == 3
+            assert all(item["unchanged"] for item in observations.values())
+        if target != "metal":
+            assert (
+                evidence["records"]["generated"]["details"]["dispatchRegion"]
+                == descriptor["provenance"]["dispatchRegion"]
+            )

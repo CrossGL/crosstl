@@ -75,6 +75,10 @@ from ..cooperative_matrix import (
     get_cooperative_matrix_fragment_mapping,
     has_cooperative_matrix_fragment_mapping,
 )
+from ..dispatch_region_contract import (
+    codegen_dispatch_region,
+    with_dispatch_region_header,
+)
 from ..metadata_preconditions import (
     checked_metadata_preconditions,
     validate_codegen_metadata_preconditions,
@@ -332,7 +336,9 @@ from .index_range_contracts import (
     IndexTargetProfile,
     IntegerRange,
     decide_index_narrowing,
+    nonnegative_remainder_interval,
     parse_index_range_assertions,
+    truncating_division_interval,
 )
 from .loop_induction import (
     fixed_stride_loop_terminates,
@@ -7336,6 +7342,9 @@ class GLSLCodeGen:
         self.metadata_preconditions = checked_metadata_preconditions(records)
 
     def generate_program(self, ast, target_stage=None):
+        region = codegen_dispatch_region(
+            ast, self.glsl_software_subgroup_stage_entries(ast, target_stage)
+        )
         records = validate_codegen_metadata_preconditions(
             self.glsl_software_subgroup_stage_entries(ast, target_stage),
             self.metadata_preconditions,
@@ -7347,7 +7356,9 @@ class GLSLCodeGen:
             self.float_atomic_storage = FloatAtomicStorage(self, roots=roots)
             code = self._generate_program(ast, target_stage)
             self.float_atomic_storage.verify()
-        return with_metadata_precondition_header(code, records) if records else code
+        if records:
+            code = with_metadata_precondition_header(code, records)
+        return with_dispatch_region_header(code, region)
 
     def _generate_program(self, ast, target_stage=None):
         """Render an AST to GLSL, optionally filtering stage entry points."""
@@ -9171,6 +9182,18 @@ class GLSLCodeGen:
                         }
                     )
 
+        region = getattr(self, "glsl_dispatch_entry_regions", {}).get(id(function))
+        if region is not None:
+            for component, (count, width) in enumerate(
+                zip(region.workgroup_count, region.workgroup_size)
+            ):
+                for builtin, interval in (
+                    ("gl_WorkGroupID", (0, count - 1)),
+                    ("gl_NumWorkGroups", (count, count)),
+                    ("gl_GlobalInvocationID", (0, count * width - 1)),
+                ):
+                    key = self.glsl_index_component_interval_key(builtin, component)
+                    builtin_intervals[key] = interval
         intervals.update(builtin_intervals)
         for parameter in (
             getattr(function, "parameters", getattr(function, "params", [])) or []
@@ -9748,6 +9771,23 @@ class GLSLCodeGen:
                     assigned_interval = self.glsl_checked_private_pointer_interval(
                         assigned, intervals, constants
                     )
+                    assigned_components = (
+                        self.glsl_static_integer_vector_component_intervals(
+                            assigned,
+                            self.glsl_source_expression_type(target),
+                            intervals,
+                            constants,
+                        )
+                        if isinstance(assigned, IdentifierNode)
+                        and self.glsl_source_expression_type(target) is not None
+                        and self.type_name_string(
+                            self.glsl_source_expression_type(target)
+                        )
+                        == self.type_name_string(
+                            self.glsl_source_expression_type(assigned)
+                        )
+                        else None
+                    )
                     operator = self.map_operator(
                         getattr(value, "operator", getattr(value, "op", "="))
                     )
@@ -9770,6 +9810,12 @@ class GLSLCodeGen:
                     if replacement is not None:
                         intervals[target_name] = replacement
                     if operator == "=":
+                        for component, bounds in enumerate(assigned_components or ()):
+                            key = self.glsl_index_component_interval_key(
+                                target_name, component
+                            )
+                            if key is not None:
+                                intervals[key] = bounds
                         for member, interval in assigned_members.items():
                             intervals[f"{target_name}.{member}"] = interval
                 elif isinstance(target, MemberAccessNode):
@@ -10102,6 +10148,10 @@ class GLSLCodeGen:
         """Create GLSL helper variants for concrete storage image arguments."""
         self.glsl_metadata_entry_bounds = {}
         entries = self.glsl_software_subgroup_stage_entries(ast, target_stage)
+        region = codegen_dispatch_region(ast, entries)
+        self.glsl_dispatch_entry_regions = (
+            {id(entries[0][1]): region} if region is not None else {}
+        )
         self.glsl_entry_pointer_parameters = {
             id(function): {
                 parameter.name
@@ -39268,28 +39318,9 @@ complex64_t crossgl_complex64_mod_assign(
                 right = self.glsl_index_value_range(
                     expression.right, active, intervals=intervals
                 )
-                if (
-                    operator_name == "%"
-                    and right is not None
-                    and right.is_exact
-                    and right.minimum > 0
-                ):
+                if operator_name == "%" and right is not None and right.minimum > 0:
                     left = left or self.glsl_integer_type_domain(
                         expression.left, allow_wide=True
-                    )
-                if (
-                    operator_name == "%"
-                    and left is not None
-                    and left.minimum >= 0
-                    and right is not None
-                    and right.is_exact
-                    and right.minimum > 0
-                ):
-                    return IntegerRange(
-                        0,
-                        right.minimum - 1,
-                        INDEX_RANGE_STATIC,
-                        expression_debug_name(expression),
                     )
                 if operator_name == "&":
                     mask = None
@@ -39324,18 +39355,18 @@ complex64_t crossgl_complex64_mod_assign(
                         left.maximum * right.maximum,
                     )
                     bounds = (min(products), max(products))
-                elif operator_name == "/" and right.is_exact and right.minimum != 0:
-                    divisor = right.minimum
-
-                    def truncate_division(value):
-                        quotient = abs(value) // abs(divisor)
-                        return -quotient if (value < 0) != (divisor < 0) else quotient
-
-                    quotients = (
-                        truncate_division(left.minimum),
-                        truncate_division(left.maximum),
+                elif operator_name in {"/", "%"}:
+                    operation = (
+                        truncating_division_interval
+                        if operator_name == "/"
+                        else nonnegative_remainder_interval
                     )
-                    bounds = (min(quotients), max(quotients))
+                    bounds = operation(
+                        (left.minimum, left.maximum),
+                        (right.minimum, right.maximum),
+                    )
+                    if bounds is None:
+                        return None
                 else:
                     return None
                 candidate = IntegerRange(
@@ -47845,20 +47876,14 @@ complex64_t crossgl_complex64_mod_assign(
                     left[1] * right[1],
                 )
                 return min(products), max(products)
-            if expression.op == "/" and right[0] == right[1] and right[0] > 0:
+            if expression.op == "/" and right[0] > 0:
+                return truncating_division_interval(left, right)
+            if expression.op == "%" and right[0] > 0 and left[0] >= 0:
+                remainder_interval = nonnegative_remainder_interval(left, right)
+                if right[0] != right[1] or left[0] == left[1]:
+                    return remainder_interval
                 divisor = right[0]
-                return int(left[0] / divisor), int(left[1] / divisor)
-            if (
-                expression.op == "%"
-                and right[0] == right[1]
-                and right[0] > 0
-                and left[0] >= 0
-            ):
-                divisor = right[0]
-                if left[0] == left[1]:
-                    remainder = left[0] % divisor
-                    return remainder, remainder
-                maximum = min(divisor - 1, left[1])
+                maximum = remainder_interval[1]
                 dividend = expression.left
                 if (
                     isinstance(dividend, BinaryOpNode)

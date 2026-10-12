@@ -37,6 +37,11 @@ from crosstl.project.runtime_verification import (
 )
 from crosstl.project.storage_record_layout import validate_storage_record_layout
 from crosstl.project.uniform_layout import validate_std140_block_layout
+from crosstl.translator.dispatch_region_contract import (
+    DISPATCH_REGION_PREFIX,
+    check_dispatch_region_geometry,
+    parse_dispatch_region_header,
+)
 from crosstl.translator.dispatch_regions import DispatchRegion
 from crosstl.translator.frozen_specializations import (
     FROZEN_SPECIALIZATION_PREFIX,
@@ -295,6 +300,26 @@ def build_native_loader_dispatch_request(
         entry_point=entry_point["name"],
         reflected_workgroup_size=_reflected_workgroup_size(entry_point),
     )
+    try:
+        artifact_region = (
+            parse_dispatch_region_header(artifact_content.decode("utf-8"))
+            if DISPATCH_REGION_PREFIX.rstrip().encode("ascii") in artifact_content
+            else None
+        )
+        if artifact_region is not None and (
+            target not in {"directx", "opengl"}
+            or normalized["provenance"].get("dispatchRegion")
+            != artifact_region.to_json()
+        ):
+            raise ValueError(
+                "Descriptor dispatch region differs from the artifact header."
+            )
+    except (ValueError, UnicodeError) as exc:
+        raise NativeLoaderDispatchError(
+            "dispatch-region-contract-invalid",
+            str(exc),
+            path="$.provenance.dispatchRegion",
+        ) from exc
     if "dispatchRegion" in normalized["provenance"]:
         region = DispatchRegion.from_json(normalized["provenance"]["dispatchRegion"])
         if (
@@ -309,6 +334,12 @@ def build_native_loader_dispatch_request(
                 path="$.dispatchGeometry",
                 details={"dispatchRegion": region.to_json()},
             )
+    try:
+        check_dispatch_region_geometry(artifact_region, dispatch)
+    except ValueError as exc:
+        raise NativeLoaderDispatchError(
+            "dispatch-region-geometry-mismatch", str(exc), path="$.dispatchGeometry"
+        ) from exc
     if dispatch.thread_grid_size and target != "metal":
         raise NativeLoaderDispatchError(
             "exact-thread-grid-unsupported",

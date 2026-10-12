@@ -28699,13 +28699,13 @@ def test_glsl_propagates_exact_signed_divisor_range(divisor, expected):
 
 
 @pytest.mark.parametrize(
-    "denominator_range",
+    "denominator_range,expected",
     [
-        pytest.param((0, 0), id="zero-divisor"),
-        pytest.param((2, 3), id="non-exact-divisor"),
+        pytest.param((0, 0), None, id="zero-divisor"),
+        pytest.param((2, 3), (-3, 4), id="non-exact-divisor"),
     ],
 )
-def test_glsl_divisor_range_propagation_fails_closed(denominator_range):
+def test_glsl_divisor_range_propagation(denominator_range, expected):
     numerator = IdentifierNode(
         "numerator",
         expression_type=PrimitiveType("int64_t"),
@@ -28731,7 +28731,12 @@ def test_glsl_divisor_range_propagation_fails_closed(denominator_range):
         ]
     )
 
-    assert generator.glsl_index_value_range(expression) is None
+    value_range = generator.glsl_index_value_range(expression)
+    if expected is None:
+        assert value_range is None
+    else:
+        assert value_range is not None
+        assert (value_range.minimum, value_range.maximum) == expected
 
 
 def test_glsl_software_subgroup_accepts_workgroup_uniform_runtime_loop(

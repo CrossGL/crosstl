@@ -1230,9 +1230,18 @@ proving the delta or subscript separately is insufficient. Unproved conversions
 remain structured errors. Native controls cover direct and rebased reads at all
 configured endpoints, unchanged inputs and guarded outputs.
 
+Division proofs use exact integer arithmetic with truncation toward zero, including
+64-bit endpoints. Checked nonzero divisor intervals can bound division and
+non-negative remainder expressions without substituting a constant divisor.
+Ranges containing zero establish no proof, and source overflow is checked
+separately from target index representability.
+
 These are conditional integer-range proofs, not allocation bounds checks. They do
-not establish bounds for dispatch-derived global coordinates or arbitrary helper
-state. A custom caller must retain the artifact's metadata obligations even when
+not establish bounds for arbitrary dispatches or helper state. An exact
+``dispatch_region`` contract can additionally bound the selected entry's physical
+group and invocation coordinates. These facts remain entry-scoped and must be
+enforced together with scalar metadata requirements. A custom caller must retain
+the artifact's obligations even when
 the emitted source uses a narrower index type.
 Record fields, GPU-produced metadata, shared allocations and C execution wrappers
 remain unsupported. C wrapper generation rejects descriptors carrying these
@@ -1240,15 +1249,16 @@ requirements rather than silently dropping enforcement. A custom runtime that
 bypasses the Python native adapters must implement equivalent checks before using
 a constrained artifact; the shader comment is not a device-side guard.
 
-Frozen specializations, resource storage encodings and checked metadata share a
+Frozen specializations, resource storage encodings, checked metadata and exact
+dispatch regions share a
 leading artifact contract block. Existing single-record artifacts remain valid;
 readers accept each distinct record in any order. Writers use frozen constants,
-storage, then metadata order. The block starts on the first source line and
+storage, metadata, then dispatch-region order. The block starts on the first source line and
 contains at most one record of each supported type, with a 64 KiB limit per
 record. Blank lines, ordinary comments and shader text end the block. Duplicates,
 malformed records and reserved markers later in the source are rejected, not
 silently ignored. Individual schema and resource-layout validation still apply.
-Formatting, package inspection and native dispatch retain all three contracts,
+Formatting, package inspection and native dispatch retain these contracts,
 including frozen half-buffer kernels with checked scalar bounds.
 
 The existing three-platform native resource job compiles and executes a
@@ -2501,6 +2511,15 @@ physical size against the reflected entry and rejects a different launch count
 or a second thread-grid mapping. Each region needs its own output directory or
 otherwise distinct artifact identity; a grid or offset change changes the
 specialized program, even when the physical workgroup shape stays the same.
+
+New specialized artifacts also retain a leading ``crosstl-dispatch-region``
+record. Reflection checks its physical size against the compute entry. Native
+request construction rejects missing or differing descriptor region metadata;
+the execution adapter independently rechecks the actual launch against the
+artifact snapshot, including global extents. The execution receipt records the
+checked region. C execution wrappers currently reject region-specialized
+descriptors because they do not implement these checks. Custom runtimes must
+enforce the same launch obligation; the header is not a device-side guard.
 
 Region packages also record ``dispatchRegionProgram``: the selected source
 entry, resolved CrossGL program hash (including included definitions), target,

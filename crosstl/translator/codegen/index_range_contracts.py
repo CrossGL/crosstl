@@ -13,6 +13,34 @@ INDEX_RANGE_UNPROVEN = "unproven"
 INDEX_RANGE_OUT_OF_RANGE = "out-of-range"
 
 
+def truncating_division_interval(dividend, divisor):
+    """Bound integer division exactly, with truncation toward zero.
+
+    A divisor interval containing zero establishes no bound. These are
+    mathematical bounds; callers must also check source integer overflow.
+    """
+    if divisor[0] <= 0 <= divisor[1]:
+        return None
+    quotients = []
+    for numerator in dividend:
+        for denominator in divisor:
+            quotient = abs(numerator) // abs(denominator)
+            if (numerator < 0) != (denominator < 0):
+                quotient = -quotient
+            quotients.append(quotient)
+    return min(quotients), max(quotients)
+
+
+def nonnegative_remainder_interval(dividend, divisor):
+    """Bound a non-negative remainder without assuming a constant divisor."""
+    if dividend[0] < 0 or divisor[0] <= 0:
+        return None
+    if dividend[0] == dividend[1] and divisor[0] == divisor[1]:
+        remainder = dividend[0] % divisor[0]
+        return remainder, remainder
+    return 0, min(dividend[1], divisor[1] - 1)
+
+
 @dataclass(frozen=True)
 class IntegerRange:
     """An inclusive integer interval and the proof that established it."""

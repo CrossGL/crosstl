@@ -20,6 +20,8 @@ from crosstl.project.integral_literals import (
 )
 from crosstl.project.storage_record_layout import storage_record_layout
 from crosstl.project.uniform_layout import std140_block_layout
+from crosstl.translator.codegen.stage_utils import compute_local_size
+from crosstl.translator.dispatch_region_contract import parse_dispatch_region_header
 from crosstl.translator.frozen_specializations import parse_frozen_specializations
 from crosstl.translator.metadata_preconditions import (
     apply_metadata_preconditions,
@@ -315,6 +317,34 @@ def _reflect_resource_identities(artifact_path, record):
                     f"Metadata precondition reflection failed: {exc}",
                     severity="error",
                     details={"contract": "metadata-precondition"},
+                ),
+            ),
+        )
+    try:
+        region = parse_dispatch_region_header(source)
+        if region is not None:
+            entries = record["entryPoints"]
+            if (
+                record["parser"] not in {"directx-reflection", "opengl-reflection"}
+                or len(entries) != 1
+                or entries[0].get("stage") != "compute"
+                or compute_local_size(entries[0].get("executionConfig"))
+                != tuple(str(n) for n in region.workgroup_size)
+            ):
+                raise ValueError(
+                    "Dispatch region differs from the reflected compute entry."
+                )
+    except ValueError as exc:
+        return empty_host_interface_record(
+            "failed",
+            parser=record["parser"],
+            artifact_format=record["artifactFormat"],
+            diagnostics=(
+                ReflectionDiagnostic(
+                    REFLECTION_PARSE_FAILED,
+                    f"Dispatch region reflection failed: {exc}",
+                    severity="error",
+                    details={"contract": "dispatch-region"},
                 ),
             ),
         )
