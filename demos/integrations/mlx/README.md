@@ -68,9 +68,20 @@ cancellation failures in [#2215](https://github.com/CrossGL/crosstl/issues/2215)
 [Windows complex-scan evidence](https://github.com/CrossGL/crosstl/actions/runs/38198627802/artifacts/11724483886)
 and [macOS original/generated evidence](https://github.com/CrossGL/crosstl/actions/runs/38198627802/artifacts/11724523773)
 retain every numerical case and guard. macOS additionally checks unchanged
-read-only inputs after original-source execution. Generated scan input
-readbacks and complete host routing remain unqualified; these results do not
-establish whole-family coverage or a complete MLX backend.
+read-only inputs after original-source execution. These results do not establish
+whole-family coverage or a complete MLX backend.
+
+At translator revision `bbb815b4ddf468717291039747ac873ba6864696`, all three
+platforms additionally retain generated read-only input observations for every
+one of those 121 scan cases: 242 input/launch-metadata observations, 149,328
+computed words and 4,544 input and output guard words per target. Independent
+artifact checks reconstruct the uploaded bytes and verify source, module,
+binding and allocation identities. The [Windows native host artifact](https://github.com/CrossGL/crosstl/actions/runs/38213774655/artifacts/11731281467)
+also verifies generic scalar, metadata-record and 256-byte-offset input views.
+The [three-platform scan artifacts](https://github.com/CrossGL/crosstl/actions/runs/38213774655)
+retain the complete numerical cases; the wider Windows host job still fails
+the distinct arithmetic controls below. Observing unchanged inputs after
+dispatch does not prove immutability during execution or complete host routing.
 
 The project-porting binary32 step selects every native execution and Metal
 linking case without repeating portable parser and compiler checks from the
@@ -88,7 +99,14 @@ request bytes, inputs and exact expected words. Both modes execute even if the
 first fails. The comparison retains requested and observed flags and fails on
 either numerical failure; it is diagnostic, not a replacement for the required
 gate. Its process limit is 180 seconds within the existing eight-minute step.
-Debug information is not a documented guarantee of different arithmetic.
+Both diagnostic modes request the Direct3D validation layer and retain its
+bounded messages, including messages from failed pipeline creation. At
+`bbb815b4`, all five debug-flag attempts reached device creation but failed at
+`CreateComputePipelineState` with `0x80070057`; none executed a debug-mode
+shader. Four default-mode cases differ numerically and the ordinary matrix
+control passes. Validation-layer diagnostics are pending native execution and
+are not a fix. Debug information is not a documented guarantee of different
+arithmetic.
 
 For manually dispatched workflow runs, that diagnostic instead compares the
 same precise scalar, cooperative-matrix and narrow-buffer controls on the

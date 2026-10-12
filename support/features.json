@@ -11836,8 +11836,8 @@
       "description": "Read selected input views after native execution without changing shader access, and compare exact device bytes with immutable upload snapshots.",
       "support": {
         "directx": {
-          "status": "partial",
-          "notes": "The public loader selects uploaded read-only bindings independently of writable outputs. Structured, raw and constant-buffer observations preserve register classes, allocation identities and view bounds. Exact bytes are compared with upload snapshots; malformed, missing or changed readbacks fail. Windows native observation qualification is pending; protocol and request tests alone do not prove device input preservation.",
+          "status": "supported",
+          "notes": "The public loader selects uploaded read-only bindings independently of writable outputs, preserving register classes, allocation identities and view bounds. Windows native scalar, metadata-record, nonzero-offset and complete pinned scan controls retain exact input and launch-metadata observations alongside numerical outputs and guards. Missing, malformed, truncated or changed readbacks fail. This qualifies post-dispatch preservation of selected views, not immutable memory during execution, index narrowing, full host routing or general runtime arithmetic correctness.",
           "evidence": [
             "tests/test_translator/test_runtime_input_observations.py::def test_loader_observations_do_not_create_outputs",
             "tests/test_translator/test_runtime_input_observations.py::def test_adapter_requires_exact_observation_bytes",

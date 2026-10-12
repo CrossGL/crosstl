@@ -164,6 +164,7 @@ def _compare(
         "sourceSHA256": hashlib.sha256(source_bytes).hexdigest(),
         "moduleSHA256": hashlib.sha256(module_bytes).hexdigest(),
         "replacesRequiredGate": False,
+        "debugLayerRequested": True,
         "modes": {},
     }
     if device is not None:
@@ -194,6 +195,7 @@ def _compare(
                     device if device is not None else compushady.get_current_device()
                 ),
                 tool_debug=enabled,
+                debug_layer=True,
             )
 
         outcome = {"requestedPipelineStateFlags": int(debug)}
@@ -215,6 +217,9 @@ def _compare(
             assert evidence["moduleSha256"] == report["moduleSHA256"]
             assert evidence["artifactSha256"] == report["sourceSHA256"]
             native = evidence["runtime"]["directxRuntime"]
+            assert native["requestedDebugLayer"] is True
+            assert native["debugLayer"]["enabled"] is True
+            outcome["debugLayer"] = native["debugLayer"]
             if device is not None:
                 assert native["adapterIdentity"] == report["requestedAdapter"]
             assert native["requestedPipelineStateFlags"] == int(debug)
@@ -327,9 +332,11 @@ def test_warp_adapter_receipt_requires_complete_identity(damage):
 
 
 @pytest.mark.parametrize(
-    "failure", [None, "numerical", "dispatch", "flags", "module", "request", "adapter"]
+    "failure",
+    [None, "numerical", "dispatch", "flags", "module", "request", "adapter", "layer"],
 )
 def test_comparison_keeps_both_modes_and_exact_module(tmp_path, monkeypatch, failure):
+    from crosstl.project import directx_runtime
     from crosstl.project.directx_runtime import _device_identity
 
     compiled, executed = [], []
@@ -343,6 +350,16 @@ def test_comparison_keeps_both_modes_and_exact_module(tmp_path, monkeypatch, fai
         shared_system_memory=4096,
         adapter_luid=[17, 0],
     )
+    options_seen = []
+
+    def native_views(*args, **options):
+        assert args == ("unchanged request",)
+        assert options["device"] is device
+        assert options["debug_layer"] is True
+        options_seen.append(options["tool_debug"])
+
+    monkeypatch.setattr(directx_runtime, "execute_buffer_views", native_views)
+    monkeypatch.setitem(sys.modules, "compushady", SimpleNamespace())
 
     def compile_source(source, work, **options):
         compiled.append((source, options))
@@ -359,6 +376,7 @@ def test_comparison_keeps_both_modes_and_exact_module(tmp_path, monkeypatch, fai
         assert options["buffer_byte_offset"] == 16
         artifact, binary = options["module_compiler"](source, work, flags=("-Gis",))
         debug = work.name == "tool-debug"
+        options["buffer_view_executor"]("unchanged request")
         if failure == "dispatch" and not debug:
             raise RuntimeError("Default dispatch failed")
         evidence = {
@@ -366,6 +384,12 @@ def test_comparison_keeps_both_modes_and_exact_module(tmp_path, monkeypatch, fai
             "moduleSha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
             "runtime": {
                 "directxRuntime": {
+                    "requestedDebugLayer": True,
+                    "debugLayer": {
+                        "enabled": failure != "layer",
+                        "discardedMessages": 0,
+                        "messages": [],
+                    },
                     "adapterIdentity": (
                         {"name": "Another adapter"}
                         if failure == "adapter" and debug
@@ -404,8 +428,10 @@ def test_comparison_keeps_both_modes_and_exact_module(tmp_path, monkeypatch, fai
         _compare(*arguments, **options)
     assert compiled == [("source", {"flags": ("-Gis",)})]
     assert executed == ["default", "tool-debug"]
+    assert options_seen == [False, True]
     report = json.loads((tmp_path / "comparison.json").read_text())
     assert report["replacesRequiredGate"] is False
+    assert report["debugLayerRequested"] is True
     assert report["adapterSelection"] == "EnumWarpAdapter"
     assert report["requestedAdapter"] == _device_identity(device)
     assert report["adapterLuid"] == [17, 0]

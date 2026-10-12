@@ -449,6 +449,56 @@ def _worker_runtime_identity(path):
     }
 
 
+def _worker_debug_messages(path):
+    with path.open("rb") as stream:
+        payload = stream.read(24 + 64 * (20 + 4096) + 1)
+    if len(payload) > 24 + 64 * (20 + 4096):
+        raise _error(
+            "DirectX debug messages exceed their limit.", "worker-output-invalid"
+        )
+    stream = io.BytesIO(payload)
+
+    def read(size):
+        data = stream.read(size)
+        if len(data) != size:
+            raise _error(
+                "DirectX debug messages are truncated.", "worker-output-invalid"
+            )
+        return data
+
+    version, stored, discarded, count = struct.unpack("<IQQI", read(24))
+    if version != 0x31475844 or stored > 64 or count != stored:
+        raise _error(
+            "DirectX debug message header is invalid.", "worker-output-invalid"
+        )
+    messages = []
+    for _ in range(count):
+        identifier, category, severity, truncated, length = struct.unpack(
+            "<5I", read(20)
+        )
+        if category > 10 or severity > 4 or truncated not in (0, 1) or length > 4096:
+            raise _error("DirectX debug message is invalid.", "worker-output-invalid")
+        description = read(length)
+        if b"\0" in description:
+            raise _error(
+                "DirectX debug description contains NUL.", "worker-output-invalid"
+            )
+        messages.append(
+            {
+                "id": identifier,
+                "category": category,
+                "severity": severity,
+                "description": description.decode("utf-8", errors="replace"),
+                "truncated": bool(truncated),
+            }
+        )
+    if stream.read(1):
+        raise _error(
+            "DirectX debug messages have trailing data.", "worker-output-invalid"
+        )
+    return {"enabled": True, "discardedMessages": discarded, "messages": messages}
+
+
 def _device_identity(device):
     name = getattr(device, "name", None)
     hardware = getattr(device, "is_hardware", None)
@@ -490,6 +540,7 @@ def execute_buffer_views(
     sdk_directory=None,
     sdk_version=None,
     tool_debug=False,
+    debug_layer=False,
 ):
     """Run unchanged DXIL using native CBV/SRV/UAV descriptors and shared buffers."""
     from .native_runtime_drivers import _buffer_readback, _input_observation_readback
@@ -498,6 +549,8 @@ def execute_buffer_views(
         raise _error(
             "WARP tool debugging requires a boolean.", "pipeline-flags-invalid"
         )
+    if type(debug_layer) is not bool:
+        raise _error("DirectX debug layer requires a boolean.", "debug-layer-invalid")
     payload, descriptions = encode_dispatches(dispatches, allocations, view_keys)
     identity = _device_identity(device)
     sdk = _sdk_snapshot(sdk_directory, sdk_version)
@@ -521,6 +574,7 @@ def execute_buffer_views(
                     str(identity["dedicatedSystemMemory"]),
                     str(identity["sharedSystemMemory"]),
                     *(["--warp-tool-debug"] if tool_debug else []),
+                    *(["--debug-layer"] if debug_layer else []),
                 ],
                 timeout=120,
             )
@@ -553,6 +607,16 @@ def execute_buffer_views(
         }
         if identity_error is not None:
             runtime_details["workerRuntimeError"] = str(identity_error)
+        debug_error = None
+        if debug_layer:
+            runtime_details["requestedDebugLayer"] = True
+            try:
+                runtime_details["debugLayer"] = _worker_debug_messages(
+                    output.with_name(output.name + ".debug")
+                )
+            except (OSError, RuntimeAdapterSetupError) as exc:
+                debug_error = exc
+                runtime_details["debugLayerError"] = str(exc)
         if sdk:
             runtime_details["requestedSDK"] = sdk.identity()
         if isinstance(getattr(state, "details", None), dict):
@@ -576,6 +640,30 @@ def execute_buffer_views(
                 "worker-output-invalid",
                 **runtime_details,
             ) from identity_error
+        if debug_error is not None:
+            raise _error(
+                "DirectX worker did not report its debug messages.",
+                "worker-output-invalid",
+                **runtime_details,
+            ) from debug_error
+        if debug_layer and runtime_details["debugLayer"]["discardedMessages"]:
+            raise _error(
+                "DirectX validation discarded messages.",
+                "debug-layer-incomplete",
+                **runtime_details,
+            )
+        if debug_layer and any(
+            message["severity"] < 2
+            for message in runtime_details["debugLayer"]["messages"]
+        ):
+            raise RuntimeAdapterDispatchError(
+                "DirectX validation reported an error.",
+                details={
+                    "target": "directx",
+                    "reasonKind": "debug-layer-error",
+                    **runtime_details,
+                },
+            )
         if runtime_identity is None:
             raise _error(
                 "DirectX worker did not report its runtime identity.",

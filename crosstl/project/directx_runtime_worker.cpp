@@ -165,6 +165,7 @@ Request read_request(std::istream& input) {
 #endif
 #include <windows.h>
 #include <d3d12.h>
+#include <d3d12sdklayers.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 #include <cstdlib>
@@ -188,6 +189,59 @@ void check(HRESULT status, const char* operation) {
         throw std::runtime_error(message.str());
     }
 }
+class DebugMessages {
+    ComPtr<ID3D12InfoQueue> queue;
+    std::filesystem::path path;
+public:
+    explicit DebugMessages(const std::filesystem::path& destination) : path(destination) {
+        if (path.empty()) return;
+        ComPtr<ID3D12Debug> debug;
+        check(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)), "D3D12GetDebugInterface");
+        debug->EnableDebugLayer();
+    }
+    void attach(ID3D12Device* device) {
+        if (path.empty()) return;
+        check(device->QueryInterface(IID_PPV_ARGS(&queue)), "QueryInterface ID3D12InfoQueue");
+        check(queue->SetMessageCountLimit(64), "SetMessageCountLimit");
+    }
+    void save() const {
+        if (!queue) return;
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        if (!output) throw std::runtime_error("cannot open debug message output");
+        auto stored = queue->GetNumStoredMessagesAllowedByRetrievalFilter();
+        auto count = static_cast<uint32_t>(std::min<UINT64>(stored, 64));
+        write_integer(output, 0x31475844u, 4);
+        write_integer(output, stored, 8);
+        write_integer(output, queue->GetNumMessagesDiscardedByMessageCountLimit(), 8);
+        write_integer(output, count, 4);
+        for (uint32_t index = 0; index < count; ++index) {
+            SIZE_T size = 0;
+            check(queue->GetMessage(index, nullptr, &size), "GetMessage size");
+            if (size < sizeof(D3D12_MESSAGE) || size > 65536)
+                throw std::runtime_error("invalid debug message size");
+            std::vector<char> storage(size);
+            auto* message = reinterpret_cast<D3D12_MESSAGE*>(storage.data());
+            check(queue->GetMessage(index, message, &size), "GetMessage");
+            auto length = message->DescriptionByteLength;
+            if (!length || length > storage.size() - sizeof(D3D12_MESSAGE))
+                throw std::runtime_error("invalid debug description size");
+            if (message->pDescription[length - 1] == '\0') --length;
+            auto retained = std::min<SIZE_T>(length, 4096);
+            write_integer(output, static_cast<uint32_t>(message->ID), 4);
+            write_integer(output, static_cast<uint32_t>(message->Category), 4);
+            write_integer(output, static_cast<uint32_t>(message->Severity), 4);
+            write_integer(output, length > retained ? 1 : 0, 4);
+            write_integer(output, retained, 4);
+            output.write(message->pDescription, static_cast<std::streamsize>(retained));
+        }
+        output.close();
+        if (!output) throw std::runtime_error("cannot write debug message output");
+    }
+    ~DebugMessages() {
+        try { save(); }
+        catch (const std::exception& error) { std::cerr << error.what() << '\n'; }
+    }
+};
 void write_runtime_libraries(const std::filesystem::path& path) {
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     if (!output) throw std::runtime_error("cannot open runtime identity output");
@@ -334,10 +388,13 @@ struct Device {
 };
 
 void execute(const Request& request, std::ostream& output, const AdapterIdentity& identity,
-             const std::filesystem::path& runtime_path, bool tool_debug) {
+             const std::filesystem::path& runtime_path, bool tool_debug,
+             const std::filesystem::path& debug_path) {
     Progress progress;
+    DebugMessages debug(debug_path);
     progress.enter("device-create");
     Device runtime(identity, tool_debug);
+    debug.attach(runtime.device.Get());
     // Inspect this process after device creation, not the Python launcher.
     write_runtime_libraries(runtime_path);
     progress.enter("allocations");
@@ -502,11 +559,15 @@ int wmain(int argc, wchar_t** argv) {
 int main(int argc, char** argv) {
 #endif
     try {
-        if (argc != 3 && argc != 9 && argc != 10)
+        if (argc != 3 && (argc < 9 || argc > 11))
             throw std::runtime_error("expected request, output and adapter identity");
-        bool tool_debug = argc == 10;
-        if (tool_debug && std::filesystem::path(argv[9]) != "--warp-tool-debug")
-            throw std::runtime_error("invalid pipeline debug option");
+        [[maybe_unused]] bool tool_debug = false, debug_layer = false;
+        for (int index = 9; index < argc; ++index) {
+            auto option = std::filesystem::path(argv[index]);
+            if (option == "--warp-tool-debug" && !tool_debug) tool_debug = true;
+            else if (option == "--debug-layer" && !debug_layer) debug_layer = true;
+            else throw std::runtime_error("invalid pipeline debug option");
+        }
         std::ifstream input(std::filesystem::path(argv[1]), std::ios::binary);
         if (!input) throw std::runtime_error("cannot open request");
         auto request = read_request(input);
@@ -516,7 +577,7 @@ int main(int argc, char** argv) {
             return 0;
         }
 #ifdef _WIN32
-        if (argc != 9 && argc != 10) throw std::runtime_error("selected adapter identity is required");
+        if (argc < 9) throw std::runtime_error("selected adapter identity is required");
         auto hardware = adapter_number(argv[4]);
         auto vendor = adapter_number(argv[5]);
         if (hardware > 1 || vendor > UINT32_MAX)
@@ -527,7 +588,12 @@ int main(int argc, char** argv) {
         if (!output) throw std::runtime_error("cannot open output");
         auto runtime_path = std::filesystem::path(argv[2]);
         runtime_path += ".runtime";
-        execute(request, output, identity, runtime_path, tool_debug);
+        std::filesystem::path debug_path;
+        if (debug_layer) {
+            debug_path = std::filesystem::path(argv[2]);
+            debug_path += ".debug";
+        }
+        execute(request, output, identity, runtime_path, tool_debug, debug_path);
         if (!output) throw std::runtime_error("cannot write output");
         if (tool_debug) std::cout << "{\"pipelineStateFlags\":1}\n";
 #else

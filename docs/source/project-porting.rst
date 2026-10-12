@@ -3520,6 +3520,18 @@ describes additional debugging information, not an arithmetic workaround or
 a guarantee that optimizations are disabled. A passing diagnostic does not
 qualify default execution.
 
+``debug_layer=True`` independently enables the Direct3D validation layer before
+device creation. It requires the Windows graphics debug components and never
+falls back silently when they are unavailable. The option retains up to 64
+``ID3D12InfoQueue`` messages with identifiers, categories, severities and bounded
+descriptions under ``directxRuntime.debugLayer``. Description truncation and
+discarded-message counts are explicit. Corruption/error messages, discarded
+messages or a missing/malformed receipt prevent a successful validation result.
+A dispatch failure or timeout remains the primary error; any available validation
+messages accompany it rather than replacing it. This option does not change the
+shader or enable GPU-based shader instrumentation. Neither debug option is
+enabled during ordinary execution.
+
 Ranged execution supports shared read-only views, disjoint UAV views and
 cross-dispatch read/write reuse. Simultaneous SRV/CBV reads and UAV writes to one
 allocation within a dispatch remain unsupported by the worker's classic

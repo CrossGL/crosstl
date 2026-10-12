@@ -1600,15 +1600,6 @@
       "status": "partial"
     },
     {
-      "backend": "DirectX / HLSL",
-      "backend_id": "directx",
-      "category": "project",
-      "feature": "Native read-only input observations",
-      "feature_id": "project.native_input_observations",
-      "notes": "The public loader selects uploaded read-only bindings independently of writable outputs. Structured, raw and constant-buffer observations preserve register classes, allocation identities and view bounds. Exact bytes are compared with upload snapshots; malformed, missing or changed readbacks fail. Windows native observation qualification is pending; protocol and request tests alone do not prove device input preservation.",
-      "status": "partial"
-    },
-    {
       "backend": "WebGL / GLSL ES",
       "backend_id": "webgl",
       "category": "project",
@@ -13845,8 +13836,8 @@
             "tests/test_translator/test_runtime_input_observations.py::def test_readonly_inputs_execute_with_observations",
             "tests/test_translator/test_runtime_input_observations.py::def test_input_observations_are_required_in_native_ci"
           ],
-          "notes": "The public loader selects uploaded read-only bindings independently of writable outputs. Structured, raw and constant-buffer observations preserve register classes, allocation identities and view bounds. Exact bytes are compared with upload snapshots; malformed, missing or changed readbacks fail. Windows native observation qualification is pending; protocol and request tests alone do not prove device input preservation.",
-          "status": "partial"
+          "notes": "The public loader selects uploaded read-only bindings independently of writable outputs, preserving register classes, allocation identities and view bounds. Windows native scalar, metadata-record, nonzero-offset and complete pinned scan controls retain exact input and launch-metadata observations alongside numerical outputs and guards. Missing, malformed, truncated or changed readbacks fail. This qualifies post-dispatch preservation of selected views, not immutable memory during execution, index narrowing, full host routing or general runtime arithmetic correctness.",
+          "status": "supported"
         },
         "hip": {
           "evidence": [],
@@ -19535,7 +19526,7 @@
   },
   "summary": {
     "backend_count": 11,
-    "backlog_count": 46,
+    "backlog_count": 45,
     "feature_count": 88,
     "status_counts": {
       "cuda": {
@@ -19548,8 +19539,8 @@
       },
       "directx": {
         "diagnostic": 2,
-        "partial": 2,
-        "supported": 84,
+        "partial": 1,
+        "supported": 85,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
