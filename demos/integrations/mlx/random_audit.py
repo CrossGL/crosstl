@@ -26,7 +26,7 @@ from demos.integrations.mlx.portable_host.prepare import COMMIT
 from demos.integrations.mlx.portable_host.random_layout import RandomOutputLayout
 from demos.integrations.mlx.portable_host.random_packages import (
     ENTRIES,
-    build_packages,
+    RandomPackageCache,
     verify_source,
 )
 
@@ -321,7 +321,7 @@ def audit(root, target, output, *, byte_tails=False):
     }
     native = None
     try:
-        descriptors = build_packages(root.resolve(), target, output.resolve())
+        cache = RandomPackageCache(root, output / "variants", target)
         native = executor(target)
         cases = workloads(byte_tails=byte_tails)
         for case in cases:
@@ -329,17 +329,22 @@ def audit(root, target, output, *, byte_tails=False):
             destination.mkdir()
             record = {"workload": case, "passed": False}
             try:
+                descriptors, package = cache.get(
+                    case["keyCount"], case["bytesPerKey"], case["execution"]
+                )
+                record["package"] = str(package)
                 inputs, outputs = dispatch_values(descriptors[case["entry"]], case)
                 write_json(
                     destination / "inputs.json", {"inputs": inputs, "outputs": outputs}
                 )
                 request = build_native_loader_dispatch_request(
                     descriptors[case["entry"]],
-                    output / "package",
+                    package,
                     inputs,
                     outputs,
                     case["execution"],
                     expected_target=target,
+                    observe_inputs=[name for name in inputs if name not in outputs],
                 )
                 native.evidence_directory = destination
                 result = native.run(request)

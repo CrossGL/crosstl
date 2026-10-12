@@ -2184,7 +2184,7 @@ def test_ci_limits_portable_contracts_without_removing_platform_abi_checks():
     assert contracts["if"] == "runner.os == 'Linux'"
     command = shlex.split(contracts["run"])
     assert command[:6] == ["python", "-m", "pytest", "-q", "-n", "auto"]
-    assert len(command[6:]) == 23
+    assert len(command[6:]) == 24
     assert set(command[6:]) == {
         "demos/integrations/mlx/tests/host/test_portable_host.py",
         "demos/integrations/mlx/tests/host/test_portable_reductions.py",
@@ -2205,6 +2205,7 @@ def test_ci_limits_portable_contracts_without_removing_platform_abi_checks():
         "demos/integrations/mlx/tests/host/test_slice_capacity.py",
         "demos/integrations/mlx/tests/test_random_audit.py",
         "demos/integrations/mlx/tests/host/test_portable_random.py",
+        "demos/integrations/mlx/tests/host/test_random_packages.py",
         "demos/integrations/mlx/tests/host/test_cast_batches.py",
         "demos/integrations/mlx/tests/host/test_large_copies.py",
         "demos/integrations/mlx/tests/host/test_binary_batches.py",

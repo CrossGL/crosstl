@@ -91,6 +91,7 @@ from demos.integrations.mlx.portable_host.quantization_packages import (
 from demos.integrations.mlx.portable_host.random_packages import (
     ENTRIES as RANDOM_ENTRIES,
 )
+from demos.integrations.mlx.portable_host.random_packages import RandomPackageCache
 from demos.integrations.mlx.portable_host.random_packages import (
     load_index as load_random_index,
 )
@@ -288,9 +289,15 @@ class HostRuntime:
         if set(self.descriptors) != set(ENTRIES):
             raise ValueError("Packages must contain the exact supported entry set")
         self.random_directory = Path(random).resolve() if random is not None else None
+        self.randoms = None
         if self.random_directory is not None:
+            if mlx_root is None:
+                raise ValueError("Random dispatch requires the pinned MLX source")
             self.descriptors.update(
                 load_random_index(self.random_directory, self.target)
+            )
+            self.randoms = RandomPackageCache(
+                mlx_root, self.random_directory / "variants", self.target
             )
         self.bitwise_directory = (
             Path(bitwise).resolve() if bitwise is not None else None

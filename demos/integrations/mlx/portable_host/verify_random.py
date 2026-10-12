@@ -60,6 +60,7 @@ def worker(args):
             args.packages,
             output / "dispatch.jsonl",
             random=args.random,
+            mlx_root=args.mlx_root,
             reductions=[args.reductions],
         )
         if args.worker == "missing":
@@ -245,7 +246,12 @@ def verify(args):
                 )
                 in index["descriptors"]
             ]
-            verify_artifacts(events, directory, index, variants=variants)
+            if directory == args.random:
+                random_evidence.verify_packages(
+                    events, args.mlx_root, directory, target
+                )
+            else:
+                verify_artifacts(events, directory, index, variants=variants)
             checked += len(events)
         if checked != len(trace):
             raise ValueError("Random trace contains an unknown or duplicate package")

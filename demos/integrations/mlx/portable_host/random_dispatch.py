@@ -119,7 +119,7 @@ def validate(entry, buffers, byte_count, execution):
 def dispatch(host, entry, buffers, count, byte_count, launch):
     from demos.integrations.mlx.portable_host.runtime import DISPATCH_VERSION
 
-    if host.random_directory is None or entry not in host.descriptors:
+    if host.randoms is None or entry not in host.descriptors:
         raise ValueError("No translated random package is configured")
     if count != len(TYPES) or not buffers or launch is None:
         raise ValueError(
@@ -141,7 +141,10 @@ def dispatch(host, entry, buffers, count, byte_count, launch):
     }
     source_values["bytes_per_key"] = [layout.native_bytes_per_key]
     source_values["odd"] = [metadata["wordCount"] % 2]
-    descriptor = host.descriptors[entry]
+    descriptors, directory = host.randoms.get(
+        metadata["keyCount"], layout.native_bytes_per_key, execution
+    )
+    descriptor = descriptors[entry]
     inputs, outputs, matched = {}, {}, set()
     for binding in descriptor["bindings"]:
         if "executionInput" in binding.get("provenance", {}):
@@ -178,7 +181,6 @@ def dispatch(host, entry, buffers, count, byte_count, launch):
         required |= {"ndim", "key_shape", "key_strides"}
     if matched != required:
         raise ValueError("Reflected random bindings do not cover the source contract")
-    directory = host.random_directory / "package"
     request = build_native_loader_dispatch_request(
         descriptor, directory, inputs, outputs, execution, expected_target=host.target
     )

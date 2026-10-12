@@ -361,7 +361,11 @@ def test_audit_keeps_complete_failure_evidence(
 ):
     cases = audit.workloads(byte_tails=byte_tails)
     desc = {entry: descriptor("opengl", entry) for entry in audit.ENTRIES}
-    monkeypatch.setattr(audit, "build_packages", lambda *args: desc)
+    monkeypatch.setattr(
+        audit,
+        "RandomPackageCache",
+        lambda *args: SimpleNamespace(get=lambda *args: (desc, tmp_path / "package")),
+    )
     monkeypatch.setattr(audit, "verify_source", lambda root: None)
     monkeypatch.setattr(
         audit,
@@ -429,7 +433,11 @@ def test_cli_returns_failure_for_failed_audit(tmp_path, monkeypatch):
 
 def test_native_failure_records_every_case_and_closes_runtime(tmp_path, monkeypatch):
     desc = {entry: descriptor("opengl", entry) for entry in audit.ENTRIES}
-    monkeypatch.setattr(audit, "build_packages", lambda *args: desc)
+    monkeypatch.setattr(
+        audit,
+        "RandomPackageCache",
+        lambda *args: SimpleNamespace(get=lambda *args: (desc, tmp_path / "package")),
+    )
     monkeypatch.setattr(audit, "verify_source", lambda root: None)
     monkeypatch.setattr(
         audit, "build_native_loader_dispatch_request", lambda *args, **kwargs: None

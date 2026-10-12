@@ -2,6 +2,7 @@
 
 import hashlib
 import math
+from pathlib import Path
 
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_input_bindings,
@@ -13,6 +14,29 @@ from demos.integrations.mlx.portable_host.random_layout import (
     MAX_WORKGROUP_COUNT,
 )
 from demos.integrations.mlx.portable_host.random_workloads import words
+
+
+def verify_packages(events, root, directory, target):
+    from demos.integrations.mlx.portable_host.random_packages import RandomPackageCache
+    from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
+
+    cache = RandomPackageCache(root, Path(directory) / "variants", target)
+    for event in events:
+        metadata = event["randomMetadata"]
+        execution = {name: event[name] for name in ("workgroupCount", "workgroupSize")}
+        descriptors, package = cache.load(
+            metadata["keyCount"], metadata["nativeBytesPerKey"], execution
+        )
+        require(
+            event.get("packageRoot") == str(package),
+            "Random cache package root differs",
+        )
+        verify_artifacts(
+            [event],
+            package.parent,
+            {"target": target, "descriptors": descriptors},
+            variants=False,
+        )
 
 
 def audit_event(np, event):

@@ -154,11 +154,15 @@ def event_packages(event, host):
         return [host.quantization.get(entry)]
     if entry.startswith("gather"):
         return [host.gathers.get(entry, 0)]
-    directory = (
-        host.bfloat_directory
-        if entry in BFLOAT_ENTRIES
-        else host.random_directory if entry in RANDOM_ENTRIES else host.directory
-    )
+    if entry in RANDOM_ENTRIES:
+        metadata = event["randomMetadata"]
+        descriptors, package = host.randoms.load(
+            metadata["keyCount"],
+            metadata["nativeBytesPerKey"],
+            {key: event[key] for key in ("workgroupCount", "workgroupSize")},
+        )
+        return [(descriptors[entry], package)]
+    directory = host.bfloat_directory if entry in BFLOAT_ENTRIES else host.directory
     return [(host.descriptors[entry], directory / "package")]
 
 

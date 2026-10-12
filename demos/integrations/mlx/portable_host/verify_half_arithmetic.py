@@ -51,6 +51,7 @@ def worker(args):
             half=args.half,
             half_arithmetic=args.arithmetic,
             random=args.random,
+            mlx_root=args.mlx_root,
         )
         if args.worker == "missing":
             host.descriptors.pop("vv_Addfloat16")
@@ -225,7 +226,12 @@ def verify(args):
             events = [
                 event for event in trace if event["entry"] in index["descriptors"]
             ]
-            verify_artifacts(events, directory, index, variants=False)
+            if directory == args.random:
+                random_evidence.verify_packages(
+                    events, args.mlx_root, directory, base["target"]
+                )
+            else:
+                verify_artifacts(events, directory, index, variants=False)
             checked += len(events)
         if checked != len(trace):
             raise ValueError(

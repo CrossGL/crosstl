@@ -264,9 +264,14 @@ def test_random_writeback_requires_exact_native_storage(
         random_dispatch, "build_native_loader_dispatch_request", request
     )
     monkeypatch.setattr(random_dispatch, "execute", execute)
+
+    def cached(key_count, bytes_per_key, execution):
+        assert (key_count, bytes_per_key, execution) == (3, 4, launch.execution())
+        return {entry: desc}, tmp_path / "checked-package"
+
     host = SimpleNamespace(
         target=target,
-        random_directory=None if fault == "package" else tmp_path,
+        randoms=None if fault == "package" else SimpleNamespace(get=cached),
         descriptors={entry: desc},
         dispatch_count=0,
         trace=tmp_path / "trace.jsonl",
@@ -288,6 +293,7 @@ def test_random_writeback_requires_exact_native_storage(
         expected = bytes([128, 255, 0, 3, 4, 5, 7, 8, 9])
         assert bytes(memory["out"]) == expected and host.dispatch_count == 1
         event = json.loads(host.trace.read_text())
+        assert event["packageRoot"] == str(tmp_path / "checked-package")
         assert event["randomValues"] == native
         assert event["randomGuardValues"] == random_dispatch.GUARD
         assert event["outputHash"] == hashlib.sha256(expected).hexdigest()
@@ -312,11 +318,17 @@ def test_random_writeback_requires_exact_native_storage(
         "null",
         "output-bound",
         "legacy-bound",
+        "contract",
+        "condition",
+        "region",
     ],
 )
 def test_random_index_verifies_source_and_package_identity(
     tmp_path, monkeypatch, fault
 ):
+    contract = random_packages.dispatch_contract(
+        1, 4, {"workgroupCount": [1, 1, 1], "workgroupSize": [1, 1, 1]}
+    )
     descriptors = {
         entry: dict(
             descriptor("opengl", entry),
@@ -331,6 +343,11 @@ def test_random_index_verifies_source_and_package_identity(
         )
         for entry in random_packages.ENTRIES
     }
+    for entry, desc in descriptors.items():
+        desc["provenance"] = {"dispatchRegion": random_packages._region(contract)}
+        desc["bindings"][3]["provenance"] = {
+            "metadataPrecondition": random_packages._condition(entry, contract)
+        }
     units = [
         {"id": entry, "entryPoint": {"source": entry}}
         for entry in random_packages.ENTRIES
@@ -339,6 +356,7 @@ def test_random_index_verifies_source_and_package_identity(
         "commit": random_packages.COMMIT,
         "target": "opengl",
         "maximumNativeByteCount": random_layout.MAX_NATIVE_BYTES,
+        "contract": contract,
         "descriptors": json.loads(json.dumps(descriptors)),
     }
     if fault == "pin":
@@ -349,6 +367,14 @@ def test_random_index_verifies_source_and_package_identity(
         index["maximumNativeByteCount"] = 65518
     elif fault == "legacy-bound":
         index.pop("maximumNativeByteCount")
+    elif fault == "contract":
+        index.pop("contract")
+    elif fault in {"condition", "region"}:
+        if fault == "condition":
+            descriptors["rbitsc"]["bindings"][3]["provenance"].clear()
+        else:
+            descriptors["rbitsc"]["provenance"].clear()
+        index["descriptors"] = descriptors
     elif fault == "entry":
         units[0]["entryPoint"]["source"] = "unknown"
     elif fault in {"source", "backend", "hash"}:

@@ -1305,8 +1305,9 @@ all narrow reduction operations or a complete upstream test-suite pass.
 ## Random Generation
 
 The optional random package family connects `RandomBits::eval_gpu` to the
-unchanged `rbitsc` and `rbits` kernels. `HostRuntime(..., random=...)` loads and
-verifies both packages against the source pin, entry identities and artifact
+unchanged `rbitsc` and `rbits` kernels. The
+`HostRuntime(..., random=..., mlx_root=...)` constructor loads and verifies both
+packages against the source pin, entry identities and artifact
 contents. Key arrays must contain uint32 pairs. Contiguous, transposed,
 broadcast and positive-stride key views use their original layout; negative
 strides are materialized by translated copy kernels. Empty outputs do not
@@ -1323,8 +1324,17 @@ must fit signed 32-bit shader indices, and each launch dimension must fit
 change Threefry counters and therefore the random stream. Larger grids still
 fail explicitly before dispatch. Device allocation limits also apply.
 
-Random package indexes record the expanded output bound; regenerate older
-packages before using this host route. This remains synchronous integration,
+The initial package verifies both entries. Dispatch then selects a cached variant
+bound to the validated key count, native bytes per key and exact workgroup grid.
+Its scalar precondition is embedded in the artifact, and non-Metal artifacts
+also retain their dispatch-region contract. Cache identities include the pinned
+source, translation implementation and packaging recipe. Evidence verification
+loads the existing variant and checks the dispatched artifact; it never creates
+a replacement package. OpenGL output indexing uses these checked bounds, while
+the strided-key assertions remain subject to the host's allocation-span checks.
+
+Random package indexes record the output bound and dispatch contract; regenerate
+older packages before using this host route. This remains synchronous integration,
 not a complete random API or backend. Other elementwise and copy size limits
 still prevent large composed distributions and the full upstream suite.
 
