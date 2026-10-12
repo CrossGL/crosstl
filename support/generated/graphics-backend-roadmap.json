@@ -1899,6 +1899,13 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_wave_and_rayquery_intrinsics_codegen",
+            "tests/test_translator/test_subgroup_value_structs.py::def test_metal_value_struct_expressions_compile_on_each_target",
+            "tests/test_translator/test_subgroup_value_structs.py::def test_nested_aggregate_expression_evaluates_each_field_once_natively",
+            "tests/test_translator/test_subgroup_float_helpers.py::def test_floating_helper_chain_converges_without_changing_ast",
+            "tests/test_translator/test_subgroup_float_helpers.py::def test_unproved_math_arguments_and_conversions_remain_guarded",
+            "tests/test_translator/test_subgroup_float_helpers.py::def test_owned_math_names_do_not_inherit_builtin_purity",
+            "tests/test_translator/test_subgroup_float_helpers.py::def test_empty_receivers_require_an_inert_declaration",
+            "tests/test_translator/test_subgroup_float_helpers.py::def test_floating_helpers_preserve_native_guarded_execution",
             "tests/test_translator/test_subgroup_value_structs.py::def test_private_struct_constructors_and_typed_overloads_converge",
             "tests/test_translator/test_subgroup_value_structs.py::def test_private_struct_mixed_scalar_fields_keep_typed_initializers",
             "tests/test_translator/test_subgroup_value_structs.py::def test_uninitialized_or_effectful_value_structs_are_not_speculated",
@@ -1996,6 +2003,11 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins",
+            "tests/test_translator/test_subgroup_float_helpers.py::def test_floating_helper_chain_converges_without_changing_ast",
+            "tests/test_translator/test_subgroup_float_helpers.py::def test_unproved_math_arguments_and_conversions_remain_guarded",
+            "tests/test_translator/test_subgroup_float_helpers.py::def test_owned_math_names_do_not_inherit_builtin_purity",
+            "tests/test_translator/test_subgroup_float_helpers.py::def test_empty_receivers_require_an_inert_declaration",
+            "tests/test_translator/test_subgroup_float_helpers.py::def test_floating_helpers_preserve_native_guarded_execution",
             "tests/test_translator/test_subgroup_value_structs.py::def test_private_struct_constructors_and_typed_overloads_converge",
             "tests/test_translator/test_subgroup_value_structs.py::def test_private_struct_mixed_scalar_fields_keep_typed_initializers",
             "tests/test_translator/test_subgroup_value_structs.py::def test_uninitialized_or_effectful_value_structs_are_not_speculated",

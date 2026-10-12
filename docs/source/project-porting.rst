@@ -705,6 +705,24 @@ compatible signature. Storage-qualified or reference parameters, resource
 effects and unsupported aggregate layouts remain diagnostic. Complete pinned
 complex scans have separate native demo controls at 64, 128 and 256 threads;
 those controls do not establish full cumulative-operation host routing.
+HLSL aggregate values used inside expressions are constructed through typed
+helpers, since HLSL does not support struct constructor calls or compound
+literals. Helper names avoid source declarations and are reset for each
+generated program; native controls retain field argument order and single
+evaluation, and strict compiler checks cover the complete Metal source path.
+
+Pure wrapper expressions may also call unshadowed scalar binary32 ``min``,
+``max``, ``exp`` and ``log`` helpers, and divide floating-point operands. The
+proof checks argument types, arity and dependencies; it does not assume that
+an owned function with the same name is a builtin. Stateless local receivers
+must have no fields, inheritance, generic parameters, attributes or initializer.
+Integer division, speculative memory accesses and floating-to-integer
+conversions remain unsupported. Disabled subgroups may produce unused NaNs or
+infinities, but retain the same barrier schedule and cannot publish their
+results. Native controls compare collective results with lane-local evaluation
+on the same device, including exceptional inputs and partial groups. These
+controls establish scheduling and guarded effects, not cross-device
+transcendental accuracy or complete log-add-exp scan parity.
 
 The bounded Windows test also records live Direct3D 12 debug-layer messages
 through ``tools/run_directx_diagnostics.py``. Each entry's JSON-lines log is

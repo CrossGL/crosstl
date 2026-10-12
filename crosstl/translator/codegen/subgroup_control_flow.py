@@ -358,9 +358,29 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
         )
     }
     value_types = scalar_types | set(value_structs)
+    pure_float_arities = {"min": 2, "max": 2, "exp": 1, "log": 1}
     empty_types = {
-        node.name for node in nodes if isinstance(node, StructNode) and not node.members
+        node.name
+        for node in nodes
+        if isinstance(node, StructNode)
+        and not (
+            node.members or node.generic_params or node.inheritance or node.attributes
+        )
     }
+
+    def pure_float_call(node, types):
+        operation = _operation(node)
+        return (
+            isinstance(node, FunctionCallNode)
+            and operation in pure_float_arities
+            and operation not in functions
+            and not node.generic_args
+            and len(node.arguments) == pure_float_arities[operation]
+            and all(
+                value_type(argument, types) in {"float", "float32_t"}
+                for argument in node.arguments
+            )
+        )
 
     def value_type(node, types):
         if isinstance(node, IdentifierNode):
@@ -418,6 +438,8 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
             return _type_name(function.return_type) if function is not None else None
         if operation in value_types:
             return operation
+        if pure_float_call(node, types):
+            return "float"
         if operation in {"isnan", "isinf"} | _VOTES:
             return "bool"
         if operation in {"asfloat", "asint", "asuint"}:
@@ -603,6 +625,8 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                 or operator in {"+", "-", "*"}
                 and operands <= scalar_types
                 and operands & _FLOATS
+                or operator == "/"
+                and operands <= _FLOATS
             ):
                 children = [node.left, node.right]
         elif isinstance(node, TernaryOpNode):
@@ -618,6 +642,16 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                 proof[1] for proof in proofs
             )
         operation = _operation(node)
+        if pure_float_call(node, types):
+            proofs = [
+                expression_inputs(argument, parameters, types, visiting, initialized)
+                for argument in node.arguments
+            ]
+            if any(proof is None for proof in proofs):
+                return None
+            return frozenset().union(*(proof[0] for proof in proofs)), any(
+                proof[1] for proof in proofs
+            )
         if (
             isinstance(node, FunctionCallNode)
             and operation in scalar_types
@@ -721,6 +755,10 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                     if value is None and target in value_structs:
                         parameters[name], types[name] = frozenset(), target
                         initialized.discard(name)
+                        continue
+                    if value is None and target in empty_types:
+                        parameters[name], types[name] = frozenset(), target
+                        initialized.add(name)
                         continue
                 elif isinstance(statement, AssignmentNode):
                     destination = statement.target

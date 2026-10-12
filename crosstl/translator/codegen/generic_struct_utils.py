@@ -540,6 +540,9 @@ def expression_result_type(generator, expr):
 
 def format_struct_constructor_expression(generator, type_name, rendered_args):
     args = ", ".join(rendered_args)
+    formatter = getattr(generator, "format_struct_constructor_expression", None)
+    if formatter is not None:
+        return formatter(type_name, rendered_args)
     if getattr(generator, "struct_constructor_uses_braces", False):
         return f"{type_name}{{{args}}}"
     return f"{type_name}({args})"

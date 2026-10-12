@@ -13,6 +13,7 @@ import pytest
 from crosstl.project import build_native_loader_dispatch_request
 from crosstl.translator import parse
 from crosstl.translator.ast import FunctionNode
+from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.subgroup_control_flow import (
     converge_subgroup_conditional_calls,
 )
@@ -272,6 +273,23 @@ kernel void conditional_pair(device float* inputWords [[buffer(0)]],
 
 
 @pytest.mark.parametrize("shape", ((7, 5, 1), (32, 4, 1)))
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_metal_value_struct_expressions_compile_on_each_target(tmp_path, target, shape):
+    _source_text, descriptor, package = _package(
+        tmp_path, target, "float", shape, source=_native_source(math.prod(shape), 1)
+    )
+    generated = (package / descriptor["artifact"]["packagePath"]).read_text()
+    if target == "directx":
+        assert "= Pair(" not in generated and ", Pair(" not in generated
+        assert "if ((lane == 0u))" not in generated
+        assert "__crossgl_construct_Pair(" in generated
+    assert generated.count("counter++") == 1
+    compilation = tmp_path / "validation"
+    compilation.mkdir()
+    _compile(generated, target, compilation)
+
+
+@pytest.mark.parametrize("shape", ((7, 5, 1), (32, 4, 1)))
 @pytest.mark.parametrize("selected", (0, 1, 3))
 def test_value_struct_collectives_preserve_fields_and_guarded_effects(
     tmp_path, shape, selected
@@ -358,3 +376,132 @@ def test_value_structs_share_the_required_native_gate():
     assert "test_subgroup_value_structs.py" in step
     assert "--timeout-seconds 180" in step and "-n auto" in step
     assert "continue-on-error" not in step and "if:" not in step
+
+
+def test_hlsl_expression_factories_avoid_user_names_and_reset_between_programs(
+    tmp_path,
+):
+    source = """shader Factories {
+        struct Pair { float real; float imag; };
+        RWStructuredBuffer<float> results @register(u0);
+        float __crossgl_construct_Pair(float x) { return x + 1.0; }
+        float checksum(Pair value) { return value.real + value.imag; }
+        compute {
+            @numthreads(1, 1, 1)
+            void main() {
+                float __crossgl_construct_Pair_1 = 3.0;
+                uint counter = 0u;
+                results[0] = checksum(Pair(float(counter++), __crossgl_construct_Pair(2.0)));
+                results[1] = __crossgl_construct_Pair_1;
+                results[2] = checksum(Pair(4.0, 5.0));
+            }
+        }
+    }"""
+    generator = HLSLCodeGen()
+    ast = parse(source)
+    original = pickle.dumps(ast)
+    generated = generator.generate_stage(ast, "compute")
+    assert "Pair __crossgl_construct_Pair_2(float field_0, float field_1)" in generated
+    assert generated.count("counter++") == 1
+    assert pickle.dumps(ast) == original
+    _compile(generated, "directx", tmp_path)
+    generator.generate_stage(parse(_source()), "compute")
+    assert generator.generate_stage(ast, "compute") == generated
+
+
+@pytest.mark.parametrize(
+    "expression",
+    (
+        "value > 0u ? checksum(Pair(counter++, counter++)) : 0u",
+        "uint(value > 0u && checksum(Pair(counter++, counter++)) != 0u)",
+    ),
+)
+def test_effectful_constructor_fields_are_not_lifted_out_of_scalar_guards(expression):
+    source = """shader GuardedFields {
+        struct Pair { uint first; uint second; };
+        uint checksum(Pair value) { return value.first + value.second; }
+        uint guarded(uint value) {
+            uint counter = 0u;
+            return EXPR;
+        }
+    }""".replace("EXPR", expression)
+    with pytest.raises(ValueError, match="ordered statement materialization"):
+        HLSLCodeGen().generate(parse(source))
+
+
+def _constructor_effect_source():
+    return """#include <metal_stdlib>
+using namespace metal;
+struct Pair { uint first; uint second; };
+uint checksum(Pair value) { return 10u * value.first + value.second; }
+kernel void constructor_effects(device uint* inputWords [[buffer(0)]],
+                                device uint* outputWords [[buffer(1)]],
+                                uint index [[thread_position_in_grid]]) {
+    if (index < 8u) {
+        uint counter = inputWords[index];
+        outputWords[2u * index] = checksum(Pair{counter++, counter++});
+        outputWords[2u * index + 1u] = counter;
+    }
+}"""
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_nested_aggregate_expression_with_field_effects_compiles(tmp_path, target):
+    _, descriptor, package = _package(
+        tmp_path,
+        target,
+        "uint",
+        (32, 1, 1),
+        source=_constructor_effect_source(),
+        software_subgroups=False,
+    )
+    generated = (package / descriptor["artifact"]["packagePath"]).read_text()
+    assert generated.count("counter++") == 2
+    compilation = tmp_path / "validation"
+    compilation.mkdir()
+    _compile(generated, target, compilation)
+
+
+def test_nested_aggregate_expression_evaluates_each_field_once_natively(tmp_path):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for aggregate expression execution")
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    source, descriptor, package = _package(
+        tmp_path,
+        target,
+        "uint",
+        (32, 1, 1),
+        source=_constructor_effect_source(),
+        software_subgroups=False,
+    )
+    marker = 0xBAD01234
+    seeds = list(range(8))
+    expected = [value for seed in seeds for value in (11 * seed + 1, seed + 2)] + [
+        marker
+    ] * 17
+
+    def packet(values):
+        return {"dtype": "uint32", "shape": [len(values)], "values": values}
+
+    inputs = _bound_values(
+        descriptor,
+        {"inputWords": packet(seeds), "outputWords": packet([marker] * len(expected))},
+    )
+    outputs = _bound_values(
+        descriptor, {"inputWords": packet(seeds), "outputWords": packet(expected)}
+    )
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        outputs,
+        {"workgroupSize": [32, 1, 1], "workgroupCount": [1, 1, 1]},
+        expected_target=target,
+    )
+    _execute(
+        request,
+        outputs,
+        tmp_path,
+        original_source=source if target == "metal" else None,
+        original_entry="constructor_effects",
+    )

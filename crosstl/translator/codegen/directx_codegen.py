@@ -2248,6 +2248,8 @@ class HLSLCodeGen:
         self.hlsl_fixed_array_return_struct_nodes = {}
         self.hlsl_fixed_array_return_struct_metadata = {}
         self.required_hlsl_fixed_array_read_helpers = set()
+        self.hlsl_struct_constructor_names = {}
+        self.hlsl_struct_constructor_reserved_names = set()
         self.required_hlsl_complex64_helpers = set()
         self.required_hlsl_bfloat16_helpers = set()
         self.hlsl_bfloat16_storage_resource_source_types = {}
@@ -3265,6 +3267,12 @@ class HLSLCodeGen:
         self.hlsl_fixed_array_return_struct_nodes = {}
         self.hlsl_fixed_array_return_struct_metadata = {}
         self.required_hlsl_fixed_array_read_helpers = set()
+        self.hlsl_struct_constructor_names = {}
+        self.hlsl_struct_constructor_reserved_names = {
+            node.name
+            for node in self.walk_ast(ast)
+            if isinstance(getattr(node, "name", None), str)
+        }
         self.required_hlsl_complex64_helpers = set()
         self.required_hlsl_bfloat16_helpers = set()
         self.hlsl_bfloat16_storage_resource_source_types = {}
@@ -4595,6 +4603,7 @@ class HLSLCodeGen:
         code = (
             code[:storage_helper_offset]
             + self.hlsl_half_storage.declarations()
+            + self.generate_hlsl_struct_constructor_helpers()
             + code[storage_helper_offset:]
         )
         return (
@@ -23220,6 +23229,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             enum_constructor = generate_enum_constructor_expression(self, expr)
             if enum_constructor is not None:
                 return enum_constructor
+            self.validate_hlsl_struct_constructor_expression_context(expr)
             constructor = generate_struct_constructor_expression(self, expr)
             if constructor is not None:
                 return constructor
@@ -23305,6 +23315,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if complex64_constructor is not None:
                 return complex64_constructor
 
+            self.validate_hlsl_struct_constructor_expression_context(expr)
             struct_constructor = self.generate_hlsl_struct_constructor_call(
                 func_name,
                 args,
@@ -44370,13 +44381,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return self.hlsl_aggregate_value_type(expected_type)
 
     def hlsl_first_aggregate_conditional(self, expr, expected_type=None):
-        aggregate_type = self.hlsl_aggregate_conditional_type(expr, expected_type)
+        aggregate_type = self.hlsl_aggregate_conditional_type(
+            expr, expected_type
+        ) or self.hlsl_effectful_struct_constructor_type(expr)
         if aggregate_type is not None:
             return expr, aggregate_type
         for node in self.walk_ast(expr):
             if node is expr:
                 continue
-            aggregate_type = self.hlsl_aggregate_conditional_type(node)
+            aggregate_type = self.hlsl_aggregate_conditional_type(
+                node
+            ) or self.hlsl_effectful_struct_constructor_type(node)
             if aggregate_type is not None:
                 return node, aggregate_type
         return None, None
@@ -44403,7 +44418,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def hlsl_expression_has_observable_side_effects(
-        self, expr, *, allow_integer_constructors=False, allow_bfloat_constructors=False
+        self,
+        expr,
+        *,
+        allow_integer_constructors=False,
+        allow_bfloat_constructors=False,
+        allow_numeric_constructors=False,
     ):
         for node in self.walk_ast(expr):
             if isinstance(node, AssignmentNode):
@@ -44430,6 +44450,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         (
                             allow_integer_constructors
                             and self.hlsl_integer_arithmetic_type_info(name) is not None
+                        )
+                        or (
+                            allow_numeric_constructors
+                            and self.value_component_count(name) is not None
                         )
                         or (
                             allow_bfloat_constructors
@@ -44606,7 +44630,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         indent_str = "    " * indent
         code = condition_code
-        code += f"{indent_str}if ({rendered_condition}) {{\n"
+        code += f"{indent_str}if ({self.hlsl_strip_wrapping_parentheses(rendered_condition)}) {{\n"
         code += self.render_hlsl_aggregate_conditional_branch_assignment(
             getattr(expr, "true_expr", None),
             target,
@@ -44665,7 +44689,25 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return self.generate_statement_code(record_transfer, indent)
         target_type = self.expression_result_type(target)
         if self.hlsl_aggregate_conditional_type(value, target_type) is None:
-            return None
+            materialized = self.render_hlsl_aggregate_conditional_value_expression(
+                value, target_type, indent, context="assignment"
+            )
+            if materialized is None:
+                return None
+            if operator != "=" or self.hlsl_expression_has_observable_side_effects(
+                target
+            ):
+                self.hlsl_aggregate_error(
+                    value,
+                    expected_type=target_type,
+                    reason="field-evaluation-order-unproven",
+                    detail="materializing constructor fields would reorder the assignment target",
+                )
+            code, rendered = materialized
+            return (
+                code
+                + f"{'    ' * indent}{self.generate_expression(target)} = {rendered};\n"
+            )
         return self.generate_hlsl_aggregate_conditional_assignment(
             value,
             self.generate_expression(target),
@@ -44692,7 +44734,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         indent_str = "    " * indent
         code = condition_code
-        code += f"{indent_str}if ({rendered_condition}) {{\n"
+        code += f"{indent_str}if ({self.hlsl_strip_wrapping_parentheses(rendered_condition)}) {{\n"
         code += self.generate_hlsl_aggregate_conditional_return_branch(
             getattr(expr, "true_expr", None), aggregate_type, indent + 1
         )
@@ -44748,6 +44790,27 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def render_hlsl_aggregate_conditional_value_expression(
         self, expr, expected_type, indent, *, context
     ):
+        constructor_type = self.hlsl_effectful_struct_constructor_type(expr)
+        if constructor_type is not None:
+            if context in {"initializer", "return"}:
+                # These statement paths already initialize fields in source order.
+                return None
+            initializer = self.hlsl_struct_initializer_components(
+                constructor_type, expr
+            )
+            if initializer is None:
+                self.hlsl_aggregate_error(
+                    expr, expected_type=constructor_type, reason="field-layout-unproven"
+                )
+            type_name, fields, rendered_args, field_exprs = initializer
+            temporary = self.next_hlsl_temp_variable("struct_value")
+            self.local_variable_types[temporary] = type_name
+            code = f"{'    ' * indent}{type_name} {temporary};\n"
+            code += self.render_hlsl_struct_field_assignments(
+                temporary, fields, rendered_args, field_exprs, indent
+            )
+            return code, temporary
+
         materialized = self.materialize_hlsl_aggregate_conditional(
             expr, expected_type, indent, context=context
         )
@@ -44846,6 +44909,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not isinstance(func_name, str) or func_name not in getattr(
             self, "function_return_types", {}
         ):
+            if (
+                func_name == "buffer_store"
+                and len(args) == 3
+                and changed_indices == {2}
+            ):
+                value_type = self.expression_result_type(args[2])
+                if value_type is not None:
+                    temporary = self.next_hlsl_temp_variable("store_value")
+                    self.local_variable_types[temporary] = value_type
+                    argument_code += (
+                        f"{'    ' * indent}{self.map_type(value_type)} {temporary} = "
+                        f"{rendered_args[2]};\n"
+                    )
+                    rewritten = deepcopy(expr)
+                    rewritten.arguments = [*args[:2], IdentifierNode(temporary)]
+                    rewritten.args = rewritten.arguments
+                    return argument_code, self.generate_expression(rewritten)
             self.hlsl_aggregate_conditional_error(
                 first_conditional,
                 aggregate_type=first_aggregate_type,
@@ -45142,6 +45222,76 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             temp_name, type_name, indent
         )
         code += f"{indent_str}return {temp_name};\n"
+        return code
+
+    def hlsl_effectful_struct_constructor_type(self, expr):
+        if isinstance(expr, ConstructorNode):
+            type_name = infer_struct_constructor_type(self, expr)
+        elif isinstance(expr, FunctionCallNode):
+            type_name = self.function_call_name(expr)
+            if type_name in self.function_return_types:
+                return None
+        else:
+            return None
+        if self.hlsl_struct_constructor_fields(type_name) is None:
+            return None
+        if self.hlsl_expression_contains_typed_buffer_atomic(expr):
+            return None
+        arguments = list(getattr(expr, "arguments", []) or [])
+        arguments.extend((getattr(expr, "named_arguments", {}) or {}).values())
+        if any(
+            self.hlsl_expression_has_observable_side_effects(
+                arg, allow_numeric_constructors=True
+            )
+            for arg in arguments
+        ):
+            return self.map_type(type_name)
+        return None
+
+    def validate_hlsl_struct_constructor_expression_context(self, expr):
+        type_name = self.hlsl_effectful_struct_constructor_type(expr)
+        if type_name is not None:
+            self.hlsl_aggregate_error(
+                expr,
+                expected_type=type_name,
+                reason="field-evaluation-order-unproven",
+                detail="effectful constructor fields require ordered statement materialization in this context",
+            )
+
+    def format_struct_constructor_expression(self, type_name, rendered_args):
+        fields = self.hlsl_struct_constructor_fields(type_name)
+        if fields is None or len(fields) != len(rendered_args):
+            raise ValueError(
+                f"Struct constructor {type_name} has an unproven field layout"
+            )
+        if not fields:
+            return f"({type_name})0"
+        if type_name not in self.hlsl_struct_constructor_names:
+            base = "__crossgl_construct_" + re.sub(r"\W", "_", type_name)
+            name, suffix = base, 0
+            while name in self.hlsl_struct_constructor_reserved_names:
+                suffix += 1
+                name = f"{base}_{suffix}"
+            self.hlsl_struct_constructor_reserved_names.add(name)
+            self.hlsl_struct_constructor_names[type_name] = name
+        name = self.hlsl_struct_constructor_names[type_name]
+        return f"{name}({', '.join(rendered_args)})"
+
+    def generate_hlsl_struct_constructor_helpers(self):
+        code = ""
+        for type_name, name in sorted(self.hlsl_struct_constructor_names.items()):
+            fields = self.hlsl_struct_constructor_fields(type_name)
+            parameters = [
+                format_c_style_array_declaration(
+                    self.map_type(field_type), f"field_{index}"
+                )
+                for index, (_field_name, field_type) in enumerate(fields)
+            ]
+            code += f"{type_name} {name}({', '.join(parameters)}) {{\n"
+            code += f"    {type_name} value;\n"
+            for index, (field_name, _field_type) in enumerate(fields):
+                code += f"    value.{field_name} = field_{index};\n"
+            code += "    return value;\n}\n\n"
         return code
 
     def generate_hlsl_struct_constructor_call(self, type_name, args, named_args=None):

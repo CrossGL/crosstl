@@ -14953,15 +14953,19 @@ def test_directx_typed_buffer_atomics_lift_in_struct_constructors():
     assert (
         "InterlockedCompareExchange(counters[index], 2u, 3u, __crossgl_atomic_expr_2);"
     ) in generated_code
-    assert "return Pair(__crossgl_atomic_ternary_0, __crossgl_atomic_expr_2);" in (
-        generated_code
+    assert (
+        "return __crossgl_construct_Pair(__crossgl_atomic_ternary_0, __crossgl_atomic_expr_2);"
+        in (generated_code)
     )
     assert "uint __crossgl_atomic_expr_3;" in generated_code
     assert (
         "InterlockedAdd(counters[tid.x], 1u, __crossgl_atomic_expr_3);"
         in generated_code
     )
-    assert "Pair p = Pair(__crossgl_atomic_expr_3, 7u);" in generated_code
+    assert (
+        "Pair p = __crossgl_construct_Pair(__crossgl_atomic_expr_3, 7u);"
+        in generated_code
+    )
     assert "uint __crossgl_atomic_expr_4;" in generated_code
     assert (
         "InterlockedCompareExchange(counters[tid.x], 2u, 3u, __crossgl_atomic_expr_4);"
@@ -14971,8 +14975,9 @@ def test_directx_typed_buffer_atomics_lift_in_struct_constructors():
         "InterlockedXor(counters[tid.x], 4u, __crossgl_atomic_expr_5);"
         in generated_code
     )
-    assert "p = Pair(__crossgl_atomic_expr_4, __crossgl_atomic_expr_5);" in (
-        generated_code
+    assert (
+        "p = __crossgl_construct_Pair(__crossgl_atomic_expr_4, __crossgl_atomic_expr_5);"
+        in (generated_code)
     )
     assert "unsupported HLSL typed buffer atomic expression" not in generated_code
     assert "atomicAdd(counters" not in generated_code
@@ -18682,7 +18687,7 @@ def test_tail_expression_returns_struct_constructor_and_vector():
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "Pair make_pair(float3 value, float weight)" in generated_code
-    assert "return Pair(value, weight);" in generated_code
+    assert "return __crossgl_construct_Pair(value, weight);" in generated_code
     assert "float4 make_color(float3 color)" in generated_code
     assert "return float4(color, 1.0);" in generated_code
     assert "ConstructorNode(" not in generated_code
@@ -18716,7 +18721,7 @@ def test_stage_tail_struct_constructor_returns_stage_output():
     assert "struct VertexOutput {" in generated_code
     assert "VertexOutput VSMain(VertexInput input)" in generated_code
     assert (
-        "return VertexOutput(float4(input.position, 1.0), input.color);"
+        "return __crossgl_construct_VertexOutput(float4(input.position, 1.0), input.color);"
         in generated_code
     )
     assert "ConstructorNode(" not in generated_code

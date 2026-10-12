@@ -1285,6 +1285,7 @@ jobs:
               tests/test_translator/test_software_subgroup_shuffle_fill.py \
               tests/test_translator/test_subgroup_conditional_calls.py \
               tests/test_translator/test_subgroup_value_structs.py \
+              tests/test_translator/test_subgroup_float_helpers.py \
               2>&1 | tee .mlx-portable-host/subgroup-products.log
       - name: Validate subgroup-guarded returns
         env:
