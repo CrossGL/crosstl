@@ -8927,6 +8927,8 @@ class MetalToCrossGLConverter:
         if name_array_suffix:
             name = f"{name}{name_array_suffix}"
         memory_qualifiers = self.resource_memory_qualifier_prefix(var)
+        if "volatile" in qualifiers and not self.declaration_has_resource_storage(var):
+            memory_qualifiers += "volatile "
         parts = [
             alignas_prefix + memory_qualifiers + const_str + address_space + type_str,
             name,

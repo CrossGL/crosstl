@@ -3785,7 +3785,7 @@ def test_resource_selection_retains_every_native_opt_in():
                 required.add(identity)
             if any(term in name for term in expression.split(" or ")):
                 selected.add(identity)
-    assert len(required) == 44
+    assert len(required) == 45
     assert required <= selected
     assert (
         "tests/test_translator/test_metadata_preconditions.py",
@@ -3794,6 +3794,10 @@ def test_resource_selection_retains_every_native_opt_in():
     assert (
         "tests/test_translator/test_metadata_preconditions.py",
         "test_native_entry_scoped_metadata",
+    ) in selected
+    assert (
+        "tests/test_translator/test_metadata_preconditions.py",
+        "test_native_metadata_bounded_collective_loop",
     ) in selected
     assert (
         "tests/test_translator/test_directx_cooperative_matrix.py",

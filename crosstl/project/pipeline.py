@@ -27586,6 +27586,9 @@ def _generate_project_target_from_crossgl_ast(
         resolved_metadata = resolve_metadata_preconditions(
             function, metadata_preconditions
         )
+    configure_metadata = getattr(codegen, "set_metadata_preconditions", None)
+    if callable(configure_metadata):
+        configure_metadata(resolved_metadata)
     if software_subgroup_applicability is not None:
         entries = (
             codegen.hlsl_software_subgroup_stage_entries(selected_ast)
@@ -27655,6 +27658,11 @@ def _generate_project_target_from_crossgl_ast(
                 ),
                 "widenNativeFloat16": directx_widen_native_float16,
                 **(
+                    {"metadataPreconditions": resolved_metadata}
+                    if resolved_metadata
+                    else {}
+                ),
+                **(
                     {"cooperativeMatrixMmaProfile": cooperative_matrix_mma_profile}
                     if cooperative_matrix_mma_profile is not None
                     else {}
@@ -27682,7 +27690,7 @@ def _generate_project_target_from_crossgl_ast(
             pass
         else:
             generated = format_shader_code(generated, target, str(output_path))
-    if resolved_metadata:
+    if resolved_metadata and not callable(configure_metadata):
         generated = with_metadata_precondition_header(generated, resolved_metadata)
     with output_path.open("w", encoding="utf-8", newline="") as output_file:
         output_file.write(generated)

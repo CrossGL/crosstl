@@ -92,6 +92,24 @@ def convert(code: str) -> str:
     return generate_code(ast)
 
 
+@pytest.mark.parametrize("kind", ["uint", "int", "short", "float"])
+def test_private_volatile_declarations_remain_qualified(kind):
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+kernel void retained(device {kind}* output [[buffer(0)]]) {{
+    volatile {kind} value = 1;
+    for (volatile uint step = 0; step < 2; ++step) {{
+        value += {kind}(step);
+    }}
+    output[0] = value;
+}}
+"""
+    canonical = convert(source)
+    mapped = {"short": "int16"}.get(kind, kind)
+    assert f"volatile {mapped} value" in canonical
+    assert "for (volatile uint step" in canonical
+
+
 def convert_without_preprocessing(code: str, file_path=None) -> str:
     tokens = MetalLexer(code, preprocess=False).tokenize()
     ast = MetalParser(tokens, file_path=file_path).parse()

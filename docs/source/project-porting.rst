@@ -1212,7 +1212,17 @@ receipt. Offset views are supported; sharing the metadata allocation with any
 other binding is rejected, including disjoint views and implicit allocation
 identities. Values outside the range are rejected, never clamped.
 
-These checks do not yet authorize loop-termination proofs or integer narrowing.
+DirectX and OpenGL software collective lowering can use these checked bounds to
+prove fixed-stride integer loops terminate. The bound must be the original
+immutable scalar parameter itself, with a constant initial value and stride.
+The proof checks both range endpoints, zero-trip paths and the terminating update
+against the counter's source integer width. Shadowing, mutation, volatile values,
+divergent exits and unproved helper forwarding do not acquire range facts.
+The loop remains runtime-controlled; the bounds are not substituted as constants.
+Direct code-generator entry points also validate source identity and retain the
+obligation header, and dispatch-region program identities include the contracts.
+
+These checks do not authorize integer narrowing or composed buffer-index proofs.
 Record fields, GPU-produced metadata, shared allocations and C execution wrappers
 remain unsupported. C wrapper generation rejects descriptors carrying these
 requirements rather than silently dropping enforcement. A custom runtime that

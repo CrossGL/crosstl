@@ -75,6 +75,11 @@ from ..cooperative_matrix import (
     get_cooperative_matrix_fragment_mapping,
     has_cooperative_matrix_fragment_mapping,
 )
+from ..metadata_preconditions import (
+    checked_metadata_preconditions,
+    validate_codegen_metadata_preconditions,
+    with_metadata_precondition_header,
+)
 from ..resource_identity import RESOURCE_IDENTITY_ATTRIBUTE, resource_identity_marker
 from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
@@ -333,6 +338,7 @@ from .loop_induction import (
     fixed_stride_loop_terminates,
     geometric_loop_terminates,
     loop_constant_bindings,
+    metadata_loop_bindings,
 )
 from .match_utils import (
     generate_match_expression_assignment,
@@ -2405,6 +2411,7 @@ class GLSLCodeGen:
     ):
         """Initialize GLSL type maps and per-generation stage/resource state."""
         self.float_atomic_storage = FloatAtomicStorage(self)
+        self.metadata_preconditions = []
         self.set_cooperative_matrix_software_lowering(
             cooperative_matrix_software_lowering
         )
@@ -4535,6 +4542,7 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_helper_function_ids = set()
         self.glsl_software_subgroup_omitted_helper_function_ids = set()
         self.glsl_software_subgroup_loop_constants = {}
+        self.glsl_software_subgroup_loop_metadata = {}
 
         functions = self.glsl_software_subgroup_functions(ast)
         functions_by_id = {id(function): function for function in functions}
@@ -5303,6 +5311,7 @@ class GLSLCodeGen:
     def validate_glsl_software_subgroup_contract(self, ast, target_stage=None):
         self.required_glsl_software_subgroup_helpers = set()
         self.glsl_software_subgroup_loop_constants = {}
+        self.glsl_software_subgroup_loop_metadata = {}
         self.glsl_software_subgroup_call_mutations = {}
         self.glsl_software_subgroup_uniform_call_ids = set()
         self.glsl_software_subgroup_uniform_returns = UniformReturnAnalysis({}, set())
@@ -5759,6 +5768,17 @@ class GLSLCodeGen:
 
     def glsl_software_subgroup_uniform_arguments(self, function, seeds, *, entry):
         facts = self.glsl_software_subgroup_exit_facts(function, seeds, entry)
+        metadata_bounds = metadata_loop_bindings(
+            function,
+            self.metadata_preconditions if entry else (),
+            facts["mutable_names"],
+            self.walk_ast,
+        )
+        self.glsl_software_subgroup_loop_metadata.update(
+            (id(node), metadata_bounds)
+            for node in self.walk_ast(function.body)
+            if isinstance(node, ForNode)
+        )
         self.glsl_software_subgroup_loop_constants.update(
             loop_constant_bindings(
                 function,
@@ -6285,6 +6305,9 @@ class GLSLCodeGen:
             )
         )
         constants.pop(loop_name, None)
+        metadata_bounds = getattr(self, "glsl_software_subgroup_loop_metadata", {}).get(
+            id(node), {}
+        )
         if uniform_names is not None:
             constants = {
                 name: value
@@ -6408,6 +6431,7 @@ class GLSLCodeGen:
         if (
             additive_update
             or geometric_update
+            or (isinstance(bound, IdentifierNode) and bound.name in metadata_bounds)
             or (
                 isinstance(update, UnaryOpNode)
                 and narrow_integer_shape(self.type_name_string(initializer.var_type))
@@ -6431,6 +6455,11 @@ class GLSLCodeGen:
                 update,
                 constants,
                 normalized_operator,
+                **(
+                    {"metadata_bounds": metadata_bounds}
+                    if proof is fixed_stride_loop_terminates
+                    else {}
+                ),
             ):
                 return False
 
@@ -7303,7 +7332,14 @@ class GLSLCodeGen:
             return f"{base_type}(false)"
         return f"{base_type}(0)"
 
+    def set_metadata_preconditions(self, records):
+        self.metadata_preconditions = checked_metadata_preconditions(records)
+
     def generate_program(self, ast, target_stage=None):
+        records = validate_codegen_metadata_preconditions(
+            self.glsl_software_subgroup_stage_entries(ast, target_stage),
+            self.metadata_preconditions,
+        )
         self.float_atomic_storage = FloatAtomicStorage(self, discover=True)
         code = self._generate_program(ast, target_stage)
         roots = self.float_atomic_storage.roots
@@ -7311,7 +7347,7 @@ class GLSLCodeGen:
             self.float_atomic_storage = FloatAtomicStorage(self, roots=roots)
             code = self._generate_program(ast, target_stage)
             self.float_atomic_storage.verify()
-        return code
+        return with_metadata_precondition_header(code, records) if records else code
 
     def _generate_program(self, ast, target_stage=None):
         """Render an AST to GLSL, optionally filtering stage entry points."""

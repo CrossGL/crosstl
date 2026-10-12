@@ -11847,10 +11847,14 @@
         },
         "directx": {
           "status": "supported",
-          "notes": "Constant integer references retain source identity, signedness and width in artifact headers and reflected binding provenance. Python native dispatch rechecks exact descriptors and upload bytes, rejects out-of-range values and shared allocation identities, and records checked values and payload hashes. Required Windows execution covers bounded values and nonzero metadata view offsets. This does not authorize compiler range proofs or support record fields, GPU-produced metadata, shared allocations or C execution wrappers.",
+          "notes": "Constant integer references retain source identity, signedness and width in artifact headers and reflected binding provenance. Python native dispatch rechecks exact descriptors and upload bytes, rejects out-of-range values and shared allocation identities, and records checked values and payload hashes. Software collective loops can use immutable scalar bounds for fixed-stride termination, including final-update overflow checks. Required Windows execution includes runtime-controlled loops and observed metadata. Composed index proofs, record fields, GPU-produced metadata, shared allocations and C execution wrappers remain unsupported.",
           "evidence": [
             "tests/test_translator/test_metadata_preconditions.py::def test_project_package_dispatch_roundtrip",
             "tests/test_translator/test_metadata_preconditions.py::def test_descriptor_cannot_change_obligations",
+            "tests/test_translator/test_metadata_loop_bounds.py::def test_metadata_bound_does_not_hide_counter_overflow",
+            "tests/test_translator/test_metadata_loop_bounds.py::def test_codegen_rejects_facts_from_another_source_parameter",
+            "tests/test_translator/test_metadata_loop_bounds.py::def test_dispatch_region_identity_binds_runtime_loop_obligations",
+            "tests/test_translator/test_metadata_preconditions.py::def test_native_metadata_bounded_collective_loop",
             "tests/test_translator/test_project_metadata_entry_scope.py::def test_each_selected_entry_retains_only_its_metadata",
             "tests/test_translator/test_project_metadata_entry_scope.py::def test_unresolved_metadata_is_not_silently_dropped",
             "tests/test_translator/test_metadata_preconditions.py::def test_native_entry_scoped_metadata",
@@ -11864,11 +11868,14 @@
         },
         "opengl": {
           "status": "supported",
-          "notes": "Checked original scalar parameters are matched to reflected GLSL uniform layouts and validated against immutable native upload bytes. Descriptor mutations, out-of-range values and shared allocations are rejected. Native Linux controls cover boundary values, nonzero metadata offsets, outputs and guards. Loop induction, integer narrowing, record metadata and custom runtime enforcement remain separate contracts.",
+          "notes": "Checked original scalar parameters are matched to reflected GLSL uniform layouts and validated against immutable native upload bytes. Descriptor mutations, out-of-range values and shared allocations are rejected. Native Linux controls cover boundary values, nonzero metadata offsets, outputs and guards. Software collective loops consume only immutable source-owned scalar bounds and check final-update overflow; native cases include zero-trip and maximum-bound loops. Composed index proofs, integer narrowing, record metadata and custom runtime enforcement remain separate contracts.",
           "evidence": [
             "tests/test_translator/test_metadata_preconditions.py::def test_project_package_dispatch_roundtrip",
             "tests/test_translator/test_metadata_preconditions.py::def test_metadata_source_types_survive_lowering",
             "tests/test_translator/test_metadata_preconditions.py::def test_out_of_range_input_is_rejected",
+            "tests/test_translator/test_metadata_loop_bounds.py::def test_runtime_proof_does_not_accept_shadowing_or_divergence",
+            "tests/test_translator/test_metadata_loop_bounds.py::def test_checked_runtime_bound_retains_loop_and_package_contract",
+            "tests/test_translator/test_metadata_preconditions.py::def test_native_metadata_bounded_collective_loop",
             "tests/test_translator/test_project_metadata_entry_scope.py::def test_each_selected_entry_retains_only_its_metadata",
             "tests/test_translator/test_project_metadata_entry_scope.py::def test_variant_only_entries_are_resolved_before_scoping",
             "tests/test_translator/test_metadata_preconditions.py::def test_native_entry_scoped_metadata",

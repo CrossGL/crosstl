@@ -193,9 +193,10 @@ def _execute(
                 entry_point=original_entry,
                 loaded_artifact=None,
             )
-            outputs = executor.runtime_adapter.runtime.dispatch(None, state, control)
+            outputs = executor.runtime_adapter.dispatch(state, control)
             records["originalMetal"] = {
                 "outputs": outputs,
+                "details": copy.deepcopy(state.details),
                 "compileFlags": [
                     "-fno-fast-math",
                     *language_flags,

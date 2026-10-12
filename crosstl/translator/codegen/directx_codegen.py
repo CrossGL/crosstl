@@ -62,6 +62,11 @@ from ..ast import (
     WhileNode,
 )
 from ..cooperative_matrix import get_cooperative_matrix_fragment_mapping
+from ..metadata_preconditions import (
+    checked_metadata_preconditions,
+    validate_codegen_metadata_preconditions,
+    with_metadata_precondition_header,
+)
 from ..resource_identity import resource_identity_marker
 from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
@@ -336,6 +341,7 @@ from .loop_induction import (
     fixed_stride_loop_terminates,
     geometric_loop_terminates,
     loop_constant_bindings,
+    metadata_loop_bindings,
 )
 from .match_utils import (
     generate_match_expression_assignment,
@@ -2116,6 +2122,7 @@ class HLSLCodeGen:
     ):
         """Initialize DirectX type maps and per-generation resource state."""
         self.target_profile = self.normalize_directx_target_profile(target_profile)
+        self.metadata_preconditions = []
         self.set_cooperative_matrix_software_lowering(
             cooperative_matrix_software_lowering
         )
@@ -3124,7 +3131,18 @@ class HLSLCodeGen:
             return self.hlsl_builtin_option_payload_type(option_type)
         return None
 
+    def set_metadata_preconditions(self, records):
+        self.metadata_preconditions = checked_metadata_preconditions(records)
+
     def generate_program(self, ast, target_stage=None):
+        records = validate_codegen_metadata_preconditions(
+            self.hlsl_software_subgroup_stage_entries(ast, target_stage),
+            self.metadata_preconditions,
+        )
+        code = self._generate_program(ast, target_stage)
+        return with_metadata_precondition_header(code, records) if records else code
+
+    def _generate_program(self, ast, target_stage=None):
         """Render an AST to HLSL, optionally filtering stage entry points."""
         ast = lower_resource_aggregates(
             ast,
@@ -4841,7 +4859,7 @@ class HLSLCodeGen:
         )
 
     def hlsl_software_subgroup_fixed_stride(
-        self, initializer, bound, update, constants, operator
+        self, initializer, bound, update, constants, operator, metadata_bounds=None
     ):
         if self.hlsl_software_subgroup_uniform_returns._qualified(
             initializer, {"volatile"}
@@ -4861,6 +4879,11 @@ class HLSLCodeGen:
             update,
             constants,
             operator,
+            **(
+                {"metadata_bounds": metadata_bounds}
+                if proof is fixed_stride_loop_terminates
+                else {}
+            ),
         )
 
     def hlsl_software_subgroup_uniform_for(
@@ -4870,6 +4893,7 @@ class HLSLCodeGen:
         call_mutations,
         uniform_components,
         loop_constants=None,
+        metadata_bounds=None,
     ):
         initializer = getattr(node, "init", None)
         if not isinstance(initializer, VariableNode):
@@ -5000,13 +5024,17 @@ class HLSLCodeGen:
             additive_update
             or geometric_update
             or (
+                isinstance(bound, IdentifierNode)
+                and bound.name in (metadata_bounds or {})
+            )
+            or (
                 isinstance(update, UnaryOpNode)
                 and narrow_integer_shape(self.type_name_string(initializer.var_type))
                 is not None
             )
         )
         if checked_stride and not self.hlsl_software_subgroup_fixed_stride(
-            initializer, bound, update, constants, normalized_operator
+            initializer, bound, update, constants, normalized_operator, metadata_bounds
         ):
             return False
 
@@ -5074,6 +5102,8 @@ class HLSLCodeGen:
         mutable_names,
         uniform_components,
         uniform_call_arguments=None,
+        *,
+        entry=False,
     ):
         body = getattr(function, "body", None)
         operation_records = self.hlsl_software_subgroup_operation_records(body)
@@ -5088,6 +5118,12 @@ class HLSLCodeGen:
             self.initial_literal_int_constants(function),
             mutable_names,
             self.type_name_string,
+        )
+        metadata_bounds = metadata_loop_bindings(
+            function,
+            self.metadata_preconditions if entry else (),
+            mutable_names,
+            self.walk_ast,
         )
 
         def validate_statements(statements, names, components):
@@ -5162,6 +5198,7 @@ class HLSLCodeGen:
                         call_mutations,
                         components,
                         loop_constants.get(id(statement), {}),
+                        metadata_bounds,
                     ):
                         raise self.hlsl_software_subgroup_error(
                             "DirectX software subgroup barriers require a "
@@ -5738,6 +5775,7 @@ class HLSLCodeGen:
                 mutable_names,
                 uniform_components,
                 uniform_call_arguments,
+                entry=function is entry_function,
             )
             for call, target in call_edges[function_id]:
                 facts = uniform_call_arguments.get(id(call), set())

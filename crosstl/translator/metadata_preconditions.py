@@ -305,6 +305,34 @@ def resolve_metadata_preconditions(function, requirements):
         raise MetadataPreconditionError(str(exc)) from exc
 
 
+def validate_codegen_metadata_preconditions(entries, records):
+    """Bind proof obligations to the actual selected compute entry and its types."""
+    records = checked_metadata_preconditions(records)
+    if not records:
+        return records
+    if len(entries) != 1 or entries[0][0] != "compute":
+        raise MetadataPreconditionError(
+            "Metadata proofs require one selected compute entry."
+        )
+    resolved = resolve_metadata_preconditions(
+        entries[0][1],
+        [
+            MetadataRangePrecondition(
+                entry_point=item["sourceResource"]["entryPoint"],
+                parameter=item["sourceResource"]["parameter"],
+                minimum=item["minimum"],
+                maximum=item["maximum"],
+            )
+            for item in records
+        ],
+    )
+    if resolved != records:
+        raise MetadataPreconditionError(
+            "Metadata proof identity or type differs from the selected source."
+        )
+    return records
+
+
 def apply_metadata_preconditions(resources, records):
     """Match obligations to independently reflected read-only scalar layouts."""
     pending = []
