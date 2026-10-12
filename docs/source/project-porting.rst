@@ -1166,6 +1166,50 @@ metadata, or establish that a resource remains immutable during execution.
 Those checks require separate runtime contracts. Existing layout and native
 runtime limitations still apply.
 
+**Checked scalar metadata.**
+
+Project translation can attach integer bounds to an original constant-reference
+parameter. These bounds are enforced by the Python native loader and native
+Metal, DirectX and OpenGL dispatch adapters, unlike caller-trusted
+``index_range_assertions``:
+
+.. code-block:: toml
+
+   [[project.metadata_preconditions]]
+   source = "kernels/scan.metal"
+   entryPoint = "scan_values"
+   parameter = "axis_size"
+   minimum = 1
+   maximum = 65535
+
+Enable ``preserve_resource_origins`` for the Metal source frontend. Each matched
+translation must select one compute entry. A missing or ambiguous source
+parameter, writable resource, pointer, vector or record produces a diagnostic;
+the initial contract supports constant integer scalar references only.
+
+The generated ``crosstl-metadata-preconditions`` header records the original
+resource identity, integer width, signedness and inclusive bounds. Reflection
+matches it to the actual read-only scalar layout; package inspection rejects
+changed or removed requirements. The native loader checks typed uploaded values
+and rechecks descriptor coordinates and layouts against the artifact. Immediately
+before native dispatch, the adapter checks the immutable upload bytes and records
+the value, requirement, allocation view and payload digest in its execution
+receipt. Offset views are supported; sharing the metadata allocation with any
+other binding is rejected, including disjoint views and implicit allocation
+identities. Values outside the range are rejected, never clamped.
+
+These checks do not yet authorize loop-termination proofs or integer narrowing.
+Record fields, GPU-produced metadata, shared allocations and C execution wrappers
+remain unsupported. C wrapper generation rejects descriptors carrying these
+requirements rather than silently dropping enforcement. A custom runtime that
+bypasses the Python native adapters must implement equivalent checks before using
+a constrained artifact; the shader comment is not a device-side guard.
+
+Combining frozen specializations with DirectX encoded half-buffer storage
+currently fails package inspection because both contracts require the first
+source line. Adding checked metadata does not resolve this composition limit;
+see `issue #2219 <https://github.com/CrossGL/crosstl/issues/2219>`_.
+
 The existing three-platform native resource job compiles and executes a
 record-buffer gather with a scalar constant, choosing all uploads by source
 identity and checking exact integer results and untouched output guards.

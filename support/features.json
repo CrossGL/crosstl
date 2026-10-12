@@ -11830,6 +11830,87 @@
       }
     },
     {
+      "id": "project.checked_scalar_metadata",
+      "category": "project",
+      "name": "Checked scalar metadata preconditions",
+      "description": "Preserve original integer scalar requirements through project packages and enforce their bounds against native upload snapshots.",
+      "support": {
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "Checked scalar metadata currently requires a Metal, DirectX or OpenGL native dispatch adapter.",
+          "evidence": ["tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"]
+        },
+        "wgsl": {
+          "status": "validated_rejection",
+          "notes": "Checked scalar metadata currently requires a Metal, DirectX or OpenGL native dispatch adapter.",
+          "evidence": ["tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"]
+        },
+        "directx": {
+          "status": "supported",
+          "notes": "Constant integer references retain source identity, signedness and width in artifact headers and reflected binding provenance. Python native dispatch rechecks exact descriptors and upload bytes, rejects out-of-range values and shared allocation identities, and records checked values and payload hashes. Required Windows execution covers bounded values and nonzero metadata view offsets. This does not authorize compiler range proofs or support record fields, GPU-produced metadata, shared allocations or C execution wrappers.",
+          "evidence": [
+            "tests/test_translator/test_metadata_preconditions.py::def test_project_package_dispatch_roundtrip",
+            "tests/test_translator/test_metadata_preconditions.py::def test_descriptor_cannot_change_obligations",
+            "tests/test_translator/test_metadata_preconditions.py::def test_package_rechecks_metadata_contract",
+            "tests/test_translator/test_metadata_preconditions.py::def test_invalid_late_value_stops_native_preparation",
+            "tests/test_translator/test_metadata_preconditions.py::def test_native_checked_metadata"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Checked original scalar parameters are matched to reflected GLSL uniform layouts and validated against immutable native upload bytes. Descriptor mutations, out-of-range values and shared allocations are rejected. Native Linux controls cover boundary values, nonzero metadata offsets, outputs and guards. Loop induction, integer narrowing, record metadata and custom runtime enforcement remain separate contracts.",
+          "evidence": [
+            "tests/test_translator/test_metadata_preconditions.py::def test_project_package_dispatch_roundtrip",
+            "tests/test_translator/test_metadata_preconditions.py::def test_metadata_source_types_survive_lowering",
+            "tests/test_translator/test_metadata_preconditions.py::def test_out_of_range_input_is_rejected",
+            "tests/test_translator/test_metadata_preconditions.py::def test_invalid_late_value_stops_native_preparation",
+            "tests/test_translator/test_metadata_preconditions.py::def test_native_checked_metadata"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Generated Metal constant scalar references retain original parameter identities and checked integer bounds. Project packages and Python native dispatch enforce the artifact contract, including immutable upload snapshots and allocation isolation. Native controls compare generated and original Metal outputs with guards and offset metadata views. Record fields, mutable metadata, compiler range proofs and C execution wrappers are not covered.",
+          "evidence": [
+            "tests/test_translator/test_metadata_preconditions.py::def test_project_package_dispatch_roundtrip",
+            "tests/test_translator/test_metadata_preconditions.py::def test_metadata_source_types_survive_lowering",
+            "tests/test_translator/test_metadata_preconditions.py::def test_implicit_allocation_alias_is_rejected",
+            "tests/test_translator/test_metadata_preconditions.py::def test_input_snapshot_remains_owned_and_is_checked_again",
+            "tests/test_translator/test_metadata_preconditions.py::def test_native_checked_metadata"
+          ]
+        },
+        "vulkan": {
+          "status": "validated_rejection",
+          "notes": "Checked scalar metadata currently requires a Metal, DirectX or OpenGL native dispatch adapter.",
+          "evidence": ["tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"]
+        },
+        "cuda": {
+          "status": "validated_rejection",
+          "notes": "Checked scalar metadata currently requires a Metal, DirectX or OpenGL native dispatch adapter.",
+          "evidence": ["tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"]
+        },
+        "hip": {
+          "status": "validated_rejection",
+          "notes": "Checked scalar metadata currently requires a Metal, DirectX or OpenGL native dispatch adapter.",
+          "evidence": ["tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"]
+        },
+        "mojo": {
+          "status": "validated_rejection",
+          "notes": "Checked scalar metadata currently requires a Metal, DirectX or OpenGL native dispatch adapter.",
+          "evidence": ["tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"]
+        },
+        "rust": {
+          "status": "validated_rejection",
+          "notes": "Checked scalar metadata currently requires a Metal, DirectX or OpenGL native dispatch adapter.",
+          "evidence": ["tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"]
+        },
+        "slang": {
+          "status": "validated_rejection",
+          "notes": "Checked scalar metadata currently requires a Metal, DirectX or OpenGL native dispatch adapter.",
+          "evidence": ["tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"]
+        }
+      }
+    },
+    {
       "id": "project.native_input_observations",
       "category": "project",
       "name": "Native read-only input observations",

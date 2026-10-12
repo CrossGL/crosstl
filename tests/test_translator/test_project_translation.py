@@ -22653,6 +22653,8 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
     assert set(payload) == project_pipeline.REPORT_FIELDS - {"externalCorpus"}
     assert set(payload["generator"]) == project_pipeline.REPORT_GENERATOR_FIELDS
     assert set(payload["project"]) == project_pipeline.REPORT_PROJECT_FIELDS
+    assert payload["project"]["metadataPreconditions"] == []
+    assert payload["project"]["metadataPreconditionCount"] == 0
     assert set(payload["summary"]) == project_pipeline.REPORT_SUMMARY_FIELDS
     assert (
         set(payload["artifactMatrix"]) == project_pipeline.REPORT_ARTIFACT_MATRIX_FIELDS

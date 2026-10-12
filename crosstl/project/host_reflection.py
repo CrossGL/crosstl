@@ -21,6 +21,10 @@ from crosstl.project.integral_literals import (
 from crosstl.project.storage_record_layout import storage_record_layout
 from crosstl.project.uniform_layout import std140_block_layout
 from crosstl.translator.frozen_specializations import parse_frozen_specializations
+from crosstl.translator.metadata_preconditions import (
+    apply_metadata_preconditions,
+    parse_metadata_precondition_header,
+)
 from crosstl.translator.resource_identity import (
     apply_resource_identities,
     parse_resource_identities,
@@ -275,6 +279,25 @@ def _reflect_resource_identities(artifact_path, record):
                     f"Frozen specialization reflection failed: {exc}",
                     severity="error",
                     details={"contract": "frozen-specialization"},
+                ),
+            ),
+        )
+    try:
+        conditions = parse_metadata_precondition_header(
+            artifact_path.read_text(encoding="utf-8")
+        )
+        apply_metadata_preconditions(record["resources"], conditions)
+    except ValueError as exc:
+        return empty_host_interface_record(
+            "failed",
+            parser=record["parser"],
+            artifact_format=record["artifactFormat"],
+            diagnostics=(
+                ReflectionDiagnostic(
+                    REFLECTION_PARSE_FAILED,
+                    f"Metadata precondition reflection failed: {exc}",
+                    severity="error",
+                    details={"contract": "metadata-precondition"},
                 ),
             ),
         )

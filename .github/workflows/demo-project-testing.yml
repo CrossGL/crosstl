@@ -1333,6 +1333,7 @@ jobs:
           CROSTL_REQUIRE_RUNTIME_INPUT_OWNERSHIP: "1"
           CROSTL_REQUIRE_INPUT_OBSERVATIONS: "1"
           CROSTL_REQUIRE_RESOURCE_IDENTITY: "1"
+          CROSTL_REQUIRE_METADATA_PRECONDITIONS: "1"
           CROSTL_REQUIRE_FROZEN_SPECIALIZATION: "1"
           CROSTL_REQUIRE_STORAGE_RECORD_RUNTIME: "1"
           CROSTL_REQUIRE_INTEGER_LITERAL_RUNTIME: "1"
@@ -1392,6 +1393,7 @@ jobs:
               tests/test_translator/test_runtime_input_ownership.py \
               tests/test_translator/test_runtime_input_observations.py \
               tests/test_translator/test_resource_identity.py \
+              tests/test_translator/test_metadata_preconditions.py \
               tests/test_translator/test_frozen_specializations.py \
               tests/test_translator/test_storage_record_runtime.py \
               tests/test_translator/test_integer_literals.py \

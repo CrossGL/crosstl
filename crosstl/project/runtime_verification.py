@@ -1253,6 +1253,27 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
         )
         state.loaded_artifact = self._load_artifact(state, module_path)
         prepared = self._prepare_dispatch_request(state, artifact_path, module_path)
+        from .metadata_preconditions import check_native_metadata_snapshots
+
+        try:
+            receipts = check_native_metadata_snapshots(
+                artifact_snapshot.path, self.target, prepared.buffers
+            )
+        except (ValueError, UnicodeError) as exc:
+            raise RuntimeAdapterSetupError(
+                str(exc),
+                details={
+                    "reasonKind": "metadata-precondition-invalid",
+                    "target": self.target,
+                },
+            ) from exc
+        if receipts:
+            state.details["metadataPreconditions"] = receipts
+            state.record_step(
+                "bind",
+                "check-native-metadata-preconditions",
+                details={"requirements": receipts},
+            )
         state.details["nativeRuntimeDispatch"] = prepared.to_json()
         return prepared
 

@@ -156,8 +156,13 @@ The completed comparison step at `d9623102` reports scalar numerical failures
 for all seven settings, including the unannotated control. The
 [Windows job log](https://github.com/CrossGL/crosstl/actions/runs/38230653906/job/114749015598)
 therefore rules out these annotations as a general workaround on that runner.
-This interim finding does not claim an independently audited aggregate result
-for the matrix or lane-count controls.
+An independent audit of all 27 retained controls also confirms that the seven
+ordinary matrix variants pass all 768 output words, while each rounding-sensitive
+matrix variant differs in the same 321 words. All six lane-count witnesses return
+their requested width. Shader and module hashes, original inputs, exact
+references, allocation offsets, guards and the loaded WARP 1.0.21 identity were
+checked against the [retained artifact](https://github.com/CrossGL/crosstl/actions/runs/38230653906/artifacts/11742207193).
+Wave-width selection works on this runner but does not repair precise arithmetic.
 
 For manually dispatched workflow runs, that diagnostic instead compares the
 same precise scalar, cooperative-matrix and narrow-buffer controls on the

@@ -269,8 +269,21 @@ def build_native_loader_dispatch_request(
             path="$.specializationConstants",
         ) from exc
 
+    from .metadata_preconditions import (
+        artifact_metadata_bindings,
+        check_metadata_inputs,
+    )
+
     inputs = _typed_values(input_values, role="input")
     outputs = _typed_values(output_values, role="output")
+    try:
+        requirements = artifact_metadata_bindings(
+            artifact_path, target, normalized["bindings"]
+        )
+    except (ValueError, UnicodeError) as exc:
+        raise NativeLoaderDispatchError(
+            "metadata-precondition-invalid", str(exc), path="$.bindings"
+        ) from exc
     dispatch = _dispatch_geometry(
         dispatch_geometry,
         entry_point=entry_point["name"],
@@ -339,6 +352,12 @@ def build_native_loader_dispatch_request(
         inputs=inputs,
         outputs=outputs,
     )
+    try:
+        check_metadata_inputs(requirements, inputs, outputs, resource_bindings)
+    except ValueError as exc:
+        raise NativeLoaderDispatchError(
+            "metadata-precondition-invalid", str(exc), path="$.inputValues"
+        ) from exc
     constants = _specialization_constants(
         normalized["specializationConstants"],
         specialization_values,

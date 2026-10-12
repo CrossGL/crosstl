@@ -149,13 +149,14 @@ class CodeFormatter:
         if (
             "// crosstl-resource-origin:" in code
             or "// crosstl-frozen-specializations:" in code
+            or "// crosstl-metadata-preconditions:" in code
         ):
             # Structured provenance must remain a single parseable comment line.
             style = json.dumps(
                 {
                     "BasedOnStyle": style,
                     "CommentPragmas": (
-                        "^ (IWYU pragma:|crosstl-resource-origin:|crosstl-frozen-specializations:)"
+                        "^ (IWYU pragma:|crosstl-resource-origin:|crosstl-frozen-specializations:|crosstl-metadata-preconditions:)"
                     ),
                 }
             )

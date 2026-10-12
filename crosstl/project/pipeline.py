@@ -126,6 +126,12 @@ from crosstl.translator.frozen_specializations import (
     frozen_specialization_header,
     frozen_specializations,
 )
+from crosstl.translator.metadata_preconditions import (
+    MetadataPreconditionError,
+    parse_metadata_preconditions,
+    resolve_metadata_preconditions,
+    with_metadata_precondition_header,
+)
 from crosstl.translator.plugin_loader import discover_backend_plugins
 from crosstl.translator.source_registry import (
     SOURCE_REGISTRY,
@@ -1508,6 +1514,8 @@ REPORT_PROJECT_FIELDS = frozenset(
         "sourceOptionCount",
         "indexRangeAssertions",
         "indexRangeAssertionCount",
+        "metadataPreconditions",
+        "metadataPreconditionCount",
         "workgroupAccessAssertions",
         "workgroupAccessAssertionCount",
         "includeDirs",
@@ -7633,6 +7641,7 @@ class ProjectConfig:
     dispatch_contracts: Sequence[str] | str = ()
     external_corpus_manifest: str | os.PathLike[str] | None = None
     index_range_assertions: Sequence[Any] = ()
+    metadata_preconditions: Sequence[Any] = ()
     workgroup_access_assertions: Sequence[Any] = ()
     translate_discovered_entry_points: Sequence[str] | str = ()
     _dispatch_contract_manifests: tuple[DispatchContractManifest, ...] = field(
@@ -7754,6 +7763,18 @@ class ProjectConfig:
                     ),
                 )
                 for assertion in assertions
+            ),
+        )
+        object.__setattr__(
+            self,
+            "metadata_preconditions",
+            tuple(
+                replace(
+                    condition, source=_normalize_project_relative_path(condition.source)
+                )
+                for condition in parse_metadata_preconditions(
+                    self.metadata_preconditions
+                )
             ),
         )
         workgroup_assertions = parse_workgroup_access_assertions(
@@ -8905,6 +8926,10 @@ class ProjectPortabilityReport:
                     for assertion in self.config.index_range_assertions
                 ],
                 "indexRangeAssertionCount": len(self.config.index_range_assertions),
+                "metadataPreconditions": [
+                    item.to_json() for item in self.config.metadata_preconditions
+                ],
+                "metadataPreconditionCount": len(self.config.metadata_preconditions),
                 "workgroupAccessAssertions": [
                     assertion.to_json()
                     for assertion in self.config.workgroup_access_assertions
@@ -9256,6 +9281,7 @@ def load_project_config(
         dispatch_contracts=dispatch_contracts,
         external_corpus_manifest=external_corpus_manifest,
         index_range_assertions=index_range_assertions,
+        metadata_preconditions=project.get("metadata_preconditions", ()),
         workgroup_access_assertions=workgroup_access_assertions,
     )
 
@@ -27353,6 +27379,7 @@ def _generate_project_target_from_crossgl_ast(
     entry_point: str | None,
     format_output: bool,
     index_range_assertions: Sequence[IndexRangeAssertion] = (),
+    metadata_preconditions: Sequence[Any] = (),
     workgroup_access_assertions: Sequence[WorkgroupAccessAssertion] = (),
     software_subgroup_width: Any | None = None,
     software_subgroup_applicability: str | None = None,
@@ -27452,6 +27479,16 @@ def _generate_project_target_from_crossgl_ast(
     selected_ast, remaining_entry_point = prepare_entry_scoped_target(
         codegen, ast, entry_point
     )
+    resolved_metadata = []
+    if metadata_preconditions:
+        stages = _crossgl_compute_stages(selected_ast, remaining_entry_point)
+        if target not in {"metal", "directx", "opengl"} or len(stages) != 1:
+            raise MetadataPreconditionError(
+                "Metadata preconditions require one selected Metal, DirectX or OpenGL compute entry."
+            )
+        resolved_metadata = resolve_metadata_preconditions(
+            stages[0].entry_point, metadata_preconditions
+        )
     if software_subgroup_applicability is not None:
         entries = (
             codegen.hlsl_software_subgroup_stage_entries(selected_ast)
@@ -27548,6 +27585,8 @@ def _generate_project_target_from_crossgl_ast(
             pass
         else:
             generated = format_shader_code(generated, target, str(output_path))
+    if resolved_metadata:
+        generated = with_metadata_precondition_header(generated, resolved_metadata)
     with output_path.open("w", encoding="utf-8", newline="") as output_file:
         output_file.write(generated)
     return generated
@@ -28292,6 +28331,7 @@ def _translate_project_impl(
             dispatch_contracts=config.dispatch_contracts,
             external_corpus_manifest=config.external_corpus_manifest,
             index_range_assertions=config.index_range_assertions,
+            metadata_preconditions=config.metadata_preconditions,
             workgroup_access_assertions=config.workgroup_access_assertions,
         )
     config = _config_with_selected_variants(config, variants)
@@ -28503,6 +28543,12 @@ def _translate_project_impl(
                     if target in {"opengl", "webgl"}
                     else ()
                 )
+                metadata_preconditions = tuple(
+                    item
+                    for item in config.metadata_preconditions
+                    if item.source == "*"
+                    or fnmatch.fnmatch(unit.relative_path, item.source)
+                )
                 workgroup_access_assertions = (
                     _workgroup_access_assertions_for_unit(
                         config,
@@ -28520,6 +28566,14 @@ def _translate_project_impl(
                 directx_widen_native_float16 = None
                 dispatch_region = None
                 try:
+                    if metadata_preconditions and target not in {
+                        "metal",
+                        "directx",
+                        "opengl",
+                    }:
+                        raise MetadataPreconditionError(
+                            "Checked metadata dispatch is not implemented for this target."
+                        )
                     division_profile = source_options.get("binary32_division_profile")
                     multiplication_profile = source_options.get(
                         "binary32_multiplication_profile"
@@ -29207,6 +29261,7 @@ def _translate_project_impl(
                                             index_range_assertions=(
                                                 index_range_assertions
                                             ),
+                                            metadata_preconditions=metadata_preconditions,
                                             workgroup_access_assertions=(
                                                 workgroup_access_assertions
                                             ),
@@ -29291,6 +29346,7 @@ def _translate_project_impl(
                                         entry_point=selected_entry_point,
                                         format_output=format_output,
                                         index_range_assertions=(index_range_assertions),
+                                        metadata_preconditions=metadata_preconditions,
                                         workgroup_access_assertions=(
                                             workgroup_access_assertions
                                         ),
@@ -29336,6 +29392,7 @@ def _translate_project_impl(
                                 )
                     if generated_source is None and (
                         index_range_assertions
+                        or metadata_preconditions
                         or any(
                             record.get("frozen") for record in specialization_constants
                         )
@@ -29374,6 +29431,7 @@ def _translate_project_impl(
                             entry_point=selected_entry_point,
                             format_output=format_output,
                             index_range_assertions=index_range_assertions,
+                            metadata_preconditions=metadata_preconditions,
                             workgroup_access_assertions=(workgroup_access_assertions),
                             software_subgroup_width=software_subgroup_width,
                             software_subgroup_applicability=software_subgroup_applicability,
@@ -36049,7 +36107,8 @@ def _runtime_package_resource_identity_diagnostics(package_path, artifact, refle
         for record in _record_sequence(reflected.get("diagnosticRecords"))
         if isinstance(record, Mapping)
         and isinstance(record.get("details"), Mapping)
-        and record["details"].get("contract") == "source-resource-identity"
+        and record["details"].get("contract")
+        in {"source-resource-identity", "metadata-precondition"}
         and record.get("severity") == "error"
     ]
     declared = artifact.get("hostInterface")
@@ -36073,6 +36132,11 @@ def _runtime_package_resource_identity_diagnostics(package_path, artifact, refle
                     "name": resource.get("name"),
                     "entryPoint": metadata.get("entryPoint"),
                     "sourceResource": provenance["sourceResource"],
+                    **(
+                        {"metadataPrecondition": provenance["metadataPrecondition"]}
+                        if "metadataPrecondition" in provenance
+                        else {}
+                    ),
                 }
             )
         return sorted(result, key=lambda item: json.dumps(item, sort_keys=True))
@@ -47642,6 +47706,7 @@ def _project_config_for_scan_validation(
             if isinstance(values, Mapping)
         },
         variant_specialization_constants=variant_specializations,
+        metadata_preconditions=project.get("metadataPreconditions", ()),
         workgroup_size=workgroup_size,
         variant_workgroup_sizes={
             name: value
@@ -53496,6 +53561,18 @@ def _project_metadata_contract_reasons(
             )
 
     workgroup_access_assertions = project.get("workgroupAccessAssertions")
+    if "metadataPreconditions" in project or "metadataPreconditionCount" in project:
+        try:
+            values = parse_metadata_preconditions(
+                project.get("metadataPreconditions", ())
+            )
+            count = project.get("metadataPreconditionCount")
+            if type(count) is not int or count != len(values):
+                reasons.append(
+                    "project.metadataPreconditionCount must match project.metadataPreconditions"
+                )
+        except ValueError as exc:
+            reasons.append(str(exc))
     if _optional_project_field(project, "workgroupAccessAssertions", required=False):
         try:
             parse_workgroup_access_assertions(
