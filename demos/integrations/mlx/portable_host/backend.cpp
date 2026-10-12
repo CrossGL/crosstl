@@ -1003,6 +1003,91 @@ void AsType::eval_gpu(const std::vector<array>& inputs, array& out) {
   dispatch_cast(inputs, out);
 }
 
+void Scan::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() != 1 || inputs[0].shape() != out.shape() ||
+      axis_ < 0 || axis_ >= inputs[0].ndim() || out.size() > 65535) {
+    throw std::invalid_argument("CrossTL scan requires matching bounded array shapes.");
+  }
+  if (out.size() == 0) {
+    out.set_data(allocator::malloc(0));
+    return;
+  }
+  auto in = inputs[0];
+  if (!in.flags().contiguous || in.strides()[axis_] == 0) {
+    if (in.dtype() != out.dtype()) {
+      array converted(in.shape(), out.dtype(), nullptr, {});
+      dispatch_cast({in}, converted);
+      in = std::move(converted);
+    }
+    in = dense_input(in);
+  }
+  auto scan_type = [](Dtype dtype) {
+    return dtype == float16 ? "float16" : dtype == bfloat16 ? "bfloat16" : storage_type(dtype);
+  };
+  const char* source_type = scan_type(in.dtype());
+  const char* output_type = scan_type(out.dtype());
+  if (!source_type || !output_type ||
+      (out.dtype() != in.dtype() &&
+       !(reduce_type_ == Sum && in.dtype() == bool_ && out.dtype() == int32))) {
+    throw std::invalid_argument("CrossTL scan requires supported matching scalar types or Boolean sum promotion.");
+  }
+  if (in.offset() < 0 || uint64_t(in.offset()) > in.buffer_size() ||
+      in.data_size() > (in.buffer_size() - uint64_t(in.offset())) / in.itemsize()) {
+    throw std::invalid_argument("CrossTL scan input exceeds its allocation.");
+  }
+  uint64_t axis_size = in.shape(axis_);
+  const auto source_stride = in.strides()[axis_];
+  if (source_stride < 1 || source_stride > 65535 ||
+      !axis_size || !in.data_size() || in.data_size() > 65535) {
+    throw std::invalid_argument("CrossTL scan storage metadata exceeds its bounds.");
+  }
+  uint64_t stride = source_stride;
+  if (in.data_size() % (axis_size * stride)) {
+    throw std::invalid_argument("CrossTL scan axis and stride do not partition its storage.");
+  }
+  const bool contiguous = stride == 1;
+  uint64_t stride_blocks = (stride + 31) / 32;
+  const uint64_t rows = (in.data_size() / (axis_size * stride)) * stride_blocks;
+  if (!rows || rows > 65535) {
+    throw std::invalid_argument("CrossTL scan launch exceeds its native group limit.");
+  }
+  const uint32_t reads = in.itemsize() <= 4 ? 4 : 2;
+  uint32_t width = contiguous ? 1024 : 32 * (32 / reads);
+  if (contiguous && axis_size <= reads * 2048) {
+    const uint64_t reduced = axis_size <= reads * 1024 ? axis_size : axis_size / 2;
+    width = uint32_t((reduced + reads * 32 - 1) / (reads * 32)) * 32;
+  }
+  const char* operation = reduce_type_ == Sum ? "sum" :
+      reduce_type_ == Prod ? "prod" : reduce_type_ == Min ? "min" :
+      reduce_type_ == Max ? "max" : "logaddexp";
+  const std::string entry = std::string(contiguous ? "contig_scan_" : "strided_scan_") +
+      (reverse_ ? "reverse_" : "") + (inclusive_ ? "inclusive_" : "exclusive_") +
+      operation + "_" + source_type + "_" + output_type;
+  require_entry(entry);
+  if (in.is_donatable() && in.itemsize() == out.itemsize()) {
+    out.copy_shared_buffer(in);
+  } else {
+    out.set_data(allocator::malloc(in.data_size() * out.itemsize()),
+                 in.data_size(), in.strides(), in.flags());
+  }
+  CrosstlMlxBuffer buffers[] = {
+      {"in", source_type, const_cast<void*>(in.data<void>()), in.data_size(), 0},
+      {"out", output_type, out.data<void>(), out.data_size(), 1},
+      {"axis_size", "uint64", &axis_size, 1, 0},
+      {"stride", "uint64", &stride, 1, 0},
+      {"stride_blocks", "uint64", &stride_blocks, 1, 0},
+  };
+  const CrosstlMlxLaunch launch{{1, uint32_t(rows), 1}, {width, 1, 1}};
+  char error[2048] = {};
+  const int status = dispatch_callback.load()(
+      entry.c_str(), buffers, contiguous ? 3 : 5, in.data_size(), &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native scan failed: ") + error);
+  }
+}
+
 void RandomBits::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   if (inputs.size() != 1 || inputs[0].dtype() != uint32 ||

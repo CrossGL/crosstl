@@ -38,6 +38,8 @@ from demos.integrations.mlx.portable_host import (
     random_dispatch,
     reduction_layout,
     row_reduction_layout,
+    scan_dispatch,
+    scan_layout,
     slice_update_layout,
 )
 from demos.integrations.mlx.portable_host.gather_packages import (
@@ -103,6 +105,7 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
 from demos.integrations.mlx.portable_host.reduction_packages import (
     load_index as load_reduction_index,
 )
+from demos.integrations.mlx.portable_host.scan_packages import ScanPackageCache
 from demos.integrations.mlx.portable_host.small_row_packages import (
     SMALL_ROW_ENTRIES,
     SmallRowPackageCache,
@@ -276,6 +279,11 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        self.scans = (
+            ScanPackageCache(mlx_root, self.directory / "scans", self.target)
+            if mlx_root is not None
+            else None
+        )
         self.descriptors = index["descriptors"]
         if set(self.descriptors) != set(ENTRIES):
             raise ValueError("Packages must contain the exact supported entry set")
@@ -389,6 +397,9 @@ class HostRuntime:
             name = entry.decode("ascii")
             if name in self.descriptors:
                 return 1
+            if name.startswith(scan_layout.ENTRY_PREFIXES) and self.scans is not None:
+                scan_layout.signature(name)
+                return 1
             if name.startswith(("gather", "scatter")) and self.gathers is not None:
                 gather_signature(name)
                 return 1
@@ -441,6 +452,8 @@ class HostRuntime:
             return 1
 
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
+        if entry.startswith(scan_layout.ENTRY_PREFIXES):
+            return scan_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if entry.startswith(quantization_layout.ENTRY_PREFIXES):
             return quantization_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch

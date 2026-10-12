@@ -108,6 +108,44 @@ Metal packages, not MLX's original Metal backend. DirectX 10/11, Vulkan,
 asynchronous queues, persistent GPU allocations, automatic operation
 selection, and the complete MLX suite are not covered here.
 
+## Cumulative Operations
+
+`Scan::eval_gpu` now reaches the translated-package callback. Its source entry,
+scalar types, axis extent, storage stride and workgroup geometry are checked
+before native execution. Packages retain the unchanged pinned `scan.metal` and
+its headers, with an exact workgroup width in the cache identity. No prefix
+arithmetic is performed on the host, and translation failures remain errors.
+
+The required `--scans` host verification runs in the existing Metal, OpenGL and
+DirectX jobs, within the existing 4,000-second host-verification deadline. Its
+24 API cases cover inclusive sum, minimum and maximum for float32 and int32,
+nonzero input offsets, row- and column-major contiguous views, and axis lengths
+1, 33, 129 and 257. Those lengths select 32-, 64- and 96-thread workgroups.
+Each case checks an independent exact reference, CPU/native agreement, unchanged
+host input, device input and metadata observations, 32 input and output guards,
+and the identities of the packaged source and compiled native modules.
+
+```bash
+python -m demos.integrations.mlx.portable_host.verify_scans \
+  --mlx-root mlx-upstream --packages host-packages --output-dir scan-evidence
+```
+
+This route remains bounded to 65,535 logical and stored elements. It uses the
+pinned source planner with an explicit 1,024-thread source pipeline limit;
+larger native widths require their own qualification. Empty arrays do not
+dispatch. Stored-contiguous layouts and eligible donation are retained;
+other layouts require the existing translated-copy path. Unsupported complex
+and narrow-integer host storage is rejected explicitly.
+
+This is not complete cumulative-operation coverage. Reverse scans currently
+encounter unproved wide pointer offsets on OpenGL. Strided entries encounter
+unproved runtime-bound collective loops on the software-subgroup path.
+Product, log-add-exp, additional scalar types and full unchanged upstream scan
+tests require separate numerical qualification. The independently captured
+original bfloat16 scan-versus-reduction failure in
+[`METAL_HOST.md`](../METAL_HOST.md#captured-scan-replay) remains unresolved; this
+host proof does not change its input, assertion or required outcome.
+
 ## Batched Casts
 
 The required batched-cast verifier also runs in each native host CI job:

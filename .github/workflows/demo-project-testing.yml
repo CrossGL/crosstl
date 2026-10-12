@@ -1228,7 +1228,9 @@ jobs:
       - name: Validate portable host contracts
         id: portable-host-contracts
         if: runner.os == 'Linux'
-        run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_host.py demos/integrations/mlx/tests/host/test_portable_reductions.py demos/integrations/mlx/tests/host/test_portable_rows.py demos/integrations/mlx/tests/host/test_portable_reduction_shards.py demos/integrations/mlx/tests/host/test_portable_mixed_reductions.py demos/integrations/mlx/tests/host/test_portable_columns.py demos/integrations/mlx/tests/host/test_portable_small_rows.py demos/integrations/mlx/tests/host/test_portable_empty_reductions.py demos/integrations/mlx/tests/host/test_portable_bitwise.py demos/integrations/mlx/tests/host/test_portable_concatenate.py demos/integrations/mlx/tests/host/test_portable_selection.py demos/integrations/mlx/tests/host/test_portable_integer64.py demos/integrations/mlx/tests/host/test_portable_padding.py demos/integrations/mlx/tests/host/test_portable_slice_updates.py demos/integrations/mlx/tests/host/test_portable_slice_update_workloads.py demos/integrations/mlx/tests/host/test_slice_capacity.py demos/integrations/mlx/tests/test_random_audit.py demos/integrations/mlx/tests/host/test_portable_random.py demos/integrations/mlx/tests/host/test_cast_batches.py demos/integrations/mlx/tests/host/test_large_copies.py demos/integrations/mlx/tests/host/test_binary_batches.py demos/integrations/mlx/tests/host/test_unary_batches.py
+        run: >-
+          python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_host.py demos/integrations/mlx/tests/host/test_portable_reductions.py demos/integrations/mlx/tests/host/test_portable_rows.py demos/integrations/mlx/tests/host/test_portable_reduction_shards.py demos/integrations/mlx/tests/host/test_portable_mixed_reductions.py demos/integrations/mlx/tests/host/test_portable_columns.py demos/integrations/mlx/tests/host/test_portable_small_rows.py demos/integrations/mlx/tests/host/test_portable_empty_reductions.py demos/integrations/mlx/tests/host/test_portable_bitwise.py demos/integrations/mlx/tests/host/test_portable_concatenate.py demos/integrations/mlx/tests/host/test_portable_selection.py demos/integrations/mlx/tests/host/test_portable_integer64.py demos/integrations/mlx/tests/host/test_portable_padding.py demos/integrations/mlx/tests/host/test_portable_slice_updates.py demos/integrations/mlx/tests/host/test_portable_slice_update_workloads.py demos/integrations/mlx/tests/host/test_slice_capacity.py demos/integrations/mlx/tests/test_random_audit.py demos/integrations/mlx/tests/host/test_portable_random.py demos/integrations/mlx/tests/host/test_cast_batches.py demos/integrations/mlx/tests/host/test_large_copies.py demos/integrations/mlx/tests/host/test_binary_batches.py demos/integrations/mlx/tests/host/test_unary_batches.py
+          demos/integrations/mlx/tests/host/test_portable_scans.py
       - name: Validate platform host ABI
         id: platform-host-abi
         if: runner.os != 'Linux'
@@ -2159,7 +2161,7 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 4000 --label "MLX portable host verification" -- \
             python -m demos.integrations.mlx.portable_host.verify --mlx-root mlx-upstream \
-              --packages .mlx-portable-host/packages --cast-batches --large-copies --binary-batches --unary-batches --output-dir .mlx-portable-host/evidence 2>&1 | tee .mlx-portable-host/verification.log
+              --packages .mlx-portable-host/packages --cast-batches --large-copies --binary-batches --unary-batches --scans --output-dir .mlx-portable-host/evidence 2>&1 | tee .mlx-portable-host/verification.log
       - name: Retain native execution evidence
         if: always()
         uses: actions/upload-artifact@v4

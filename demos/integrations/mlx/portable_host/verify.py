@@ -40,6 +40,7 @@ from demos.integrations.mlx.portable_host.verify_cast_batches import (
 from demos.integrations.mlx.portable_host.verify_large_copies import (
     run_bounded as run_large_copies,
 )
+from demos.integrations.mlx.portable_host.verify_scans import run_bounded as run_scans
 from demos.integrations.mlx.portable_host.verify_unary_batches import (
     run_bounded as run_unary_batches,
 )
@@ -549,6 +550,11 @@ def verify(args):
         if getattr(args, "unary_batches", False)
         else None
     )
+    scans = (
+        run_scans(args.mlx_root, args.packages, output / "scans")
+        if getattr(args, "scans", False)
+        else None
+    )
     upstream_quantization = None
     if getattr(args, "upstream_quantization", False):
         from demos.integrations.mlx.portable_host.verify_upstream_quantization import (
@@ -589,6 +595,7 @@ def verify(args):
         **({"largeCopies": large_copies} if large_copies is not None else {}),
         **({"binaryBatches": binary_batches} if binary_batches is not None else {}),
         **({"unaryBatches": unary_batches} if unary_batches is not None else {}),
+        **({"scans": scans} if scans is not None else {}),
     }
     save(output / "evidence.json", evidence)
     return evidence
@@ -604,6 +611,7 @@ if __name__ == "__main__":
     parser.add_argument("--large-copies", action="store_true")
     parser.add_argument("--binary-batches", action="store_true")
     parser.add_argument("--unary-batches", action="store_true")
+    parser.add_argument("--scans", action="store_true")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--worker",
