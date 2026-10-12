@@ -3473,10 +3473,23 @@ def test_project_native_job_deadlines_fit_runner_limit(job, overhead):
             if step.get("id") == "collective-helpers"
         )
         assert steps.index(comparison) > failed_index
-        # Later success-only tests cannot run on this diagnostic failure path.
+        # Host build and dispatch use their own prerequisites after a regression fails.
+        independent = [
+            step
+            for step in steps[failed_index + 1 :]
+            if "!cancelled()" in step.get("if", "")
+        ]
+        assert {step["name"] for step in independent} == {
+            "Verify Windows host runtime identity",
+            "Checkout and prepare pinned upstream MLX",
+            "Build adapted upstream MLX",
+            "Translate unchanged upstream kernels",
+            "Execute upstream tests on the translated backend",
+        }
         paths.append(
             sum(deadline(step) for step in steps[: failed_index + 1])
             + comparison["timeout-minutes"] * 60
+            + sum(deadline(step) for step in independent)
         )
     else:
         assert not failure_steps

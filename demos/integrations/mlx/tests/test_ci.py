@@ -213,6 +213,7 @@ def test_windows_host_qualification_preserves_required_workloads():
     assert script.index("selection failed") < script.index("ConvertTo-Json")
     comparison = steps["Compare WARP arithmetic across codegen revisions"]
     assert "!matrix.warp_qualification" in comparison["if"]
+    identity = steps["Verify Windows host runtime identity"]
     upload = steps["Retain native execution evidence"]
     assert upload["if"] == "always()"
     assert upload["with"]["name"] == (
@@ -224,16 +225,136 @@ def test_windows_host_qualification_preserves_required_workloads():
     assert upload["with"]["include-hidden-files"] is True
     for step in job["steps"]:
         assert "continue-on-error" not in step
-        if step not in (selection, comparison, upload):
+        if step not in (selection, comparison, identity, upload):
             assert "warp_qualification" not in json.dumps(step)
     for name in (
         "Validate collective helper arguments",
         "Validate pinned native binary math",
-        "Build adapted upstream MLX",
-        "Translate unchanged upstream kernels",
-        "Execute upstream tests on the translated backend",
     ):
         assert "if" not in steps[name]
+
+
+def test_host_pipeline_uses_explicit_prerequisites_without_waiving_other_failures():
+    job = yaml.safe_load(_workflow_texts()["demo-project-testing.yml"])["jobs"][
+        "portable-host"
+    ]
+    steps = {step.get("name"): step for step in job["steps"]}
+    assert steps["Validate portable host contracts"]["id"] == "portable-host-contracts"
+    assert steps["Validate platform host ABI"]["id"] == "platform-host-abi"
+    assert steps["Validate portable host contracts"]["if"] == "runner.os == 'Linux'"
+    assert steps["Validate platform host ABI"]["if"] == "runner.os != 'Linux'"
+    identity = steps["Verify Windows host runtime identity"]
+    assert identity["id"] == "host-warp-identity"
+    assert identity["timeout-minutes"] == 1
+    assert identity["if"] == (
+        "${{ !cancelled() && runner.os == 'Windows' && "
+        "steps.platform-host-abi.outcome == 'success' }}"
+    )
+    assert (
+        "matrix.warp_qualification == '1.0.13'" in identity["env"][
+            "EXPECTED_WARP_SHA256"
+        ]
+    )
+    for digest in (
+        "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638",
+        "e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3",
+    ):
+        assert digest in identity["env"]["EXPECTED_WARP_SHA256"]
+    prepare = steps["Checkout and prepare pinned upstream MLX"]
+    assert prepare["id"] == "pinned-upstream"
+    assert " ".join(prepare["if"].split()) == (
+        "${{ !cancelled() && (steps.portable-host-contracts.outcome == 'success' || "
+        "(runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') || "
+        "steps.host-warp-identity.outcome == 'success') }}"
+    )
+    build = steps["Build adapted upstream MLX"]
+    packages = steps["Translate unchanged upstream kernels"]
+    execute = steps["Execute upstream tests on the translated backend"]
+    assert build["id"] == "host-build" and packages["id"] == "host-packages"
+    for step, deadline in ((build, 1800), (packages, 2400)):
+        assert step["if"] == (
+            "${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}"
+        )
+        assert f"--timeout-seconds {deadline}" in step["run"]
+    assert " ".join(execute["if"].split()) == (
+        "${{ !cancelled() && steps.host-build.outcome == 'success' && "
+        "steps.host-packages.outcome == 'success' }}"
+    )
+    assert "--timeout-seconds 4000" in execute["run"]
+    assert (
+        "--cast-batches --large-copies --binary-batches --unary-batches" in execute[
+            "run"
+        ]
+    )
+    assert job["steps"].index(steps["Validate collective helper arguments"]) < job[
+        "steps"
+    ].index(identity)
+    assert [
+        job["steps"].index(step)
+        for step in (identity, prepare, build, packages, execute)
+    ] == sorted(
+        job["steps"].index(step)
+        for step in (identity, prepare, build, packages, execute)
+    )
+    assert all("continue-on-error" not in step for step in job["steps"])
+    assert steps["Retain native execution evidence"]["if"] == "always()"
+
+
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell is not installed")
+@pytest.mark.parametrize("version", ["required", "qualification"])
+@pytest.mark.parametrize(
+    "failure", [None, "missing", "directory", "changed", "empty-digest"]
+)
+def test_host_runtime_recheck_rejects_missing_or_changed_libraries(
+    tmp_path, version, failure
+):
+    job = yaml.safe_load(_workflow_texts()["demo-project-testing.yml"])["jobs"][
+        "portable-host"
+    ]
+    step = next(s for s in job["steps"] if s.get("id") == "host-warp-identity")
+    script = tmp_path / "verify-runtime.ps1"
+    script.write_text(step["run"], encoding="utf-8")
+    python_root = tmp_path / "python"
+    python_root.mkdir()
+    library = python_root / "d3d10warp.dll"
+    payload = (version + " runtime fixture").encode()
+    if failure == "directory":
+        library.mkdir()
+    elif failure != "missing":
+        library.write_bytes(
+            b"wrong runtime fixture" if failure == "changed" else payload
+        )
+    evidence = tmp_path / ".mlx-portable-host"
+    evidence.mkdir()
+    expected = hashlib.sha256(payload).hexdigest()
+    env = dict(
+        os.environ, pythonLocation=str(python_root), EXPECTED_WARP_SHA256=expected
+    )
+    if failure == "empty-digest":
+        env["EXPECTED_WARP_SHA256"] = ""
+    result = subprocess.run(
+        [shutil.which("pwsh"), "-NoProfile", "-NonInteractive", "-File", str(script)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    receipt = evidence / "host-runtime-identity.json"
+    if failure:
+        assert result.returncode != 0, result.stdout + result.stderr
+        assert not receipt.exists()
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert json.loads(receipt.read_text(encoding="utf-8-sig")) == {
+            "library": str(library),
+            "sha256": expected,
+            "replacesRequiredGate": False,
+        }
+    if library.is_file():
+        assert library.read_bytes() == (
+            b"wrong runtime fixture" if failure == "changed" else payload
+        )
 
 
 @pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell is not installed")

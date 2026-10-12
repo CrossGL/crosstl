@@ -49,6 +49,16 @@ removed. A previous revision's successful proof does not satisfy the current
 revision's required checks.
 Core and demo tests also remain part of the complete test suite.
 
+The portable host build, package translation and upstream test execution use
+explicit prerequisites, so an earlier independent regression does not hide
+their results. Preparation requires successful host contract or ABI checks.
+Windows additionally rechecks the selected WARP library's pinned digest after
+any runtime comparison; a missing or changed library prevents preparation.
+Build and translation both require successful source preparation, and native
+upstream tests require both products. Cancellation stops this work. Earlier
+failures remain fatal to the job, all numerical checks and deadlines are
+unchanged, and no extra runner is added.
+
 Complete DirectX scan tests select the translator's `native-precise` binary32
 addition policy. The generated helpers materialize a precise result to preserve
 each addition and subtraction through optimization. The pinned upstream source,
@@ -101,12 +111,16 @@ either numerical failure; it is diagnostic, not a replacement for the required
 gate. Its process limit is 180 seconds within the existing eight-minute step.
 Both diagnostic modes request the Direct3D validation layer and retain its
 bounded messages, including messages from failed pipeline creation. At
-`bbb815b4`, all five debug-flag attempts reached device creation but failed at
-`CreateComputePipelineState` with `0x80070057`; none executed a debug-mode
-shader. Four default-mode cases differ numerically and the ordinary matrix
-control passes. Validation-layer diagnostics are pending native execution and
-are not a fix. Debug information is not a documented guarantee of different
-arithmetic.
+`afa595de`, all five debug-flag attempts report Direct3D error 922: the flag is
+deprecated and rejected. They fail at `CreateComputePipelineState` with
+`0x80070057`; none executes a debug-mode shader. Four default-mode cases differ
+numerically and the ordinary matrix control passes. Default dispatches report
+only initial-buffer-state warnings, not validation errors. The
+[retained Windows artifact](https://github.com/CrossGL/crosstl/actions/runs/38219130449/artifacts/11734215973)
+contains complete messages for all ten attempts. Identical source, module,
+request, input, reference and default-readback identities bind this result to
+the preceding comparison. A clean validation queue does not establish correct
+arithmetic, and this flag is not a usable workaround on the captured runtime.
 
 For manually dispatched workflow runs, that diagnostic instead compares the
 same precise scalar, cooperative-matrix and narrow-buffer controls on the

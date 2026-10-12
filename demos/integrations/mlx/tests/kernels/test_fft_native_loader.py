@@ -439,8 +439,10 @@ def _build_runtime_package(
 
     generated_path = mlx_root / artifact["path"]
     generated = generated_path.read_text(encoding="utf-8")
-    assert "groupshared float2 fft_mem_256_float2_float2_shared_in[256];" in generated
-    assert re.search(r"\bcrosstl_ptr_buf\s*[,)]", generated) is None
+    assert "groupshared float2 crosstl_workgroup_shared_in[256];" in generated
+    assert "crosstl_resource_ref_vec2 crosstl_ptr_buf" in generated
+    assert "crosstl_workgroup_store_vec2(crosstl_ptr_buf," in generated
+    assert "crosstl_workgroup_load_vec2(crosstl_ptr_buf," in generated
     assert "float2*" not in generated
     assert "decltype(" not in generated
     assert "vec_u3cfloat_u2c2_u3e" not in generated

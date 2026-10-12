@@ -1226,9 +1226,11 @@ jobs:
             replacesRequiredGate = $false
           } | ConvertTo-Json | Set-Content ".mlx-portable-host/runtime-qualification.json"
       - name: Validate portable host contracts
+        id: portable-host-contracts
         if: runner.os == 'Linux'
         run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_host.py demos/integrations/mlx/tests/host/test_portable_reductions.py demos/integrations/mlx/tests/host/test_portable_rows.py demos/integrations/mlx/tests/host/test_portable_reduction_shards.py demos/integrations/mlx/tests/host/test_portable_mixed_reductions.py demos/integrations/mlx/tests/host/test_portable_columns.py demos/integrations/mlx/tests/host/test_portable_small_rows.py demos/integrations/mlx/tests/host/test_portable_empty_reductions.py demos/integrations/mlx/tests/host/test_portable_bitwise.py demos/integrations/mlx/tests/host/test_portable_concatenate.py demos/integrations/mlx/tests/host/test_portable_selection.py demos/integrations/mlx/tests/host/test_portable_integer64.py demos/integrations/mlx/tests/host/test_portable_padding.py demos/integrations/mlx/tests/host/test_portable_slice_updates.py demos/integrations/mlx/tests/host/test_portable_slice_update_workloads.py demos/integrations/mlx/tests/host/test_slice_capacity.py demos/integrations/mlx/tests/test_random_audit.py demos/integrations/mlx/tests/host/test_portable_random.py demos/integrations/mlx/tests/host/test_cast_batches.py demos/integrations/mlx/tests/host/test_large_copies.py demos/integrations/mlx/tests/host/test_binary_batches.py demos/integrations/mlx/tests/host/test_unary_batches.py
       - name: Validate platform host ABI
+        id: platform-host-abi
         if: runner.os != 'Linux'
         run: |
           set -euo pipefail
@@ -1741,7 +1743,31 @@ jobs:
               tests/test_translator/test_metal_multiplication_profile.py \
               tests/test_translator/test_metal_power.py \
               2>&1 | tee .mlx-portable-host/fused-math.log
+      - name: Verify Windows host runtime identity
+        id: host-warp-identity
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.platform-host-abi.outcome == 'success' }}
+        shell: pwsh
+        timeout-minutes: 1
+        env:
+          EXPECTED_WARP_SHA256: ${{ matrix.warp_qualification == '1.0.13' && '0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638' || 'e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3' }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $library = Join-Path $env:pythonLocation "d3d10warp.dll"
+          if (-not (Test-Path $library -PathType Leaf)) { throw "Host WARP library is missing." }
+          $digest = (Get-FileHash $library -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($digest -ne $env:EXPECTED_WARP_SHA256) { throw "Host WARP library identity does not match." }
+          @{
+            library = $library
+            sha256 = $digest
+            replacesRequiredGate = $false
+          } | ConvertTo-Json | Set-Content ".mlx-portable-host/host-runtime-identity.json"
       - name: Checkout and prepare pinned upstream MLX
+        id: pinned-upstream
+        if: >-
+          ${{ !cancelled() &&
+              (steps.portable-host-contracts.outcome == 'success' ||
+               (runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') ||
+               steps.host-warp-identity.outcome == 'success') }}
         run: |
           set -euo pipefail
           git init mlx-upstream
@@ -2043,17 +2069,24 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_attention_reduce_runtime.py \
               2>&1 | tee .mlx-portable-host/attention-reduce.log
       - name: Build adapted upstream MLX
+        id: host-build
+        if: ${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}
         run: |
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX portable host build" -- \
             python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-host/build.log
       - name: Translate unchanged upstream kernels
+        id: host-packages
+        if: ${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}
         run: |
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 2400 --label "MLX host package translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
               --target ${{ matrix.target }} --output-dir .mlx-portable-host/packages 2>&1 | tee .mlx-portable-host/translation.log
       - name: Execute upstream tests on the translated backend
+        if: >-
+          ${{ !cancelled() && steps.host-build.outcome == 'success' &&
+              steps.host-packages.outcome == 'success' }}
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
