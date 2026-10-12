@@ -738,13 +738,16 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                 statement = statement.expression
             if isinstance(statement, (VariableNode, AssignmentNode, ReturnNode)):
                 if isinstance(statement, VariableNode):
+                    allowed_qualifiers = {"const", "thread"}
+                    if _type_name(statement.var_type) in _FLOATS:
+                        allowed_qualifiers.add("precise")
                     if (
                         statement.name in types
                         or statement.name in controls
                         or statement.attributes
-                        or set(statement.qualifiers or []) - {"const", "thread"}
+                        or set(statement.qualifiers or []) - allowed_qualifiers
                         or set(getattr(statement.var_type, "qualifiers", []) or [])
-                        - {"const", "thread"}
+                        - allowed_qualifiers
                     ):
                         return None
                     name, target, value = (

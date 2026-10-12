@@ -49,6 +49,16 @@ removed. A previous revision's successful proof does not satisfy the current
 revision's required checks.
 Core and demo tests also remain part of the complete test suite.
 
+Complete DirectX scan tests select the translator's `native-precise` binary32
+addition policy. The generated helpers materialize a precise result to preserve
+each addition and subtraction through optimization. The pinned upstream source,
+original-Metal reference words, buffer layouts and guard checks are unchanged.
+Reports and packages retain the arithmetic policy. This is a target translation
+configuration, not an upstream source patch or a relaxed comparison; native
+Windows parity is required before closing the record-scan defect in #2215.
+The mode does not select software IEEE emulation or resolve the separate WARP
+multiply-add defect in #2193.
+
 The project-porting binary32 step selects every native execution and Metal
 linking case without repeating portable parser and compiler checks from the
 main suite. It limits test workers and software-OpenGL threads to two while

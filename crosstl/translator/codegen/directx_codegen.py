@@ -2225,6 +2225,7 @@ class HLSLCodeGen:
         self.current_identifier_reserved_names = set()
         self.current_function_name = None
         self.current_function_return_type = None
+        self.current_hlsl_precise_return_type = None
         self.current_hlsl_tail_recursive_call_ids = set()
         self.current_hlsl_tail_recursive_function = None
         self.current_expression_expected_type = None
@@ -3242,6 +3243,7 @@ class HLSLCodeGen:
         self.current_identifier_reserved_names = set()
         self.current_function_name = None
         self.current_function_return_type = None
+        self.current_hlsl_precise_return_type = None
         self.current_hlsl_tail_recursive_call_ids = set()
         self.current_hlsl_tail_recursive_function = None
         self.current_expression_expected_type = None
@@ -10362,6 +10364,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         param_names = {getattr(param, "name", None) for param in param_list}
         emitted_param_names = set(param_names)
         previous_function_return_type = self.current_function_return_type
+        previous_precise_return_type = self.current_hlsl_precise_return_type
         previous_local_variable_types = self.local_variable_types
         previous_local_variable_source_types = self.local_variable_source_types
         previous_identifier_aliases = self.current_identifier_aliases
@@ -10997,6 +11000,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             raw_return_type = stage_output_lowering["struct_name"]
             return_type = stage_output_lowering["struct_name"]
         self.current_function_return_type = raw_return_type
+        self.current_hlsl_precise_return_type = (
+            return_type
+            if return_type != "void" and self.hlsl_has_precise_modifier(func)
+            else None
+        )
         declaration_return_type = (
             f"{self.hlsl_precise_modifier_prefix(func)}{return_type}"
         )
@@ -11016,6 +11024,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "HLSL", getattr(func, "name", None), unsupported_function_reason
             )
             self.current_function_return_type = previous_function_return_type
+            self.current_hlsl_precise_return_type = previous_precise_return_type
             self.current_function_name = previous_function_name
             self.current_hlsl_tail_recursive_call_ids = previous_tail_recursive_call_ids
             self.current_hlsl_tail_recursive_function = previous_tail_recursive_function
@@ -11091,6 +11100,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"{return_semantic_attr};\n\n"
             )
             self.current_function_return_type = previous_function_return_type
+            self.current_hlsl_precise_return_type = previous_precise_return_type
             self.current_function_name = previous_function_name
             self.current_hlsl_tail_recursive_call_ids = previous_tail_recursive_call_ids
             self.current_hlsl_tail_recursive_function = previous_tail_recursive_function
@@ -11298,7 +11308,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 and stage_output_lowering.get("local_name") is not None
             ):
                 fallback = stage_output_lowering["local_name"]
-                code += f"{'    ' * (indent + 1)}return {fallback};\n"
+                code += self.generate_hlsl_return_value_statement(fallback, indent + 1)
             else:
                 struct_fallback = self.render_hlsl_default_struct_return(
                     raw_return_type, indent + 1
@@ -11307,7 +11317,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     code += struct_fallback
                 else:
                     fallback = self.hlsl_default_value_expression(raw_return_type)
-                    code += f"{'    ' * (indent + 1)}return {fallback};\n"
+                    code += self.generate_hlsl_return_value_statement(
+                        fallback, indent + 1
+                    )
         self.current_sampler_parameters = previous_sampler_parameters
         self.current_texture_parameters = previous_texture_parameters
         self.current_image_access_parameters = previous_image_access_parameters
@@ -11320,6 +11332,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             previous_implicit_texture_query_lod_samplers
         )
         self.current_function_return_type = previous_function_return_type
+        self.current_hlsl_precise_return_type = previous_precise_return_type
         self.current_function_name = previous_function_name
         self.current_hlsl_tail_recursive_call_ids = previous_tail_recursive_call_ids
         self.current_hlsl_tail_recursive_function = previous_tail_recursive_function
@@ -11887,7 +11900,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         code += f"{self.generate_expression(return_stmt)}"
                         if i < len(stmt.value) - 1:
                             code += ", "
-                    return f"{indent_str}return {code};\n"
+                    return self.generate_hlsl_return_value_statement(code, indent)
                 else:
                     aggregate_return = self.generate_hlsl_aggregate_conditional_return(
                         stmt.value, indent
@@ -11904,7 +11917,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     )
                     if aggregate_value is not None:
                         aggregate_code, return_expr = aggregate_value
-                        aggregate_code += f"{indent_str}return {return_expr};\n"
+                        aggregate_code += self.generate_hlsl_return_value_statement(
+                            return_expr, indent
+                        )
                         return aggregate_code
                     ternary_return = (
                         self.generate_hlsl_typed_buffer_atomic_ternary_return(
@@ -11926,7 +11941,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                                 indent,
                             )
                         )
-                        code += f"{indent_str}return {return_expr};\n"
+                        code += self.generate_hlsl_return_value_statement(
+                            return_expr, indent
+                        )
                         return code
                     lifted_return = self.hlsl_typed_buffer_atomic_lifted_expression(
                         stmt.value, self.current_function_return_type
@@ -11936,14 +11953,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         code = self.generate_statement_code(
                             "\n".join(lift_statements), indent
                         )
-                        code += f"{indent_str}return {return_expr};\n"
+                        code += self.generate_hlsl_return_value_statement(
+                            return_expr, indent
+                        )
                         return code
                     struct_return = self.render_hlsl_struct_return(stmt.value, indent)
                     if struct_return is not None:
                         return struct_return
-                    return (
-                        f"{indent_str}return "
-                        f"{self.generate_expression_with_expected(stmt.value, self.current_function_return_type)};\n"
+                    return self.generate_hlsl_return_value_statement(
+                        self.generate_expression_with_expected(
+                            stmt.value, self.current_function_return_type
+                        ),
+                        indent,
                     )
             else:
                 stage_output_lowering = self.current_hlsl_stage_output_lowering
@@ -11951,8 +11972,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     stage_output_lowering is not None
                     and stage_output_lowering.get("local_name") is not None
                 ):
-                    return (
-                        f"{indent_str}return {stage_output_lowering['local_name']};\n"
+                    return self.generate_hlsl_return_value_statement(
+                        stage_output_lowering["local_name"], indent
                     )
                 return f"{indent_str}return;\n"
 
@@ -12112,6 +12133,30 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return f"{indent_str}{storage_statement};\n"
             return f"{indent_str}{self.generate_expression(stmt)};\n"
 
+    def generate_hlsl_return_value_statement(self, value, indent):
+        """Keep precise result dependencies visible through helper inlining."""
+        indent_str = "    " * indent
+        return_type = self.current_hlsl_precise_return_type
+        if return_type is None:
+            return f"{indent_str}return {value};\n"
+
+        used_names = set(self.local_variable_types)
+        used_names.update(self.global_variable_types)
+        used_names.update(self.function_return_types)
+        used_names.update(self.structs_by_name)
+        used_names.update(self.hlsl_type_aliases)
+        used_names.update(self.current_identifier_aliases.values())
+        name = self.hlsl_unique_local_identifier("crossglPreciseReturn", used_names)
+        self.current_identifier_reserved_names.add(name)
+        source_type = self.type_name_string(self.current_function_return_type)
+        self.local_variable_types[name] = source_type
+        self.local_variable_source_types[name] = source_type
+        declaration = format_c_style_array_declaration(return_type, name)
+        return (
+            f"{indent_str}precise {declaration} = {value};\n"
+            f"{indent_str}return {name};\n"
+        )
+
     def generate_tail_expression_statement(self, stmt, indent=0):
         if not getattr(stmt, "is_tail_expression", False):
             return None
@@ -12133,11 +12178,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if aggregate_value is not None:
             aggregate_code, value = aggregate_value
-            return f"{aggregate_code}{'    ' * indent}return {value};\n"
+            return aggregate_code + self.generate_hlsl_return_value_statement(
+                value, indent
+            )
 
-        indent_str = "    " * indent
         value = self.generate_expression_with_expected(stmt.expression, return_type)
-        return f"{indent_str}return {value};\n"
+        return self.generate_hlsl_return_value_statement(value, indent)
 
     def local_variable_declared_type(self, stmt):
         vtype = getattr(stmt, "var_type", None)
@@ -21892,6 +21938,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         code += f"{indent_str}}}\n"
         return code
+
+    def format_match_condition(self, condition):
+        return f"({self.hlsl_strip_wrapping_parentheses(condition)})"
 
     def generate_match(self, node, indent):
         subject_type = self.type_name_string(
@@ -44333,7 +44382,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if declaration:
             code += f"{indent_str}{declaration}"
         code += f"{indent_str}{parts['intrinsic']}({', '.join(call_args)});\n"
-        code += f"{indent_str}return {original};\n"
+        code += self.generate_hlsl_return_value_statement(original, indent)
         return code
 
     def hlsl_is_ternary_expression(self, expr):
@@ -44437,6 +44486,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 hasattr(node, "__class__") and "FunctionCall" in str(node.__class__)
             ):
                 function = getattr(node, "function", getattr(node, "name", None))
+                arguments = getattr(node, "arguments", getattr(node, "args", [])) or []
+                if allow_numeric_constructors and len(arguments) == 1:
+                    numeric_type = numeric_trait_method_result_type(self, node)
+                    if (
+                        numeric_type is not None
+                        and self.value_component_count(numeric_type) is not None
+                        and self.value_component_count(
+                            self.expression_result_type(arguments[0])
+                        )
+                        is not None
+                    ):
+                        # Numeric trait methods lower to operators, not calls.
+                        # The walk still checks receiver and argument effects.
+                        continue
                 name = getattr(function, "name", function)
                 definition = self.current_hlsl_available_functions.get(name)
                 if getattr(definition, "resource_aggregate_nonmutating", False):
@@ -44762,7 +44825,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             indent,
             context="return",
         )
-        return f"{code}{'    ' * indent}return {rendered};\n"
+        return code + self.generate_hlsl_return_value_statement(rendered, indent)
 
     def materialize_hlsl_aggregate_conditional(
         self, expr, expected_type, indent, *, context
@@ -45138,7 +45201,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         code += self.render_hlsl_struct_field_assignments(
             temp_name, fields, rendered_args, field_exprs, indent
         )
-        code += f"{indent_str}return {temp_name};\n"
+        code += self.generate_hlsl_return_value_statement(temp_name, indent)
         return code
 
     def render_hlsl_struct_field_assignments(
@@ -45221,7 +45284,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         code += self.render_hlsl_default_struct_field_assignments(
             temp_name, type_name, indent
         )
-        code += f"{indent_str}return {temp_name};\n"
+        code += self.generate_hlsl_return_value_statement(temp_name, indent)
         return code
 
     def hlsl_effectful_struct_constructor_type(self, expr):
@@ -46407,8 +46470,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         code, rendered_expr = self.render_hlsl_typed_buffer_atomic_value_expression(
             expr, self.current_function_return_type, indent
         )
-        indent_str = "    " * indent
-        code += f"{indent_str}return {rendered_expr};\n"
+        code += self.generate_hlsl_return_value_statement(rendered_expr, indent)
         return code
 
     def generate_hlsl_typed_buffer_atomic_ternary_return(self, expr, indent=0):
@@ -48601,6 +48663,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             return f"{mapped_type}(0)"
         return "0"
+
+    def default_value_expression_for_type(self, field_type):
+        mapped_type = self.map_type(field_type)
+        if self.hlsl_struct_constructor_fields(mapped_type) is not None:
+            return f"({mapped_type})0"
+        return None
 
     def hlsl_default_value_expression(self, vtype, seen_structs=None):
         type_name = self.type_name_string(vtype)

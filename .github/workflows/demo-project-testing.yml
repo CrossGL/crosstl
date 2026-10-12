@@ -1733,6 +1733,7 @@ jobs:
               tests/test_translator/test_metal_comparison_profile.py \
               tests/test_translator/test_metal_remainder_profile.py \
               tests/test_translator/test_metal_additive_profile.py \
+              tests/test_translator/test_precise_returns.py \
               tests/test_translator/test_metal_multiplication_profile.py \
               tests/test_translator/test_metal_power.py \
               2>&1 | tee .mlx-portable-host/fused-math.log
@@ -3863,6 +3864,7 @@ jobs:
         env:
           CROSTL_REQUIRE_FUSED_MATH: "1"
           CROSTL_REQUIRE_HALF_REMAINDER: "1"
+          CROSTL_REQUIRE_ADDITIVE_PROFILE: "1"
           CROSTL_REQUIRE_HALF_WIDENING: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
           LP_NUM_THREADS: "2"
@@ -3881,6 +3883,8 @@ jobs:
               tests/test_translator/test_fused_math.py \
               tests/test_translator/test_metal_fma.py \
               tests/test_translator/test_metal_half_remainder.py::test_half_remainder_profile_executes \
+              tests/test_translator/test_metal_additive_profile.py \
+              tests/test_translator/test_precise_returns.py \
               tests/test_translator/test_metal_half_widening.py::test_half_widening_profile_executes \
               tests/test_translator/test_half_bitcast_identity.py::test_half_bitcasts_execute \
               tests/test_translator/test_half_bitcast_identity.py::test_half_buffer_bitcasts_execute \

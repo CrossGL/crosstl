@@ -28537,9 +28537,13 @@ def _translate_project_impl(
                         ] = multiplication_profile
                     additive_profile = source_options.get("binary32_additive_profile")
                     if unit.source_backend == "metal" and additive_profile is not None:
-                        if additive_profile not in ("rne-gradual", "rne-flush"):
+                        if additive_profile not in (
+                            "rne-gradual",
+                            "rne-flush",
+                            "native-precise",
+                        ):
                             raise ValueError(
-                                "binary32_additive_profile must be 'rne-gradual', 'rne-flush', or None"
+                                "binary32_additive_profile must be 'rne-gradual', 'rne-flush', 'native-precise', or None"
                             )
                         artifact["provenance"][
                             "binary32AdditiveProfile"
@@ -46817,9 +46821,13 @@ def _provenance_contract_reasons(
     if "binary32AdditiveProfile" in provenance:
         if artifact.get("sourceBackend") != "metal":
             reasons.append(f"{prefix}.binary32AdditiveProfile requires a Metal source")
-        if provenance["binary32AdditiveProfile"] not in ("rne-gradual", "rne-flush"):
+        if provenance["binary32AdditiveProfile"] not in (
+            "rne-gradual",
+            "rne-flush",
+            "native-precise",
+        ):
             reasons.append(
-                f"{prefix}.binary32AdditiveProfile must be rne-gradual or rne-flush"
+                f"{prefix}.binary32AdditiveProfile must be rne-gradual, rne-flush or native-precise"
             )
     if "binary32MultiplicationProfile" in provenance:
         if artifact.get("sourceBackend") != "metal":

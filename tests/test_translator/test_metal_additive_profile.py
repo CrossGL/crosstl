@@ -2,6 +2,9 @@
 
 import json
 import os
+import re
+import shutil
+import subprocess
 import sys
 from functools import partial
 from pathlib import Path
@@ -138,7 +141,7 @@ def test_additive_oracle_boundaries(a, b, preserved, flushed):
     assert _oracle(a, b ^ 0x80000000, True, True) == flushed
 
 
-@pytest.mark.parametrize("profile", PROFILES)
+@pytest.mark.parametrize("profile", (*PROFILES, "native-precise"))
 @pytest.mark.parametrize("target", ("metal", "opengl", "directx"))
 def test_additive_profiles_compile(tmp_path, profile, target):
     generated = _translate(tmp_path, profile=profile, target=target)
@@ -262,13 +265,14 @@ def test_additive_profile_is_independent_of_fused_profile():
     assert "asuint(a), asuint(b), asuint(c), true" in generated
 
 
-def test_additive_profile_report_provenance(tmp_path):
+@pytest.mark.parametrize("directx_profile", ("rne-gradual", "native-precise"))
+def test_additive_profile_report_provenance(tmp_path, directx_profile):
     (tmp_path / "additive.metal").write_text(SOURCE, encoding="utf-8")
     (tmp_path / "crosstl.toml").write_text(
-        """[project]
+        f"""[project]
 targets = ["directx", "opengl"]
 [project.source_options.metal]
-binary32_additive_profile = "rne-gradual"
+binary32_additive_profile = "{directx_profile}"
 [project.source_options.metal.target_options.opengl.source_patterns."additive.metal"]
 binary32_additive_profile = "rne-flush"
 """,
@@ -277,7 +281,7 @@ binary32_additive_profile = "rne-flush"
     report = translate_project(load_project_config(tmp_path), format_output=False)
     data = report.to_json()
     assert data["summary"]["translatedCount"] == 2, data["diagnostics"]
-    expected = dict(zip(("directx", "opengl"), PROFILES))
+    expected = {"directx": directx_profile, "opengl": "rne-flush"}
     assert {
         a["target"]: a["provenance"]["binary32AdditiveProfile"]
         for a in data["artifacts"]
@@ -303,6 +307,161 @@ binary32_additive_profile = "rne-flush"
         result = validate_project_report(path)
         assert not result["success"]
         assert "binary32AdditiveProfile" in json.dumps(result["diagnostics"])
+
+
+NATIVE_ORDER_SOURCE = """#include <metal_stdlib>
+using namespace metal;
+kernel void additive_order(const device uint* values [[buffer(0)]],
+                          device uint* results [[buffer(1)]],
+                          uint i [[thread_position_in_grid]]) {
+    float a = as_type<float>(values[2u * i]);
+    float b = as_type<float>(values[2u * i + 1u]);
+    results[4u + 4u * i] = as_type<uint>((a + b) - a);
+    results[5u + 4u * i] = as_type<uint>((a - b) + b);
+    results[6u + 4u * i] = as_type<uint>(a + (b - a));
+    results[7u + 4u * i] = as_type<uint>(b - (a + b));
+}
+"""
+
+
+@pytest.mark.parametrize("target", ("crossgl", "metal", "opengl", "directx"))
+def test_native_precise_additive_uses_portable_qualifiers(tmp_path, target):
+    source = _translate(
+        tmp_path, NATIVE_ORDER_SOURCE, target=target, profile="native-precise"
+    )
+    assert "fma_bits" not in source
+    assert "crossgl_metal_add_float" in source
+    assert "crossgl_metal_subtract_float" in source
+    if target == "crossgl":
+        assert re.search(r"@precise\s+float __crossgl_metal_add_float", source)
+    elif target == "directx":
+        assert "precise float __crossgl_metal_add_float" in source
+    elif target == "metal":
+        assert "#pragma clang fp contract(off)" in source
+        assert "#pragma clang fp reassociate(off)" in source
+    else:
+        assert "precise float " in source
+    if target != "crossgl":
+        _compile(source, target, tmp_path)
+
+
+@pytest.mark.parametrize("target", ("metal", "opengl", "directx"))
+def test_native_precise_additive_survives_saved_crossgl(tmp_path, target):
+    intermediate = _translate(tmp_path, NATIVE_ORDER_SOURCE, profile="native-precise")
+    path = tmp_path / "saved.cgl"
+    path.write_text(intermediate, encoding="utf-8")
+    generated = translate(str(path), backend=target, format_output=False)
+    assert generated == _translate(
+        tmp_path, NATIVE_ORDER_SOURCE, target=target, profile="native-precise"
+    )
+    _compile(generated, target, tmp_path)
+
+
+def test_native_precise_additive_dxil_has_no_fast_arithmetic(tmp_path):
+    if not shutil.which("dxc"):
+        pytest.skip("DXC is required to inspect compiled arithmetic")
+    generated = _translate(
+        tmp_path, NATIVE_ORDER_SOURCE, target="directx", profile="native-precise"
+    )
+    _, module = _compile(generated, "directx", tmp_path)
+    result = subprocess.run(
+        ["dxc", "-dumpbin", str(module)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    (tmp_path / "translated.ll").write_text(result.stdout, encoding="utf-8")
+    arithmetic = re.findall(r"= (?:fadd|fsub) ([^\n]+)", result.stdout)
+    assert len(arithmetic) >= 6, result.stdout
+    assert all(line.startswith("float ") for line in arithmetic), arithmetic
+
+
+def test_native_precise_additive_retains_other_software_profiles():
+    tree = MetalParser(
+        MetalLexer(
+            "float value(float a, float b) { return fma(a, b, a) + b; }"
+        ).tokenize()
+    ).parse()
+    generated = MetalToCrossGLConverter(
+        binary32_additive_profile="native-precise", binary32_fma_profile="rne-flush"
+    ).generate(tree)
+    assert "asuint(a), asuint(b), asuint(c), true" in generated
+    assert re.search(r"@precise\s+float __crossgl_metal_add_float", generated)
+
+
+def test_native_precise_additive_executes_cancellation_boundaries(
+    tmp_path, monkeypatch
+):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for native additive policies")
+    from tests.test_translator import test_fused_math as native
+
+    monkeypatch.setattr(
+        native,
+        "_compile",
+        partial(_compile, metal_compile_flags=("-std=metal3.2", "-fno-fast-math")),
+    )
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    pairs = [
+        (0x4B800000, 0x3F800000),
+        (0xCB800000, 0xBF800000),
+        (0x4B800001, 0x3F800000),
+        (0x3F800000, 0x33800000),
+        (0x3F800001, 0x33800000),
+        (0x3F000000, 0xBF000000),
+        (0x80000000, 0),
+        (0x80000000, 0x80000000),
+    ]
+    expected = [GUARD] * 4
+    for a, b in pairs:
+        added, subtracted = _oracle(a, b, True), _oracle(a, b, True, True)
+        expected.extend(
+            [
+                _oracle(added, a, True, True),
+                _oracle(subtracted, b, True),
+                _oracle(a, _oracle(b, a, True, True), True),
+                _oracle(b, added, True, True),
+            ]
+        )
+    expected.extend([GUARD] * 4)
+    generated = _translate(
+        tmp_path, NATIVE_ORDER_SOURCE, target=target, profile="native-precise"
+    )
+    sources = [("translated", generated)]
+    if target == "metal":
+        sources.append(("original", NATIVE_ORDER_SOURCE))
+    for name, source in sources:
+        work = tmp_path / name
+        work.mkdir()
+        actual, evidence = _dispatch(
+            work,
+            target,
+            source,
+            pairs,
+            len(expected),
+            entry="additive_order" if target == "metal" else None,
+            initial_output=[GUARD] * len(expected),
+        )
+        evidence.update({"expected": expected, "actual": actual})
+        (work / "evidence.json").write_text(json.dumps(evidence, indent=2))
+        assert actual == expected
+
+
+def test_native_precise_additive_ci_requires_all_target_execution():
+    from tools import ci_coverage
+
+    workflow = (
+        Path(__file__).resolve().parents[2]
+        / ".github/workflows/demo-project-testing.yml"
+    ).read_text()
+    for job in ("mlx-metal-porting", "portable-host"):
+        step = ci_coverage.workflow_job_step_section(
+            workflow, job, "Validate binary32 arithmetic"
+        )
+        assert f'{REQUIRE_ENV}: "1"' in step
+        assert "tests/test_translator/test_metal_additive_profile.py" in step
+        assert "if:" not in step
 
 
 @pytest.mark.parametrize("profile", (*PROFILES, "source"))
@@ -428,6 +587,6 @@ def test_ci_requires_additive_profiles_in_existing_native_job():
     )
     assert "if:" not in step
     assert f'{REQUIRE_ENV}: "1"' in step
-    assert workflow.count("tests/test_translator/test_metal_additive_profile.py") == 1
+    assert step.count("tests/test_translator/test_metal_additive_profile.py") == 1
     assert "tests/test_translator/test_metal_additive_profile.py" in step
     assert "--timeout-seconds 120" in step

@@ -1617,6 +1617,25 @@ default is unset. The implementation shares the integer-word exact-rounding
 support with fused arithmetic, but the two policies remain independent. It does
 not replace separate source operations with a fused expression.
 
+``native-precise`` instead emits a separate ``precise`` scalar helper for each
+addition and subtraction. HLSL and GLSL materialize a precise local result;
+Metal disables contraction and reassociation in the helper. Metal execution
+also requires a compiler configuration without fast math, matching the native
+reference controls; source qualifiers alone do not select a compiler mode.
+This policy retains native arithmetic rather than emitting integer-word
+emulation. It preserves the selected operation boundaries but does not specify
+subnormal handling, NaN payloads or a universal device rounding policy. It is not
+equivalent to either ``rne`` profile or to honoring lexical source pragmas.
+The helper bodies remain ordinary checked arithmetic for conditional subgroup
+lowering; selecting this policy does not bypass convergence or effect analysis.
+
+CrossGL ``@precise`` function returns are materialized through precise local
+values in HLSL as well as GLSL. This includes early returns, generic
+specializations and return expressions with effects; the expressions are still
+evaluated once. The HLSL return qualifier remains present, but is not relied on
+alone to preserve arithmetic through optimized helper inlining. Native runtime
+correctness remains a separate requirement from compiler qualification.
+
 Scalar and vector ``+`` and ``-`` evaluate operands once, retain source
 conversions and preserve bfloat result narrowing. Proven side-effect-free
 ``+=`` and ``-=`` support writable thread storage, direct buffer elements and

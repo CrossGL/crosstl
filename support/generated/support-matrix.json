@@ -177,7 +177,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 2138
+        "test_count": 2144
       },
       "translator_codegen": {
         "exists": true,
@@ -356,7 +356,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 2358
+        "test_count": 2364
       },
       "translator_codegen": {
         "exists": true,
@@ -777,7 +777,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2551
+        "test_count": 2567
       },
       "translator_codegen": {
         "exists": true,
@@ -1868,6 +1868,8 @@
             "tests/test_translator/test_metal_remainder_profile.py::def test_remainder_profile_report_provenance",
             "tests/test_translator/test_metal_additive_profile.py::def test_additive_profiles_execute",
             "tests/test_translator/test_metal_additive_profile.py::def test_additive_profile_report_provenance",
+            "tests/test_translator/test_metal_additive_profile.py::def test_native_precise_additive_",
+            "tests/test_translator/test_precise_returns.py::def test_precise_",
             "tests/test_translator/test_metal_multiplication_profile.py::def test_multiplication_profiles_execute",
             "tests/test_translator/test_metal_multiplication_profile.py::def test_multiplication_profile_report_provenance",
             "tests/test_translator/test_directx_metal_math.py::def test_directx_metal_math_rejects_shadowed_target",
@@ -1955,6 +1957,7 @@
             "tests/test_translator/test_metal_remainder_profile.py::def test_remainder_profile_report_provenance",
             "tests/test_translator/test_metal_additive_profile.py::def test_additive_profiles_execute",
             "tests/test_translator/test_metal_additive_profile.py::def test_additive_profile_report_provenance",
+            "tests/test_translator/test_metal_additive_profile.py::def test_native_precise_additive_",
             "tests/test_translator/test_metal_multiplication_profile.py::def test_multiplication_profiles_execute",
             "tests/test_translator/test_metal_multiplication_profile.py::def test_multiplication_profile_report_provenance"
           ],
@@ -2012,6 +2015,7 @@
             "tests/test_translator/test_metal_remainder_profile.py::def test_remainder_profile_report_provenance",
             "tests/test_translator/test_metal_additive_profile.py::def test_additive_profiles_execute",
             "tests/test_translator/test_metal_additive_profile.py::def test_additive_profile_report_provenance",
+            "tests/test_translator/test_metal_additive_profile.py::def test_native_precise_additive_",
             "tests/test_translator/test_metal_multiplication_profile.py::def test_multiplication_profiles_execute",
             "tests/test_translator/test_metal_multiplication_profile.py::def test_multiplication_profile_report_provenance",
             "tests/test_translator/test_metal_half_remainder.py::def test_project_retains_half_remainder_profile",

@@ -18078,9 +18078,9 @@ def test_match_guarded_literal_and_wildcard_arms_lower_to_if_chain():
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "switch (mode)" not in generated_code
-    assert "if (((mode == 0) &&" in generated_code
+    assert "if ((mode == 0) &&" in generated_code
     assert "mode > 0" in generated_code
-    assert "else if ((mode == 0))" in generated_code
+    assert "else if (mode == 0)" in generated_code
     assert "else if" in generated_code
     assert "mode < 10" in generated_code
     assert "else {" in generated_code
@@ -18108,7 +18108,7 @@ def test_match_identifier_binding_arm_lowers_to_scoped_else_body():
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "switch (mode)" not in generated_code
-    assert "if ((mode == 0))" in generated_code
+    assert "if (mode == 0)" in generated_code
     assert "else {" in generated_code
     assert "int other = mode;" in generated_code
     assert "value = other;" in generated_code
@@ -18133,7 +18133,7 @@ def test_match_guarded_identifier_binding_falls_through_to_later_arm():
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "switch (mode)" not in generated_code
-    assert "if ((mode == 0))" in generated_code
+    assert "if (mode == 0)" in generated_code
     assert "else {" in generated_code
     assert "int candidate = mode;" in generated_code
     assert "candidate > 2" in generated_code
@@ -18197,8 +18197,8 @@ def test_match_enum_path_pattern_lowers_to_integer_constants():
     assert "int helper(int mode)" in generated_code
     assert "int value = Mode_Divide;" in generated_code
     assert "switch (mode)" not in generated_code
-    assert "if ((mode == Mode_Add))" in generated_code
-    assert "else if ((mode == Mode_Multiply))" in generated_code
+    assert "if (mode == Mode_Add)" in generated_code
+    assert "else if (mode == Mode_Multiply)" in generated_code
     assert "value = 3;" in generated_code
     assert "MatchNode(" not in generated_code
 
@@ -18242,8 +18242,8 @@ def test_match_struct_enum_pattern_binds_named_payload_fields():
     assert "float3 ambient;" in generated_code
     assert "float3 base_color;" in generated_code
     assert "float3 shade(LightingModel model)" in generated_code
-    assert "if ((model.variant == LightingModel_Phong))" in generated_code
-    assert "else if ((model.variant == LightingModel_Toon))" in generated_code
+    assert "if (model.variant == LightingModel_Phong)" in generated_code
+    assert "else if (model.variant == LightingModel_Toon)" in generated_code
     assert "float3 ambient = model.ambient;" in generated_code
     assert "float shininess = model.shininess;" in generated_code
     assert "float3 base_color = model.base_color;" in generated_code
@@ -18289,8 +18289,8 @@ def test_match_tuple_enum_pattern_binds_payload_fields():
     assert "float Pair_1;" in generated_code
     assert "MaybeInt MaybeInt_Value_make(int payload0)" in generated_code
     assert "MaybeInt MaybeInt_Missing_make()" in generated_code
-    assert "if ((item.variant == MaybeInt_Value))" in generated_code
-    assert "else if ((item.variant == MaybeInt_Pair))" in generated_code
+    assert "if (item.variant == MaybeInt_Value)" in generated_code
+    assert "else if (item.variant == MaybeInt_Pair)" in generated_code
     assert "int value = item.Value_0;" in generated_code
     assert "int left = item.Pair_0;" in generated_code
     assert "float scale = item.Pair_1;" in generated_code
@@ -18319,7 +18319,7 @@ def test_non_void_match_function_emits_fallthrough_return():
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "int read(MaybeInt item)" in generated_code
-    assert "if ((item.variant == MaybeInt_Value))" in generated_code
+    assert "if (item.variant == MaybeInt_Value)" in generated_code
     assert "return value;" in generated_code
     assert "return int(0);" in generated_code
 
@@ -18406,8 +18406,8 @@ def test_builtin_option_helpers_lower_to_hlsl_structs():
     assert "return Option_uint_Absent_make();" in generated_code
     assert "return Option_uint_Some_make(n);" in generated_code
     assert "uint value = item.Some_0;" in generated_code
-    assert "if ((item.variant == Option_Some))" in generated_code
-    assert "else if ((item.variant == Option_Absent))" in generated_code
+    assert "if (item.variant == Option_Some)" in generated_code
+    assert "else if (item.variant == Option_Absent)" in generated_code
     assert "Option<" not in generated_code
     assert "Option::" not in generated_code
     assert re.search(r"\bSome\s*\(", generated_code) is None
@@ -18492,10 +18492,10 @@ def test_generic_enum_struct_concrete_match_and_constructors():
         "return Result_int_MathError_Err_make(MathError_DivisionByZero);"
         in generated_code
     )
-    assert "if ((item.variant == Option_Some))" in generated_code
-    assert "else if ((item.variant == Option_None))" in generated_code
-    assert "if ((item.variant == Result_Ok))" in generated_code
-    assert "else if ((item.variant == Result_Err))" in generated_code
+    assert "if (item.variant == Option_Some)" in generated_code
+    assert "else if (item.variant == Option_None)" in generated_code
+    assert "if (item.variant == Result_Ok)" in generated_code
+    assert "else if (item.variant == Result_Err)" in generated_code
     assert "int value = item.Some_0;" in generated_code
     assert "int value = item.Ok_0;" in generated_code
     assert "Option<" not in generated_code
@@ -18542,8 +18542,8 @@ def test_generic_enum_function_call_match_infers_result_type_once():
     assert subject_match is not None
     subject = subject_match.group(1)
     assert generated_code.count("make_result(ok)") == 1
-    assert f"if (({subject}.variant == Result_Ok))" in generated_code
-    assert f"else if (({subject}.variant == Result_Err))" in generated_code
+    assert f"if ({subject}.variant == Result_Ok)" in generated_code
+    assert f"else if ({subject}.variant == Result_Err)" in generated_code
     assert f"int value = {subject}.Ok_0;" in generated_code
     assert "Result::" not in generated_code
     assert "MatchNode(" not in generated_code
@@ -18582,8 +18582,8 @@ def test_generic_enum_local_function_call_type_infers_match_subject():
 
     assert "Result_int_MathError item = make_result(ok);" in generated_code
     assert "float item = make_result(ok);" not in generated_code
-    assert "if ((item.variant == Result_Ok))" in generated_code
-    assert "else if ((item.variant == Result_Err))" in generated_code
+    assert "if (item.variant == Result_Ok)" in generated_code
+    assert "else if (item.variant == Result_Err)" in generated_code
     assert "int value = item.Ok_0;" in generated_code
     assert "Result<" not in generated_code
     assert "ConstructorNode(" not in generated_code
@@ -18631,8 +18631,8 @@ def test_generic_enum_match_expression_initializes_vector_local():
     )
     assert subject_match is not None
     subject = subject_match.group(1)
-    assert f"if (({subject}.variant == Result_Ok))" in generated_code
-    assert f"else if (({subject}.variant == Result_Err))" in generated_code
+    assert f"if ({subject}.variant == Result_Ok)" in generated_code
+    assert f"else if ({subject}.variant == Result_Err)" in generated_code
     assert f"float3 actual = {subject}.Ok_0;" in generated_code
     assert "value = actual;" in generated_code
     assert "value = fallback;" in generated_code

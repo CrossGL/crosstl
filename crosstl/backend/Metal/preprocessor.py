@@ -59,6 +59,9 @@ METAL_ANGLE_OPERATOR_RE = re.compile(
     r"(?:<<=|>>=|<=>|<<|>>|<=|>=|<|>)"
 )
 METAL_STATEMENT_DELIMITER_RE = re.compile(r"[()\[\]<>{};\"'/]")
+METAL_TEMPLATE_DELIMITER_RE = re.compile(r"[()\[\]<>{}\"'/]")
+METAL_COMMENT_LITERAL_RE = re.compile(r"[\"'/]")
+METAL_SCOPE_DELIMITER_RE = re.compile(r"[{}\"'/]")
 METAL_NAMESPACE_DELIMITER_RE = re.compile(r"namespace|[{}\"'/]")
 METAL_STRING_LITERAL_PATTERN = r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'"
 METAL_STRING_EXPRESSION_PATTERN = (
@@ -19186,6 +19189,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         spans: List[Tuple[int, int]] = []
         i = 0
         while i < len(code):
+            match = METAL_COMMENT_LITERAL_RE.search(code, i)
+            if match is None:
+                break
+            i = match.start()
             if code[i] in "\"'":
                 _literal, consumed = self._read_string(code, i)
                 spans.append((i, i + consumed))
@@ -19217,6 +19224,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         brace_stack: List[int] = []
         i = 0
         while i < len(code):
+            match = METAL_SCOPE_DELIMITER_RE.search(code, i)
+            if match is None:
+                break
+            i = match.start()
             if code[i] in "\"'":
                 _literal, consumed = self._read_string(code, i)
                 i += consumed
@@ -27972,6 +27983,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         angle_contexts = [(0, 0, 0)]
         index = start + 1
         while index < len(code):
+            match = METAL_TEMPLATE_DELIMITER_RE.search(code, index)
+            if match is None:
+                return None
+            index = match.start()
             if code[index] in "\"'":
                 _literal, consumed = self._read_string(code, index)
                 index += consumed
@@ -28032,9 +28047,14 @@ class MetalPreprocessor(HLSLPreprocessor):
     ) -> Optional[int]:
         if start < 0 or start >= len(code) or code[start] != opener:
             return None
+        delimiters = re.compile("[" + re.escape(opener + closer + "\"'/") + "]")
         depth = 0
         i = start
         while i < len(code):
+            match = delimiters.search(code, i)
+            if match is None:
+                return None
+            i = match.start()
             if code[i] in "\"'":
                 _literal, consumed = self._read_string(code, i)
                 i += consumed
@@ -28068,11 +28088,23 @@ class MetalPreprocessor(HLSLPreprocessor):
         *,
         track_angles: bool = True,
     ) -> Optional[int]:
+        # Skip identifiers and whitespace without allocating a source substring.
+        # Operator names still need their own angle-bracket handling below.
+        delimiters = re.compile(
+            "["
+            + re.escape("()[]\"'/" + target + ("<>" if track_angles else ""))
+            + "]"
+            + (r"|\boperator" if track_angles else "")
+        )
         paren_depth = 0
         bracket_depth = 0
         angle_depth = 0
         i = start
         while i < len(code):
+            match = delimiters.search(code, i)
+            if match is None:
+                return None
+            i = match.start()
             ch = code[i]
             if ch == '"' or ch == "'":
                 _literal, consumed = self._read_string(code, i)

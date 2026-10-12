@@ -1483,9 +1483,15 @@ class MetalToCrossGLConverter:
                 "'flush-arithmetic-subnormals', or None"
             )
         self.binary32_remainder_profile = binary32_remainder_profile
-        if binary32_additive_profile not in (None, "rne-gradual", "rne-flush"):
+        if binary32_additive_profile not in (
+            None,
+            "rne-gradual",
+            "rne-flush",
+            "native-precise",
+        ):
             raise ValueError(
-                "binary32_additive_profile must be 'rne-gradual', 'rne-flush', or None"
+                "binary32_additive_profile must be 'rne-gradual', 'rne-flush', "
+                "'native-precise', or None"
             )
         self.binary32_additive_profile = binary32_additive_profile
         if binary32_multiplication_profile not in (None, "rne-gradual", "rne-flush"):
@@ -15554,7 +15560,10 @@ float {scalar}(float base, float exponent) {{
         if not (
             self.required_metal_fma_widths
             or self.required_metal_half_remainder_widths
-            or self.required_metal_additive_operations
+            or (
+                self.required_metal_additive_operations
+                and self.binary32_additive_profile != "native-precise"
+            )
             or self.required_metal_multiplication_widths
         ):
             return ""
@@ -15646,7 +15655,13 @@ float {scalar}(float base, float exponent) {{
         code = ""
         for operator, width in sorted(operations, key=lambda item: (item[1], item[0])):
             name = self.metal_additive_helper_name(operator, width)
-            if width == 1:
+            if width == 1 and self.binary32_additive_profile == "native-precise":
+                code += (
+                    f"@metal_static\n@precise\nfloat {name}(float a, float b) {{\n"
+                    f"    precise float result = a {operator} b;\n"
+                    "    return result;\n}\n"
+                )
+            elif width == 1:
                 right = "asuint(b)" if operator == "+" else "asuint(b) ^ 0x80000000u"
                 # Multiplication by exactly one introduces no extra rounding.
                 code += (

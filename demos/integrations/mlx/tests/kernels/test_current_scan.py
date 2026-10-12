@@ -333,6 +333,7 @@ def scan_package(tmp_path_factory, request):
                         "directx": {
                             "software_subgroup_width": 32,
                             "relative_wave_shuffle_out_of_range": "self",
+                            "binary32_additive_profile": "native-precise",
                         },
                         "opengl": {"software_subgroup_width": 32},
                     },
@@ -344,6 +345,11 @@ def scan_package(tmp_path_factory, request):
         assert report.to_json()["summary"]["failedCount"] == 0, report.to_json()[
             "diagnostics"
         ]
+        assert all(
+            artifact["provenance"].get("binary32AdditiveProfile")
+            == ("native-precise" if target == "directx" else None)
+            for artifact in report.to_json()["artifacts"]
+        )
         manifest = build_runtime_artifact_manifest(work / "report.json")
         assert manifest["success"], manifest
         (work / "artifacts.json").write_text(json.dumps(manifest, indent=2))

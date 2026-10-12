@@ -80,6 +80,38 @@ def _assert_not_converged(ast, target):
 
 
 @pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_precise_float_locals_retain_qualifiers_during_convergence(tmp_path, target):
+    helpers = """float wrapped(float value) {
+        precise float rounded = value + 1.0;
+        return WavePrefixSum(rounded);
+    }"""
+    ast = parse(_source(helpers=helpers))
+    original = pickle.dumps(ast)
+    generated = _codegen(target).generate_stage(ast, "compute")
+    assert "subgroup_input" in generated and "subgroup_enabled" in generated
+    assert "precise float rounded" in generated
+    assert pickle.dumps(ast) == original
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize(
+    "declaration",
+    (
+        "precise volatile float rounded = value;",
+        "precise device float rounded = value;",
+        "precise float rounded;",
+        "precise uint rounded = 1u;",
+    ),
+)
+def test_precise_locals_do_not_hide_storage_or_initialization(target, declaration):
+    helpers = (
+        f"float wrapped(float value) {{ {declaration} return WavePrefixSum(value); }}"
+    )
+    _assert_not_converged(parse(_source(helpers=helpers)), target)
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
 @pytest.mark.parametrize(
     "expression",
     (

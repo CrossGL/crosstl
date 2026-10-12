@@ -410,9 +410,51 @@ def test_hlsl_expression_factories_avoid_user_names_and_reset_between_programs(
 
 
 @pytest.mark.parametrize(
+    "method,operator", (("add", "+"), ("sub", "-"), ("mul", "*"), ("div", "/"))
+)
+def test_numeric_trait_fields_in_generic_enum_payloads_compile(
+    tmp_path, method, operator
+):
+    source = """shader NumericFields {
+        generic<T> struct Pair { T first; T second; };
+        generic<T> struct Option {
+            enum OptionType { Some(T), None }
+            OptionType variant;
+        }
+        generic<T> fn wrapped(a: T, b: T) -> Option<Pair<T>> {
+            match true {
+                true => Option::Some(Pair { first: a.METHOD(b), second: b }),
+                false => Option::None
+            }
+        }
+        RWStructuredBuffer<float> results @register(u0);
+        compute { @numthreads(1, 1, 1) void main() {
+            Option<Pair<float>> item = wrapped(2.0, 1.0);
+            match item {
+                Option::Some(pair) => { results[0] = pair.first; },
+                Option::None => { results[0] = 0.0; }
+            }
+        } }
+    }""".replace("METHOD", method)
+    tree = parse(source)
+    original = pickle.dumps(tree)
+    generated = HLSLCodeGen().generate_stage(tree, "compute")
+    assert "." + method + "(" not in generated
+    assert f"__crossgl_construct_Pair_float((a {operator} b), b)" in generated
+    assert "result.Some_0 = (Pair_float)0;" in generated
+    assert "if (item.variant == Option_Some)" in generated
+    assert pickle.dumps(tree) == original
+    _compile(generated, "directx", tmp_path)
+
+
+@pytest.mark.parametrize(
     "expression",
     (
         "value > 0u ? checksum(Pair(counter++, counter++)) : 0u",
+        "value > 0u ? checksum(Pair((counter++).add(1u), counter)) : 0u",
+        "value > 0u ? checksum(Pair(counter.add(counter++), counter)) : 0u",
+        "value > 0u ? checksum(Pair(next(counter).add(1u), counter)) : 0u",
+        "value > 0u ? checksum(Pair(counter.add(next(counter)), counter)) : 0u",
         "uint(value > 0u && checksum(Pair(counter++, counter++)) != 0u)",
     ),
 )
@@ -420,6 +462,7 @@ def test_effectful_constructor_fields_are_not_lifted_out_of_scalar_guards(expres
     source = """shader GuardedFields {
         struct Pair { uint first; uint second; };
         uint checksum(Pair value) { return value.first + value.second; }
+        uint next(inout uint value) { value += 1u; return value; }
         uint guarded(uint value) {
             uint counter = 0u;
             return EXPR;
