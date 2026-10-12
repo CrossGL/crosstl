@@ -830,6 +830,8 @@ def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
         "crosstl/project/runtime_variant_dispatch.py",
         "crosstl/project/__init__.py",
         "tests/test_native_target_adapters_public_api.py",
+        "tests/ci_helpers.py",
+        "tests/test_ci_workflows.py",
         "tests/test_translator/test_native_directx_adapter.py",
         "tests/test_translator/test_native_directx_adapter_device.py",
         "tests/test_translator/test_native_loader_abi.py",
@@ -964,6 +966,7 @@ def test_deferred_native_compilation_workflow_proves_contracts_and_device_dispat
         "tests/test_translator/test_runtime_variant_dispatch.py",
         "tests/test_translator/test_runtime_verification.py",
         "tests/test_ci_workflows.py",
+        "tests/ci_helpers.py",
     }
 
     assert workflow, "deferred-native-compilation.yml must exist"
@@ -2494,6 +2497,107 @@ def test_support_sync_installs_workflow_test_dependencies():
     assert {"pytest", "pypdf", "PyYAML>=6,<7"} <= set(command[4:])
 
 
+def _assert_workflow_yaml_dependency(job):
+    installed = False
+    for step in job.get("steps", []):
+        script = step.get("run", "").replace("\\\n", " ")
+        for line in script.splitlines():
+            if re.match(r"^\s*(?:python -m )?pytest\b", line):
+                name = step.get("name", line)
+                assert installed, f"PyYAML is not installed before {name}"
+            if "if" in step or step.get("continue-on-error"):
+                continue
+            if not re.match(r"^\s*(?:python -m )?pip install\b", line):
+                continue
+            command = shlex.split(line, comments=True)
+            if command[:4] == ["python", "-m", "pip", "install"]:
+                dependencies = command[4:]
+            elif command[:2] == ["pip", "install"]:
+                dependencies = command[2:]
+            else:
+                continue
+            if "PyYAML>=6,<7" in dependencies:
+                installed = True
+            if any(
+                dependencies[index : index + 2] == ["-r", "requirements.txt"]
+                for index in range(len(dependencies) - 1)
+            ):
+                requirements = (ROOT / "requirements.txt").read_text().splitlines()
+                assert "PyYAML>=6,<7" in requirements
+                installed = True
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "demo-project-testing.yml",
+        "deferred-native-compilation.yml",
+        "native-host-loader.yml",
+    ],
+)
+def test_workflow_jobs_install_shared_test_dependencies(filename):
+    workflow = yaml.safe_load((WORKFLOW_DIR / filename).read_text())
+    for job_name, job in workflow["jobs"].items():
+        try:
+            _assert_workflow_yaml_dependency(job)
+        except AssertionError as error:
+            raise AssertionError(f"{filename}:{job_name}: {error}") from error
+
+
+@pytest.mark.parametrize(
+    "installation",
+    [
+        'python -m pip install pytest-xdist "PyYAML>=6,<7"',
+        'python -m pip install -e . \\\n  pytest-xdist "PyYAML>=6,<7"',
+        "pip install -r requirements.txt pytest-xdist",
+    ],
+)
+def test_workflow_yaml_dependency_accepts_explicit_installation(installation):
+    _assert_workflow_yaml_dependency(
+        {"steps": [{"run": installation}, {"run": "python -m pytest -q -n auto"}]}
+    )
+
+
+@pytest.mark.parametrize(
+    "installation",
+    [
+        {"run": "python -m pip install pytest-xdist"},
+        {"run": '# python -m pip install "PyYAML>=6,<7"'},
+        {"run": 'echo python -m pip install "PyYAML>=6,<7"'},
+        {"run": 'python -m pip install "PyYAML>=6,<7"', "if": "failure()"},
+        {"run": 'python -m pip install "PyYAML>=6,<7"', "continue-on-error": True},
+    ],
+)
+def test_workflow_yaml_dependency_rejects_incomplete_installation(installation):
+    with pytest.raises(AssertionError, match="PyYAML is not installed"):
+        _assert_workflow_yaml_dependency(
+            {"steps": [installation, {"run": "python -m pytest -q -n auto"}]}
+        )
+
+
+def test_workflow_yaml_dependency_requires_installation_before_tests():
+    with pytest.raises(AssertionError, match="PyYAML is not installed"):
+        _assert_workflow_yaml_dependency(
+            {
+                "steps": [
+                    {"run": "python -m pytest -q -n auto"},
+                    {"run": 'python -m pip install "PyYAML>=6,<7"'},
+                ]
+            }
+        )
+
+
+@pytest.mark.parametrize("install_first", [False, True])
+def test_workflow_yaml_dependency_checks_command_order_within_step(install_first):
+    commands = ['python -m pip install "PyYAML>=6,<7"', "python -m pytest -q -n auto"]
+    job = {"steps": [{"run": "\n".join(commands if install_first else commands[::-1])}]}
+    if install_first:
+        _assert_workflow_yaml_dependency(job)
+    else:
+        with pytest.raises(AssertionError, match="PyYAML is not installed"):
+            _assert_workflow_yaml_dependency(job)
+
+
 def test_ci_coverage_comparison_reports_removed_coverage():
     module = _load_ci_coverage_module()
     baseline = module.build_report()
@@ -3704,6 +3808,7 @@ def test_project_arithmetic_selection_retains_every_device_test():
     assert "--timeout-seconds 120" in step
     assert 'PYTEST_XDIST_AUTO_NUM_WORKERS: "2"' in step
     assert 'LP_NUM_THREADS: "2"' in step
+    assert "--dist loadgroup -vv --durations=10" in step
     assert "if:" not in step
     assert "continue-on-error" not in step
     assert 'CROSTL_REQUIRE_FUSED_MATH: "1"' in step
@@ -3714,6 +3819,10 @@ def test_project_arithmetic_selection_retains_every_device_test():
         r"tests/test_translator/test_[a-z_]+\.py(?:::[a-z_]+)?", step
     )
     assert len(selectors) == len(set(selectors)) == 9
+    assert selectors[0] == (
+        "tests/test_translator/test_metal_arithmetic_ownership.py::"
+        "test_arithmetic_builtin_ownership_executes"
+    )
     modules = {selector.split("::")[0] for selector in selectors}
     assert len(modules) == 8
     selected = set()

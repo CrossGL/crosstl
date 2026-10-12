@@ -224,7 +224,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install CrossTL and test dependencies
-        run: python -m pip install -e . pytest pytest-xdist numpy
+        run: python -m pip install -e . pytest pytest-xdist numpy "PyYAML>=6,<7"
       - name: Checkout pinned upstream MLX
         run: |
           git init mlx-upstream
@@ -366,7 +366,7 @@ jobs:
           xcodebuild -version | tee .mlx-float-metal/xcode-version.txt
           xcrun --sdk macosx metal --version | tee .mlx-float-metal/metal-version.txt
       - name: Install CrossTL and test dependencies
-        run: python -m pip install -e . pytest pytest-xdist numpy
+        run: python -m pip install -e . pytest pytest-xdist numpy "PyYAML>=6,<7"
       - name: Checkout pinned upstream MLX
         run: |
           git init mlx-upstream
@@ -430,7 +430,7 @@ jobs:
       - name: Install CrossTL and runtime dependencies
         run: |
           set -euo pipefail
-          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist numpy \
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist numpy "PyYAML>=6,<7" \
             2>&1 | tee .mlx-gather-directx/dependencies.log
       - name: Install pinned DirectX tools
         shell: pwsh
@@ -996,7 +996,7 @@ jobs:
       - name: Install Direct3D runtime dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[directx-runtime]" pytest-xdist
+          python -m pip install -e ".[directx-runtime]" pytest-xdist "PyYAML>=6,<7"
 
       - name: Checkout pinned MLX Metal source tree
         shell: bash
@@ -1053,7 +1053,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0
           python -m pip install --upgrade pip
-          python -m pip install -e . moderngl==5.12.0 PyOpenGL==3.1.10 pytest-xdist
+          python -m pip install -e . moderngl==5.12.0 PyOpenGL==3.1.10 pytest-xdist "PyYAML>=6,<7"
           glslangValidator --version
 
       - name: Checkout pinned MLX Metal source tree
@@ -2217,7 +2217,7 @@ jobs:
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
-          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging \
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging "PyYAML>=6,<7" \
             2>&1 | tee .mlx-portable-small-rows/dependencies.log
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
@@ -2731,7 +2731,7 @@ jobs:
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
-          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging \
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging "PyYAML>=6,<7" \
             2>&1 | tee .mlx-portable-integer64/dependencies.log
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
@@ -2916,7 +2916,7 @@ jobs:
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
-          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging \
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging "PyYAML>=6,<7" \
             2>&1 | tee .mlx-portable-slice-update/dependencies.log
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
@@ -3119,7 +3119,7 @@ jobs:
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
-          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging \
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging "PyYAML>=6,<7" \
             2>&1 | tee .mlx-portable-scatter/dependencies.log
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
@@ -3363,7 +3363,7 @@ jobs:
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
-          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging \
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging "PyYAML>=6,<7" \
             2>&1 | tee .mlx-portable-reductions/dependencies.log
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
@@ -3965,10 +3965,11 @@ jobs:
           mkdir -p fused-math-results
           python tools/run_bounded_command.py \
             --label "binary32 arithmetic" --timeout-seconds 120 -- \
-            python -m pytest -q -n auto \
+            python -m pytest -q -n auto --dist loadgroup -vv --durations=10 \
               -k "execute or original_metal or modules_link_together" \
               --basetemp="fused-math-results/pytest" \
               --junitxml="fused-math-results/results.xml" \
+              tests/test_translator/test_metal_arithmetic_ownership.py::test_arithmetic_builtin_ownership_executes \
               tests/test_translator/test_fused_math.py \
               tests/test_translator/test_metal_fma.py \
               tests/test_translator/test_metal_half_remainder.py::test_half_remainder_profile_executes \
@@ -3976,8 +3977,7 @@ jobs:
               tests/test_translator/test_precise_returns.py \
               tests/test_translator/test_metal_half_widening.py::test_half_widening_profile_executes \
               tests/test_translator/test_half_bitcast_identity.py::test_half_bitcasts_execute \
-              tests/test_translator/test_half_bitcast_identity.py::test_half_buffer_bitcasts_execute \
-              tests/test_translator/test_metal_arithmetic_ownership.py::test_arithmetic_builtin_ownership_executes
+              tests/test_translator/test_half_bitcast_identity.py::test_half_buffer_bitcasts_execute
 
       - name: Upload binary32 arithmetic evidence
         if: always()
@@ -6211,7 +6211,7 @@ jobs:
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
 
       - name: Checkout current MLX unary corpus
         shell: bash
@@ -6350,7 +6350,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y glslang-tools spirv-tools
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
           glslangValidator --version
           spirv-val --version
 
@@ -6422,7 +6422,7 @@ jobs:
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
 
       - name: Install pinned DirectX Shader Compiler
         uses: ./.github/actions/install-linux-dxc
@@ -6497,7 +6497,7 @@ jobs:
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
 
       - name: Checkout current MLX binary corpus
         shell: bash
@@ -6632,7 +6632,7 @@ jobs:
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
 
       - name: Checkout current MLX copy corpus
         shell: bash
@@ -6767,7 +6767,7 @@ jobs:
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
 
       - name: Checkout current MLX reduce corpus
         shell: bash
@@ -6902,7 +6902,7 @@ jobs:
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
 
       - name: Checkout current MLX quantized corpus
         shell: bash
@@ -7059,7 +7059,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y glslang-tools spirv-tools
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
           glslangValidator --version
           spirv-val --version
 
@@ -7132,7 +7132,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y glslang-tools spirv-tools
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
           glslangValidator --version
           spirv-val --version
 
@@ -7208,7 +7208,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y glslang-tools spirv-tools
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
           glslangValidator --version
           spirv-val --version
 
@@ -7280,7 +7280,7 @@ jobs:
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
 
       - name: Install pinned DirectX Shader Compiler
         uses: ./.github/actions/install-linux-dxc
@@ -7355,7 +7355,7 @@ jobs:
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
 
       - name: Install pinned DirectX Shader Compiler
         uses: ./.github/actions/install-linux-dxc
@@ -7434,7 +7434,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y glslang-tools spirv-tools
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
           glslangValidator --version
           spirv-val --version
 
@@ -7506,7 +7506,7 @@ jobs:
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
 
       - name: Install pinned DirectX Shader Compiler
         uses: ./.github/actions/install-linux-dxc

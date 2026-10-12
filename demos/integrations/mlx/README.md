@@ -111,6 +111,10 @@ linking case without repeating portable parser and compiler checks from the
 main suite. It limits test workers and software-OpenGL threads to two while
 retaining the 120-second deadline, all numerical inputs and all guard checks.
 A workflow regression checks that every device test remains selected.
+The two generated arithmetic-ownership profiles run first as separate test
+work units on the existing two workers. This avoids queueing both expensive
+controls behind one worker; per-case progress and durations are retained.
+The selected cases, inputs, compiler options and 120-second bound are unchanged.
 The larger collective and resource batches also cap software-OpenGL threads
 at two. Their complete module selections and separate 360-second deadlines
 remain unchanged; per-test progress and durations make timeout diagnosis visible.
@@ -148,6 +152,12 @@ required unannotated controls. WARP's documented
 motivates this comparison, but compilation alone does not establish a numerical
 fix. Unsupported widths must retain a pipeline failure, not a passing numerical
 result. No additional runner or longer diagnostic deadline is required.
+The completed comparison step at `d9623102` reports scalar numerical failures
+for all seven settings, including the unannotated control. The
+[Windows job log](https://github.com/CrossGL/crosstl/actions/runs/38230653906/job/114749015598)
+therefore rules out these annotations as a general workaround on that runner.
+This interim finding does not claim an independently audited aggregate result
+for the matrix or lane-count controls.
 
 For manually dispatched workflow runs, that diagnostic instead compares the
 same precise scalar, cooperative-matrix and narrow-buffer controls on the

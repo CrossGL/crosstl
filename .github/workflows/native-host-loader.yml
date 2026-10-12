@@ -24,6 +24,8 @@ on:
       - "crosstl/project/runtime_variant_dispatch.py"
       - "crosstl/project/__init__.py"
       - "tests/test_native_target_adapters_public_api.py"
+      - "tests/ci_helpers.py"
+      - "tests/test_ci_workflows.py"
       - "tests/test_translator/test_native_loader_abi.py"
       - "tests/test_translator/test_native_loader_abi_integration.py"
       - "tests/test_translator/test_native_loader_dispatch.py"
@@ -54,6 +56,8 @@ on:
       - "crosstl/project/runtime_variant_dispatch.py"
       - "crosstl/project/__init__.py"
       - "tests/test_native_target_adapters_public_api.py"
+      - "tests/ci_helpers.py"
+      - "tests/test_ci_workflows.py"
       - "tests/test_translator/test_native_loader_abi.py"
       - "tests/test_translator/test_native_loader_abi_integration.py"
       - "tests/test_translator/test_native_loader_dispatch.py"
@@ -115,7 +119,7 @@ jobs:
       - name: Install project and test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
 
       - name: Verify native compiler availability
         run: >-
@@ -215,7 +219,7 @@ jobs:
       - name: Install project and test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
 
       - name: Execute translated Direct3D artifact
         env:
@@ -250,7 +254,7 @@ jobs:
       - name: Install project and test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
 
       - name: Execute translated OpenGL artifact
         env:
