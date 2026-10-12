@@ -27844,9 +27844,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }.get(operation)
 
     def hlsl_ray_query_method_names(self):
-        return {
-            operation
-            for operation in (
+        return {*(
                 "Proceed",
                 "Abort",
                 "TraceRayInline",
