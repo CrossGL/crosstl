@@ -31,6 +31,7 @@ from demos.integrations.mlx.tests.kernels.test_current_complex_power import (
     MLX_COMMIT,
     ROOT,
 )
+from tests.ci_helpers import assert_native_step_prerequisites
 from tests.runtime_helpers import _prepare_native_package
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values, _request
 from tests.test_translator.test_half_copy_identity import _widen
@@ -221,7 +222,8 @@ def test_ci_requires_native_copy_parity(job):
     step = ci_coverage.workflow_job_step_section(
         workflow, job, "Validate pinned copy layouts"
     )
-    assert "if:" not in step and "continue-on-error" not in step
+    assert_native_step_prerequisites(step, job=job, pinned=True)
+    assert "continue-on-error" not in step
     for required in (
         f'{REQUIRE_ENV}: "1"',
         "CROSTL_MLX_CURRENT_ROOT",

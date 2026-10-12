@@ -38,7 +38,7 @@ from crosstl.project.runtime_verification import (
     _compare_runtime_value,
     _parse_runtime_value,
 )
-from tests.ci_helpers import assert_paths_covered
+from tests.ci_helpers import assert_native_step_prerequisites, assert_paths_covered
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_native_runtime import _native_request
@@ -524,7 +524,8 @@ def test_float_storage_native_gate_is_required():
     assert "test_float_storage_encoding.py" in step
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "-n auto" in step and "--junitxml" in step and "--timeout-seconds" in step
-    assert "if:" not in step and "continue-on-error" not in step
+    assert_native_step_prerequisites(step, job="portable-host")
+    assert "continue-on-error" not in step
     for event in ("push", "pull_request"):
         assert_paths_covered(
             ci_coverage.workflow_event_path_filters(workflow, event),

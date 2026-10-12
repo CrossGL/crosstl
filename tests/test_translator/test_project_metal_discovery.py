@@ -15,6 +15,7 @@ from crosstl.project.translation_checkpoint import (
     ProjectTranslationCheckpointRecorder,
     load_project_translation_checkpoint,
 )
+from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_fused_math import _dispatch
 from tests.test_translator.test_metal_builtin_ownership import _compile
 
@@ -278,7 +279,7 @@ def test_ci_requires_native_argument_inference(job):
     step = ci_coverage.workflow_job_step_section(
         workflow, job, "Validate Metal argument inference"
     )
-    assert "if:" not in step
+    assert_native_step_prerequisites(step, job=job)
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_project_metal_discovery.py" in step
     assert "--basetemp=" in step

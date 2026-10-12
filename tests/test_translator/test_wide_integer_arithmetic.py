@@ -29,7 +29,7 @@ from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
-from tests.ci_helpers import assert_paths_covered
+from tests.ci_helpers import assert_native_step_prerequisites, assert_paths_covered
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
@@ -1273,7 +1273,8 @@ def test_wide_integer_native_gate_is_required_on_every_target():
     )
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "test_wide_integer_arithmetic.py" in step
-    assert "if:" not in step and "continue-on-error" not in step
+    assert_native_step_prerequisites(step, job="portable-host")
+    assert "continue-on-error" not in step
     assert "--timeout-seconds 360" in step and "--junitxml" in step
     assert "--durations=20" in step
     for event in ("pull_request", "push"):

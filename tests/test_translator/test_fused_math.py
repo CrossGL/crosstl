@@ -24,6 +24,7 @@ from crosstl.project.runtime_verification import (
     RuntimeResourceBinding,
 )
 from crosstl.translator.fused_math import FMA_HELPER_KEYS, binary32_fma_support
+from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_metal_builtin_ownership import _compile
 
 REQUIRE_ENV = "CROSTL_REQUIRE_FUSED_MATH"
@@ -197,7 +198,7 @@ def test_ci_requires_native_fma_on_all_three_platforms(job):
     step = ci_coverage.workflow_job_step_section(
         workflow, job, "Validate binary32 arithmetic"
     )
-    assert "if:" not in step
+    assert_native_step_prerequisites(step, job=job)
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_fused_math.py" in step
     assert "tests/test_translator/test_metal_fma.py" in step

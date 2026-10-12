@@ -24,7 +24,7 @@ from crosstl.project import (
 from crosstl.project.native_loader_abi import NativeLoaderABIError
 from crosstl.project.native_loader_dispatch import NativeLoaderDispatchError
 from crosstl.translator.dispatch_regions import DispatchRegion, plan_dispatch_regions
-from tests.ci_helpers import assert_paths_covered
+from tests.ci_helpers import assert_native_step_prerequisites, assert_paths_covered
 from tests.test_translator.test_dispatch_regions import REQUIRE_ENV, _case
 from tests.test_translator.test_exact_thread_grid_runtime import GRIDS, SOURCE
 from tests.test_translator.test_metal_builtin_ownership import _compile
@@ -519,7 +519,8 @@ def test_region_package_native_gate_is_required():
     )
     assert "test_dispatch_region_project.py" in step
     assert f'{REQUIRE_ENV}: "1"' in step
-    assert "if:" not in step and "continue-on-error" not in step
+    assert_native_step_prerequisites(step, job="portable-host")
+    assert "continue-on-error" not in step
     for event in ("push", "pull_request"):
         assert_paths_covered(
             ci_coverage.workflow_event_path_filters(workflow, event),

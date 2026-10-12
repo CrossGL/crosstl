@@ -10,6 +10,7 @@ import pytest
 from crosstl.project import build_native_loader_dispatch_request
 from crosstl.translator import parse
 from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
+from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_integer_subgroup_shuffles import OFFSETS, SHAPES
 from tests.test_translator.test_loop_updates import _execute
@@ -267,4 +268,5 @@ def test_overloaded_shuffle_execution_is_required_in_existing_native_jobs():
     )
     assert "test_directx_subgroup_overloads.py" in step
     assert f'{REQUIRE_ENV}: "1"' in step
-    assert "-n auto" in step and "continue-on-error" not in step and "if:" not in step
+    assert_native_step_prerequisites(step, job="portable-host")
+    assert "-n auto" in step and "continue-on-error" not in step

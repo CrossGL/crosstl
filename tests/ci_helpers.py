@@ -1,11 +1,35 @@
-"""Assertions for positive workflow path-filter coverage."""
+"""Assertions for workflow coverage and required execution prerequisites."""
 
 from fnmatch import fnmatchcase
 from pathlib import Path
 
+import yaml
+
 from tools import ci_coverage
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def assert_native_step_prerequisites(step, *, job, pinned=False):
+    """Require exact native prerequisites without accepting optional execution."""
+    assert job in ("portable-host", "metal-host", "mlx-metal-porting")
+    definition = yaml.safe_load(step)
+    if isinstance(definition, list):
+        assert len(definition) == 1
+        definition = definition[0]
+    assert isinstance(definition, dict)
+    assert "continue-on-error" not in definition
+    if job != "portable-host":
+        assert "if" not in definition
+        return
+    expected = (
+        "${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}"
+        if pinned
+        else "${{ !cancelled() && (steps.portable-host-contracts.outcome == 'success' || "
+        "(runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') || "
+        "steps.host-warp-identity.outcome == 'success') }}"
+    )
+    assert " ".join(definition.get("if", "").split()) == expected
 
 
 def _matches_path(parts, patterns):

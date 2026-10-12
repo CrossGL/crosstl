@@ -25,7 +25,7 @@ from crosstl.project.runtime_verification import (
 from crosstl.translator import parse
 from crosstl.translator.dispatch_region_lowering import specialize_dispatch_region
 from crosstl.translator.dispatch_regions import DispatchRegion, plan_dispatch_regions
-from tests.ci_helpers import assert_paths_covered
+from tests.ci_helpers import assert_native_step_prerequisites, assert_paths_covered
 from tests.test_backend.test_metal.test_codegen import convert, parse_crossgl
 from tests.test_translator.test_exact_thread_grid_runtime import (
     GRIDS,
@@ -51,7 +51,8 @@ def test_region_execution_gate_is_required_on_every_native_target():
     )
     assert "test_dispatch_regions.py" in step
     assert f'{REQUIRE_ENV}: "1"' in step
-    assert "-n auto" in step and "continue-on-error" not in step and "if:" not in step
+    assert_native_step_prerequisites(step, job="portable-host")
+    assert "-n auto" in step and "continue-on-error" not in step
     assert (
         "--timeout-seconds 300" in step
         and "--junitxml=" in step

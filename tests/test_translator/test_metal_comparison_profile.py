@@ -26,6 +26,7 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_fused_math import _dispatch
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_division import _bfloat
@@ -369,7 +370,7 @@ def test_ci_requires_comparison_profiles_once_per_native_target():
     step = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Validate binary32 arithmetic"
     )
-    assert "if:" not in step
+    assert_native_step_prerequisites(step, job="portable-host")
     assert f'{REQUIRE_ENV}: "1"' in step
     assert workflow.count("tests/test_translator/test_metal_comparison_profile.py") == 1
     assert "tests/test_translator/test_metal_comparison_profile.py" in step

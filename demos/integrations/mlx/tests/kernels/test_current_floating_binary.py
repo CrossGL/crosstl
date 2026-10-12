@@ -13,6 +13,7 @@ from demos.integrations.mlx.tests.kernels import (
 from demos.integrations.mlx.tests.kernels.floating_binary_runtime import (
     run_binary_cases,
 )
+from tests.ci_helpers import assert_native_step_prerequisites
 from tools import ci_coverage
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -63,7 +64,7 @@ def test_ci_requires_floating_binary_once_per_native_target():
     step = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Validate pinned native binary math"
     )
-    assert "if:" not in step
+    assert_native_step_prerequisites(step, job="portable-host", pinned=True)
     assert f'{REQUIRE_ENV}: "1"' in step
     path = "demos/integrations/mlx/tests/kernels/test_current_floating_binary.py"
     assert workflow.count(path) == 1

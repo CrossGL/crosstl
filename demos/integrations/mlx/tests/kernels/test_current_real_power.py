@@ -11,6 +11,7 @@ from demos.integrations.mlx.tests.kernels.floating_binary_runtime import (
 )
 from demos.integrations.mlx.tests.kernels.test_current_additive import _check_words
 from demos.integrations.mlx.tests.kernels.test_current_extrema import _guard, _request
+from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_metal_power import (
     _finite_pairs,
     _identity_pairs,
@@ -186,7 +187,7 @@ def test_ci_requires_real_power_on_existing_native_targets():
         workflow, "portable-host", "Validate pinned real power"
     )
     path = "demos/integrations/mlx/tests/kernels/test_current_real_power.py"
-    assert "if:" not in step
+    assert_native_step_prerequisites(step, job="portable-host", pinned=True)
     assert workflow.count(path) == 1
     assert f'{REQUIRE_ENV}: "1"' in step
     assert f"{path}::test_current_real_power_native_parity" in step

@@ -18,6 +18,7 @@ from demos.integrations.mlx.tests.kernels.test_current_extrema import (
     _payload,
     _request,
 )
+from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_metal_division import _bfloat
 from tests.test_translator.test_metal_precise_atan2 import _oracle, _profile_word
 from tests.test_translator.test_metal_precise_trig import _float
@@ -252,4 +253,5 @@ def test_ci_requires_pinned_atan2_once_per_native_target():
     assert f'{REQUIRE_ENV}: "1"' in step
     assert 'PYTEST_XDIST_AUTO_NUM_WORKERS: "2"' in step
     assert "--timeout-seconds 180" in step and "pytest -q -n auto" in step
-    assert "if:" not in step and "continue-on-error" not in step
+    assert_native_step_prerequisites(step, job="portable-host", pinned=True)
+    assert "continue-on-error" not in step

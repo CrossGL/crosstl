@@ -16,7 +16,7 @@ from crosstl.project import (
 )
 from crosstl.project.runtime_value_encoding import FLOAT32_BITS
 from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
-from tests.ci_helpers import assert_paths_covered
+from tests.ci_helpers import assert_native_step_prerequisites, assert_paths_covered
 from tests.runtime_helpers import _prepare_native_package, _validate
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_float_storage_encoding import WORDS
@@ -280,7 +280,8 @@ def test_gather_native_gate_is_required():
         "-n auto",
     ):
         assert required in step
-    assert "if:" not in step and "continue-on-error" not in step
+    assert_native_step_prerequisites(step, job="portable-host", pinned=True)
+    assert "continue-on-error" not in step
     for event in ("push", "pull_request"):
         assert_paths_covered(
             ci_coverage.workflow_event_path_filters(workflow, event),

@@ -9,7 +9,7 @@ import pytest
 from demos.integrations.mlx.tests.kernels.test_current_unary_fma import (
     _run_current_unary,
 )
-from tests.ci_helpers import assert_paths_covered
+from tests.ci_helpers import assert_native_step_prerequisites, assert_paths_covered
 from tests.test_translator.test_metal_precise_atan import _check_word, _inputs, _oracle
 from tests.test_translator.test_metal_precise_trig import _bits, _float
 
@@ -59,7 +59,8 @@ def test_ci_requires_precise_atan(job_id):
         .split("      - name: Validate pinned arctangent\n", 1)[1]
         .split("      - name:", 1)[0]
     )
-    assert "if:" not in step and "continue-on-error" not in step
+    assert_native_step_prerequisites(step, job=job_id, pinned=True)
+    assert "continue-on-error" not in step
     assert f'{REQUIRE_ENV}: "1"' in step
     assert 'CROSTL_REQUIRE_METAL_PRECISE_ATAN: "1"' in step
     assert "demos/integrations/mlx/tests/kernels/test_current_unary_atan.py" in step

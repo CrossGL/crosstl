@@ -22,6 +22,7 @@ from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
     _run,
 )
 from demos.integrations.mlx.tests.kernels.test_current_complex_power import MLX_COMMIT
+from tests.ci_helpers import assert_native_step_prerequisites
 from tests.runtime_helpers import _prepare_native_package, _validate
 from tests.test_translator.test_bfloat_buffer_runtime import _storage as _bfloat_payload
 from tests.test_translator.test_boolean_buffer_runtime import (
@@ -376,7 +377,7 @@ def test_ci_requires_floating_remainder_once_per_native_target():
     step = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Validate pinned native binary math"
     )
-    assert "if:" not in step
+    assert_native_step_prerequisites(step, job="portable-host", pinned=True)
     assert f'{REQUIRE_ENV}: "1"' in step
     path = "demos/integrations/mlx/tests/kernels/test_current_floating_remainder.py"
     assert workflow.count(path) == 1

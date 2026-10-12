@@ -28,6 +28,7 @@ from demos.integrations.mlx.tests.kernels.test_unary_complete_directx import (
     UNARY_DIRECTX_WORKLOADS,
     _project_config,
 )
+from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_bfloat_buffer_runtime import _storage
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_half_buffer_runtime import _directx_buffers
@@ -213,7 +214,7 @@ def test_ci_requires_pinned_division_once_per_platform():
     step = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Validate pinned unary arithmetic"
     )
-    assert "if:" not in step
+    assert_native_step_prerequisites(step, job="portable-host", pinned=True)
     assert f'{REQUIRE_ENV}: "1"' in step
     assert 'CROSTL_REQUIRE_METAL_PRECISE_EXP: "1"' in step
     assert "CROSTL_MLX_CURRENT_ROOT:" in step

@@ -3856,3 +3856,65 @@ def test_native_arithmetic_selection_retains_every_device_test():
     assert (
         "python -m pytest tests demos/integrations --durations=25 -n auto" in full_suite
     )
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("pinned", [False, True])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "missing",
+        "always",
+        "cancelled",
+        "prerequisite",
+        "optional",
+        "explicit-false",
+        "wrong-job",
+        "unknown-job",
+    ],
+)
+def test_native_step_prerequisite_assertions_reject_weakened_conditions(
+    wrapped, pinned, damage
+):
+    from tests.ci_helpers import assert_native_step_prerequisites
+
+    expected = (
+        "${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}"
+        if pinned
+        else "${{ !cancelled() && (steps.portable-host-contracts.outcome == 'success' || "
+        "(runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') || "
+        "steps.host-warp-identity.outcome == 'success') }}"
+    )
+    definition = {"name": "Required native check", "if": expected, "run": "pytest"}
+    job = "portable-host"
+    if damage == "missing":
+        del definition["if"]
+    elif damage == "always":
+        definition["if"] = "always()"
+    elif damage == "cancelled":
+        definition["if"] = expected.replace("!cancelled() && ", "")
+    elif damage == "prerequisite":
+        definition["if"] = expected.replace("== 'success'", "!= 'cancelled'")
+    elif damage in ("optional", "explicit-false"):
+        definition["continue-on-error"] = damage == "optional"
+    elif damage == "wrong-job":
+        job = "metal-host"
+    elif damage == "unknown-job":
+        job = "other"
+    text = yaml.safe_dump([definition] if wrapped else definition)
+    if damage is None:
+        assert_native_step_prerequisites(text, job=job, pinned=pinned)
+    else:
+        with pytest.raises(AssertionError):
+            assert_native_step_prerequisites(text, job=job, pinned=pinned)
+
+
+@pytest.mark.parametrize("job", ["metal-host", "mlx-metal-porting"])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_native_step_prerequisite_assertions_preserve_unconditional_jobs(job, wrapped):
+    from tests.ci_helpers import assert_native_step_prerequisites
+
+    definition = {"name": "Required native check", "run": "pytest"}
+    text = yaml.safe_dump([definition] if wrapped else definition)
+    assert_native_step_prerequisites(text, job=job)

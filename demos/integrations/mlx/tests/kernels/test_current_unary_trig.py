@@ -11,6 +11,7 @@ import pytest
 from demos.integrations.mlx.tests.kernels.test_current_unary_fma import (
     _run_current_unary,
 )
+from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_metal_precise_asin import _inputs as _asin_inputs
 from tests.test_translator.test_metal_precise_trig import (
     _bits,
@@ -183,7 +184,8 @@ def test_ci_requires_pinned_trigonometry(job_id):
         .split("      - name: Validate pinned unary arithmetic\n", 1)[1]
         .split("      - name:", 1)[0]
     )
-    assert "if:" not in step and "continue-on-error" not in step
+    assert_native_step_prerequisites(step, job=job_id, pinned=True)
+    assert "continue-on-error" not in step
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py" in step
     assert "--timeout-seconds 300" in step

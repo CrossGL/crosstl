@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from crosstl.project import build_native_loader_dispatch_request
-from tests.ci_helpers import assert_paths_covered
+from tests.ci_helpers import assert_native_step_prerequisites, assert_paths_covered
 from tests.runtime_helpers import _validate
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_loop_updates import _execute
@@ -302,7 +302,8 @@ def test_generic_vector_constructor_gate_is_required():
     assert (
         "--timeout-seconds 300" in step and "--junitxml" in step and "-n auto" in step
     )
-    assert "if:" not in step and "continue-on-error" not in step
+    assert_native_step_prerequisites(step, job="portable-host")
+    assert "continue-on-error" not in step
     for event in ("push", "pull_request"):
         assert_paths_covered(
             ci_coverage.workflow_event_path_filters(workflow, event),

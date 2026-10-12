@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from crosstl import translate
-from tests.ci_helpers import assert_paths_covered
+from tests.ci_helpers import assert_native_step_prerequisites, assert_paths_covered
 from tests.test_translator.test_software_subgroup_product import _package
 from tests.test_translator.test_wide_integer_arithmetic import (
     REQUIRE_ENV,
@@ -204,7 +204,8 @@ def test_vector_scalar_native_gate_is_required_on_every_target():
     )
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "test_metal_vector_scalar_arithmetic.py" in step
-    assert "if:" not in step and "continue-on-error" not in step
+    assert_native_step_prerequisites(step, job="portable-host")
+    assert "continue-on-error" not in step
     assert "--timeout-seconds 360" in step and "--junitxml" in step
     assert "--durations=20" in step
     for event in ("pull_request", "push"):

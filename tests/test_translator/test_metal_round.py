@@ -21,6 +21,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.project import load_project_config, translate_project
+from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_metal_builtin_ownership import _compile
 
 REQUIRE_ENV = "CROSTL_REQUIRE_METAL_ROUND"
@@ -433,4 +434,5 @@ def test_ci_requires_round_in_existing_native_step():
     assert workflow.count(selector) == 1 and selector in step
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "--timeout-seconds 300" in step
-    assert "continue-on-error" not in step and "if:" not in step
+    assert_native_step_prerequisites(step, job="portable-host", pinned=True)
+    assert "continue-on-error" not in step

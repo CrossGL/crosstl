@@ -26,6 +26,7 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_precise_trig import (
     _bits,
@@ -146,7 +147,8 @@ def test_ci_requires_metal_contraction_scope_in_existing_native_step():
     assert workflow.count(selector) == 1 and selector in step
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "--timeout-seconds 180" in step
-    assert "continue-on-error" not in step and "if:" not in step
+    assert_native_step_prerequisites(step, job="portable-host", pinned=True)
+    assert "continue-on-error" not in step
 
 
 @pytest.mark.parametrize("profile", PROFILES)

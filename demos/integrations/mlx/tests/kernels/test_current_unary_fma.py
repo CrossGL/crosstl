@@ -22,6 +22,7 @@ from crosstl.project import (
     translate_project,
 )
 from demos.integrations.mlx.tests.kernels.test_current_complex_power import MLX_COMMIT
+from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 from tools import ci_coverage
 
@@ -95,7 +96,7 @@ def test_ci_requires_current_unary_execution(job_id):
         .split("      - name: Validate pinned unary arithmetic\n", 1)[1]
         .split("      - name:", 1)[0]
     )
-    assert "if:" not in step
+    assert_native_step_prerequisites(step, job=job_id, pinned=True)
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "CROSTL_MLX_CURRENT_ROOT:" in step
     assert "CROSTL_MLX_CURRENT_TARGET" in step

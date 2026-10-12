@@ -35,7 +35,7 @@ from demos.integrations.mlx.tests.kernels.test_unary_complete_opengl import (
     UNARY_OPENGL_WORKLOADS,
     _project_config,
 )
-from tests.ci_helpers import assert_paths_covered
+from tests.ci_helpers import assert_native_step_prerequisites, assert_paths_covered
 from tests.runtime_helpers import _validate
 from tests.test_translator.test_metal_boolean_promotion import _inputs
 from tests.test_translator.test_metal_precise_trig import _bits, _float
@@ -331,7 +331,8 @@ def test_ci_requires_boolean_promotion(job_id):
         .split("      - name: Validate pinned comparison arithmetic\n", 1)[1]
         .split("      - name:", 1)[0]
     )
-    assert "if:" not in step and "continue-on-error" not in step
+    assert_native_step_prerequisites(step, job=job_id, pinned=True)
+    assert "continue-on-error" not in step
     assert f'{REQUIRE_ENV}: "1"' in step
     assert 'CROSTL_REQUIRE_METAL_BOOLEAN_PROMOTION: "1"' in step
     assert "--timeout-seconds 180" in step
