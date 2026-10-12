@@ -1374,6 +1374,7 @@ jobs:
           mkdir -p .mlx-portable-host/resource-values
           python tools/run_bounded_command.py --timeout-seconds 360 --label "Resource values and project execution" -- \
             python -m pytest -q -n auto -vv --durations=25 \
+              -k "execute or native or original_metal or prepared_uploads or dxc_compilation or fxc_comparison_preserves" \
               --basetemp=.mlx-portable-host/resource-values/pytest \
               --junitxml=.mlx-portable-host/resource-values/results.xml \
               tests/test_translator/test_directx_matrix_rounding.py \

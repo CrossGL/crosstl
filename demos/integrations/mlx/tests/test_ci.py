@@ -6,6 +6,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import textwrap
 import zipfile
 from fnmatch import fnmatchcase
@@ -374,13 +375,19 @@ def test_automatic_windows_comparison_keeps_runtime_and_failure_status(
     bootstrap = r"""
 function Invoke-WebRequest { throw "Automatic comparison must not download a runtime." }
 function Copy-Item { throw "Automatic comparison must not replace a runtime." }
-function python {
-    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
-    if ($env:CROSTL_REQUIRE_DIRECTX_TOOL_DEBUG_COMPARISON -ne "1") { throw "Missing native gate." }
-    $Arguments | ConvertTo-Json | Set-Content "arguments.json"
-    $global:LASTEXITCODE = [int]$env:CROSTL_TEST_EXIT_CODE
-}
 """
+    # A native executable preserves '--'; PowerShell functions consume it.
+    executable = sys.executable.replace("'", "''")
+    bootstrap += f"Set-Alias python '{executable}'\n"
+    command = tmp_path / "tools/run_bounded_command.py"
+    command.parent.mkdir()
+    command.write_text(
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "assert os.environ['CROSTL_REQUIRE_DIRECTX_TOOL_DEBUG_COMPARISON'] == '1'\n"
+        "Path('arguments.json').write_text(json.dumps(sys.argv))\n"
+        "raise SystemExit(int(os.environ['CROSTL_TEST_EXIT_CODE']))\n"
+    )
     script = tmp_path / "compare.ps1"
     script.write_text(bootstrap + step["run"])
     result = subprocess.run(
@@ -397,8 +404,8 @@ function python {
     arguments = json.loads(
         (tmp_path / "arguments.json").read_text(encoding="utf-8-sig")
     )
-    assert arguments == [
-        "tools/run_bounded_command.py",
+    assert (tmp_path / arguments[0]).resolve() == command.resolve()
+    assert arguments[1:] == [
         "--timeout-seconds",
         "180",
         "--label",
@@ -535,6 +542,7 @@ function python {
         CROSTL_WARP_TEST_SYSTEM_ROOT=str(tmp_path / "windows"),
         CROSTL_WARP_TEST_ARCHIVES=json.dumps(archives),
         CROSTL_WARP_TEST_FAILURE=failure or "",
+        GITHUB_EVENT_NAME="workflow_dispatch",
     )
     result = subprocess.run(
         [

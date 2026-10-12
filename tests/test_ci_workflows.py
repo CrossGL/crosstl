@@ -3584,10 +3584,84 @@ def test_native_collective_batches_limit_software_driver_threads():
     assert step["run"].count("-n auto -vv --durations=25") == 2
     batches = step["run"].split("python -m pytest ")[1:]
     assert len(batches) == 2
-    for batch, count in zip(batches, (16, 25)):
+    for index, (batch, count) in enumerate(zip(batches, (16, 25))):
         selectors = re.findall(r"tests/[^\s\\]+", batch)
         assert len(selectors) == len(set(selectors)) == count
-        assert not re.search(r"(?:^|\s)(?:-k|-m|--maxfail)(?:\s|=|$)", batch)
+        assert not re.search(r"(?:^|\s)(?:-m|--maxfail)(?:\s|=|$)", batch)
+        if index == 0:
+            assert not re.search(r"(?:^|\s)-k(?:\s|=|$)", batch)
+
+
+def test_resource_selection_retains_every_native_opt_in():
+    workflow = yaml.safe_load((WORKFLOW_DIR / "demo-project-testing.yml").read_text())
+    step = next(
+        step
+        for step in workflow["jobs"]["portable-host"]["steps"]
+        if step.get("id") == "collective-helpers"
+    )
+    batch = step["run"].split('--label "Resource values and project execution"', 1)[1]
+    expression = "execute or native or original_metal or prepared_uploads or dxc_compilation or fxc_comparison_preserves"
+    assert f'-k "{expression}"' in batch
+    selectors = re.findall(r"tests/[^\s\\]+", batch)
+    required, selected = set(), set()
+    for selector in selectors:
+        module = selector.split("::")[0]
+        tree = ast.parse((ROOT / module).read_text())
+        functions = {
+            node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+        }
+        assert not any(
+            isinstance(node, ast.ClassDef) and node.name.startswith("Test")
+            for node in tree.body
+        )
+        guarded = {
+            name
+            for name, function in functions.items()
+            if any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "environ"
+                for node in ast.walk(function)
+            )
+        }
+        # Include local helper calls and fixtures, not only guards in test bodies.
+        while True:
+            inherited = {
+                name
+                for name, function in functions.items()
+                if any(
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id in guarded
+                    for node in ast.walk(function)
+                )
+                or any(arg.arg in guarded for arg in function.args.args)
+            }
+            if inherited <= guarded:
+                break
+            guarded.update(inherited)
+        for name in functions:
+            if not name.startswith("test_") or (
+                "::" in selector and selector != f"{module}::{name}"
+            ):
+                continue
+            identity = (module, name)
+            if name in guarded:
+                required.add(identity)
+            if any(term in name for term in expression.split(" or ")):
+                selected.add(identity)
+    assert len(required) == 41
+    assert required <= selected
+    assert (
+        "tests/test_translator/test_directx_cooperative_matrix.py",
+        "test_precise_scalar_control_executes",
+    ) in selected
+    assert (
+        "tests/test_translator/test_runtime_input_ownership.py",
+        "test_prepared_uploads_ignore_late_input_mutation",
+    ) in selected
 
 
 def test_project_arithmetic_selection_retains_every_device_test():
