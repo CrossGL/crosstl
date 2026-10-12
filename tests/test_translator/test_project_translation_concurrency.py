@@ -541,6 +541,7 @@ def test_parallel_worker_failure_removes_deferred_staging(
     context = project_pipeline._ProjectTranslationWorkerContext(
         config=ProjectConfig(root=repo),
         dispatch_artifact_plan=None,
+        metadata_source_matches={},
         preserve_source_suffix=frozenset(),
         format_output=False,
         output_dir_blocked=False,

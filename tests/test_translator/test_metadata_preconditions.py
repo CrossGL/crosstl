@@ -849,3 +849,46 @@ def test_native_checked_metadata(tmp_path):
             ]["byteOffset"]
             == 256
         )
+
+
+def test_native_entry_scoped_metadata(tmp_path):
+    if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":
+        pytest.skip(
+            "set CROSTL_REQUIRE_METADATA_PRECONDITIONS=1 for native metadata checks"
+        )
+    from tests.runtime_helpers import _validate
+    from tests.test_translator.test_loop_updates import _execute
+    from tests.test_translator.test_project_metadata_entry_scope import SOURCE as source
+    from tests.test_translator.test_project_metadata_entry_scope import (
+        _config,
+        _entry,
+        _packages,
+    )
+    from tests.test_translator.test_project_metadata_entry_scope import (
+        _request as entry_request,
+    )
+
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    _payload, package, descriptors = _packages(_config(tmp_path, target))
+    for descriptor in descriptors:
+        entry = _entry(descriptor)
+        counts = (1, 3, 4) if entry == "first" else (1, 5, 8)
+        for count in counts:
+            request, outputs = entry_request(descriptor, package, count)
+            work = tmp_path / f"native-entry-{entry}-{count}"
+            work.mkdir()
+            _execute(
+                request,
+                outputs,
+                work,
+                validate=_validate,
+                original_source=source if target == "metal" else None,
+                original_entry=entry,
+            )
+            evidence = json.loads((work / "evidence.json").read_text())
+            checks = evidence["records"]["generated"]["details"][
+                "metadataPreconditions"
+            ]
+            assert len(checks) == 1
+            assert checks[0]["value"] == count
+            assert checks[0]["requirement"]["sourceResource"]["entryPoint"] == entry

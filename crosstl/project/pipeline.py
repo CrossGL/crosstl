@@ -129,11 +129,13 @@ from crosstl.translator.frozen_specializations import (
 )
 from crosstl.translator.metadata_preconditions import (
     MetadataPreconditionError,
+    MetadataRangePrecondition,
     parse_metadata_preconditions,
     resolve_metadata_preconditions,
     with_metadata_precondition_header,
 )
 from crosstl.translator.plugin_loader import discover_backend_plugins
+from crosstl.translator.resource_identity import source_resource_identity
 from crosstl.translator.source_registry import (
     SOURCE_REGISTRY,
     SourceSpec,
@@ -9569,6 +9571,80 @@ def _subgroup_width_rule_diagnostics(
     ]
 
 
+def _metadata_precondition_pattern_diagnostics(config, units):
+    return [
+        ProjectDiagnostic(
+            severity="error",
+            code="project.config.metadata-precondition-pattern-unmatched",
+            message=(
+                f"Metadata precondition source pattern '{pattern}' does not "
+                "match a discovered translation unit."
+            ),
+            location=_config_location(config),
+            details={"pattern": pattern},
+        )
+        for pattern in sorted({item.source for item in config.metadata_preconditions})
+        if not any(fnmatch.fnmatch(unit.relative_path, pattern) for unit in units)
+    ]
+
+
+def _metadata_precondition_source_matches(config, units):
+    """Resolve source selectors without assuming configured entries exist.
+
+    The base scan can miss entries enabled only by a define variant. Discover
+    those variants only when a relevant requirement is still unresolved.
+    Unknown requirements remain unscoped and fail source-identity resolution.
+    """
+    matches = {item: set() for item in config.metadata_preconditions}
+    if not matches:
+        return matches
+    for unit in units:
+        requirements = [
+            item for item in matches if fnmatch.fnmatch(unit.relative_path, item.source)
+        ]
+        if not requirements:
+            continue
+        discovery = unit.entry_discovery
+        entries = (
+            {entry.name for entry in discovery.entries}
+            if discovery is not None and discovery.status == ENTRY_DISCOVERY_AVAILABLE
+            else set()
+        )
+        seen_defines = {tuple(sorted(config.defines.items()))}
+        for _variant, defines in _variant_jobs(config):
+            if all(item.entry_point in entries for item in requirements):
+                break
+            key = tuple(sorted(defines.items()))
+            if key in seen_defines:
+                continue
+            seen_defines.add(key)
+            source_spec = SOURCE_REGISTRY.get(unit.source_backend)
+            if source_spec is None:
+                continue
+            discovery, _diagnostics = _discover_project_source_entries(
+                replace(config, defines=defines),
+                unit.path,
+                unit.relative_path,
+                source_spec,
+            )
+            if discovery.status == ENTRY_DISCOVERY_AVAILABLE:
+                entries.update(entry.name for entry in discovery.entries)
+        for item in requirements:
+            if item.entry_point in entries:
+                matches[item].add(unit.relative_path)
+    return matches
+
+
+def _entry_metadata_preconditions(requirements, entry_point, source_matches):
+    if entry_point is None:
+        return tuple(requirements)
+    return tuple(
+        item
+        for item in requirements
+        if item.entry_point == entry_point or not source_matches.get(item)
+    )
+
+
 def _project_entry_discovery_diagnostic(
     relative_path: str,
     source_backend: str,
@@ -9790,6 +9866,7 @@ def scan_project(
     diagnostics.extend(_workgroup_size_rule_diagnostics(scan_config, units))
     diagnostics.extend(_entry_workgroup_size_rule_diagnostics(scan_config, units))
     diagnostics.extend(_subgroup_width_rule_diagnostics(scan_config, units))
+    diagnostics.extend(_metadata_precondition_pattern_diagnostics(scan_config, units))
     if not units:
         diagnostics.append(
             ProjectDiagnostic(
@@ -10041,6 +10118,7 @@ class _ScheduledProjectArtifactTranslation:
 class _ProjectTranslationWorkerContext:
     config: ProjectConfig
     dispatch_artifact_plan: DispatchArtifactPlan | None
+    metadata_source_matches: Mapping[MetadataRangePrecondition, set[str]]
     preserve_source_suffix: frozenset[tuple[str, str]]
     format_output: bool
     output_dir_blocked: bool
@@ -10087,6 +10165,7 @@ def _run_project_translation_worker(
                 write_interval_jobs=1,
             ),
             scan_override=worker_scan,
+            metadata_source_matches_override=context.metadata_source_matches,
             translation_job_override=request,
             preserve_source_suffix_override=context.preserve_source_suffix,
             suppress_forwarding_diagnostics=True,
@@ -10794,6 +10873,7 @@ def _translate_project_jobs_concurrently(
     scan: ProjectScan,
     targets: Sequence[str],
     dispatch_artifacts: Mapping[str, Sequence[tuple[int, DispatchArtifactJob]]],
+    metadata_source_matches: Mapping[MetadataRangePrecondition, set[str]],
     include_paths: Sequence[str],
     preserve_source_suffix: set[tuple[str, str]],
     format_output: bool,
@@ -10828,6 +10908,7 @@ def _translate_project_jobs_concurrently(
     context = _ProjectTranslationWorkerContext(
         config=config,
         dispatch_artifact_plan=scan.dispatch_artifact_plan,
+        metadata_source_matches=metadata_source_matches,
         preserve_source_suffix=frozenset(preserve_source_suffix),
         format_output=format_output,
         output_dir_blocked=output_dir_blocked,
@@ -27381,6 +27462,7 @@ def _generate_project_target_from_crossgl_ast(
     format_output: bool,
     index_range_assertions: Sequence[IndexRangeAssertion] = (),
     metadata_preconditions: Sequence[Any] = (),
+    metadata_source_matches: Mapping[MetadataRangePrecondition, set[str]] | None = None,
     workgroup_access_assertions: Sequence[WorkgroupAccessAssertion] = (),
     software_subgroup_width: Any | None = None,
     software_subgroup_applicability: str | None = None,
@@ -27487,8 +27569,22 @@ def _generate_project_target_from_crossgl_ast(
             raise MetadataPreconditionError(
                 "Metadata preconditions require one selected Metal, DirectX or OpenGL compute entry."
             )
+        function = stages[0].entry_point
+        if entry_point is None:
+            source_entries = {
+                origin["entryPoint"]
+                for parameter in function.parameters
+                for origin in (source_resource_identity(parameter),)
+                if origin is not None
+            }
+            if len(source_entries) == 1:
+                metadata_preconditions = _entry_metadata_preconditions(
+                    metadata_preconditions,
+                    next(iter(source_entries)),
+                    metadata_source_matches or {},
+                )
         resolved_metadata = resolve_metadata_preconditions(
-            stages[0].entry_point, metadata_preconditions
+            function, metadata_preconditions
         )
     if software_subgroup_applicability is not None:
         entries = (
@@ -28277,6 +28373,9 @@ def _translate_project_impl(
     job_timeout_seconds: float | None,
     checkpoint_run: _ProjectTranslationCheckpointRun,
     scan_override: ProjectScan | None = None,
+    metadata_source_matches_override: (
+        Mapping[MetadataRangePrecondition, set[str]] | None
+    ) = None,
     translation_job_override: _ProjectArtifactTranslationRequest | None = None,
     preserve_source_suffix_override: frozenset[tuple[str, str]] | None = None,
     suppress_forwarding_diagnostics: bool = False,
@@ -28345,6 +28444,11 @@ def _translate_project_impl(
 
     scan = scan_override if scan_override is not None else scan_project(config)
     config = scan.config
+    metadata_source_matches = (
+        metadata_source_matches_override
+        if metadata_source_matches_override is not None
+        else _metadata_precondition_source_matches(config, scan.units)
+    )
     diagnostics: list[ProjectDiagnostic] = list(scan.diagnostics)
     if not suppress_target_diagnostics:
         diagnostics.extend(_target_diagnostics(config, selected_targets))
@@ -28414,6 +28518,7 @@ def _translate_project_impl(
             scan=scan,
             targets=selected_targets,
             dispatch_artifacts=dispatch_artifacts,
+            metadata_source_matches=metadata_source_matches,
             include_paths=include_paths,
             preserve_source_suffix=preserve_source_suffix,
             format_output=format_output,
@@ -28544,11 +28649,18 @@ def _translate_project_impl(
                     if target in {"opengl", "webgl"}
                     else ()
                 )
-                metadata_preconditions = tuple(
-                    item
-                    for item in config.metadata_preconditions
-                    if item.source == "*"
-                    or fnmatch.fnmatch(unit.relative_path, item.source)
+                metadata_preconditions = _entry_metadata_preconditions(
+                    (
+                        item
+                        for item in config.metadata_preconditions
+                        if fnmatch.fnmatch(unit.relative_path, item.source)
+                        and (
+                            not metadata_source_matches[item]
+                            or unit.relative_path in metadata_source_matches[item]
+                        )
+                    ),
+                    selected_entry_point,
+                    metadata_source_matches,
                 )
                 workgroup_access_assertions = (
                     _workgroup_access_assertions_for_unit(
@@ -29262,7 +29374,12 @@ def _translate_project_impl(
                                             index_range_assertions=(
                                                 index_range_assertions
                                             ),
-                                            metadata_preconditions=metadata_preconditions,
+                                            metadata_preconditions=_entry_metadata_preconditions(
+                                                metadata_preconditions,
+                                                source_entry,
+                                                metadata_source_matches,
+                                            ),
+                                            metadata_source_matches=metadata_source_matches,
                                             workgroup_access_assertions=(
                                                 workgroup_access_assertions
                                             ),
@@ -29348,6 +29465,7 @@ def _translate_project_impl(
                                         format_output=format_output,
                                         index_range_assertions=(index_range_assertions),
                                         metadata_preconditions=metadata_preconditions,
+                                        metadata_source_matches=metadata_source_matches,
                                         workgroup_access_assertions=(
                                             workgroup_access_assertions
                                         ),
@@ -29433,6 +29551,7 @@ def _translate_project_impl(
                             format_output=format_output,
                             index_range_assertions=index_range_assertions,
                             metadata_preconditions=metadata_preconditions,
+                            metadata_source_matches=metadata_source_matches,
                             workgroup_access_assertions=(workgroup_access_assertions),
                             software_subgroup_width=software_subgroup_width,
                             software_subgroup_applicability=software_subgroup_applicability,

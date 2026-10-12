@@ -1187,6 +1187,20 @@ translation must select one compute entry. A missing or ambiguous source
 parameter, writable resource, pointer, vector or record produces a diagnostic;
 the initial contract supports constant integer scalar references only.
 
+Requirements are scoped by both the source pattern and the original entry name,
+including template ``host_name`` entries. Explicit and discovered jobs, and
+DirectX/OpenGL dispatch-plan jobs, retain only their own requirements;
+automatic OpenGL entry splitting uses
+the same selection. A wildcard source pattern applies to matching files that
+actually contain the named entry, not to every kernel in those files. Discovery
+also checks configured define variants when the base scan cannot find an entry.
+Unknown entries and selected parameters still fail translation, and unmatched
+source patterns produce configuration errors. Requirements for a known but
+unselected entry are not applied to another artifact. Their parameter types and
+bounds are checked when that entry is translated. Each emitted package still
+requires the corresponding checked values at native dispatch.
+Serial and parallel translation use the same project-wide entry ownership.
+
 The generated ``crosstl-metadata-preconditions`` header records the original
 resource identity, integer width, signedness and inclusive bounds. Reflection
 matches it to the actual read-only scalar layout; package inspection rejects
