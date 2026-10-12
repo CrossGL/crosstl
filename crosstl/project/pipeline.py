@@ -78,6 +78,7 @@ from crosstl.project.translation_checkpoint import (
     load_project_translation_checkpoint,
     project_translation_implementation_identity,
 )
+from crosstl.translator.artifact_contracts import with_artifact_contract_header
 from crosstl.translator.ast import (
     AttributeNode,
     IdentifierNode,
@@ -28048,7 +28049,7 @@ def _finalize_project_generated_artifact(
     report_output_path = report_output_path or output_path
     header = frozen_specialization_header(artifact.get("specializationConstants", []))
     if header:
-        generated_source = header + generated_source
+        generated_source = with_artifact_contract_header(generated_source, header)
         output_path.write_text(generated_source, encoding="utf-8")
     mojo_diagnostics = _mojo_unresolved_target_construct_diagnostics(
         artifact, generated_source
@@ -36013,6 +36014,11 @@ def _runtime_package_inspection_binding(
             package_path, artifact, host_interface
         )
     )
+    diagnostics.extend(
+        _runtime_package_resource_storage_diagnostics(
+            package_path, artifact, host_interface
+        )
+    )
     frozen_mismatch = False
     try:
         declared_frozen = frozen_specializations(
@@ -36099,6 +36105,61 @@ def _runtime_package_inspection_binding(
         "hostInterface": host_interface,
         "diagnostics": [diagnostic.code for diagnostic in diagnostics],
     }, diagnostics
+
+
+def _runtime_package_resource_storage_diagnostics(package_path, artifact, reflected):
+    errors = [
+        record
+        for record in _record_sequence(reflected.get("diagnosticRecords"))
+        if isinstance(record, Mapping)
+        and isinstance(record.get("details"), Mapping)
+        and record["details"].get("contract") == "resource-storage"
+        and record.get("severity") == "error"
+    ]
+
+    def encodings(interface):
+        result = []
+        for resource in _record_sequence(interface.get("resources")):
+            if not isinstance(resource, Mapping):
+                continue
+            layout = resource.get("scalarLayout")
+            if not isinstance(layout, Mapping) or "storageEncoding" not in layout:
+                continue
+            result.append(
+                {
+                    key: resource.get(key)
+                    for key in (
+                        "name",
+                        "kind",
+                        "type",
+                        "access",
+                        "set",
+                        "binding",
+                        "scalarLayout",
+                    )
+                }
+            )
+        return sorted(result, key=lambda item: json.dumps(item, sort_keys=True))
+
+    declared = artifact.get("hostInterface")
+    mismatch = isinstance(declared, Mapping) and encodings(declared) != encodings(
+        reflected
+    )
+    if not errors and not mismatch:
+        return []
+    return [
+        ProjectDiagnostic(
+            severity="error",
+            code="project.runtime-package-inspection.resource-storage-invalid",
+            message=(
+                errors[0]["message"]
+                if errors
+                else "Declared resource storage encodings differ from the packaged artifact."
+            ),
+            location=SourceLocation(file=str(package_path)),
+            check_kind="runtime-package-inspection",
+        )
+    ]
 
 
 def _runtime_package_resource_identity_diagnostics(package_path, artifact, reflected):

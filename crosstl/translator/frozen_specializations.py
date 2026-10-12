@@ -6,6 +6,10 @@ import json
 import re
 from collections.abc import Mapping
 
+from .artifact_contracts import (
+    FROZEN_SPECIALIZATION_PREFIX,
+    artifact_contract_headers,
+)
 from .ast import (
     AST_CHILD_FIELD_EXCLUSIONS,
     ASTNode,
@@ -19,8 +23,6 @@ from .ast import (
     UnaryOpNode,
     VariableNode,
 )
-
-FROZEN_SPECIALIZATION_PREFIX = "// crosstl-frozen-specializations: "
 
 
 def frozen_specializations(records):
@@ -73,17 +75,9 @@ def frozen_specialization_header(records):
 
 
 def parse_frozen_specializations(source):
-    reserved = FROZEN_SPECIALIZATION_PREFIX.rstrip()
-    if reserved not in source:
+    line = artifact_contract_headers(source).get(FROZEN_SPECIALIZATION_PREFIX)
+    if line is None:
         return []
-    if (
-        not source.startswith(FROZEN_SPECIALIZATION_PREFIX)
-        or source.count(reserved) != 1
-    ):
-        raise ValueError(
-            "Frozen specialization metadata requires one first-line header."
-        )
-    line = source.split("\n", 1)[0]
     if len(line.encode("utf-8")) > 65536:
         raise ValueError("Frozen specialization metadata exceeds the byte limit.")
 

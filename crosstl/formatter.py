@@ -148,6 +148,7 @@ class CodeFormatter:
         style = style_map.get(language, "LLVM")
         if (
             "// crosstl-resource-origin:" in code
+            or "// crosstl-resource-storage:" in code
             or "// crosstl-frozen-specializations:" in code
             or "// crosstl-metadata-preconditions:" in code
         ):
@@ -156,7 +157,7 @@ class CodeFormatter:
                 {
                     "BasedOnStyle": style,
                     "CommentPragmas": (
-                        "^ (IWYU pragma:|crosstl-resource-origin:|crosstl-frozen-specializations:|crosstl-metadata-preconditions:)"
+                        "^ (IWYU pragma:|crosstl-resource-origin:|crosstl-resource-storage:|crosstl-frozen-specializations:|crosstl-metadata-preconditions:)"
                     ),
                 }
             )

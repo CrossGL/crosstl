@@ -30,6 +30,7 @@ from crosstl.translator.resource_identity import (
     parse_resource_identities,
 )
 from crosstl.translator.resource_storage import (
+    RESOURCE_STORAGE_PREFIX,
     apply_resource_storage,
     parse_resource_storage_header,
 )
@@ -236,10 +237,28 @@ def reflect_target_host_interface(
 
 
 def _reflect_resource_identities(artifact_path, record):
-    try:
-        identities = parse_resource_identities(
-            artifact_path.read_text(encoding="utf-8")
+    if record["status"] == "failed":
+        return record
+    source = artifact_path.read_text(encoding="utf-8")
+    if (
+        record["parser"] != "directx-reflection"
+        and RESOURCE_STORAGE_PREFIX.rstrip() in source
+    ):
+        return empty_host_interface_record(
+            "failed",
+            parser=record["parser"],
+            artifact_format=record["artifactFormat"],
+            diagnostics=(
+                ReflectionDiagnostic(
+                    REFLECTION_PARSE_FAILED,
+                    "Encoded resource storage contracts require DirectX reflection.",
+                    severity="error",
+                    details={"contract": "resource-storage"},
+                ),
+            ),
         )
+    try:
+        identities = parse_resource_identities(source)
         apply_resource_identities(
             record["resources"], identities, record["entryPoints"]
         )
@@ -258,7 +277,7 @@ def _reflect_resource_identities(artifact_path, record):
             ),
         )
     try:
-        frozen = parse_frozen_specializations(artifact_path.read_text(encoding="utf-8"))
+        frozen = parse_frozen_specializations(source)
         live = record["specializationConstants"]
         if any(
             item["id"] == other.get("id") or item["name"] == other.get("name")
@@ -283,9 +302,7 @@ def _reflect_resource_identities(artifact_path, record):
             ),
         )
     try:
-        conditions = parse_metadata_precondition_header(
-            artifact_path.read_text(encoding="utf-8")
-        )
+        conditions = parse_metadata_precondition_header(source)
         apply_metadata_preconditions(record["resources"], conditions)
     except ValueError as exc:
         return empty_host_interface_record(

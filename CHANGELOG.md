@@ -31,6 +31,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Fixed
 
+- Frozen specializations, encoded resource storage and checked metadata compose in a bounded leading artifact contract block. Formatting, package inspection and native dispatch preserve each record, reject duplicates and misplaced declarations, and retain the original reflection failure.
 - Metal CI setup waits for a downloaded compiler to become executable before running the existing language and native checks. Only the explicit missing-toolchain error is retried, within bounded activation attempts; download failures and unrelated compiler errors remain fatal.
 - Precise HLSL helper returns materialize the result before returning so DXC preserves scalar, vector and record-field arithmetic dependencies. Complete cancellation-sensitive record scans retain native Windows and original/generated Metal output evidence without changing their inputs or comparisons.
 - Project checkpoints identify the installed translator sources as well as the package version. Resume rejects changed implementations and legacy checkpoints before reusing artifacts, preserving saved progress and providing restart instructions.

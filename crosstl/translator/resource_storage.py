@@ -6,7 +6,8 @@ import json
 import re
 from typing import Any, Mapping, NoReturn, Sequence
 
-RESOURCE_STORAGE_PREFIX = "// crosstl-resource-storage: "
+from .artifact_contracts import RESOURCE_STORAGE_PREFIX, artifact_contract_headers
+
 MAX_RESOURCE_STORAGE_HEADER_BYTES = 65536
 BINARY16_STORAGE = {
     "logicalElementType": "float16",
@@ -44,7 +45,7 @@ def _validated_resources(value: Any) -> dict[str, dict[str, str]]:
 
 
 def resource_storage_header(resources: Mapping[str, Mapping[str, str]]) -> str:
-    """Serialize a source contract; it must precede all shader source text."""
+    """Serialize a source contract for the leading artifact contract block."""
     payload = {"schemaVersion": 1, "resources": _validated_resources(resources)}
     header = RESOURCE_STORAGE_PREFIX + json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
@@ -55,13 +56,10 @@ def resource_storage_header(resources: Mapping[str, Mapping[str, str]]) -> str:
 
 
 def parse_resource_storage_header(source: str) -> dict[str, dict[str, str]]:
-    """Read the reserved first-line contract, rejecting misplaced declarations."""
-    marker = RESOURCE_STORAGE_PREFIX.rstrip()
-    if marker not in source:
+    """Read the leading storage contract, rejecting misplaced declarations."""
+    first_line = artifact_contract_headers(source).get(RESOURCE_STORAGE_PREFIX)
+    if first_line is None:
         return {}
-    first_line, _, remaining = source.partition("\n")
-    if not first_line.startswith(RESOURCE_STORAGE_PREFIX) or marker in remaining:
-        raise ValueError("Resource storage must be declared once, on the first line.")
     if len(first_line.encode("utf-8")) > MAX_RESOURCE_STORAGE_HEADER_BYTES:
         raise ValueError("Resource storage header exceeds the byte limit.")
     try:

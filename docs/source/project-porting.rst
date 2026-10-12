@@ -1205,10 +1205,16 @@ requirements rather than silently dropping enforcement. A custom runtime that
 bypasses the Python native adapters must implement equivalent checks before using
 a constrained artifact; the shader comment is not a device-side guard.
 
-Combining frozen specializations with DirectX encoded half-buffer storage
-currently fails package inspection because both contracts require the first
-source line. Adding checked metadata does not resolve this composition limit;
-see `issue #2219 <https://github.com/CrossGL/crosstl/issues/2219>`_.
+Frozen specializations, resource storage encodings and checked metadata share a
+leading artifact contract block. Existing single-record artifacts remain valid;
+readers accept each distinct record in any order. Writers use frozen constants,
+storage, then metadata order. The block starts on the first source line and
+contains at most one record of each supported type, with a 64 KiB limit per
+record. Blank lines, ordinary comments and shader text end the block. Duplicates,
+malformed records and reserved markers later in the source are rejected, not
+silently ignored. Individual schema and resource-layout validation still apply.
+Formatting, package inspection and native dispatch retain all three contracts,
+including frozen half-buffer kernels with checked scalar bounds.
 
 The existing three-platform native resource job compiles and executes a
 record-buffer gather with a scalar constant, choosing all uploads by source
@@ -3312,7 +3318,7 @@ padded source layouts and overlapping writable views are not established by
 this coverage.
 
 An HLSL artifact may explicitly distinguish logical binary16 values from native
-unsigned 16-bit storage. Its first line contains a versioned resource contract,
+unsigned 16-bit storage. Its leading contract block contains a versioned resource contract,
 serialized by ``crosstl.translator.resource_storage.resource_storage_header``:
 
 .. code-block:: hlsl

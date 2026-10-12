@@ -11853,6 +11853,9 @@
             "tests/test_translator/test_metadata_preconditions.py::def test_descriptor_cannot_change_obligations",
             "tests/test_translator/test_metadata_preconditions.py::def test_package_rechecks_metadata_contract",
             "tests/test_translator/test_metadata_preconditions.py::def test_invalid_late_value_stops_native_preparation",
+            "tests/test_translator/test_metadata_preconditions.py::def test_combined_project_contracts_survive_format_package_and_dispatch",
+            "tests/test_translator/test_metadata_preconditions.py::def test_native_combined_contracts",
+            "tests/test_translator/test_artifact_contracts.py::def test_combined_records_retain_individual_validation",
             "tests/test_translator/test_metadata_preconditions.py::def test_native_checked_metadata"
           ]
         },
@@ -11864,6 +11867,9 @@
             "tests/test_translator/test_metadata_preconditions.py::def test_metadata_source_types_survive_lowering",
             "tests/test_translator/test_metadata_preconditions.py::def test_out_of_range_input_is_rejected",
             "tests/test_translator/test_metadata_preconditions.py::def test_invalid_late_value_stops_native_preparation",
+            "tests/test_translator/test_metadata_preconditions.py::def test_combined_project_contracts_survive_format_package_and_dispatch",
+            "tests/test_translator/test_metadata_preconditions.py::def test_native_combined_contracts",
+            "tests/test_translator/test_artifact_contracts.py::def test_combined_records_retain_individual_validation",
             "tests/test_translator/test_metadata_preconditions.py::def test_native_checked_metadata"
           ]
         },
@@ -11875,6 +11881,9 @@
             "tests/test_translator/test_metadata_preconditions.py::def test_metadata_source_types_survive_lowering",
             "tests/test_translator/test_metadata_preconditions.py::def test_implicit_allocation_alias_is_rejected",
             "tests/test_translator/test_metadata_preconditions.py::def test_input_snapshot_remains_owned_and_is_checked_again",
+            "tests/test_translator/test_metadata_preconditions.py::def test_combined_project_contracts_survive_format_package_and_dispatch",
+            "tests/test_translator/test_metadata_preconditions.py::def test_native_combined_contracts",
+            "tests/test_translator/test_artifact_contracts.py::def test_combined_records_retain_individual_validation",
             "tests/test_translator/test_metadata_preconditions.py::def test_native_checked_metadata"
           ]
         },

@@ -43,7 +43,11 @@ from crosstl.translator.frozen_specializations import (
     frozen_specializations,
     parse_frozen_specializations,
 )
-from crosstl.translator.resource_storage import encoded_storage_dtype
+from crosstl.translator.resource_storage import (
+    RESOURCE_STORAGE_PREFIX,
+    encoded_storage_dtype,
+    parse_resource_storage_header,
+)
 
 _ERROR_PREFIX = "project.native-loader-dispatch"
 _COMPUTE_STAGE = "compute"
@@ -251,11 +255,10 @@ def build_native_loader_dispatch_request(
     )
     try:
         declared_frozen = frozen_specializations(normalized["specializationConstants"])
-        with artifact_path.open("rb") as artifact_file:
-            first_line = artifact_file.readline(65537)
+        artifact_content = artifact_path.read_bytes()
         reflected_frozen = (
-            parse_frozen_specializations(first_line.decode("utf-8"))
-            if first_line.startswith(FROZEN_SPECIALIZATION_PREFIX.encode("ascii"))
+            parse_frozen_specializations(artifact_content.decode("utf-8"))
+            if FROZEN_SPECIALIZATION_PREFIX.rstrip().encode("ascii") in artifact_content
             else []
         )
         if declared_frozen != reflected_frozen:
@@ -268,6 +271,9 @@ def build_native_loader_dispatch_request(
             str(exc),
             path="$.specializationConstants",
         ) from exc
+    _validate_artifact_storage_contracts(
+        artifact_path, artifact_content, target, normalized["bindings"]
+    )
 
     from .metadata_preconditions import (
         artifact_metadata_bindings,
@@ -1336,6 +1342,54 @@ def _validated_raw_layout(
             path=path,
             details={"binding": runtime_value.name},
         )
+
+
+def _validate_artifact_storage_contracts(artifact_path, content, target, bindings):
+    declared = {
+        binding["name"]: binding["scalarLayout"]["storageEncoding"]
+        for binding in bindings
+        if isinstance(binding.get("scalarLayout"), Mapping)
+        and "storageEncoding" in binding["scalarLayout"]
+    }
+    if not declared and RESOURCE_STORAGE_PREFIX.rstrip().encode("ascii") not in content:
+        return
+    from .host_reflection import reflect_target_host_interface
+
+    try:
+        if declared != parse_resource_storage_header(content.decode("utf-8")):
+            raise ValueError("Descriptor storage encodings differ from the artifact.")
+        reflected = reflect_target_host_interface(
+            artifact_path, target=target, stage="compute"
+        )
+        if reflected["status"] != "ready":
+            raise ValueError(
+                "Encoded storage requires independently reflected bindings."
+            )
+        for binding in bindings:
+            if binding["name"] not in declared:
+                continue
+            matches = [
+                resource
+                for resource in reflected["resources"]
+                if resource["name"] == binding["name"]
+            ]
+            if len(matches) != 1:
+                raise ValueError("Encoded storage binding is missing or ambiguous.")
+            resource = matches[0]
+            if any(
+                binding.get(key) != resource.get(key)
+                for key in ("kind", "type", "access", "scalarLayout")
+            ) or binding.get("coordinates") != {
+                "set": resource["set"],
+                "binding": resource["binding"],
+            }:
+                raise ValueError(
+                    "Encoded storage binding differs from artifact reflection."
+                )
+    except (ValueError, UnicodeError) as exc:
+        raise NativeLoaderDispatchError(
+            "resource-storage-invalid", str(exc), path="$.bindings"
+        ) from exc
 
 
 def _validated_scalar_layout(

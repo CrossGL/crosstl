@@ -6801,6 +6801,9 @@
             "tests/test_translator/test_metadata_preconditions.py::def test_descriptor_cannot_change_obligations",
             "tests/test_translator/test_metadata_preconditions.py::def test_package_rechecks_metadata_contract",
             "tests/test_translator/test_metadata_preconditions.py::def test_invalid_late_value_stops_native_preparation",
+            "tests/test_translator/test_metadata_preconditions.py::def test_combined_project_contracts_survive_format_package_and_dispatch",
+            "tests/test_translator/test_metadata_preconditions.py::def test_native_combined_contracts",
+            "tests/test_translator/test_artifact_contracts.py::def test_combined_records_retain_individual_validation",
             "tests/test_translator/test_metadata_preconditions.py::def test_native_checked_metadata"
           ],
           "notes": "Constant integer references retain source identity, signedness and width in artifact headers and reflected binding provenance. Python native dispatch rechecks exact descriptors and upload bytes, rejects out-of-range values and shared allocation identities, and records checked values and payload hashes. Required Windows execution covers bounded values and nonzero metadata view offsets. This does not authorize compiler range proofs or support record fields, GPU-produced metadata, shared allocations or C execution wrappers.",
@@ -6819,6 +6822,9 @@
             "tests/test_translator/test_metadata_preconditions.py::def test_metadata_source_types_survive_lowering",
             "tests/test_translator/test_metadata_preconditions.py::def test_implicit_allocation_alias_is_rejected",
             "tests/test_translator/test_metadata_preconditions.py::def test_input_snapshot_remains_owned_and_is_checked_again",
+            "tests/test_translator/test_metadata_preconditions.py::def test_combined_project_contracts_survive_format_package_and_dispatch",
+            "tests/test_translator/test_metadata_preconditions.py::def test_native_combined_contracts",
+            "tests/test_translator/test_artifact_contracts.py::def test_combined_records_retain_individual_validation",
             "tests/test_translator/test_metadata_preconditions.py::def test_native_checked_metadata"
           ],
           "notes": "Generated Metal constant scalar references retain original parameter identities and checked integer bounds. Project packages and Python native dispatch enforce the artifact contract, including immutable upload snapshots and allocation isolation. Native controls compare generated and original Metal outputs with guards and offset metadata views. Record fields, mutable metadata, compiler range proofs and C execution wrappers are not covered.",
@@ -6837,6 +6843,9 @@
             "tests/test_translator/test_metadata_preconditions.py::def test_metadata_source_types_survive_lowering",
             "tests/test_translator/test_metadata_preconditions.py::def test_out_of_range_input_is_rejected",
             "tests/test_translator/test_metadata_preconditions.py::def test_invalid_late_value_stops_native_preparation",
+            "tests/test_translator/test_metadata_preconditions.py::def test_combined_project_contracts_survive_format_package_and_dispatch",
+            "tests/test_translator/test_metadata_preconditions.py::def test_native_combined_contracts",
+            "tests/test_translator/test_artifact_contracts.py::def test_combined_records_retain_individual_validation",
             "tests/test_translator/test_metadata_preconditions.py::def test_native_checked_metadata"
           ],
           "notes": "Checked original scalar parameters are matched to reflected GLSL uniform layouts and validated against immutable native upload bytes. Descriptor mutations, out-of-range values and shared allocations are rejected. Native Linux controls cover boundary values, nonzero metadata offsets, outputs and guards. Loop induction, integer narrowing, record metadata and custom runtime enforcement remain separate contracts.",

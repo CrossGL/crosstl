@@ -9,12 +9,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from .arithmetic_conversions import ArithmeticScalarKind, source_integer_shape
+from .artifact_contracts import (
+    METADATA_PRECONDITION_PREFIX,
+    artifact_contract_headers,
+    with_artifact_contract_header,
+)
 from .ast import ReferenceType
-from .frozen_specializations import FROZEN_SPECIALIZATION_PREFIX
 from .resource_identity import source_resource_attribute, source_resource_identity
-from .resource_storage import RESOURCE_STORAGE_PREFIX
 
-METADATA_PRECONDITION_PREFIX = "// crosstl-metadata-preconditions: "
 MAX_METADATA_PRECONDITIONS = 256
 MAX_METADATA_PRECONDITION_BYTES = 65536
 INTEGER_METADATA_TYPES = {
@@ -211,37 +213,19 @@ def metadata_precondition_header(records: Any) -> str:
 
 
 def with_metadata_precondition_header(source: str, records: Any) -> str:
-    """Keep the existing frozen-specialization first-line contract intact."""
+    """Retain every existing leading artifact contract when adding obligations."""
     if METADATA_PRECONDITION_PREFIX.rstrip() in source:
         raise ValueError("Source already contains a metadata precondition marker.")
-    header = metadata_precondition_header(records)
-    if (
-        source.startswith((FROZEN_SPECIALIZATION_PREFIX, RESOURCE_STORAGE_PREFIX))
-        and header
-    ):
-        first, separator, rest = source.partition("\n")
-        if not separator:
-            raise ValueError("Leading contract header lacks a source body.")
-        return first + "\n" + header + rest
-    return header + source
+    return with_artifact_contract_header(source, metadata_precondition_header(records))
 
 
 def parse_metadata_precondition_header(source: str) -> list[dict[str, Any]]:
     """Require one canonical header; reject markers hidden in source text."""
-    reserved = METADATA_PRECONDITION_PREFIX.rstrip()
-    if reserved not in source:
+    line = artifact_contract_headers(source).get(METADATA_PRECONDITION_PREFIX)
+    if line is None:
         return []
-    lines = source.split("\n", 2)
-    index = int(
-        source.startswith((FROZEN_SPECIALIZATION_PREFIX, RESOURCE_STORAGE_PREFIX))
-    )
-    if (
-        source.count(reserved) != 1
-        or len(lines) <= index
-        or not lines[index].startswith(METADATA_PRECONDITION_PREFIX)
-        or len(lines[index].encode("utf-8")) > MAX_METADATA_PRECONDITION_BYTES
-    ):
-        raise ValueError("Metadata preconditions require one leading header.")
+    if len(line.encode("utf-8")) > MAX_METADATA_PRECONDITION_BYTES:
+        raise ValueError("Metadata precondition header exceeds its byte limit.")
 
     def unique(pairs):
         result = {}
@@ -253,7 +237,7 @@ def parse_metadata_precondition_header(source: str) -> list[dict[str, Any]]:
 
     try:
         record = json.loads(
-            lines[index][len(METADATA_PRECONDITION_PREFIX) :],
+            line[len(METADATA_PRECONDITION_PREFIX) :],
             object_pairs_hook=unique,
         )
     except (ValueError, RecursionError) as error:

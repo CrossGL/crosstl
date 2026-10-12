@@ -1,6 +1,8 @@
 """Checked metadata remains attached to the exact artifact and upload."""
 
+import copy
 import hashlib
+import itertools
 import json
 import os
 import sys
@@ -20,6 +22,7 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from crosstl.project.host_reflection import reflect_target_host_interface
 from crosstl.project.metadata_preconditions import check_native_metadata_snapshots
 from crosstl.project.native_loader_abi import (
     NativeLoaderABIError,
@@ -59,6 +62,19 @@ kernel void bounded_copy(constant uint& count [[buffer(0)]],
     if (lane < count) { output[lane] = count + lane; }
 }
 """
+COMBINED_SOURCE = (
+    SOURCE.replace(
+        "using namespace metal;",
+        "using namespace metal;\nconstant bool enabled [[function_constant(0)]];",
+    )
+    .replace(
+        "device uint* output [[buffer(1)]],",
+        "device const half* values [[buffer(1)]],\n"
+        "                         device half* output [[buffer(2)]],",
+    )
+    .replace("lane < count", "enabled && lane < count")
+    .replace("count + lane", "values[lane]")
+)
 CONDITION = dict(entryPoint="bounded_copy", parameter="count", minimum=1, maximum=4)
 RESOLVED = dict(
     sourceResource=dict(
@@ -75,7 +91,9 @@ RESOLVED = dict(
 TARGETS = ("metal", "directx", "opengl")
 
 
-def _package(tmp_path, target, *, source=SOURCE, conditions=None):
+def _package(
+    tmp_path, target, *, source=SOURCE, conditions=None, enabled=None, formatted=False
+):
     tmp_path.mkdir(exist_ok=True)
     (tmp_path / "bounded.metal").write_text(source)
     report = translate_project(
@@ -85,9 +103,11 @@ def _package(tmp_path, target, *, source=SOURCE, conditions=None):
             targets=(target,),
             workgroup_size=(4, 1, 1),
             metadata_preconditions=[CONDITION] if conditions is None else conditions,
+            specialization_constants={} if enabled is None else {"enabled": enabled},
+            freeze_specialization_constants=enabled is not None,
             source_options={"metal": {"preserve_resource_origins": True}},
         ),
-        format_output=False,
+        format_output=formatted,
     )
     report.write_json(tmp_path / "report.json")
     assert report.to_json()["summary"]["translatedCount"] == 1, report.to_json()[
@@ -107,6 +127,230 @@ def _package(tmp_path, target, *, source=SOURCE, conditions=None):
         ),
         package,
     )
+
+
+def _combined_values(descriptor, count=3, enabled=True):
+    inputs, outputs = {}, {}
+    values = [1.5, -2.0, 3.25, 4.5, 7.0, 8.0, 9.0, 10.0]
+    for binding in descriptor["bindings"]:
+        parameter = binding["provenance"]["sourceResource"]["parameter"]
+        words = {"count": [count], "values": values, "output": [-11.0] * 8}[parameter]
+        layout = binding["scalarLayout"]
+        dtype = layout.get("storageEncoding", {}).get(
+            "logicalElementType", layout["elementType"]
+        )
+        inputs[binding["name"]] = dict(dtype=dtype, shape=[len(words)], values=words)
+        if parameter == "output":
+            outputs[binding["name"]] = dict(
+                dtype=dtype,
+                shape=[8],
+                values=[
+                    value if enabled and index < count else -11.0
+                    for index, value in enumerate(values)
+                ],
+            )
+    return inputs, outputs
+
+
+@pytest.mark.parametrize("target", TARGETS)
+@pytest.mark.parametrize("enabled", [False, True])
+def test_combined_project_contracts_survive_format_package_and_dispatch(
+    tmp_path, target, enabled
+):
+    descriptor, package = _package(
+        tmp_path, target, source=COMBINED_SOURCE, enabled=enabled, formatted=True
+    )
+    artifact = package / descriptor["artifact"]["packagePath"]
+    source = artifact.read_text()
+    assert parse_frozen_specializations(source) == [
+        dict(id=0, name="enabled", dtype="bool", value=enabled, frozen=True)
+    ]
+    assert parse_metadata_precondition_header(source) == [RESOLVED]
+    assert bool(parse_resource_storage_header(source)) == (target == "directx")
+    assert reflect_target_host_interface(artifact, target=target)["status"] == "ready"
+    assert inspect_runtime_package(package / "runtime-package.json")["success"]
+    assert validate_project_report(tmp_path / "report.json")["success"]
+    inputs, outputs = _combined_values(descriptor, enabled=enabled)
+    request = _request(descriptor, package, values=(inputs, outputs))
+    assert not request.adapter_contract.specialization_constants
+    for value in (0, 5):
+        with pytest.raises(NativeLoaderDispatchError, match="outside"):
+            _request(
+                descriptor, package, values=_combined_values(descriptor, value, enabled)
+            )
+    with pytest.raises(NativeLoaderDispatchError, match="override"):
+        build_native_loader_dispatch_request(
+            descriptor,
+            package,
+            inputs,
+            outputs,
+            {"workgroupCount": [1, 1, 1], "workgroupSize": [4, 1, 1]},
+            specialization_values={0: not enabled},
+        )
+
+
+@pytest.mark.parametrize("order", list(itertools.permutations(range(3))))
+def test_dispatch_accepts_all_contract_orders_and_rechecks_full_artifact(
+    tmp_path, order
+):
+    descriptor, package = _package(
+        tmp_path, "directx", source=COMBINED_SOURCE, enabled=True
+    )
+    artifact = package / descriptor["artifact"]["packagePath"]
+    lines = artifact.read_text().splitlines(keepends=True)
+    source = "".join(lines[index] for index in order) + "".join(lines[3:])
+    artifact.write_text(source)
+    descriptor["artifact"]["sizeBytes"] = artifact.stat().st_size
+    descriptor["artifact"]["hash"]["value"] = hashlib.sha256(
+        artifact.read_bytes()
+    ).hexdigest()
+    request = _request(descriptor, package, values=_combined_values(descriptor))
+    assert (
+        request.adapter_contract.metadata["frozenSpecializations"][0]["value"] is True
+    )
+    artifact.write_text(source + lines[0])
+    descriptor["artifact"]["sizeBytes"] = artifact.stat().st_size
+    descriptor["artifact"]["hash"]["value"] = hashlib.sha256(
+        artifact.read_bytes()
+    ).hexdigest()
+    with pytest.raises(
+        NativeLoaderDispatchError, match="frozen-specialization-invalid"
+    ):
+        _request(descriptor, package, values=_combined_values(descriptor))
+
+
+def test_storage_failure_is_not_replaced_by_missing_resource_identity(tmp_path):
+    descriptor, package = _package(
+        tmp_path, "directx", source=COMBINED_SOURCE, enabled=True
+    )
+    artifact = package / descriptor["artifact"]["packagePath"]
+    source = artifact.read_text().replace('"ieee754-binary16"', '"unknown"')
+    artifact.write_text(source)
+    reflected = reflect_target_host_interface(artifact, target="directx")
+    assert reflected["status"] == "failed"
+    assert (
+        reflected["diagnosticRecords"][0]["details"]["contract"] == "resource-storage"
+    )
+    assert (
+        "Unsupported logical storage encoding" in reflected["diagnosticRecords"][0][
+            "message"
+        ]
+    )
+
+
+@pytest.mark.parametrize("target", ["metal", "opengl"])
+def test_storage_contract_cannot_be_ignored_by_another_target(tmp_path, target):
+    descriptor, package = _package(
+        tmp_path, target, source=COMBINED_SOURCE, enabled=True
+    )
+    artifact = package / descriptor["artifact"]["packagePath"]
+    artifact.write_text(
+        resource_storage_header(
+            {
+                "values": {
+                    "logicalElementType": "float16",
+                    "encoding": "ieee754-binary16",
+                }
+            }
+        )
+        + artifact.read_text()
+    )
+    reflected = reflect_target_host_interface(artifact, target=target)
+    assert reflected["status"] == "failed"
+    assert (
+        reflected["diagnosticRecords"][0]["details"]["contract"] == "resource-storage"
+    )
+
+
+@pytest.mark.parametrize("index", range(3))
+@pytest.mark.parametrize("fault", ["remove", "duplicate", "body", "malformed"])
+def test_package_rejects_mutations_of_any_combined_contract(tmp_path, index, fault):
+    descriptor, package = _package(
+        tmp_path, "directx", source=COMBINED_SOURCE, enabled=True
+    )
+    artifact = package / descriptor["artifact"]["packagePath"]
+    lines = artifact.read_text().splitlines(keepends=True)
+    if fault == "remove":
+        del lines[index]
+    elif fault == "duplicate":
+        lines.insert(index, lines[index])
+    elif fault == "body":
+        lines.append(lines.pop(index))
+    else:
+        lines[index] = lines[index].split(": ", 1)[0] + ": {\n"
+    artifact.write_text("".join(lines))
+    path = package / "runtime-package.json"
+    payload = json.loads(path.read_text())
+    record = payload["artifacts"][0]
+    record["sizeBytes"] = artifact.stat().st_size
+    record["hash"]["value"] = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    path.write_text(json.dumps(payload))
+    assert not inspect_runtime_package(path)["success"]
+    assert not build_runtime_loader_manifest(path)["success"]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_native_combined_contracts(tmp_path, enabled):
+    if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":
+        pytest.skip(
+            "set CROSTL_REQUIRE_METADATA_PRECONDITIONS=1 for native metadata checks"
+        )
+    from tests.runtime_helpers import _validate
+    from tests.test_translator.test_loop_updates import _execute
+
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    descriptor, package = _package(
+        tmp_path, target, source=COMBINED_SOURCE, enabled=enabled
+    )
+    for count in (1, 3, 4):
+        inputs, outputs = _combined_values(descriptor, count, enabled)
+        request = _request(descriptor, package, values=(inputs, outputs))
+        work = tmp_path / f"native-combined-{count}"
+        work.mkdir()
+        _execute(request, outputs, work, validate=_validate)
+        evidence = json.loads((work / "evidence.json").read_text())
+        assert (
+            evidence["records"]["generated"]["details"]["metadataPreconditions"][0][
+                "value"
+            ]
+            == count
+        )
+
+
+@pytest.mark.parametrize(
+    "fault", ["remove", "encoding", "coordinates", "layout", "header"]
+)
+def test_direct_dispatch_rechecks_storage_contract(tmp_path, fault):
+    descriptor, package = _package(
+        tmp_path, "directx", source=COMBINED_SOURCE, enabled=True
+    )
+    binding = next(
+        item
+        for item in descriptor["bindings"]
+        if "storageEncoding" in item["scalarLayout"]
+    )
+    if fault == "remove":
+        binding["scalarLayout"].pop("storageEncoding")
+    elif fault == "encoding":
+        binding["scalarLayout"]["storageEncoding"]["encoding"] = "unknown"
+    elif fault == "coordinates":
+        binding["coordinates"]["binding"] = 15
+    elif fault == "layout":
+        binding["scalarLayout"]["elementStrideBytes"] = 4
+    else:
+        artifact = package / descriptor["artifact"]["packagePath"]
+        lines = artifact.read_text().splitlines(keepends=True)
+        artifact.write_text("".join([lines[0], *lines[2:]]))
+        descriptor["artifact"]["sizeBytes"] = artifact.stat().st_size
+        descriptor["artifact"]["hash"]["value"] = hashlib.sha256(
+            artifact.read_bytes()
+        ).hexdigest()
+    descriptor["scalarLayout"]["bindings"] = [
+        {"binding": item["name"], "layout": copy.deepcopy(item["scalarLayout"])}
+        for item in descriptor["bindings"]
+    ]
+    with pytest.raises(NativeLoaderDispatchError, match="resource-storage-invalid"):
+        _request(descriptor, package, values=_combined_values(descriptor))
 
 
 def _values(descriptor, count=4):
