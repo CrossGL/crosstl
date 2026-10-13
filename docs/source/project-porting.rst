@@ -5909,6 +5909,16 @@ and sibling scopes are preserved. Forward references, alias cycles, and chains
 whose equivalence cannot be proved remain failed bindings; they are not treated
 as matching merely because their unresolved spelling is the same.
 
+Metal import restores variable types, qualifiers and resource-name bindings
+when leaving a nested block, branch, loop body or switch. A local scalar or array
+that shadows a buffer parameter cannot change the type of a later access to
+the enclosing parameter. The local binding still governs accesses inside its
+scope; invalid scalar subscripts remain errors. Compiler and native controls
+cover nested shadows, loop-local declarations and helper returns on generated
+Metal, HLSL and GLSL. Shared declarations across separate switch cases remain a
+distinct target-emission limitation tracked in
+`issue #2232 <https://github.com/CrossGL/crosstl/issues/2232>`_.
+
 For DirectX, a supported storage-pointer helper parameter is emitted as a
 ``StructuredBuffer`` or ``RWStructuredBuffer`` resource together with a signed
 element offset. Passing ``&buffer[index]``, a previously rebased alias, or an

@@ -9779,6 +9779,8 @@ class MetalToCrossGLConverter:
                 self.current_variable_type_qualifiers[stmt.name] = (
                     self.metal_declaration_type_qualifiers(stmt)
                 )
+                self.current_storage_texture_names.discard(stmt.name)
+                self.current_structured_buffer_names.discard(stmt.name)
                 if id(stmt) in self.storage_texture_declaration_ids:
                     self.current_storage_texture_names.add(stmt.name)
                 if self.structured_buffer_pointer_type(stmt):
@@ -9818,6 +9820,8 @@ class MetalToCrossGLConverter:
                     self.current_variable_type_qualifiers[declaration.name] = (
                         inferred_qualifiers
                     )
+                    self.current_storage_texture_names.discard(declaration.name)
+                    self.current_structured_buffer_names.discard(declaration.name)
                     if id(declaration) in self.storage_texture_declaration_ids:
                         self.current_storage_texture_names.add(declaration.name)
                     if self.structured_buffer_pointer_type(declaration):
@@ -9950,7 +9954,15 @@ class MetalToCrossGLConverter:
         return code
 
     def generate_scoped_function_body(self, body, indent=0, is_main=False):
-        """Render a nested lexical block without leaking local type aliases."""
+        """Render a nested lexical block without leaking local bindings."""
+        previous_variable_types = self.current_variable_types
+        previous_variable_type_qualifiers = self.current_variable_type_qualifiers
+        previous_storage_texture_names = self.current_storage_texture_names
+        previous_structured_buffer_names = self.current_structured_buffer_names
+        self.current_variable_types = dict(previous_variable_types)
+        self.current_variable_type_qualifiers = dict(previous_variable_type_qualifiers)
+        self.current_storage_texture_names = set(previous_storage_texture_names)
+        self.current_structured_buffer_names = set(previous_structured_buffer_names)
         previous_type_aliases = dict(self.type_aliases)
         previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
         previous_type_alias_pointee_qualifiers = dict(
@@ -9966,6 +9978,10 @@ class MetalToCrossGLConverter:
             return self.generate_function_body(body, indent, is_main)
         finally:
             self.template_binding_shadow_scopes.pop()
+            self.current_variable_types = previous_variable_types
+            self.current_variable_type_qualifiers = previous_variable_type_qualifiers
+            self.current_storage_texture_names = previous_storage_texture_names
+            self.current_structured_buffer_names = previous_structured_buffer_names
             self.type_aliases = previous_type_aliases
             self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.type_alias_pointee_qualifiers = previous_type_alias_pointee_qualifiers
@@ -21877,6 +21893,15 @@ float {scalar}(float value) {{
         return None
 
     def generate_switch_statement(self, node, indent, is_main):
+        expression = self.generate_expression(node.expression, is_main)
+        previous_variable_types = self.current_variable_types
+        previous_variable_type_qualifiers = self.current_variable_type_qualifiers
+        previous_storage_texture_names = self.current_storage_texture_names
+        previous_structured_buffer_names = self.current_structured_buffer_names
+        self.current_variable_types = dict(previous_variable_types)
+        self.current_variable_type_qualifiers = dict(previous_variable_type_qualifiers)
+        self.current_storage_texture_names = set(previous_storage_texture_names)
+        self.current_structured_buffer_names = set(previous_structured_buffer_names)
         previous_type_aliases = dict(self.type_aliases)
         previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
         previous_type_alias_pointee_qualifiers = dict(
@@ -21887,7 +21912,6 @@ float {scalar}(float value) {{
         previous_local_integral_constant_bindings = dict(
             self.local_integral_constant_bindings
         )
-        expression = self.generate_expression(node.expression, is_main)
         code = f"switch ({expression}) {{\n"
         try:
             for case in node.cases:
@@ -21908,6 +21932,10 @@ float {scalar}(float value) {{
             code += "    " * indent + "}\n"
             return code
         finally:
+            self.current_variable_types = previous_variable_types
+            self.current_variable_type_qualifiers = previous_variable_type_qualifiers
+            self.current_storage_texture_names = previous_storage_texture_names
+            self.current_structured_buffer_names = previous_structured_buffer_names
             self.type_aliases = previous_type_aliases
             self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.type_alias_pointee_qualifiers = previous_type_alias_pointee_qualifiers
