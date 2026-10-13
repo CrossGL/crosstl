@@ -1319,6 +1319,16 @@ strides, mutations of bound or stride components, and shadowed bindings do not
 establish this proof. These ranges establish index representability, not the
 size of the bound allocation; runtime buffer and metadata checks still apply.
 
+Local storage-pointer declarations participate in this analysis, including
+positive and negative strides in nested loops. Bounds cover pointer formation
+by inactive lanes and the terminal update, not just dereferenced addresses.
+An integer helper can provide a loop limit when its return and effects are
+proved and its arguments remain invariant across calls. Counter-dependent calls,
+even those that appear effect-free on the first iteration, cannot establish this
+proof. Native controls retain the source loop and verify exact output values,
+untouched inputs and output guards. The pinned arg-reduce demo separately exercises
+checked metadata for two entries; it does not establish full reduction coverage.
+
 For straight-line top-level loops with at most 64 iterations, a conjunction of
 invariant affine integer guards can further constrain entry ranges. For example,
 ``x + i < width`` excludes the unused lane of a partial tile before deriving its

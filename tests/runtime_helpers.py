@@ -9,7 +9,12 @@ from crosstl.project import (
     build_runtime_loader_manifest,
     build_runtime_package,
 )
-from crosstl.project.directx_toolchain import dxc_compiler_arguments_for_source
+from crosstl.project.directx_toolchain import (
+    dxc_compiler_arguments_for_source,
+    dxc_file_path,
+    dxc_long_path_command,
+    dxc_profile_for_source,
+)
 from tests.test_translator.test_metal_builtin_ownership import _compile
 
 
@@ -64,23 +69,25 @@ def compile_metal(artifact, root, directory, *, flags=()):
 def _validate_generated_artifact(path, work, target):
     if target == "directx":
         module = work / "kernel.dxil"
+        source = path.read_text(encoding="utf-8")
         commands = [
             (
                 "dxc",
-                [
-                    "dxc",
-                    *dxc_compiler_arguments_for_source(
-                        path.read_text(encoding="utf-8")
-                    ),
-                    "-WX",
-                    "-T",
-                    "cs_6_2",
-                    "-E",
-                    "CSMain",
+                dxc_long_path_command(
+                    [
+                        "dxc",
+                        *dxc_compiler_arguments_for_source(source),
+                        "-WX",
+                        "-T",
+                        dxc_profile_for_source("cs_6_2", source),
+                        "-E",
+                        "CSMain",
+                        dxc_file_path(path),
+                        "-Fo",
+                        dxc_file_path(module),
+                    ],
                     path,
-                    "-Fo",
-                    module,
-                ],
+                ),
             )
         ]
     else:

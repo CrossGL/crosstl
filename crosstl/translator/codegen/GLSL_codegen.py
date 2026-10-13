@@ -9457,7 +9457,13 @@ class GLSLCodeGen:
                 )
 
         escaped_names = set()
+        local_storage_pointer_names = set()
         for node in self.walk_ast(getattr(function, "body", [])):
+            if (
+                isinstance(node, VariableNode)
+                and self.glsl_storage_pointer_element_type(node) is not None
+            ):
+                local_storage_pointer_names.add(node.name)
             if isinstance(node, UnaryOpNode) and self.map_operator(node.op) == "&":
                 escaped_names.update(self.glsl_interval_dependency_names(node.operand))
             elif isinstance(node, VariableNode) and (
@@ -9931,6 +9937,25 @@ class GLSLCodeGen:
             start = loop_intervals.get(init.name)
             dependencies = self.glsl_interval_dependency_names(condition)
             dependencies.discard(init.name)
+            for child in self.walk_ast(node.condition):
+                if isinstance(child, AssignmentNode) or (
+                    isinstance(child, UnaryOpNode)
+                    and unit_increment(child.op) is not None
+                ):
+                    return None
+                if isinstance(child, FunctionCallNode) and (
+                    self.glsl_private_pointer_expression_has_side_effects(child)
+                ):
+                    # A return summary proves effects only for the analyzed
+                    # arguments. They must remain invariant on later calls.
+                    if (
+                        self.glsl_interval_key_sets_overlap(
+                            self.glsl_interval_dependency_names(child),
+                            mutated | escaped_names | {init.name},
+                        )
+                        or checked_integer_interval(child, loop_intervals) is None
+                    ):
+                        return None
             if (
                 domain is None
                 or start is None
@@ -9942,7 +9967,6 @@ class GLSLCodeGen:
                 )
                 or init.name in mutation_interval_keys(node.body)
                 or init.name in self.glsl_interval_dependency_names(condition.right)
-                or self.glsl_private_pointer_expression_has_side_effects(node.condition)
                 or mutation_interval_keys(node.condition)
             ):
                 return None
@@ -10024,9 +10048,15 @@ class GLSLCodeGen:
         def additive_loop_intervals(node, incoming, mutated, count):
             """Bound one unconditional, invariant additive update per iteration."""
             statements = list(getattr(node.body, "statements", node.body) or [])
-            pointer_names = set(
-                getattr(self, "glsl_entry_pointer_parameters", {}).get(id(function), ())
-            ) | set(getattr(function, "_glsl_storage_pointer_aliases", {}))
+            pointer_names = (
+                set(
+                    getattr(self, "glsl_entry_pointer_parameters", {}).get(
+                        id(function), ()
+                    )
+                )
+                | set(getattr(function, "_glsl_storage_pointer_aliases", {}))
+                | local_storage_pointer_names
+            )
             declared = {
                 child.name
                 for child in self.walk_ast(node.body)

@@ -475,6 +475,18 @@ This is a 24/17,832 deterministic translation and native-compiler increment with
 14/17,832 common required numerical entries, not full-tree
 coverage, upstream MLX test-suite execution, or MLX host-runtime redirection.
 
+A separate checked-metadata runtime test covers `argmin_float32` and
+`argmin_uint64` with the existing 16 numerical cases. It uses six upload-validated
+metadata requirements and no trusted index-range assertions. Each dispatch
+observes all seven read-only inputs and checks 32 output guards; Metal also
+compares the unchanged upstream kernel. The input allocation includes space for
+pointer formation by inactive lanes and the terminal pointer update, with
+extremal padding outside the original rows. Row values, strides, tail conditions
+and expected indices are unchanged. Local Metal and Mesa EGL execution pass;
+DirectX execution is required by the existing Windows job, not inferred from
+compiler validation. This checked package path is separate from the legacy
+artifact identities above and does not qualify the full MLX runtime or test suite.
+
 The current OpenGL identities include explicit signed 64-bit remainder,
 source-typed half loads, and bfloat rounding at shuffle and sentinel boundaries.
 All 24 bodies were reviewed against the retained sources and compiled with

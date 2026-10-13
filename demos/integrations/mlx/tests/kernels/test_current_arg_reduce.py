@@ -9,6 +9,7 @@ import struct
 import subprocess
 import tempfile
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,9 @@ from crosstl.project.native_runtime_drivers import (
     _prepare_directx_constants,
     _validate_directx_register_layout,
 )
+from crosstl.translator.dispatch_regions import plan_dispatch_regions
+from tests.runtime_helpers import _validate
+from tests.test_translator.test_loop_updates import _execute
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -973,7 +977,7 @@ def test_arg_reduce_runtime_input_matches_physical_storage(target, dtype):
     assert _runtime_input_type(target, f"argmin_{dtype}") == expected
 
 
-def _runtime_descriptor(translation, work, target, entry):
+def _package_descriptor(translation, work):
     report_path = work / "portability-report.json"
     translation.write_json(report_path)
     artifacts = build_runtime_artifact_manifest(report_path)
@@ -993,6 +997,11 @@ def _runtime_descriptor(translation, work, target, entry):
         loader,
         load_unit_id=loader["loadUnits"][0]["id"],
     )
+    return descriptor, package_dir
+
+
+def _runtime_descriptor(translation, work, target, entry):
+    descriptor, package_dir = _package_descriptor(translation, work)
     assert descriptor["target"] == target
     assert descriptor["entryPoint"]["name"] == (
         "CSMain" if target == "directx" else "main"
@@ -1015,6 +1024,176 @@ def _runtime_descriptor(translation, work, target, entry):
     }
     assert reflected_types == expected_types
     return descriptor, package_dir
+
+
+def _checked_runtime_config(config, target, entry):
+    bounds = {
+        "shape": (2, 2, True),
+        "in_strides": (31, 258, True),
+        "out_strides": (1, 1, True),
+        "ndim": (1, 1, False),
+        "axis_stride": (1, 2, False),
+        "axis_size": (31, 129, False),
+    }
+    conditions = [
+        dict(
+            source=SOURCE,
+            entryPoint=entry,
+            parameter=name,
+            minimum=low,
+            maximum=high,
+            **({"element": 0} if array else {}),
+        )
+        for name, (low, high, array) in bounds.items()
+    ]
+    metal = dict(config.source_options["metal"])
+    if target == "opengl":
+        options = dict(metal["target_options"][target])
+        (region,) = plan_dispatch_regions((32, 2, 1), (32, 1, 1))
+        options["dispatch_region"] = region.to_json()
+        metal["target_options"] = {target: options}
+    metal["preserve_resource_origins"] = True
+    return replace(
+        config,
+        index_range_assertions=(),
+        metadata_preconditions=conditions,
+        source_options={"metal": metal},
+    )
+
+
+@pytest.mark.parametrize("entry", ["argmin_float32", "argmin_uint64"])
+def test_current_arg_reduce_checked_metadata_runtime(
+    current_mlx, metal_reference, tmp_path, entry
+):
+    if os.environ.get(REQUIRE_RUNTIME_ENV) != "1":
+        pytest.skip(
+            "Set CROSTL_REQUIRE_MLX_CURRENT_ARG_REDUCE_RUNTIME for native execution"
+        )
+    root, target = current_mlx
+    with tempfile.TemporaryDirectory(
+        prefix=".checked-arg-reduce-", dir=root
+    ) as directory:
+        work = Path(directory)
+        path = work / "crosstl.toml"
+        path.write_text(_config(f"{work.name}/out", target, entry), encoding="utf-8")
+        config = _checked_runtime_config(load_project_config(root, path), target, entry)
+        assert not config.index_range_assertions
+        translation = translate_project(config, format_output=False)
+        report = translation.to_json()
+        assert report["summary"]["translatedCount"] == 1, report["diagnostics"]
+        assert not report["diagnostics"]
+        assert report["artifacts"][0]["sourceHash"]["value"] == SOURCE_SHA256
+        descriptor, package = _package_descriptor(translation, tmp_path)
+        cases = _integer_cases(entry) if entry in INTEGER_RUNTIME_ENTRIES else _cases()
+        evidence = []
+        for case, parameters, rows, storage in cases:
+            case_dir = tmp_path / case
+            case_dir.mkdir()
+            expected = _expected_indices(entry, rows)
+            dtype = _runtime_input_type(target, entry)
+            # Cover pointer formation by inactive lanes and the final update,
+            # while preserving all original rows and extremal stride padding.
+            limit = parameters["rowStride"] + (
+                (parameters["axisSize"] + 127) // 128 * 128 * parameters["axisStride"]
+            )
+            padding = -math.inf if dtype == "float32" else 0
+            storage = [*storage, *([padding] * max(0, limit + 1 - len(storage)))]
+            encoded = [
+                (
+                    "nan"
+                    if isinstance(value, float) and math.isnan(value)
+                    else (
+                        "+infinity"
+                        if value == math.inf
+                        else "-infinity" if value == -math.inf else value
+                    )
+                )
+                for value in storage
+            ]
+            guard = 0xABCDEF01
+            output = expected + [guard] * 32
+            data = {
+                "in": (dtype, encoded),
+                "out": ("uint32", [guard] * len(output)),
+                "shape": ("int32", [2]),
+                "in_strides": ("int64", [parameters["rowStride"]]),
+                "out_strides": ("int64", [1]),
+                "ndim": ("uint64", [1]),
+                "axis_stride": ("int64", [parameters["axisStride"]]),
+                "axis_size": ("uint64", [parameters["axisSize"]]),
+            }
+            inputs, outputs, observed = {}, {}, []
+            for binding in descriptor["bindings"]:
+                parameter = binding["provenance"]["sourceResource"]["parameter"]
+                element_type, values = data[parameter]
+                inputs[binding["name"]] = dict(
+                    dtype=element_type, shape=[len(values)], values=values
+                )
+                if parameter == "out":
+                    outputs[binding["name"]] = dict(
+                        dtype="uint32", shape=[len(output)], values=output
+                    )
+                else:
+                    observed.append(binding["name"])
+            request = build_native_loader_dispatch_request(
+                descriptor,
+                package,
+                inputs,
+                outputs,
+                dict(workgroupCount=[1, 2, 1], workgroupSize=[32, 1, 1]),
+                observe_inputs=observed,
+            )
+            assert not request.execution_plan.diagnostics
+            _execute(request, outputs, case_dir, validate=_validate)
+            details = json.loads((case_dir / "evidence.json").read_text())["records"][
+                "generated"
+            ]["details"]
+            assert len(details["metadataPreconditions"]) == 6
+            assert len(details["inputObservations"]) == 7
+            assert all(
+                item["unchanged"] for item in details["inputObservations"].values()
+            )
+            reference = None
+            if target == "metal":
+                runner, original = metal_reference
+                packed = struct.pack(
+                    "<" + ("f" if dtype == "float32" else "Q") * len(storage), *storage
+                )
+                original_request = {
+                    **parameters,
+                    "inputBits": list(
+                        struct.unpack("<" + "I" * (len(packed) // 4), packed)
+                    ),
+                }
+                request_path = case_dir / "upstream-input.json"
+                _write_json(request_path, original_request)
+                reference = json.loads(
+                    _run([runner, original, entry, request_path], case_dir, "upstream")
+                )
+                assert reference["threadExecutionWidth"] == 32
+                assert reference["indices"] == expected
+                _write_json(case_dir / "upstream-result.json", reference)
+            evidence.append(
+                dict(
+                    case=case,
+                    expected=expected,
+                    guards=32,
+                    checkedMetadata=6,
+                    observedInputs=7,
+                    upstream=reference,
+                )
+            )
+        _write_json(
+            tmp_path / "checked-parity.json",
+            dict(
+                commit=MLX_COMMIT,
+                entry=entry,
+                target=target,
+                cases=evidence,
+                indexRangeAssertions=[],
+                upstreamMlxTestSuiteExecuted=False,
+            ),
+        )
 
 
 class _RecordingDirectXRuntime(DirectXComputeRuntime):
