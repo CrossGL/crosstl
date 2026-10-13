@@ -12286,8 +12286,11 @@ def test_translate_project_expands_named_variants_with_merged_defines(
     )["defines"] == {"MODE": "base", "USE_FAST_PATH": "1"}
 
 
-def test_translate_project_limits_named_variants_to_selected(tmp_path, monkeypatch):
-    repo = tmp_path / "repo"
+@pytest.mark.parametrize("repo_name", ["repo", "release"])
+def test_translate_project_limits_named_variants_to_selected(
+    tmp_path, monkeypatch, repo_name
+):
+    repo = tmp_path / repo_name
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
     (repo / "crosstl.toml").write_text(
@@ -12422,7 +12425,7 @@ def test_translate_project_limits_named_variants_to_selected(tmp_path, monkeypat
     }
     assert (repo / "translated" / "opengl" / "debug" / "simple.glsl").exists()
     assert not (repo / "translated" / "opengl" / "release" / "simple.glsl").exists()
-    assert "release" not in json.dumps(payload)
+    assert payload["project"]["root"] == str(repo)
 
 
 def test_translate_project_sanitizes_variant_output_segments(tmp_path, monkeypatch):

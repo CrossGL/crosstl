@@ -1335,13 +1335,14 @@ no proof. Unknown callees, ambiguous overloads, recursion, mutable or volatile
 references, captured caller locals and unmodeled effects remain unproved.
 Checked immutable integer-array elements can pass through these helpers without
 becoming unchecked pointer-offset facts. Scalar- and vector-return helpers support
-local scalar/vector assignments and finite ``for`` loops before a final return,
+local scalar/vector assignments, conditional branches and finite ``for`` loops,
 with a maximum of 64 iterations per loop and a shared expression budget. By-value
 parameters have private state; their updates cannot change the caller's facts.
 Ranges include every possible exit. Writes through reference or array parameters,
 constant writes, escaping locals, uncovered elements and division by a possibly
-zero value cannot establish a proof. Early returns and unmodeled control flow
-remain unsupported. Native controls compare expression, local, loop and parameter
+zero value cannot establish a proof. Explicit early returns retain the value and
+private state at each reachable exit; non-void fallthrough and unmodeled control
+flow remain unsupported. Native controls compare expression, local, loop and parameter
 forms with exact indexed readbacks, caller-value observations and untouched guards.
 The pinned reversed one- and four-dimensional copy demos use checked shape,
 stride and offset uploads and a checked OpenGL dispatch region rather than
@@ -1378,9 +1379,17 @@ change the caller's aggregate. A caller loop can summarize one unconditional
 additive field update when its increment is independent of aggregate state.
 Positive counter strides and bounded varying starts are supported when their
 dependencies remain invariant and all terminating updates fit the source types.
-The analysis does not replace helper computations or unroll live loops. Aliased
-references, volatile objects, unknown effects, nonlinear field updates and
-overflow cannot establish a range. Native Metal and OpenGL controls check
+Finite caller loops can also replay source-owned aggregate state within a shared
+work budget, including state-dependent updates, conditional resets and nested
+owned fields. Nested helper calls preserve sibling fields and reject overlapping
+mutable references. Lexically distinct loop counters may reuse a name without
+borrowing each other's facts. Bounds at a repeated occurrence include every
+analyzed iteration; an inner loop is not removed because only its first visit
+has zero iterations. The analysis does not replace helper computations or unroll
+live loops. OpenGL omits a statement after an early return only when no analyzed
+path reaches it; reanalysis discards previous reachability decisions. Aliased
+references, volatile objects, unknown effects and source arithmetic overflow
+cannot establish a range. Native Metal and OpenGL controls check
 per-invocation results, unchanged inputs and output guards; Windows requires
 the same controls through the existing native job.
 
@@ -1417,7 +1426,11 @@ elements, addressed views, forwarding, saved pointers and repeated calls with
 guards and unchanged inputs. DirectX still diagnoses selected pointer-element
 aliases and element reassignment outside its canonical initialization plan.
 This does not qualify the full upstream row-reduction family or its iterator
-state, and does not establish complete repository runtime integration.
+variants, and does not establish complete repository runtime integration. The
+separate checked row demo exercises one unchanged float32 entry with padded
+132-element rows, nested cursor resets, three numerical profiles, output guards
+and unchanged inputs. Metadata uploads and launch geometry are checked before
+dispatch; target compilation alone is not treated as numerical validation.
 
 DirectX mutable storage-pointer array helpers write back their logical offsets
 on both fallthrough and explicit returns. Value returns are evaluated once

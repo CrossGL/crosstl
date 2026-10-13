@@ -271,7 +271,7 @@ def test_loop_does_not_borrow_pointer_facts_for_unstable_or_scalar_binding(
         "reference-bound",
         "volatile-bound",
         "escaped-position",
-        "shadow-counter",
+        "mutated-counter-after-shadow",
         "shadow-position",
         "unknown-stride",
         "stride-overflow",
@@ -300,11 +300,13 @@ def test_unproved_loop_does_not_restore_offset(case):
             loop.body.statements.append(UnaryOpNode("++", IdentifierNode("limit")))
     elif case == "escaped-position":
         function.body.statements.insert(1, UnaryOpNode("&", IdentifierNode("position")))
-    elif case.startswith("shadow-"):
-        name = "i" if case == "shadow-counter" else "position"
+    elif case == "shadow-position" or case == "mutated-counter-after-shadow":
+        name = "i" if case == "mutated-counter-after-shadow" else "position"
         loop.body.statements.insert(
             0, BlockNode([VariableNode(name, "int", _integer(0))])
         )
+        if case == "mutated-counter-after-shadow":
+            loop.body.statements.append(UnaryOpNode("--", IdentifierNode("i")))
     elif case == "unknown-stride":
         loop.body.statements[-1].value = IdentifierNode("unknown")
     elif case == "reused-update":

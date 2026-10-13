@@ -8,11 +8,13 @@ from ..ast import (
     ArrayType,
     AssignmentNode,
     BinaryOpNode,
+    BlockNode,
     ConstructorNode,
     ExpressionStatementNode,
     ForNode,
     FunctionCallNode,
     IdentifierNode,
+    IfNode,
     LiteralNode,
     MemberAccessNode,
     PointerType,
@@ -60,6 +62,12 @@ class _CallResult:
     function: object
 
 
+@dataclass(frozen=True)
+class _Flow:
+    continuing: object
+    returned: list
+
+
 class _ReturnAnalysis:
     def __init__(self, generator, intervals, constants):
         self.generator = generator
@@ -74,6 +82,59 @@ class _ReturnAnalysis:
         if "volatile" in name.split():
             return {}
         return self.generator.glsl_struct_member_types(name)
+
+    def owned_path(self, expression):
+        if isinstance(expression, IdentifierNode):
+            return (expression.name,)
+        if isinstance(expression, MemberAccessNode):
+            owner = self.owned_path(expression.object)
+            if owner is not None:
+                return (*owner, str(expression.member))
+        return None
+
+    def store(self, target, value, bindings, readonly):
+        path = self.owned_path(target)
+        if path is None or path[0] not in bindings or path[0] in readonly:
+            return False
+
+        def replace(owner, members):
+            if not members:
+                return (
+                    self.convert(value, owner.source_type)
+                    if owner is not None
+                    else None
+                )
+            member, *remaining = members
+            if isinstance(owner, _Aggregate):
+                source_type = self.aggregate_fields(owner.source_type).get(member)
+                if source_type is None or "const" in (
+                    getattr(source_type, "qualifiers", ()) or ()
+                ):
+                    return None
+                updated = (
+                    replace(owner.fields.get(member), remaining)
+                    if remaining
+                    else self.convert(value, source_type)
+                )
+                if updated is not None:
+                    return _Aggregate(
+                        owner.source_type, {**owner.fields, member: updated}
+                    )
+            elif isinstance(owner, _Vector) and not remaining:
+                index = self.generator.glsl_index_component_index(member)
+                if index is not None and index < len(owner.components):
+                    updated = self.convert(value, owner.components[index].source_type)
+                    if updated is not None:
+                        components = list(owner.components)
+                        components[index] = updated
+                        return _Vector(owner.source_type, tuple(components))
+            return None
+
+        updated = replace(bindings[path[0]], path[1:])
+        if updated is None:
+            return False
+        bindings[path[0]] = updated
+        return True
 
     def component_type(self, source_type):
         info = self.generator.glsl_value_type_info(source_type)
@@ -514,7 +575,8 @@ class _ReturnAnalysis:
                 ) or "inout" not in generator.glsl_parameter_qualifiers(parameter):
                     continue
                 argument = arguments[index]
-                if not isinstance(argument, IdentifierNode):
+                path = self.owned_path(argument)
+                if path is None:
                     return None
                 for other_index, other in enumerate(function.parameters):
                     if other_index == index:
@@ -526,7 +588,7 @@ class _ReturnAnalysis:
                             arguments[other_index]
                         )
                         if generator.glsl_interval_key_sets_overlap(
-                            {argument.name}, dependencies
+                            {".".join(path)}, dependencies
                         ):
                             return None
         is_void = generator.type_name_string(function.return_type) == "void"
@@ -542,11 +604,7 @@ class _ReturnAnalysis:
         ):
             return None
         statements = generator.glsl_software_subgroup_statement_list(function.body)
-        if (
-            function.body is None
-            or not is_void
-            and (not statements or not isinstance(statements[-1], ReturnNode))
-        ):
+        if function.body is None:
             return None
         # Value parameters and locals belong to this call's frame. References
         # and metadata keep their source identity and remain read-only below.
@@ -632,24 +690,28 @@ class _ReturnAnalysis:
                 )
             )
         active = (*active, id(function))
-        has_return = bool(statements and isinstance(statements[-1], ReturnNode))
-        body = statements[:-1] if has_return else statements
-        if not self.statements(body, bindings, readonly, active):
-            return None
-        if is_void:
-            if has_return and statements[-1].value is not None:
-                return None
-            value = None
-        else:
-            value = self.convert(
-                self.expression(statements[-1].value, bindings, active),
-                function.return_type,
-            )
-            if value is None:
-                return None
-        return _CallResult(
-            value, {index: bindings[name] for index, name in mutable.items()}, function
+        flow = self.execute(
+            statements, bindings, readonly, active, function.return_type
         )
+        if flow is None:
+            return None
+        exits = list(flow.returned)
+        if flow.continuing is not None:
+            if not is_void:
+                return None
+            exits.append((None, flow.continuing))
+        if not exits:
+            return None
+        value = None if is_void else self.join([value for value, _ in exits])
+        if not is_void and value is None:
+            return None
+        updates = {
+            index: self.join([frame[name] for _, frame in exits])
+            for index, name in mutable.items()
+        }
+        if any(value is None for value in updates.values()):
+            return None
+        return _CallResult(value, updates, function)
 
     def truth(self, expression, bindings, active):
         self.remaining -= 1
@@ -741,9 +803,6 @@ class _ReturnAnalysis:
             elif isinstance(statement, FunctionCallNode):
                 if not self.apply_call(statement, bindings, readonly, active):
                     return False
-            elif isinstance(statement, ForNode):
-                if not self.loop(statement, bindings, readonly, active):
-                    return False
             else:
                 if isinstance(statement, UnaryOpNode) and self.generator.map_operator(
                     statement.op
@@ -771,50 +830,108 @@ class _ReturnAnalysis:
                         )
                 else:
                     return False
-                owner = (
-                    target.object if isinstance(target, MemberAccessNode) else target
-                )
-                if (
-                    not isinstance(owner, IdentifierNode)
-                    or owner.name in readonly
-                    or owner.name not in bindings
-                ):
+                if not self.store(target, value, bindings, readonly):
                     return False
-                prior = self.expression(target, bindings, active)
-                aggregate = bindings[owner.name]
-                if isinstance(target, MemberAccessNode) and isinstance(
-                    aggregate, _Aggregate
-                ):
-                    field_type = self.aggregate_fields(aggregate.source_type).get(
-                        str(target.member)
-                    )
-                    value = self.convert(value, field_type)
-                    if value is None:
-                        return False
-                    bindings[owner.name] = _Aggregate(
-                        aggregate.source_type,
-                        {**aggregate.fields, str(target.member): value},
-                    )
-                    continue
-                if not isinstance(prior, (_Value, _Vector, _Aggregate)):
-                    return False
-                value = self.convert(value, prior.source_type)
-                if value is None:
-                    return False
-                if isinstance(target, MemberAccessNode):
-                    vector = bindings[owner.name]
-                    index = self.generator.glsl_index_component_index(target.member)
-                    if (
-                        not isinstance(vector, _Vector)
-                        or index is None
-                        or index >= len(vector.components)
-                    ):
-                        return False
-                    components = list(vector.components)
-                    components[index] = value
-                    value = _Vector(vector.source_type, tuple(components))
-                bindings[owner.name] = value
         return True
+
+    def join_frames(self, names, frames):
+        joined = {
+            name: self.join([frame.get(name) for frame in frames]) for name in names
+        }
+        return joined if all(value is not None for value in joined.values()) else None
+
+    def execute(self, statements, bindings, readonly, active, return_type):
+        readonly = set(readonly)
+        returned = []
+        for statement in statements:
+            if isinstance(statement, (ReturnNode, BlockNode, IfNode, ForNode)):
+                self.remaining -= 1
+                if self.remaining < 0:
+                    return None
+            if isinstance(statement, ReturnNode):
+                if self.generator.type_name_string(return_type) == "void":
+                    if statement.value is not None:
+                        return None
+                    value = None
+                else:
+                    value = self.convert(
+                        self.expression(statement.value, bindings, active), return_type
+                    )
+                    if value is None:
+                        return None
+                returned.append((value, dict(bindings)))
+                return _Flow(None, returned)
+            if isinstance(statement, BlockNode):
+                flow = self.execute(
+                    statement.statements, dict(bindings), readonly, active, return_type
+                )
+            elif isinstance(statement, IfNode):
+                branches = [(statement.condition, statement.if_body)] + list(
+                    zip(
+                        statement.else_if_conditions or (),
+                        statement.else_if_bodies or (),
+                    )
+                )
+                continuing, exits = [], []
+                fallthrough = True
+                for condition, body in branches:
+                    if not fallthrough:
+                        break
+                    truth = self.truth(condition, bindings, active)
+                    if truth is None:
+                        return None
+                    if True in truth:
+                        branch = self.execute(
+                            self.generator.glsl_software_subgroup_statement_list(body),
+                            dict(bindings),
+                            readonly,
+                            active,
+                            return_type,
+                        )
+                        if branch is None:
+                            return None
+                        exits.extend(branch.returned)
+                        if branch.continuing is not None:
+                            continuing.append(branch.continuing)
+                    fallthrough = False in truth
+                if fallthrough:
+                    branch = self.execute(
+                        self.generator.glsl_software_subgroup_statement_list(
+                            statement.else_body
+                        ),
+                        dict(bindings),
+                        readonly,
+                        active,
+                        return_type,
+                    )
+                    if branch is None:
+                        return None
+                    exits.extend(branch.returned)
+                    if branch.continuing is not None:
+                        continuing.append(branch.continuing)
+                joined = self.join_frames(bindings, continuing) if continuing else None
+                if continuing and joined is None:
+                    return None
+                flow = _Flow(joined, exits)
+            elif isinstance(statement, ForNode):
+                flow = self.loop(statement, bindings, readonly, active, return_type)
+            else:
+                if not self.statements([statement], bindings, readonly, active):
+                    return None
+                if (
+                    isinstance(statement, VariableNode)
+                    and "const" in statement.qualifiers
+                ):
+                    readonly.add(statement.name)
+                continue
+            if flow is None:
+                return None
+            returned.extend(flow.returned)
+            if flow.continuing is None:
+                return _Flow(None, returned)
+            for name in bindings:
+                bindings[name] = flow.continuing[name]
+        return _Flow(bindings, returned)
 
     def apply_call(self, expression, bindings, readonly, active):
         arguments = list(expression.arguments or ())
@@ -825,56 +942,58 @@ class _ReturnAnalysis:
         if result is None:
             return False
         owners = [
-            argument.name
+            self.owned_path(argument)
             for argument, value in zip(arguments, values)
-            if isinstance(argument, IdentifierNode) and isinstance(value, _Aggregate)
+            if isinstance(value, _Aggregate)
         ]
-        if len(owners) != len(set(owners)):
+        if any(owner is None for owner in owners) or len(owners) != len(set(owners)):
             return False
-        for index in result.updates:
-            argument = arguments[index]
-            if not isinstance(argument, IdentifierNode) or argument.name in readonly:
-                return False
+        updated = dict(bindings)
         for index, value in result.updates.items():
-            bindings[arguments[index].name] = value
+            if not self.store(arguments[index], value, updated, readonly):
+                return False
+        bindings.update(updated)
         return True
 
-    def loop(self, node, bindings, readonly, active):
+    def loop(self, node, bindings, readonly, active, return_type):
         if (
             not isinstance(node.init, VariableNode)
             or node.condition is None
             or node.update is None
         ):
-            return False
+            return None
         current = dict(bindings)
         if not self.statements([node.init], current, readonly, active):
-            return False
+            return None
         if "const" in node.init.qualifiers:
             readonly = readonly | {node.init.name}
         exits = []
+        returned = []
         for iteration in range(65):
             condition = self.truth(node.condition, current, active)
             if condition is None:
-                return False
+                return None
             if False in condition:
                 exits.append(dict(current))
             if True not in condition:
                 break
             if iteration == 64:
-                return False
+                return None
             frame = dict(current)
             body = self.generator.glsl_software_subgroup_statement_list(node.body)
-            if not self.statements(body, frame, readonly, active):
-                return False
-            current = {name: frame[name] for name in current}
+            flow = self.execute(body, frame, readonly, active, return_type)
+            if flow is None:
+                return None
+            returned.extend(flow.returned)
+            if flow.continuing is None:
+                break
+            current = {name: flow.continuing[name] for name in current}
             if not self.statements([node.update], current, readonly, active):
-                return False
-        for name in bindings:
-            joined = self.join([exit_[name] for exit_ in exits])
-            if joined is None:
-                return False
-            bindings[name] = joined
-        return True
+                return None
+        joined = self.join_frames(bindings, exits) if exits else None
+        if exits and joined is None:
+            return None
+        return _Flow(joined, returned)
 
 
 def _return_value(generator, expression, intervals, constants):

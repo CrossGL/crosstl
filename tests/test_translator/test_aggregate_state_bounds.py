@@ -92,7 +92,8 @@ def test_aggregate_helper_loop_and_nested_updates_keep_callee_ownership():
         "void advance(inout Cursor state, int n) { state.offset += hidden; }",
         "void advance(inout Cursor state, int n) { unknown(state); }",
         "void advance(inout Cursor state, int n) { advance(state, n); }",
-        "void advance(inout Cursor state, int n) { if (n > 0) state.offset += n; }",
+        "void advance(inout Cursor state, int n) { if (n > 0) unknown(state); }",
+        "void advance(inout Cursor state, int n) { if (n > 0) state.offset += hidden; }",
         "void advance(inout Cursor state, int n) { state.offset += 9223372036854775807l; }",
     ],
 )
@@ -120,6 +121,90 @@ def test_aliased_aggregate_parameters_cannot_supply_updates():
             generator,
             _call("advance", "cursor", "cursor"),
             {"cursor.offset": (1, 1)},
+            {},
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "body,step,expected",
+    [
+        ("if (n > 0) state.offset += n;", (2, 2), (3, 3)),
+        ("if (n > 0) state.offset += n;", (-2, -2), (1, 1)),
+        ("if (n > 0) state.offset += n;", (-2, 2), (-1, 3)),
+        ("if (n == 0) return; state.offset += n;", (0, 0), (1, 1)),
+        ("if (n == 0) return; state.offset += n;", (0, 2), (1, 3)),
+        (
+            "if (n > 0) { state.offset += n; return; } state.offset = 7;",
+            (-2, 2),
+            (-1, 7),
+        ),
+        (
+            "if (n < 0) state.offset = 3; else if (n > 0) state.offset = 5; else state.offset = 7;",
+            (-2, 2),
+            (3, 7),
+        ),
+        (
+            "for (int i = 0; i < 3; ++i) { state.offset += 1; if (i == n) return; }",
+            (0, 2),
+            (2, 4),
+        ),
+    ],
+)
+def test_conditional_aggregate_updates_join_every_reachable_exit(body, step, expected):
+    generator = _aggregate_generator(
+        f"void advance(inout Cursor state, int n) {{ {body} }}"
+    )
+    facts = {"cursor.offset": (1, 1), "step": step}
+    assert aggregate_call_intervals(
+        generator, _call("advance", "cursor", "step"), facts, {}
+    ) == {"cursor.offset": expected}
+    assert facts == {"cursor.offset": (1, 1), "step": step}
+
+
+def test_nested_aggregate_updates_preserve_sibling_fields():
+    generator = _aggregate_generator("""
+        void step_inner(inout Inner state, int n) {
+            if (n == 0) return;
+            state.offset += n;
+        }
+        void advance(inout Cursor state, int n) {
+            step_inner(state.inner, n);
+            state.offset = state.inner.offset;
+        }
+    """)
+    generator.struct_member_types["Inner"] = {"offset": "int64", "untouched": "int"}
+    generator.struct_member_types["Cursor"]["inner"] = "Inner"
+    facts = {
+        "cursor.offset": (1, 1),
+        "cursor.inner.offset": (3, 3),
+        "cursor.inner.untouched": (9, 9),
+        "step": (0, 2),
+    }
+    assert aggregate_call_intervals(
+        generator, _call("advance", "cursor", "step"), facts, {}
+    ) == {
+        "cursor.offset": (3, 5),
+        "cursor.inner.offset": (3, 5),
+        "cursor.inner.untouched": (9, 9),
+    }
+
+
+def test_nested_aggregate_reference_alias_cannot_supply_updates():
+    generator = _aggregate_generator("""
+        void conflicting(inout Cursor outer, inout Inner inner) {
+            outer.inner.offset += 1; inner.offset += 2;
+        }
+        void advance(inout Cursor state, int n) { conflicting(state, state.inner); }
+    """)
+    generator.struct_member_types["Inner"] = {"offset": "int64"}
+    generator.struct_member_types["Cursor"]["inner"] = "Inner"
+    assert (
+        aggregate_call_intervals(
+            generator,
+            _call("advance", "cursor", "step"),
+            {"cursor.offset": (1, 1), "cursor.inner.offset": (3, 3), "step": (1, 1)},
             {},
         )
         is None
@@ -198,6 +283,26 @@ CASES = {
     "sequence": ("cursor.next(3); cursor.next(-1);", 2),
     "by-value": ("cursor.next(1); mutate_copy(cursor);", 1),
     "caller-loop": ("for (int i = 0; i < 3; ++i) cursor.next(1);", 3),
+    "state-dependent-loop": (
+        "for (int i = 0; i < 2; ++i) cursor.next(cursor.offset + 1);",
+        3,
+    ),
+    "shadowed-counter": (
+        "for (int i = 0; i < 3; ++i) { for (int i = 0; i < 2; ++i) cursor.next(1); cursor.next(i); }",
+        9,
+    ),
+    "conditional-step": ("cursor.advance(int(tid));", (0, 1, 2, 3)),
+    "conditional-return": ("cursor.choose(int(tid));", (1, 3, 3, 3)),
+    "conditional-loop-return": ("cursor.until(int(tid));", (1, 2, 3, 3)),
+    "nested-carry": (
+        "cursor.inner.dim = 1; for (int i = 0; i < 7; ++i) cursor.carry(2);",
+        6,
+    ),
+    "nested-return": ("for (int i = 0; i < 3; ++i) cursor.carry(2);", 0),
+    "varying-inner-count": (
+        "for (int i = 0; i < 3; ++i) { for (int j = 0; j < i; ++j) cursor.next(1); }",
+        3,
+    ),
     "field-loop": ("for (int i = 0; i < 3; ++i) cursor.offset += 1;", 3),
     "long-loop": ("for (int i = 0; i < 128; ++i) cursor.next(1);", 128),
     "strided-loop": ("for (long i = 1; i < 9; i += 3) cursor.next(2);", 6),
@@ -214,10 +319,26 @@ CASES = {
 def _source(body):
     return f"""#include <metal_stdlib>
 using namespace metal;
+struct InnerCursor {{
+    long offset = 0;
+    int dim = 0;
+    InnerCursor(int) thread {{}}
+    void advance(int n) thread {{ if (dim == 0) return; offset += n; }}
+}};
 struct Cursor {{
     long offset = 0;
+    int index = 0;
+    InnerCursor inner{{0}};
     Cursor(int) thread {{}}
     void next(int n) thread {{ offset += n; }}
+    void advance(int n) thread {{ if (n == 0) return; offset += n; }}
+    void choose(int n) thread {{ if (n == 0) {{ offset = 1; return; }} offset = 3; }}
+    void until(int n) thread {{ for (int i = 0; i < 3; ++i) {{ offset += 1; if (i == n) return; }} }}
+    void carry(int n) thread {{
+        index += 1;
+        offset += n;
+        if (index >= 3) {{ index = 0; inner.advance(n); offset = inner.offset; }}
+    }}
     void repeat(int n) thread {{ for (int i = 0; i < 3; ++i) next(n); }}
     long location() thread {{ return offset; }}
 }};
@@ -257,7 +378,7 @@ def test_private_aggregate_state_survives_project_packages(tmp_path, target, cas
         "cursor.offset = -1;",
         "cursor.offset = 1; thread Cursor& alias = cursor; alias.offset = -1;",
         "for (int i = 0; i < 2; ++i) cursor.next(-1);",
-        "for (int i = 0; i < 2; ++i) cursor.next(cursor.offset + 1);",
+        "for (int i = 0; i < 2; ++i) cursor.next(cursor.offset - 1);",
         "for (int i = 0; i < 2; ++i) { cursor.next(1); cursor.offset = -1; }",
         "int step = 1; for (int i = 0; i < 3; i += step) { cursor.next(1); step = 0; }",
         "for (int i = 2147483646; i < 2147483647; i += 2) cursor.next(1);",

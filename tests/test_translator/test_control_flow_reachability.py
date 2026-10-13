@@ -11,6 +11,7 @@ from crosstl.translator.ast import (
     IdentifierNode,
     IfNode,
     LiteralNode,
+    ReturnNode,
     UnaryOpNode,
     VariableNode,
 )
@@ -22,6 +23,7 @@ from tests.test_translator.test_metadata_index_bounds import (
 )
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_project_metadata_entry_scope import _packages
+from tests.test_translator.test_scalar_return_bounds import _generator
 
 
 def _loop(kind="int", count=0, start=0, operator="<", qualifiers=()):
@@ -182,6 +184,83 @@ def test_reannotation_discards_previous_loop_and_branch_decisions():
     generator.annotate_glsl_control_flow_intervals(function)
     assert not loop._glsl_checked_zero_trip
     assert statement._glsl_checked_static_if == (True, statement.if_body)
+
+
+@pytest.mark.parametrize(
+    "body,facts,unreachable",
+    [
+        ("if (flag == 0) return;", {"flag": (0, 0)}, True),
+        ("if (flag == 0) return;", {"flag": (1, 1)}, False),
+        ("if (flag == 0) return;", {"flag": (0, 1)}, False),
+        ("if (flag == 0) return;", {}, False),
+        ("if (flag == 0) { return; } else { return; }", {}, True),
+        ("{ if (flag == 0) return; }", {"flag": (0, 0)}, True),
+        ("if (flag == 0) return; else if (flag == 1) return;", {"flag": (0, 1)}, True),
+        ("if (flag == 0) return; else if (flag == 1) return;", {"flag": (0, 2)}, False),
+        ("unknown(&flag); if (flag == 0) return;", {"flag": (0, 0)}, False),
+        ("if (++flag == 0) return;", {"flag": (0, 0)}, False),
+        ("for (int i = 0; i < flag; ++i) { return; }", {"flag": (0, 1)}, False),
+    ],
+)
+def test_only_proven_return_paths_remove_the_following_statement(
+    body, facts, unreachable
+):
+    generator = _generator(f"void run(int flag) {{ {body} marker(); }}")
+    function = generator.function_definitions["run"]
+    generator.glsl_workgroup_proof_initial_intervals = lambda _function: dict(facts)
+    generator.annotate_glsl_control_flow_intervals(function)
+    marker = function.body.statements[-1]
+    assert getattr(marker, "_glsl_checked_unreachable", False) is unreachable
+
+
+def test_return_reachability_is_recomputed_for_each_caller_context():
+    generator = _generator("void run(int flag) { if (flag == 0) return; marker(); }")
+    function = generator.function_definitions["run"]
+    for flag in (0, 1, 0, 1):
+        generator.glsl_workgroup_proof_initial_intervals = lambda _function: {
+            "flag": (flag, flag)
+        }
+        generator.annotate_glsl_control_flow_intervals(function)
+        assert function.body.statements[-1]._glsl_checked_unreachable is (flag == 0)
+
+
+def test_a_shared_statement_reached_by_another_branch_is_not_removed():
+    marker = FunctionCallNode(IdentifierNode("marker"), [])
+    branch = IfNode(
+        IdentifierNode("unknown"),
+        BlockNode([ReturnNode(), marker]),
+        BlockNode([marker]),
+    )
+    function = FunctionNode("run", "void", [], BlockNode([branch]))
+    generator = GLSLCodeGen()
+    generator.annotate_glsl_control_flow_intervals(function)
+    assert not marker._glsl_checked_unreachable
+
+
+def test_replayed_inner_loop_is_not_removed_when_later_iterations_execute_it():
+    generator = _generator("""
+        void run(Cursor cursor) {
+            for (int i = 0; i < 3; ++i) {
+                for (int j = 0; j < i; ++j) { cursor.offset += 1; }
+            }
+            cursor.offset;
+        }
+    """)
+    generator.struct_member_types["Cursor"] = {"offset": "int64"}
+    function = generator.function_definitions["run"]
+    generator.glsl_workgroup_proof_initial_intervals = lambda _function: {
+        "cursor.offset": (0, 0)
+    }
+    generator.annotate_glsl_control_flow_intervals(function)
+    loops = [
+        node for node in generator.walk_ast(function.body) if isinstance(node, ForNode)
+    ]
+    assert len(loops) == 2
+    assert all(not node._glsl_checked_zero_trip for node in loops)
+    low, high = function.body.statements[-1]._glsl_control_flow_intervals[
+        "cursor.offset"
+    ]
+    assert 0 <= low <= 3 == high
 
 
 @pytest.mark.parametrize("location", ["condition", "cast", "later-else-if"])

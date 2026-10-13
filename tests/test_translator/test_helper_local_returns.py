@@ -56,6 +56,11 @@ def _bounds(body, facts=None):
             (6, 6),
         ),
         ("uint at = uint(lane); at *= uint(stride); return int(at);", (-6, 0)),
+        ("int at = 0; for (int d = 0; d < 2; ++d) { return 1; } return at;", (1, 1)),
+        ("if (lane == 0) return 7; return lane;", (0, 7)),
+        ("if (lane == 0) return 7; else return 3;", (3, 7)),
+        ("int at = 1; { at += 2; } return at;", (3, 3)),
+        ("for (int d = 0; d < 3; ++d) { if (d == lane) return d; } return 9;", (0, 9)),
     ],
 )
 def test_scalar_local_state_has_source_typed_exit_bounds(body, expected):
@@ -76,7 +81,10 @@ def test_scalar_local_state_has_source_typed_exit_bounds(body, expected):
         "int at = 0; for (int d = 0; d < 2; --d) { at += 1; } return at;",
         "int at = 0; for (int d = 0; d < unknown(lane); ++d) { at += 1; } return at;",
         "int at = 0; for (int d = 0; d < 2; ++d) { break; } return at;",
-        "int at = 0; for (int d = 0; d < 2; ++d) { return 1; } return at;",
+        "if (lane == 0) return 7;",
+        "if (lane == 0) return 7; return unknown(lane);",
+        "const int at = 1; if (lane == 0) at += 1; return at;",
+        "if (lane == 0) return 7; return lane + 2147483647;",
         "int at = lane; at += 2147483647; return at;",
         "int at = lane; at /= 0; return at;",
         "lane += 2147483647; return lane;",
@@ -156,6 +164,10 @@ def test_scalar_helper_vector_parameter_state_stays_inside_callee():
 EXPRESSION = "long(flat / uint(shape[1])) * strides[0] + long(flat % uint(shape[1])) * strides[1]"
 BODIES = {
     "expression": f"return {EXPRESSION};",
+    "early-return": f"if (flat == 0) return 0; return {EXPRESSION};",
+    "loop-return": (
+        f"for (int d = 0; d < 2; ++d) {{ if (d == 0) return {EXPRESSION}; }} return 0;"
+    ),
     "local": f"long at = {EXPRESSION}; return at;",
     "loop": (
         """long at = 0; uint remaining = flat;

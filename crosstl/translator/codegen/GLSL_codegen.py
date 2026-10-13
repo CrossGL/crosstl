@@ -9429,6 +9429,8 @@ class GLSLCodeGen:
         replay_depth = 0
         replay_budget = 4096
         replay_intervals = {}
+        reached_statements = set()
+        unreachable_tails = set()
 
         def pointer_array_extent(expression):
             if not isinstance(expression, IdentifierNode):
@@ -9872,8 +9874,20 @@ class GLSLCodeGen:
                     result.add(f"{argument_name}{key[len(parameter_name) :]}")
             return result
 
-        def mutation_interval_keys(value):
+        def mutation_interval_keys(value, declaration=None):
             mutated = set()
+
+            def relevant(target):
+                if declaration is None:
+                    return True
+                name = lexical["declarations"][declaration]["node"].name
+                return any(
+                    isinstance(child, IdentifierNode)
+                    and child.name == name
+                    and lexical["reference_bindings"].get(id(child))
+                    in {None, declaration}
+                    for child in self.walk_ast(target)
+                )
 
             def collect(node):
                 if node is None or isinstance(node, (str, int, float, bool)):
@@ -9892,7 +9906,8 @@ class GLSLCodeGen:
                         "target",
                         getattr(node, "left", None),
                     )
-                    mutated.update(target_interval_keys(target))
+                    if relevant(target):
+                        mutated.update(target_interval_keys(target))
                 elif isinstance(node, UnaryOpNode) and (
                     self.map_operator(node.op) in {"++", "--"}
                     or node.op in {
@@ -9902,7 +9917,8 @@ class GLSLCodeGen:
                         "POST_DECREMENT",
                     }
                 ):
-                    mutated.update(target_interval_keys(node.operand))
+                    if relevant(node.operand):
+                        mutated.update(target_interval_keys(node.operand))
                 elif isinstance(node, FunctionCallNode):
                     function_name = self.function_call_name(node)
                     candidates = list(
@@ -9912,6 +9928,8 @@ class GLSLCodeGen:
                     if fallback is not None and fallback not in candidates:
                         candidates.append(fallback)
                     for argument_index, argument in enumerate(node.arguments or []):
+                        if not relevant(argument):
+                            continue
                         mutated.update(
                             call_argument_mutation_keys(
                                 function_name,
@@ -9939,15 +9957,20 @@ class GLSLCodeGen:
 
         def visit_sequence(value, intervals):
             if isinstance(value, BlockNode):
-                visit(value, intervals)
-                return
+                return visit(value, intervals)
             statements = getattr(value, "statements", value)
             if not isinstance(statements, (list, tuple)):
                 statements = [statements]
-            for statement in statements:
-                visit(statement, intervals)
+            for index, statement in enumerate(statements):
+                if visit(statement, intervals) is False:
+                    unreachable_tails.update(
+                        id(item) for item in statements[index + 1 :]
+                    )
+                    return False
+            return True
 
         bounded_zero_trip = set()
+        possibly_entered_loops = set()
 
         def bounded_loop_bounds(node, loop_intervals, mutated):
             init, condition, update = node.init, node.condition, node.update
@@ -10069,7 +10092,7 @@ class GLSLCodeGen:
                 or self.glsl_interval_key_sets_overlap(
                     dependencies, mutated | escaped_names | {init.name}
                 )
-                or init.name in mutation_interval_keys(node.body)
+                or init.name in mutation_interval_keys(node.body, id(init))
                 or init.name in self.glsl_interval_dependency_names(condition.right)
                 or mutation_interval_keys(node.condition)
             ):
@@ -10079,7 +10102,7 @@ class GLSLCodeGen:
                 for child in self.walk_ast(node.body)
                 if isinstance(child, (VariableNode, ArrayNode))
             }
-            if declarations & (dependencies | {init.name}):
+            if declarations & dependencies:
                 return None
             bound = checked_integer_interval(condition.right, loop_intervals)
             if bound is None or bound[0] < 0:
@@ -10325,10 +10348,13 @@ class GLSLCodeGen:
                     visit(child, intervals)
                 return
             if isinstance(value, (list, tuple, set)):
-                visit_sequence(list(value), intervals)
-                return
+                return visit_sequence(list(value), intervals)
 
+            reached_statements.add(id(value))
             annotate_expression(value, intervals)
+            if isinstance(value, ReturnNode):
+                visit(value.value, intervals)
+                return False
             if isinstance(value, (VariableNode, ArrayNode)):
                 initial_value = getattr(value, "initial_value", None)
                 visit(initial_value, intervals)
@@ -10652,7 +10678,8 @@ class GLSLCodeGen:
                 shadowed_values = {}
                 block_names = set()
                 statements = list(getattr(value, "statements", []) or [])
-                for statement in statements:
+                continuing = True
+                for index, statement in enumerate(statements):
                     if isinstance(statement, (VariableNode, ArrayNode)):
                         name = getattr(statement, "name", None)
                         if name:
@@ -10660,7 +10687,12 @@ class GLSLCodeGen:
                             for key in outer_keys:
                                 if key == name or key.startswith(f"{name}."):
                                     shadowed_values[key] = block_intervals.get(key)
-                    visit(statement, block_intervals)
+                    if visit(statement, block_intervals) is False:
+                        unreachable_tails.update(
+                            id(item) for item in statements[index + 1 :]
+                        )
+                        continuing = False
+                        break
                 for key in outer_keys:
                     value_after_block = shadowed_values.get(
                         key,
@@ -10674,7 +10706,7 @@ class GLSLCodeGen:
                     owner, separator, _ = key.partition(".[")
                     if separator and owner not in block_names:
                         intervals[key] = bounds
-                return
+                return continuing
             if isinstance(value, IfNode):
                 condition = getattr(
                     value, "condition", getattr(value, "if_condition", None)
@@ -10682,8 +10714,7 @@ class GLSLCodeGen:
                 visit(condition, intervals)
                 static_known, static_body = self.glsl_static_if_body(value)
                 if static_known:
-                    visit_sequence(static_body, intervals)
-                    return
+                    return visit_sequence(static_body, intervals)
                 branch_intervals = []
                 then_intervals = refine_guard(
                     condition,
@@ -10691,8 +10722,8 @@ class GLSLCodeGen:
                     True,
                 )
                 if then_intervals is not None:
-                    visit_sequence(value.if_body, then_intervals)
-                    branch_intervals.append(then_intervals)
+                    if visit_sequence(value.if_body, then_intervals) is not False:
+                        branch_intervals.append(then_intervals)
                 fallthrough_intervals = refine_guard(
                     condition,
                     intervals,
@@ -10711,8 +10742,8 @@ class GLSLCodeGen:
                         True,
                     )
                     if candidate is not None:
-                        visit_sequence(else_if_body, candidate)
-                        branch_intervals.append(candidate)
+                        if visit_sequence(else_if_body, candidate) is not False:
+                            branch_intervals.append(candidate)
                     fallthrough_intervals = refine_guard(
                         else_if_condition,
                         fallthrough_intervals,
@@ -10720,10 +10751,15 @@ class GLSLCodeGen:
                     )
                 if fallthrough_intervals is not None:
                     else_intervals = dict(fallthrough_intervals)
-                    visit_sequence(getattr(value, "else_body", None), else_intervals)
-                    branch_intervals.append(else_intervals)
+                    if (
+                        visit_sequence(
+                            getattr(value, "else_body", None), else_intervals
+                        )
+                        is not False
+                    ):
+                        branch_intervals.append(else_intervals)
                 if not branch_intervals:
-                    return
+                    return False
                 merged = branch_intervals[0]
                 for candidate in branch_intervals[1:]:
                     merged = merge_intervals(merged, candidate)
@@ -10748,6 +10784,19 @@ class GLSLCodeGen:
                 clear_interval_targets(intervals, mutated)
                 return
             if isinstance(value, ForNode):
+                counter_name = getattr(value.init, "name", None)
+                counter_before = {
+                    key: bounds
+                    for key, bounds in intervals.items()
+                    if key == counter_name or key.startswith(f"{counter_name}.")
+                }
+
+                def restore_counter(frame):
+                    if not isinstance(value.init, VariableNode):
+                        return
+                    clear_interval_targets(frame, {counter_name})
+                    frame.update(counter_before)
+
                 loop_intervals = dict(intervals)
                 mutated = mutation_interval_keys(
                     [
@@ -10764,14 +10813,32 @@ class GLSLCodeGen:
                 if count == 0:
                     bounded_zero_trip.add(id(value))
                     return
+                possibly_entered_loops.add(id(value))
                 pointer_array_loop = any(
                     isinstance(child, ArrayAccessNode)
                     and pointer_array_extent(child.array) is not None
                     for child in self.walk_ast(value.body)
                 )
+                aggregate_loop_names = {
+                    child.name
+                    for child in self.walk_ast(value.body)
+                    if isinstance(child, IdentifierNode)
+                    and child.name not in escaped_names
+                    and self.glsl_struct_member_types(
+                        self.type_name_string(stable_lexical_type(child))
+                    )
+                    and any(key.startswith(f"{child.name}.") for key in intervals)
+                }
+                annotate_expression(value.condition, loop_intervals)
                 exact_values = (
-                    self.glsl_storage_pointer_array_loop_iteration_values(value)
-                    if count is not None and pointer_array_loop
+                    self.glsl_storage_pointer_array_loop_iteration_values(
+                        value,
+                        counter_mutated=value.init.name in mutation_interval_keys(
+                            value.body, id(value.init)
+                        ),
+                    )
+                    if count is not None
+                    and (pointer_array_loop or aggregate_loop_names)
                     else None
                 )
                 if (
@@ -10793,13 +10860,14 @@ class GLSLCodeGen:
                             visit(value.update, replay)
                     finally:
                         replay_depth -= 1
+                    restore_counter(replay)
                     for key in list(intervals):
                         if key in replay:
                             intervals[key] = replay[key]
                         else:
                             intervals.pop(key, None)
                     for key, bounds in replay.items():
-                        if ".[" in key:
+                        if ".[" in key or key.partition(".")[0] in aggregate_loop_names:
                             intervals[key] = bounds
                     return
                 entries, exits = (
@@ -10837,7 +10905,13 @@ class GLSLCodeGen:
                     [
                         getattr(value, "condition", None),
                         getattr(value, "body", None),
-                    ]
+                    ],
+                    (
+                        id(value.init)
+                        if isinstance(value.init, VariableNode)
+                        and value.init.name == loop_name
+                        else None
+                    ),
                 ):
                     loop_interval = None
                 if loop_name:
@@ -10852,6 +10926,7 @@ class GLSLCodeGen:
                     visit(getattr(value, "update", None), guarded)
                 clear_interval_targets(intervals, mutated)
                 intervals.update(exits)
+                restore_counter(intervals)
                 return
             if isinstance(value, ForInNode):
                 loop_intervals = dict(intervals)
@@ -10921,12 +10996,18 @@ class GLSLCodeGen:
             self.glsl_workgroup_proof_initial_intervals(function),
         )
         for node in self.walk_ast(getattr(function, "body", [])):
-            if isinstance(node, ForNode):
-                node._glsl_checked_zero_trip = id(
-                    node
-                ) in bounded_zero_trip or self.glsl_control_flow_zero_trip_for(
-                    node, lexical
+            # Replayed nodes are unreachable only if no iteration reaches them.
+            if id(node) in unreachable_tails or hasattr(
+                node, "_glsl_checked_unreachable"
+            ):
+                node._glsl_checked_unreachable = (
+                    id(node) in unreachable_tails and id(node) not in reached_statements
                 )
+            if isinstance(node, ForNode):
+                node._glsl_checked_zero_trip = (
+                    id(node) in bounded_zero_trip
+                    and id(node) not in possibly_entered_loops
+                ) or self.glsl_control_flow_zero_trip_for(node, lexical)
             elif isinstance(node, IfNode):
                 node._glsl_checked_static_if = self.glsl_control_flow_static_if_body(
                     node, lexical
@@ -23173,6 +23254,8 @@ class GLSLCodeGen:
 
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL AST statement as GLSL source."""
+        if getattr(stmt, "_glsl_checked_unreachable", False):
+            return ""
         indent_str = "    " * indent
 
         if isinstance(stmt, VariableNode):
@@ -24739,13 +24822,15 @@ class GLSLCodeGen:
             }
         return None
 
-    def glsl_storage_pointer_array_loop_iteration_values(self, node):
+    def glsl_storage_pointer_array_loop_iteration_values(
+        self, node, *, counter_mutated=None
+    ):
         """Return exact values for a bounded side-effect-free unit-step loop."""
 
         init = getattr(node, "init", None)
         loop_name = getattr(init, "name", None)
         initial_value = getattr(init, "initial_value", None)
-        if not loop_name or initial_value is None:
+        if not loop_name or initial_value is None or counter_mutated:
             return None
         constants = self.glsl_active_literal_int_constants()
         initial_intervals = dict(
@@ -24803,18 +24888,25 @@ class GLSLCodeGen:
         for child in self.walk_ast(getattr(node, "body", None)):
             if isinstance(child, (BreakNode, ContinueNode, ReturnNode)):
                 return None
-            if isinstance(child, (VariableNode, ArrayNode)) and (
-                getattr(child, "name", None) == loop_name
+            if (
+                counter_mutated is None
+                and isinstance(child, (VariableNode, ArrayNode))
+                and (getattr(child, "name", None) == loop_name)
             ):
                 return None
-            if isinstance(child, AssignmentNode):
+            if counter_mutated is None and isinstance(child, AssignmentNode):
                 target = getattr(child, "target", getattr(child, "left", None))
                 if self.expression_name(target) == loop_name:
                     return None
-            if isinstance(child, UnaryOpNode) and self.map_operator(child.op) in {
-                "++",
-                "--",
-            }:
+            if (
+                counter_mutated is None
+                and isinstance(child, UnaryOpNode)
+                and self.map_operator(child.op)
+                in {
+                    "++",
+                    "--",
+                }
+            ):
                 if self.expression_name(child.operand) == loop_name:
                     return None
 
@@ -24828,8 +24920,10 @@ class GLSLCodeGen:
         if predicate is None:
             return None
         body = getattr(node, "body", None)
-        body_mutations = self.glsl_function_mutated_interval_names(
-            SimpleNamespace(body=body)
+        body_mutations = (
+            self.glsl_function_mutated_interval_names(SimpleNamespace(body=body))
+            if counter_mutated is None
+            else set()
         )
         if loop_name in body_mutations:
             # Exact iteration replay is only sound while the loop controller is

@@ -216,7 +216,7 @@ def test_counter_entry_bounds_preserve_the_initial_value(condition, expected, st
         ("int& alias = offset;", "offset + i < size", "", "++i"),
         ("", "offset + i < size", "unknown(offset);", "++i"),
         ("", "offset + i < size", "{ int offset = 0; }", "++i"),
-        ("", "offset + i < size", "{ int i = 0; }", "++i"),
+        ("", "offset + i < size", "{ int i = 0; } i = 0;", "++i"),
         ("", "offset + i < size", "", "--i"),
         ("", "offset + i < size || i < 30", "", "++i"),
         ("", "offset + i < size++", "", "++i"),
@@ -229,6 +229,15 @@ def test_counter_proof_rejects_unstable_dependencies(prefix, condition, body, up
         {"offset": (0, 22), "size": (23, 23)},
     ).get("i")
     assert bounds is None or bounds[0] < 0
+
+
+def test_counter_proof_distinguishes_a_nested_shadow_binding():
+    bounds = _analyze(
+        "void run(int64_t offset, int64_t size) { "
+        "for (int i = 0; offset + i < size; ++i) { i; { int i = 0; ++i; } } }",
+        {"offset": (0, 22), "size": (23, 23)},
+    )["i"]
+    assert bounds == (0, 22)
 
 
 @pytest.mark.parametrize(

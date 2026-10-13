@@ -508,6 +508,19 @@ target compilation and retained packages, descriptors and execution records.
 Local Metal and software OpenGL runs pass these cases; Windows execution must
 pass its separate CI gate.
 
+`tests/kernels/test_checked_rows.py` exercises the unchanged
+`row_reduce_looped_large_5_reduce_sumfloat32` entry at the current pin. It checks
+two outputs over three padded 132-element rows per output, with constant,
+signed and binary-fraction inputs. Nested cursor resets, early returns and
+partial row reads retain source-owned bounds through pointer-array helpers.
+Eight upload-checked metadata requirements and the checked launch geometry
+replace trusted index assertions. Each profile checks 32 output guards and
+nine unchanged inputs. Local Metal and software OpenGL execution match the
+independent reference; Metal also matches the original upstream registration.
+The existing platform jobs require these same numerical cases, including
+Windows execution. This covers one float32 entry and geometry, not the complete
+row-reduction family, host routing or upstream test suite.
+
 The Metal reference wrapper selects the same registration macro and includes
 the unchanged upstream implementation. It does not rewrite the kernel body.
 Only the original-header compilation suppresses the C++17-extension warning
