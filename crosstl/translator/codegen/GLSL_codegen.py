@@ -366,6 +366,7 @@ from .resource_arrays import (
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
 )
+from .scalar_return_bounds import scalar_return_interval
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -9410,6 +9411,12 @@ class GLSLCodeGen:
             if any(
                 isinstance(node, BinaryOpNode)
                 and self.map_operator(node.op) in {"<<", ">>"}
+                or isinstance(node, FunctionCallNode)
+                and (
+                    self.function_call_name(node) in self.function_definitions
+                    or self.function_call_name(node)
+                    in self.glsl_function_overloads_by_name
+                )
                 for node in nodes
             ):
                 for node in nodes:
@@ -39561,6 +39568,14 @@ complex64_t crossgl_complex64_mod_assign(
         if not intervals:
             return None
 
+        returned_interval = scalar_return_interval(
+            self, expression, intervals, self.glsl_active_literal_int_constants()
+        )
+        if returned_interval is not None:
+            return IntegerRange(
+                *returned_interval, INDEX_RANGE_STATIC, "source-typed helper return"
+            )
+
         element_interval = self.glsl_metadata_element_interval(
             expression, intervals, self.glsl_active_literal_int_constants()
         )
@@ -47978,97 +47993,9 @@ complex64_t crossgl_complex64_mod_assign(
         return function_name, arguments
 
     def glsl_constant_return_integer_interval(self, expression, constants):
-        """Summarize a provably constant, single-return integer helper call.
-
-        This deliberately uses function bodies and source signatures rather than
-        sanitized specialization names. Ambiguous overloads are accepted only
-        when every same-arity candidate independently proves the same value.
-        """
-        if not isinstance(expression, FunctionCallNode):
-            return None
-        function_name = self.function_call_name(expression)
-        arguments = list(
-            getattr(
-                expression,
-                "arguments",
-                getattr(expression, "args", []),
-            )
-            or []
-        )
-        candidates = [
-            function
-            for function in self.glsl_function_overloads_by_name.get(function_name, ())
-            if len(
-                getattr(function, "parameters", getattr(function, "params", [])) or []
-            )
-            == len(arguments)
-        ]
-        fallback = self.function_definitions.get(function_name)
-        if fallback is not None and len(
-            getattr(fallback, "parameters", getattr(fallback, "params", [])) or []
-        ) == len(arguments):
-            candidates.append(fallback)
-        if not candidates:
-            return None
-
-        unique_candidates = {}
-        for function in candidates:
-            source_key = self.glsl_source_function_signature(function)
-            previous = unique_candidates.get(source_key)
-            if previous is None or (
-                getattr(previous, "body", None) is None
-                and getattr(function, "body", None) is not None
-            ):
-                unique_candidates[source_key] = function
-        candidates = list(unique_candidates.values())
-        if len(candidates) > 1:
-            try:
-                resolved = self.resolve_glsl_function_overload(
-                    function_name,
-                    arguments,
-                    call_node=expression,
-                )
-            except OpenGLMappedOverloadError:
-                resolved = None
-            if resolved is not None:
-                candidates = [resolved]
-
-        values = set()
-        for function in candidates:
-            return_type = self.glsl_value_type_info(
-                self.type_name_string(getattr(function, "return_type", None))
-            )
-            if (
-                return_type is None
-                or return_type["family"] not in {"int", "uint"}
-                or return_type["width"] != 1
-            ):
-                return None
-            statements = self.glsl_software_subgroup_statement_list(
-                getattr(function, "body", None)
-            )
-            if len(statements) != 1 or not isinstance(statements[0], ReturnNode):
-                return None
-            parameters = (
-                getattr(function, "parameters", getattr(function, "params", [])) or []
-            )
-            bound_constants = dict(constants or {})
-            for parameter, argument in zip(parameters, arguments):
-                value = evaluate_literal_int_expression(argument, constants)
-                parameter_name = getattr(parameter, "name", None)
-                if parameter_name and value is not None:
-                    bound_constants[parameter_name] = value
-            value = evaluate_literal_int_expression(
-                getattr(statements[0], "value", None),
-                bound_constants,
-            )
-            if value is None:
-                return None
-            values.add(int(value))
-        if len(values) != 1:
-            return None
-        value = next(iter(values))
-        return value, value
+        """Summarize constants using the same source-typed helper contract."""
+        result = scalar_return_interval(self, expression, {}, constants)
+        return result if result is not None and result[0] == result[1] else None
 
     def glsl_private_pointer_affine_interval(self, expression, intervals, constants):
         if expression is None:
@@ -48240,6 +48167,11 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_private_pointer_interval(self, expression, intervals, constants):
         if expression is None:
             return None
+        returned_interval = scalar_return_interval(
+            self, expression, intervals, constants
+        )
+        if returned_interval is not None:
+            return returned_interval
         element_interval = self.glsl_metadata_element_interval(
             expression, intervals, constants
         )

@@ -3259,6 +3259,15 @@ readbacks. The HLSL corpus gate checks the physical `uint16_t` half-buffer layou
 and logical binary16 metadata explicitly; this does not accept unreviewed
 artifact identities or claim complete copy-conversion numerical coverage.
 
+The reversed one-dimensional float32 copy now supplies checked integer metadata
+for both strides and offsets. OpenGL additionally uses a checked dispatch region;
+the fixture no longer trusts assertions about the final index expressions.
+Source-typed scalar helper summaries retain negative strides through unsigned
+arithmetic and signed return conversion. Native checks retain all 17 copied
+values, 32 tail guards and five immutable input observations, with original
+Metal comparison on macOS. This does not establish multidimensional helper
+summaries, unrestricted layouts or complete host-runtime copy routing.
+
 The focused `prove_layer_norm_directx.py` gate translates two host-selected
 single-row entries from the pinned `layer_norm.metal` source: forward float32
 with axis size 4099 and VJP float32 with axis size 8192 and `has_w=true`. It

@@ -1258,6 +1258,17 @@ for that pointer; composed offsets still undergo overflow and scope checks.
 Local-name allocation keeps emitted resource aliases reserved, including when
 a local uses the preferred escaped spelling or shadows another local in a block.
 
+Pure scalar helpers with one return expression can retain checked caller ranges
+through nested calls, integer casts, addition, subtraction and multiplication.
+Analysis uses source overloads, parameter conversions and return conversions;
+each callee has its own bindings. Fixed-width unsigned wrapping is represented
+before signed conversion, while possible signed arithmetic overflow establishes
+no proof. Unknown callees, ambiguous overloads, recursion, mutable or volatile
+references, captured caller locals and unmodeled effects remain unproved. This
+does not yet summarize helper loops, vector returns or forwarded array pointers.
+The pinned reversed one-dimensional copy demo uses checked stride/offset uploads
+and a checked OpenGL dispatch region rather than trusted index assertions.
+
 Bounded increasing loops retain conservative ranges for a single additive scalar
 or storage-pointer update in the loop body. The iteration bound and stride must
 remain invariant, the counter's terminating increment must fit its source type,

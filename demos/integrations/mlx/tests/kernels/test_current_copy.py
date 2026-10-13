@@ -9,15 +9,18 @@ import shutil
 import struct
 import subprocess
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from crosstl.project import (
+    ProjectConfig,
     build_native_loader_dispatch_request,
     load_project_config,
     translate_project,
 )
+from crosstl.translator.dispatch_regions import plan_dispatch_regions
 from demos.integrations.mlx.portable_host import bfloat_storage
 from demos.integrations.mlx.portable_host.runtime import boolean_values, physical_dtype
 from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
@@ -153,21 +156,33 @@ def _check(actual, expected):
     assert _bytes("float32", actual[-32:]) == struct.pack("<32I", *([0x6A15BEEF] * 32))
 
 
-def _index_contracts(target, workload):
-    if target != "opengl" or not workload["entry"].startswith("gg1_dynamic_copy"):
-        return ""
-    # Only final addresses are bounded; signed stride intermediates may be negative.
-    return "".join(
-        f"""[[project.index_range_assertions]]
-source = "{SOURCE}"
-expression = "{expression}"
-minimum = {min(indices)}
-maximum = {max(indices)}
-"""
-        for expression, indices in (
-            ("src_idx + src_offset", workload["offsets"]),
-            ("dst_idx + dst_offset", workload["destinations"]),
+def _checked_copy_config(config, workload):
+    if not workload["entry"].startswith("gg1_dynamic_copy"):
+        return config
+    requirements = [
+        dict(
+            source=SOURCE,
+            entryPoint=workload["entry"],
+            parameter=name,
+            minimum=values[0],
+            maximum=values[0],
         )
+        for name, (_, values, _) in workload["constants"].items()
+    ]
+    metal = dict(config.source_options.get("metal", {}))
+    metal["preserve_resource_origins"] = True
+    if "opengl" in config.targets:
+        (region,) = plan_dispatch_regions(workload["grid"], (1, 1, 1))
+        targets = dict(metal.get("target_options", {}))
+        targets["opengl"] = {
+            **targets.get("opengl", {}),
+            "dispatch_region": region.to_json(),
+        }
+        metal["target_options"] = targets
+    return replace(
+        config,
+        metadata_preconditions=requirements,
+        source_options={**config.source_options, "metal": metal},
     )
 
 
@@ -203,14 +218,25 @@ def test_copy_readback_rejects_corruption(fault):
         _check(actual, expected)
 
 
-def test_copy_index_contracts_cover_only_final_bounded_addresses():
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+def test_copy_contracts_bind_uploaded_metadata_and_launch(tmp_path, target):
     workload = _workload("reverse-1d")
-    contract = _index_contracts("opengl", workload)
-    assert "minimum = 6\nmaximum = 38" in contract
-    assert "minimum = 3\nmaximum = 35" in contract
-    assert contract.count("[[project.index_range_assertions]]") == 2
-    assert _index_contracts("directx", workload) == ""
-    assert _index_contracts("opengl", _workload("stride")) == ""
+    original = ProjectConfig(root=tmp_path, targets=(target,))
+    config = _checked_copy_config(original, workload)
+    assert not config.index_range_assertions
+    assert len(config.metadata_preconditions) == 4
+    assert {
+        item.parameter: (item.minimum, item.maximum)
+        for item in config.metadata_preconditions
+    } == {
+        "src_stride": (-2, -2),
+        "dst_stride": (2, 2),
+        "src_offset": (38, 38),
+        "dst_offset": (3, 3),
+    }
+    assert config.source_options["metal"]["preserve_resource_origins"] is True
+    assert ("target_options" in config.source_options["metal"]) is (target == "opengl")
+    assert _checked_copy_config(original, _workload("stride")) is original
 
 
 @pytest.mark.parametrize("job", ["portable-host", "metal-host", "mlx-metal-porting"])
@@ -385,9 +411,11 @@ output_dir = "{work.name}/out"
 "{SOURCE}" = "{entry}"
 [project.entry_workgroup_size_rules."{SOURCE}"]
 "{entry}" = [1, 1, 1]
-{_index_contracts(target, workload)}
 """)
-    report = translate_project(load_project_config(root, config), format_output=False)
+    report = translate_project(
+        _checked_copy_config(load_project_config(root, config), workload),
+        format_output=False,
+    )
     report.write_json(work / "report.json")
     payload = report.to_json()
     assert payload["summary"]["failedCount"] == 0, payload["diagnostics"]
@@ -454,6 +482,11 @@ def test_current_copy_native_parity(current_copy_source, copy_executor, tmp_path
                 outputs,
                 {"workgroupCount": workload["grid"], "workgroupSize": [1, 1, 1]},
                 expected_target=target,
+                observe_inputs=[
+                    item["name"]
+                    for item in descriptor["bindings"]
+                    if item["access"] == "read" and item["name"] in inputs
+                ],
             )
             assert not request.execution_plan.diagnostics
             availability = copy_executor.is_available(request)
@@ -470,6 +503,13 @@ def test_current_copy_native_parity(current_copy_source, copy_executor, tmp_path
                 )
             )
             assert result.status == "ok"
+            if workload["entry"].startswith("gg1_dynamic_copy"):
+                assert len(result.details["metadataPreconditions"]) == 4
+                assert len(result.details["inputObservations"]) == 5
+                assert all(
+                    item["unchanged"]
+                    for item in result.details["inputObservations"].values()
+                )
             output = result.outputs[output_name]
             assert output["dtype"] == "float32" and output["shape"] == [
                 len(workload["expected"])
