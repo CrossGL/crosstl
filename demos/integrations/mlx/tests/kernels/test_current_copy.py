@@ -54,6 +54,8 @@ FORMATS = {
 CASES = {
     "vector": ("v_copy", [17], [1]),
     "scalar": ("s_copy", [17], [0]),
+    "scalar-tiled-tail": ("s2_copy", [23], [0]),
+    "vector-tiled-tail": ("v2_copy", [23], [1]),
     "stride": ("g1_copy", [17], [3]),
     "broadcast-1d": ("g1_copy", [17], [0]),
     "transpose": ("g2_copy", [5, 7], [1, 5]),
@@ -77,6 +79,14 @@ DYNAMIC_LAYOUTS = {
     "tight-reverse-wide-4d": (67, 4, [151, 43, 9, -1]),
 }
 TILE_WIDTHS = {"gn2_copy": 2, "ggn2_dynamic_copy": 2, "ggn4large_dynamic_copy": 4}
+FLAT_TILED_PREFIXES = {"s2_copy", "v2_copy"}
+CHECKED_PREFIXES = (
+    "gg1_dynamic_copy",
+    "ggn2_dynamic_copy",
+    "ggn4large_dynamic_copy",
+    "s2_copy",
+    "v2_copy",
+)
 
 
 def _bytes(dtype, values):
@@ -85,7 +95,7 @@ def _bytes(dtype, values):
 
 def _workload(case):
     prefix, shape, strides = CASES[case]
-    tile_width = TILE_WIDTHS.get(prefix, 1)
+    tile_width = 2 if prefix in FLAT_TILED_PREFIXES else TILE_WIDTHS.get(prefix, 1)
     count = math.prod(shape)
     source_offset, destination_offset, destination_strides = DYNAMIC_LAYOUTS.get(
         case, (0, 0, None)
@@ -119,9 +129,11 @@ def _workload(case):
             math.prod(shape[:-2]),
         ]
     )
+    if prefix in FLAT_TILED_PREFIXES:
+        grid = [3, 4, 1]
     constants = (
-        {"size": ("uint32", [count], 2)}
-        if prefix in {"v_copy", "s_copy"}
+        {"size": ("int64" if prefix in FLAT_TILED_PREFIXES else "uint32", [count], 2)}
+        if prefix in {"v_copy", "s_copy"} | FLAT_TILED_PREFIXES
         else (
             {"src_stride": ("int64", strides, 3)}
             if prefix in {"g1_copy", "gg1_dynamic_copy"}
@@ -168,9 +180,7 @@ def _check(actual, expected):
 
 
 def _checked_copy_config(config, workload):
-    if not workload["entry"].startswith(
-        ("gg1_dynamic_copy", "ggn2_dynamic_copy", "ggn4large_dynamic_copy")
-    ):
+    if not workload["entry"].startswith(CHECKED_PREFIXES):
         return config
     requirements = [
         dict(
@@ -219,6 +229,11 @@ def test_copy_workload_covers_logical_coordinates(case):
     if case.startswith("tight-reverse"):
         assert min(workload["offsets"]) == 0
         assert min(workload["destinations"]) == 0
+    if case.endswith("tiled-tail"):
+        assert workload["grid"] == [3, 4, 1]
+        assert workload["tileWidth"] == 2
+        assert workload["shape"] == [23]
+        assert len(workload["source"]) == (1 if case.startswith("scalar") else 23)
 
 
 @pytest.mark.parametrize("fault", ["value", "missing", "guard", "zero-sign"])
@@ -239,14 +254,16 @@ def test_copy_readback_rejects_corruption(fault):
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
 @pytest.mark.parametrize(
-    "case", ("reverse-1d", "reverse-4d", "tight-reverse-4d", "tight-reverse-wide-4d")
+    "case", (*DYNAMIC_LAYOUTS, "scalar-tiled-tail", "vector-tiled-tail")
 )
 def test_copy_contracts_bind_uploaded_metadata_and_launch(tmp_path, target, case):
     workload = _workload(case)
     original = ProjectConfig(root=tmp_path, targets=(target,))
     config = _checked_copy_config(original, workload)
     assert not config.index_range_assertions
-    assert len(config.metadata_preconditions) == (4 if case == "reverse-1d" else 15)
+    assert len(config.metadata_preconditions) == (
+        1 if case.endswith("tiled-tail") else 4 if case == "reverse-1d" else 15
+    )
     assert {
         (item.parameter, item.element): (item.minimum, item.maximum)
         for item in config.metadata_preconditions
@@ -296,7 +313,7 @@ def test_ci_requires_native_copy_parity(job):
     assert upload_path in upload
     assert "if-no-files-found: error" in upload
     assert "retention-days: 14" in upload
-    assert len({item[0] for item in CASES.values()}) == 9
+    assert len({item[0] for item in CASES.values()}) == 11
 
 
 @pytest.fixture(scope="module")
@@ -524,7 +541,7 @@ def test_current_copy_native_parity(current_copy_source, copy_executor, tmp_path
                 )
             )
             assert result.status == "ok"
-            if case in DYNAMIC_LAYOUTS:
+            if entry.startswith(CHECKED_PREFIXES):
                 assert len(result.details["metadataPreconditions"]) == sum(
                     len(values) for _, values, _ in workload["constants"].values()
                 )

@@ -3287,6 +3287,18 @@ Metal with the same 120 values, untouched holes and 32 tail guards. This adds a
 wide-index entry to the existing OS jobs, not full copy-conversion or host-routing
 coverage. No upstream source changes or padding workarounds are used.
 
+The scalar and vector two-dimensional copies also cover the unchanged
+`s2_copyfloat32float32` and `v2_copyfloat32float32` entries with 23 output values,
+a `[3, 4, 1]` launch and a partial final two-element tile. The source allocations
+contain one scalar or 23 vector elements, respectively; 32 output guards remain
+outside the logical result. The fixtures check the uploaded 64-bit size and
+read-only inputs, including bitwise preservation of negative zero. The OpenGL
+analysis retains the counter's initial value under affine tail conditions and
+checks source arithmetic through the terminating update. An upper trip bound
+is not treated as an exact iteration sequence for pointer rebasing. These cases
+extend the existing native jobs without changing upstream kernels or claiming
+complete copy-conversion coverage.
+
 The focused `prove_layer_norm_directx.py` gate translates two host-selected
 single-row entries from the pinned `layer_norm.metal` source: forward float32
 with axis size 4099 and VJP float32 with axis size 8192 and `has_w=true`. It

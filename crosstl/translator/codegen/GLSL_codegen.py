@@ -9484,14 +9484,27 @@ class GLSLCodeGen:
                 str(qualifier).lower()
                 for qualifier in getattr(binding["node"], "qualifiers", ()) or ()
             }
-            type_name = self.type_name_string(binding["source_type"]) or ""
+            source_type = binding["source_type"]
+            metadata = getattr(self, "glsl_metadata_entry_bounds", {}).get(
+                id(function), {}
+            )
+            if (
+                owner.name in metadata
+                and any(
+                    binding["node"] is parameter for parameter in function.parameters
+                )
+                and getattr(source_type, "referenced_type", None) is not None
+            ):
+                # These source-owned immutable scalar references have already
+                # passed metadata validation; their loaded values are integers.
+                source_type = source_type.referenced_type
+            type_name = self.type_name_string(source_type) or ""
             if (
                 "&" in type_name
                 or "volatile" in type_name.replace("*", " ").split()
                 or qualifiers.intersection({"volatile", "out", "inout"})
             ):
                 return None
-            source_type = binding["source_type"]
             if isinstance(expression, MemberAccessNode):
                 component = self.glsl_index_component_index(expression.member)
                 info = self.glsl_value_type_info(source_type)
@@ -9842,6 +9855,31 @@ class GLSLCodeGen:
             init, condition, update = node.init, node.condition, node.update
             if not isinstance(init, VariableNode):
                 return None
+
+            def counter_operand(expression):
+                if (
+                    isinstance(expression, IdentifierNode)
+                    and expression.name == init.name
+                ):
+                    return expression
+                if (
+                    isinstance(expression, BinaryOpNode)
+                    and self.map_operator(expression.op) == "+"
+                ):
+                    for counter, offset in (
+                        (expression.left, expression.right),
+                        (expression.right, expression.left),
+                    ):
+                        if (
+                            isinstance(counter, IdentifierNode)
+                            and counter.name == init.name
+                            and init.name not in self.glsl_interval_dependency_names(
+                                offset
+                            )
+                        ):
+                            return counter
+                return None
+
             conditions = [condition]
             for candidate in conditions:
                 if (
@@ -9860,12 +9898,23 @@ class GLSLCodeGen:
                 ),
                 None,
             )
+            if condition is None:
+                condition = next(
+                    (
+                        candidate
+                        for candidate in conditions
+                        if isinstance(candidate, BinaryOpNode)
+                        and self.map_operator(candidate.op) in {"<", "<="}
+                        and counter_operand(candidate.left) is not None
+                    ),
+                    None,
+                )
+            counter = counter_operand(condition.left) if condition is not None else None
             if (
                 not isinstance(init, VariableNode)
                 or getattr(init, "qualifiers", None)
                 or not isinstance(condition, BinaryOpNode)
-                or not isinstance(condition.left, IdentifierNode)
-                or condition.left.name != init.name
+                or counter is None
                 or self.map_operator(condition.op) not in {"<", "<="}
                 or not isinstance(update, UnaryOpNode)
                 or not isinstance(update.operand, IdentifierNode)
@@ -9878,9 +9927,10 @@ class GLSLCodeGen:
                 or mutation_interval_keys(init.initial_value)
             ):
                 return None
-            domain = lexical_integer_domain(condition.left)
+            domain = lexical_integer_domain(counter)
             start = loop_intervals.get(init.name)
-            dependencies = self.glsl_interval_dependency_names(condition.right)
+            dependencies = self.glsl_interval_dependency_names(condition)
+            dependencies.discard(init.name)
             if (
                 domain is None
                 or start is None
@@ -9891,6 +9941,7 @@ class GLSLCodeGen:
                     dependencies, mutated | escaped_names | {init.name}
                 )
                 or init.name in mutation_interval_keys(node.body)
+                or init.name in self.glsl_interval_dependency_names(condition.right)
                 or self.glsl_private_pointer_expression_has_side_effects(node.condition)
                 or mutation_interval_keys(node.condition)
             ):
@@ -9905,10 +9956,69 @@ class GLSLCodeGen:
             bound = checked_integer_interval(condition.right, loop_intervals)
             if bound is None or bound[0] < 0:
                 return None
+            initial_left = checked_integer_interval(condition.left, loop_intervals)
+            if initial_left is None:
+                return None
             inclusive = self.map_operator(condition.op) == "<="
-            count = max(0, bound[1] - start[0] + int(inclusive))
+            count = max(0, bound[1] - initial_left[0] + int(inclusive))
             if start[0] + count > domain.maximum:
                 return None
+            if condition.left is not counter:
+                for call in self.walk_ast(node.body):
+                    if not isinstance(call, FunctionCallNode):
+                        continue
+                    name = self.function_call_name(call)
+                    if (
+                        not self.glsl_side_effect_free_expression(call)
+                        and name not in self.function_definitions
+                        and name not in self.glsl_function_overloads_by_name
+                        and not (
+                            name in {"buffer_load", "buffer_store"}
+                            and name not in self.function_return_types
+                        )
+                    ):
+                        return None
+                # Include the terminal condition evaluation. Source additions and
+                # usual arithmetic conversions must preserve these integer values.
+                frame = {**loop_intervals, init.name: (start[0], start[0] + count)}
+                source_types = {}
+                for child in self.walk_ast(condition):
+                    if isinstance(child, IdentifierNode):
+                        source_type = stable_lexical_type(child)
+                        if source_type is not None:
+                            source_types[child.name] = source_type
+                with self.glsl_lexical_source_type_scope(source_types):
+                    for expression in self.walk_ast(condition):
+                        if not isinstance(expression, BinaryOpNode):
+                            continue
+                        plan = self.glsl_arithmetic_conversion_plan(
+                            self.glsl_source_expression_type(expression.left),
+                            self.glsl_source_expression_type(expression.right),
+                            self.map_operator(expression.op),
+                        )
+                        if plan is None:
+                            return None
+                        for operand, target in (
+                            (expression.left, plan.left_target_type),
+                            (expression.right, plan.right_target_type),
+                        ):
+                            bounds = checked_integer_interval(operand, frame)
+                            info = target_arithmetic_type(target)
+                            if (
+                                bounds is None
+                                or info is None
+                                or info.lanes != 1
+                                or info.kind not in {
+                                    ArithmeticScalarKind.SIGNED_INTEGER,
+                                    ArithmeticScalarKind.UNSIGNED_INTEGER,
+                                }
+                            ):
+                                return None
+                            signed = info.kind == ArithmeticScalarKind.SIGNED_INTEGER
+                            minimum = -(1 << (info.bits - 1)) if signed else 0
+                            maximum = (1 << (info.bits - int(signed))) - 1
+                            if not minimum <= bounds[0] <= bounds[1] <= maximum:
+                                return None
             return count
 
         def additive_loop_intervals(node, incoming, mutated, count):
@@ -10407,6 +10517,12 @@ class GLSLCodeGen:
                 loop_name, loop_interval = self.glsl_private_pointer_loop_interval(
                     value, loop_intervals, constants
                 )
+                if loop_interval is None and count is not None:
+                    loop_name = value.init.name
+                    first = loop_intervals[loop_name][0]
+                    # An upper trip bound establishes entry values, not an exact
+                    # iteration sequence for pointer rebasing or exit state.
+                    loop_interval = (first, first + count - 1)
                 if loop_name in mutation_interval_keys(
                     [
                         getattr(value, "condition", None),

@@ -187,6 +187,246 @@ def test_shared_budget_never_returns_a_partial_iteration_proof():
     assert bounds == (-65, 0)
 
 
+@pytest.mark.parametrize(
+    "condition,expected",
+    [
+        ("i < 2 && offset + i < size", (0, 1)),
+        ("offset + i < size && i < 2", (0, 1)),
+        ("offset + i < size", (0, 22)),
+        ("i + offset < size", (0, 22)),
+        ("offset + i <= size", (0, 23)),
+    ],
+)
+@pytest.mark.parametrize("start", [0, 1])
+def test_counter_entry_bounds_preserve_the_initial_value(condition, expected, start):
+    bounds = _analyze(
+        "void run(int64_t offset, int64_t size) { "
+        f"for (int i = {start}; {condition}; ++i) {{ i; }} }}",
+        {"offset": (0, 22), "size": (23, 23)},
+    )
+    assert bounds["i"] == (start, expected[1])
+
+
+@pytest.mark.parametrize(
+    "prefix,condition,body,update",
+    [
+        ("", "offset + i < size", "offset -= 1;", "++i"),
+        ("", "offset + i < size", "size += 1;", "++i"),
+        ("", "offset + i < size", "i -= 1;", "++i"),
+        ("int& alias = offset;", "offset + i < size", "", "++i"),
+        ("", "offset + i < size", "unknown(offset);", "++i"),
+        ("", "offset + i < size", "{ int offset = 0; }", "++i"),
+        ("", "offset + i < size", "{ int i = 0; }", "++i"),
+        ("", "offset + i < size", "", "--i"),
+        ("", "offset + i < size || i < 30", "", "++i"),
+        ("", "offset + i < size++", "", "++i"),
+    ],
+)
+def test_counter_proof_rejects_unstable_dependencies(prefix, condition, body, update):
+    bounds = _analyze(
+        f"void run(int64_t offset, int64_t size) {{ {prefix} "
+        f"for (int i = 0; {condition}; {update}) {{ i; {body} }} }}",
+        {"offset": (0, 22), "size": (23, 23)},
+    ).get("i")
+    assert bounds is None or bounds[0] < 0
+
+
+@pytest.mark.parametrize(
+    "counter,offset_kind,offset,size_kind,size,condition",
+    [
+        ("int", "int", 2147483646, "int64_t", 2147483650, "offset + i < size"),
+        ("uint", "uint", 4294967294, "int64_t", 4294967296, "offset + i < size"),
+        ("int", "int64_t", 0, "int64_t", 2147483648, "offset + i < size"),
+        (
+            "int",
+            "int64_t",
+            9223372036854775807,
+            "int64_t",
+            9223372036854775807,
+            "offset + i <= size",
+        ),
+        ("int", "int64_t", -1, "uint64_t", 2, "offset + i < size"),
+    ],
+)
+def test_counter_proof_does_not_assume_source_arithmetic_is_mathematical(
+    counter, offset_kind, offset, size_kind, size, condition
+):
+    generator = _generator(
+        f"void run({offset_kind} offset, {size_kind} size) {{ "
+        f"for ({counter} i = 0; {condition}; ++i) {{ i; }} }}"
+    )
+    function = generator.function_definitions["run"]
+    generator.glsl_workgroup_proof_initial_intervals = lambda _function: {
+        "offset": (offset, offset),
+        "size": (size, size),
+    }
+    generator.annotate_glsl_control_flow_intervals(function)
+    (loop,) = (
+        node for node in generator.walk_ast(function.body) if isinstance(node, ForNode)
+    )
+    assert not loop._glsl_checked_zero_trip
+    body = getattr(loop.body, "statements", loop.body)
+    bounds = getattr(body[0], "_glsl_control_flow_intervals", {}).get("i")
+    assert bounds is None or bounds[0] <= 0 and bounds[1] >= 2147483647
+
+
+def test_counter_entry_bound_is_not_an_exact_pointer_rebase_sequence():
+    generator = _generator(
+        "void run(int64_t offset, int64_t size) { "
+        "for (int i = 0; i < 2 && offset + i < size; ++i) { i; } }"
+    )
+    function = generator.function_definitions["run"]
+    facts = {"offset": (0, 22), "size": (23, 23)}
+    generator.glsl_workgroup_proof_initial_intervals = lambda _function: dict(facts)
+    generator.annotate_glsl_control_flow_intervals(function)
+    (loop,) = (
+        node for node in generator.walk_ast(function.body) if isinstance(node, ForNode)
+    )
+    body = getattr(loop.body, "statements", loop.body)
+    assert body[0]._glsl_control_flow_intervals["i"] == (0, 1)
+    assert (
+        generator.glsl_private_pointer_rebase_loop_iteration_values(
+            loop, {**facts, "i": (0, 0)}, {}
+        )
+        is None
+    )
+
+
+TAIL_HEADER = """#include <metal_stdlib>
+using namespace metal;
+kernel void tail_copy(const device uint* src [[buffer(0)]],
+                     device uint* dst [[buffer(1)]],
+                     constant long& size [[buffer(2)]],
+                     uint3 index [[thread_position_in_grid]],
+                     uint3 grid_dim [[threads_per_grid]]) {
+"""
+TAIL_BODY = """long offset = 2 * (index.x + grid_dim.x * long(index.y));
+if (offset + 2 > size) {
+    for (int i = 0; offset + i < size; ++i) {
+        dst[offset + i] = src[offset + i];
+    }
+} else {
+    for (int i = 0; i < 2; ++i) {
+        dst[offset + i] = src[offset + i];
+    }
+}
+"""
+TAIL_CASES = {
+    "affine": (TAIL_BODY, 23, (3, 4, 1), 23),
+    "conjunction": (
+        TAIL_BODY.replace("offset + i < size;", "i < 2 && offset + i < size;"),
+        23,
+        (3, 4, 1),
+        23,
+    ),
+    "volume": (
+        "long offset = 4 * index.x + size * (index.y + long(grid_dim.y) * index.z);\n"
+        "for (int i = 0; i < 4 && int(4 * index.x) + i < size; ++i) {\n"
+        "    dst[offset + i] = src[offset + i];\n}\n",
+        5,
+        (2, 4, 6),
+        120,
+    ),
+}
+
+
+def _tail_config(root, target, case):
+    body, size, grid, _count = TAIL_CASES[case]
+    config = _config(
+        root,
+        target,
+        source=TAIL_HEADER + body + "}\n",
+        entries=("tail_copy",),
+        conditions=[
+            dict(entryPoint="tail_copy", parameter="size", minimum=size, maximum=size)
+        ],
+    )
+    options = dict(config.source_options["metal"])
+    if target == "opengl":
+        (region,) = plan_dispatch_regions(grid, (1, 1, 1))
+        options["target_options"] = {target: dict(dispatch_region=region.to_json())}
+    return replace(config, workgroup_size=(1, 1, 1), source_options={"metal": options})
+
+
+@pytest.mark.parametrize("target", ["metal", "opengl", "directx"])
+@pytest.mark.parametrize("case", TAIL_CASES)
+def test_tail_counter_translates_with_checked_source_metadata(tmp_path, target, case):
+    config = _tail_config(tmp_path, target, case)
+    report = translate_project(config, format_output=False).to_json()
+    assert report["summary"]["translatedCount"] == 1, report["diagnostics"]
+    assert not config.index_range_assertions
+
+
+def test_tail_counter_rejects_an_unchecked_reference_bound(tmp_path):
+    config = replace(
+        _tail_config(tmp_path, "opengl", "affine"), metadata_preconditions=()
+    )
+    report = translate_project(config, format_output=False).to_json()
+    assert report["summary"]["translatedCount"] == 0
+    assert any(
+        item["code"] == "project.translate.opengl-index-type-unsupported"
+        for item in report["diagnostics"]
+    )
+
+
+@pytest.mark.parametrize("case", TAIL_CASES)
+def test_tail_counter_executes_natively(tmp_path, case):
+    if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":
+        pytest.skip(
+            "set CROSTL_REQUIRE_METADATA_PRECONDITIONS=1 for native metadata checks"
+        )
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    config = _tail_config(tmp_path, target, case)
+    _, package, (descriptor,) = _packages(config)
+    body, size, grid, count = TAIL_CASES[case]
+    words = [17 + 13 * i for i in range(count)]
+    guard = 0xABCDEF01
+    expected = words + [guard] * 32
+    data = {
+        "src": ("uint32", words),
+        "dst": ("uint32", [guard] * len(expected)),
+        "size": ("int64", [size]),
+    }
+    inputs, outputs = {}, {}
+    for binding in descriptor["bindings"]:
+        name = binding["provenance"]["sourceResource"]["parameter"]
+        dtype, items = data[name]
+        inputs[binding["name"]] = dict(dtype=dtype, shape=[len(items)], values=items)
+        if name == "dst":
+            outputs[binding["name"]] = dict(
+                dtype=dtype, shape=[len(expected)], values=expected
+            )
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        outputs,
+        dict(workgroupCount=list(grid), workgroupSize=[1, 1, 1]),
+        observe_inputs=[
+            binding["name"]
+            for binding in descriptor["bindings"]
+            if binding["access"] == "read"
+        ],
+    )
+    assert not request.execution_plan.diagnostics
+    native = tmp_path / "native"
+    native.mkdir()
+    _execute(
+        request,
+        outputs,
+        native,
+        validate=_validate,
+        original_source=TAIL_HEADER + body + "}\n",
+        original_entry="tail_copy",
+    )
+    details = json.loads((native / "evidence.json").read_text())["records"][
+        "generated"
+    ]["details"]
+    assert len(details["metadataPreconditions"]) == 1
+    assert len(details["inputObservations"]) == 2
+    assert all(item["unchanged"] for item in details["inputObservations"].values())
+
+
 SOURCE = """#include <metal_stdlib>
 using namespace metal;
 kernel void tiled_copy(

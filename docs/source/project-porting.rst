@@ -1273,6 +1273,18 @@ for that pointer; composed offsets still undergo overflow and scope checks.
 Local-name allocation keeps emitted resource aliases reserved, including when
 a local uses the preferred escaped spelling or shadows another local in a block.
 
+Increasing unit-stride loop counters retain their initial value under conjunctive
+bounds and affine conditions such as ``offset + i < size``. The offset and limit
+must remain stable, and the initial expression, source arithmetic, implicit
+conversions and terminating update must preserve the proved integer values.
+Validated immutable scalar metadata references can provide these limits;
+unchecked references, escaping state, unknown effects and possible wrapping do
+not establish bounds. An upper trip bound only describes possible body-entry
+values, not an exact sequence for pointer rebasing or a final counter value.
+Native tail-copy cases exercise partial two-element tiles and three-dimensional
+launches with tight inputs, unchanged metadata and output guards. Source loops
+and tail conditions remain intact.
+
 Pure scalar helpers with one return expression can retain checked caller ranges
 through nested calls, integer casts and integer arithmetic.
 Analysis uses source overloads, parameter conversions and return conversions;
