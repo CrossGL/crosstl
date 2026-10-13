@@ -1338,13 +1338,29 @@ older packages before using this host route. This remains synchronous integratio
 not a complete random API or backend. Other elementwise and copy size limits
 still prevent large composed distributions and the full upstream suite.
 
+Whole-array assertion reductions use an explicit `--on-demand` catalog. The
+catalog declares permitted entries and widths; it is not a translated artifact
+or evidence of execution. After validating the host buffers and upstream launch
+plan, dispatch creates a package bound to the exact input count, row size and
+grid. The cache supports the existing float32, int32, uint32, Boolean and bfloat16
+whole-array entries, with separate packages for different counts even when their
+launch widths match. Initialization, row and column reductions retain their
+existing package paths.
+
+Each cached package carries checked scalar metadata and, for HLSL and GLSL, a
+dispatch-region contract. Source, implementation, recipe and artifact identities
+are verified when loading it. Trace verification requires the pinned source and
+loads the recorded package without translating a replacement. Native dispatch
+also observes the input and metadata buffers to detect device-side modification.
+Static reduction packages remain supported for existing callers.
+
 ```bash
 python -m demos.integrations.mlx.portable_host.random_packages \
   --mlx-root mlx-upstream --target metal --output-dir random-packages
 python -m demos.integrations.mlx.portable_host.reduction_packages \
   --mlx-root mlx-upstream --target metal \
   --entry all_reduce_andbool_ --entry all_reduce_sumfloat32 \
-  --width 32 --width 256 --output-dir random-reductions
+  --width 32 --width 256 --on-demand --output-dir random-reductions
 python -m demos.integrations.mlx.portable_host.verify_random \
   --mlx-root mlx-upstream --packages host-packages --random random-packages \
   --reductions random-reductions --output-dir random-evidence

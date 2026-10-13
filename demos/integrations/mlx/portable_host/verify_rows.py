@@ -21,7 +21,16 @@ from demos.integrations.mlx.portable_host.reduction_shards import load_row_packa
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
 
 
-def verify_artifacts(trace, directory, index, *, variants=True):
+def verify_artifacts(trace, directory, index, *, variants=True, mlx_root=None):
+    if index.get("dispatchMode") == "on-demand":
+        from demos.integrations.mlx.portable_host.reduction_cache import verify_events
+
+        if mlx_root is None or not variants:
+            raise ValueError(
+                "Checked reduction verification requires the pinned source"
+            )
+        verify_events(trace, mlx_root, directory, index)
+        return
     checked = set()
     for record in trace:
         key = (

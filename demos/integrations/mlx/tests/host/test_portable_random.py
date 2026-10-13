@@ -719,7 +719,7 @@ def test_random_host_ci_requires_all_three_platforms():
     }
     steps = {step.get("name"): step for step in job["steps"]}
     build = steps["Translate random kernels"]
-    reductions = steps["Translate random assertion reductions"]
+    reductions = steps["Configure checked random assertion reductions"]
     execute = steps["Execute random workloads and unchanged upstream tests"]
     for step in (build, reductions, execute):
         assert not step.get("continue-on-error") and not step.get("if")
@@ -729,6 +729,7 @@ def test_random_host_ci_requires_all_three_platforms():
         "--entry all_reduce_andbool_ --entry all_reduce_sumfloat32" in reductions["run"]
     )
     assert "--width 32 --width 256" in reductions["run"]
+    assert "--on-demand" in reductions["run"]
     assert '--target "${{ matrix.target }}"' in reductions["run"]
     assert (
         "--output-dir .mlx-portable-small-rows/random-reductions" in reductions["run"]

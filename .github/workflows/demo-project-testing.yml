@@ -2392,13 +2392,13 @@ jobs:
             python -m demos.integrations.mlx.portable_host.random_packages --mlx-root mlx-upstream \
               --target ${{ matrix.target }} --output-dir .mlx-portable-small-rows/random-packages \
               2>&1 | tee .mlx-portable-small-rows/random-translation.log
-      - name: Translate random assertion reductions
+      - name: Configure checked random assertion reductions
         run: |
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX random reduction packages" -- \
             python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --entry all_reduce_andbool_ --entry all_reduce_sumfloat32 \
-              --width 32 --width 256 --jobs 2 --output-dir .mlx-portable-small-rows/random-reductions \
+              --width 32 --width 256 --on-demand --output-dir .mlx-portable-small-rows/random-reductions \
               2>&1 | tee .mlx-portable-small-rows/random-reductions.log
       - name: Execute random workloads and unchanged upstream tests
         env:

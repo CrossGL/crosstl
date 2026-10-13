@@ -95,6 +95,7 @@ from demos.integrations.mlx.portable_host.random_packages import RandomPackageCa
 from demos.integrations.mlx.portable_host.random_packages import (
     load_index as load_random_index,
 )
+from demos.integrations.mlx.portable_host.reduction_cache import ReductionPackageCache
 from demos.integrations.mlx.portable_host.reduction_packages import (
     ALL_ENTRIES as REDUCTION_ENTRIES,
 )
@@ -106,6 +107,7 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
 from demos.integrations.mlx.portable_host.reduction_packages import (
     load_index as load_reduction_index,
 )
+from demos.integrations.mlx.portable_host.reduction_packages import variant_keys
 from demos.integrations.mlx.portable_host.scan_packages import ScanPackageCache
 from demos.integrations.mlx.portable_host.small_row_packages import (
     SMALL_ROW_ENTRIES,
@@ -362,6 +364,7 @@ class HostRuntime:
             raise ValueError("At least one reduction package directory is required")
         self.reduction_descriptors = {}
         self.reduction_directories = {}
+        self.checked_reductions = {}
         self.dispatch_count = 0
         for directory in directories:
             directory = Path(directory).resolve()
@@ -370,9 +373,20 @@ class HostRuntime:
                     continue
                 raise ValueError("Reduction package index is missing")
             reduction_index = load_reduction_index(directory, self.target)
-            descriptors = reduction_index["descriptors"]
-            if self.reduction_descriptors.keys() & descriptors.keys():
+            keys = variant_keys(reduction_index)
+            if keys & (
+                self.reduction_descriptors.keys() | self.checked_reductions.keys()
+            ):
                 raise ValueError("Reduction packages contain duplicate variants")
+            if reduction_index.get("dispatchMode") == "on-demand":
+                if mlx_root is None:
+                    raise ValueError("Checked reductions require the pinned MLX source")
+                cache = ReductionPackageCache(
+                    mlx_root, directory / "variants", self.target
+                )
+                self.checked_reductions.update({key: cache for key in keys})
+                continue
+            descriptors = reduction_index["descriptors"]
             self.reduction_descriptors.update(descriptors)
             self.reduction_directories.update({key: directory for key in descriptors})
         self.trace.parent.mkdir(parents=True, exist_ok=True)
@@ -536,12 +550,15 @@ class HostRuntime:
             raise ValueError(
                 "Reduction initialization requires one invocation per output"
             )
+        checked_reduction = None
         if reduction and not small_row:
             key = f'w{execution["workgroupSize"][0]}/{entry}'
-            if key not in self.reduction_descriptors:
+            checked_reduction = getattr(self, "checked_reductions", {}).get(key)
+            if checked_reduction is None and key not in self.reduction_descriptors:
                 raise ValueError(f"No translated reduction variant for {key}")
-            descriptor = self.reduction_descriptors[key]
-            package_directory = self.reduction_directories[key] / "package"
+            if checked_reduction is None:
+                descriptor = self.reduction_descriptors[key]
+                package_directory = self.reduction_directories[key] / "package"
         elif not small_row:
             descriptor = self.descriptors[entry]
             package_directory = (
@@ -713,6 +730,10 @@ class HostRuntime:
             reduction_layout.validate(
                 supplied, threads, execution, REDUCTION_ENTRIES[entry]
             )
+            if checked_reduction is not None:
+                descriptor, package_directory = checked_reduction.get(
+                    entry, threads, execution
+                )
         copy_metadata = (
             copy_layout.validate(
                 supplied,
@@ -981,6 +1002,20 @@ class HostRuntime:
                 outputs,
                 execution,
                 expected_target=self.target,
+                **(
+                    {
+                        "observe_inputs": [
+                            binding["name"]
+                            for binding in descriptor["bindings"]
+                            if binding.get("provenance", {})
+                            .get("sourceResource", {})
+                            .get("parameter")
+                            in {"in", "in_size", "row_size"}
+                        ]
+                    }
+                    if checked_reduction is not None
+                    else {}
+                ),
             )
             result = (
                 gather_dispatch.execute(self, request)
@@ -1217,6 +1252,7 @@ class HostRuntime:
                                         "packageRoot": str(package_directory),
                                     }
                                     if self.retain_native_modules
+                                    or checked_reduction is not None
                                     else {}
                                 ),
                                 "reductionMetadata": (

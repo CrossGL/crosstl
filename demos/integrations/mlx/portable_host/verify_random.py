@@ -14,6 +14,7 @@ from demos.integrations.mlx.portable_host.random_packages import ENTRIES, load_i
 from demos.integrations.mlx.portable_host.reduction_packages import (
     load_index as load_reductions,
 )
+from demos.integrations.mlx.portable_host.reduction_packages import variant_keys
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
 from demos.integrations.mlx.portable_host.verify import upstream_test_sources
 from demos.integrations.mlx.portable_host.verify_bitwise import verify_native_identity
@@ -150,7 +151,7 @@ def verify(args):
     target = base["target"]
     random = {"target": target, "descriptors": load_index(args.random, target)}
     reductions = load_reductions(args.reductions, target)
-    missing = REQUIRED_REDUCTIONS - reductions["descriptors"].keys()
+    missing = REQUIRED_REDUCTIONS - variant_keys(reductions)
     if missing:
         raise ValueError(
             "Random upstream assertions require reduction packages: "
@@ -244,14 +245,16 @@ def verify(args):
                     if variants
                     else event["entry"]
                 )
-                in index["descriptors"]
+                in (variant_keys(index) if variants else index["descriptors"])
             ]
             if directory == args.random:
                 random_evidence.verify_packages(
                     events, args.mlx_root, directory, target
                 )
             else:
-                verify_artifacts(events, directory, index, variants=variants)
+                verify_artifacts(
+                    events, directory, index, variants=variants, mlx_root=args.mlx_root
+                )
             checked += len(events)
         if checked != len(trace):
             raise ValueError("Random trace contains an unknown or duplicate package")

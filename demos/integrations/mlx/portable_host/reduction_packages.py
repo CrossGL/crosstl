@@ -17,7 +17,7 @@ from crosstl.project import (
     load_project_config,
     translate_project,
 )
-from demos.integrations.mlx.portable_host.prepare import require_revision
+from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
 
 SOURCE = "mlx/backend/metal/kernels/reduce.metal"
 ENTRIES = {
@@ -101,6 +101,20 @@ def load_index(directory, target):
         or len(set(entries)) != len(entries)
     ):
         raise ValueError("Invalid reduction package target, widths or entries")
+    mode = index.get("dispatchMode", "static")
+    if mode == "on-demand":
+        from demos.integrations.mlx.portable_host.reduction_cache import SOURCE_SHA256
+
+        if (
+            family not in {"all", "bfloat"}
+            or index.get("revision") != COMMIT
+            or index.get("sourceHash") != SOURCE_SHA256
+            or "descriptors" in index
+        ):
+            raise ValueError("Invalid checked reduction catalog")
+        return index
+    if mode != "static":
+        raise ValueError("Unknown reduction dispatch mode")
     expected = {f"w{width}/{entry}" for width in widths for entry in entries}
     if (
         not isinstance(index.get("descriptors"), dict)
@@ -113,8 +127,26 @@ def load_index(directory, target):
     return index
 
 
+def variant_keys(index):
+    if index.get("dispatchMode") == "on-demand":
+        return {
+            f"w{width}/{entry}"
+            for width in index["widths"]
+            for entry in index["entries"]
+        }
+    return set(index["descriptors"])
+
+
 def build_packages(
-    root, output, target, *, widths=None, entries=None, jobs=1, family="all"
+    root,
+    output,
+    target,
+    *,
+    widths=None,
+    entries=None,
+    jobs=1,
+    family="all",
+    on_demand=False,
 ):
     root, output = Path(root).resolve(), Path(output).resolve()
     if target not in {"metal", "opengl", "directx"}:
@@ -123,6 +155,8 @@ def build_packages(
         raise ValueError("Reduction translation jobs must be a positive integer")
     if not isinstance(family, str) or family not in ENTRY_GROUPS:
         raise ValueError("Unknown reduction package family")
+    if type(on_demand) is not bool or (on_demand and family not in {"all", "bfloat"}):
+        raise ValueError("On-demand packages require whole-array reductions")
     supported = ENTRY_GROUPS[family]
     allowed_widths = FAMILY_WIDTHS[family]
     widths = tuple(allowed_widths if widths is None else widths)
@@ -157,6 +191,25 @@ def build_packages(
     )
     if dirty.strip():
         raise ValueError("Reduction translation requires unchanged pinned kernels")
+    if on_demand:
+        from demos.integrations.mlx.portable_host.reduction_cache import (
+            SOURCE_SHA256,
+            ReductionPackageCache,
+        )
+
+        ReductionPackageCache(root, output / "variants", target)._require_source()
+        index = {
+            "dispatchMode": "on-demand",
+            "revision": COMMIT,
+            "sourceHash": SOURCE_SHA256,
+            "target": target,
+            "family": family,
+            "widths": list(widths),
+            "entries": list(entries),
+        }
+        output.mkdir(parents=True)
+        (output / "index.json").write_text(json.dumps(index, indent=2) + "\n")
+        return index
     output.mkdir(parents=True)
     with tempfile.TemporaryDirectory(prefix=".host-reductions-", dir=root) as directory:
         work = Path(directory)
@@ -267,6 +320,7 @@ if __name__ == "__main__":
     parser.add_argument("--entry", action="append")
     parser.add_argument("--jobs", type=int, default=2)
     parser.add_argument("--family", choices=tuple(ENTRY_GROUPS), default="all")
+    parser.add_argument("--on-demand", action="store_true")
     args = parser.parse_args()
     build_packages(
         args.mlx_root,
@@ -276,4 +330,5 @@ if __name__ == "__main__":
         entries=args.entry,
         jobs=args.jobs,
         family=args.family,
+        on_demand=args.on_demand,
     )
