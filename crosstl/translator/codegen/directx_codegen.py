@@ -2238,6 +2238,7 @@ class HLSLCodeGen:
         self.current_function_name = None
         self.current_function_return_type = None
         self.current_hlsl_precise_return_type = None
+        self.current_hlsl_parameter_epilogue = ()
         self.current_hlsl_tail_recursive_call_ids = set()
         self.current_hlsl_tail_recursive_function = None
         self.current_expression_expected_type = None
@@ -3272,6 +3273,7 @@ class HLSLCodeGen:
         self.current_function_name = None
         self.current_function_return_type = None
         self.current_hlsl_precise_return_type = None
+        self.current_hlsl_parameter_epilogue = ()
         self.current_hlsl_tail_recursive_call_ids = set()
         self.current_hlsl_tail_recursive_function = None
         self.current_expression_expected_type = None
@@ -10571,19 +10573,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         materialized_function_name, set()
                     )
                 )
-                if mutated and any(
-                    isinstance(node, ReturnNode)
-                    for node in self.walk_ast(getattr(func, "body", []))
-                ):
-                    raise DirectXResourcePointerArrayError(
-                        "DirectX cannot write back mutable storage pointer-array "
-                        "offsets across an early return",
-                        function_name=materialized_function_name,
-                        array_name=p.name,
-                        address_space=pointer_array_contract["address_space"],
-                        reason="pointer-array-early-return-unsupported",
-                        source_location=getattr(p, "source_location", None),
-                    )
                 used_names = set(self.current_identifier_reserved_names)
                 used_names.update(emitted_param_names)
                 offset_parameters = []
@@ -11302,12 +11291,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             id(func), {}
         ).items():
             self.current_hlsl_texture_offset_constants[parameter_name] = value
-        needs_fallthrough_return = (
-            return_type != "void" and not self.statement_body_terminates(body)
-        )
+        body_terminates = self.statement_body_terminates(body)
+        needs_fallthrough_return = return_type != "void" and not body_terminates
         compound_declaration_offset = len(code)
         previous_compound_indices = self.hlsl_wide_integer_compound_indices
         self.hlsl_wide_integer_compound_indices = []
+        previous_parameter_epilogue = self.current_hlsl_parameter_epilogue
+        self.current_hlsl_parameter_epilogue = tuple(parameter_epilogue_statements)
         try:
             if stage_output_lowering is not None:
                 output_name = stage_output_lowering.get("local_name")
@@ -11344,6 +11334,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 + code[compound_declaration_offset:]
             )
         finally:
+            self.current_hlsl_parameter_epilogue = previous_parameter_epilogue
             self.hlsl_wide_integer_compound_indices = previous_compound_indices
             self.current_hlsl_visible_int_constants = (
                 previous_hlsl_visible_int_constants
@@ -11351,8 +11342,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.current_hlsl_texture_offset_constants = (
                 previous_texture_offset_constants
             )
-        for statement in parameter_epilogue_statements:
-            code += f"{'    ' * (indent + 1)}{statement}\n"
+        if not body_terminates:
+            for statement in parameter_epilogue_statements:
+                code += f"{'    ' * (indent + 1)}{statement}\n"
         if needs_fallthrough_return:
             if (
                 stage_output_lowering is not None
@@ -12026,7 +12018,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return self.generate_hlsl_return_value_statement(
                         stage_output_lowering["local_name"], indent
                     )
-                return f"{indent_str}return;\n"
+                return (
+                    self.generate_hlsl_parameter_epilogue(indent)
+                    + f"{indent_str}return;\n"
+                )
 
         elif hasattr(stmt, "__class__") and "ExpressionStatement" in str(
             stmt.__class__
@@ -12184,12 +12179,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return f"{indent_str}{storage_statement};\n"
             return f"{indent_str}{self.generate_expression(stmt)};\n"
 
+    def generate_hlsl_parameter_epilogue(self, indent):
+        return "".join(
+            f"{'    ' * indent}{statement}\n"
+            for statement in self.current_hlsl_parameter_epilogue
+        )
+
     def generate_hlsl_return_value_statement(self, value, indent):
-        """Keep precise result dependencies visible through helper inlining."""
+        """Evaluate the result before pointer writeback, preserving precision."""
         indent_str = "    " * indent
         return_type = self.current_hlsl_precise_return_type
-        if return_type is None:
+        epilogue = self.generate_hlsl_parameter_epilogue(indent)
+        if return_type is None and not epilogue:
             return f"{indent_str}return {value};\n"
+
+        precise = "precise " if return_type is not None else ""
+        return_type = return_type or self.map_type(self.current_function_return_type)
+        if return_type == "void":
+            return f"{indent_str}{value};\n{epilogue}{indent_str}return;\n"
 
         used_names = set(self.local_variable_types)
         used_names.update(self.global_variable_types)
@@ -12197,14 +12204,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         used_names.update(self.structs_by_name)
         used_names.update(self.hlsl_type_aliases)
         used_names.update(self.current_identifier_aliases.values())
-        name = self.hlsl_unique_local_identifier("crossglPreciseReturn", used_names)
+        used_names.update(self.current_identifier_reserved_names)
+        name = self.hlsl_unique_local_identifier(
+            "crossglPreciseReturn" if precise else "crossglReturn", used_names
+        )
         self.current_identifier_reserved_names.add(name)
         source_type = self.type_name_string(self.current_function_return_type)
         self.local_variable_types[name] = source_type
         self.local_variable_source_types[name] = source_type
         declaration = format_c_style_array_declaration(return_type, name)
         return (
-            f"{indent_str}precise {declaration} = {value};\n"
+            f"{indent_str}{precise}{declaration} = {value};\n"
+            f"{epilogue}"
             f"{indent_str}return {name};\n"
         )
 
@@ -44426,7 +44437,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.generate_statement_code(parts["code"], indent)
                 + f"{indent_str}{self.map_type(parts['target_type'])} {original};\n"
                 f"{indent_str}{parts['intrinsic']}({', '.join(call_args)});\n"
-                f"{indent_str}return;\n"
+                + self.generate_hlsl_parameter_epilogue(indent)
+                + f"{indent_str}return;\n"
             )
 
         original_arg = parts["original_arg"]

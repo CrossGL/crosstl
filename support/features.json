@@ -3986,9 +3986,15 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "Selected compute entries lower private constant/device pointer-bearing aggregates to resource identity and signed element offsets, including nested owners, fixed pointer arrays, copies, rebasing and helper calls. Typed vector pointees retain two or four 32-bit float/int/uint components and vector-element offsets; unproven vector layouts remain diagnostic. Native Windows controls are required. External aggregate buffer layouts, thread/workgroup pointer fields, pointer identity operations and unproven escapes remain unsupported; this is not full MLX host integration.",
+          "notes": "Selected compute entries lower private constant/device pointer-bearing aggregates to resource identity and signed element offsets, including nested owners, fixed pointer arrays, copies, rebasing and helper calls. Mutable pointer-array helpers write back offsets on fallthrough and explicit exits after evaluating any returned value once. Native controls cover forwarding, return-expression effects, conditional and loop exits, switches, void and struct results, multiple offsets and lexical shadowing. Typed vector pointees retain two or four 32-bit float/int/uint components and vector-element offsets; unproven vector layouts remain diagnostic. Native Windows controls are required. External aggregate buffer layouts, thread/workgroup pointer fields, pointer identity operations and unproven escapes remain unsupported; this is not full MLX host integration.",
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_struct",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_return_captures_value_before_pointer_array_writeback",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_void_return_expression_precedes_pointer_array_writeback",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_metal_transitively_mutated_pointer_array_writes_back_on_early_return",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_project_preserves_pointer_array_return_writeback",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_pointer_array_returns_compile",
+            "tests/test_translator/test_pointer_offset_address_spaces.py::def test_pointer_array_returns_execute_natively",
             "tests/test_translator/test_codegen/test_directx_builtin_inference.py::def test_builtin_width_in_vector_initializer",
             "tests/test_translator/test_codegen/test_directx_builtin_inference.py::def test_user_overload_return_type_precedes_builtin",
             "tests/test_translator/test_codegen/test_directx_builtin_inference.py::def test_unproven_initializer_retains_diagnostic",

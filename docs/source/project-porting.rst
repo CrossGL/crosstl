@@ -1404,6 +1404,15 @@ shadowing. The existing native pointer controls check these cases on each target
 without adding a CI job. Unproven wide offsets remain structured failures; this
 does not establish bounds for an entire upstream reduction kernel.
 
+DirectX mutable storage-pointer array helpers write back their logical offsets
+on both fallthrough and explicit returns. Value returns are evaluated once
+before writeback, including forwarded calls that mutate the array. Conditional
+exits, loops, switches, void expressions and structure results use the same
+exit handling; read-only helpers do not acquire writeback parameters. The native
+pointer tests check returned values, multiple caller-visible offsets, unchanged
+inputs and output guards. This does not relax initialization, backing identity,
+aliasing, access or offset-range requirements, or establish full runtime coverage.
+
 Ordinary arithmetic uses each operand's lexical source type, including promoted
 byte and short operands mixed with 32-bit or 64-bit locals. Stored integer facts
 apply the destination conversion before subsequent bounds checks; the range of

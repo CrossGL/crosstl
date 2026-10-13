@@ -579,3 +579,242 @@ def test_helper_computed_pointer_views_execute_natively(tmp_path, case):
         observations = record["details"]["inputObservations"]
         assert len(observations) == 2
         assert all(item["unchanged"] for item in observations.values())
+
+
+POINTER_RETURN_BODIES = {
+    "final": "rows[0] += 1; return rows[0][0] + rows[1][0];",
+    "effect": "return advance(rows, calls);",
+    "forward": "rows[0] += 1; return advance(rows, calls);",
+    "early": (
+        """
+        rows[0] += 1;
+        if (mode == 0) { return rows[0][0]; }
+        rows[1] += 1;
+        return rows[1][0];
+    """
+    ),
+    "void": (
+        """
+        rows[0] += 1;
+        if (mode == 0) { return; }
+        rows[1] += 1;
+        calls += 1;
+    """
+    ),
+    "void-expression": "return advance_void(rows, calls);",
+    "switch": (
+        """
+        rows[0] += 1;
+        switch (mode) {
+            case 0: return rows[0][0];
+            case 1: rows[1] += 1; return rows[1][0];
+            default: break;
+        }
+        rows[0] += 1;
+        return rows[0][0] + rows[1][0];
+    """
+    ),
+    "loop": (
+        """
+        for (uint i = 0; i < 3; ++i) {
+            rows[0] += 1;
+            if (i == mode) { return rows[0][0]; }
+        }
+        return 999u;
+    """
+    ),
+    "struct": "return Result{advance(rows, calls), 7u};",
+    "shadow": (
+        """
+        uint crossglReturn = 7;
+        rows[0] += 1;
+        if (mode == 0) {
+            uint crossglReturn = 11;
+            return rows[0][0] + crossglReturn;
+        }
+        return rows[1][0] + crossglReturn;
+    """
+    ),
+}
+
+
+def _pointer_return_source(case):
+    return_type = (
+        "void" if case.startswith("void") else "Result" if case == "struct" else "uint"
+    )
+    invocation = "consume(rows, tid, calls)"
+    statement = (
+        f"{invocation}; uint total = 101;"
+        if return_type == "void"
+        else (
+            f"Result result = {invocation}; uint total = result.value + result.marker;"
+            if return_type == "Result"
+            else f"uint total = {invocation};"
+        )
+    )
+    return f"""#include <metal_stdlib>
+using namespace metal;
+struct Result {{ uint value; uint marker; }};
+uint advance(const device uint* rows[2], thread uint& calls) {{
+    rows[0] += 1;
+    rows[1] += 2;
+    calls += 1;
+    return rows[0][0] + rows[1][0];
+}}
+void advance_void(const device uint* rows[2], thread uint& calls) {{
+    rows[0] += 1;
+    rows[1] += 2;
+    calls += 1;
+}}
+{return_type} consume(const device uint* rows[2], uint mode, thread uint& calls) {{
+    {POINTER_RETURN_BODIES[case]}
+}}
+uint readonly_value(const device uint* rows[2]) {{ return rows[1][0]; }}
+kernel void pointer_return(const device uint* values [[buffer(0)]],
+                           const constant uint* metadata [[buffer(1)]],
+                           device uint* results [[buffer(2)]],
+                           uint tid [[thread_position_in_grid]]) {{
+    uint base = metadata[tid] & 3u;
+    const device uint* rows[2];
+    for (int i = 0; i < 2; ++i) {{
+        rows[i] = values + base + i * 2;
+    }}
+    uint calls = 0;
+    {statement}
+    results[tid * 6 + 1] = total;
+    results[tid * 6 + 2] = rows[0][0];
+    results[tid * 6 + 3] = readonly_value(rows);
+    results[tid * 6 + 4] = calls;
+}}
+"""
+
+
+def _pointer_return_request(root, target, case):
+    original, descriptor, package = _package(
+        root,
+        target,
+        "uint",
+        (1, 1, 1),
+        source=_pointer_return_source(case),
+        software_subgroups=False,
+    )
+    values = [19, 31, 47, 67, 89, 113, 139, 167, 197, 229]
+    metadata = [0, 1, 3]
+    result = [0xDEADBEEF] * 50
+    expected_words = result.copy()
+    for tid, base in enumerate(metadata):
+        first, second, calls = base + 1, base + 2, 0
+        if case in {"effect", "forward", "struct", "void-expression"}:
+            first += case == "forward"
+            second += 2
+            calls = 1
+        elif case in {"early", "void", "switch"}:
+            second += tid == 1 or (tid == 2 and case != "switch")
+            first += tid == 2 and case == "switch"
+            calls = int(tid != 0 and case == "void")
+        elif case == "loop":
+            first += tid
+        total = values[first] + values[second]
+        if case == "struct":
+            total += 7
+        elif case in {"early", "switch"} and tid < (3 if case == "early" else 2):
+            total = values[first if tid == 0 else second]
+        elif case == "loop":
+            total = values[first]
+        elif case.startswith("void"):
+            total = 101
+        elif case == "shadow":
+            total = values[first] + 11 if tid == 0 else values[second] + 7
+        expected_words[tid * 6 + 1 : tid * 6 + 5] = [
+            total,
+            values[first],
+            values[second],
+            calls,
+        ]
+    inputs = _bound_values(
+        descriptor,
+        {
+            name: {"dtype": "uint32", "shape": [len(words)], "values": words}
+            for name, words in (
+                ("values", values),
+                ("metadata", metadata),
+                ("results", result),
+            )
+        },
+    )
+    expected = _bound_values(
+        descriptor,
+        {
+            "results": {
+                "dtype": "uint32",
+                "shape": [len(result)],
+                "values": expected_words,
+            },
+        },
+    )
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        expected,
+        {"workgroupCount": [3, 1, 1], "workgroupSize": [1, 1, 1]},
+        expected_target=target,
+        observe_inputs=[name for name in inputs if name not in expected],
+    )
+    assert not request.execution_plan.diagnostics
+    return original, request, expected
+
+
+@pytest.mark.parametrize("case", POINTER_RETURN_BODIES)
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+@pytest.mark.parametrize("scoped", (False, True))
+def test_project_preserves_pointer_array_return_writeback(
+    tmp_path, case, target, scoped
+):
+    (tmp_path / "return.metal").write_text(
+        _pointer_return_source(case), encoding="utf-8"
+    )
+    payload = translate_project(
+        ProjectConfig(
+            root=tmp_path,
+            include_patterns=("return.metal",),
+            targets=(target,),
+            entry_points={"return.metal": ("pointer_return",)} if scoped else {},
+            workgroup_size=(1, 1, 1),
+            output_dir="out",
+        ),
+        format_output=False,
+    ).to_json()
+    assert payload["summary"]["translatedCount"] == 1, payload["diagnostics"]
+    assert not payload["diagnostics"]
+
+
+@pytest.mark.parametrize("case", POINTER_RETURN_BODIES)
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+def test_pointer_array_returns_compile(tmp_path, case, target):
+    tool = {"metal": "xcrun", "directx": "dxc", "opengl": "glslangValidator"}[target]
+    if not shutil.which(tool):
+        pytest.skip(f"{tool} is not installed")
+    _, request, _ = _pointer_return_request(tmp_path, target, case)
+    _, module = _compile(request.artifact_path.read_text(), target, tmp_path)
+    assert module.is_file() and module.stat().st_size
+
+
+@pytest.mark.parametrize("case", POINTER_RETURN_BODIES)
+def test_pointer_array_returns_execute_natively(tmp_path, case):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required pointer-offset execution")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    original, request, expected = _pointer_return_request(tmp_path, target, case)
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=original,
+        original_entry="pointer_return",
+    )
+    evidence = json.loads((tmp_path / "evidence.json").read_text())
+    for record in evidence["records"].values():
+        observations = record["details"]["inputObservations"]
+        assert len(observations) == 2
+        assert all(item["unchanged"] for item in observations.values())

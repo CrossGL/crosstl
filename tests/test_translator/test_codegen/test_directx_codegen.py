@@ -10784,7 +10784,41 @@ def test_hlsl_metal_pointer_array_element_by_value_does_not_write_back(tmp_path)
     assert_directx_warnings_clean_if_available(generated, tmp_path)
 
 
-def test_hlsl_metal_transitively_mutated_pointer_array_rejects_early_return(
+@pytest.mark.parametrize("precise", (False, True))
+def test_hlsl_return_captures_value_before_pointer_array_writeback(precise):
+    generator = HLSLCodeGen()
+    generator.generate(crosstl.translator.parse("shader ReturnWriteback {}"))
+    generator.current_function_return_type = "float"
+    generator.current_hlsl_precise_return_type = "float" if precise else None
+    generator.current_hlsl_parameter_epilogue = (
+        "first_offset = first_offsets[0];",
+        "second_offset = second_offsets[0];",
+    )
+    base = "crossglPreciseReturn" if precise else "crossglReturn"
+    generator.current_identifier_reserved_names.add(base)
+    code = generator.generate_hlsl_return_value_statement("advance()", 1)
+    lines = code.splitlines()
+    assert code.count("advance()") == 1
+    assert lines[0].startswith("    precise float " if precise else "    float ")
+    assert f"{base} =" not in lines[0]
+    assert lines[1:3] == [
+        "    first_offset = first_offsets[0];",
+        "    second_offset = second_offsets[0];",
+    ]
+    assert lines[3].startswith("    return ")
+    assert lines[3].removeprefix("    return ").removesuffix(";") in lines[0]
+
+
+def test_hlsl_void_return_expression_precedes_pointer_array_writeback():
+    generator = HLSLCodeGen()
+    generator.current_function_return_type = "void"
+    generator.current_hlsl_parameter_epilogue = ("offset = offsets[0];",)
+    assert generator.generate_hlsl_return_value_statement("advance()", 1) == (
+        "    advance();\n    offset = offsets[0];\n    return;\n"
+    )
+
+
+def test_hlsl_metal_transitively_mutated_pointer_array_writes_back_on_early_return(
     tmp_path,
 ):
     shader = """
@@ -10817,18 +10851,17 @@ def test_hlsl_metal_transitively_mutated_pointer_array_rejects_early_return(
     shader_path = tmp_path / "pointer_array_element_early_return.metal"
     shader_path.write_text(shader)
 
-    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
-        crosstl.translate(
-            str(shader_path),
-            backend="directx",
-            format_output=False,
-            source_backend="metal",
-        )
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
 
-    assert excinfo.value.function_name == "consume"
-    assert excinfo.value.array_name == "rows"
-    assert excinfo.value.address_space == "device"
-    assert excinfo.value.reason == "pointer-array-early-return-unsupported"
+    assert generated.count("rows_offset_0 = rows_offsets[0];") == 2
+    assert "rows_offset_0 = rows_offsets[0];\n        return;" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
 
 
 @pytest.mark.parametrize(
