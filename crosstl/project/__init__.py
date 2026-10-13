@@ -37,6 +37,7 @@ from .host_reflection import (
     ReflectionDiagnostic,
     reflect_target_host_interface,
 )
+from .metal_runtime import MetalComputeRuntime
 from .native_deferred_compilation import (
     NATIVE_DEFERRED_COMPILATION_KIND,
     NATIVE_DEFERRED_COMPILATION_REQUEST_KIND,
@@ -184,6 +185,7 @@ from .runtime_variant_dispatch import (
 )
 from .runtime_verification import (
     DirectXRuntimeParityAdapter,
+    MetalRuntimeParityAdapter,
     NativeRuntimeBufferBinding,
     NativeRuntimeConstantBinding,
     NativeRuntimeDispatchRequest,
@@ -325,6 +327,8 @@ __all__ = [
     "ReflectionDiagnostic",
     "DirectXComputeRuntime",
     "DirectXRuntimeParityAdapter",
+    "MetalComputeRuntime",
+    "MetalRuntimeParityAdapter",
     "NativeRuntimeBufferBinding",
     "NativeRuntimeConstantBinding",
     "NativeRuntimeDispatchRequest",

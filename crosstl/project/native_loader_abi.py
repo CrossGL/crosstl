@@ -1433,6 +1433,8 @@ def _binding_namespace(target: str, resource: Mapping[str, Any]) -> str:
     kind = str(resource.get("kind") or "").lower()
     access = resource.get("access")
     type_name = str(resource.get("type") or "").lower().replace(" ", "")
+    if target == "metal" and kind in {"buffer", "constant-buffer", "uniform"}:
+        return "buffer"
     if target == "directx":
         if kind == "sampler":
             return "sampler"

@@ -48,13 +48,13 @@ SCALAR_UNARY_METAL_CONTRACT_PATH = (
     / "unary.scalar-metal-roundtrip.json"
 )
 SCALAR_UNARY_METAL_CONTRACT_SHA256 = (
-    "4d8252501a64f461fe30fc73264bc39a192f8b4eba5ddc8ce89ab853b7f65aab"
+    "c00579571aca66b58c669c43e0bdf240ba041b725ad8e856b2bc86e2ef847629"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "a99ca6fbe0a4cc1462b7f9e0c85cd17206c5ebed0ea02f75b4166f879ad3ad91"
+    "2afe13af9db007c1fedde5d43c4f55d394481c90ff5ce85cf4021502dd70fce5"
 )
 
 
@@ -95,9 +95,9 @@ SQUARE_WORKLOAD = UnaryWorkload(
         },
         "metal": {
             "sha256": (
-                "244e34b7aa58b7abe7c3ff09f3f51f3aa283a42bf7585bf88200590767032495"
+                "5252972da0b75ff966e967e7327612b91ef9c72867efff55d3ec0a9a5dcb8aff"
             ),
-            "sizeBytes": 1015,
+            "sizeBytes": 1091,
         },
         "opengl": {
             "sha256": (
@@ -127,21 +127,21 @@ ARCCOS_WORKLOAD = UnaryWorkload(
     generated_artifacts={
         "directx": {
             "sha256": (
-                "4562332ad4fb951478ca419180ccdf3589f74b9e0956226badc6de877d343239"
+                "656cb5ddadb5f710e360ff14ceac70892c7168ff23ab6ac065067693962836bd"
             ),
-            "sizeBytes": 4175,
+            "sizeBytes": 4430,
         },
         "metal": {
             "sha256": (
-                "1247739bc0c48d11692aee81953d8a6a4071de488bfe7ea8d7b2083aa48d9b2b"
+                "a6a870e3c299a0b69b3fd3fbcebe729a44876294c2129d5c5fa689249c26dd48"
             ),
-            "sizeBytes": 2742,
+            "sizeBytes": 3087,
         },
         "opengl": {
             "sha256": (
-                "280864c39e88198cd5e660127db453877349fadb090cb37f022bcc46300660b3"
+                "e383cc2b3bf900c5d2974c716e36068014841dae82e2ce6ed65bb8dfab8216fc"
             ),
-            "sizeBytes": 5965,
+            "sizeBytes": 6220,
         },
     },
     input_values=(-1.0, -0.5, 0.0, 0.5, 1.0),
@@ -717,12 +717,12 @@ def test_current_mlx_unary_metal_contract_is_complete_and_classified():
         "intermediate": "crossgl",
         "hostInterfaceStatus": "ready",
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 1321996,
+        "generatedSizeBytesTotal": 1444337,
         "generatedSizeRange": {
-            "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 974},
+            "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 1050},
             "maximum": {
                 "entryPoint": "gn4large_ArcTancomplex64complex64",
-                "sizeBytes": 4468,
+                "sizeBytes": 4710,
             },
         },
         "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",
