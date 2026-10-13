@@ -28,6 +28,7 @@ from .translator.codegen.pointer_reinterpret import (
 )
 from .translator.default_arguments import lower_default_arguments
 from .translator.plugin_loader import discover_backend_plugins
+from .translator.source_licenses import source_license_comments
 from .translator.source_registry import (
     BINARY_SPIRV_UNSUPPORTED_MESSAGE,
     SOURCE_REGISTRY,
@@ -244,7 +245,7 @@ def translate(
             )
             validate_pointer_reinterpretation_target(selected_ast, normalized_backend)
             generated_code = _generate_target_code(
-                codegen, selected_ast, remaining_entry_point
+                codegen, selected_ast, remaining_entry_point, normalized_backend
             )
     else:
         if normalized_backend in ["cgl", "crossgl"]:
@@ -304,7 +305,7 @@ def translate(
             )
             validate_pointer_reinterpretation_target(selected_ast, normalized_backend)
             generated_code = _generate_target_code(
-                codegen, selected_ast, remaining_entry_point
+                codegen, selected_ast, remaining_entry_point, normalized_backend
             )
 
     if (
@@ -323,18 +324,21 @@ def translate(
     return generated_code
 
 
-def _generate_target_code(codegen, ast, entry_point):
+def _generate_target_code(codegen, ast, entry_point, backend=None):
     if entry_point is None:
-        return codegen.generate(ast)
-    entry_point = _validated_entry_point(entry_point)
-    generate_entry = getattr(codegen, "generate_entry", None)
-    if not callable(generate_entry):
-        raise EntryPointSelectionUnsupportedError(
-            "Entry-scoped artifact generation is not supported for the requested "
-            "target backend",
-            entry_point=entry_point,
-        )
-    return generate_entry(ast, entry_point)
+        code = codegen.generate(ast)
+    else:
+        entry_point = _validated_entry_point(entry_point)
+        generate_entry = getattr(codegen, "generate_entry", None)
+        if not callable(generate_entry):
+            raise EntryPointSelectionUnsupportedError(
+                "Entry-scoped artifact generation is not supported for the requested "
+                "target backend",
+                entry_point=entry_point,
+            )
+        code = generate_entry(ast, entry_point)
+    notices = source_license_comments(ast, backend)
+    return code if not notices or notices in code else notices + code
 
 
 def _validated_entry_point(entry_point):

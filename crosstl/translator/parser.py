@@ -75,6 +75,7 @@ from .ast import (
     WildcardPatternNode,
     create_legacy_shader_node,
 )
+from .source_licenses import SOURCE_LICENSES
 from .stage_utils import shader_stage_from_name
 from .validation import validate_shader_cbuffers
 
@@ -1708,16 +1709,45 @@ class Parser:
         finally:
             self.restore_generic_parameter_scope(previous_scope)
 
+        function_attributes = []
+        linkage_qualifiers = set()
+        source_licenses = set()
+        for attribute in attributes + post_attributes:
+            if attribute.name == "source_license":
+                arguments = attribute.arguments
+                license_name = (
+                    getattr(arguments[0], "name", None) if len(arguments) == 1 else None
+                )
+                if license_name not in SOURCE_LICENSES:
+                    raise SyntaxError(
+                        "@source_license requires one registered license identifier"
+                    )
+                source_licenses.add(license_name)
+            elif attribute.name in {"metal_static", "metal_inline"}:
+                if attribute.arguments:
+                    raise SyntaxError(f"@{attribute.name} does not accept arguments")
+                qualifier = attribute.name[len("metal_") :]
+                linkage_qualifiers.add(qualifier)
+            else:
+                function_attributes.append(attribute)
+
         return FunctionNode(
             name=name,
             return_type=return_type,
             parameters=parameters,
             body=body,
             generic_params=generic_params,
-            attributes=attributes + post_attributes,
+            attributes=function_attributes,
             qualifiers=qualifiers,
             is_async="async" in qualifiers,
             is_unsafe="unsafe" in qualifiers,
+            linkage="internal" if "static" in linkage_qualifiers else "external",
+            is_inline="inline" in linkage_qualifiers,
+            annotations=(
+                {"source_licenses": tuple(sorted(source_licenses))}
+                if source_licenses
+                else None
+            ),
         )
 
     def parse_return_type_attributes(self):
