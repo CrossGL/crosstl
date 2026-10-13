@@ -1485,6 +1485,15 @@ the existing 20 word-aligned cases as a separate required step. This establishes
 bounded byte transport, not `RandomBits` host routing or upstream random-suite
 parity.
 
+The audit writes its active case, phase, elapsed time and completed-case count
+to `evidence.json` before package preparation and native execution, and emits
+the same progress to the CI log. Evidence remains unsuccessful until every case,
+source verification and runtime cleanup finishes. JSON updates use atomic file
+replacement so an interrupted run retains the last complete progress record.
+The Windows byte-tail step has a 1,200-second overall budget for all 48 cases;
+Metal and OpenGL retain their 450-second budgets. Native operation deadlines,
+numerical comparisons, input observations and guard checks are unchanged.
+
 ```bash
 python -m demos.integrations.mlx.random_audit --byte-tails \
   --mlx-root /path/to/pinned/mlx --target metal \

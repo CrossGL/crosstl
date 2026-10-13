@@ -356,8 +356,9 @@ def test_numerical_and_native_evidence_contract(target, fault):
 
 @pytest.mark.parametrize("wrong", [False, True])
 @pytest.mark.parametrize("byte_tails", [False, True])
+@pytest.mark.parametrize("cleanup_error", [False, True])
 def test_audit_keeps_complete_failure_evidence(
-    tmp_path, monkeypatch, wrong, byte_tails
+    tmp_path, monkeypatch, capsys, wrong, byte_tails, cleanup_error
 ):
     cases = audit.workloads(byte_tails=byte_tails)
     desc = {entry: descriptor("opengl", entry) for entry in audit.ENTRIES}
@@ -392,16 +393,25 @@ def test_audit_keeps_complete_failure_evidence(
         return result
 
     run.calls = 0
+
+    def close():
+        pending = json.loads((output / "evidence.json").read_text())
+        assert pending["passed"] is False
+        assert pending["progress"]["phase"] == "cleanup"
+        closed.append(True)
+        if cleanup_error:
+            raise RuntimeError("Runtime cleanup failed")
+
     native = SimpleNamespace(
         run=run,
-        runtime_adapter=SimpleNamespace(
-            runtime=SimpleNamespace(close=lambda: closed.append(True))
-        ),
+        runtime_adapter=SimpleNamespace(runtime=SimpleNamespace(close=close)),
     )
     monkeypatch.setattr(audit, "executor", lambda target: native)
     output = tmp_path / "audit"
     result = audit.audit(tmp_path, "opengl", output, byte_tails=byte_tails)
-    assert result["passed"] is (not wrong)
+    assert result["passed"] is (not wrong and not cleanup_error)
+    if cleanup_error:
+        assert result["cleanupError"] == "Runtime cleanup failed"
     assert len(result["cases"]) == run.calls == len(cases)
     assert all(case["passed"] is (not wrong) for case in result["cases"])
     assert len(list(output.glob("*/result.json"))) == len(cases)
@@ -410,6 +420,80 @@ def test_audit_keeps_complete_failure_evidence(
     )
     assert json.loads((output / "evidence.json").read_text()) == result
     assert closed == [True]
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert all(event["event"] == "random-audit-progress" for event in events)
+    assert all(event["target"] == "opengl" for event in events)
+    assert all(event["totalCases"] == len(cases) for event in events)
+    assert events[-1]["phase"] == "complete"
+    assert events[-1]["activeCase"] is None
+    assert events[-1]["completedCases"] == len(cases)
+    assert [event["elapsedSeconds"] for event in events] == sorted(
+        event["elapsedSeconds"] for event in events
+    )
+    for case, record in zip(cases, result["cases"]):
+        selected = [event for event in events if event["activeCase"] == case["id"]]
+        assert [event["phase"] for event in selected] == [
+            "package",
+            "bindings",
+            "native-execution",
+            "compare-readback",
+            "case-complete",
+        ]
+        assert all(event["caseElapsedSeconds"] >= 0 for event in selected)
+        assert record["elapsedSeconds"] >= 0
+        if wrong:
+            assert record["failedPhase"] == "compare-readback"
+
+
+def test_atomic_audit_write_preserves_previous_evidence(tmp_path, monkeypatch):
+    path = tmp_path / "evidence.json"
+    audit.write_json(path, {"passed": False, "phase": "native-execution"})
+    before = path.read_bytes()
+
+    def fail_replace(self, destination):
+        assert self == path.with_name("evidence.json.tmp")
+        assert destination == path
+        assert json.loads(self.read_text()) == {"passed": True}
+        raise OSError("Replacement failed")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    with pytest.raises(OSError, match="Replacement failed"):
+        audit.write_json(path, {"passed": True})
+    assert path.read_bytes() == before
+
+
+def test_progress_write_failure_still_closes_runtime(tmp_path, monkeypatch):
+    def reject_package(*args):
+        raise ValueError("Package unavailable")
+
+    monkeypatch.setattr(
+        audit, "RandomPackageCache", lambda *args: SimpleNamespace(get=reject_package)
+    )
+    monkeypatch.setattr(audit, "verify_source", lambda root: None)
+    closed = []
+    native = SimpleNamespace(
+        runtime_adapter=SimpleNamespace(
+            runtime=SimpleNamespace(close=lambda: closed.append(True))
+        )
+    )
+    monkeypatch.setattr(audit, "executor", lambda target: native)
+    write_json = audit.write_json
+
+    def fail_cleanup_record(path, value):
+        if value.get("progress", {}).get("phase") == "cleanup":
+            raise OSError("Cannot save progress")
+        write_json(path, value)
+
+    monkeypatch.setattr(audit, "write_json", fail_cleanup_record)
+    output = tmp_path / "audit"
+    with pytest.raises(OSError, match="Cannot save progress"):
+        audit.audit(tmp_path, "opengl", output)
+    assert closed == [True]
+    saved = json.loads((output / "evidence.json").read_text())
+    assert saved["passed"] is False
+    assert saved["progress"]["phase"] == "verify-source"
+    assert len(saved["cases"]) == 20
+    assert all(case["failedPhase"] == "package" for case in saved["cases"])
 
 
 def test_cli_returns_failure_for_failed_audit(tmp_path, monkeypatch):
@@ -445,6 +529,13 @@ def test_native_failure_records_every_case_and_closes_runtime(tmp_path, monkeypa
     closed = []
 
     def run(request):
+        pending = json.loads((output / "evidence.json").read_text())
+        assert pending["passed"] is False
+        assert pending["progress"]["phase"] == "native-execution"
+        assert (
+            pending["progress"]["activeCase"]
+            == audit.workloads()[len(pending["cases"])]["id"]
+        )
         raise RuntimeError("Native compiler rejected the source")
 
     native = SimpleNamespace(
@@ -462,6 +553,7 @@ def test_native_failure_records_every_case_and_closes_runtime(tmp_path, monkeypa
         case["error"] == "Native compiler rejected the source"
         for case in result["cases"]
     )
+    assert all(case["failedPhase"] == "native-execution" for case in result["cases"])
     assert closed == [True]
     before = (output / "evidence.json").read_bytes()
     with pytest.raises(FileExistsError):
@@ -539,7 +631,8 @@ def test_partial_random_profile_is_required_on_each_platform(target):
     )
     assert "if" not in step and not step.get("continue-on-error", False)
     assert "set -euo pipefail" in step["run"]
-    assert "--timeout-seconds 450" in step["run"]
+    timeout = 1200 if target == "directx" else 450
+    assert f"--timeout-seconds {timeout}" in step["run"]
     assert "--byte-tails" in step["run"]
     assert f"--target {target}" in step["run"]
     assert "python -m demos.integrations.mlx.random_audit" in step["run"]

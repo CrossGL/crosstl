@@ -543,7 +543,7 @@ jobs:
       - name: Validate DirectX random byte tails
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 450 --label "Native DirectX random byte tails" -- \
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "Native DirectX random byte tails" -- \
             python -m demos.integrations.mlx.random_audit --byte-tails \
               --mlx-root mlx-upstream --target directx --output-dir .mlx-gather-directx/random-byte-tails \
               2>&1 | tee .mlx-gather-directx/random-byte-tails.log

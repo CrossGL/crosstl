@@ -5,6 +5,7 @@ import hashlib
 import json
 import struct
 import subprocess
+import time
 from pathlib import Path
 
 from crosstl.project import (
@@ -39,7 +40,9 @@ GUARD_COUNT = 17
 
 
 def write_json(path, value):
-    path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
+    pending = path.with_name(path.name + ".tmp")
+    pending.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
+    pending.replace(path)
 
 
 def threefry(key, count):
@@ -310,6 +313,9 @@ def executor(target):
 
 def audit(root, target, output, *, byte_tails=False):
     output.mkdir(parents=True)
+    started = time.monotonic()
+    cases = workloads(byte_tails=byte_tails)
+    case_started = None
     evidence = {
         "commit": COMMIT,
         "target": target,
@@ -319,20 +325,51 @@ def audit(root, target, output, *, byte_tails=False):
         "fullHostIntegration": False,
         "fullUpstreamSuite": False,
     }
+
+    def progress(phase, case=None):
+        now = time.monotonic()
+        evidence["progress"] = {
+            "phase": phase,
+            "activeCase": case["id"] if case is not None else None,
+            "completedCases": len(evidence["cases"]),
+            "totalCases": len(cases),
+            "elapsedSeconds": round(now - started, 6),
+            "caseElapsedSeconds": (
+                round(now - case_started, 6)
+                if case is not None and case_started is not None
+                else None
+            ),
+        }
+        write_json(output / "evidence.json", evidence)
+        print(
+            json.dumps(
+                {
+                    "event": "random-audit-progress",
+                    "target": target,
+                    **evidence["progress"],
+                }
+            ),
+            flush=True,
+        )
+
     native = None
+    qualified = False
     try:
+        progress("initialize")
         cache = RandomPackageCache(root, output / "variants", target)
         native = executor(target)
-        cases = workloads(byte_tails=byte_tails)
         for case in cases:
+            case_started = time.monotonic()
             destination = output / case["id"]
             destination.mkdir()
             record = {"workload": case, "passed": False}
             try:
+                progress("package", case)
                 descriptors, package = cache.get(
                     case["keyCount"], case["bytesPerKey"], case["execution"]
                 )
                 record["package"] = str(package)
+                progress("bindings", case)
                 inputs, outputs = dispatch_values(descriptors[case["entry"]], case)
                 write_json(
                     destination / "inputs.json", {"inputs": inputs, "outputs": outputs}
@@ -347,7 +384,9 @@ def audit(root, target, output, *, byte_tails=False):
                     observe_inputs=[name for name in inputs if name not in outputs],
                 )
                 native.evidence_directory = destination
+                progress("native-execution", case)
                 result = native.run(request)
+                progress("compare-readback", case)
                 write_json(
                     destination / "result.json",
                     {
@@ -382,30 +421,38 @@ def audit(root, target, output, *, byte_tails=False):
                 record["passed"] = passed
                 if not record["passed"]:
                     record["error"] = "Native random values, layout, guards or execution identity differ"
+                    record["failedPhase"] = evidence["progress"]["phase"]
             except (ValueError, RuntimeError) as error:
                 record["error"] = str(error)
                 record["errorType"] = type(error).__name__
                 record["details"] = getattr(error, "details", {})
+                record["failedPhase"] = evidence["progress"]["phase"]
+            record["elapsedSeconds"] = round(time.monotonic() - case_started, 6)
             evidence["cases"].append(record)
-            write_json(output / "evidence.json", evidence)
-        evidence["passed"] = len(evidence["cases"]) == len(cases) and all(
+            progress("case-complete", case)
+        progress("verify-source")
+        verify_source(root)
+        qualified = len(evidence["cases"]) == len(cases) and all(
             record["passed"] for record in evidence["cases"]
         )
-        verify_source(root)
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
         evidence["passed"] = False
         evidence["error"] = str(error)
         evidence["errorType"] = type(error).__name__
     finally:
         if native is not None:
-            close = getattr(native.runtime_adapter.runtime, "close", None)
-            if close:
-                try:
-                    close()
-                except (RuntimeError, OSError) as error:
-                    evidence["passed"] = False
-                    evidence["cleanupError"] = str(error)
-        write_json(output / "evidence.json", evidence)
+            try:
+                progress("cleanup")
+            finally:
+                close = getattr(native.runtime_adapter.runtime, "close", None)
+                if close:
+                    try:
+                        close()
+                    except (RuntimeError, OSError) as error:
+                        qualified = False
+                        evidence["cleanupError"] = str(error)
+        evidence["passed"] = qualified
+        progress("complete")
     return evidence
 
 
