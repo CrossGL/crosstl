@@ -60,7 +60,7 @@ repos:
           - --markdown-linebreak-ext=rst
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.10
+    rev: v0.17.0
     hooks:
       - id: ruff-check
         name: ruff critical Python checks
@@ -71,7 +71,7 @@ repos:
           - --target-version=py38
 
   - repo: https://github.com/asottile/pyupgrade
-    rev: v3.21.2
+    rev: v3.22.0
     hooks:
       - id: pyupgrade
         args: [--py38-plus]
@@ -85,7 +85,7 @@ repos:
           - --filter-files
 
   - repo: https://github.com/psf/black-pre-commit-mirror
-    rev: 26.10.0
+    rev: 26.10.1
     hooks:
       - id: black
         args:
