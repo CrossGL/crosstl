@@ -1236,7 +1236,9 @@ def test_current_mlx_arg_reduce_native_validation(
         report = translation.to_json()
         report_path = tmp_path / "report.json"
         translation.write_json(report_path)
-        assert validate_project_report(report_path)["success"] is True
+        validation = validate_project_report(report_path)
+        _write_json(tmp_path / "validation.json", validation)
+        assert validation["success"] is True, validation
         assert report["diagnostics"] == []
         assert report["summary"]["translatedCount"] == 1
         assert report["summary"]["failedCount"] == 0

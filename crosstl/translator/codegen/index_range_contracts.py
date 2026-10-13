@@ -196,8 +196,9 @@ def decide_index_narrowing(
     value_range: IntegerRange | None,
     indexed_extent: int | None = None,
     target_signed: bool | None = None,
+    base_range: IntegerRange | None = None,
 ) -> IndexNarrowingDecision:
-    """Prove an identity or narrowing conversion without target-side checks."""
+    """Prove an index conversion, optionally relative to a checked pointer base."""
 
     if source_width != 1:
         return IndexNarrowingDecision(
@@ -226,6 +227,51 @@ def decide_index_narrowing(
     if indexed_extent is not None:
         maximum_index = min(maximum_index, indexed_extent - 1)
     accepted_range = IntegerRange(0, maximum_index) if maximum_index >= 0 else None
+
+    if base_range is not None:
+        combined = (
+            IntegerRange(
+                base_range.minimum + value_range.minimum,
+                base_range.maximum + value_range.maximum,
+            )
+            if value_range is not None
+            else None
+        )
+        source_range = IndexScalarType("source", source_signed, source_bits).value_range
+        checked_statuses = {INDEX_RANGE_CONSTANT, INDEX_RANGE_STATIC}
+        if (
+            combined is None
+            or accepted_range is None
+            or base_range.status not in checked_statuses
+            or value_range.status not in checked_statuses
+            or not base_range.is_within(target_range)
+            or not value_range.is_within(source_range)
+            or not value_range.is_within(target_range)
+            or not combined.is_within(accepted_range)
+        ):
+            return IndexNarrowingDecision(
+                "reject",
+                target_type,
+                INDEX_RANGE_UNPROVEN,
+                "composed-pointer-index-range-unproven",
+                combined,
+                accepted_range,
+            )
+        # Negative relative offsets are valid only after the complete address
+        # and both operands have been proved representable in the target.
+        return IndexNarrowingDecision(
+            (
+                "identity"
+                if source_signed == target_type.signed
+                and source_bits <= target_type.bits
+                else "convert"
+            ),
+            target_type,
+            value_range.status,
+            None,
+            value_range,
+            target_range,
+        )
 
     # A source index that is already legal for the target needs no range proof.
     # Still reject an exact invalid subscript because constants are diagnosed
@@ -261,11 +307,12 @@ def decide_index_narrowing(
 
     if value_range is not None:
         if value_range.minimum < 0:
+            always_negative = value_range.maximum < 0
             return IndexNarrowingDecision(
                 "reject",
                 target_type,
-                INDEX_RANGE_OUT_OF_RANGE,
-                "negative-index",
+                INDEX_RANGE_OUT_OF_RANGE if always_negative else INDEX_RANGE_UNPROVEN,
+                "negative-index" if always_negative else "index-range-may-be-negative",
                 value_range,
                 accepted_range,
             )

@@ -1285,9 +1285,14 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "Linux) export CROSTL_MLX_CURRENT_TARGET=opengl" in current_arg_reduce
     assert "Windows) export CROSTL_MLX_CURRENT_TARGET=directx" in current_arg_reduce
     assert "macOS) export CROSTL_MLX_CURRENT_TARGET=metal" in current_arg_reduce
+    assert 'PYTEST_XDIST_AUTO_NUM_WORKERS: "2"' in current_arg_reduce
+    assert "--basetemp=mlx-current-results/arg-reduce \\" in current_arg_reduce
+    assert "--junitxml=mlx-current-results/arg-reduce.xml \\" in current_arg_reduce
     assert (
-        "python -m pytest -q "
-        "demos/integrations/mlx/tests/kernels/test_current_arg_reduce.py"
+        "--basetemp=mlx-current-results/arg-reduce-contracts \\" in current_arg_reduce
+    )
+    assert (
+        "--junitxml=mlx-current-results/arg-reduce-contracts.xml \\"
         in current_arg_reduce
     )
     _assert_workflow_triggers(
@@ -1336,7 +1341,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     runtime_upload = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Upload current MLX runtime diagnostics"
     )
-    assert "if: always() && runner.os == 'Windows'" in runtime_upload
+    assert "if: always()\n" in runtime_upload
+    assert "runner.os" not in runtime_upload
     assert "path: mlx-current-results" in runtime_upload
     assert "actions/upload-artifact@v4" in runtime_upload
     assert '-k "$entry"' in current_arg_reduce

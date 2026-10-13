@@ -381,9 +381,7 @@ def audit(root, target, output, *, byte_tails=False):
                         raise ValueError("Native random module was not retained")
                 record["passed"] = passed
                 if not record["passed"]:
-                    record["error"] = (
-                        "Native random values, layout, guards or execution identity differ"
-                    )
+                    record["error"] = "Native random values, layout, guards or execution identity differ"
             except (ValueError, RuntimeError) as error:
                 record["error"] = str(error)
                 record["errorType"] = type(error).__name__

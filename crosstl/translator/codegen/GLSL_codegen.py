@@ -40084,6 +40084,7 @@ complex64_t crossgl_complex64_mod_assign(
         )
         if source_range is None:
             source_range = self.glsl_index_value_range(index_expr)
+        base_range = None
         if indexed_expr is not None and not isinstance(indexed_expr, str):
             binding = self.glsl_storage_pointer_binding(
                 indexed_expr, self.glsl_storage_pointer_aliases()
@@ -40091,7 +40092,13 @@ complex64_t crossgl_complex64_mod_assign(
             if (
                 binding is not None
                 and binding.get("offset", 0) not in (0, "0", "0u")
-                and (source_bits > 32 or binding.get("wide_offset"))
+                and (
+                    source_bits > 32
+                    or binding.get("wide_offset")
+                    or source_range is not None
+                    and source_range.is_exact
+                    and source_range.minimum < 0
+                )
             ):
                 intervals = getattr(indexed_expr, "_glsl_control_flow_intervals", {})
                 base = self.glsl_checked_private_pointer_interval(
@@ -40103,21 +40110,8 @@ complex64_t crossgl_complex64_mod_assign(
                         intervals,
                         self.glsl_active_literal_int_constants(),
                     )
-                combined = (
-                    IntegerRange(
-                        base[0] + source_range.minimum, base[1] + source_range.maximum
-                    )
-                    if base is not None and source_range is not None
-                    else None
-                )
                 accepted = IntegerRange(0, (1 << 31) - 1)
-                if (
-                    combined is None
-                    or not combined.is_within(accepted)
-                    or not source_range.is_within(
-                        IntegerRange(-(1 << 31), (1 << 31) - 1)
-                    )
-                ):
+                if base is None:
                     self.glsl_index_type_error(
                         index_expr,
                         indexed_expr,
@@ -40125,9 +40119,29 @@ complex64_t crossgl_complex64_mod_assign(
                         "int",
                         "composed-pointer-index-range-unproven",
                         range_status="unproven",
-                        source_range=combined,
+                        source_range=None,
                         accepted_range=accepted,
                     )
+                # A proved zero base is an ordinary subscript. Keep explicit
+                # assertion provenance rather than treating it as a rebase proof.
+                if base != (0, 0):
+                    base_range = IntegerRange(*base)
+                    if source_range is not None and (
+                        source_range.minimum < 0
+                        or any(
+                            self.glsl_index_asserted_range(node) is not None
+                            for node in self.walk_ast(index_expr)
+                        )
+                    ):
+                        checked = self.glsl_checked_private_pointer_interval(
+                            index_expr,
+                            intervals,
+                            self.glsl_active_literal_int_constants(),
+                            require_arithmetic_types=True,
+                        )
+                        source_range = (
+                            IntegerRange(*checked) if checked is not None else None
+                        )
                 target_signed = True
         decision = decide_index_narrowing(
             source_signed=index_info["family"] == "int",
@@ -40141,6 +40155,7 @@ complex64_t crossgl_complex64_mod_assign(
                 else indexed_extent
             ),
             target_signed=target_signed,
+            base_range=base_range,
         )
         target_type = decision.target_type.name if decision.target_type else None
         if not decision.accepted:

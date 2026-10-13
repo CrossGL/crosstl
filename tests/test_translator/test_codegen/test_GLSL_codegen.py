@@ -12316,7 +12316,7 @@ def test_opengl_storage_pointer_source_range_assertion_propagates_to_offset(
                 "minimum": -1,
                 "maximum": 2**31 - 1,
             },
-            "negative-index",
+            "index-range-may-be-negative",
         ),
         (
             {

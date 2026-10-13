@@ -3278,6 +3278,15 @@ The OpenGL proof follows the partial-tile loop guard into the helper-derived
 offsets; no source edits or asserted index ranges are used. This case runs in the
 existing native copy jobs alongside the padded layout.
 
+The same tight layout also covers `ggn4large_dynamic_copyfloat32float32`, with
+four-element tiles and signed 64-bit indices. Its launch grid is `[2, 4, 6]`;
+the final tile contains one valid element. Checked base and relative-offset
+bounds preserve negative relative subscripts without accepting a negative final
+address. The unchanged source executes on generated OpenGL and original/generated
+Metal with the same 120 values, untouched holes and 32 tail guards. This adds a
+wide-index entry to the existing OS jobs, not full copy-conversion or host-routing
+coverage. No upstream source changes or padding workarounds are used.
+
 The focused `prove_layer_norm_directx.py` gate translates two host-selected
 single-row entries from the pinned `layer_norm.metal` source: forward float32
 with axis size 4099 and VJP float32 with axis size 8192 and `has_w=true`. It

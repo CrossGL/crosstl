@@ -20445,9 +20445,8 @@ class TestVulkanSPIRVCodeGen:
             spv_code,
         )
         assert texel_pointer is not None
-        image_pointer_types = {*re.findall(
-                r"(%\d+) = OpTypePointer Image %\d+\b", spv_code
-            )
+        image_pointer_types = {
+            *re.findall(r"(%\d+) = OpTypePointer Image %\d+\b", spv_code)
         }
         assert texel_pointer.group(2) in image_pointer_types
         assert re.search(

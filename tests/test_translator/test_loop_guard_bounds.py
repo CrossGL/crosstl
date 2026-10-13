@@ -210,18 +210,18 @@ kernel void tiled_copy(
 GUARD = 123456
 
 
-def _metadata(reverse):
+def _metadata(reverse, *, width=3):
     return dict(
-        shape=("int32", [2, 3]),
-        a=("int64", [3, -1 if reverse else 1]),
+        shape=("int32", [2, width]),
+        a=("int64", [width, -1 if reverse else 1]),
         b=("int64", [1, 2]),
-        src_base=("int64", [2 if reverse else 0]),
+        src_base=("int64", [width - 1 if reverse else 0]),
         dst_base=("int64", [0]),
     )
 
 
-def _tiled_config(root, target, reverse, *, width=3, offset=0):
-    metadata = _metadata(reverse)
+def _tiled_config(root, target, reverse, *, width=3, offset=0, layout_width=3):
+    metadata = _metadata(reverse, width=layout_width)
     metadata["shape"] = ("int32", [2, width])
     metadata["dst_base"] = ("int64", [offset])
     conditions = [
@@ -266,24 +266,25 @@ def test_guard_proof_rejects_actual_negative_indices(tmp_path, width, offset):
 
 
 @pytest.mark.parametrize("reverse", [False, True])
-def test_tight_tiled_layout_executes_natively(tmp_path, reverse):
+@pytest.mark.parametrize("width", [3, 4])
+def test_tight_tiled_layout_executes_natively(tmp_path, reverse, width):
     if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":
         pytest.skip(
             "set CROSTL_REQUIRE_METADATA_PRECONDITIONS=1 for native metadata checks"
         )
     target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
-    config = _tiled_config(tmp_path, target, reverse)
+    config = _tiled_config(tmp_path, target, reverse, width=width, layout_width=width)
     _, package, (descriptor,) = _packages(config)
-    words = [101 + i * 7 for i in range(6)]
-    expected = [GUARD] * 11
+    words = [101 + i * 7 for i in range(2 * width)]
+    expected = [GUARD] * (2 * width + 5)
     for row in range(2):
-        for column in range(3):
-            index = row * 3 + (2 - column if reverse else column)
+        for column in range(width):
+            index = row * width + (width - 1 - column if reverse else column)
             expected[row + 2 * column] = words[index]
     values = {
-        **_metadata(reverse),
+        **_metadata(reverse, width=width),
         "src": ("int32", words),
-        "dst": ("int32", [GUARD] * 11),
+        "dst": ("int32", [GUARD] * len(expected)),
     }
     inputs, outputs = {}, {}
     for binding in descriptor["bindings"]:

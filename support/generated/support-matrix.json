@@ -13967,6 +13967,12 @@
             "tests/test_translator/test_loop_guard_bounds.py::def test_unmodeled_control_flow_and_dependencies_do_not_tighten_entries",
             "tests/test_translator/test_loop_guard_bounds.py::def test_guard_proof_rejects_actual_negative_indices",
             "tests/test_translator/test_loop_guard_bounds.py::def test_tight_tiled_layout_executes_natively",
+            "tests/test_translator/test_pointer_index_bounds.py::def test_checked_base_keeps_signed_relative_indices",
+            "tests/test_translator/test_pointer_index_bounds.py::def test_relative_index_requires_a_complete_checked_address",
+            "tests/test_translator/test_pointer_index_bounds.py::def test_negative_absolute_subscript_is_still_rejected",
+            "tests/test_translator/test_pointer_index_bounds.py::def test_index_diagnostic_distinguishes_possible_and_proven_negative_values",
+            "tests/test_translator/test_pointer_index_bounds.py::def test_signed_relative_indices_execute_natively",
+            "tests/test_translator/test_index_range_contracts.py::def test_relative_index_requires_checked_representable_operands",
             "tests/test_translator/test_loop_offset_bounds.py::def test_component_loop_proof_rejects_unsafe_updates",
             "demos/integrations/mlx/tests/kernels/test_current_copy.py::def test_copy_contracts_bind_uploaded_metadata_and_launch"
           ],

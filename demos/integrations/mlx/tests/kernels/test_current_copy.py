@@ -64,12 +64,19 @@ CASES = {
     "reverse-1d": ("gg1_dynamic_copy", [17], [-2]),
     "reverse-4d": ("ggn2_dynamic_copy", [2, 3, 4, 5], [100, 7, -21, -1]),
     "tight-reverse-4d": ("ggn2_dynamic_copy", [2, 3, 4, 5], [100, 7, -21, -1]),
+    "tight-reverse-wide-4d": (
+        "ggn4large_dynamic_copy",
+        [2, 3, 4, 5],
+        [100, 7, -21, -1],
+    ),
 }
 DYNAMIC_LAYOUTS = {
     "reverse-1d": (38, 3, [2]),
     "reverse-4d": (80, 7, [151, 43, 9, -1]),
     "tight-reverse-4d": (67, 4, [151, 43, 9, -1]),
+    "tight-reverse-wide-4d": (67, 4, [151, 43, 9, -1]),
 }
+TILE_WIDTHS = {"gn2_copy": 2, "ggn2_dynamic_copy": 2, "ggn4large_dynamic_copy": 4}
 
 
 def _bytes(dtype, values):
@@ -78,6 +85,7 @@ def _bytes(dtype, values):
 
 def _workload(case):
     prefix, shape, strides = CASES[case]
+    tile_width = TILE_WIDTHS.get(prefix, 1)
     count = math.prod(shape)
     source_offset, destination_offset, destination_strides = DYNAMIC_LAYOUTS.get(
         case, (0, 0, None)
@@ -106,7 +114,7 @@ def _workload(case):
         [count, 1, 1]
         if len(shape) == 1
         else [
-            (shape[-1] + 1) // 2 if "n2" in prefix else shape[-1],
+            (shape[-1] + tile_width - 1) // tile_width,
             shape[-2],
             math.prod(shape[:-2]),
         ]
@@ -120,7 +128,7 @@ def _workload(case):
             else {"src_strides": ("int64", strides, 3)}
         )
     )
-    if "n2" in prefix:
+    if prefix in TILE_WIDTHS:
         constants.update(
             {
                 "src_shape": ("int32", shape, 2),
@@ -148,6 +156,7 @@ def _workload(case):
         "destinationStrides": destination_strides,
         "expected": expected,
         "grid": grid,
+        "tileWidth": tile_width,
         "constants": constants,
     }
 
@@ -159,7 +168,9 @@ def _check(actual, expected):
 
 
 def _checked_copy_config(config, workload):
-    if not workload["entry"].startswith(("gg1_dynamic_copy", "ggn2_dynamic_copy")):
+    if not workload["entry"].startswith(
+        ("gg1_dynamic_copy", "ggn2_dynamic_copy", "ggn4large_dynamic_copy")
+    ):
         return config
     requirements = [
         dict(
@@ -202,9 +213,10 @@ def test_copy_workload_covers_logical_coordinates(case):
     assert workload["expected"][first] == 0
     assert math.copysign(1, workload["expected"][first]) == -1
     if case.endswith("4d"):
-        assert workload["grid"] == [3, 4, 6]
-        assert workload["shape"][-1] % 2 == 1
-    if case == "tight-reverse-4d":
+        tile = workload["tileWidth"]
+        assert workload["grid"] == [(workload["shape"][-1] + tile - 1) // tile, 4, 6]
+        assert workload["shape"][-1] % tile == 1
+    if case.startswith("tight-reverse"):
         assert min(workload["offsets"]) == 0
         assert min(workload["destinations"]) == 0
 
@@ -226,7 +238,9 @@ def test_copy_readback_rejects_corruption(fault):
 
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
-@pytest.mark.parametrize("case", ("reverse-1d", "reverse-4d", "tight-reverse-4d"))
+@pytest.mark.parametrize(
+    "case", ("reverse-1d", "reverse-4d", "tight-reverse-4d", "tight-reverse-wide-4d")
+)
 def test_copy_contracts_bind_uploaded_metadata_and_launch(tmp_path, target, case):
     workload = _workload(case)
     original = ProjectConfig(root=tmp_path, targets=(target,))
@@ -282,7 +296,7 @@ def test_ci_requires_native_copy_parity(job):
     assert upload_path in upload
     assert "if-no-files-found: error" in upload
     assert "retention-days: 14" in upload
-    assert len({item[0] for item in CASES.values()}) == 8
+    assert len({item[0] for item in CASES.values()}) == 9
 
 
 @pytest.fixture(scope="module")

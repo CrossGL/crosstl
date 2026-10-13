@@ -1252,6 +1252,21 @@ and subsequent subscripts must also prove the complete signed logical offset;
 proving the delta or subscript separately is insufficient. Unproved conversions
 remain structured errors. Native controls cover direct and rebased reads at all
 configured endpoints, unchanged inputs and guarded outputs.
+Signed relative subscripts may be negative after a pointer rebase. They acquire
+a narrowing proof only when checked bounds establish that the base and relative
+offset each fit the signed target representation and their complete sum is a
+non-negative index within the target limit and any known fixed extent. Trusted
+expression assertions alone cannot establish this composed proof. Negative
+absolute indices, missing contracts, overflow, shadowing and escaped values remain
+rejected; runtime allocation checks are still required.
+A pointer base proved to be exactly zero remains an ordinary absolute subscript.
+Existing explicit assertions retain their ``asserted`` status in that case; they
+are not promoted to checked metadata or native execution evidence.
+For rejected wide-index proofs, a range spanning negative and non-negative values
+reports ``index-range-may-be-negative`` with ``rangeStatus: unproven``. A wholly
+negative range reports ``negative-index`` with ``rangeStatus: out-of-range``.
+The report retains the inferred bounds in either case; an over-approximation is
+not presented as a demonstrated invalid input.
 Pointer-offset proofs retain source identifier ownership when GLSL emission
 renames a reserved word. A similarly named local variable cannot supply bounds
 for that pointer; composed offsets still undergo overflow and scope checks.

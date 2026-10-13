@@ -621,18 +621,25 @@ def test_generated_resource_load_helpers_execute(tmp_path, iterations):
     )
 
 
-def test_generated_handle_uniformity_does_not_authorize_index_narrowing(tmp_path):
+@pytest.mark.parametrize("offset", [0, 1, 8])
+def test_generated_handle_uniformity_does_not_authorize_index_narrowing(
+    tmp_path, offset
+):
+    source = STORAGE_SOURCE
+    if offset:
+        source = source.replace(
+            "destination.data = output;", f"destination.data = output + {offset}u;"
+        )
     report = _report(
         tmp_path,
         "opengl",
-        STORAGE_SOURCE,
+        source,
         diagnostic="project.translate.opengl-index-type-unsupported",
     ).to_json()
     assert report["summary"]["translatedCount"] == 0
-    assert (
-        report["diagnostics"][0]["details"]["indexConversion"]["reason"]
-        == "composed-pointer-index-range-unproven"
-    )
+    diagnostic = report["diagnostics"][0]["details"]["indexConversion"]
+    assert diagnostic["reason"] == "index-range-unproven"
+    assert diagnostic["rangeStatus"] == "unproven"
 
 
 BUFFER_SOURCE = (

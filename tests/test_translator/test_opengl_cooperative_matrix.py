@@ -174,7 +174,7 @@ def test_matrix_scratch_identifiers_avoid_source_names(tmp_path):
 def test_public_matrix_package_retains_logical_policy(tmp_path, shape):
     _, request, _ = _project_request(tmp_path, "opengl", shape=shape)
     report = json.loads((tmp_path / "report.json").read_text())
-    policies = [value for value in _policies(report)]
+    policies = [*_policies(report)]
     assert len(policies) == 1
     assert policies[0]["effectiveWidth"] == 32
     assert policies[0]["requirements"] == [
