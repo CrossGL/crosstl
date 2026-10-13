@@ -672,6 +672,33 @@ requires DXC compilation and Direct3D readbacks for finite values, NaNs,
 infinities, vector selection, and eager evaluation. This isolated arithmetic
 check does not establish whole-MLX numerical or host-runtime coverage.
 
+Canonical ``atan2(y, x)`` uses typed HLSL helpers to retain the sign of zero
+when selecting a quadrant. The helpers also handle both-infinite operands,
+signed axis angles, and NaNs explicitly; ordinary finite values still use the
+native HLSL approximation. Float scalar/vector operands are supported, with
+explicit promotion and narrowing for half/minimum-precision forms and the
+existing scalar bfloat decode/encode path. Arguments are evaluated once.
+Unknown, mismatched or unsupported operand types and shadowed target intrinsics
+fail closed. Source-defined overloads retain their behavior, and HLSL-to-HLSL
+``atan2`` round trips remain native. This is not a general subnormal or
+transcendental-accuracy contract.
+
+A bounded Windows readback test checks 209 operand pairs through scalar and
+vector calls, including raw-bit and float-upload echoes, signed zeros,
+infinities and NaNs. macOS executes the unchanged Metal source with fast math
+disabled as a control; fast-math compilation may ignore signed zeros and
+non-finite values. The pinned MLX complex-power test separately retains its
+existing numerical reference and error bound; passing an isolated angular
+test does not replace that end-to-end proof.
+
+The frozen binary and unary HLSL contracts at MLX revision
+``846d176227a0ac13d2667e58d2bb68b322109ab0`` retain their source pins,
+entry classifications, materialization counts and interfaces. The angular
+lowering changes 84 binary and 28 complex-unary artifact identities; each
+changed entry is recompiled with DXC and warnings fatal before refreshing its
+fingerprint. The other 4,887 identities remain unchanged. This historical
+contract refresh is separate from current-revision MLX runtime coverage.
+
 OpenGL also lowers canonical ``fabs``, ``fmin``, ``fmax``, and Boolean
 ``select`` for desktop GLSL 4.00 and later. Floating min/max helpers explicitly
 return the numeric operand when the other operand is NaN, in either argument
@@ -2012,13 +2039,65 @@ tables. Runtime ``vec2`` and ``vec4`` storage arrays remain tightly packed,
 while ``vec3`` records its logical element size and padded array stride
 separately. The current native loader rejects padded storage vectors rather
 than uploading a falsely tight layout. GLSL ``dvec`` values, HLSL 64-bit
-vectors, matrices, fixed arrays, aggregates, unsupported narrow or
+vectors, matrices, fixed arrays, unsupported aggregate shapes, narrow or
 floating-point scalar widths, implicit GLSL block layouts, arbitrary member
 offsets, and multi-member blocks do not receive usable loader metadata. Those
 shapes remain unresolved or fail closed when a native loader request requires
 a physical layout. Native requests range-check signed and unsigned 64-bit
 values and preserve them with little-endian 8-byte packing; 64-bit
 specialization constants remain intentionally unsupported.
+
+Flat homogeneous structs are supported as HLSL structured-buffer elements and
+GLSL ``std430`` storage-array elements. Each may contain 1-64 members of one
+supported scalar type: ``float``, ``int``, ``uint``, ``int64_t``, or ``uint64_t``.
+The layout retains the actual struct name as ``physicalType``, a
+``componentCount``, and ordered ``structMembers`` containing each member's
+``name``, scalar ``physicalType``, and ``offsetBytes``. Structs are not relabeled
+as native vectors: two float members have an 8-byte element size and 4-byte
+alignment on these storage paths. Allocation sizing divides the flattened scalar
+count by the member count before applying the element stride.
+
+Dispatch validation requires unique member names, exact homogeneous types and
+offsets, tight stride, complete elements, and the matching target storage class.
+Nested structs, mixed scalar types, arrays, padded records, explicit member
+qualifiers, duplicate declarations and struct uniform blocks remain unsupported.
+No MLX-specific type-name mapping is used.
+The storage rules follow `DXC buffer packing
+<https://github.com/microsoft/DirectXShaderCompiler/wiki/Buffer-Packing>`_ and
+the `GLSL buffer layout specification
+<https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html#uniform-and-shader-storage-block-layout-qualifiers>`_.
+
+Required native CI exercises a reduced two-field transform and the unmodified
+``g1_Powercomplex64`` entry from MLX commit
+``d9add9d11f3154111a4c85f267ec2fd307ecd18e``. The latter runs 256 finite and
+zero-base cases through translated HLSL/GLSL runtime packages; macOS compiles
+and executes both original and roundtrip Metal. The numerical bound is
+``5e-5 * max(1, abs(reference))`` for the complex absolute error. Reports retain
+every input, output, error and bound, and buffers use nonzero sentinels to detect
+missed writes. This proves the selected kernel and layout path, not full binary
+family coverage, upstream MLX-suite execution, or MLX host-runtime redirection.
+
+The separate binary-shape gate discovers and executes every one of the 15
+``Powercomplex64`` entry shapes at that pin. Its 873 complex outputs exercise
+scalar/vector broadcasting, two- and three-dimensional dispatch, non-contiguous
+storage, zero strides, 32/64-bit index paths and partial final tiles in
+four-dimensional gathers. Each shape retains its random workload and adds two
+branch-cut workloads: negative-real bases with positive or negative imaginary
+zero, raised to the power one half. Each dataset retains its own inputs and
+readback evidence, without weakening the complex-error bound above.
+Expected input locations are enumerated from logical
+coordinates and strides independently of the shader's index helpers. Metal
+executes both original and translated kernels; DirectX and OpenGL consume the
+public runtime packages. DirectX also compiles with warnings fatal, and OpenGL
+validates a generated SPIR-V 1.3 module before native GLSL execution.
+
+The gate rejects a changed source census, missing native tools, missing entry
+outputs and numerical mismatches. OpenGL's explicit ``[0, 511]`` index-range
+assertions apply only to these bounded workloads; they are not inferred bounds
+for arbitrary tensors. A 900-second outer deadline and always-uploaded artifacts
+preserve failures without converting them to optional skips. This extends
+access-shape coverage for one operator and type, not every binary operation or
+the upstream MLX test suite.
 
 At pinned MLX commit ``4367c73b60541ddd5a266ce4644fd93d20223b6e``, the
 ``arangeuint32`` entry from ``arange.metal`` is translated to DirectX and
