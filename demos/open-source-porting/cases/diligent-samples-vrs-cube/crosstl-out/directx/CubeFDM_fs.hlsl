@@ -1,4 +1,27 @@
 
+float __crossgl_uint_to_float1(uint value) {
+    if (value == 0u) { return 0.0f; }
+    uint exponent = uint(firstbithigh(value));
+    uint significand;
+    if (exponent <= 23u) {
+        significand = value << (23u - exponent);
+    } else {
+        // Round the integer once, including a carry into the next exponent.
+        uint shift = exponent - 23u;
+        significand = value >> shift;
+        uint remainder = value & ((1u << shift) - 1u);
+        uint midpoint = 1u << (shift - 1u);
+        if (remainder > midpoint || (remainder == midpoint && (significand & 1u) != 0u)) {
+            significand += 1u;
+        }
+        if (significand == 0x1000000u) {
+            significand >>= 1u;
+            exponent += 1u;
+        }
+    }
+    return asfloat(((exponent + 127u) << 23u) | (significand & 0x7fffffu));
+}
+
 struct g_Constants {
     float4x4 WorldViewProj;
     int PrimitiveShadingRate;
@@ -24,7 +47,7 @@ uint2 CrossGLFragmentSizeFromShadingRate(uint shadingRate) {
 float4 FragmentDensityToColor(uint2 _crossglFragSize);
 
 float4 FragmentDensityToColor(uint2 _crossglFragSize) {
-    float h = (clamp((1.0 - (1.0 / float((_crossglFragSize.x * _crossglFragSize.y)))), 0.0, 1.0) / 1.35);
+    float h = (clamp((1.0 - (1.0 / __crossgl_uint_to_float1((_crossglFragSize.x * _crossglFragSize.y)))), 0.0, 1.0) / 1.35);
     float3 col = float3((abs(((h * 6.0) - 3.0)) - 1.0), (2.0 - abs(((h * 6.0) - 2.0))), (2.0 - abs(((h * 6.0) - 4.0))));
     return float4(clamp(col, float3(0.0, 0.0, 0.0), float3(1.0, 1.0, 1.0)), 1.0);
 }
