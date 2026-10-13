@@ -1235,6 +1235,17 @@ for that pointer; composed offsets still undergo overflow and scope checks.
 Local-name allocation keeps emitted resource aliases reserved, including when
 a local uses the preferred escaped spelling or shadows another local in a block.
 
+Bounded increasing loops retain conservative ranges for a single additive scalar
+or storage-pointer update in the loop body. The iteration bound and stride must
+remain invariant, the counter's terminating increment must fit its source type,
+and every possible accumulated offset must fit the target domain. Entry and exit
+ranges include early exits and zero iterations; the actual loop is not unrolled
+or replaced with a fixed result. Checked scalar increments and decrements retain
+facts only when they cannot overflow or wrap. Aliased or volatile values, unknown
+strides, mutations of bound or stride components, and shadowed bindings do not
+establish this proof. These ranges establish index representability, not the
+size of the bound allocation; runtime buffer and metadata checks still apply.
+
 Division proofs use exact integer arithmetic with truncation toward zero, including
 64-bit endpoints. Checked nonzero divisor intervals can bound division and
 non-negative remainder expressions without substituting a constant divisor.

@@ -46,7 +46,7 @@ def _index_config(root, *, source=SOURCE, conditions=CONDITIONS, target="opengl"
     )
 
 
-def _index_request(descriptor, package, index, offset):
+def _index_request(descriptor, package, index, offset, *, expected_words=None):
     values = [17 + position * 13 for position in range(16)]
     inputs, outputs, observed = {}, {}, []
     for binding in descriptor["bindings"]:
@@ -67,6 +67,9 @@ def _index_request(descriptor, package, index, offset):
             expected[2] = (
                 values[index + offset] if index + offset < len(values) else GUARD
             )
+            if expected_words is not None:
+                assert len(expected_words) == 8
+                expected = list(expected_words)
             outputs[name] = dict(dtype=dtype, shape=[8], values=expected)
         else:
             observed.append(name)

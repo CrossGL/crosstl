@@ -1183,6 +1183,65 @@ def test_native_metadata_pointer_identifier_bounds(tmp_path):
                 } == {"index": index, "offset": offset}
 
 
+def test_native_metadata_loop_offsets(tmp_path):
+    if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":
+        pytest.skip("native metadata checks are opt-in")
+    from tests.runtime_helpers import _validate
+    from tests.test_translator.test_loop_offset_bounds import NATIVE_LOOPS
+    from tests.test_translator.test_loop_updates import _execute
+    from tests.test_translator.test_metadata_index_bounds import (
+        GUARD,
+        SOURCE,
+        _index_config,
+        _index_request,
+    )
+    from tests.test_translator.test_project_metadata_entry_scope import _packages
+
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    for name, (loop, positions, tail) in NATIVE_LOOPS.items():
+        root = tmp_path / name
+        source = SOURCE.replace(
+            "result[0] = values[offset + index];",
+            "values += offset; uint total=0; "
+            + loop
+            + " result[0]=total; result[1]=values[0];",
+        )
+        _, package, (descriptor,) = _packages(
+            _index_config(root, source=source, target=target)
+        )
+        for index, offset in ((0, 0), (3, 4)):
+            reads, final = positions, tail
+            if name == "conditional":
+                reads, final = ((0,), 1) if index > 1 else ((), 0)
+            words = [GUARD] * 8
+            words[0] = sum(17 + 13 * (offset + position) for position in reads)
+            words[1] = 17 + 13 * (offset + final)
+            request, expected = _index_request(
+                descriptor, package, index, offset, expected_words=words
+            )
+            work = root / f"native-{index}-{offset}"
+            work.mkdir()
+            _execute(
+                request,
+                expected,
+                work,
+                validate=_validate,
+                original_source=source if target == "metal" else None,
+                original_entry="read_value",
+            )
+            evidence = json.loads((work / "evidence.json").read_text())
+            assert {
+                packet["name"]: {
+                    key: packet[key] for key in ("dtype", "shape", "values")
+                }
+                for packet in evidence["fixture"]["expectedOutputs"]
+            } == evidence["expected"]
+            for record in evidence["records"].values():
+                observations = record["details"]["inputObservations"]
+                assert len(observations) == 3
+                assert all(item["unchanged"] for item in observations.values())
+
+
 def test_native_metadata_control_flow(tmp_path):
 
     if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":

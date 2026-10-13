@@ -9429,6 +9429,70 @@ class GLSLCodeGen:
                     self.glsl_interval_dependency_names(node.initial_value)
                 )
 
+        def stable_lexical_type(expression):
+            if not isinstance(expression, IdentifierNode):
+                return None
+            binding = lexical["declarations"].get(
+                lexical["reference_bindings"].get(id(expression))
+            )
+            if binding is None or binding["source_type"] is None:
+                return None
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(binding["node"], "qualifiers", ()) or ()
+            }
+            type_name = self.type_name_string(binding["source_type"]) or ""
+            if (
+                "&" in type_name
+                or "volatile" in type_name.replace("*", " ").split()
+                or qualifiers.intersection({"volatile", "out", "inout"})
+            ):
+                return None
+            return binding["source_type"]
+
+        def lexical_integer_domain(expression):
+            source_type = stable_lexical_type(expression)
+            if source_type is None or "*" in (self.type_name_string(source_type) or ""):
+                return None
+            with self.glsl_lexical_source_type_scope({expression.name: source_type}):
+                return self.glsl_integer_type_domain(expression, allow_wide=True)
+
+        def unit_increment(operator):
+            operator = self.map_operator(operator)
+            if operator in {"++", "PRE_INCREMENT", "POST_INCREMENT"}:
+                return 1
+            if operator in {"--", "PRE_DECREMENT", "POST_DECREMENT"}:
+                return -1
+            return None
+
+        def checked_integer_interval(expression, intervals):
+            source_types = {}
+            for child in self.walk_ast(expression):
+                if not isinstance(child, IdentifierNode):
+                    continue
+                binding = lexical["declarations"].get(
+                    lexical["reference_bindings"].get(id(child))
+                )
+                if binding is not None:
+                    source_type = stable_lexical_type(child)
+                    if source_type is None or "*" in (
+                        self.type_name_string(source_type) or ""
+                    ):
+                        return None
+                    source_types[child.name] = source_type
+            with self.glsl_lexical_source_type_scope(source_types):
+                bounds = self.glsl_checked_private_pointer_interval(
+                    expression, intervals, constants, require_arithmetic_types=True
+                )
+                domain = self.glsl_integer_type_domain(expression, allow_wide=True)
+            if bounds is None or domain is None:
+                return None
+            return (
+                bounds
+                if domain.minimum <= bounds[0] <= bounds[1] <= domain.maximum
+                else None
+            )
+
         def refine_guard(condition, intervals, expected):
             source_types = {}
             expressions = []
@@ -9710,6 +9774,137 @@ class GLSLCodeGen:
             for statement in statements:
                 visit(statement, intervals)
 
+        bounded_zero_trip = set()
+
+        def bounded_loop_count(node, loop_intervals, mutated):
+            init, condition, update = node.init, node.condition, node.update
+            if (
+                not isinstance(init, VariableNode)
+                or getattr(init, "qualifiers", None)
+                or not isinstance(condition, BinaryOpNode)
+                or not isinstance(condition.left, IdentifierNode)
+                or condition.left.name != init.name
+                or self.map_operator(condition.op) not in {"<", "<="}
+                or not isinstance(update, UnaryOpNode)
+                or not isinstance(update.operand, IdentifierNode)
+                or update.operand.name != init.name
+                or unit_increment(update.op) != 1
+                or init.name in escaped_names
+                or self.glsl_private_pointer_expression_has_side_effects(
+                    init.initial_value
+                )
+                or mutation_interval_keys(init.initial_value)
+            ):
+                return None
+            domain = lexical_integer_domain(condition.left)
+            start = loop_intervals.get(init.name)
+            dependencies = self.glsl_interval_dependency_names(condition.right)
+            if (
+                domain is None
+                or start is None
+                or start[0] != start[1]
+                or not 0 <= start[0] <= domain.maximum
+                or checked_integer_interval(init.initial_value, loop_intervals) != start
+                or self.glsl_interval_key_sets_overlap(
+                    dependencies, mutated | escaped_names | {init.name}
+                )
+                or init.name in mutation_interval_keys(node.body)
+                or self.glsl_private_pointer_expression_has_side_effects(condition)
+            ):
+                return None
+            declarations = {
+                child.name
+                for child in self.walk_ast(node.body)
+                if isinstance(child, (VariableNode, ArrayNode))
+            }
+            if declarations & (dependencies | {init.name}):
+                return None
+            bound = checked_integer_interval(condition.right, loop_intervals)
+            if bound is None or bound[0] < 0:
+                return None
+            inclusive = self.map_operator(condition.op) == "<="
+            count = max(0, bound[1] - start[0] + int(inclusive))
+            if start[0] + count > domain.maximum:
+                return None
+            return count
+
+        def additive_loop_intervals(node, incoming, mutated, count):
+            """Bound one unconditional, invariant additive update per iteration."""
+            statements = list(getattr(node.body, "statements", node.body) or [])
+            pointer_names = set(
+                getattr(self, "glsl_entry_pointer_parameters", {}).get(id(function), ())
+            ) | set(getattr(function, "_glsl_storage_pointer_aliases", {}))
+            declared = {
+                child.name
+                for child in self.walk_ast(node.body)
+                if isinstance(child, (VariableNode, ArrayNode))
+            }
+            entries, exits = {}, {}
+            for index, statement in enumerate(statements):
+                update = (
+                    statement.expression
+                    if isinstance(statement, ExpressionStatementNode)
+                    else statement
+                )
+                if not isinstance(update, AssignmentNode):
+                    continue
+                target = getattr(update, "target", getattr(update, "left", None))
+                assigned = getattr(update, "value", getattr(update, "right", None))
+                operator = self.map_operator(update.operator)
+                if not isinstance(target, IdentifierNode) or operator not in {
+                    "+=",
+                    "-=",
+                }:
+                    continue
+                name = target.name
+                initial = incoming.get(name)
+                dependencies = self.glsl_interval_dependency_names(assigned)
+                other_statements = statements[:index] + statements[index + 1 :]
+                if (
+                    initial is None
+                    or name in escaped_names | declared
+                    or self.glsl_interval_key_sets_overlap(
+                        dependencies, mutated | escaped_names | declared
+                    )
+                    or name in mutation_interval_keys(other_statements)
+                    or self.glsl_private_pointer_expression_has_side_effects(assigned)
+                ):
+                    continue
+                domain = lexical_integer_domain(target)
+                source_type = stable_lexical_type(target)
+                if (
+                    domain is None
+                    and name in pointer_names
+                    and source_type is not None
+                    and (
+                        "*" in self.type_name_string(source_type)
+                        or self.is_structured_buffer_type(source_type)
+                    )
+                ):
+                    domain = IntegerRange(0, (1 << 31) - 1)
+                step = checked_integer_interval(assigned, incoming)
+                if domain is None or step is None:
+                    continue
+                if operator == "-=":
+                    step = (-step[1], -step[0])
+                exit_interval = (
+                    initial[0] + min(0, count * step[0]),
+                    initial[1] + max(0, count * step[1]),
+                )
+                if (
+                    not domain.minimum
+                    <= exit_interval[0]
+                    <= exit_interval[1]
+                    <= domain.maximum
+                ):
+                    continue
+                entries[name] = (
+                    initial[0] + min(0, (count - 1) * step[0]),
+                    initial[1] + max(0, (count - 1) * step[1]),
+                )
+                exits[name] = exit_interval
+            return entries, exits
+
         def visit(value, intervals):
             if value is None or isinstance(value, (str, int, float, bool)):
                 return
@@ -9962,10 +10157,26 @@ class GLSLCodeGen:
                 }
             ):
                 visit(value.operand, intervals)
+                name = getattr(value.operand, "name", None)
+                current = intervals.get(name)
+                domain = lexical_integer_domain(value.operand)
+                replacement = None
+                if (
+                    current is not None
+                    and domain is not None
+                    and name not in escaped_names
+                    and domain.minimum <= current[0] <= current[1] <= domain.maximum
+                ):
+                    step = unit_increment(value.op)
+                    candidate = (current[0] + step, current[1] + step)
+                    if domain.minimum <= candidate[0] <= candidate[1] <= domain.maximum:
+                        replacement = candidate
                 clear_interval_targets(
                     intervals,
                     target_interval_keys(value.operand),
                 )
+                if replacement is not None:
+                    intervals[name] = replacement
                 return
             if isinstance(value, BlockNode):
                 outer_keys = set(intervals)
@@ -10074,6 +10285,16 @@ class GLSLCodeGen:
                 )
                 clear_interval_targets(loop_intervals, mutated)
                 visit(getattr(value, "init", None), loop_intervals)
+                count = bounded_loop_count(value, loop_intervals, mutated)
+                if count == 0:
+                    bounded_zero_trip.add(id(value))
+                    return
+                entries, exits = (
+                    additive_loop_intervals(value, intervals, mutated, count)
+                    if count is not None
+                    else ({}, {})
+                )
+                loop_intervals.update(entries)
                 loop_name, loop_interval = self.glsl_private_pointer_loop_interval(
                     value, loop_intervals, constants
                 )
@@ -10095,6 +10316,7 @@ class GLSLCodeGen:
                     visit_sequence(getattr(value, "body", None), guarded)
                     visit(getattr(value, "update", None), guarded)
                 clear_interval_targets(intervals, mutated)
+                intervals.update(exits)
                 return
             if isinstance(value, ForInNode):
                 loop_intervals = dict(intervals)
@@ -10165,7 +10387,9 @@ class GLSLCodeGen:
         )
         for node in self.walk_ast(getattr(function, "body", [])):
             if isinstance(node, ForNode):
-                node._glsl_checked_zero_trip = self.glsl_control_flow_zero_trip_for(
+                node._glsl_checked_zero_trip = id(
+                    node
+                ) in bounded_zero_trip or self.glsl_control_flow_zero_trip_for(
                     node, lexical
                 )
             elif isinstance(node, IfNode):
