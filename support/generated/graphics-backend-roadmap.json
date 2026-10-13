@@ -1785,6 +1785,9 @@
             "tests/test_translator/test_range_bindings.py::def test_range_binding_contract_survives_import",
             "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_translate_and_compile",
             "tests/test_translator/test_loop_updates.py::def test_ordered_loop_updates_execute_natively",
+            "tests/test_translator/test_narrow_integer_conversions.py::def test_metal_narrow_update_results_compile",
+            "tests/test_translator/test_narrow_integer_conversions.py::def test_metal_narrow_update_results_execute_natively",
+            "tests/test_translator/test_narrow_integer_conversions.py::def test_metal_narrow_update_tail_values_remain_used",
             "demos/integrations/mlx/tests/kernels/test_current_gather.py::def test_pinned_gather_front_native_parity"
           ],
           "notes": "",

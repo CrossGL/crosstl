@@ -1050,6 +1050,15 @@ order, matching DirectX. Updates remain in the loop header so ``continue``
 executes them and ``break`` skips them. Prefix/postfix increments, dependent
 compound assignments, empty and single updates retain their loop-local scopes.
 Required three-platform native tests check these effects and guarded outputs.
+Metal explicitly discards unused narrow-integer update results in expression
+statements and ``for`` initializers and updates, without suppressing compiler
+warnings. The stored conversion and update remain unchanged; values used by
+assignments, arguments, conditions, returns and non-void tail expressions are
+preserved. Strict Metal compilation and original-source numerical comparisons
+cover signed and unsigned byte/short boundaries, vector and field updates,
+ordered updates, loop exits and output guards. This does not extend support to
+updates with unproven or side-effecting lvalues.
+
 The pinned MLX ``gather_front<float, int, int, N>`` proof instantiates unchanged
 upstream bodies for ``N`` equal to 1, 4 and 8. It checks negative and repeated
 indices, empty slices, partial chunks and exact binary32 storage words, including

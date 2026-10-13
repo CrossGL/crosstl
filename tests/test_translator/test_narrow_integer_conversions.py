@@ -10,11 +10,15 @@ import pytest
 from crosstl._crosstl import translate
 from crosstl.project import build_native_loader_dispatch_request
 from crosstl.translator import parse
+from crosstl.translator.ast import ExpressionStatementNode, IdentifierNode, UnaryOpNode
 from crosstl.translator.codegen.directx_codegen import (
     DirectXContextualConversionError,
     HLSLCodeGen,
 )
-from crosstl.translator.codegen.metal_codegen import UnsupportedMetalFeatureError
+from crosstl.translator.codegen.metal_codegen import (
+    MetalCodeGen,
+    UnsupportedMetalFeatureError,
+)
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
@@ -62,6 +66,153 @@ FORMS = (
     "reference_conditional",
     "reference_loop",
 )
+
+DISCARDED_UPDATE_CASES = {
+    "short-statement": ("short value = 7; value++; output[0] = uint(value);", [8]),
+    "ushort-wrap": ("ushort value = 65535; value++; output[0] = uint(value);", [0]),
+    "uchar-wrap": ("uchar value = 255; value++; output[0] = uint(value);", [0]),
+    "char-boundary": (
+        "char value = 127; value++; output[0] = uint(int(value));",
+        [0xFFFFFF80],
+    ),
+    "short-boundary": (
+        "short value = 32767; value++; output[0] = uint(int(value));",
+        [0xFFFF8000],
+    ),
+    "prefix-statement": ("short value = 7; ++value; output[0] = uint(value);", [8]),
+    "compound-statement": (
+        "ushort value = 65535; value += 1; output[0] = uint(value);",
+        [0],
+    ),
+    "initializer": (
+        "short value = 0; uint total = 0; "
+        "for (value++; value < 3; value++) { total += uint(value); } output[0] = total;",
+        [3],
+    ),
+    "used-postfix": (
+        "short value = 0; for (uint i = 0; i < 3; output[i] = uint(value++), i++) {}",
+        [0, 1, 2],
+    ),
+    "used-prefix": (
+        "short value = 0; for (uint i = 0; i < 3; output[i] = uint(++value), i++) {}",
+        [1, 2, 3],
+    ),
+    "used-condition": (
+        "short value = 0; uint total = 0; "
+        "while (value++ < 3) { total += uint(value); } "
+        "output[0] = total; output[1] = uint(value);",
+        [6, 4],
+    ),
+    "two-updates": (
+        "short a = 0; short b = 3; uint total = 0; "
+        "for (; a < 3; a++, b--) { total += uint(a + b); } output[0] = total;",
+        [9],
+    ),
+    "continue-break": (
+        "short value = 0; uint total = 0; for (; value < 8; value++) { "
+        "if (value == 1) continue; if (value == 4) break; total += uint(value); } "
+        "output[0] = total; output[1] = uint(value);",
+        [5, 4],
+    ),
+    "field": (
+        "Counter state; state.value = 2; state.value++; output[0] = uint(state.value);",
+        [3],
+    ),
+    "vector": (
+        "short2 values = short2(1, 3); values++; "
+        "output[0] = uint(values.x); output[1] = uint(values.y);",
+        [2, 4],
+    ),
+    "returned-postfix": (
+        "short value = 5; output[0] = uint(take(value)); output[1] = uint(value);",
+        [5, 6],
+    ),
+    "argument-postfix": (
+        "short value = 5; output[0] = promote(value++); output[1] = uint(value);",
+        [5, 6],
+    ),
+    "shadowed-loop": (
+        "uint total = 0; for (short value = 0; value < 3; value++) { "
+        "{ short value = 7; value++; total += uint(value); } } output[0] = total;",
+        [24],
+    ),
+}
+
+
+def _discarded_update_case(root, case):
+    body, values = DISCARDED_UPDATE_CASES[case]
+    source = (
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        "struct Counter { short value; };\n"
+        "short take(thread short& value) { return value++; }\n"
+        "uint promote(short value) { return uint(value); }\n"
+        "kernel void update_result(device uint* output [[buffer(0)]]) {\n"
+        + body
+        + "\n}\n"
+    )
+    _, descriptor, package = _package(
+        root, "metal", "uint", (1, 1, 1), source=source, software_subgroups=False
+    )
+    values = values + [0xDEAD] * 32
+    expected = _bound_values(
+        descriptor,
+        {"output": {"dtype": "uint32", "shape": [len(values)], "values": values}},
+    )
+    inputs = {
+        key: dict(item, values=[0xDEAD] * len(values)) for key, item in expected.items()
+    }
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        expected,
+        {"workgroupCount": [1, 1, 1], "workgroupSize": [1, 1, 1]},
+        expected_target="metal",
+    )
+    assert not request.execution_plan.diagnostics
+    return source, request, expected
+
+
+@pytest.mark.parametrize("case", DISCARDED_UPDATE_CASES)
+def test_metal_narrow_update_results_compile(tmp_path, case):
+    _, request, _ = _discarded_update_case(tmp_path, case)
+    _compile(request.artifact_path.read_text(), "metal", tmp_path)
+
+
+@pytest.mark.parametrize("case", DISCARDED_UPDATE_CASES)
+def test_metal_narrow_update_results_execute_natively(tmp_path, case):
+    if os.environ.get(REQUIRE_ENV) != "1" or sys.platform != "darwin":
+        pytest.skip(f"set {REQUIRE_ENV}=1 on macOS for required Metal update results")
+    source, request, expected = _discarded_update_case(tmp_path, case)
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source,
+        original_entry="update_result",
+    )
+
+
+@pytest.mark.parametrize("operator", ("++", "--"))
+@pytest.mark.parametrize("postfix", (False, True))
+@pytest.mark.parametrize("return_type", ("void", "short"))
+def test_metal_narrow_update_tail_values_remain_used(operator, postfix, return_type):
+    generator = MetalCodeGen()
+    generator.local_variable_types["value"] = "short"
+    generator.current_function_return_type = return_type
+    expression = UnaryOpNode(operator, IdentifierNode("value"), is_postfix=postfix)
+    statement = ExpressionStatementNode(expression)
+    statement.is_tail_expression = True
+    used = generator.generate_expression(expression)
+    discarded = generator.generate_discarded_expression(expression)
+    assert discarded == f"(void)({used})"
+    assert generator.generate_expression(expression) == used
+    tail = generator.generate_statement(statement)
+    if return_type == "void":
+        assert tail == f"{discarded};\n"
+    else:
+        assert "return " in tail and "(void)" not in tail
+        assert used in tail
 
 
 def _narrow(value, signed):

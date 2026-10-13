@@ -7658,7 +7658,7 @@ class MetalCodeGen:
             expr_code = self.generate_expression_statement(stmt)
             return self.generate_statement_code(expr_code, indent)
         else:
-            return f"{indent_str}{self.generate_expression(stmt)};\n"
+            return f"{indent_str}{self.generate_discarded_expression(stmt)};\n"
 
     def generate_tail_expression_statement(self, stmt, indent=0):
         if not getattr(stmt, "is_tail_expression", False):
@@ -9805,12 +9805,26 @@ class MetalCodeGen:
         if hasattr(stmt, "expression"):
             if isinstance(stmt.expression, (AssignmentNode, BackendAssignmentNode)):
                 return self.generate_assignment(stmt.expression)
-            expr = self.generate_expression(stmt.expression)
-            if self.is_discarded_metal_type_constructor(stmt.expression):
-                return f"(void)({expr})"
-            return expr
+            return self.generate_discarded_expression(stmt.expression)
         else:
-            return self.generate_expression(stmt)
+            return self.generate_discarded_expression(stmt)
+
+    def generate_discarded_expression(self, expr):
+        """Render an unused result without changing nested value expressions."""
+        rendered = self.generate_expression(expr)
+        narrow_update = (
+            isinstance(expr, UnaryOpNode)
+            and self.map_operator(expr.op) in {"++", "--"}
+            and self.metal_narrow_integer_conversion_expression(
+                "value", self.expression_result_type(expr.operand)
+            )
+            is not None
+        )
+        if narrow_update or self.is_discarded_metal_type_constructor(expr):
+            # Postfix lowering reconstructs the old value after the stored update.
+            # A discarded result must not trigger Metal's unused-value diagnostic.
+            return f"(void)({rendered})"
+        return rendered
 
     def is_discarded_metal_type_constructor(self, expr):
         if not isinstance(expr, FunctionCallNode):
@@ -10099,12 +10113,12 @@ class MetalCodeGen:
 
             if isinstance(getattr(node, "update", None), list):
                 update = ", ".join(
-                    self.generate_expression(expression).strip().rstrip(";")
+                    self.generate_discarded_expression(expression).strip().rstrip(";")
                     for expression in node.update
                 )
             else:
                 update = (
-                    self.generate_expression(node.update)
+                    self.generate_discarded_expression(node.update)
                     if getattr(node, "update", None)
                     else ""
                 )
@@ -10496,7 +10510,7 @@ class MetalCodeGen:
         ):
             initializer = self.generate_statement(init, 0).strip().rstrip(";")
             return self.strip_unused_metal_declaration_attribute(initializer)
-        return self.generate_expression(init).strip().rstrip(";")
+        return self.generate_discarded_expression(init).strip().rstrip(";")
 
     def generate_expression(self, expr):
         """Render a CrossGL AST expression into Metal expression syntax."""
