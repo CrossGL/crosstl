@@ -1329,6 +1329,18 @@ proof. Native controls retain the source loop and verify exact output values,
 untouched inputs and output guards. The pinned arg-reduce demo separately exercises
 checked metadata for two entries; it does not establish full reduction coverage.
 
+Ordinary arithmetic uses each operand's lexical source type, including promoted
+byte and short operands mixed with 32-bit or 64-bit locals. Stored integer facts
+apply the destination conversion before subsequent bounds checks; the range of
+an initializer is not reused after a narrowing store. Assignments and supported
+compound updates retain these conversions for scalar locals and vector
+components. Ranges crossing a sign or wrap boundary include every converted
+value. Signed arithmetic overflow, escaped values and missing facts still do
+not establish a proof. Native controls retain input observations and output
+guards and compare generated Metal against the original source. Metal short
+conversions and OpenGL/HLSL narrow component writes use the same source widths
+as the analysis; a successful compiler check alone is not numerical evidence.
+
 For straight-line top-level loops with at most 64 iterations, a conjunction of
 invariant affine integer guards can further constrain entry ranges. For example,
 ``x + i < width`` excludes the unused lane of a partial tile before deriving its

@@ -487,6 +487,14 @@ DirectX execution is required by the existing Windows job, not inferred from
 compiler validation. This checked package path is separate from the legacy
 artifact identities above and does not qualify the full MLX runtime or test suite.
 
+Checked column-reduction translation now retains the promoted value of local
+integer arithmetic such as an `int` group count multiplied by a byte-sized
+subgroup width. Narrow storage conversions are reflected in subsequent bounds,
+rather than treating pre-conversion values as valid offsets. The unchanged
+`col_reduce_2pass_large_1_32_32_reduce_sumfloat16` probe advances to the separate
+`LoopedElemToLoc::location` state-bound limitation. This is translation progress,
+not a passing column-reduction execution or complete reduction coverage.
+
 The current OpenGL identities include explicit signed 64-bit remainder,
 source-typed half loads, and bfloat rounding at shuffle and sentinel boundaries.
 All 24 bodies were reviewed against the retained sources and compiled with

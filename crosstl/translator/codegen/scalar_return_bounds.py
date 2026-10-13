@@ -61,6 +61,8 @@ class _ReturnAnalysis:
         if info["width"] == 1:
             return source_type
         if 2 <= info["width"] <= 4:
+            if info["narrow"] is not None:
+                return info["family"] + str(info["narrow"]["bits"])
             return self.generator.vector_component_type(info["mapped"])
         return None
 

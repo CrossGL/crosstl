@@ -15204,6 +15204,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             pointer_element_type = self.hlsl_pointer_element_type(array_type)
             if pointer_element_type is not None:
                 return pointer_element_type
+            byte_shape = self.hlsl_byte_integer_shape(array_type)
+            if byte_shape is not None and byte_shape[2] > 1:
+                return (
+                    "int8"
+                    if byte_shape[0] is ArithmeticScalarKind.SIGNED_INTEGER
+                    else "uint8"
+                )
             return array_type
         if isinstance(expr, MemberAccessNode):
             block_access = self.glsl_buffer_block_member_access(expr)
@@ -15219,7 +15226,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 object_type = element_type
             member = str(expr.member)
             if object_type and all(ch in "xyzwrgba" for ch in member):
-                component_type = self.vector_component_type(object_type)
+                byte_shape = self.hlsl_byte_integer_shape(object_type)
+                component_type = (
+                    (
+                        "char"
+                        if byte_shape[0] is ArithmeticScalarKind.SIGNED_INTEGER
+                        else "uchar"
+                    )
+                    if byte_shape is not None and byte_shape[2] > 1
+                    else self.vector_component_type(object_type)
+                )
                 if component_type and len(member) == 1:
                     return component_type
                 if component_type:

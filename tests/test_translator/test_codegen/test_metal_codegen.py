@@ -396,7 +396,7 @@ def test_metal_explicit_as_type_preserves_native_narrow_vector_widths():
 
     assert (
         "uint4 unsignedWords = "
-        "uint4(as_type<ushort4>(short3(signedWords)));" in generated
+        "uint4(ushort4(uint4(as_type<ushort4>(short3(signedWords)))));" in generated
     )
     assert (
         "uint4 unsignedBytes = uint4(uchar4(uint4(as_type<uchar4>(char3(signedBytes)))));"
@@ -408,11 +408,16 @@ def test_metal_explicit_as_type_preserves_native_narrow_vector_widths():
     )
     assert (
         "uint4 unsignedWordAliases = "
-        "uint4(as_type<ushort4>(short3(signedWordAliases)));" in generated
+        "uint4(ushort4(uint4(as_type<ushort4>(short3(signedWordAliases)))));"
+        in generated
     )
-    assert "uint4 halfAliasBits = uint4(as_type<ushort4>(halfAliases));" in generated
     assert (
-        "uint4 bfloatAliasBits = uint4(as_type<ushort4>(bfloatAliases));" in generated
+        "uint4 halfAliasBits = uint4(ushort4(uint4(as_type<ushort4>(halfAliases))));"
+        in generated
+    )
+    assert (
+        "uint4 bfloatAliasBits = uint4(ushort4(uint4(as_type<ushort4>(bfloatAliases))));"
+        in generated
     )
     assert "int8_t3" not in generated
     assert "uint8_t4" not in generated
@@ -5394,9 +5399,14 @@ def test_metal_narrow_integer_aliases_map_to_valid_metal_integer_types():
         "uint3 inc = uint3(uchar3(uint3(uchar3(uint3(1u, 2u, 3u)))));" in generated_code
     )
     assert "int2 signedShort(int2 input)" in generated_code
-    assert "int2 inc = int2(1, 2);" in generated_code
+    assert "int2 inc = int2(short2(int2(short2(int2(1, 2)))));" in generated_code
+    assert "return int2(short2(input + inc));" in generated_code
     assert "uint3 unsignedShort(uint3 input)" in generated_code
-    assert "uint3 inc = uint3(1u, 2u, 3u);" in generated_code
+    assert (
+        "uint3 inc = uint3(ushort3(uint3(ushort3(uint3(1u, 2u, 3u)))));"
+        in generated_code
+    )
+    assert "return uint3(ushort3(input + inc));" in generated_code
     assert "int4 signedChar(int4 input)" in generated_code
     assert "int4 inc = int4(char4(int4(char4(int4(1, 2, 3, 4)))));" in generated_code
     assert "uint2 unsignedChar(uint2 input)" in generated_code
@@ -5406,8 +5416,6 @@ def test_metal_narrow_integer_aliases_map_to_valid_metal_integer_types():
         "uint8",
         "i8vec2",
         "u8vec3",
-        "short2",
-        "ushort3",
     ):
         assert invalid_token not in generated_code
 
@@ -5476,9 +5484,13 @@ def test_metal_generic_vector_constructors_emit_metal_names():
         in generated_code
     )
     assert "int3 signedShorts(int3 input)" in generated_code
-    assert "int3 inc = int3(1, 2, 3);" in generated_code
+    assert "int3 inc = int3(short3(int3(short3(int3(1, 2, 3)))));" in generated_code
+    assert "return int3(short3(input + inc));" in generated_code
     assert "uint2 unsignedShorts(uint2 input)" in generated_code
-    assert "uint2 inc = uint2(1u, 2u);" in generated_code
+    assert (
+        "uint2 inc = uint2(ushort2(uint2(ushort2(uint2(1u, 2u)))));" in generated_code
+    )
+    assert "return uint2(ushort2(input + inc));" in generated_code
     assert "int3 signedInts(int3 input)" in generated_code
     assert "int3 inc = int3(1, 2, 3);" in generated_code
     assert "uint4 unsignedInts(uint4 input)" in generated_code
@@ -6091,8 +6103,8 @@ def test_metal_structured_buffer_fixed_width_aliases_map_to_device_pointers():
     assert "device ushort* counts" in generated_code
     assert "const device int64_t* signedValues" in generated_code
     assert "device uint64_t* offsets" in generated_code
-    assert "uint count = counts[index];" in generated_code
-    assert "counts[index] = count + uint(1u);" in generated_code
+    assert "uint count = uint(ushort(counts[index]));" in generated_code
+    assert "counts[index] = count + uint(ushort(uint(1u)));" in generated_code
     assert "uint16_t" not in generated_code
     assert "size_t" not in generated_code
 
@@ -6134,8 +6146,8 @@ def test_metal_structured_buffer_alias_arrays_infer_helper_parameter_sizes():
         "uint64_t combine(uint which, uint index, array<device ushort*, 2> counts, array<const device uint64_t*, 2> offsets)"
         in generated_code
     )
-    assert "return localCounts[which][index];" in generated_code
-    assert "counts[which][index] = count + uint(1u);" in generated_code
+    assert "return uint(ushort(localCounts[which][index]));" in generated_code
+    assert "counts[which][index] = count + uint(ushort(uint(1u)));" in generated_code
     assert "device ushort* localCounts" not in generated_code
     assert "uint16_t" not in generated_code
     assert "size_t" not in generated_code
@@ -6177,9 +6189,9 @@ def test_metal_unsized_structured_buffer_arrays_infer_helper_size():
         "uint64_t readOffset(array<const device uint64_t*, 2> localOffsets, uint index)"
         in generated_code
     )
-    assert "return localCounts[2][index];" in generated_code
+    assert "return uint(ushort(localCounts[2][index]));" in generated_code
     assert "return localOffsets[1][index];" in generated_code
-    assert "uint count = readCount(counts, index);" in generated_code
+    assert "uint count = uint(ushort(readCount(counts, index)));" in generated_code
     assert "uint64_t offset = readOffset(offsets, index);" in generated_code
     assert "uint16_t" not in generated_code
     assert "size_t" not in generated_code
@@ -6301,9 +6313,12 @@ def test_metal_structured_buffer_array_helpers_propagate_nested_fixed_sizes():
     assert (
         "uint readMid(array<device ushort*, 3> midCounts, uint index)" in generated_code
     )
-    assert "return leafCounts[2][index];" in generated_code
-    assert "return readLeaf(midCounts, index);" in generated_code
-    assert "return readMid(counts, index) + afterCounts[index];" in generated_code
+    assert "return uint(ushort(leafCounts[2][index]));" in generated_code
+    assert "return uint(ushort(readLeaf(midCounts, index)));" in generated_code
+    assert (
+        "return uint(ushort(readMid(counts, index) + afterCounts[index]));"
+        in generated_code
+    )
     assert "array<device ushort*, 1> counts" not in generated_code
     assert "uint16_t" not in generated_code
 
@@ -6361,7 +6376,7 @@ def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
 
     assert "device uchar* aliasBlock" in generated_code
     assert (
-        "uint word = (*reinterpret_cast<const device uint*>(aliasBlock + 4));"
+        "uint word = uint(ushort((*reinterpret_cast<const device uint*>(aliasBlock + 4))));"
         in generated_code
     )
     assert (
@@ -6370,7 +6385,7 @@ def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
     )
     assert "void writeAlias(uint index, uint word, uint64_t offset" in generated_code
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + 4)) = uint(word);"
+        "(*reinterpret_cast<device uint*>(aliasBlock + 4)) = uint(uint(ushort(word)));"
         in generated_code
     )
     assert (
@@ -6378,7 +6393,7 @@ def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
         in generated_code
     )
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + 0)) = uint(((*reinterpret_cast<const device uint*>(aliasBlock + 0)) + uint(1u)));"
+        "(*reinterpret_cast<device uint*>(aliasBlock + 0)) = uint(((*reinterpret_cast<const device uint*>(aliasBlock + 0)) + uint(ushort(uint(ushort(uint(1u)))))));"
         in generated_code
     )
     assert "unsupported Metal GLSL buffer block" not in generated_code

@@ -1,5 +1,6 @@
 """Source byte conversions retain their range across widened arithmetic values."""
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -7,13 +8,14 @@ from pathlib import Path
 import pytest
 
 from crosstl._crosstl import translate
+from crosstl.project import build_native_loader_dispatch_request
 from crosstl.translator import parse
 from crosstl.translator.codegen.directx_codegen import (
     DirectXContextualConversionError,
     HLSLCodeGen,
 )
 from crosstl.translator.codegen.metal_codegen import UnsupportedMetalFeatureError
-from tests.test_translator.test_boolean_buffer_runtime import _bound_values, _request
+from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_software_subgroup_product import _package
@@ -34,6 +36,11 @@ FORMS = (
     "single_evaluation",
     "vector",
     "vector_braces",
+    "vector_member_assignment",
+    "vector_index_assignment",
+    "vector_swizzle_compound",
+    "vector_member_compound",
+    "vector_index_compound",
     "array_assignment",
     "buffer_store",
     "buffer_offset",
@@ -122,6 +129,20 @@ def _case(root, target, signed, form):
     elif form == "vector_braces":
         body = f"{byte}2 value = {{{byte}(input_value), {byte}(input_value + 2)}};"
         expression = "int(value.x) + int(value.y) * 1024"
+    elif form.startswith("vector_"):
+        body = f"{byte}2 value = {byte}2(0);"
+        expression = "int(value.x) + int(value.y) * 1024"
+        if form == "vector_swizzle_compound":
+            body += f" value.yx = {byte}2(input_value + 2, input_value); value.yx += {byte}2(3);"
+        elif form in {"vector_index_assignment", "vector_index_compound"}:
+            body += " uint lane = tid & 1u; value[lane] = input_value; value[1u - lane] = input_value + 2;"
+            expression = "int(value[lane]) + int(value[1u - lane]) * 1024"
+            if form == "vector_index_compound":
+                body += " value[lane] += 3;"
+        else:
+            body += " value.x = input_value; value.y = input_value + 2;"
+            if form == "vector_member_compound":
+                body += " value.x += 3;"
     elif form == "array_assignment":
         body = f"{byte} values[2]; values[1] = input_value;"
         expression = "int(values[1])"
@@ -213,7 +234,13 @@ kernel void byte_conversions(const device int* inputs [[buffer(0)]],
     values = []
     for value in VALUES:
         narrowed = _narrow(value, signed)
-        if form in {"vector", "vector_braces"}:
+        if form == "vector_swizzle_compound":
+            narrowed = _narrow(narrowed + 3, signed)
+            narrowed += _narrow(value + 5, signed) * 1024
+        elif form in {"vector_member_compound", "vector_index_compound"}:
+            narrowed = _narrow(narrowed + 3, signed)
+            narrowed += _narrow(value + 2, signed) * 1024
+        elif form.startswith("vector"):
             narrowed += _narrow(value + 2, signed) * 1024
         elif form in {"compound", "member_compound", "nested_member_compound"}:
             narrowed = _narrow(narrowed + 3, signed)
@@ -250,7 +277,17 @@ kernel void byte_conversions(const device int* inputs [[buffer(0)]],
     }
     return (
         source,
-        _request(descriptor, package, inputs, outputs, len(VALUES)),
+        build_native_loader_dispatch_request(
+            descriptor,
+            package,
+            _bound_values(descriptor, inputs),
+            _bound_values(descriptor, outputs),
+            {"workgroupCount": [len(VALUES), 1, 1], "workgroupSize": [1, 1, 1]},
+            expected_target=target,
+            observe_inputs=list(
+                _bound_values(descriptor, {"inputs": inputs["inputs"]})
+            ),
+        ),
         _bound_values(descriptor, outputs),
     )
 
@@ -286,6 +323,11 @@ def test_narrow_integer_conversions_execute_natively(tmp_path, signed, form):
         original_source=source if target == "metal" else None,
         original_entry="byte_conversions",
     )
+    records = json.loads((tmp_path / "evidence.json").read_text())["records"]
+    for record in records.values():
+        observations = record["details"]["inputObservations"]
+        assert len(observations) == 1
+        assert all(item["unchanged"] for item in observations.values())
 
 
 @pytest.mark.parametrize("target", ("metal", "directx"))

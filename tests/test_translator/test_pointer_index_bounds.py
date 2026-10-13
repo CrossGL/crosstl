@@ -8,7 +8,7 @@ from dataclasses import replace
 import pytest
 
 from crosstl.project import build_native_loader_dispatch_request, translate_project
-from crosstl.translator.ast import ForNode
+from crosstl.translator.ast import ForNode, ReturnNode
 from crosstl.translator.codegen import GLSL_codegen
 from crosstl.translator.dispatch_regions import plan_dispatch_regions
 from tests.runtime_helpers import _validate
@@ -530,4 +530,352 @@ def test_local_pointer_loops_execute_natively(tmp_path, bound, stride):
     ]["details"]
     assert len(details["metadataPreconditions"]) == 3
     assert len(details["inputObservations"]) == 4
+    assert all(item["unchanged"] for item in details["inputObservations"].values())
+
+
+OPERAND_TYPES = {
+    "uint8": ("uchar", "32", "int", "8", "short", "1", 256),
+    "int8": ("char", "16", "int", "8", "short", "1", 128),
+    "uint16": ("ushort", "256", "int", "256", "int", "256", 256),
+    "int16": ("short", "128", "int", "256", "int", "128", 256),
+    "uint32": ("uint", "2147483648u", "long", "2l", "long", "16777216l", 256),
+    "int32": ("int", "1073741824", "long", "2l", "long", "8388608l", 256),
+    "uint64": ("ulong", "4294967296ul", "int", "2", "ulong", "33554432ul", 256),
+    "int64": ("long", "4294967296l", "uint", "2u", "long", "33554432l", 256),
+}
+
+STORED_OPERANDS = {
+    "helper-char": ("int groups = 257;", "typed_offset(groups)", 1),
+    "helper-uchar": ("int groups = 257;", "typed_offset(groups)", 1),
+    "helper-short": ("int groups = 65537;", "typed_offset(groups)", 1),
+    "helper-ushort": ("int groups = 65537;", "typed_offset(groups)", 1),
+    "store-uint8": ("int groups = 257; uchar narrowed = groups;", "long(narrowed)", 1),
+    "store-int8": ("int groups = 257; char narrowed = groups;", "long(narrowed)", 1),
+    "store-uint16": (
+        "int groups = 65537; ushort narrowed = groups;",
+        "long(narrowed)",
+        1,
+    ),
+    "store-int16": (
+        "int groups = 65537; short narrowed = groups;",
+        "long(narrowed)",
+        1,
+    ),
+    "store-uint32": (
+        "ulong groups = 4294967297ul; uint narrowed = groups;",
+        "long(narrowed)",
+        1,
+    ),
+    "store-int32": (
+        "long groups = 4294967297l; int narrowed = groups;",
+        "long(narrowed)",
+        1,
+    ),
+    "store-uint64": (
+        "long groups = -1l; ulong narrowed = groups;",
+        "long(narrowed / 18446744073709551615ul)",
+        1,
+    ),
+    "store-int64": (
+        "ulong groups = 18446744073709551615ul; long narrowed = groups;",
+        "narrowed + 2l",
+        1,
+    ),
+    "assign-int16": (
+        "int groups = 65537; short narrowed = 0; narrowed = groups;",
+        "long(narrowed)",
+        1,
+    ),
+    "add-int16": (
+        "int groups = 32770; short narrowed = 32767; narrowed += groups;",
+        "long(narrowed)",
+        1,
+    ),
+    "subtract-int16": (
+        "int groups = 65535; short narrowed = 0; narrowed -= groups;",
+        "long(narrowed)",
+        1,
+    ),
+    "vector-int16": (
+        "int groups = 65537; short2 narrowed = short2(groups, groups);",
+        "long(narrowed.x)",
+        1,
+    ),
+    "component-int16": (
+        "int groups = 65537; short2 narrowed = short2(0); narrowed.x = groups;",
+        "long(narrowed.x)",
+        1,
+    ),
+    "component-add-int16": (
+        "int groups = 32770; short2 narrowed = short2(32767); narrowed.x += groups;",
+        "long(narrowed.x)",
+        1,
+    ),
+}
+
+
+def _operand_source(kind):
+    global_type, width, local_type, groups, product_type, divisor, _ = OPERAND_TYPES[
+        kind
+    ]
+    return f"""#include <metal_stdlib>
+using namespace metal;
+constant {global_type} width = {width};
+kernel void select_value(const device uint* input [[buffer(0)]],
+                         device uint* output [[buffer(1)]]) {{
+    const {local_type} groups = {groups};
+    const {product_type} product = groups * width;
+    const long at = long(product / {divisor});
+    const device uint* selected = input + at;
+    output[0] = selected[0];
+}}
+"""
+
+
+def _stored_operand_source(kind):
+    declarations, expression, _ = STORED_OPERANDS[kind]
+    source = _replace_operand_body(declarations, expression).replace(
+        "constant uchar width = 32;\n", ""
+    )
+    if kind.startswith("helper-"):
+        scalar = kind.split("-", 1)[1]
+        helper = f"long typed_offset(int value) {{ {scalar}2 stored = {scalar}2(value); return long(stored.x); }}\n"
+        source = source.replace("kernel void", helper + "kernel void")
+    return source
+
+
+def _replace_operand_body(declarations, expression):
+    source = _operand_source("uint8")
+    start = source.index("    const int groups")
+    end = source.index("    const device uint* selected", start)
+    return (
+        source[:start]
+        + f"    {declarations}\n    const long at = {expression};\n"
+        + source[end:]
+    )
+
+
+def _operand_config(root, target, kind, *, source=None):
+    return replace(
+        _config(
+            root,
+            target,
+            source=_operand_source(kind) if source is None else source,
+            entries=("select_value",),
+            conditions=(),
+        ),
+        workgroup_size=(1, 1, 1),
+    )
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
+@pytest.mark.parametrize("kind", OPERAND_TYPES)
+def test_pointer_bounds_preserve_promoted_operand_types(tmp_path, target, kind):
+    config = _operand_config(tmp_path, target, kind)
+    assert not config.index_range_assertions
+    report = translate_project(config, format_output=False).to_json()
+    assert report["summary"]["translatedCount"] == 1, report["diagnostics"]
+    assert not report["diagnostics"]
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
+@pytest.mark.parametrize("kind", STORED_OPERANDS)
+def test_pointer_bounds_preserve_stored_operand_values(tmp_path, target, kind):
+    config = _operand_config(
+        tmp_path, target, "uint8", source=_stored_operand_source(kind)
+    )
+    assert not config.index_range_assertions
+    report = translate_project(config, format_output=False).to_json()
+    assert report["summary"]["translatedCount"] == 1, report["diagnostics"]
+    assert not report["diagnostics"]
+
+
+@pytest.mark.parametrize(
+    "scalar,bits", [("char", 8), ("uchar", 8), ("short", 16), ("ushort", 16)]
+)
+def test_helper_vector_storage_cannot_authorize_negative_addresses(
+    tmp_path, scalar, bits
+):
+    source = _stored_operand_source(f"helper-{scalar}").replace(
+        "return long(stored.x);", f"return long(stored.x) - {1 << bits}l;"
+    )
+    report = translate_project(
+        _operand_config(tmp_path, "opengl", "uint8", source=source), format_output=False
+    ).to_json()
+    assert report["summary"]["translatedCount"] == 0, report
+    assert any(
+        item["code"] == "project.translate.opengl-index-type-unsupported"
+        for item in report["diagnostics"]
+    )
+
+
+@pytest.mark.parametrize("name", ["groups", "count", "width"])
+def test_operand_analysis_restores_caller_type_state(name):
+    generator = _generator("""
+        int offset(uint8 width) {
+            const int groups = 8;
+            const int count = groups * width;
+            return count;
+        }
+    """)
+    function = generator.function_definitions["offset"]
+    generator.local_variable_types[name] = "uint64_t"
+    generator.local_variable_source_types[name] = "uint8"
+    types = dict(generator.local_variable_types)
+    source_types = dict(generator.local_variable_source_types)
+    generator.glsl_workgroup_proof_initial_intervals = lambda _: {"width": (32, 32)}
+    generator.annotate_glsl_control_flow_intervals(function)
+    (returned,) = (
+        node
+        for node in generator.walk_ast(function.body)
+        if isinstance(node, ReturnNode)
+    )
+    assert returned._glsl_control_flow_intervals["count"] == (256, 256)
+    assert generator.local_variable_types == types
+    assert generator.local_variable_source_types == source_types
+
+
+@pytest.mark.parametrize(
+    "source_type,bits,signed",
+    [
+        ("int8", 8, True),
+        ("uint8", 8, False),
+        ("int16", 16, True),
+        ("uint16", 16, False),
+        ("int", 32, True),
+        ("uint", 32, False),
+    ],
+)
+@pytest.mark.parametrize("assignment", [False, True])
+@pytest.mark.parametrize("boundary", ["sign", "wrap", "negative"])
+def test_stored_operand_ranges_include_every_converted_value(
+    source_type, bits, signed, assignment, boundary
+):
+    modulus = 1 << bits
+    start = {"sign": modulus // 2 - 2, "wrap": modulus - 2, "negative": -2}[boundary]
+    values = [value % modulus for value in range(start, start + 5)]
+    if signed:
+        values = [
+            value - modulus if value >= modulus // 2 else value for value in values
+        ]
+    body = f"{source_type} narrowed = input_value;"
+    if assignment:
+        body = f"{source_type} narrowed = 0; narrowed = input_value;"
+    generator = _generator(
+        f"int offset(int64 input_value) {{ {body} return int(narrowed); }}"
+    )
+    function = generator.function_definitions["offset"]
+    generator.glsl_workgroup_proof_initial_intervals = lambda _: {
+        "input_value": (start, start + 4)
+    }
+    generator.annotate_glsl_control_flow_intervals(function)
+    (returned,) = (
+        node
+        for node in generator.walk_ast(function.body)
+        if isinstance(node, ReturnNode)
+    )
+    assert returned._glsl_control_flow_intervals["narrowed"] == (
+        min(values),
+        max(values),
+    )
+
+
+@pytest.mark.parametrize(
+    "declarations,expression",
+    [
+        ("int groups = 2147483647;", "groups + 1"),
+        ("uint groups = 4294967295u;", "groups + 1u"),
+        ("long groups = 9223372036854775807l;", "groups + 1l"),
+        ("int groups = int(input[0]);", "groups * width"),
+        ("int groups = 8; { long groups = -1; output[0] = input[groups]; }", "groups"),
+        ("int groups = 8; groups = -1;", "groups"),
+        ("int groups = 8; unknown(&groups);", "groups"),
+        (
+            "const int groups = 65537; const short narrowed = groups;",
+            "long(narrowed) - 65536l",
+        ),
+        (
+            "int groups = 65537; short narrowed = 0; narrowed = groups;",
+            "long(narrowed) - 65536l",
+        ),
+        (
+            "int groups = 32770; short narrowed = 32767; narrowed += groups;",
+            "long(narrowed) - 65536l",
+        ),
+        (
+            "int groups = 65537; short2 narrowed = short2(groups);",
+            "long(narrowed.x) - 65536l",
+        ),
+        (
+            "int groups = 65537; short2 narrowed = short2(0); narrowed.x = groups;",
+            "long(narrowed.x) - 65536l",
+        ),
+        (
+            "int groups = 32770; short2 narrowed = short2(32767); narrowed.x += groups;",
+            "long(narrowed.x) - 65536l",
+        ),
+        ("int groups = 2147483647; groups += 1;", "long(groups) - 2147483647l"),
+    ],
+)
+def test_operand_types_do_not_authorize_unproved_addresses(
+    tmp_path, declarations, expression
+):
+    source = _replace_operand_body(declarations, expression)
+    report = translate_project(
+        _operand_config(tmp_path, "opengl", "uint8", source=source), format_output=False
+    ).to_json()
+    assert report["summary"]["translatedCount"] == 0, report
+    assert any(item["severity"] == "error" for item in report["diagnostics"])
+
+
+@pytest.mark.parametrize("kind", [*OPERAND_TYPES, *STORED_OPERANDS])
+def test_typed_pointer_operands_execute_natively(tmp_path, kind):
+    if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":
+        pytest.skip(
+            "set CROSTL_REQUIRE_METADATA_PRECONDITIONS=1 for native pointer checks"
+        )
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    if kind in STORED_OPERANDS:
+        source, index = _stored_operand_source(kind), STORED_OPERANDS[kind][-1]
+    else:
+        source, index = _operand_source(kind), OPERAND_TYPES[kind][-1]
+    _, package, (descriptor,) = _packages(
+        _operand_config(tmp_path, target, "uint8", source=source)
+    )
+    values = [17 + 13 * index for index in range(257)]
+    expected = [values[index]] + [GUARD] * 32
+    inputs, outputs, observed = {}, {}, []
+    for binding in descriptor["bindings"]:
+        parameter = binding["provenance"]["sourceResource"]["parameter"]
+        data = values if parameter == "input" else [GUARD] * len(expected)
+        inputs[binding["name"]] = dict(dtype="uint32", shape=[len(data)], values=data)
+        if parameter == "output":
+            outputs[binding["name"]] = dict(
+                dtype="uint32", shape=[len(expected)], values=expected
+            )
+        else:
+            observed.append(binding["name"])
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        outputs,
+        dict(workgroupCount=[1, 1, 1], workgroupSize=[1, 1, 1]),
+        observe_inputs=observed,
+    )
+    assert not request.execution_plan.diagnostics
+    native = tmp_path / "native"
+    native.mkdir()
+    _execute(
+        request,
+        outputs,
+        native,
+        validate=_validate,
+        original_source=source,
+        original_entry="select_value",
+    )
+    details = json.loads((native / "evidence.json").read_text())["records"][
+        "generated"
+    ]["details"]
+    assert len(details["inputObservations"]) == 1
     assert all(item["unchanged"] for item in details["inputObservations"].values())

@@ -8916,19 +8916,22 @@ class MetalCodeGen:
         if self.map_type(expected_type_name) == "bfloat" and not is_bfloat_constructor:
             return f"bfloat({rendered})"
         return (
-            self.metal_byte_conversion_expression(rendered, expected_type) or rendered
+            self.metal_narrow_integer_conversion_expression(rendered, expected_type)
+            or rendered
         )
 
-    def metal_byte_conversion_expression(self, rendered, value_type):
+    def metal_narrow_integer_conversion_expression(self, rendered, value_type):
         native = self.metal_native_narrow_bitcast_storage_type(value_type)
-        if native is None or not re.fullmatch(r"u?char[234]?", native):
+        if native is None or not re.fullmatch(r"u?(?:char|short)[234]?", native):
             return None
         # Keep arithmetic carriers widened, but preserve the source conversion.
         return f"{self.map_type(value_type)}({native}({rendered}))"
 
-    def metal_byte_update_expression(self, node, target, operator, value=None):
+    def metal_narrow_integer_update_expression(
+        self, node, target, operator, value=None
+    ):
         value_type = self.expression_result_type(target)
-        if self.metal_byte_conversion_expression("value", value_type) is None:
+        if self.metal_narrow_integer_conversion_expression("value", value_type) is None:
             return None
         owner = target
         while isinstance(owner, MemberAccessNode):
@@ -8936,7 +8939,7 @@ class MetalCodeGen:
         if not isinstance(owner, (IdentifierNode, VariableNode)):
             raise UnsupportedMetalFeatureError(
                 "byte-update",
-                "Byte updates require a stable variable or field",
+                "Narrow integer updates require a stable variable or field",
                 reason="byte-update-lvalue-unsupported",
                 source_location=getattr(node, "source_location", None),
             )
@@ -8948,15 +8951,23 @@ class MetalCodeGen:
             if value is not None
             else "1"
         )
+        native = self.metal_native_narrow_bitcast_storage_type(value_type)
+        if native[-1:] in {"2", "3", "4"} and (
+            self.metal_native_narrow_bitcast_storage_type(
+                self.expression_result_type(value)
+            )
+            == native
+        ):
+            rhs = f"{promoted}({rhs})"
         binary = operator[0] if operator in {"++", "--"} else operator[:-1]
-        converted = self.metal_byte_conversion_expression(
+        converted = self.metal_narrow_integer_conversion_expression(
             f"({promoted}({lhs}) {binary} ({rhs}))", value_type
         )
         updated = f"({lhs} = {converted})"
         if value is None and getattr(node, "is_postfix", False):
             inverse = "-" if operator == "++" else "+"
-            # Byte increment is bijective modulo 256; invert the stored result.
-            previous = self.metal_byte_conversion_expression(
+            # Fixed-width increment is bijective; invert the stored result.
+            previous = self.metal_narrow_integer_conversion_expression(
                 f"({promoted}({lhs}) {inverse} 1)", value_type
             )
             return f"({updated}, {previous})"
@@ -9319,6 +9330,9 @@ class MetalCodeGen:
             if pointee_type is not None:
                 return pointee_type
             if self.is_vector_value_type(array_type):
+                native = self.metal_native_narrow_bitcast_storage_type(array_type)
+                if native is not None and native[-1:] in {"2", "3", "4"}:
+                    return native[:-1]
                 return self.vector_component_type(array_type)
             return array_type
         if isinstance(expr, MemberAccessNode):
@@ -9331,7 +9345,12 @@ class MetalCodeGen:
             object_type = self.member_lookup_type_name(object_type)
             member = str(expr.member)
             if object_type and all(ch in "xyzwrgba" for ch in member):
-                component_type = self.vector_component_type(object_type)
+                native = self.metal_native_narrow_bitcast_storage_type(object_type)
+                component_type = (
+                    native[:-1]
+                    if native is not None and native[-1:] in {"2", "3", "4"}
+                    else self.vector_component_type(object_type)
+                )
                 if component_type and len(member) == 1:
                     return component_type
                 if component_type:
@@ -9909,7 +9928,9 @@ class MetalCodeGen:
             return address_space_assignment
 
         if op != "=":
-            byte_update = self.metal_byte_update_expression(node, target, op, value)
+            byte_update = self.metal_narrow_integer_update_expression(
+                node, target, op, value
+            )
             if byte_update is not None:
                 return byte_update
 
@@ -10618,7 +10639,7 @@ class MetalCodeGen:
             operand = self.generate_unary_operand(expr.operand)
             operator = self.map_operator(expr.op)
             if operator in {"++", "--"}:
-                byte_update = self.metal_byte_update_expression(
+                byte_update = self.metal_narrow_integer_update_expression(
                     expr, expr.operand, operator
                 )
                 if byte_update is not None:
@@ -10730,7 +10751,9 @@ class MetalCodeGen:
                 else:
                     rendered = f"{metal_type}({args})"
                 return (
-                    self.metal_byte_conversion_expression(rendered, constructor_type)
+                    self.metal_narrow_integer_conversion_expression(
+                        rendered, constructor_type
+                    )
                     or rendered
                 )
             return str(expr)
@@ -11278,7 +11301,7 @@ class MetalCodeGen:
                 )
                 rendered = f"{metal_type}({args})"
                 return (
-                    self.metal_byte_conversion_expression(rendered, func_name)
+                    self.metal_narrow_integer_conversion_expression(rendered, func_name)
                     or rendered
                 )
             readonly_raw_buffer_call = self.readonly_raw_buffer_call_diagnostic(
@@ -20709,7 +20732,9 @@ class MetalCodeGen:
             ):
                 # Native aggregate vectors need an explicit value conversion
                 # when the callee uses the widened arithmetic representation.
-                converted = self.metal_byte_conversion_expression(rendered, param_type)
+                converted = self.metal_narrow_integer_conversion_expression(
+                    rendered, param_type
+                )
                 if converted is not None:
                     rendered = converted
                 elif native_type[-1:] in {"2", "3", "4"}:
