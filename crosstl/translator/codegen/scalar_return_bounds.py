@@ -1,22 +1,31 @@
-"""Source-typed range summaries for pure, single-return integer helpers."""
+"""Source-typed return bounds for bounded, side-effect-free integer helpers."""
 
 from dataclasses import dataclass
 
 from ..ast import (
     ArrayAccessNode,
+    ArrayLiteralNode,
+    ArrayType,
+    AssignmentNode,
     BinaryOpNode,
+    ConstructorNode,
+    ExpressionStatementNode,
+    ForNode,
     FunctionCallNode,
     IdentifierNode,
     LiteralNode,
     MemberAccessNode,
     PointerType,
+    PrimitiveType,
     ReferenceType,
     ReturnNode,
     UnaryOpNode,
+    VariableNode,
 )
 from .integer_intervals import (
     convert_integer_intervals,
     integer_arithmetic_intervals,
+    merge_integer_intervals,
 )
 
 
@@ -26,12 +35,58 @@ class _Value:
     intervals: list
 
 
+@dataclass(frozen=True)
+class _Vector:
+    source_type: object
+    components: tuple
+
+
+@dataclass(frozen=True)
+class _MetadataArray:
+    source_type: object
+    elements: dict
+
+
 class _ReturnAnalysis:
     def __init__(self, generator, intervals, constants):
         self.generator = generator
         self.intervals = intervals
         self.constants = constants
-        self.remaining = 512
+        self.remaining = 4096
+
+    def component_type(self, source_type):
+        info = self.generator.glsl_value_type_info(source_type)
+        if info is None or info["family"] not in {"int", "uint"}:
+            return None
+        if info["width"] == 1:
+            return source_type
+        if 2 <= info["width"] <= 4:
+            return self.generator.vector_component_type(info["mapped"])
+        return None
+
+    def join(self, values):
+        if not values or any(value is None for value in values):
+            return None
+        first = values[0]
+        if any(
+            type(value) is not type(first) or value.source_type != first.source_type
+            for value in values
+        ):
+            return None
+        if isinstance(first, _MetadataArray):
+            return first if all(value == first for value in values) else None
+        if isinstance(first, _Vector):
+            components = tuple(
+                self.join([value.components[i] for value in values])
+                for i in range(len(first.components))
+            )
+            return _Vector(first.source_type, components) if all(components) else None
+        return _Value(
+            first.source_type,
+            merge_integer_intervals(
+                [bounds for value in values for bounds in value.intervals]
+            ),
+        )
 
     def shape(self, source_type):
         info = self.generator.glsl_value_type_info(source_type)
@@ -43,8 +98,17 @@ class _ReturnAnalysis:
         return bits, info["family"] == "int"
 
     def convert(self, value, source_type):
+        info = self.generator.glsl_value_type_info(source_type)
+        if info is not None and 2 <= info["width"] <= 4 and isinstance(value, _Vector):
+            if len(value.components) != info["width"]:
+                return None
+            component_type = self.component_type(source_type)
+            components = tuple(
+                self.convert(item, component_type) for item in value.components
+            )
+            return _Vector(source_type, components) if all(components) else None
         shape = self.shape(source_type)
-        if value is None or shape is None:
+        if not isinstance(value, _Value) or shape is None:
             return None
         return _Value(source_type, convert_integer_intervals(value.intervals, *shape))
 
@@ -76,6 +140,109 @@ class _ReturnAnalysis:
             return None
         return _Value(source_type, [bounds])
 
+    def caller_value(self, expression):
+        generator = self.generator
+        source_type = generator.glsl_source_expression_type(expression)
+        if isinstance(expression, IdentifierNode):
+            prefix = f"@metadata:{expression.name}["
+            elements = {}
+            for key, bounds in self.intervals.items():
+                if (
+                    not isinstance(key, str)
+                    or not key.startswith(prefix)
+                    or not key.endswith("]")
+                ):
+                    continue
+                index = key[len(prefix) : -1]
+                if not index.isdecimal():
+                    return None
+                read = ArrayAccessNode(
+                    expression, LiteralNode(int(index), PrimitiveType("int"))
+                )
+                value = self.leaf(read)
+                if value is None:
+                    return None
+                elements[int(index)] = value
+            if elements:
+                return _MetadataArray(source_type, elements)
+        info = generator.glsl_value_type_info(source_type)
+        if info is not None and 2 <= info["width"] <= 4:
+            components = tuple(
+                self.leaf(MemberAccessNode(expression, name))
+                for name in "xyzw"[: info["width"]]
+            )
+            return _Vector(source_type, components) if all(components) else None
+        return self.leaf(expression)
+
+    def arithmetic(self, operator, left, right):
+        if (
+            left is None
+            or right is None
+            or isinstance(left, _MetadataArray)
+            or isinstance(right, _MetadataArray)
+        ):
+            return None
+        source_type = self.generator.glsl_common_arithmetic_type(
+            left.source_type, right.source_type, operator
+        )
+        if isinstance(left, _Vector) or isinstance(right, _Vector):
+            count = (
+                len(left.components)
+                if isinstance(left, _Vector)
+                else len(right.components)
+            )
+            a = left.components if isinstance(left, _Vector) else (left,) * count
+            b = right.components if isinstance(right, _Vector) else (right,) * count
+            if len(a) != len(b) or self.component_type(source_type) is None:
+                return None
+            values = tuple(self.arithmetic(operator, x, y) for x, y in zip(a, b))
+            return (
+                self.convert(_Vector(source_type, values), source_type)
+                if all(values)
+                else None
+            )
+        shape = self.shape(source_type)
+        if shape is None:
+            return None
+        result = integer_arithmetic_intervals(
+            operator, left.intervals, right.intervals, *shape
+        )
+        return _Value(source_type, result) if result is not None else None
+
+    def read(self, value, index):
+        if not isinstance(index, _Value):
+            return None
+        lower, upper = min(x for x, _ in index.intervals), max(
+            y for _, y in index.intervals
+        )
+        elements = (
+            value.elements
+            if isinstance(value, _MetadataArray)
+            else dict(enumerate(value.components)) if isinstance(value, _Vector) else {}
+        )
+        if lower < 0 or upper - lower >= len(elements):
+            return None
+        return self.join([elements.get(i) for i in range(lower, upper + 1)])
+
+    def constructor(self, source_type, values):
+        if any(value is None for value in values):
+            return None
+        info = self.generator.glsl_value_type_info(source_type)
+        if info is None:
+            return None
+        if info["width"] == 1:
+            return self.convert(values[0], source_type) if len(values) == 1 else None
+        components = tuple(
+            component
+            for value in values
+            for component in (
+                value.components if isinstance(value, _Vector) else (value,)
+            )
+        )
+        if len(components) == 1:
+            components *= info["width"]
+        return self.convert(_Vector(source_type, components), source_type)
+
     def expression(self, expression, bindings=None, active=()):
         self.remaining -= 1
         if self.remaining < 0 or len(active) > 32:
@@ -84,7 +251,7 @@ class _ReturnAnalysis:
         if isinstance(expression, IdentifierNode):
             # A callee sees only its own parameters, never caller constants.
             return (
-                self.leaf(expression)
+                self.caller_value(expression)
                 if bindings is None
                 else bindings.get(expression.name)
             )
@@ -100,14 +267,49 @@ class _ReturnAnalysis:
             value = int(value)
             converted = self.convert(_Value(source_type, [(value, value)]), source_type)
             return converted if converted.intervals == [(value, value)] else None
-        if isinstance(expression, (ArrayAccessNode, MemberAccessNode)):
+        if isinstance(expression, ArrayLiteralNode):
+            values = tuple(
+                self.expression(item, bindings, active) for item in expression.elements
+            )
+            return (
+                _Vector(None, values)
+                if all(isinstance(value, _Value) for value in values)
+                else None
+            )
+        if isinstance(expression, ConstructorNode):
+            return self.constructor(
+                expression.constructor_type,
+                [
+                    self.expression(item, bindings, active)
+                    for item in expression.arguments
+                ],
+            )
+        if isinstance(expression, ArrayAccessNode):
+            result = self.read(
+                self.expression(expression.array, bindings, active),
+                self.expression(expression.index, bindings, active),
+            )
+            return (
+                result
+                if result is not None or bindings is not None
+                else self.leaf(expression)
+            )
+        if isinstance(expression, MemberAccessNode):
+            owner = self.expression(expression.object, bindings, active)
+            index = generator.glsl_index_component_index(expression.member)
+            if (
+                isinstance(owner, _Vector)
+                and index is not None
+                and index < len(owner.components)
+            ):
+                return owner.components[index]
             return self.leaf(expression) if bindings is None else None
         if isinstance(expression, UnaryOpNode):
             operator = generator.map_operator(expression.op)
             if operator not in {"+", "-"}:
                 return None
             value = self.expression(expression.operand, bindings, active)
-            if value is None:
+            if not isinstance(value, _Value):
                 return None
             info = generator.glsl_value_type_info(value.source_type)
             source_type = (
@@ -122,22 +324,11 @@ class _ReturnAnalysis:
             return _Value(source_type, result) if result is not None else None
         if isinstance(expression, BinaryOpNode):
             operator = generator.map_operator(expression.op)
-            if operator not in {"+", "-", "*"}:
+            if operator not in {"+", "-", "*", "/", "%"}:
                 return None
             left = self.expression(expression.left, bindings, active)
             right = self.expression(expression.right, bindings, active)
-            if left is None or right is None:
-                return None
-            source_type = generator.glsl_common_arithmetic_type(
-                left.source_type, right.source_type, operator
-            )
-            shape = self.shape(source_type)
-            if shape is None:
-                return None
-            result = integer_arithmetic_intervals(
-                operator, left.intervals, right.intervals, *shape
-            )
-            return _Value(source_type, result) if result is not None else None
+            return self.arithmetic(operator, left, right)
         if isinstance(expression, FunctionCallNode):
             if not isinstance(expression.function, IdentifierNode):
                 return None
@@ -149,12 +340,45 @@ class _ReturnAnalysis:
             if any(value is None for value in values):
                 return None
             if (
-                self.shape(name) is not None
+                self.component_type(name) is not None
                 and name not in generator.function_return_types
             ):
-                return self.convert(values[0], name) if len(values) == 1 else None
+                return self.constructor(name, values)
+            if (
+                name == "buffer_load"
+                and name not in generator.function_return_types
+                and len(values) == 2
+            ):
+                return self.read(*values)
             return self.call(expression, values, active)
         return None
+
+    def score(self, value, parameter):
+        if isinstance(
+            value, _MetadataArray
+        ) and self.generator.is_structured_buffer_type(value.source_type):
+            source_type = parameter.param_type
+            element = (
+                source_type.pointee_type
+                if isinstance(source_type, PointerType)
+                else (
+                    source_type.element_type
+                    if isinstance(source_type, ArrayType)
+                    else None
+                )
+            )
+            if self.shape(element) is not None and all(
+                self.shape(item.source_type) == self.shape(element)
+                for item in value.elements.values()
+            ):
+                return 2
+            return None
+        if isinstance(value, _Vector) and value.source_type is None:
+            converted = self.convert(value, parameter.param_type)
+            return 1 if converted is not None else None
+        return self.generator.glsl_function_type_match_score(
+            value.source_type, parameter.param_type
+        )
 
     def call(self, expression, values, active):
         generator = self.generator
@@ -167,16 +391,34 @@ class _ReturnAnalysis:
         for function in candidates:
             if len(function.parameters or ()) != len(values):
                 continue
-            signature = generator.glsl_source_function_signature(function)
+            # Emitted type spellings can erase source pointer address spaces.
+            signature = (
+                generator.glsl_source_function_signature(function),
+                tuple(
+                    (
+                        getattr(parameter.param_type, "address_space", None),
+                        getattr(parameter.param_type, "is_mutable", None),
+                        getattr(parameter.param_type, "access_mode", None),
+                        tuple(sorted(str(item) for item in parameter.qualifiers)),
+                        tuple(
+                            sorted(
+                                (item.kind, item.scope or "")
+                                for item in generator.typed_resource_memory_qualifiers(
+                                    parameter
+                                )
+                            )
+                        ),
+                    )
+                    for parameter in function.parameters
+                ),
+            )
             previous = unique.get(signature)
             if previous is None or previous.body is None:
                 unique[signature] = function
         scored = []
         for function in unique.values():
             scores = [
-                generator.glsl_function_type_match_score(
-                    value.source_type, parameter.param_type
-                )
+                self.score(value, parameter)
                 for value, parameter in zip(values, function.parameters)
             ]
             if all(score is not None for score in scores):
@@ -191,42 +433,267 @@ class _ReturnAnalysis:
         if (
             id(function) in active
             or isinstance(function.return_type, (PointerType, ReferenceType))
-            or self.shape(function.return_type) is None
+            or self.component_type(function.return_type) is None
         ):
             return None
         statements = generator.glsl_software_subgroup_statement_list(function.body)
-        if len(statements) != 1 or not isinstance(statements[0], ReturnNode):
+        if not statements or not isinstance(statements[-1], ReturnNode):
+            return None
+        if self.shape(function.return_type) is not None and len(statements) != 1:
             return None
         bindings = {}
+        readonly = set()
         for parameter, value in zip(function.parameters, values):
             source_type = parameter.param_type
             nodes = [parameter, source_type]
+            if parameter.name in bindings:
+                return None
             if isinstance(source_type, ReferenceType):
                 if source_type.is_mutable:
                     return None
                 source_type = source_type.referenced_type
                 nodes.append(source_type)
+                readonly.add(parameter.name)
             if (
-                isinstance(source_type, (PointerType, ReferenceType))
-                or set(generator.glsl_parameter_qualifiers(parameter))
-                & {"out", "inout"}
+                set(generator.glsl_parameter_qualifiers(parameter)) & {"out", "inout"}
                 or any(
                     "volatile" in (getattr(node, "qualifiers", ()) or ())
                     for node in nodes
                 )
+                or any(
+                    qualifier.kind == "volatile"
+                    for qualifier in generator.typed_resource_memory_qualifiers(
+                        parameter
+                    )
+                )
+            ):
+                return None
+            if "const" in (getattr(parameter, "qualifiers", ()) or ()):
+                readonly.add(parameter.name)
+            if isinstance(value, _MetadataArray):
+                if not isinstance(
+                    source_type, (PointerType, ArrayType)
+                ) or "volatile" in (getattr(parameter, "qualifiers", ()) or ()):
+                    return None
+                if isinstance(source_type, PointerType):
+                    if (
+                        source_type.address_space != "constant"
+                        and source_type.is_mutable
+                    ):
+                        return None
+                    element_type = source_type.pointee_type
+                else:
+                    if "constant" not in (getattr(parameter, "qualifiers", ()) or ()):
+                        return None
+                    element_type = source_type.element_type
+                if "volatile" in (getattr(element_type, "qualifiers", ()) or ()):
+                    return None
+                if any(
+                    self.shape(item.source_type) != self.shape(element_type)
+                    for item in value.elements.values()
+                ):
+                    return None
+                bindings[parameter.name] = _MetadataArray(source_type, value.elements)
+                readonly.add(parameter.name)
+                continue
+            if (
+                isinstance(source_type, (PointerType, ReferenceType))
                 or parameter.name in bindings
             ):
                 return None
             converted = self.convert(value, source_type)
             if converted is None:
                 return None
-            bindings[parameter.name] = _Value(parameter.param_type, converted.intervals)
-        value = self.expression(statements[0].value, bindings, (*active, id(function)))
+            bindings[parameter.name] = (
+                _Vector(parameter.param_type, converted.components)
+                if isinstance(converted, _Vector)
+                else _Value(parameter.param_type, converted.intervals)
+            )
+        active = (*active, id(function))
+        if not self.statements(statements[:-1], bindings, readonly, active):
+            return None
+        value = self.expression(statements[-1].value, bindings, active)
         return self.convert(value, function.return_type)
 
+    def truth(self, expression, bindings, active):
+        self.remaining -= 1
+        if self.remaining < 0:
+            return None
+        if isinstance(expression, BinaryOpNode):
+            op = self.generator.map_operator(expression.op)
+            if op in {"&&", "||"}:
+                left = self.truth(expression.left, bindings, active)
+                if left is None:
+                    return None
+                if left == {False} and op == "&&" or left == {True} and op == "||":
+                    return left
+                right = self.truth(expression.right, bindings, active)
+                return (
+                    {a and b if op == "&&" else a or b for a in left for b in right}
+                    if right is not None
+                    else None
+                )
+            if op in {"<", "<=", ">", ">=", "==", "!="}:
+                left = self.expression(expression.left, bindings, active)
+                right = self.expression(expression.right, bindings, active)
+                if not isinstance(left, _Value) or not isinstance(right, _Value):
+                    return None
+                common = self.generator.glsl_common_arithmetic_type(
+                    left.source_type, right.source_type, "+"
+                )
+                left, right = self.convert(left, common), self.convert(right, common)
+                if left is None or right is None:
+                    return None
+                a, b = min(x for x, _ in left.intervals), max(
+                    y for _, y in left.intervals
+                )
+                c, d = min(x for x, _ in right.intervals), max(
+                    y for _, y in right.intervals
+                )
+                if op == "<":
+                    return {True} if b < c else {False} if a >= d else {True, False}
+                if op == "<=":
+                    return {True} if b <= c else {False} if a > d else {True, False}
+                if op == ">":
+                    return {True} if a > d else {False} if b <= c else {True, False}
+                if op == ">=":
+                    return {True} if a >= d else {False} if b < c else {True, False}
+                equal = (
+                    {True}
+                    if a == b == c == d
+                    else {False} if b < c or d < a else {True, False}
+                )
+                return equal if op == "==" else {not item for item in equal}
+        value = self.expression(expression, bindings, active)
+        if not isinstance(value, _Value):
+            return None
+        return ({False} if any(a <= 0 <= b for a, b in value.intervals) else set()) | (
+            {True} if any(a != 0 or b != 0 for a, b in value.intervals) else set()
+        )
 
-def scalar_return_interval(generator, expression, intervals, constants):
-    """Bound a helper result without rewriting it or changing evaluation counts."""
+    def statements(self, statements, bindings, readonly, active):
+        readonly = set(readonly)
+        for statement in statements:
+            self.remaining -= 1
+            if self.remaining < 0:
+                return False
+            if isinstance(statement, ExpressionStatementNode):
+                statement = statement.expression
+            if isinstance(statement, VariableNode):
+                if (
+                    statement.name in bindings
+                    or isinstance(
+                        statement.var_type, (ReferenceType, PointerType, ArrayType)
+                    )
+                    or "volatile" in statement.qualifiers
+                ):
+                    return False
+                value = self.convert(
+                    self.expression(statement.initial_value, bindings, active),
+                    statement.var_type,
+                )
+                if value is None:
+                    return False
+                bindings[statement.name] = value
+                if "const" in statement.qualifiers:
+                    readonly.add(statement.name)
+            elif isinstance(statement, ForNode):
+                if not self.loop(statement, bindings, readonly, active):
+                    return False
+            else:
+                if isinstance(statement, UnaryOpNode) and self.generator.map_operator(
+                    statement.op
+                ) in {"++", "--"}:
+                    target = statement.operand
+                    op = (
+                        "+"
+                        if self.generator.map_operator(statement.op) == "++"
+                        else "-"
+                    )
+                    value = self.arithmetic(
+                        op,
+                        self.expression(target, bindings, active),
+                        _Value("int", [(1, 1)]),
+                    )
+                elif isinstance(statement, AssignmentNode):
+                    target = statement.target
+                    value = self.expression(statement.value, bindings, active)
+                    op = self.generator.map_operator(statement.operator)
+                    if op != "=":
+                        if op not in {"+=", "-=", "*=", "/=", "%="}:
+                            return False
+                        value = self.arithmetic(
+                            op[:-1], self.expression(target, bindings, active), value
+                        )
+                else:
+                    return False
+                owner = (
+                    target.object if isinstance(target, MemberAccessNode) else target
+                )
+                if (
+                    not isinstance(owner, IdentifierNode)
+                    or owner.name in readonly
+                    or owner.name not in bindings
+                ):
+                    return False
+                prior = self.expression(target, bindings, active)
+                if not isinstance(prior, (_Value, _Vector)):
+                    return False
+                value = self.convert(value, prior.source_type)
+                if value is None:
+                    return False
+                if isinstance(target, MemberAccessNode):
+                    vector = bindings[owner.name]
+                    index = self.generator.glsl_index_component_index(target.member)
+                    if (
+                        not isinstance(vector, _Vector)
+                        or index is None
+                        or index >= len(vector.components)
+                    ):
+                        return False
+                    components = list(vector.components)
+                    components[index] = value
+                    value = _Vector(vector.source_type, tuple(components))
+                bindings[owner.name] = value
+        return True
+
+    def loop(self, node, bindings, readonly, active):
+        if (
+            not isinstance(node.init, VariableNode)
+            or node.condition is None
+            or node.update is None
+        ):
+            return False
+        current = dict(bindings)
+        if not self.statements([node.init], current, readonly, active):
+            return False
+        exits = []
+        for iteration in range(65):
+            condition = self.truth(node.condition, current, active)
+            if condition is None:
+                return False
+            if False in condition:
+                exits.append(dict(current))
+            if True not in condition:
+                break
+            if iteration == 64:
+                return False
+            frame = dict(current)
+            body = self.generator.glsl_software_subgroup_statement_list(node.body)
+            if not self.statements(body, frame, readonly, active):
+                return False
+            current = {name: frame[name] for name in current}
+            if not self.statements([node.update], current, readonly, active):
+                return False
+        for name in bindings:
+            joined = self.join([exit_[name] for exit_ in exits])
+            if joined is None:
+                return False
+            bindings[name] = joined
+        return True
+
+
+def _return_value(generator, expression, intervals, constants):
     if not isinstance(expression, FunctionCallNode) or getattr(
         generator, "_glsl_return_bounds_active", False
     ):
@@ -242,8 +709,27 @@ def scalar_return_interval(generator, expression, intervals, constants):
         value = _ReturnAnalysis(generator, intervals, constants).expression(expression)
     finally:
         generator._glsl_return_bounds_active = False
-    if value is None or not value.intervals:
+    return value
+
+
+def scalar_return_interval(generator, expression, intervals, constants):
+    """Bound a helper result without rewriting it or changing evaluation counts."""
+    value = _return_value(generator, expression, intervals, constants)
+    if not isinstance(value, _Value) or not value.intervals:
         return None
     return min(low for low, _ in value.intervals), max(
         high for _, high in value.intervals
+    )
+
+
+def vector_return_intervals(generator, expression, vector_type, intervals, constants):
+    value = _return_value(generator, expression, intervals, constants)
+    if not isinstance(value, _Vector):
+        return None
+    value = _ReturnAnalysis(generator, intervals, constants).convert(value, vector_type)
+    if value is None:
+        return None
+    return tuple(
+        (min(a for a, _ in item.intervals), max(b for _, b in item.intervals))
+        for item in value.components
     )

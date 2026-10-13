@@ -50,7 +50,7 @@ def integer_arithmetic_intervals(operator, left, right, bits, signed):
     """Bound typed arithmetic; signed overflow cannot establish a range."""
     left = convert_integer_intervals(left, bits, signed)
     right = convert_integer_intervals(right, bits, signed)
-    if not signed:
+    if not signed and operator in {"+", "-", "*"}:
         # Congruent signed representatives tighten bounds around unsigned wrap.
         left = convert_integer_intervals(left, bits, True)
         right = convert_integer_intervals(right, bits, True)
@@ -64,6 +64,26 @@ def integer_arithmetic_intervals(operator, left, right, bits, signed):
             elif operator == "*":
                 products = a * c, a * d, b * c, b * d
                 bounds = min(products), max(products)
+            elif operator in {"/", "%"}:
+                if c <= 0 <= d or (signed and a == -(1 << (bits - 1)) and c <= -1 <= d):
+                    return None
+                if operator == "/":
+
+                    def quotient(x, y):
+                        value = abs(x) // abs(y)
+                        return -value if (x < 0) != (y < 0) else value
+
+                    values = [quotient(x, y) for x in (a, b) for y in (c, d)]
+                    bounds = min(values), max(values)
+                elif a == b and c == d:
+                    remainder = abs(a) % abs(c)
+                    value = -remainder if a < 0 else remainder
+                    bounds = value, value
+                else:
+                    maximum = max(abs(c), abs(d)) - 1
+                    bounds = max(a, -maximum) if a < 0 else 0, (
+                        min(b, maximum) if b > 0 else 0
+                    )
             else:
                 return None
             if signed and not -(1 << (bits - 1)) <= bounds[0] <= bounds[1] < (

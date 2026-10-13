@@ -366,7 +366,7 @@ from .resource_arrays import (
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
 )
-from .scalar_return_bounds import scalar_return_interval
+from .scalar_return_bounds import scalar_return_interval, vector_return_intervals
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -9286,6 +9286,12 @@ class GLSLCodeGen:
             return None
         width = info["width"]
 
+        returned = vector_return_intervals(
+            self, expression, vector_type, intervals, constants
+        )
+        if returned is not None:
+            return returned
+
         literal = self.glsl_integer_vector_literal_value(
             expression,
             int_constants=constants,
@@ -9405,7 +9411,7 @@ class GLSLCodeGen:
         constants = self.initial_literal_int_constants(function)
         lexical = self.glsl_scalar_array_view_lexical_bindings(function)
 
-        def checked_interval(expression, intervals):
+        def helper_source_types(expression):
             nodes = list(self.walk_ast(expression))
             source_types = {}
             if any(
@@ -9429,9 +9435,24 @@ class GLSLCodeGen:
                         if binding["source_type"] is None:
                             return None
                         source_types[node.name] = binding["source_type"]
+            return source_types
+
+        def checked_interval(expression, intervals):
+            source_types = helper_source_types(expression)
+            if source_types is None:
+                return None
             with self.glsl_lexical_source_type_scope(source_types):
                 return self.glsl_checked_private_pointer_interval(
                     expression, intervals, constants
+                )
+
+        def checked_components(expression, vector_type, intervals):
+            source_types = helper_source_types(expression)
+            if source_types is None:
+                return None
+            with self.glsl_lexical_source_type_scope(source_types):
+                return self.glsl_static_integer_vector_component_intervals(
+                    expression, vector_type, intervals, constants
                 )
 
         escaped_names = set()
@@ -9446,10 +9467,15 @@ class GLSLCodeGen:
                 )
 
         def stable_lexical_type(expression):
-            if not isinstance(expression, IdentifierNode):
+            owner = (
+                expression.object
+                if isinstance(expression, MemberAccessNode)
+                else expression
+            )
+            if not isinstance(owner, IdentifierNode):
                 return None
             binding = lexical["declarations"].get(
-                lexical["reference_bindings"].get(id(expression))
+                lexical["reference_bindings"].get(id(owner))
             )
             if binding is None or binding["source_type"] is None:
                 return None
@@ -9464,13 +9490,32 @@ class GLSLCodeGen:
                 or qualifiers.intersection({"volatile", "out", "inout"})
             ):
                 return None
-            return binding["source_type"]
+            source_type = binding["source_type"]
+            if isinstance(expression, MemberAccessNode):
+                component = self.glsl_index_component_index(expression.member)
+                info = self.glsl_value_type_info(source_type)
+                if (
+                    info is None
+                    or component is None
+                    or not 2 <= info["width"] <= 4
+                    or component >= info["width"]
+                ):
+                    return None
+                return self.vector_component_type(info["mapped"])
+            return source_type
 
         def lexical_integer_domain(expression):
             source_type = stable_lexical_type(expression)
             if source_type is None or "*" in (self.type_name_string(source_type) or ""):
                 return None
-            with self.glsl_lexical_source_type_scope({expression.name: source_type}):
+            owner = (
+                expression.object
+                if isinstance(expression, MemberAccessNode)
+                else expression
+            )
+            with self.glsl_lexical_source_type_scope(
+                {owner.name: stable_lexical_type(owner)}
+            ):
                 return self.glsl_integer_type_domain(expression, allow_wide=True)
 
         def unit_increment(operator):
@@ -9794,6 +9839,26 @@ class GLSLCodeGen:
 
         def bounded_loop_count(node, loop_intervals, mutated):
             init, condition, update = node.init, node.condition, node.update
+            if not isinstance(init, VariableNode):
+                return None
+            conditions = [condition]
+            for candidate in conditions:
+                if (
+                    isinstance(candidate, BinaryOpNode)
+                    and self.map_operator(candidate.op) == "&&"
+                ):
+                    conditions.extend((candidate.left, candidate.right))
+            condition = next(
+                (
+                    candidate
+                    for candidate in conditions
+                    if isinstance(candidate, BinaryOpNode)
+                    and isinstance(candidate.left, IdentifierNode)
+                    and candidate.left.name == init.name
+                    and self.map_operator(candidate.op) in {"<", "<="}
+                ),
+                None,
+            )
             if (
                 not isinstance(init, VariableNode)
                 or getattr(init, "qualifiers", None)
@@ -9825,7 +9890,8 @@ class GLSLCodeGen:
                     dependencies, mutated | escaped_names | {init.name}
                 )
                 or init.name in mutation_interval_keys(node.body)
-                or self.glsl_private_pointer_expression_has_side_effects(condition)
+                or self.glsl_private_pointer_expression_has_side_effects(node.condition)
+                or mutation_interval_keys(node.condition)
             ):
                 return None
             declarations = {
@@ -9867,22 +9933,35 @@ class GLSLCodeGen:
                 target = getattr(update, "target", getattr(update, "left", None))
                 assigned = getattr(update, "value", getattr(update, "right", None))
                 operator = self.map_operator(update.operator)
-                if not isinstance(target, IdentifierNode) or operator not in {
+                if not isinstance(
+                    target, (IdentifierNode, MemberAccessNode)
+                ) or operator not in {
                     "+=",
                     "-=",
                 }:
                     continue
-                name = target.name
+                if isinstance(target, MemberAccessNode):
+                    if stable_lexical_type(target) is None:
+                        continue
+                    name = self.glsl_index_component_interval_key(
+                        target.object, self.glsl_index_component_index(target.member)
+                    )
+                else:
+                    name = target.name
                 initial = incoming.get(name)
                 dependencies = self.glsl_interval_dependency_names(assigned)
                 other_statements = statements[:index] + statements[index + 1 :]
                 if (
                     initial is None
-                    or name in escaped_names | declared
+                    or self.glsl_interval_key_sets_overlap(
+                        {name}, escaped_names | declared
+                    )
                     or self.glsl_interval_key_sets_overlap(
                         dependencies, mutated | escaped_names | declared
                     )
-                    or name in mutation_interval_keys(other_statements)
+                    or self.glsl_interval_key_sets_overlap(
+                        {name}, mutation_interval_keys(other_statements)
+                    )
                     or self.glsl_private_pointer_expression_has_side_effects(assigned)
                 ):
                     continue
@@ -9963,13 +10042,10 @@ class GLSLCodeGen:
                         "var_type",
                         getattr(value, "vtype", None),
                     )
-                    component_intervals = (
-                        self.glsl_static_integer_vector_component_intervals(
-                            initial_value,
-                            variable_type,
-                            intervals,
-                            constants,
-                        )
+                    component_intervals = checked_components(
+                        initial_value,
+                        variable_type,
+                        intervals,
                     )
                     for component_index, component_interval in enumerate(
                         component_intervals or ()
@@ -10003,11 +10079,10 @@ class GLSLCodeGen:
                 ):
                     assigned_interval = checked_interval(assigned, intervals)
                     assigned_components = (
-                        self.glsl_static_integer_vector_component_intervals(
+                        checked_components(
                             assigned,
                             self.glsl_source_expression_type(target),
                             intervals,
-                            constants,
                         )
                         if isinstance(assigned, IdentifierNode)
                         and self.glsl_source_expression_type(target) is not None

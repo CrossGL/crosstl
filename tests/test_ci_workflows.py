@@ -3652,10 +3652,11 @@ def test_directx_runtime_comparison_preserves_required_runtime_and_workload():
     )[1]
     required_tests = re.findall(r"tests/[^\s\\]+", resource_command)
     compared_tests = re.findall(r'"(tests/[^"\s]+)"', script)
-    assert len(required_tests) == 28
+    assert len(required_tests) == 29
     assert "tests/test_translator/test_metadata_preconditions.py" in required_tests
     assert "tests/test_translator/test_metadata_elements.py" in required_tests
     assert "tests/test_translator/test_scalar_return_bounds.py" in required_tests
+    assert "tests/test_translator/test_helper_array_returns.py" in required_tests
     assert "tests/test_translator/test_runtime_input_observations.py" in required_tests
     assert compared_tests == [
         "tests/test_translator/test_directx_cooperative_matrix.py::test_precise_scalar_control_executes",
@@ -3719,7 +3720,7 @@ def test_native_collective_batches_limit_software_driver_threads():
     assert step["run"].count("-n auto -vv --durations=25") == 2
     batches = step["run"].split("python -m pytest ")[1:]
     assert len(batches) == 2
-    for index, (batch, count) in enumerate(zip(batches, (16, 28))):
+    for index, (batch, count) in enumerate(zip(batches, (16, 29))):
         selectors = re.findall(r"tests/[^\s\\]+", batch)
         assert len(selectors) == len(set(selectors)) == count
         assert not re.search(r"(?:^|\s)(?:-m|--maxfail)(?:\s|=|$)", batch)
@@ -3787,8 +3788,12 @@ def test_resource_selection_retains_every_native_opt_in():
                 required.add(identity)
             if any(term in name for term in expression.split(" or ")):
                 selected.add(identity)
-    assert len(required) == 56
+    assert len(required) == 57
     assert required <= selected
+    assert (
+        "tests/test_translator/test_helper_array_returns.py",
+        "test_vector_array_helpers_execute_natively",
+    ) in selected
     assert (
         "tests/test_translator/test_metadata_elements.py",
         "test_array_metadata_executes_natively",

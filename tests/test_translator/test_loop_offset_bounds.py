@@ -7,13 +7,16 @@ from crosstl.translator.ast import (
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
+    ConstructorNode,
     ForNode,
     FunctionNode,
     IdentifierNode,
     LiteralNode,
+    MemberAccessNode,
     PrimitiveType,
     UnaryOpNode,
     VariableNode,
+    VectorType,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from tests.test_translator.test_metadata_index_bounds import SOURCE, _index_config
@@ -153,6 +156,86 @@ def test_additive_loop_intervals_cover_entry_and_exit(
     GLSLCodeGen().annotate_glsl_control_flow_intervals(function)
     assert inside._glsl_control_flow_intervals["position"] == inside_bounds
     assert after._glsl_control_flow_intervals["position"] == after_bounds
+
+
+def _component_loop(step=2):
+    function, loop, inside, after = _offset_loop(step=step)
+    vector_type = VectorType(PrimitiveType("int"), 2)
+    position = function.body.statements[0]
+    position.var_type = vector_type
+    position.initial_value = ConstructorNode(vector_type, [_integer(4), _integer(9)])
+    loop.body.statements[-1].target = MemberAccessNode(IdentifierNode("position"), "x")
+    loop.condition = BinaryOpNode(
+        loop.condition, "&&", BinaryOpNode(IdentifierNode("i"), "<", _integer(2))
+    )
+    return function, loop, inside, after
+
+
+@pytest.mark.parametrize(
+    "step,bounds,exit_bounds", [(2, (4, 8), (4, 10)), (-1, (2, 4), (1, 4))]
+)
+def test_conjunction_bounded_component_updates(step, bounds, exit_bounds):
+    function, loop, inside, after = _component_loop(step)
+    loop.body.statements.append(
+        AssignmentNode(
+            MemberAccessNode(IdentifierNode("position"), "y"), _integer(1), "+="
+        )
+    )
+    GLSLCodeGen().annotate_glsl_control_flow_intervals(function)
+    assert inside._glsl_control_flow_intervals["position.x"] == bounds
+    assert after._glsl_control_flow_intervals["position.x"] == exit_bounds
+    assert inside._glsl_control_flow_intervals["position.y"] == (9, 11)
+    assert after._glsl_control_flow_intervals["position.y"] == (9, 12)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "whole-write",
+        "swizzle-write",
+        "duplicate-update",
+        "escape",
+        "shadow",
+        "volatile",
+        "overflow",
+        "condition-write",
+        "disjunction",
+    ],
+)
+def test_component_loop_proof_rejects_unsafe_updates(fault):
+    function, loop, inside, after = _component_loop()
+    target = lambda: MemberAccessNode(IdentifierNode("position"), "x")
+    if fault == "whole-write":
+        loop.body.statements.insert(
+            1, AssignmentNode(IdentifierNode("position"), IdentifierNode("unknown"))
+        )
+    elif fault == "swizzle-write":
+        loop.body.statements.insert(
+            1,
+            AssignmentNode(
+                MemberAccessNode(IdentifierNode("position"), "xy"),
+                IdentifierNode("unknown"),
+            ),
+        )
+    elif fault == "duplicate-update":
+        loop.body.statements.append(loop.body.statements[-1])
+    elif fault == "escape":
+        function.body.statements.insert(1, UnaryOpNode("&", target()))
+    elif fault == "shadow":
+        loop.body.statements.insert(
+            1, BlockNode([VariableNode("position", "int", _integer(0))])
+        )
+    elif fault == "volatile":
+        function.body.statements[0].qualifiers = ["volatile"]
+    elif fault == "overflow":
+        loop.body.statements[-1].value = _integer(2147483647)
+    elif fault == "condition-write":
+        loop.condition.right = UnaryOpNode("++", target())
+    else:
+        loop.condition.op = loop.condition.operator = "||"
+    GLSLCodeGen().annotate_glsl_control_flow_intervals(function)
+    assert "position.x" not in inside._glsl_control_flow_intervals
+    assert "position.x" not in after._glsl_control_flow_intervals
 
 
 @pytest.mark.parametrize(

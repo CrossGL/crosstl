@@ -157,17 +157,19 @@ def _check(actual, expected):
 
 
 def _checked_copy_config(config, workload):
-    if not workload["entry"].startswith("gg1_dynamic_copy"):
+    if not workload["entry"].startswith(("gg1_dynamic_copy", "ggn2_dynamic_copy")):
         return config
     requirements = [
         dict(
             source=SOURCE,
             entryPoint=workload["entry"],
             parameter=name,
-            minimum=values[0],
-            maximum=values[0],
+            minimum=value,
+            maximum=value,
+            **({"element": element} if len(values) > 1 else {}),
         )
         for name, (_, values, _) in workload["constants"].items()
+        for element, value in enumerate(values)
     ]
     metal = dict(config.source_options.get("metal", {}))
     metal["preserve_resource_origins"] = True
@@ -219,20 +221,20 @@ def test_copy_readback_rejects_corruption(fault):
 
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
-def test_copy_contracts_bind_uploaded_metadata_and_launch(tmp_path, target):
-    workload = _workload("reverse-1d")
+@pytest.mark.parametrize("case", ("reverse-1d", "reverse-4d"))
+def test_copy_contracts_bind_uploaded_metadata_and_launch(tmp_path, target, case):
+    workload = _workload(case)
     original = ProjectConfig(root=tmp_path, targets=(target,))
     config = _checked_copy_config(original, workload)
     assert not config.index_range_assertions
-    assert len(config.metadata_preconditions) == 4
+    assert len(config.metadata_preconditions) == (4 if case == "reverse-1d" else 15)
     assert {
-        item.parameter: (item.minimum, item.maximum)
+        (item.parameter, item.element): (item.minimum, item.maximum)
         for item in config.metadata_preconditions
     } == {
-        "src_stride": (-2, -2),
-        "dst_stride": (2, 2),
-        "src_offset": (38, 38),
-        "dst_offset": (3, 3),
+        (name, element if len(values) > 1 else None): (value, value)
+        for name, (_, values, _) in workload["constants"].items()
+        for element, value in enumerate(values)
     }
     assert config.source_options["metal"]["preserve_resource_origins"] is True
     assert ("target_options" in config.source_options["metal"]) is (target == "opengl")
@@ -503,9 +505,14 @@ def test_current_copy_native_parity(current_copy_source, copy_executor, tmp_path
                 )
             )
             assert result.status == "ok"
-            if workload["entry"].startswith("gg1_dynamic_copy"):
-                assert len(result.details["metadataPreconditions"]) == 4
-                assert len(result.details["inputObservations"]) == 5
+            if case in DYNAMIC_LAYOUTS:
+                assert len(result.details["metadataPreconditions"]) == sum(
+                    len(values) for _, values, _ in workload["constants"].values()
+                )
+                assert (
+                    len(result.details["inputObservations"])
+                    == len(workload["constants"]) + 1
+                )
                 assert all(
                     item["unchanged"]
                     for item in result.details["inputObservations"].values()

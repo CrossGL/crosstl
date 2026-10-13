@@ -67,6 +67,54 @@ def test_fragmentation_widens_without_losing_reachable_values():
     assert merge_integer_intervals([(i, i) for i in range(0, 40, 2)]) == [(0, 38)]
 
 
+@pytest.mark.parametrize("bits", [2, 4, 8, 16, 32, 64])
+@pytest.mark.parametrize("signed", [False, True])
+@pytest.mark.parametrize("operator", ["/", "%"])
+def test_quotient_and_remainder_cover_exact_source_results(bits, signed, operator):
+    rng = random.Random(923)
+    modulus = 1 << bits
+    centers = (-modulus, -(modulus // 2), -1, 0, 1, modulus // 2, modulus)
+    for _ in range(160):
+        a, c = rng.choice(centers) + rng.randrange(-4, 5), rng.choice(
+            centers
+        ) + rng.randrange(-4, 5)
+        b, d = a + rng.randrange(7), c + rng.randrange(7)
+        result = integer_arithmetic_intervals(
+            operator, [(a, b)], [(c, d)], bits, signed
+        )
+        invalid = False
+        for left in range(a, b + 1):
+            for right in range(c, d + 1):
+                x, y = _cast(left, bits, signed), _cast(right, bits, signed)
+                if y == 0 or (signed and x == -(modulus // 2) and y == -1):
+                    invalid = True
+                    assert result is None
+                    continue
+                quotient = abs(x) // abs(y)
+                if (x < 0) != (y < 0):
+                    quotient = -quotient
+                expected = quotient if operator == "/" else x - quotient * y
+                if result is not None:
+                    assert any(low <= expected <= high for low, high in result)
+        assert (result is None) == invalid
+
+
+@pytest.mark.parametrize("bits", [8, 16, 32, 64])
+@pytest.mark.parametrize("operator", ["/", "%"])
+def test_division_rejects_zero_and_signed_minimum_overflow(bits, operator):
+    minimum = -(1 << (bits - 1))
+    assert (
+        integer_arithmetic_intervals(operator, [(minimum, 3)], [(-2, -1)], bits, True)
+        is None
+    )
+    assert (
+        integer_arithmetic_intervals(operator, [(1, 3)], [(-1, 1)], bits, True) is None
+    )
+    assert (
+        integer_arithmetic_intervals(operator, [(0, 3)], [(0, 0)], bits, False) is None
+    )
+
+
 @pytest.mark.parametrize("bits,signed", [(8, True), (32, True), (64, True)])
 def test_signed_overflow_never_becomes_wrapping_proof(bits, signed):
     maximum = (1 << (bits - 1)) - 1

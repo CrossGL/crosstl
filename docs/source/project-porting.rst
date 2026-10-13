@@ -1259,18 +1259,27 @@ Local-name allocation keeps emitted resource aliases reserved, including when
 a local uses the preferred escaped spelling or shadows another local in a block.
 
 Pure scalar helpers with one return expression can retain checked caller ranges
-through nested calls, integer casts, addition, subtraction and multiplication.
+through nested calls, integer casts and integer arithmetic.
 Analysis uses source overloads, parameter conversions and return conversions;
 each callee has its own bindings. Fixed-width unsigned wrapping is represented
 before signed conversion, while possible signed arithmetic overflow establishes
 no proof. Unknown callees, ambiguous overloads, recursion, mutable or volatile
-references, captured caller locals and unmodeled effects remain unproved. This
-does not yet summarize helper loops, vector returns or forwarded array pointers.
-The pinned reversed one-dimensional copy demo uses checked stride/offset uploads
-and a checked OpenGL dispatch region rather than trusted index assertions.
+references, captured caller locals and unmodeled effects remain unproved.
+Checked immutable integer-array elements can pass through these helpers without
+becoming unchecked pointer-offset facts. Integer vector-return helpers additionally
+support local scalar/vector assignments and finite ``for`` loops, with a maximum
+of 64 iterations per loop and a shared expression budget. Component ranges include
+every possible exit. Writes through array parameters, escaping locals, uncovered
+elements and division by a possibly zero value cannot establish a proof.
+Scalar-return helpers still require one return expression.
+The pinned reversed one- and four-dimensional copy demos use checked shape,
+stride and offset uploads and a checked OpenGL dispatch region rather than
+trusted index assertions.
 
 Bounded increasing loops retain conservative ranges for a single additive scalar
-or storage-pointer update in the loop body. The iteration bound and stride must
+or storage-pointer update, or a single additive update per private integer-vector
+component, in the loop body. A counter bound within a side-effect-free conjunction
+can provide a conservative maximum iteration count. The bound and stride must
 remain invariant, the counter's terminating increment must fit its source type,
 and every possible accumulated offset must fit the target domain. Entry and exit
 ranges include early exits and zero iterations; the actual loop is not unrolled
