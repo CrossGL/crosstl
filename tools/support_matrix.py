@@ -1069,7 +1069,7 @@ def render_docs(matrix):
     lines.extend(
         render_csv_table(
             "Summary by backend",
-            ["Backend"] + [status for status in STATUS_ORDER],
+            ["Backend"] + [*STATUS_ORDER],
             summary_rows,
         )
     )
@@ -1094,7 +1094,7 @@ def render_docs(matrix):
     lines.extend(
         render_csv_table(
             "Graphics backend status summary",
-            ["Backend"] + [status for status in STATUS_ORDER],
+            ["Backend"] + [*STATUS_ORDER],
             graphics_summary_rows,
         )
     )
@@ -1137,7 +1137,7 @@ def render_docs(matrix):
     lines.extend(
         render_csv_table(
             "Project-porting status summary",
-            ["Backend"] + [status for status in STATUS_ORDER],
+            ["Backend"] + [*STATUS_ORDER],
             project_summary_rows,
         )
     )

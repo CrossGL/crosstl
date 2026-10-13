@@ -733,7 +733,7 @@ def _collect_from_function(generator, func, substitutions):
         before = set(getattr(generator, "generic_function_specializations", {}) or {})
         _analyze_statement(generator, getattr(func, "body", None), substitutions)
         after = set(getattr(generator, "generic_function_specializations", {}) or {})
-        return [key for key in after - before]
+        return [*after - before]
     finally:
         generator.local_variable_types = previous_local_variable_types
         generator.current_expression_expected_type = previous_expected_type

@@ -3976,7 +3976,7 @@ def test_parse_linalg_using_alias_post_type_attributes_from_dxc():
     assert alias.name == "MyHandleT"
     assert alias.alias_type == "__builtin_LinAlgMatrix"
     assert alias.attributes[0].name == "__LinAlgMatrix_Attributes"
-    assert [arg for arg in alias.attributes[0].args] == [9, 4, 4, 0, 1]
+    assert [*alias.attributes[0].args] == [9, 4, 4, 0, 1]
     assert local.name == "MatA"
 
 
