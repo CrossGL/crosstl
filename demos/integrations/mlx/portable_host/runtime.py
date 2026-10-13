@@ -726,6 +726,17 @@ class HostRuntime:
             shaped_metadata = layout_module.validate(
                 entry, supplied, threads, execution
             )
+            if checked_reduction is not None:
+                descriptor, package_directory = checked_reduction.get(
+                    entry,
+                    threads,
+                    execution,
+                    layout=dict(
+                        metadata=shaped_metadata,
+                        inputCount=supplied["in"].count,
+                        outputCount=supplied["out"].count,
+                    ),
+                )
         elif reduction and not initialization:
             reduction_layout.validate(
                 supplied, threads, execution, REDUCTION_ENTRIES[entry]
@@ -1246,6 +1257,17 @@ class HostRuntime:
                                     buffer.count :
                                 ],
                                 "reductionValues": output["values"][: buffer.count],
+                                **(
+                                    {
+                                        "reductionLayout": dict(
+                                            inputCount=supplied["in"].count,
+                                            outputCount=supplied["out"].count,
+                                        )
+                                    }
+                                    if shaped_reduction
+                                    and checked_reduction is not None
+                                    else {}
+                                ),
                                 **(
                                     {
                                         "inputs": inputs,

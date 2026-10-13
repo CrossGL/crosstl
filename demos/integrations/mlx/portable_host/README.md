@@ -1014,6 +1014,28 @@ python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx
 python -m demos.integrations.mlx.portable_host.verify_rows --mlx-root mlx-upstream --packages host-packages --reductions row-packages --output-dir row-evidence
 ```
 
+For checked per-dispatch translation, build the catalog with `--on-demand`:
+
+```sh
+python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream --target opengl --family row --on-demand --output-dir checked-row-packages
+python -m demos.integrations.mlx.portable_host.verify_rows --mlx-root mlx-upstream --packages host-packages --reductions checked-row-packages --output-dir checked-row-evidence
+```
+
+This path validates the actual uploaded ranks, shapes, strides, source allocation
+span and launch geometry before translation. Each scalar and array element becomes
+an exact metadata requirement in the package. No generated-index assertion is
+used. The cache identity includes those values, source and translator hashes, and
+the layout validator; changing a stride cannot reuse another view's package.
+Verification loads the existing package without rebuilding it and checks the
+recorded uploads and artifact identity. `HostRuntime` requires `mlx_root` when
+loading these catalogs; `verify_rows` supplies it from `--mlx-root`.
+
+The existing native checked-reductions CI batch exercises this cache for the
+simple-row kernel, including original/generated Metal comparison and guarded
+native execution on each target. The separate all-width row collection below
+still uses static packages. Its compilation coverage must not be attributed to
+on-demand packages, nor does either path establish full MLX backend coverage.
+
 Row translation is split into eight Linux jobs per target, each containing all
 56 entries and three or four disjoint launch widths. Translation does not require
 the target driver. Each successful shard records the MLX pin, translator Git

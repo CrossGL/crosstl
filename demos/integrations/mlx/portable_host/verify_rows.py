@@ -16,6 +16,7 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
     ENTRIES,
     ROW_ENTRIES,
     load_index,
+    variant_keys,
 )
 from demos.integrations.mlx.portable_host.reduction_shards import load_row_packages
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
@@ -77,6 +78,7 @@ def worker(args):
         runtime = HostRuntime(
             args.packages,
             output / "dispatch.jsonl",
+            mlx_root=args.mlx_root,
             reductions=(
                 [*directories, args.all_reductions]
                 if args.all_reductions is not None
@@ -198,11 +200,11 @@ def verify(args):
             selected = [
                 event
                 for event in events
-                if f'w{event["workgroupSize"][0]}/{event["entry"]}' in shard[
-                    "descriptors"
-                ]
+                if f'w{event["workgroupSize"][0]}/{event["entry"]}' in variant_keys(
+                    shard
+                )
             ]
-            verify_artifacts(selected, directory, shard)
+            verify_artifacts(selected, directory, shard, mlx_root=args.mlx_root)
             checked += len(selected)
         if checked != len(events):
             raise ValueError("Row trace references an unknown package variant")
@@ -226,6 +228,7 @@ def verify(args):
             [record for record in mixed_trace if record["entry"] in ENTRIES],
             args.all_reductions,
             all_index,
+            mlx_root=args.mlx_root,
         )
         verify_artifacts(
             [
@@ -260,7 +263,11 @@ def verify(args):
         "adaptation": before,
         "widths": index["widths"],
         "packageCount": len(directories),
-        "artifactCount": len(index["descriptors"]),
+        "artifactCount": (
+            len({event["packageRoot"] for event in trace[:row_count]})
+            if index.get("dispatchMode") == "on-demand"
+            else len(index["descriptors"])
+        ),
         "entries": sorted(ROW_ENTRIES),
         "casesPerPath": len(results["native"]),
         "dispatchCount": len(trace),

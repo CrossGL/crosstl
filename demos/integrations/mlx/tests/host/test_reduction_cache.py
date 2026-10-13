@@ -1,4 +1,4 @@
-"""Validate exact whole-array reduction package contracts and cache identity."""
+"""Validate checked whole-array and row reduction packages and cache identity."""
 
 import copy
 import hashlib
@@ -399,3 +399,319 @@ def test_host_selects_and_verifies_exact_count_packages(catalog, tmp_path, monke
             verify_artifacts(changed, directory, index, mlx_root=root)
     with pytest.raises(ValueError, match="pinned source"):
         verify_artifacts(events, directory, index)
+
+
+def row_layout(simple=False):
+    from demos.integrations.mlx.portable_host import row_reduction_layout
+    from demos.integrations.mlx.tests.host.test_portable_rows import _buffers
+
+    entry, buffers, count, execution, memory = _buffers(simple, 2)
+    metadata = row_reduction_layout.validate(entry, buffers, count, execution)
+    layout = dict(
+        metadata=metadata,
+        inputCount=buffers["in"].count,
+        outputCount=buffers["out"].count,
+    )
+    return entry, count, execution, layout, buffers, memory
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "metadata",
+        "scalar",
+        "bool",
+        "element",
+        "span",
+        "rows",
+        "rank",
+        "launch",
+        "extra",
+    ],
+)
+def test_row_cache_rejects_invalid_layout_before_source_access(
+    tmp_path, monkeypatch, fault
+):
+    entry, count, execution, layout, _, _ = row_layout()
+    if fault == "metadata":
+        layout.pop("metadata")
+    elif fault == "scalar":
+        layout["metadata"]["row_size"] = [65, 65]
+    elif fault == "bool":
+        layout["metadata"]["shape"][1] = True
+    elif fault == "element":
+        layout["metadata"]["strides"][1] = -1
+    elif fault == "span":
+        layout["inputCount"] -= 1
+    elif fault == "rows":
+        layout["outputCount"] += 1
+    elif fault == "rank":
+        layout["metadata"]["reduce_ndim"] = [1]
+    elif fault == "launch":
+        execution["workgroupCount"][1] += 1
+    else:
+        layout["metadata"]["extra"] = [0]
+    cache = packages.ReductionPackageCache(tmp_path, tmp_path / "cache", "opengl")
+    monkeypatch.setattr(
+        cache, "_require_source", lambda: pytest.fail("Invalid layout accessed source")
+    )
+    with pytest.raises(ValueError):
+        cache.get(entry, count, execution, layout=layout)
+    assert not cache.directory.exists()
+
+
+@pytest.fixture(
+    params=[
+        (target, simple)
+        for target in ("metal", "opengl", "directx")
+        for simple in (False, True)
+    ]
+)
+def row_packaged(tmp_path, monkeypatch, request):
+    target, simple = request.param
+    entry, count, execution, layout, buffers, memory = row_layout(simple)
+    if simple:
+        parameters = "constant ulong& reduction_size [[buffer(2)]], constant long& out_size [[buffer(3)]]"
+        value = "reduction_size + out_size"
+    else:
+        parameters = """constant long& row_size [[buffer(2)]],
+constant long& non_row_reductions [[buffer(3)]], constant int* shape [[buffer(4)]],
+constant long* strides [[buffer(5)]], constant int& ndim [[buffer(6)]],
+constant int* reduce_shape [[buffer(7)]], constant long* reduce_strides [[buffer(8)]],
+constant int& reduce_ndim [[buffer(9)]]"""
+        value = (
+            "row_size + non_row_reductions + shape[0] + shape[1] + strides[0] + strides[1] + ndim"
+            " + reduce_shape[0] + reduce_shape[1] + reduce_strides[0] + reduce_strides[1] + reduce_ndim"
+        )
+    root = tmp_path / "source"
+    source = root / packages.SOURCE
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        f"""template<typename T> kernel void reduce_rows(device const T* in [[buffer(0)]],
+device T* out [[buffer(1)]], {parameters}, uint3 group [[threadgroup_position_in_grid]],
+uint tid [[thread_index_in_threadgroup]]) {{
+    T value = simd_sum(in[0]);
+    if (tid == 0) out[group.y] = value + T({value});
+}}
+template [[host_name("{entry}")]] [[kernel]]
+decltype(reduce_rows<float>) reduce_rows<float>;
+"""
+    )
+    monkeypatch.setattr(
+        packages, "SOURCE_SHA256", hashlib.sha256(source.read_bytes()).hexdigest()
+    )
+    monkeypatch.setattr(packages, "require_revision", lambda path: None)
+    monkeypatch.setattr(packages.subprocess, "check_output", lambda *_args, **_kw: "")
+    cache = packages.ReductionPackageCache(root, tmp_path / "row-cache", target)
+    descriptor, package = cache.get(entry, count, execution, layout=layout)
+    return cache, descriptor, package, entry, count, execution, layout, buffers, memory
+
+
+def test_row_cache_retains_each_metadata_element_and_detaches_layout(
+    row_packaged, monkeypatch
+):
+    cache, descriptor, package, entry, count, execution, layout, _, _ = row_packaged
+    changed = copy.deepcopy(layout)
+    contract = packages.dispatch_contract(entry, count, execution, layout=changed)
+    changed["metadata"][next(iter(changed["metadata"]))][0] += 1
+    assert contract["metadata"] == layout["metadata"]
+    conditions = [
+        item
+        for binding in descriptor["bindings"]
+        for item in packages._binding_conditions(binding)
+    ]
+    assert len(conditions) == sum(map(len, layout["metadata"].values()))
+    assert all(item["minimum"] == item["maximum"] for item in conditions)
+    monkeypatch.setattr(
+        cache, "_build", lambda *args: pytest.fail("Cache hit rebuilt shader")
+    )
+    assert cache.load(entry, count, execution, layout=layout) == (descriptor, package)
+    assert cache.get(entry, count, execution, layout=layout) == (descriptor, package)
+
+
+def test_row_cache_identity_includes_layout_values(row_packaged):
+    cache, descriptor, package, entry, count, execution, layout, _, _ = row_packaged
+    other_layout = copy.deepcopy(layout)
+    other_count = count
+    if "strides" in layout["metadata"]:
+        other_layout["metadata"]["strides"].reverse()
+    else:
+        other_layout["metadata"]["reduction_size"][0] += 1
+        other_count += layout["outputCount"]
+        other_layout["inputCount"] = other_count
+    with pytest.raises(FileNotFoundError):
+        cache.load(entry, other_count, execution, layout=other_layout)
+    other, other_package = cache.get(entry, other_count, execution, layout=other_layout)
+    assert other_package != package and other != descriptor
+    assert cache.load(entry, count, execution, layout=layout) == (descriptor, package)
+
+
+@pytest.mark.parametrize("fault", [None, "scalar", "element", "dtype"])
+def test_row_dispatch_checks_uploaded_metadata(row_packaged, fault):
+    cache, descriptor, package, entry, count, execution, layout, _, _ = row_packaged
+    inputs, outputs = {}, {}
+    for binding in descriptor["bindings"]:
+        name = binding["name"]
+        parameter = binding["provenance"]["sourceResource"]["parameter"]
+        values = (
+            layout["metadata"][parameter]
+            if parameter in layout["metadata"]
+            else [0.0] * layout["inputCount" if parameter == "in" else "outputCount"]
+        )
+        packet = dict(
+            dtype=binding["scalarLayout"]["elementType"],
+            shape=[len(values)],
+            values=list(values),
+        )
+        inputs[name] = packet
+        if parameter == "out":
+            outputs[name] = copy.deepcopy(packet)
+    metadata_packets = [
+        packet for packet in inputs.values() if packet["dtype"] != "float32"
+    ]
+    if fault == "element":
+        arrays = [packet for packet in metadata_packets if packet["shape"][0] > 1]
+        if arrays:
+            arrays[0]["values"][1] += 1
+        else:
+            metadata_packets[-1]["values"][0] += 1
+    elif fault == "scalar":
+        next(packet for packet in metadata_packets if packet["shape"] == [1])["values"][
+            0
+        ] += 1
+    elif fault == "dtype":
+        metadata_packets[0]["dtype"] = "float32"
+    if fault is None:
+        request = build_native_loader_dispatch_request(
+            descriptor, package, inputs, outputs, execution
+        )
+        assert not request.execution_plan.diagnostics
+    else:
+        with pytest.raises(ValueError):
+            build_native_loader_dispatch_request(
+                descriptor, package, inputs, outputs, execution
+            )
+
+
+def test_row_catalog_routes_validated_uploads_and_verifies_trace(
+    row_packaged, tmp_path, monkeypatch
+):
+    from crosstl.project.runtime_verification import RuntimeExecutorResult
+
+    cache, _, _, entry, count, execution, layout, buffers, memory = row_packaged
+    monkeypatch.setattr(reduction_packages, "require_revision", lambda root: None)
+    directory = tmp_path / "row-catalog"
+    index = reduction_packages.build_packages(
+        cache.root,
+        directory,
+        cache.target,
+        widths=(32,),
+        entries=(entry,),
+        family="row",
+        on_demand=True,
+    )
+    host = make_host((cache.root, directory, index), tmp_path, monkeypatch)
+    calls = []
+
+    def execute(request):
+        calls.append(request)
+        names = {value.name for value in request.fixture.expected_outputs}
+        return RuntimeExecutorResult(
+            outputs={
+                value.name: value.to_json()
+                for value in request.fixture.inputs
+                if value.name in names
+            },
+            details={},
+        )
+
+    host.executor.run = execute
+    raw = (runtime.Buffer * len(buffers))(*buffers.values())
+    launch = runtime.Launch(
+        tuple(execution["workgroupCount"]), tuple(execution["workgroupSize"])
+    )
+    host.dispatch(entry, raw, len(buffers), count, launch=launch)
+    events = [json.loads(line) for line in host.trace.read_text().splitlines()]
+    assert len(calls) == len(events) == 1
+    assert events[0]["reductionMetadata"] == layout["metadata"]
+    assert events[0]["reductionLayout"] == {
+        key: layout[key] for key in ("inputCount", "outputCount")
+    }
+    verify_artifacts(events, directory, index, mlx_root=cache.root)
+    monkeypatch.setattr(
+        packages.ReductionPackageCache,
+        "_build",
+        lambda *args: pytest.fail("Trace verification rebuilt shader"),
+    )
+    for fault in (
+        "span",
+        "metadata",
+        "upload",
+        "input-shape",
+        "input-values",
+        "output",
+        "package",
+    ):
+        changed = copy.deepcopy(events)
+        if fault == "span":
+            changed[0]["reductionLayout"]["inputCount"] += 1
+        elif fault == "metadata":
+            changed[0]["reductionMetadata"][next(iter(layout["metadata"]))][0] += 1
+        elif fault == "upload":
+            packet = next(
+                packet
+                for packet in changed[0]["inputs"].values()
+                if packet["dtype"] in {"int64", "uint64"}
+            )
+            packet["values"][0] += 1
+        elif fault in {"input-shape", "input-values", "output"}:
+            packets = [
+                packet
+                for packet in changed[0]["inputs"].values()
+                if packet["dtype"] == "float32"
+            ]
+            packet = next(
+                packet
+                for packet in packets
+                if packet["shape"]
+                == [
+                    (
+                        layout["outputCount"] + 32
+                        if fault == "output"
+                        else layout["inputCount"]
+                    )
+                ]
+            )
+            if fault == "input-shape":
+                packet["shape"][0] -= 1
+            else:
+                packet["values"].pop()
+        else:
+            changed[0]["packageRoot"] = str(directory)
+        with pytest.raises((ValueError, FileNotFoundError)):
+            verify_artifacts(changed, directory, index, mlx_root=cache.root)
+
+
+def test_row_cache_does_not_publish_changed_metadata(row_packaged, monkeypatch):
+    cache, _, _, entry, count, execution, layout, _, _ = row_packaged
+    changed = copy.deepcopy(layout)
+    if "strides" in changed["metadata"]:
+        changed["metadata"]["strides"].reverse()
+    else:
+        changed["metadata"]["reduction_size"][0] += 1
+        count += changed["outputCount"]
+        changed["inputCount"] = count
+    before = set(cache.directory.iterdir())
+    original = cache._build
+
+    def mutate(output, identity):
+        original(output, identity)
+        if "strides" in changed["metadata"]:
+            changed["metadata"]["strides"].reverse()
+        else:
+            changed["metadata"]["reduction_size"][0] += 1
+
+    monkeypatch.setattr(cache, "_build", mutate)
+    with pytest.raises(ValueError):
+        cache.get(entry, count, execution, layout=changed)
+    assert set(cache.directory.iterdir()) == before

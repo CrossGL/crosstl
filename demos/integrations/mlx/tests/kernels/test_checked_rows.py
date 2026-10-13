@@ -11,6 +11,7 @@ from crosstl.project import (
     translate_project,
 )
 from crosstl.translator.dispatch_regions import plan_dispatch_regions
+from demos.integrations.mlx.portable_host.reduction_cache import ReductionPackageCache
 from demos.integrations.mlx.tests.corpus_evidence import corpus_workspace
 from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
     _package_descriptor,
@@ -216,14 +217,32 @@ def test_checked_row_reduction_executes(checked_corpus, tmp_path, simple):
     with corpus_workspace(
         root, family="checked-row", target=target, entry_point=entry
     ) as work:
-        report = translate_project(
-            _config(root, work, target, simple=simple), format_output=False
-        )
-        report.write_json(tmp_path / "portability-report.json")
-        payload = report.to_json()
-        assert payload["summary"]["translatedCount"] == 1, payload["diagnostics"]
-        assert not payload["diagnostics"]
-        descriptor, package = _package_descriptor(report, tmp_path)
+        if simple:
+            layout = dict(
+                metadata={
+                    name: [value] for name, (_, value, _) in SIMPLE_METADATA.items()
+                },
+                inputCount=33 * 65,
+                outputCount=33,
+            )
+            execution = dict(workgroupCount=[1, 9, 1], workgroupSize=[32, 1, 1])
+            cache = ReductionPackageCache(root, tmp_path / "cache", target)
+            descriptor, package = cache.get(entry, 33 * 65, execution, layout=layout)
+            assert cache.load(entry, 33 * 65, execution, layout=layout) == (
+                descriptor,
+                package,
+            )
+            identity = json.loads((package.parent / "index.json").read_text())[
+                "identity"
+            ]
+            assert identity["contract"]["metadata"] == layout["metadata"]
+        else:
+            report = translate_project(_config(root, work, target), format_output=False)
+            report.write_json(tmp_path / "portability-report.json")
+            payload = report.to_json()
+            assert payload["summary"]["translatedCount"] == 1, payload["diagnostics"]
+            assert not payload["diagnostics"]
+            descriptor, package = _package_descriptor(report, tmp_path)
         (tmp_path / "descriptor.json").write_text(
             json.dumps(descriptor, indent=2) + "\n", encoding="utf-8"
         )

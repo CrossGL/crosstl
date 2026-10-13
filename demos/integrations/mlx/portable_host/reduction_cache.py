@@ -1,5 +1,6 @@
-"""Cache whole-array reductions with checked metadata and launch contracts."""
+"""Cache reductions with checked metadata, source spans and launch contracts."""
 
+import copy
 import hashlib
 import json
 import shutil
@@ -20,7 +21,11 @@ from crosstl.translator.dispatch_region_identity import translation_implementati
 from crosstl.translator.dispatch_regions import plan_dispatch_regions
 from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
 from demos.integrations.mlx.portable_host.reduction_layout import stage
-from demos.integrations.mlx.portable_host.reduction_packages import ALL_ENTRIES, SOURCE
+from demos.integrations.mlx.portable_host.reduction_packages import (
+    ALL_ENTRIES,
+    ROW_ENTRIES,
+    SOURCE,
+)
 
 SOURCE_SHA256 = "f1e410ab635eaa940ec195461069cbb013ab88ab0d1f8d5dd8790d30b32c454a"
 
@@ -34,25 +39,62 @@ def verify_events(events, root, directory, index):
     for event in events:
         execution = {name: event[name] for name in ("workgroupCount", "workgroupSize")}
         entry, count = event["entry"], event["threads"]
-        contract = dispatch_contract(entry, count, execution)
+        layout = None
+        if entry in ROW_ENTRIES:
+            layout = event.get("reductionLayout")
+            if not isinstance(layout, dict) or set(layout) != {
+                "inputCount",
+                "outputCount",
+            }:
+                raise ValueError("Row trace is missing its source spans")
+            layout = {**layout, "metadata": event.get("reductionMetadata")}
+        contract = dispatch_contract(entry, count, execution, layout=layout)
         if f'w{execution["workgroupSize"][0]}/{entry}' not in allowed or event.get(
             "reductionMetadata"
-        ) != {"in_size": count, "row_size": contract["rowSize"]}:
+        ) != contract.get(
+            "metadata", {"in_size": count, "row_size": contract.get("rowSize")}
+        ):
             raise ValueError("Reduction trace differs from its declared dispatch")
-        descriptor, package = cache.load(entry, count, execution)
+        descriptor, package = cache.load(entry, count, execution, layout=layout)
         if event.get("packageRoot") != str(package):
             raise ValueError("Reduction cache package root differs")
         for binding in descriptor["bindings"]:
-            condition = binding.get("provenance", {}).get("metadataPrecondition")
-            if condition is not None:
+            conditions = _binding_conditions(binding)
+            if conditions:
+                condition = conditions[0]
+                parameter = condition["sourceResource"]["parameter"]
+                values = (
+                    contract["metadata"][parameter]
+                    if layout is not None
+                    else [condition["minimum"]]
+                )
                 packet = event["inputs"][binding["name"]]
                 if (
-                    packet.get("dtype") != "uint64"
-                    or packet.get("shape") != [1]
-                    or packet.get("values") != [condition["minimum"]]
-                    or type(packet["values"][0]) is not int
+                    packet.get("dtype") != condition["dtype"]
+                    or packet.get("shape") != [len(values)]
+                    or packet.get("values") != values
+                    or any(type(value) is not int for value in packet["values"])
                 ):
                     raise ValueError("Reduction trace metadata upload differs")
+            elif layout is not None and "executionInput" not in binding.get(
+                "provenance", {}
+            ):
+                parameter = binding["provenance"]["sourceResource"]["parameter"]
+                if parameter not in {"in", "out"}:
+                    raise ValueError("Unexpected row trace resource")
+                size = (
+                    contract["inputCount"]
+                    if parameter == "in"
+                    else contract["outputCount"] + 32
+                )
+                packet = event["inputs"][binding["name"]]
+                if (
+                    packet.get("dtype") != binding["scalarLayout"]["elementType"]
+                    or packet.get("shape") != [size]
+                    or not isinstance(packet.get("values"), list)
+                    or len(packet["values"]) != size
+                ):
+                    raise ValueError("Row trace upload differs from its source span")
         verify_artifacts(
             [event],
             package.parent,
@@ -61,7 +103,34 @@ def verify_events(events, root, directory, index):
         )
 
 
-def dispatch_contract(entry, count, execution):
+def dispatch_contract(entry, count, execution, *, layout=None):
+    if isinstance(entry, str) and entry in ROW_ENTRIES:
+        from demos.integrations.mlx.portable_host import row_reduction_layout
+
+        if not isinstance(layout, dict) or set(layout) != {
+            "metadata",
+            "inputCount",
+            "outputCount",
+        }:
+            raise ValueError("Row cache requires checked metadata and source spans")
+        metadata = row_reduction_layout.validate_metadata(
+            entry,
+            layout["metadata"],
+            count,
+            layout["inputCount"],
+            layout["outputCount"],
+            execution,
+        )
+        return dict(
+            entry=entry,
+            count=count,
+            inputCount=layout["inputCount"],
+            outputCount=layout["outputCount"],
+            metadata=metadata,
+            execution=copy.deepcopy(execution),
+        )
+    if layout is not None:
+        raise ValueError("Whole-array reduction cannot use a row layout")
     if not isinstance(entry, str) or entry not in ALL_ENTRIES:
         raise ValueError("Unknown whole-array reduction entry")
     plan = stage(count, ALL_ENTRIES[entry])
@@ -93,6 +162,30 @@ def _region(contract):
 
 
 def _conditions(contract):
+    if "metadata" in contract:
+        from demos.integrations.mlx.portable_host.row_reduction_layout import (
+            ARRAY_METADATA,
+            signature,
+        )
+
+        return [
+            dict(
+                dtype=dtype,
+                minimum=value,
+                maximum=value,
+                sourceResource=dict(
+                    schemaVersion=1,
+                    backend="metal",
+                    entryPoint=contract["entry"],
+                    parameter=name,
+                    parameterIndex=index,
+                ),
+                **({"element": element} if name in ARRAY_METADATA else {}),
+            )
+            for index, (name, dtype) in enumerate(signature(contract["entry"]).items())
+            if dtype is not None
+            for element, value in enumerate(contract["metadata"][name])
+        ]
     return [
         {
             "dtype": "uint64",
@@ -111,6 +204,19 @@ def _conditions(contract):
             (3, "row_size", contract["rowSize"]),
         )
     ]
+
+
+def _binding_conditions(binding):
+    provenance = binding.get("provenance", {})
+    return (
+        [provenance["metadataPrecondition"]]
+        if "metadataPrecondition" in provenance
+        else provenance.get("metadataElementPreconditions", [])
+    )
+
+
+def _condition_key(condition):
+    return (condition["sourceResource"]["parameter"], condition.get("element", -1))
 
 
 class ReductionPackageCache:
@@ -144,9 +250,14 @@ class ReductionPackageCache:
         if dirty.strip():
             raise ValueError("Reduction translation requires unchanged pinned kernels")
 
-    def _identity(self, entry, count, execution):
-        contract = dispatch_contract(entry, count, execution)
+    def _identity(self, entry, count, execution, *, layout=None):
+        contract = dispatch_contract(entry, count, execution, layout=layout)
         self._require_source()
+        recipe = hashlib.sha256(Path(__file__).read_bytes())
+        if layout is not None:
+            from demos.integrations.mlx.portable_host import row_reduction_layout
+
+            recipe.update(b"\0" + Path(row_reduction_layout.__file__).read_bytes())
         return {
             "schemaVersion": 1,
             "revision": COMMIT,
@@ -154,21 +265,21 @@ class ReductionPackageCache:
             "contract": contract,
             "sourceHash": SOURCE_SHA256,
             "implementationHash": translation_implementation_hash(),
-            "recipeHash": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "recipeHash": recipe.hexdigest(),
         }
 
     def _directory(self, identity):
         key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         return self.directory / key
 
-    def load(self, entry, count, execution):
+    def load(self, entry, count, execution, *, layout=None):
         with self._lock:
-            identity = self._identity(entry, count, execution)
+            identity = self._identity(entry, count, execution, layout=layout)
             return self._load(self._directory(identity), identity)
 
-    def get(self, entry, count, execution):
+    def get(self, entry, count, execution, *, layout=None):
         with self._lock:
-            identity = self._identity(entry, count, execution)
+            identity = self._identity(entry, count, execution, layout=layout)
             destination = self._directory(identity)
             if not destination.exists():
                 self.directory.mkdir(parents=True, exist_ok=True)
@@ -178,7 +289,10 @@ class ReductionPackageCache:
                     staging = Path(temporary) / "entry"
                     staging.mkdir()
                     self._build(staging, identity)
-                    if self._identity(entry, count, execution) != identity:
+                    if (
+                        self._identity(entry, count, execution, layout=layout)
+                        != identity
+                    ):
                         raise ValueError("Reduction inputs changed during translation")
                     try:
                         staging.rename(destination)
@@ -201,9 +315,9 @@ class ReductionPackageCache:
         descriptor = build_native_loader_abi_descriptor(loader)
         contract = identity["contract"]
         conditions = [
-            binding["provenance"]["metadataPrecondition"]
+            condition
             for binding in descriptor["bindings"]
-            if "metadataPrecondition" in binding.get("provenance", {})
+            for condition in _binding_conditions(binding)
         ]
         if (
             descriptor != record.get("descriptor")
@@ -220,11 +334,8 @@ class ReductionPackageCache:
             != {"opengl": "main", "directx": "CSMain"}.get(
                 self.target, contract["entry"]
             )
-            or sorted(conditions, key=lambda item: item["sourceResource"]["parameter"])
-            != sorted(
-                _conditions(contract),
-                key=lambda item: item["sourceResource"]["parameter"],
-            )
+            or sorted(conditions, key=_condition_key)
+            != sorted(_conditions(contract), key=_condition_key)
             or descriptor.get("provenance", {}).get("dispatchRegion")
             != (None if self.target == "metal" else _region(contract))
         ):
@@ -260,14 +371,16 @@ class ReductionPackageCache:
                         dict(
                             source=SOURCE,
                             entryPoint=contract["entry"],
-                            parameter=name,
-                            minimum=value,
-                            maximum=value,
+                            parameter=condition["sourceResource"]["parameter"],
+                            minimum=condition["minimum"],
+                            maximum=condition["maximum"],
+                            **(
+                                {"element": condition["element"]}
+                                if "element" in condition
+                                else {}
+                            ),
                         )
-                        for name, value in (
-                            ("in_size", contract["count"]),
-                            ("row_size", contract["rowSize"]),
-                        )
+                        for condition in _conditions(contract)
                     ],
                     source_options={
                         "metal": {

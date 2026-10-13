@@ -24,6 +24,7 @@ METADATA_TYPES = {
     "int64": ctypes.c_int64,
     "uint64": ctypes.c_uint64,
 }
+ARRAY_METADATA = frozenset({"shape", "strides", "reduce_shape", "reduce_strides"})
 
 
 def signature(entry):
@@ -43,7 +44,6 @@ def width(row_size):
 def validate(entry, buffers, logical_size, execution):
     spec = signature(entry)
     entries = {**ROW_ENTRIES, **SMALL_ROW_ENTRIES}
-    small = entry in SMALL_ROW_ENTRIES
     if set(buffers) != set(spec) or entry not in entries:
         raise ValueError("Native row reduction metadata does not match")
     for name, buffer in buffers.items():
@@ -73,10 +73,70 @@ def validate(entry, buffers, logical_size, execution):
     metadata = {
         name: read(name)
         for name, dtype in spec.items()
-        if dtype is not None
-        and name not in {"shape", "strides", "reduce_shape", "reduce_strides"}
+        if dtype is not None and name not in ARRAY_METADATA
     }
-    rows = buffers["out"].count
+    if spec is LOOPED:
+        for prefix in ("", "reduce_"):
+            rank = metadata[prefix + "ndim"][0]
+            if not 0 <= rank <= 64:
+                raise ValueError("Native row reduction rank exceeds its bounds")
+            for suffix in ("shape", "strides"):
+                if buffers[prefix + suffix].count != max(1, rank):
+                    raise ValueError(
+                        "Native row reduction rank does not match its arrays"
+                    )
+        metadata.update({name: read(name) for name in ARRAY_METADATA})
+    return validate_metadata(
+        entry,
+        metadata,
+        logical_size,
+        buffers["in"].count,
+        buffers["out"].count,
+        execution,
+    )
+
+
+def validate_metadata(
+    entry, metadata, logical_size, input_count, output_count, execution
+):
+    """Validate a detached row layout before cache lookup or source translation."""
+    entries = {**ROW_ENTRIES, **SMALL_ROW_ENTRIES}
+    if not isinstance(entry, str) or entry not in entries:
+        raise ValueError("Unknown row reduction entry")
+    spec = signature(entry)
+    small = entry in SMALL_ROW_ENTRIES
+    if (
+        not isinstance(metadata, dict)
+        or set(metadata) != {name for name, dtype in spec.items() if dtype is not None}
+        or any(
+            type(value) is not int or not 1 <= value <= 65535
+            for value in (logical_size, input_count, output_count)
+        )
+        or not isinstance(execution, dict)
+        or any(
+            not isinstance(values, list)
+            or len(values) != 3
+            or any(type(value) is not int or value <= 0 for value in values)
+            for values in execution.values()
+        )
+    ):
+        raise ValueError("Invalid row reduction layout")
+    for name, values in metadata.items():
+        dtype = spec[name]
+        bits = 32 if dtype == "int32" else 64
+        minimum = 0 if dtype == "uint64" else -(1 << (bits - 1))
+        maximum = (1 << (bits if dtype == "uint64" else bits - 1)) - 1
+        if (
+            not isinstance(values, list)
+            or not 1 <= len(values) <= (64 if name in ARRAY_METADATA else 1)
+            or any(
+                type(value) is not int or not minimum <= value <= maximum
+                for value in values
+            )
+        ):
+            raise ValueError("Invalid row reduction metadata values")
+    metadata = {name: list(values) for name, values in metadata.items()}
+    rows = output_count
     row_size = metadata["reduction_size" if spec is SIMPLE else "row_size"][0]
     if small and not 1 <= row_size <= 64:
         raise ValueError("Small-row kernels require 1 to 64 elements per row")
@@ -87,24 +147,23 @@ def validate(entry, buffers, logical_size, execution):
             rows < 32
             or metadata["out_size"] != [rows]
             or logical_size != rows * row_size
-            or buffers["in"].count != logical_size
+            or input_count != logical_size
         ):
             raise ValueError("Simple row reduction does not match the upstream plan")
         grid = [1, (rows + 3) // 4, 1]
         # Source pointer construction may include inactive lanes beyond the last row.
-        if buffers["in"].count + group_width * 4 > 131071:
+        if input_count + group_width * 4 > 131071:
             raise ValueError("Simple row reduction exceeds its index contract")
     else:
         ndim, reduce_ndim = metadata["ndim"][0], metadata["reduce_ndim"][0]
         if not 0 <= ndim <= 64 or not 0 <= reduce_ndim <= 64:
             raise ValueError("Native row reduction rank exceeds its bounds")
         for prefix, rank in (("", ndim), ("reduce_", reduce_ndim)):
-            if buffers[prefix + "shape"].count != max(1, rank) or buffers[
-                prefix + "strides"
-            ].count != max(1, rank):
+            if len(metadata[prefix + "shape"]) != max(1, rank) or len(
+                metadata[prefix + "strides"]
+            ) != max(1, rank):
                 raise ValueError("Native row reduction rank does not match its arrays")
-            shape, strides = read(prefix + "shape"), read(prefix + "strides")
-            metadata.update({prefix + "shape": shape, prefix + "strides": strides})
+            shape, strides = metadata[prefix + "shape"], metadata[prefix + "strides"]
             if rank == 0:
                 if shape != [0] or strides != [0]:
                     raise ValueError("Native row reduction empty metadata must be zero")
@@ -132,7 +191,7 @@ def validate(entry, buffers, logical_size, execution):
             (size - 1) * stride
             for size, stride in zip(shape + reduce_shape, strides + reduce_strides)
         )
-        if extent != buffers["in"].count:
+        if extent != input_count:
             raise ValueError("Native row reduction view does not match its source span")
         dimension = 1 if reduce_ndim <= 1 else 2 if reduce_ndim == 2 else 5
         family = "small" if small else "looped"

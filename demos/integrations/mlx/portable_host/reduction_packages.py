@@ -106,7 +106,7 @@ def load_index(directory, target):
         from demos.integrations.mlx.portable_host.reduction_cache import SOURCE_SHA256
 
         if (
-            family not in {"all", "bfloat"}
+            family not in {"all", "bfloat", "row"}
             or index.get("revision") != COMMIT
             or index.get("sourceHash") != SOURCE_SHA256
             or "descriptors" in index
@@ -155,8 +155,10 @@ def build_packages(
         raise ValueError("Reduction translation jobs must be a positive integer")
     if not isinstance(family, str) or family not in ENTRY_GROUPS:
         raise ValueError("Unknown reduction package family")
-    if type(on_demand) is not bool or (on_demand and family not in {"all", "bfloat"}):
-        raise ValueError("On-demand packages require whole-array reductions")
+    if type(on_demand) is not bool or (
+        on_demand and family not in {"all", "bfloat", "row"}
+    ):
+        raise ValueError("On-demand packages require whole-array or row reductions")
     supported = ENTRY_GROUPS[family]
     allowed_widths = FAMILY_WIDTHS[family]
     widths = tuple(allowed_widths if widths is None else widths)

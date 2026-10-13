@@ -507,8 +507,9 @@ def test_single_package_remains_supported_but_full_ci_rejects_partial_widths(
         "changed-source",
     ],
 )
+@pytest.mark.parametrize("on_demand", [False, True])
 def test_row_parent_retains_package_ownership_and_complete_width_requirement(
-    tmp_path, monkeypatch, fault
+    tmp_path, monkeypatch, fault, on_demand
 ):
     base = tmp_path / "base"
     base.mkdir()
@@ -536,6 +537,17 @@ def test_row_parent_retains_package_ownership_and_complete_width_requirement(
             for key, value in index["descriptors"].items()
         },
     }
+    if on_demand:
+        merged.pop("descriptors")
+        merged["dispatchMode"] = "on-demand"
+        for directory, event in zip(directories, trace):
+            event["packageRoot"] = str(directory / "variants/example/package")
+            indexes[directory] = {
+                "target": "metal",
+                "dispatchMode": "on-demand",
+                "entries": [event["entry"]],
+                "widths": [event["workgroupSize"][0]],
+            }
     loaded, validated, verified, commands = [], [], [], []
 
     def load(directory, target, *, require_all_widths):
@@ -574,7 +586,9 @@ def test_row_parent_retains_package_ownership_and_complete_width_requirement(
     monkeypatch.setattr(
         verify_rows,
         "verify_artifacts",
-        lambda events, directory, index: verified.append((events, directory, index)),
+        lambda events, directory, index, *, mlx_root: verified.append(
+            (events, directory, index, mlx_root)
+        ),
     )
 
     def run(command, **kwargs):
@@ -610,8 +624,8 @@ def test_row_parent_retains_package_ownership_and_complete_width_requirement(
         assert result["packageCount"] == 2 and result["artifactCount"] == 2
         assert len(validated) == 2 and len(loaded) == 2
         assert verified == [
-            ([trace[0]], directories[0], indexes[directories[0]]),
-            ([trace[1]], directories[1], indexes[directories[1]]),
+            ([trace[0]], directories[0], indexes[directories[0]], args.mlx_root),
+            ([trace[1]], directories[1], indexes[directories[1]], args.mlx_root),
         ]
         assert all("--require-all-widths" in command for command in commands)
         assert all(require_all for _, _, require_all in loaded)
@@ -633,7 +647,7 @@ def test_row_worker_passes_every_owned_package_to_runtime(
     registered, devices = [], []
 
     def runtime(*args, **kwargs):
-        registered.append(kwargs["reductions"])
+        registered.append((kwargs["reductions"], kwargs["mlx_root"]))
         return SimpleNamespace(install=lambda: None, dispatch_count=0)
 
     core = SimpleNamespace(
@@ -650,6 +664,7 @@ def test_row_worker_passes_every_owned_package_to_runtime(
         monkeypatch.setattr(module, "validate", lambda *args, **kwargs: None)
     args = SimpleNamespace(
         packages=base,
+        mlx_root=tmp_path / "mlx",
         reductions=tmp_path / "collection",
         all_reductions=tmp_path / "all",
         output_dir=tmp_path / "native",
@@ -662,4 +677,5 @@ def test_row_worker_passes_every_owned_package_to_runtime(
         assert registered == devices == []
         return
     verify_rows.worker(args)
-    assert registered == [[*directories, args.all_reductions]] and devices == ["gpu"]
+    assert registered == [([*directories, args.all_reductions], args.mlx_root)]
+    assert devices == ["gpu"]
