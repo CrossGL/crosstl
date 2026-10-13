@@ -17,6 +17,7 @@ import pytest
 from crosstl.project import (
     DirectXComputeRuntime,
     DirectXRuntimeParityAdapter,
+    MetalRuntimeParityAdapter,
     OpenGLComputeRuntime,
     OpenGLRuntimeParityAdapter,
     RuntimeParityExecutor,
@@ -38,8 +39,6 @@ from crosstl.project.native_runtime_drivers import (
     _validate_directx_register_layout,
 )
 from crosstl.translator.dispatch_regions import plan_dispatch_regions
-from tests.runtime_helpers import _validate
-from tests.test_translator.test_loop_updates import _execute
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -88,439 +87,439 @@ ARTIFACTS = {
     "directx": {
         "argmin_bool_": {
             "sha256": (
-                "841b0bfa5028ae03e6d49dda5a8c37bab402fcea0d6df060dea2b1628b4260fe"
+                "f3505cdf87bb4de46d143b50fb0cac5f1ef84d0b9dd1186607e7b3f4ceba0df7"
             ),
-            "sizeBytes": 9283,
+            "sizeBytes": 12005,
         },
         "argmax_bool_": {
             "sha256": (
-                "219a8f36e0cc935e94f0530d65b6c6c710549296a8333f21c887c3fe54485f1c"
+                "98a8422d3eeedaed7ff586c5847bf1d4829d33959d55efa42e61a868906fc644"
             ),
-            "sizeBytes": 9285,
+            "sizeBytes": 12007,
         },
         "argmin_uint8": {
             "sha256": (
-                "09f4b5a349fdc5ad7d20432e9088bc8913fc1fe55753fc13dff8c62a6e20df44"
+                "cac0b1b8857e4c40372a83b7b7ceacc4e031c134e37543f9c324278e0d30d193"
             ),
-            "sizeBytes": 7318,
+            "sizeBytes": 10043,
         },
         "argmax_uint8": {
             "sha256": (
-                "23f97e600842f4046235ad8ef1b5181f4a88ca858ba4ecd6826acb5f62c143e1"
+                "8808a95c1e47f9b0d5c60b836be60c70b7ea546fe4c8a68bcd45f85797976442"
             ),
-            "sizeBytes": 7314,
+            "sizeBytes": 10039,
         },
         "argmin_uint16": {
             "sha256": (
-                "a8655583f8e495fc2566c2f5f997c125dada67676564a53ff017a123bc9a15fe"
+                "f32df27016c2dab2187a8e0dbb529adc9c3053ea355286de85d0dad42d34b794"
             ),
-            "sizeBytes": 8386,
+            "sizeBytes": 11128,
         },
         "argmax_uint16": {
             "sha256": (
-                "5e4d14c8ccbc89a0097b5b693fa76771c3ffaf05c1286979c63a11d087d9356b"
+                "655c0d0e6ffa96fe1b4eb32edc2b8901cc32a824755ce679fa67ea8c5d2d81aa"
             ),
-            "sizeBytes": 8378,
+            "sizeBytes": 11120,
         },
         "argmin_uint32": {
             "sha256": (
-                "a62eb4a8277f007dad94727b2beb69d290db48b22323401d4bcd85405e32e901"
+                "4be7a03ad62cf8d6d10fcb1b76a6ddcc678c0b29066d6f60d1837fff0c2d8582"
             ),
-            "sizeBytes": 7667,
+            "sizeBytes": 10409,
         },
         "argmax_uint32": {
             "sha256": (
-                "9dc8f951ddaf8b4e061814f23bff0a01f18bdcde264b9b7f7f520ba6832a9cc0"
+                "95147763ae2c6e4ae665abf1cc10dc3ef0c5ff706bfb3c9dceaaa8a3b4299e38"
             ),
-            "sizeBytes": 7645,
+            "sizeBytes": 10387,
         },
         "argmin_uint64": {
             "sha256": (
-                "467fdaa9fb5938d63b89b1af650694a7f6f86b0ddaf3d2d899aead47457d6916"
+                "f7881eb41cd8f1cd350c7cb8e97991bcf12e62e55444903cde693a4d7fdb1a4b"
             ),
-            "sizeBytes": 10858,
+            "sizeBytes": 13600,
         },
         "argmax_uint64": {
             "sha256": (
-                "4684f22295e0ce54e1895158a9c64031140d86bb08fcee2bd2b7b835eb51277b"
+                "de380ced1954e96508c2c0d908e12cb259c8b93fb39f87aa43a8c9ed090e53fb"
             ),
-            "sizeBytes": 10820,
+            "sizeBytes": 13562,
         },
         "argmin_int8": {
             "sha256": (
-                "6f2896511701eefe8a64da9944ff5fd108354ba74fd421330a6992b1affd461a"
+                "d24eacd8dfb92b1f16ef2998ccc366c257696c18eb6c7d4ff773500e3e8dd02a"
             ),
-            "sizeBytes": 7737,
+            "sizeBytes": 10445,
         },
         "argmax_int8": {
             "sha256": (
-                "1467653d714af86b6133ba813b2493e57af24f8e5af205591dd135ae8841093d"
+                "f60f6c47cbf68ad523f6f6af24d66804a7b13039d725428f4c8bf7b2cd8e6663"
             ),
-            "sizeBytes": 7739,
+            "sizeBytes": 10447,
         },
         "argmin_int16": {
             "sha256": (
-                "30ca101381a6682d6796444c283cc34e2d3f3cad1042a558a90a00bb99c69ddf"
+                "71757209b10e0f98f53614e926ea838410bd91f16b218efea0bfb9f789815457"
             ),
-            "sizeBytes": 8308,
+            "sizeBytes": 11033,
         },
         "argmax_int16": {
             "sha256": (
-                "278b4e0ab4529d6964f8c932e489eedb1423713bb36d197f74859b4c89e026d0"
+                "42d050b2d53bfd431ab08bdc2c56bd9495b5c8b23992419d744f5877ed5ec260"
             ),
-            "sizeBytes": 8310,
+            "sizeBytes": 11035,
         },
         "argmin_int32": {
             "sha256": (
-                "89f10ac366b7a3c44781c536b14c517e40f05b9cbda963836661d02661383222"
+                "749b8d8a52b94878aa3f7325283499322c41684c1ae9ce9e08940bc6b47415c6"
             ),
-            "sizeBytes": 8212,
+            "sizeBytes": 10937,
         },
         "argmax_int32": {
             "sha256": (
-                "dbba01fabdffb80dd2c2d201e719d471b323926e8136fc98a293872ec88939e8"
+                "d6fd4859c5088daae2a4f961b706afbd1862ed517cecc8036c659900fa5bfda8"
             ),
-            "sizeBytes": 8218,
+            "sizeBytes": 10943,
         },
         "argmin_int64": {
             "sha256": (
-                "4c336568e1c2bd3b225597d126f9b05192b7334df5f604db13669df6ef317560"
+                "f16edad6a65fac97c76d476529d14c68d81e3a4ced6d6f979a7fb29112e0168d"
             ),
-            "sizeBytes": 10785,
+            "sizeBytes": 13510,
         },
         "argmax_int64": {
             "sha256": (
-                "2e52421b697eb52d85341dec94a7a964a4903b8bbec38e1ecc9872f7b3ffb4dc"
+                "f93bacd4eaefb4946082f55a50cd8fcf2b53991c1f11c77756f280849efd76c8"
             ),
-            "sizeBytes": 10803,
+            "sizeBytes": 13528,
         },
         "argmin_float16": {
             "sha256": (
-                "f450ae20b34ecae3aa4986ac7349cc4deea1b248d481f973d5a215197d730889"
+                "2c10826d82749b2f21faacab5ce21947c423c62b2dd3507052e88b8835a92a03"
             ),
-            "sizeBytes": 8563,
+            "sizeBytes": 11322,
         },
         "argmax_float16": {
             "sha256": (
-                "497e53dee2432797fbde734e107fe534ad4d68822f2bc21e62d97a69de4f9eaa"
+                "27600fbfbdc699b9d479cff30cc2c7e263df5c4c91c6effd5dffd8abdab740c0"
             ),
-            "sizeBytes": 8565,
+            "sizeBytes": 11324,
         },
         "argmin_float32": {
             "sha256": (
-                "d4da45e9e0230bf1e20dee667e4b833426bda99a60008cf16b02e9a844176dee"
+                "9a23e557a9d9c179c545e1f8bba40e09950e5f730269ef9f7035e33793362339"
             ),
-            "sizeBytes": 8061,
+            "sizeBytes": 10820,
         },
         "argmax_float32": {
             "sha256": (
-                "098fe7de24162b565aba5881dc5e9b22e0973c3bb1be6fcbb4ed25679f769136"
+                "37a90d0e9c00dfbfc8ec8c531c80fbf1d1c28a98acd27dd3800f9d44e798082d"
             ),
-            "sizeBytes": 8123,
+            "sizeBytes": 10882,
         },
         "argmin_bfloat16": {
             "sha256": (
-                "575c1b77726e489029c503ff5d5b6597e17a6c90159371cb0c265afeebbe0394"
+                "00dbc073da2edaee393801fb61e014156af4053cc10c6c651bfdb876315d395f"
             ),
-            "sizeBytes": 8618,
+            "sizeBytes": 11394,
         },
         "argmax_bfloat16": {
             "sha256": (
-                "1d3d3738d96944a13fa36057d211295a66f29aeaf71e54c4008400172c207eb9"
+                "0acc69a3d57f3056afc0924623f924eb4d426a63cfdd261d91929c1539d7982b"
             ),
-            "sizeBytes": 8678,
+            "sizeBytes": 11454,
         },
     },
     "opengl": {
         "argmin_bool_": {
             "sha256": (
-                "1fc50fdbdf7bf258d2889c2be92a846e0516ec3d8b519ab9a2ed9ae96f3cede2"
+                "7088fc8e44db7b0f6f953a12d62fdca8651323215559b288d8dd0fc6c46c56b0"
             ),
-            "sizeBytes": 8171,
+            "sizeBytes": 11274,
         },
         "argmax_bool_": {
             "sha256": (
-                "c4e2c3b2dc5540f003dad72cd101a988040aa8e15aeb6ff146845546b074624a"
+                "2eb5ed4c0495d8e3c89ffbd4a728a4335936e8194684a0fc322b7fdec64b95e4"
             ),
-            "sizeBytes": 8173,
+            "sizeBytes": 11276,
         },
         "argmin_uint8": {
             "sha256": (
-                "9f7295f1acccab3fc7434abf21cc94e6630bd672a9ef0aff9e5a8c4f22e68a16"
+                "e0ec30c02cba37284bba5a3f7578066b734e91f8ed6ce7cbe4fb09cb96b8c2e8"
             ),
-            "sizeBytes": 7962,
+            "sizeBytes": 11068,
         },
         "argmax_uint8": {
             "sha256": (
-                "6ab4270cf1725e5c8a2eedf687a8503d7de88cff297135fcbb5709c933f20f9f"
+                "bb578d14c33fb5afcbc36d18372241c2bdff6c45d75f70f084ae2412e3567c33"
             ),
-            "sizeBytes": 7958,
+            "sizeBytes": 11064,
         },
         "argmin_uint16": {
             "sha256": (
-                "42ef076afc61d1a73f1e4374625b699269453bfef7ce01c69bc44760c018b5af"
+                "1c65e97966f0c728de0f1d9e50921b8c6ba3dbcfdb2a520065cd5ac342cb35b6"
             ),
-            "sizeBytes": 8021,
+            "sizeBytes": 11144,
         },
         "argmax_uint16": {
             "sha256": (
-                "5c8bec2628ef05ca5a3d42d096d7236ef85e4b41d2b83484e5c9988d94ecc5ef"
+                "620b59906deaf0119f228a970ebdfa2bb9599a48aedbad8f2b4b9d692acc8571"
             ),
-            "sizeBytes": 8013,
+            "sizeBytes": 11136,
         },
         "argmin_uint32": {
             "sha256": (
-                "dd9e06cfbba49b79290e55236ff92c9579c92ea265639033135f67eb90960ea3"
+                "f5cbc5e9c0d4ec75808d89b788345e8c2d10d0955e61ee46835f0fc9c7cb9094"
             ),
-            "sizeBytes": 7907,
+            "sizeBytes": 11030,
         },
         "argmax_uint32": {
             "sha256": (
-                "17c6d3e44199a234a3e512593614ea661609858b01a88fb665338eb157e04ea6"
+                "4335a4309d8537f9352a9076fc81f5c9a86c04e3f5dc15bb92a294724c3c0a17"
             ),
-            "sizeBytes": 7887,
+            "sizeBytes": 11010,
         },
         "argmin_uint64": {
             "sha256": (
-                "b1c052baa967b3c38a55714f5ce23011b19f15dc92213b0a923c9bf49fcd0153"
+                "57a7408157b9cfd1525242a7e77b7f837b168417d8e4eddb280d4a9922615eb9"
             ),
-            "sizeBytes": 8670,
+            "sizeBytes": 11793,
         },
         "argmax_uint64": {
             "sha256": (
-                "f4aa718f30c19b068654def06046565d454691f79dca37388f314618d643df2c"
+                "312305c09b9285c9121cfabfb4d18f47ab359976bfa5f1b1b1e56378558bac9c"
             ),
-            "sizeBytes": 8632,
+            "sizeBytes": 11755,
         },
         "argmin_int8": {
             "sha256": (
-                "aeccecbf9f9b96c1fdcf8e2ed9038a7abb9e82d30f62ea045f2cd6e0ca5aa830"
+                "c87e2c9aac22e151b6ca457c9d4706dc81604b0502237f4ad20a722fded30b61"
             ),
-            "sizeBytes": 8375,
+            "sizeBytes": 11464,
         },
         "argmax_int8": {
             "sha256": (
-                "a1b4ba5a3ffe6e7bfee2cfba40296ce2a689770b8eba44bab348d86c6a9777ca"
+                "fce920bb3914facf1e284c58303bf32840633e5b27e500729d57524bfd860fdc"
             ),
-            "sizeBytes": 8381,
+            "sizeBytes": 11470,
         },
         "argmin_int16": {
             "sha256": (
-                "5b716e5603d58045d754ce58149463d52d4e820b574cc34c6fa9b8c9c4916e9d"
+                "7953ec3c435223a8f685a4d4b39290164ab248f1416fe90541fe4d3efb550f4e"
             ),
-            "sizeBytes": 8434,
+            "sizeBytes": 11540,
         },
         "argmax_int16": {
             "sha256": (
-                "8ede7c37791da8c37570562e8a70e7c412ae9439f220b3ca153cc6bfde6d8e01"
+                "c9841eaaa4beba89ef344f0ba0b24b8b0a0812366c8ce4d54eea0c16e7bbea66"
             ),
-            "sizeBytes": 8440,
+            "sizeBytes": 11546,
         },
         "argmin_int32": {
             "sha256": (
-                "508b7acd99dd5b888e3050bdaa3de31bba58e50555af1cfc7a7cc1e1aa1e2841"
+                "1a719e8d3d8260d73170e030b72ce737e5135a882cb53b47e0626540db8dc739"
             ),
-            "sizeBytes": 8348,
+            "sizeBytes": 11454,
         },
         "argmax_int32": {
             "sha256": (
-                "00dffeedf4a376c29f0d93e81cb671702383b96468b5da049bd7d0e29c603415"
+                "f4ffbe52138cf2bae3367f9ac8bde4fee26a7e1ceebc8353793b39ffb43aad20"
             ),
-            "sizeBytes": 8356,
+            "sizeBytes": 11462,
         },
         "argmin_int64": {
             "sha256": (
-                "f51a15a010783855b489cf11f6d2181bcb192b4bee3311ea1d52211a0eb78957"
+                "d4fb0622380afdca8a99f397ae36891cb9e70e27a2f71669275641855c167e93"
             ),
-            "sizeBytes": 8613,
+            "sizeBytes": 11719,
         },
         "argmax_int64": {
             "sha256": (
-                "eb41ff4f6fe29eb78ed9c40af9ab9b2f1a4b5f4c6fb88023a79d8cbdebf4ca64"
+                "b5be3a6e122267c7c1c3fbac809b76684a4d671e6041f0a29e51ba3b5fc24797"
             ),
-            "sizeBytes": 8633,
+            "sizeBytes": 11739,
         },
         "argmin_float16": {
             "sha256": (
-                "9b55b1a5adf9bc45a4ab4deec55387ee96ab8067e2fca358dc71c97714e5e39b"
+                "08221bb0847b28c607cdc87f54f30a6faa0b9abafa025a3ca9b0f14e701112f2"
             ),
-            "sizeBytes": 9540,
+            "sizeBytes": 12680,
         },
         "argmax_float16": {
             "sha256": (
-                "3f4b07ac5c5ff7589063a87a900fbeb09981ddf40302ab7f91111f3f83afa1f4"
+                "d1ddd908a66308e69fa0a8a7906f23eb00b16b7e74f25d862e5f183bc6c59136"
             ),
-            "sizeBytes": 9546,
+            "sizeBytes": 12686,
         },
         "argmin_float32": {
             "sha256": (
-                "ee802da16f965a7dda2da0ac37f8f7a05001248fe3df768eca06e86836db389e"
+                "a301401508473b846cd0b90993cb03631c270f590ea4020f246d96a5f1c62c9d"
             ),
-            "sizeBytes": 8193,
+            "sizeBytes": 11333,
         },
         "argmax_float32": {
             "sha256": (
-                "16b40c743d66925d15c411f0969bdaebdaeb2aa20770656664d710719219a327"
+                "055ab02c5efac3d28728d0d39fc8f2262bd4d5dfb8fba36240d182a6c4ff2219"
             ),
-            "sizeBytes": 8199,
+            "sizeBytes": 11339,
         },
         "argmin_bfloat16": {
             "sha256": (
-                "5c7a083032c1489b5849bb1f967075c99e31cd9777e12a78fcd084bd28586cdc"
+                "9f0a6282b1d382a7eb2d863168c5b00ed3bf53a027c7e47d1cb60b99d1bbd1a1"
             ),
-            "sizeBytes": 8797,
+            "sizeBytes": 11954,
         },
         "argmax_bfloat16": {
             "sha256": (
-                "0e714cc919987a25caf3de3ca35acd381449003f720c06d657b5a311be02f620"
+                "ebc5fd1520a1e8dd10c05706de821314da39f15f88dd1cc7555bb0e494b7bba7"
             ),
-            "sizeBytes": 8803,
+            "sizeBytes": 11960,
         },
     },
     "metal": {
         "argmin_bool_": {
             "sha256": (
-                "48b4214a0a1461067ed81ce71f5f29158a5e82e37f969c68e667871bf3a034c1"
+                "f7d76d9cde4a9fd6bc950a329cf426240c579a8982e1c79a13222510618346f7"
             ),
-            "sizeBytes": 5231,
+            "sizeBytes": 7995,
         },
         "argmax_bool_": {
             "sha256": (
-                "4e192b25ddf5da8ed952c8a314639a5c2877f3e6aaca2fe6def4993f437e58ff"
+                "eae2860b807a42eec7e8bf1b57cc607ef3f49f28cb648a90409bcb8e8083cab8"
             ),
-            "sizeBytes": 5233,
+            "sizeBytes": 7997,
         },
         "argmin_uint8": {
             "sha256": (
-                "905adc21c642fca01fd93879f3bc966f4749f77cd523cad5480819901fec9eb4"
+                "ca564449bb92f7babcf6515a1e7575a1c8f0f317761020b190c4ce9270b75863"
             ),
-            "sizeBytes": 4501,
+            "sizeBytes": 7265,
         },
         "argmax_uint8": {
             "sha256": (
-                "400c1fa82e466b8d1de318f3cb80f0e961cb51b1154b738d4e633bb5730f1b40"
+                "7691d90a9c2e1a346b4b381d70d2005e6dcb56e5010f1f51ee6d3e04ae7f1f1b"
             ),
-            "sizeBytes": 4497,
+            "sizeBytes": 7261,
         },
         "argmin_uint16": {
             "sha256": (
-                "98f89ddbf72abea643e49af14976c61a29f447e933d573b0fe99a7604c2573f1"
+                "407a1115d94d8f29d5da8cfc99799501c57f28f2701caa485fd47655a270e04c"
             ),
-            "sizeBytes": 4389,
+            "sizeBytes": 7343,
         },
         "argmax_uint16": {
             "sha256": (
-                "0a3f61769d847ec708b02636ca735ced1dc1917a3bcf1b55db3a8f014c08e643"
+                "86d5dc4bea7d1aa930c2b566428f9b1c38619c45abfa08aadb1936ed477c35e1"
             ),
-            "sizeBytes": 4381,
+            "sizeBytes": 7335,
         },
         "argmin_uint32": {
             "sha256": (
-                "a21fd3ef30a8dd605121620aa87c712f7c8b96e2589a05599ef4f862d8810025"
+                "b40dbbca4906a7b1005ad8a03965756450087b911c40585aadb64281827c775c"
             ),
-            "sizeBytes": 4375,
+            "sizeBytes": 7161,
         },
         "argmax_uint32": {
             "sha256": (
-                "d4a48982d8e56ace8e8c2a86ffe39d1b8770a47551a932b0ffb3d97e3fd6c589"
+                "c3abc144d3333bb7a1d97d4c45ca93e1419a37b31fad62f65f1f3ab14851ad26"
             ),
-            "sizeBytes": 4355,
+            "sizeBytes": 7141,
         },
         "argmin_uint64": {
             "sha256": (
-                "dad0c1b529c7af9dac0cdafbb49699103ecc9c9e7ef77963b11f1f01a0d87426"
+                "49fe5ad571c3832cdb4d09cd55b5bfd2d7e4cec0ef39d27a8cfad43c4b1683f0"
             ),
-            "sizeBytes": 5424,
+            "sizeBytes": 8210,
         },
         "argmax_uint64": {
             "sha256": (
-                "d7cd2df32a90e555823da11443a0932348f3d87721b99e7de427172c3277840c"
+                "e8f6ebe9156f4ec94057b5ec134f8c1b73a3e275ae120591aa8c51181eebf981"
             ),
-            "sizeBytes": 5386,
+            "sizeBytes": 8172,
         },
         "argmin_int8": {
             "sha256": (
-                "2fb9fcb77481baaa8daa16f96230c62d031b0677d7373a55efbff3761532ac9c"
+                "2d581a12d6f04e4d0d39fecd7f86d632d55b1f15a83944b8244180555bca7cd7"
             ),
-            "sizeBytes": 4433,
+            "sizeBytes": 7175,
         },
         "argmax_int8": {
             "sha256": (
-                "8622d7005c115ff49accd1c45cacfbab3f44ae0e4993577d841ca7761ef8731b"
+                "1f1bdd9c59e0cac454bf26323904779dae4bda1467d9807b5e651825d89997aa"
             ),
-            "sizeBytes": 4435,
+            "sizeBytes": 7177,
         },
         "argmin_int16": {
             "sha256": (
-                "d48ca4d9e54fc3ae297ab0753469e30e9c6361fd1815381316c76d03dc8a483b"
+                "a919d7301887243d76ecb6e1f08b389d7b904e63e0bd693173194cc18a4f7405"
             ),
-            "sizeBytes": 4345,
+            "sizeBytes": 7253,
         },
         "argmax_int16": {
             "sha256": (
-                "545c1d0bf96dad0b32e90caef805982e57a52161d07193f5354f9d41831ebeb8"
+                "6c48f210d5a8c698a4f90ba0fc11e54ba151259c881478e0b62d71051db4ba2e"
             ),
-            "sizeBytes": 4347,
+            "sizeBytes": 7255,
         },
         "argmin_int32": {
             "sha256": (
-                "fe22c75c073af75f4a5ac49b2825f826258c46d68e32f050fd0e359878e58bd5"
+                "3bff201a301e8b5111d36ee97f0ef325c477a6a4fe8878c930389c1d29ef10f7"
             ),
-            "sizeBytes": 4331,
+            "sizeBytes": 7095,
         },
         "argmax_int32": {
             "sha256": (
-                "b222dc6326e8860d075754094401b3e12d7ee7e9d4a11758593f5bb6fba0a6b7"
+                "c790cb1262fd1c93d4e08b6dfb7f5d08b7e23566dbbaf5ebf09ab9ee0a57f4c7"
             ),
-            "sizeBytes": 4335,
+            "sizeBytes": 7099,
         },
         "argmin_int64": {
             "sha256": (
-                "bb08aee274e4173b74b7e54b274f29b880fd0ee0aa26ccb6be16d0d538b02a84"
+                "0406a653f17d159a5152d0205b434180e52d1512d163c0ed976918e1cc8cb53e"
             ),
-            "sizeBytes": 5378,
+            "sizeBytes": 8142,
         },
         "argmax_int64": {
             "sha256": (
-                "fb5e266fe010b8c25a2152203b874831cc37251001028f8f8b212f5087b51ccd"
+                "9bf0ea15ace7f309d680ee67cb053fd662b53a6b113ad85329f94383fafa8e62"
             ),
-            "sizeBytes": 5390,
+            "sizeBytes": 8154,
         },
         "argmin_float16": {
             "sha256": (
-                "f2d793f603a7c2fa3d43d331adf5c3177662e6093b1d90da534b6cfe605a01fc"
+                "607547feaa9cb6b8cd33257f4c2d66e404e5d9de593e94cc6b417c60b7469f22"
             ),
-            "sizeBytes": 4162,
+            "sizeBytes": 6970,
         },
         "argmax_float16": {
             "sha256": (
-                "5a68cb65060ef3e4c02b64e798e5deb1a40f066a3db43d6d121a1d80d81a53d9"
+                "f1e1220dc661ec91759a9e876e51d2de21866fc852a3f2026a9684788c62e1c4"
             ),
-            "sizeBytes": 4164,
+            "sizeBytes": 6972,
         },
         "argmin_float32": {
             "sha256": (
-                "2cff5b36b3a8437d0e5f6be68b982f7ca6b168e36f4a7b6b7d4b42d47cd0ac26"
+                "daebed04961834537bc93089b49b64c64526b5f5d8588f21a8f5a04810a0dbf0"
             ),
-            "sizeBytes": 4182,
+            "sizeBytes": 6990,
         },
         "argmax_float32": {
             "sha256": (
-                "7b3e5c739949232212d9c155863510d4fb8b1dc64cd720375747a679894f01e2"
+                "159e1eaf36336752ef9efab54e9aa9cb2daaebdb1a5224f3c6242f02c8d84a46"
             ),
-            "sizeBytes": 4184,
+            "sizeBytes": 6992,
         },
         "argmin_bfloat16": {
             "sha256": (
-                "93285c3d4d4b0e9a0c9fd5334bdc62fcb67481276da40dc5c572108e8b4952f8"
+                "6889bde8be463785e55b64806e6dd69e6d4a0831b1fa96914f3d4bb4f5568fe5"
             ),
-            "sizeBytes": 4366,
+            "sizeBytes": 7196,
         },
         "argmax_bfloat16": {
             "sha256": (
-                "a8c10582cae5046fdd206170182f9ff58b2d91db6572ee6cef55938d8b624959"
+                "bc4d57221950a893761ab9fe47517fbcad344ea201009d70da5967517e56d86f"
             ),
-            "sizeBytes": 4376,
+            "sizeBytes": 7206,
         },
     },
 }
@@ -559,6 +558,18 @@ def test_current_mlx_arg_reduce_contract_is_exact():
     assert validation["rowsPerCase"] == 2
     assert validation["ordinaryValues"] is True
     assert validation["nanAndInfinityValues"] is True
+    assert validation["indexRangeAssertions"] == []
+    assert validation["outputGuardCount"] == OUTPUT_GUARD_COUNT
+    assert validation["observedInputCount"] == 7
+    assert validation["preserveResourceOrigins"] is True
+    assert validation["metadataPreconditions"] == [
+        {"parameter": "shape", "element": 0, "minimum": 2, "maximum": 2},
+        {"parameter": "in_strides", "element": 0, "minimum": 31, "maximum": 258},
+        {"parameter": "out_strides", "element": 0, "minimum": 1, "maximum": 1},
+        {"parameter": "ndim", "minimum": 1, "maximum": 1},
+        {"parameter": "axis_stride", "minimum": 1, "maximum": 2},
+        {"parameter": "axis_size", "minimum": 31, "maximum": 129},
+    ]
     assert all(
         target["compilerEntries"] == ENTRIES
         for target in validation["targets"].values()
@@ -572,6 +583,11 @@ def test_current_mlx_arg_reduce_contract_is_exact():
     runtime = contract["runtimeMatrix"]
     assert runtime["scope"] == "representative-float32-numerical-parity"
     assert runtime["entries"] == RUNTIME_ENTRIES
+    assert runtime["totalCaseCountByTarget"] == {
+        "metal": 112,
+        "opengl": 112,
+        "directx": 112,
+    }
     assert runtime["integerCases"] == {
         "entries": INTEGER_RUNTIME_ENTRIES,
         "axisSizes": [31, 32, 33, 129],
@@ -726,16 +742,6 @@ output_dir = "{output}"
 "{SOURCE}" = "{entry}"
 [project.entry_workgroup_size_rules."{SOURCE}"]
 "{entry}" = [32, 1, 1]
-[[project.index_range_assertions]]
-source = "{SOURCE}"
-expression = "in_idx + current_index * axis_stride"
-minimum = 0
-maximum = 515
-[[project.index_range_assertions]]
-source = "{SOURCE}"
-expression = "out_idx"
-minimum = 0
-maximum = 1
 {source_options}
 """
 
@@ -935,30 +941,6 @@ def _expected_indices(entry, rows):
     return expected
 
 
-def _runtime_binding_names(target, entry):
-    if target == "directx":
-        return {
-            "input": "in_",
-            "output": "out_",
-            "shape": "shape",
-            "inStrides": "in_strides",
-            "outStrides": "out_strides",
-            "ndim": f"{entry}_ndim_Constants",
-            "axisStride": f"{entry}_axis_stride_Constants",
-            "axisSize": f"{entry}_axis_size_Constants",
-        }
-    return {
-        "input": "in_Buffer",
-        "output": "out_Buffer",
-        "shape": "shapeBuffer",
-        "inStrides": "in_stridesBuffer",
-        "outStrides": "out_stridesBuffer",
-        "ndim": f"{entry}_ndim_Args",
-        "axisStride": f"{entry}_axis_stride_Args",
-        "axisSize": f"{entry}_axis_size_Args",
-    }
-
-
 def _runtime_input_type(target, entry):
     dtype = entry.split("_", 1)[1]
     if target == "opengl" and dtype in {"int16", "uint16"}:
@@ -1000,29 +982,51 @@ def _package_descriptor(translation, work):
     return descriptor, package_dir
 
 
+def _source_bindings(descriptor):
+    return [
+        binding
+        for binding in descriptor["bindings"]
+        if binding.get("provenance", {}).get("kind") != "generated-execution-input"
+    ]
+
+
 def _runtime_descriptor(translation, work, target, entry):
     descriptor, package_dir = _package_descriptor(translation, work)
     assert descriptor["target"] == target
     assert descriptor["entryPoint"]["name"] == (
-        "CSMain" if target == "directx" else "main"
+        "CSMain" if target == "directx" else entry if target == "metal" else "main"
     )
-    names = _runtime_binding_names(target, entry)
     expected_types = {
-        names["input"]: _runtime_input_type(target, entry),
-        names["output"]: "uint32",
-        names["shape"]: "int32",
-        names["inStrides"]: "int64",
-        names["outStrides"]: "int64",
-        names["ndim"]: "uint64",
-        names["axisStride"]: "int64",
-        names["axisSize"]: "uint64",
+        "in": _runtime_input_type(target, entry),
+        "out": "uint32",
+        "shape": "int32",
+        "in_strides": "int64",
+        "out_strides": "int64",
+        "ndim": "uint64",
+        "axis_stride": "int64",
+        "axis_size": "uint64",
     }
+    source_bindings = _source_bindings(descriptor)
     reflected_types = {
-        binding["name"]: binding["scalarLayout"]["elementType"]
-        for binding in descriptor["bindings"]
-        if binding["name"] in expected_types
+        binding["provenance"]["sourceResource"]["parameter"]: binding["scalarLayout"][
+            "elementType"
+        ]
+        for binding in source_bindings
     }
+    assert len(source_bindings) == len(expected_types)
     assert reflected_types == expected_types
+    generated = [
+        binding for binding in descriptor["bindings"] if binding not in source_bindings
+    ]
+    assert len(generated) == (1 if target == "directx" else 0)
+    for binding in generated:
+        assert binding["provenance"]["executionInput"] == {
+            "kind": "dispatch-workgroup-count",
+            "valueSource": "dispatch.workgroupCount",
+            "coordinateSpace": "physical",
+            "dimensions": 3,
+            "memberName": binding["scalarLayout"]["memberName"],
+        }
     return descriptor, package_dir
 
 
@@ -1061,138 +1065,42 @@ def _checked_runtime_config(config, target, entry):
     )
 
 
-@pytest.mark.parametrize("entry", ["argmin_float32", "argmin_uint64"])
-def test_current_arg_reduce_checked_metadata_runtime(
-    current_mlx, metal_reference, tmp_path, entry
-):
-    if os.environ.get(REQUIRE_RUNTIME_ENV) != "1":
-        pytest.skip(
-            "Set CROSTL_REQUIRE_MLX_CURRENT_ARG_REDUCE_RUNTIME for native execution"
-        )
-    root, target = current_mlx
-    with tempfile.TemporaryDirectory(
-        prefix=".checked-arg-reduce-", dir=root
-    ) as directory:
-        work = Path(directory)
-        path = work / "crosstl.toml"
-        path.write_text(_config(f"{work.name}/out", target, entry), encoding="utf-8")
-        config = _checked_runtime_config(load_project_config(root, path), target, entry)
-        assert not config.index_range_assertions
-        translation = translate_project(config, format_output=False)
-        report = translation.to_json()
-        assert report["summary"]["translatedCount"] == 1, report["diagnostics"]
-        assert not report["diagnostics"]
-        assert report["artifacts"][0]["sourceHash"]["value"] == SOURCE_SHA256
-        descriptor, package = _package_descriptor(translation, tmp_path)
-        cases = _integer_cases(entry) if entry in INTEGER_RUNTIME_ENTRIES else _cases()
-        evidence = []
-        for case, parameters, rows, storage in cases:
-            case_dir = tmp_path / case
-            case_dir.mkdir()
-            expected = _expected_indices(entry, rows)
-            dtype = _runtime_input_type(target, entry)
-            # Cover pointer formation by inactive lanes and the final update,
-            # while preserving all original rows and extremal stride padding.
-            limit = parameters["rowStride"] + (
-                (parameters["axisSize"] + 127) // 128 * 128 * parameters["axisStride"]
-            )
-            padding = -math.inf if dtype == "float32" else 0
-            storage = [*storage, *([padding] * max(0, limit + 1 - len(storage)))]
-            encoded = [
-                (
-                    "nan"
-                    if isinstance(value, float) and math.isnan(value)
-                    else (
-                        "+infinity"
-                        if value == math.inf
-                        else "-infinity" if value == -math.inf else value
-                    )
-                )
-                for value in storage
-            ]
-            guard = 0xABCDEF01
-            output = expected + [guard] * 32
-            data = {
-                "in": (dtype, encoded),
-                "out": ("uint32", [guard] * len(output)),
-                "shape": ("int32", [2]),
-                "in_strides": ("int64", [parameters["rowStride"]]),
-                "out_strides": ("int64", [1]),
-                "ndim": ("uint64", [1]),
-                "axis_stride": ("int64", [parameters["axisStride"]]),
-                "axis_size": ("uint64", [parameters["axisSize"]]),
-            }
-            inputs, outputs, observed = {}, {}, []
-            for binding in descriptor["bindings"]:
-                parameter = binding["provenance"]["sourceResource"]["parameter"]
-                element_type, values = data[parameter]
-                inputs[binding["name"]] = dict(
-                    dtype=element_type, shape=[len(values)], values=values
-                )
-                if parameter == "out":
-                    outputs[binding["name"]] = dict(
-                        dtype="uint32", shape=[len(output)], values=output
-                    )
-                else:
-                    observed.append(binding["name"])
-            request = build_native_loader_dispatch_request(
-                descriptor,
-                package,
-                inputs,
-                outputs,
-                dict(workgroupCount=[1, 2, 1], workgroupSize=[32, 1, 1]),
-                observe_inputs=observed,
-            )
-            assert not request.execution_plan.diagnostics
-            _execute(request, outputs, case_dir, validate=_validate)
-            details = json.loads((case_dir / "evidence.json").read_text())["records"][
-                "generated"
-            ]["details"]
-            assert len(details["metadataPreconditions"]) == 6
-            assert len(details["inputObservations"]) == 7
-            assert all(
-                item["unchanged"] for item in details["inputObservations"].values()
-            )
-            reference = None
-            if target == "metal":
-                runner, original = metal_reference
-                packed = struct.pack(
-                    "<" + ("f" if dtype == "float32" else "Q") * len(storage), *storage
-                )
-                original_request = {
-                    **parameters,
-                    "inputBits": list(
-                        struct.unpack("<" + "I" * (len(packed) // 4), packed)
-                    ),
-                }
-                request_path = case_dir / "upstream-input.json"
-                _write_json(request_path, original_request)
-                reference = json.loads(
-                    _run([runner, original, entry, request_path], case_dir, "upstream")
-                )
-                assert reference["threadExecutionWidth"] == 32
-                assert reference["indices"] == expected
-                _write_json(case_dir / "upstream-result.json", reference)
-            evidence.append(
-                dict(
-                    case=case,
-                    expected=expected,
-                    guards=32,
-                    checkedMetadata=6,
-                    observedInputs=7,
-                    upstream=reference,
-                )
-            )
-        _write_json(
-            tmp_path / "checked-parity.json",
-            dict(
-                commit=MLX_COMMIT,
-                entry=entry,
-                target=target,
-                cases=evidence,
-                indexRangeAssertions=[],
-                upstreamMlxTestSuiteExecuted=False,
-            ),
+@pytest.mark.parametrize("target", ["metal", "opengl", "directx"])
+@pytest.mark.parametrize("entry", ENTRIES)
+def test_current_arg_reduce_checked_metadata_config(tmp_path, target, entry):
+    path = tmp_path / "crosstl.toml"
+    path.write_text(_config("out", target, entry), encoding="utf-8")
+    config = _checked_runtime_config(load_project_config(tmp_path, path), target, entry)
+    assert config.index_range_assertions == ()
+    conditions = {
+        item.parameter: item.to_json() for item in config.metadata_preconditions
+    }
+    contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+    assert list(conditions.values()) == [
+        {"source": SOURCE, "entryPoint": entry, **condition}
+        for condition in contract["validationContract"]["metadataPreconditions"]
+    ]
+    assert set(conditions) == {
+        "shape",
+        "in_strides",
+        "out_strides",
+        "ndim",
+        "axis_stride",
+        "axis_size",
+    }
+    assert all(item["entryPoint"] == entry for item in conditions.values())
+    assert all(item["source"] == SOURCE for item in conditions.values())
+    assert {name for name, item in conditions.items() if item.get("element") == 0} == {
+        "shape",
+        "in_strides",
+        "out_strides",
+    }
+    assert config.source_options["metal"]["preserve_resource_origins"] is True
+    if target == "opengl":
+        (region,) = plan_dispatch_regions((32, 2, 1), (32, 1, 1))
+        assert (
+            config.source_options["metal"]["target_options"][target]["dispatch_region"]
+            == region.to_json()
         )
 
 
@@ -1247,6 +1155,8 @@ class _RecordingDirectXRuntime(DirectXComputeRuntime):
 def _runtime_executor(target, work):
     if target == "directx":
         adapter = DirectXRuntimeParityAdapter(runtime=_RecordingDirectXRuntime(work))
+    elif target == "metal":
+        adapter = MetalRuntimeParityAdapter(language_version="3.1")
     else:
         adapter = OpenGLRuntimeParityAdapter(
             runtime=OpenGLComputeRuntime(context_backends=("egl",))
@@ -1262,6 +1172,33 @@ def _runtime_executor(target, work):
     )
 
 
+OUTPUT_GUARD = 0xABCDEF01
+OUTPUT_GUARD_COUNT = 32
+
+
+def _runtime_storage(entry, request, storage):
+    dtype = entry.split("_", 1)[1]
+    maximum = entry.startswith("argmax")
+    if dtype == "float32":
+        padding = math.inf if maximum else -math.inf
+    else:
+        signed = dtype.startswith("int")
+        width = int(dtype[3:] if signed else dtype[4:])
+        padding = (
+            (1 << (width - int(signed))) - 1
+            if maximum
+            else -(1 << (width - 1)) if signed else 0
+        )
+    # Include inactive-lane pointer formation and the final pointer update.
+    limit = (request["rows"] - 1) * request["rowStride"] + (
+        (request["axisSize"] + 127) // 128 * 128 * request["axisStride"]
+    )
+    count = max(len(storage), limit + 1)
+    if dtype in {"int16", "uint16"}:
+        count += count % 2
+    return [*storage, *([padding] * (count - len(storage)))]
+
+
 def _runtime_dispatch_request(
     descriptor,
     package_dir,
@@ -1271,127 +1208,154 @@ def _runtime_dispatch_request(
     storage,
     expected,
 ):
-    names = _runtime_binding_names(target, entry)
-    encoded_storage = []
-    for value in storage:
-        if math.isnan(value):
-            encoded_storage.append("nan")
-        elif value == math.inf:
-            encoded_storage.append("+infinity")
-        elif value == -math.inf:
-            encoded_storage.append("-infinity")
+    storage = _runtime_storage(entry, request, storage)
+    encoded_storage = [
+        (
+            "nan"
+            if isinstance(value, float) and math.isnan(value)
+            else (
+                "+infinity"
+                if value == math.inf
+                else "-infinity" if value == -math.inf else value
+            )
+        )
+        for value in storage
+    ]
+    guarded = [*expected, *([OUTPUT_GUARD] * OUTPUT_GUARD_COUNT)]
+    data = {
+        "in": (_runtime_input_type(target, entry), encoded_storage),
+        "out": ("uint32", [OUTPUT_GUARD] * len(guarded)),
+        "shape": ("int32", [request["rows"]]),
+        "in_strides": ("int64", [request["rowStride"]]),
+        "out_strides": ("int64", [1]),
+        "ndim": ("uint64", [1]),
+        "axis_stride": ("int64", [request["axisStride"]]),
+        "axis_size": ("uint64", [request["axisSize"]]),
+    }
+    inputs, outputs, observed = {}, {}, []
+    for binding in _source_bindings(descriptor):
+        parameter = binding["provenance"]["sourceResource"]["parameter"]
+        dtype, values = data[parameter]
+        inputs[binding["name"]] = {
+            "dtype": dtype,
+            "shape": [len(values)],
+            "values": values,
+        }
+        if parameter == "out":
+            outputs[binding["name"]] = {
+                "dtype": "uint32",
+                "shape": [len(guarded)],
+                "values": guarded,
+            }
         else:
-            encoded_storage.append(value)
+            observed.append(binding["name"])
+    assert len(inputs) == 8 and len(outputs) == 1 and len(observed) == 7
     dispatch = build_native_loader_dispatch_request(
         descriptor,
         package_dir,
-        {
-            names["input"]: {
-                "dtype": _runtime_input_type(target, entry),
-                "shape": [len(storage)],
-                "values": encoded_storage,
-            },
-            names["shape"]: {
-                "dtype": "int32",
-                "shape": [1],
-                "values": [request["rows"]],
-            },
-            names["inStrides"]: {
-                "dtype": "int64",
-                "shape": [1],
-                "values": [request["rowStride"]],
-            },
-            names["outStrides"]: {
-                "dtype": "int64",
-                "shape": [1],
-                "values": [1],
-            },
-            names["ndim"]: {
-                "dtype": "uint64",
-                "shape": [1],
-                "values": [1],
-            },
-            names["axisStride"]: {
-                "dtype": "int64",
-                "shape": [1],
-                "values": [request["axisStride"]],
-            },
-            names["axisSize"]: {
-                "dtype": "uint64",
-                "shape": [1],
-                "values": [request["axisSize"]],
-            },
-        },
-        {
-            names["output"]: {
-                "dtype": "uint32",
-                "shape": [request["rows"]],
-                "values": expected,
-            }
-        },
-        [1, request["rows"], 1],
+        inputs,
+        outputs,
+        {"workgroupCount": [1, request["rows"], 1], "workgroupSize": [32, 1, 1]},
         expected_target=target,
+        observe_inputs=observed,
     )
     assert dispatch.execution_plan is not None
     assert dispatch.execution_plan.diagnostics == ()
     assert dispatch.execution_plan.dispatch.workgroup_size == (32, 1, 1)
-    assert dispatch.execution_plan.dispatch.workgroup_count == (
-        1,
-        request["rows"],
-        1,
-    )
-    return dispatch, names["output"]
+    assert dispatch.execution_plan.dispatch.workgroup_count == (1, request["rows"], 1)
+    for binding in descriptor["bindings"]:
+        if binding.get("provenance", {}).get("kind") == "generated-execution-input":
+            (value,) = (
+                item for item in dispatch.fixture.inputs if item.name == binding["name"]
+            )
+            assert value.dtype == "uint32" and value.shape == (3,)
+            assert value.values == [1, request["rows"], 1]
+            assert value.metadata["source"] == "dispatch.workgroupCount"
+    return dispatch, next(iter(outputs))
 
 
-def _run_runtime_parity(translation, work, target, entry):
+def _run_runtime_parity(translation, work, target, entry, *, metal_reference=None):
     with _runtime_stage(work, "package", entry=entry, target=target):
-        descriptor, package_dir = _runtime_descriptor(
-            translation,
-            work,
-            target,
-            entry,
-        )
+        descriptor, package_dir = _runtime_descriptor(translation, work, target, entry)
     _write_json(work / "native-loader-abi.json", descriptor)
     executor = _runtime_executor(target, work)
     evidence = []
     cases = _integer_cases(entry) if entry in INTEGER_RUNTIME_ENTRIES else _cases()
-    for name, request, rows, storage in cases:
-        expected = _expected_indices(entry, rows)
-        _write_json(work / f"{name}-input.json", {**request, "expected": expected})
-        dispatch, output_name = _runtime_dispatch_request(
-            descriptor,
-            package_dir,
-            target,
-            entry,
-            request,
-            storage,
-            expected,
-        )
-        with _runtime_stage(
-            work, "availability", entry=entry, target=target, case=name
-        ):
-            availability = executor.is_available(dispatch)
-        if not availability.available:
-            if os.environ.get(REQUIRE_RUNTIME_ENV) == "1":
-                pytest.fail(
-                    availability.reason or f"The native {target} runtime is unavailable"
-                )
-            return []
-        with _runtime_stage(work, "execute", entry=entry, target=target, case=name):
-            result = executor.run(dispatch)
-        assert result.status == "ok"
-        assert result.outputs[output_name]["dtype"] == "uint32"
-        assert result.outputs[output_name]["shape"] == [request["rows"]]
-        assert result.outputs[output_name]["values"] == expected
-        evidence.append(
-            {
-                "case": name,
-                "expected": expected,
-                "translated": result.outputs[output_name]["values"],
+    try:
+        for name, request, rows, storage in cases:
+            expected = _expected_indices(entry, rows)
+            _write_json(work / f"{name}-input.json", {**request, "expected": expected})
+            dispatch, output_name = _runtime_dispatch_request(
+                descriptor, package_dir, target, entry, request, storage, expected
+            )
+            with _runtime_stage(
+                work, "availability", entry=entry, target=target, case=name
+            ):
+                availability = executor.is_available(dispatch)
+            if not availability.available:
+                if os.environ.get(REQUIRE_RUNTIME_ENV) == "1":
+                    pytest.fail(
+                        availability.reason
+                        or f"The native {target} runtime is unavailable"
+                    )
+                return []
+            with _runtime_stage(work, "execute", entry=entry, target=target, case=name):
+                result = executor.run(dispatch)
+            _write_json(
+                work / f"{name}-native-result.json",
+                {
+                    "status": result.status,
+                    "outputs": result.outputs,
+                    "details": result.details,
+                },
+            )
+            assert result.status == "ok"
+            guarded = [*expected, *([OUTPUT_GUARD] * OUTPUT_GUARD_COUNT)]
+            assert result.outputs[output_name] == {
+                "dtype": "uint32",
+                "shape": [len(guarded)],
+                "values": guarded,
             }
-        )
-        _write_json(work / "runtime-cases.json", evidence)
-    return evidence
+            assert len(result.details["metadataPreconditions"]) == 6
+            observations = result.details["inputObservations"]
+            assert len(observations) == 7
+            assert all(item["unchanged"] for item in observations.values())
+            reference = None
+            if target == "metal":
+                assert metal_reference is not None
+                assert result.details["metalRuntime"]["threadExecutionWidth"] == 32
+                runner, original = metal_reference
+                request_path = work / f"{name}-upstream-input.json"
+                _write_json(request_path, request)
+                reference = json.loads(
+                    _run(
+                        [runner, original, entry, request_path],
+                        work,
+                        f"{name}-upstream",
+                    )
+                )
+                assert reference["threadExecutionWidth"] == 32
+                assert reference["indices"] == expected
+            evidence.append(
+                {
+                    "case": name,
+                    "expected": expected,
+                    "translated": result.outputs[output_name]["values"][
+                        : len(expected)
+                    ],
+                    "outputGuardCount": OUTPUT_GUARD_COUNT,
+                    "checkedMetadataCount": 6,
+                    "observedInputCount": 7,
+                    "upstream": reference,
+                }
+            )
+            _write_json(work / "runtime-cases.json", evidence)
+        return evidence
+    finally:
+        runtime = getattr(getattr(executor, "runtime_adapter", None), "runtime", None)
+        close = getattr(runtime, "close", None)
+        if callable(close):
+            close()
 
 
 @pytest.mark.parametrize("entry", ENTRIES)
@@ -1407,7 +1371,9 @@ def test_current_mlx_arg_reduce_native_validation(
         config.write_text(_config(f"{work.name}/out", target, entry), encoding="utf-8")
         with _runtime_stage(tmp_path, "translate", entry=entry, target=target):
             translation = translate_project(
-                load_project_config(root, config),
+                _checked_runtime_config(
+                    load_project_config(root, config), target, entry
+                ),
                 format_output=False,
                 validate=True,
                 run_toolchains=False,
@@ -1470,18 +1436,6 @@ def test_current_mlx_arg_reduce_native_validation(
                 tmp_path,
                 "dxc",
             )
-            if entry in RUNTIME_ENTRIES_BY_TARGET[target]:
-                evidence = _run_runtime_parity(translation, tmp_path, target, entry)
-                if evidence:
-                    _write_json(
-                        tmp_path / "parity.json",
-                        {
-                            "commit": MLX_COMMIT,
-                            "entry": entry,
-                            "cases": evidence,
-                            "upstreamMlxTestSuiteExecuted": False,
-                        },
-                    )
         elif target == "opengl":
             binary = tmp_path / "kernel.spv"
             _run(
@@ -1505,60 +1459,24 @@ def test_current_mlx_arg_reduce_native_validation(
                 tmp_path,
                 "spirv-val",
             )
-            if entry in RUNTIME_ENTRIES_BY_TARGET[target]:
-                evidence = _run_runtime_parity(translation, tmp_path, target, entry)
-                if evidence:
-                    _write_json(
-                        tmp_path / "parity.json",
-                        {
-                            "commit": MLX_COMMIT,
-                            "entry": entry,
-                            "cases": evidence,
-                            "upstreamMlxTestSuiteExecuted": False,
-                        },
-                    )
         else:
             assert "current_in += axis_stride;" in generated_text
             assert "isnan_float" not in generated_text
-            library = _metal_library(output, tmp_path / "translated.metallib", root)
-            if entry not in RUNTIME_ENTRIES_BY_TARGET[target]:
-                return
-            runner, original = metal_reference
-            evidence = []
-            cases = (
-                _integer_cases(entry) if entry in INTEGER_RUNTIME_ENTRIES else _cases()
+            _metal_library(output, tmp_path / "translated.metallib", root)
+        if entry in RUNTIME_ENTRIES_BY_TARGET[target]:
+            evidence = _run_runtime_parity(
+                translation, tmp_path, target, entry, metal_reference=metal_reference
             )
-            for name, request, rows, _storage in cases:
-                request_path = tmp_path / f"{name}.json"
-                _write_json(request_path, request)
-                expected = _expected_indices(entry, rows)
-                observed = {}
-                for label, compiled in (
-                    ("upstream", original),
-                    ("translated", library),
-                ):
-                    result = json.loads(
-                        _run(
-                            [runner, compiled, entry, request_path],
-                            tmp_path,
-                            f"{name}-{label}",
-                        )
-                    )
-                    observed[label] = result
-                    assert result["threadExecutionWidth"] == 32
-                    assert result["indices"] == expected, (
-                        name,
-                        label,
-                        result,
-                        expected,
-                    )
-                evidence.append({"case": name, "expected": expected, **observed})
-            _write_json(
-                tmp_path / "parity.json",
-                {
-                    "commit": MLX_COMMIT,
-                    "entry": entry,
-                    "cases": evidence,
-                    "upstreamMlxTestSuiteExecuted": False,
-                },
-            )
+            if evidence:
+                assert len(evidence) == 8
+                _write_json(
+                    tmp_path / "parity.json",
+                    {
+                        "commit": MLX_COMMIT,
+                        "entry": entry,
+                        "target": target,
+                        "cases": evidence,
+                        "indexRangeAssertions": [],
+                        "upstreamMlxTestSuiteExecuted": False,
+                    },
+                )

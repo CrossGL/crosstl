@@ -523,19 +523,36 @@ exactly 49 Metal units, 17,832 entries, and zero diagnostics. The compact
 ``arg_reduce.metal`` entries and 72 deterministic Metal, OpenGL, and DirectX
 artifacts. Required macOS, Linux, and Windows CI compiles all 24 entries with
 the native Metal compiler, ``glslangValidator``/``spirv-val``, and DXC,
-respectively. Numerical runtime parity remains an explicit representative
+respectively. Numerical runtime parity includes a representative
 float32 subset: ``argmin_float32`` and ``argmax_float32`` must execute on Metal,
 Mesa EGL, and Direct3D 12 WARP over two rows, axis sizes 32 and 129, strides 1
 and 2, ordinary values, and NaN/Infinity values; the Metal path also executes
-the exact upstream metallib for parity. This is a 24/17,832 deterministic
-translation and native-compiler increment with 2/17,832 numerical runtime
-coverage, not full-tree coverage. The contract explicitly records that the
+the exact upstream metallib for parity. Twelve signed/unsigned 16/32/64-bit
+entries add 96 integer cases, covering extrema, lowest-index ties, axis sizes
+31, 32, 33 and 129, and both strides. All three targets require these 14 entries
+and 112 cases. This is a 24/17,832 deterministic translation and native-compiler
+increment with 14/17,832 numerical runtime coverage, not full-tree coverage.
+The contract explicitly records that the
 upstream MLX test suite and MLX host-runtime redirection have not yet been
 implemented. Strict JSON runtime requests encode non-finite float32 inputs with
 the exact strings ``nan``, ``+infinity``, and ``-infinity`` before
 deterministic IEEE-754 packing.
 
-The current OpenGL identities were reviewed against retained sources after
+All 24 entries use checked metadata rather than trusted index-range assertions.
+The runtime validates six conditions against uploaded shape, stride and size
+values. Each numerical case checks 32 output guards and observes seven inputs
+for modification. Input allocations include inactive-lane pointer formation and
+the final pointer update, preserving the original rows and expected indices.
+Bindings are matched through source-resource provenance and checked against
+their physical ABI. Windows retains the executed DXIL and packed bindings before
+dispatch. These checks share the existing OS jobs; the two-entry exploratory
+runtime path is no longer executed separately.
+
+The following reviews predate the checked-metadata artifact refresh. Their
+Windows execution results are historical, not qualification of the refreshed
+artifacts; native Windows execution must pass again.
+
+The earlier OpenGL identities were reviewed against retained sources after
 signed 64-bit remainder and narrow-value lowering changed. All 24 entries
 compile and validate, and the 16 required float32 execution cases pass on Mesa
 EGL. A separate local review covers 80 half/bfloat cases with source-rounded
@@ -546,7 +563,7 @@ bodies retain their source, specialization and execution metadata, while the
 16 other bodies are unchanged. The four byte entries also match unchanged
 upstream Metal execution and independent integer indices in 64 local cases
 covering extrema, ties, constant rows, tails and strides. Required CI runtime
-coverage remains the stated float32 subset.
+coverage includes the float32 and integer subsets described above.
 
 All 24 DirectX identities have complete-body review and warning-fatal DXC
 compilation. Reviewed changes make source-width index conversions and byte
@@ -555,11 +572,11 @@ decode logical half values from integer storage. Source hashes, template
 materializations, resource registers, launch geometry, reduction comparisons
 and tie-breaking are unchanged. The two float32 entries retain the required
 32-lane software subgroup path. The existing Windows numerical gate remains
-required and passes all 16 float32 cases with these reviewed shaders. A separate
+required and passed all 16 float32 cases with those reviewed shaders. A separate
 audit verifies all 32 reduction indices against retained uploaded input words,
 including strides, tails, ties and non-finite values, and checks parameter
 bindings and executed module identities. This does not expand numerical
-coverage to the other scalar entries or establish upstream-suite parity.
+coverage to bool, byte, half or bfloat entries or establish upstream-suite parity.
 
 Constrained Metal free-function fallbacks are materialized only when their
 recognized constraints select a unique implementation. A visible ordinary or

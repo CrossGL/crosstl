@@ -475,17 +475,19 @@ This is a 24/17,832 deterministic translation and native-compiler increment with
 14/17,832 common required numerical entries, not full-tree
 coverage, upstream MLX test-suite execution, or MLX host-runtime redirection.
 
-A separate checked-metadata runtime test covers `argmin_float32` and
-`argmin_uint64` with the existing 16 numerical cases. It uses six upload-validated
-metadata requirements and no trusted index-range assertions. Each dispatch
+The compiler and runtime tests use the same checked-metadata configuration for
+all 24 entries. The 14 numerical entries retain all 112 cases per backend and
+use six upload-validated metadata requirements with no trusted index-range
+assertions. Each dispatch
 observes all seven read-only inputs and checks 32 output guards; Metal also
 compares the unchanged upstream kernel. The input allocation includes space for
 pointer formation by inactive lanes and the terminal pointer update, with
 extremal padding outside the original rows. Row values, strides, tail conditions
-and expected indices are unchanged. Local Metal and Mesa EGL execution pass;
-DirectX execution is required by the existing Windows job, not inferred from
-compiler validation. This checked package path is separate from the legacy
-artifact identities above and does not qualify the full MLX runtime or test suite.
+and expected indices are unchanged. The pinned artifact identities now cover
+this checked package path. DirectX execution remains required by the existing
+Windows job, with the actual DXIL and packed resource bindings retained before
+dispatch. A passing compiler check does not qualify numerical execution, the
+full MLX runtime or the upstream test suite.
 
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
@@ -495,7 +497,11 @@ rather than treating pre-conversion values as valid offsets. The unchanged
 `LoopedElemToLoc::location` state-bound limitation. This is translation progress,
 not a passing column-reduction execution or complete reduction coverage.
 
-The current OpenGL identities include explicit signed 64-bit remainder,
+The following reviews describe earlier artifact revisions, before the checked
+metadata identity refresh. Their Windows numerical results do not qualify the
+refreshed artifacts; those require a new native Windows CI run.
+
+The earlier OpenGL identities include explicit signed 64-bit remainder,
 source-typed half loads, and bfloat rounding at shuffle and sentinel boundaries.
 All 24 bodies were reviewed against the retained sources and compiled with
 `glslangValidator` and `spirv-val`. The 16 float32 and 96 integer cases are
@@ -511,7 +517,7 @@ specialization counts, workgroup metadata and the 16 other bodies are unchanged.
 A local execution review compares the four byte entries against the unchanged
 upstream metallib and independent integer indices across 64 cases, including
 extrema, ties, constant rows, tails and strided inputs. These cases supplement,
-but do not expand, the required float32 CI runtime subset.
+but do not expand, the required CI runtime subset.
 
 The four 16-bit Metal references additionally retain explicit `short`/`ushort`
 conversions at aggregate construction. Removing only the two field conversions
@@ -532,8 +538,8 @@ byte conversions at aggregate and call boundaries, the negative-infinity
 sentinel, and logical half loads from integer storage. Source hashes, template
 materializations, resource registers, launch geometry, reduction comparisons
 and tie-breaking remain unchanged. The 32-lane software subgroup path remains
-required for the two float32 entries. The updated identities allow the existing
-Windows numerical gate to run. Its 16 cases pass with the reviewed shaders;
+required for the two float32 entries. Those identities allowed the existing
+Windows numerical gate to run. Its 16 cases passed with those reviewed shaders;
 an independent audit of retained uploads and outputs verifies all 32 reduction
 indices, parameter bindings and executed module identities. This confirms the
 existing float32 subset, not numerical coverage of all 24 scalar entries.
