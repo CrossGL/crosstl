@@ -43,6 +43,24 @@ The backend is the primary path for DirectX shader integration:
 * HLSL-specific resource validation for duplicate constant-buffer names and
   resource/member shadowing
 
+Unsigned Binary32 Conversions
+-----------------------------
+
+Scalar and vector conversions from 32-bit unsigned integers to ``float`` use
+integer significand rounding followed by bit reinterpretation. Rounding is
+to nearest, ties to even, including zero and the carry from ``UINT32_MAX`` to
+``2^32``. This avoids an intermediate rounding step on native implementations
+that split the input into a high bit and a signed-range remainder.
+
+Explicit constructors and casts, typed initializers, assignments, helper
+arguments and returns retain this conversion. Mixed unsigned-integer/float
+arithmetic and comparisons round the integer operand before the operation.
+Vector arguments with side effects are evaluated once. Signed conversions,
+double precision and bit reinterpretation are separate operations.
+Required native tests compare original Metal with the
+generated backends and retain a standalone HLSL control for runtime diagnosis;
+successful compilation alone does not establish numerical parity.
+
 16-bit Type Semantics
 ---------------------
 

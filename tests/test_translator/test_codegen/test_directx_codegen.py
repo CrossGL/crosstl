@@ -9204,7 +9204,7 @@ def test_hlsl_metal_native_half_constant_params_promote_to_cbuffers(tmp_path):
         generated_code
     )
     assert (
-        "asfloat16(half_step_start) + (__crossgl_round_half1(float(index)) * asfloat16(half_step_step))"
+        "asfloat16(half_step_start) + (__crossgl_round_half1(__crossgl_uint_to_float1(index)) * asfloat16(half_step_step))"
         in generated_code
     )
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
@@ -17122,7 +17122,7 @@ def test_hlsl_vertex_index_identifier_adds_sv_vertex_id_parameter():
 
     assert "SV_VertexID" in generated
     assert "uint gl_VertexIndex : SV_VertexID" in generated
-    assert "float(gl_VertexIndex)" in generated
+    assert "__crossgl_uint_to_float1(gl_VertexIndex)" in generated
     assert "gl_VertexID" not in generated
 
 
@@ -19440,7 +19440,9 @@ def test_hlsl_user_defined_mod_is_not_lowered():
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "float mod(float value, float period)" in generated_code
-    assert "float wrapped = mod(float(tid.x), 2.0);" in generated_code
+    assert (
+        "float wrapped = mod(__crossgl_uint_to_float1(tid.x), 2.0);" in generated_code
+    )
     assert "floor(" not in generated_code
 
 

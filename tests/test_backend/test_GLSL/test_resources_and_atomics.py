@@ -718,7 +718,7 @@ def test_codegen_mixed_ssbo_runtime_array_blocks_preserve_shape_with_attribute()
     assert "unsupported HLSL GLSL buffer block ParticlesBlock" not in hlsl
     assert "uint n = particles.Load(0);" in hlsl
     assert "float v = asfloat(particles.Load(4));" in hlsl
-    assert "particles.Store(4, asuint((v + float(n))));" in hlsl
+    assert "particles.Store(4, asuint((v + __crossgl_uint_to_float1(n))));" in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
     assert "device uchar* particles [[buffer(0)]]" in metal
@@ -1869,7 +1869,7 @@ def test_codegen_mixed_ssbo_nested_struct_arrays_lower_as_leaf_offsets():
     assert "float readNestedArray(RWByteAddressBuffer localBlock, uint i)" in hlsl
     assert (
         "return (asfloat(localBlock.Load3((112 + i * 48 + 16))).x + "
-        "float(localBlock.Load(48)));" in hlsl
+        "__crossgl_uint_to_float1(localBlock.Load(48)));" in hlsl
     )
     assert "uint i = nestedArrayBlock.Load(96);" in hlsl
     assert "float3 normal = asfloat(nestedArrayBlock.Load3(64));" in hlsl
@@ -14824,11 +14824,11 @@ def test_codegen_allows_explicit_image_atomic_result_casts():
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert (
-        "float scalarCast = float(imageAtomicAdd_uimage2D(counters, int2(0, 0), 1u));"
+        "float scalarCast = __crossgl_uint_to_float1(imageAtomicAdd_uimage2D(counters, int2(0, 0), 1u));"
         in hlsl
     )
     assert (
-        "target[int2(0, 0)] = float(imageAtomicAdd_uimage2D(counters, int2(1, 1), 2u));"
+        "target[int2(0, 0)] = __crossgl_uint_to_float1(imageAtomicAdd_uimage2D(counters, int2(1, 1), 2u));"
         in hlsl
     )
 
@@ -14945,9 +14945,11 @@ def test_codegen_allows_explicit_image_load_result_casts():
     metal = MetalCodeGen().generate(shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
-    assert "float floatCast = float(counters[int2(0, 0)]);" in hlsl
+    assert "float floatCast = __crossgl_uint_to_float1(counters[int2(0, 0)]);" in hlsl
     assert "uint uintCast = uint(values[int2(1, 1)]);" in hlsl
-    assert "target[int2(0, 0)] = float(counters[int2(2, 2)]);" in hlsl
+    assert (
+        "target[int2(0, 0)] = __crossgl_uint_to_float1(counters[int2(2, 2)]);" in hlsl
+    )
 
     assert "float floatCast = float(counters.read(uint2(int2(0))).x);" in metal
     assert "uint uintCast = uint(values.read(uint2(int2(1))).x);" in metal

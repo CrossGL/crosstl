@@ -10580,7 +10580,7 @@ def test_translate_project_lowers_glsl_vertex_index_for_graphics_targets(tmp_pat
 
     assert "SV_VertexID" in directx
     assert "gl_VertexIndex" in directx
-    assert "float(gl_VertexIndex)" in directx
+    assert "__crossgl_uint_to_float1(gl_VertexIndex)" in directx
     assert "gl_VertexID" not in directx
 
 

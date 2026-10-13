@@ -2282,6 +2282,8 @@ class HLSLCodeGen:
         self.hlsl_atan2_helper_names = {}
         self.required_hlsl_half_helpers = set()
         self.hlsl_half_helper_names = {}
+        self.required_hlsl_unsigned_float_helpers = set()
+        self.hlsl_unsigned_float_helper_names = {}
         self.required_hlsl_half_selection_helpers = set()
         self.hlsl_half_selection_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
@@ -3323,6 +3325,8 @@ class HLSLCodeGen:
         self.hlsl_atan2_helper_names = {}
         self.required_hlsl_half_helpers = set()
         self.hlsl_half_helper_names = {}
+        self.required_hlsl_unsigned_float_helpers = set()
+        self.hlsl_unsigned_float_helper_names = {}
         self.required_hlsl_half_selection_helpers = set()
         self.hlsl_half_selection_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
@@ -3525,6 +3529,7 @@ class HLSLCodeGen:
         self.prepare_hlsl_inverse_hyperbolic_helper_names(functions)
         self.prepare_hlsl_atan2_helper_names(functions)
         self.prepare_hlsl_half_helper_names(functions)
+        self.prepare_hlsl_unsigned_float_helper_names(functions)
         self.prepare_hlsl_half_selection_helper_names(functions)
         self.prepare_hlsl_physical_subgroup_id_helper_names(functions)
         self.hlsl_float_atomic_reserved_names = self.hlsl_helper_reserved_names(
@@ -4643,6 +4648,7 @@ class HLSLCodeGen:
             + code[:half_helper_offset]
             + self.generate_hlsl_explicit_bitcast_helpers()
             + self.generate_hlsl_half_helpers()
+            + self.generate_hlsl_unsigned_float_helpers()
             + self.generate_hlsl_half_selection_helpers()
             + code[half_helper_offset:]
         )
@@ -6329,6 +6335,86 @@ uint {helper_name}(uint groupIndex) {{
                 "}\n\n"
             )
         return code
+
+    def prepare_hlsl_unsigned_float_helper_names(self, functions):
+        used_names = self.hlsl_helper_reserved_names(functions)
+        self.hlsl_unsigned_float_helper_names = {}
+        for width in range(1, 5):
+            name = f"__crossgl_uint_to_float{width}"
+            while name in used_names:
+                name += "_"
+            self.hlsl_unsigned_float_helper_names[width] = name
+            used_names.add(name)
+
+    def generate_hlsl_unsigned_float_helpers(self):
+        if not self.required_hlsl_unsigned_float_helpers:
+            return ""
+        scalar = self.hlsl_unsigned_float_helper_names[1]
+        code = f"""float {scalar}(uint value) {{
+    if (value == 0u) {{ return 0.0f; }}
+    uint exponent = uint(firstbithigh(value));
+    uint significand;
+    if (exponent <= 23u) {{
+        significand = value << (23u - exponent);
+    }} else {{
+        // Round the integer once, including a carry into the next exponent.
+        uint shift = exponent - 23u;
+        significand = value >> shift;
+        uint remainder = value & ((1u << shift) - 1u);
+        uint midpoint = 1u << (shift - 1u);
+        if (remainder > midpoint || (remainder == midpoint && (significand & 1u) != 0u)) {{
+            significand += 1u;
+        }}
+        if (significand == 0x1000000u) {{
+            significand >>= 1u;
+            exponent += 1u;
+        }}
+    }}
+    return asfloat(((exponent + 127u) << 23u) | (significand & 0x7fffffu));
+}}
+"""
+        for width in sorted(self.required_hlsl_unsigned_float_helpers - {1}):
+            name = self.hlsl_unsigned_float_helper_names[width]
+            lanes = ", ".join(f"{scalar}(value.{lane})" for lane in "xyzw"[:width])
+            code += (
+                f"float{width} {name}(uint{width} value) {{\n"
+                f"    return float{width}({lanes});\n}}\n"
+            )
+        return code + "\n"
+
+    def hlsl_unsigned_float_conversion_expression(
+        self, rendered, expected_type, source_type, *, source_location=None
+    ):
+        expected = self.hlsl_floating_arithmetic_type_info(expected_type)
+        source = self.hlsl_integer_arithmetic_type_info(source_type)
+        if (
+            expected is None
+            or expected["base_type"] != "float"
+            or source is None
+            or source["base_type"] != "uint"
+            or source["width"] not in {1, expected["width"]}
+        ):
+            return None
+        for intrinsic in ("asfloat", "firstbithigh"):
+            if intrinsic in self.global_variable_types or (
+                intrinsic in self.function_return_types
+                and intrinsic not in self.hlsl_function_name_aliases
+            ):
+                raise DirectXContextualConversionError(
+                    f"DirectX cannot preserve unsigned-to-float rounding: '{intrinsic}' is shadowed",
+                    source_type=source["mapped_type"],
+                    target_type=expected["mapped_type"],
+                    reason="unsigned-float-intrinsic-shadowed",
+                    source_location=source_location,
+                )
+        width = source["width"]
+        self.required_hlsl_unsigned_float_helpers.add(width)
+        if not self.hlsl_unsigned_float_helper_names:
+            self.prepare_hlsl_unsigned_float_helper_names([])
+        converted = f"{self.hlsl_unsigned_float_helper_names[width]}({rendered})"
+        if width != expected["width"]:
+            return self.hlsl_scalar_splat_cast(expected["mapped_type"], converted)
+        return converted
 
     def prepare_hlsl_half_helper_names(self, functions):
         used_names = self.hlsl_helper_reserved_names(functions)
@@ -12745,6 +12831,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         source = self.map_type(source_name)
         if not expected or not source or expected == source:
             return rendered
+        unsigned_to_float = self.hlsl_unsigned_float_conversion_expression(
+            rendered, expected, source, source_location=source_location
+        )
+        if unsigned_to_float is not None:
+            return unsigned_to_float
         expected_info = self.hlsl_floating_arithmetic_type_info(expected)
         source_info = self.hlsl_floating_arithmetic_type_info(source)
         if (
@@ -13128,22 +13219,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return f"((asuint16({rendered}) & 0x7fffu) {comparison} 0x7c00u)"
         return f"((asuint({rendered}) & 0x7fffffffu) {comparison} 0x7f800000u)"
 
-    def hlsl_wide_integer_floating_binary_contract(
+    def hlsl_integer_floating_binary_contract(
         self,
         node,
         operator,
         left_type,
         right_type,
     ):
-        """Describe warning-clean HLSL lowering for float/wide-integer operands.
-
-        Metal follows the usual arithmetic conversions for ``float`` combined
-        with a signed or unsigned 64-bit integer. HLSL performs the same numeric
-        conversion, but DXC diagnoses the implicit 64-bit-integer-to-float step
-        under ``-Wconversion`` (and therefore rejects it under ``-WX``). An
-        explicit HLSL float constructor preserves the source operation while
-        recording that the precision loss is intentional.
-        """
+        """Preserve rounding for uint32 and warning-clean wide integer operands."""
         if operator not in {"+", "-", "*", "/", "==", "!=", "<", "<=", ">", ">="}:
             return None
 
@@ -13156,7 +13239,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             left_floating is not None
             and left_floating["base_type"] == "float"
             and right_integer is not None
-            and right_integer["base_type"] in {"int64_t", "uint64_t"}
+            and right_integer["base_type"] in {"uint", "int64_t", "uint64_t"}
         ):
             floating = left_floating
             integer = right_integer
@@ -13165,7 +13248,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             right_floating is not None
             and right_floating["base_type"] == "float"
             and left_integer is not None
-            and left_integer["base_type"] in {"int64_t", "uint64_t"}
+            and left_integer["base_type"] in {"uint", "int64_t", "uint64_t"}
         ):
             floating = right_floating
             integer = left_integer
@@ -13179,7 +13262,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and floating["width"] != integer["width"]
         ):
             raise DirectXContextualConversionError(
-                "DirectX cannot lower mixed float and 64-bit integer arithmetic "
+                "DirectX cannot lower mixed float and integer arithmetic "
                 f"from '{integer['mapped_type']}' to "
                 f"'{floating['mapped_type']}' because the vector lane shapes differ",
                 source_type=integer["mapped_type"],
@@ -13201,14 +13284,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "result_type": result_type,
         }
 
-    def hlsl_wide_integer_floating_binary_expression(
+    def hlsl_integer_floating_binary_expression(
         self,
         expr,
         left,
         right,
         operator,
     ):
-        contract = self.hlsl_wide_integer_floating_binary_contract(
+        contract = self.hlsl_integer_floating_binary_contract(
             expr,
             operator,
             self.expression_result_type(getattr(expr, "left", None)),
@@ -13217,10 +13300,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if contract is None:
             return None
 
+        value = left if contract["integer_side"] == "left" else right
+        converted = self.hlsl_unsigned_float_conversion_expression(
+            value,
+            contract["integer_float_type"],
+            contract["integer"]["mapped_type"],
+            source_location=getattr(expr, "source_location", None),
+        )
+        if converted is None:
+            converted = f"{contract['integer_float_type']}({value})"
         if contract["integer_side"] == "left":
-            left = f"{contract['integer_float_type']}({left})"
+            left = converted
         else:
-            right = f"{contract['integer_float_type']}({right})"
+            right = converted
         return f"({left} {operator} {right})"
 
     def hlsl_wide_integer_arithmetic_contract(
@@ -15093,14 +15185,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 }:
                     return other_type
                 return "float"
-            wide_integer_floating = self.hlsl_wide_integer_floating_binary_contract(
+            integer_floating = self.hlsl_integer_floating_binary_contract(
                 expr,
                 operator,
                 left_type,
                 right_type,
             )
-            if wide_integer_floating is not None:
-                return wide_integer_floating["result_type"]
+            if integer_floating is not None:
+                return integer_floating["result_type"]
             mapped_operator = self.map_operator(operator)
             native_16_bit_contract = self.hlsl_native_16_bit_arithmetic_contract(
                 expr,
@@ -23142,14 +23234,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if native_16_bit_binary is not None:
                 return native_16_bit_binary
-            wide_integer_floating = self.hlsl_wide_integer_floating_binary_expression(
+            integer_floating = self.hlsl_integer_floating_binary_expression(
                 expr,
                 left,
                 right,
                 mapped_op,
             )
-            if wide_integer_floating is not None:
-                return wide_integer_floating
+            if integer_floating is not None:
+                return integer_floating
             wide_integer = self.hlsl_wide_integer_binary_expression(
                 expr, left, right, mapped_op
             )
@@ -42280,9 +42372,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if info is not None and info["base_type"] in {"float", "double"}:
             rendered_args = list(rendered_args)
             for index, arg in enumerate(args):
-                source_info = self.hlsl_floating_arithmetic_type_info(
-                    self.expression_result_type(arg)
-                )
+                argument_type = self.expression_result_type(arg)
+                integer_info = self.hlsl_integer_arithmetic_type_info(argument_type)
+                if info["base_type"] == "float" and integer_info is not None:
+                    width = integer_info["width"]
+                    converted = self.hlsl_unsigned_float_conversion_expression(
+                        rendered_args[index],
+                        "float" + (str(width) if width > 1 else ""),
+                        argument_type,
+                        source_location=getattr(arg, "source_location", None),
+                    )
+                    if converted is not None:
+                        rendered_args[index] = converted
+                        if len(args) == 1 and width == info["width"]:
+                            return converted
+                source_info = self.hlsl_floating_arithmetic_type_info(argument_type)
                 if source_info is not None and source_info["base_type"] == "float16_t":
                     rendered_args[index] = self.hlsl_native_16_bit_arithmetic_operand(
                         rendered_args[index], source_info, info["base_type"]

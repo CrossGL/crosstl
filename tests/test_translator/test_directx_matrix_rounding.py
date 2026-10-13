@@ -99,7 +99,12 @@ def test_matrix_rounding_default_and_generation_state():
 
 @pytest.mark.parametrize("name", ["asuint", "asfloat"])
 def test_matrix_rounding_rejects_captured_bitcasts(name):
-    source = _source(helpers=f"float {name}(float value) {{ return value; }}")
+    result_type, argument_type = (
+        ("float", "uint") if name == "asfloat" else ("uint", "float")
+    )
+    source = _source(
+        helpers=f"{result_type} {name}({argument_type} value) {{ return {result_type}(0); }}"
+    )
     with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as error:
         _codegen(cooperative_matrix_mma_profile="rne-gradual").generate(parse(source))
     assert error.value.reason == "rounding-builtin-shadowed"
