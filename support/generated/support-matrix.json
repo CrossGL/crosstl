@@ -13962,6 +13962,11 @@
             "tests/test_translator/test_helper_array_returns.py::def test_array_helper_requires_unique_immutable_source_contract",
             "tests/test_translator/test_helper_array_returns.py::def test_checked_arrays_forward_through_nested_vector_helpers",
             "tests/test_translator/test_helper_array_returns.py::def test_vector_array_helpers_execute_natively",
+            "tests/test_translator/test_loop_guard_bounds.py::def test_partial_tiles_bound_exact_source_coordinates",
+            "tests/test_translator/test_loop_guard_bounds.py::def test_wrapping_unsigned_guard_does_not_exclude_valid_coordinates",
+            "tests/test_translator/test_loop_guard_bounds.py::def test_unmodeled_control_flow_and_dependencies_do_not_tighten_entries",
+            "tests/test_translator/test_loop_guard_bounds.py::def test_guard_proof_rejects_actual_negative_indices",
+            "tests/test_translator/test_loop_guard_bounds.py::def test_tight_tiled_layout_executes_natively",
             "tests/test_translator/test_loop_offset_bounds.py::def test_component_loop_proof_rejects_unsafe_updates",
             "demos/integrations/mlx/tests/kernels/test_current_copy.py::def test_copy_contracts_bind_uploaded_metadata_and_launch"
           ],

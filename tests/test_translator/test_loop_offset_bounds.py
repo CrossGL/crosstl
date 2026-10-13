@@ -172,7 +172,7 @@ def _component_loop(step=2):
 
 
 @pytest.mark.parametrize(
-    "step,bounds,exit_bounds", [(2, (4, 8), (4, 10)), (-1, (2, 4), (1, 4))]
+    "step,bounds,exit_bounds", [(2, (4, 6), (4, 10)), (-1, (3, 4), (1, 4))]
 )
 def test_conjunction_bounded_component_updates(step, bounds, exit_bounds):
     function, loop, inside, after = _component_loop(step)
@@ -184,7 +184,7 @@ def test_conjunction_bounded_component_updates(step, bounds, exit_bounds):
     GLSLCodeGen().annotate_glsl_control_flow_intervals(function)
     assert inside._glsl_control_flow_intervals["position.x"] == bounds
     assert after._glsl_control_flow_intervals["position.x"] == exit_bounds
-    assert inside._glsl_control_flow_intervals["position.y"] == (9, 11)
+    assert inside._glsl_control_flow_intervals["position.y"] == (9, 10)
     assert after._glsl_control_flow_intervals["position.y"] == (9, 12)
 
 

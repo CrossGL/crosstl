@@ -341,6 +341,7 @@ from .index_range_contracts import (
     parse_index_range_assertions,
     truncating_division_interval,
 )
+from .loop_guard_bounds import guarded_additive_loop_entries
 from .loop_induction import (
     fixed_stride_loop_terminates,
     geometric_loop_terminates,
@@ -10384,6 +10385,23 @@ class GLSLCodeGen:
                     additive_loop_intervals(value, intervals, mutated, count)
                     if count is not None
                     else ({}, {})
+                )
+                entries.update(
+                    guarded_additive_loop_entries(
+                        self,
+                        function,
+                        value,
+                        intervals,
+                        entries,
+                        count,
+                        constants=constants,
+                        escaped=escaped_names,
+                        mutated=mutated,
+                        lexical=lexical,
+                        checked_integer=checked_integer_interval,
+                        checked_components=checked_components,
+                        mutation_keys=mutation_interval_keys,
+                    )
                 )
                 loop_intervals.update(entries)
                 loop_name, loop_interval = self.glsl_private_pointer_loop_interval(

@@ -3271,6 +3271,13 @@ Metal comparison on macOS. The four-dimensional case checks 15 metadata values,
 including negative strides and the partial final two-element copy. These fixed
 workloads do not establish unrestricted layouts or complete host-runtime copy routing.
 
+A second reversed four-dimensional case starts both allocations at their first
+accessed element, with source and destination offsets 67 and 4. It retains the
+120 copied values, untouched holes and 32 tail guards without leading padding.
+The OpenGL proof follows the partial-tile loop guard into the helper-derived
+offsets; no source edits or asserted index ranges are used. This case runs in the
+existing native copy jobs alongside the padded layout.
+
 The focused `prove_layer_norm_directx.py` gate translates two host-selected
 single-row entries from the pinned `layer_norm.metal` source: forward float32
 with axis size 4099 and VJP float32 with axis size 8192 and `has_w=true`. It

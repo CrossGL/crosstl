@@ -1289,6 +1289,15 @@ strides, mutations of bound or stride components, and shadowed bindings do not
 establish this proof. These ranges establish index representability, not the
 size of the bound allocation; runtime buffer and metadata checks still apply.
 
+For straight-line top-level loops with at most 64 iterations, a conjunction of
+invariant affine integer guards can further constrain entry ranges. For example,
+``x + i < width`` excludes the unused lane of a partial tile before deriving its
+buffer offset. The analysis follows stable local initializers and checked helper
+results, preserving source arithmetic and conversions. Wrapping arithmetic is not
+treated as an unbounded affine expression. Unknown effects, conditional updates,
+early exits, escaped values and ambiguous bindings retain the conservative proof
+instead. Exit ranges remain conservative, and generated control flow is unchanged.
+
 Division proofs use exact integer arithmetic with truncation toward zero, including
 64-bit endpoints. Checked nonzero divisor intervals can bound division and
 non-negative remainder expressions without substituting a constant divisor.

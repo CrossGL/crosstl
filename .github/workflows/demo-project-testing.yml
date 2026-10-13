@@ -1398,6 +1398,7 @@ jobs:
               tests/test_translator/test_metadata_elements.py \
               tests/test_translator/test_scalar_return_bounds.py \
               tests/test_translator/test_helper_array_returns.py \
+              tests/test_translator/test_loop_guard_bounds.py \
               tests/test_translator/test_frozen_specializations.py \
               tests/test_translator/test_storage_record_runtime.py \
               tests/test_translator/test_integer_literals.py \

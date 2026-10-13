@@ -63,10 +63,12 @@ CASES = {
     "broadcast-4d": ("gn2_copy", [2, 3, 4, 5], [0, 0, 0, 2]),
     "reverse-1d": ("gg1_dynamic_copy", [17], [-2]),
     "reverse-4d": ("ggn2_dynamic_copy", [2, 3, 4, 5], [100, 7, -21, -1]),
+    "tight-reverse-4d": ("ggn2_dynamic_copy", [2, 3, 4, 5], [100, 7, -21, -1]),
 }
 DYNAMIC_LAYOUTS = {
     "reverse-1d": (38, 3, [2]),
     "reverse-4d": (80, 7, [151, 43, 9, -1]),
+    "tight-reverse-4d": (67, 4, [151, 43, 9, -1]),
 }
 
 
@@ -202,6 +204,9 @@ def test_copy_workload_covers_logical_coordinates(case):
     if case.endswith("4d"):
         assert workload["grid"] == [3, 4, 6]
         assert workload["shape"][-1] % 2 == 1
+    if case == "tight-reverse-4d":
+        assert min(workload["offsets"]) == 0
+        assert min(workload["destinations"]) == 0
 
 
 @pytest.mark.parametrize("fault", ["value", "missing", "guard", "zero-sign"])
@@ -221,7 +226,7 @@ def test_copy_readback_rejects_corruption(fault):
 
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
-@pytest.mark.parametrize("case", ("reverse-1d", "reverse-4d"))
+@pytest.mark.parametrize("case", ("reverse-1d", "reverse-4d", "tight-reverse-4d"))
 def test_copy_contracts_bind_uploaded_metadata_and_launch(tmp_path, target, case):
     workload = _workload(case)
     original = ProjectConfig(root=tmp_path, targets=(target,))
