@@ -24,7 +24,12 @@ from tests.test_translator.test_loop_updates import _execute
 
 SOURCE = "mlx/backend/metal/kernels/reduce.metal"
 ENTRY = "row_reduce_looped_large_5_reduce_sumfloat32"
+SIMPLE_ENTRY = "row_reduce_simple_sumfloat32"
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CHECKED_ROWS"
+SIMPLE_METADATA = {
+    "reduction_size": ("uint64", 65, False),
+    "out_size": ("int64", 33, False),
+}
 METADATA = {
     "row_size": ("int64", 132, False),
     "non_row_reductions": ("int64", 3, False),
@@ -37,14 +42,16 @@ METADATA = {
 }
 
 
-def _config(root, work, target):
+def _config(root, work, target, *, simple=False):
+    entry = SIMPLE_ENTRY if simple else ENTRY
+    metadata = SIMPLE_METADATA if simple else METADATA
     options = {}
     if target != "metal":
         options["software_subgroup_width"] = 32
     if target == "directx":
         options["relative_wave_shuffle_out_of_range"] = "self"
     if target == "opengl":
-        (region,) = plan_dispatch_regions((32, 2, 1), (32, 1, 1))
+        (region,) = plan_dispatch_regions((32, 9 if simple else 2, 1), (32, 1, 1))
         options["dispatch_region"] = region.to_json()
     return ProjectConfig(
         root=root,
@@ -53,18 +60,18 @@ def _config(root, work, target):
         include_dirs=(".",),
         targets=(target,),
         output_dir=f"{work.relative_to(root).as_posix()}/out",
-        entry_points={SOURCE: (ENTRY,)},
-        entry_workgroup_size_rules={SOURCE: {ENTRY: (32, 1, 1)}},
+        entry_points={SOURCE: (entry,)},
+        entry_workgroup_size_rules={SOURCE: {entry: (32, 1, 1)}},
         metadata_preconditions=[
             dict(
                 source=SOURCE,
-                entryPoint=ENTRY,
+                entryPoint=entry,
                 parameter=name,
                 minimum=value,
                 maximum=value,
                 **({"element": 0} if array else {}),
             )
-            for name, (_, value, array) in METADATA.items()
+            for name, (_, value, array) in metadata.items()
         ],
         source_options={
             "metal": dict(
@@ -78,14 +85,19 @@ def _config(root, work, target):
 
 
 @pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
-def test_row_offsets_use_checked_uploads_and_launch_geometry(tmp_path, target):
-    config = _config(tmp_path, tmp_path / "case", target)
+@pytest.mark.parametrize("simple", [False, True])
+def test_row_offsets_use_checked_uploads_and_launch_geometry(tmp_path, target, simple):
+    config = _config(tmp_path, tmp_path / "case", target, simple=simple)
+    entry = SIMPLE_ENTRY if simple else ENTRY
     assert not config.index_range_assertions
-    assert len(config.metadata_preconditions) == 8
-    assert config.entry_workgroup_size_rules[SOURCE][ENTRY] == ("32", "1", "1")
+    assert len(config.metadata_preconditions) == (2 if simple else 8)
+    assert config.entry_workgroup_size_rules[SOURCE][entry] == ("32", "1", "1")
 
 
-def _reference_source():
+def _reference_source(*, simple=False):
+    entry = SIMPLE_ENTRY if simple else ENTRY
+    function = "row_reduce_simple" if simple else "row_reduce_looped"
+    arguments = "float, float, Sum<float>" + ("" if simple else ", int64_t, 5")
     return f"""#include <metal_atomic>
 #include <metal_simdgroup>
 #include "mlx/backend/metal/kernels/defines.h"
@@ -93,12 +105,26 @@ def _reference_source():
 #include "mlx/backend/metal/kernels/atomic.h"
 #include "mlx/backend/metal/kernels/reduction/ops.h"
 #include "mlx/backend/metal/kernels/reduce.h"
-instantiate_kernel("{ENTRY}", row_reduce_looped,
-                   float, float, Sum<float>, int64_t, 5)
+instantiate_kernel("{entry}", {function}, {arguments})
 """
 
 
-def _values(profile):
+def _values(profile, *, simple=False):
+    if simple:
+        values, totals = [], []
+        for row in range(33):
+            words = [
+                (
+                    1.0
+                    if profile == "ones"
+                    else float((row * 13 + column) % 23 - 11)
+                    / (16 if profile == "fractions" else 1)
+                )
+                for column in range(65)
+            ]
+            values.extend(words)
+            totals.append(sum(words))
+        return values, totals
     # Include padded rows, inactive lanes and terminal pointer formation.
     values = [1033.0] * 1120
     totals = []
@@ -134,8 +160,10 @@ def test_row_profiles_exclude_padding_from_the_reference(profile, expected):
         assert values[base + 132 : base + 160] == [1033.0] * 28
 
 
-def _request(descriptor, package, profile):
-    values, totals = _values(profile)
+def _request(descriptor, package, profile, *, simple=False):
+    values, totals = _values(profile, simple=simple)
+    metadata = SIMPLE_METADATA if simple else METADATA
+    output_count = len(totals) + 32
     guard = 16384.0
     inputs, outputs, observations = {}, {}, []
     for binding in _source_bindings(descriptor):
@@ -146,23 +174,26 @@ def _request(descriptor, package, profile):
             data = values
             assert dtype == "float32"
         elif parameter == "out":
-            data = [guard] * 34
+            data = [guard] * output_count
             assert dtype == "float32"
-            outputs[name] = dict(dtype=dtype, shape=[34], values=totals + [guard] * 32)
+            outputs[name] = dict(
+                dtype=dtype, shape=[output_count], values=totals + [guard] * 32
+            )
         else:
-            source_dtype, value, _ = METADATA[parameter]
+            source_dtype, value, _ = metadata[parameter]
             assert dtype == source_dtype
             data = [value]
         inputs[name] = dict(dtype=dtype, shape=[len(data)], values=data)
         if parameter != "out":
             observations.append(name)
-    assert len(inputs) == 10 and len(observations) == 9
+    assert len(inputs) == len(metadata) + 2
+    assert len(observations) == len(metadata) + 1
     request = build_native_loader_dispatch_request(
         descriptor,
         package,
         inputs,
         outputs,
-        dict(workgroupCount=[1, 2, 1], workgroupSize=[32, 1, 1]),
+        dict(workgroupCount=[1, 9 if simple else 2, 1], workgroupSize=[32, 1, 1]),
         observe_inputs=observations,
     )
     assert not request.execution_plan.diagnostics
@@ -178,12 +209,16 @@ def checked_corpus(request):
     return request.getfixturevalue("current_mlx")
 
 
-def test_checked_row_reduction_executes(checked_corpus, tmp_path):
+@pytest.mark.parametrize("simple", [False, True], ids=["looped", "simple"])
+def test_checked_row_reduction_executes(checked_corpus, tmp_path, simple):
     root, target = checked_corpus
+    entry = SIMPLE_ENTRY if simple else ENTRY
     with corpus_workspace(
-        root, family="checked-row", target=target, entry_point=ENTRY
+        root, family="checked-row", target=target, entry_point=entry
     ) as work:
-        report = translate_project(_config(root, work, target), format_output=False)
+        report = translate_project(
+            _config(root, work, target, simple=simple), format_output=False
+        )
         report.write_json(tmp_path / "portability-report.json")
         payload = report.to_json()
         assert payload["summary"]["translatedCount"] == 1, payload["diagnostics"]
@@ -195,14 +230,16 @@ def test_checked_row_reduction_executes(checked_corpus, tmp_path):
         for profile in ("ones", "signed", "fractions"):
             native = tmp_path / profile
             native.mkdir()
-            request, expected = _request(descriptor, package, profile)
+            request, expected = _request(descriptor, package, profile, simple=simple)
             _execute(
                 request,
                 expected,
                 native,
                 validate=_validate,
-                original_source=_reference_source() if target == "metal" else None,
-                original_entry=ENTRY,
+                original_source=(
+                    _reference_source(simple=simple) if target == "metal" else None
+                ),
+                original_entry=entry,
                 metal_compile_flags=("-I", str(root), "-Wno-c++17-extensions"),
                 metal_language_version="3.1" if target == "metal" else None,
             )
@@ -211,5 +248,5 @@ def test_checked_row_reduction_executes(checked_corpus, tmp_path):
             )
             for record in evidence["records"].values():
                 observations = record["details"]["inputObservations"]
-                assert len(observations) == 9
+                assert len(observations) == (3 if simple else 9)
                 assert all(item["unchanged"] for item in observations.values())

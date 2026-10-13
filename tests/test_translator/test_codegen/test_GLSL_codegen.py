@@ -10270,7 +10270,7 @@ def test_opengl_fixed_array_helper_specializes_multiple_runtime_resources(tmp_pa
     )
 
 
-def test_opengl_fixed_array_storage_specialization_reuses_clone_and_keeps_private_call(
+def test_opengl_fixed_array_storage_specialization_keeps_caller_proofs_and_private_call(
     tmp_path,
 ):
     shader = """
@@ -10303,10 +10303,10 @@ def test_opengl_fixed_array_storage_specialization_reuses_clone_and_keeps_privat
         r"\bint\s+(sum2_glsl_[A-Za-z0-9_]+)\s*\([^;]*\)\s*\{",
         generated,
     )
-    assert len(definitions) == 1, generated
-    specialized_name = definitions[0]
+    assert len(set(definitions)) == 2, generated
+    specialized_names = "|".join(re.escape(name) for name in definitions)
     specialized_calls = re.findall(
-        rf"=\s*{re.escape(specialized_name)}\s*\(([^;\n]+)\)", generated
+        rf"=\s*(?:{specialized_names})\s*\(([^;\n]+)\)", generated
     )
     assert len(specialized_calls) == 2, generated
     assert any("int(0)" in call for call in specialized_calls)
@@ -14898,13 +14898,18 @@ def test_opengl_storage_pointer_helper_writes_addressed_and_rebased_resource(
     )
     assert_glsl_storage_pointer_syntax_is_lowered(generated)
 
-    helper = re.search(
-        r"\bvoid\s+(?P<name>writeValue[A-Za-z0-9_]*)\s*"
-        r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
-        generated,
-        re.MULTILINE | re.DOTALL,
+    helpers = list(
+        re.finditer(
+            r"\bvoid\s+(?P<name>writeValue[A-Za-z0-9_]*)\s*"
+            r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+            generated,
+            re.MULTILINE | re.DOTALL,
+        )
     )
-    assert helper is not None, generated
+    assert len(helpers) == 2, generated
+    helper = helpers[0]
+    assert helpers[1].group("params") == helper.group("params")
+    assert helpers[1].group("body") == helper.group("body")
     array_parameters = set(
         re.findall(r"\bfloat\s+([A-Za-z_]\w*)\s*\[\s*\]", helper.group("params"))
     )
@@ -14933,9 +14938,8 @@ def test_opengl_storage_pointer_helper_writes_addressed_and_rebased_resource(
         for offset_parameter in offset_parameters
     ), generated
 
-    helper_calls = re.findall(
-        rf"\b{re.escape(helper.group('name'))}\s*\(([^;\n]*)\)\s*;", generated
-    )
+    helper_names = "|".join(re.escape(item.group("name")) for item in helpers)
+    helper_calls = re.findall(rf"\b(?:{helper_names})\s*\(([^;\n]*)\)\s*;", generated)
     addressed_call = next(
         (arguments for arguments in helper_calls if "7.0" in arguments), None
     )

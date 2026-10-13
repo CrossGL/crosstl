@@ -9429,8 +9429,13 @@ class GLSLCodeGen:
         replay_depth = 0
         replay_budget = 4096
         replay_intervals = {}
+        pointer_read_intervals = {}
         reached_statements = set()
         unreachable_tails = set()
+
+        for node in self.walk_ast(getattr(function, "body", [])):
+            if isinstance(node, ArrayAccessNode):
+                node._glsl_storage_pointer_read_interval = None
 
         def pointer_array_extent(expression):
             if not isinstance(expression, IdentifierNode):
@@ -9729,6 +9734,21 @@ class GLSLCodeGen:
             }
 
         def annotate_expression(expression, intervals):
+            if (
+                isinstance(expression, ArrayAccessNode)
+                and pointer_array_extent(expression.array) is not None
+            ):
+                # A recurrence can read a different initialized slot on every
+                # visit. Join the values read, not the intersection of slots.
+                current = checked_interval(expression, intervals)
+                if id(expression) in pointer_read_intervals:
+                    previous = pointer_read_intervals[id(expression)]
+                    current = (
+                        (min(previous[0], current[0]), max(previous[1], current[1]))
+                        if previous is not None and current is not None
+                        else None
+                    )
+                pointer_read_intervals[id(expression)] = current
             if hasattr(expression, "__dict__"):
                 bounds = dict(intervals)
                 if replay_depth:
@@ -10996,6 +11016,10 @@ class GLSLCodeGen:
             self.glsl_workgroup_proof_initial_intervals(function),
         )
         for node in self.walk_ast(getattr(function, "body", [])):
+            if isinstance(node, ArrayAccessNode):
+                node._glsl_storage_pointer_read_interval = pointer_read_intervals.get(
+                    id(node)
+                )
             # Replayed nodes are unreachable only if no iteration reaches them.
             if id(node) in unreachable_tails or hasattr(
                 node, "_glsl_checked_unreachable"
@@ -15558,7 +15582,9 @@ class GLSLCodeGen:
 
         if not bindings:
             return None, None
-        if any("." in name for name in workgroup_parameter_intervals) or any(
+        # Every transferred scalar fact can affect bounds or reachability in
+        # the clone, including helpers whose only resource is a storage buffer.
+        if workgroup_parameter_intervals or any(
             binding.get("kind")
             in {
                 "workgroup-pointer",
@@ -23269,7 +23295,10 @@ class GLSLCodeGen:
             )
             if scalar_array_view is not None:
                 return scalar_array_view
-            if getattr(stmt, "_glsl_storage_pointer_array_binding", None) is not None:
+            if (
+                getattr(stmt, "_glsl_storage_pointer_array_binding", None) is not None
+                or self.glsl_storage_pointer_array_contract(stmt) is not None
+            ):
                 self.current_identifier_aliases.pop(stmt.name, None)
                 self.current_glsl_storage_pointer_aliases.pop(stmt.name, None)
                 return self.generate_glsl_storage_pointer_array_alias_declaration(
@@ -24778,6 +24807,21 @@ class GLSLCodeGen:
         )
         if offset is None:
             return None
+        bounds = getattr(expression, "_glsl_storage_pointer_read_interval", None)
+        if (
+            binding.get("offset_array")
+            and bounds is not None
+            and 0 <= bounds[0] <= bounds[1] < (1 << 31)
+            and "pointer_reinterpretation" not in binding
+            and "byte_offset" not in binding
+        ):
+            # Retain a typed subscript and its source-owned occurrence proof.
+            # Never attach this fact to the mutable alias table.
+            offset = ArrayAccessNode(
+                IdentifierNode(binding["offset_array"]), deepcopy(index)
+            )
+            offset._glsl_lowered_pointer_offset_interval = bounds
+            offset.source_location = getattr(expression, "source_location", None)
         return {
             **binding,
             "kind": "storage-pointer",
@@ -28168,6 +28212,14 @@ class GLSLCodeGen:
     def generate_glsl_storage_pointer_array_alias_declaration(self, node, indent):
         binding = getattr(node, "_glsl_storage_pointer_array_binding", None)
         if not isinstance(binding, dict):
+            if self.glsl_storage_pointer_array_contract(node) is not None:
+                raise OpenGLStoragePointerError(
+                    "OpenGL cannot emit a storage pointer array without a proven "
+                    f"backing buffer: {getattr(node, 'name', '<anonymous>')}",
+                    parameter_name=getattr(node, "name", None),
+                    reason="pointer-array-backing-unresolved",
+                    source_location=getattr(node, "source_location", None),
+                )
             return None
         extent = binding.get("extent")
         if not isinstance(extent, int) or extent <= 0:
@@ -40303,6 +40355,12 @@ complex64_t crossgl_complex64_mod_assign(
         )
 
     def glsl_index_flow_range(self, expression, intervals=None):
+        if isinstance(expression, ArrayAccessNode):
+            bounds = getattr(expression, "_glsl_lowered_pointer_offset_interval", None)
+            if bounds is not None:
+                return IntegerRange(
+                    *bounds, INDEX_RANGE_STATIC, "source pointer-array read"
+                )
         if intervals is None:
             intervals = getattr(expression, "_glsl_control_flow_intervals", None)
         if not intervals:
@@ -48965,6 +49023,10 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_private_pointer_interval(self, expression, intervals, constants):
         if expression is None:
             return None
+        if isinstance(expression, ArrayAccessNode):
+            bounds = getattr(expression, "_glsl_lowered_pointer_offset_interval", None)
+            if bounds is not None:
+                return bounds
         returned_interval = scalar_return_interval(
             self, expression, intervals, constants
         )

@@ -1417,7 +1417,14 @@ OpenGL fixed storage-pointer arrays carry checked element-offset bounds through
 helper specialization. Facts belong to source array elements and each use, not
 to generated parameter names. Assignments, branches, lexical scopes and bounded
 loop iterations update or invalidate those facts; repeated uses retain the
-combined range from every analyzed iteration. Different caller bounds produce
+combined range from every analyzed iteration, including recurrences that read
+a different initialized predecessor slot on each visit. An unknown visit
+invalidates that occurrence, and reanalysis clears previous read proofs.
+Lowered offsets retain typed array subscripts rather than generated expression
+text. Arrays without a proven backing buffer produce a structured diagnostic
+instead of raw pointer declarations. Every scalar proof transferred into a
+resource helper participates in its specialization identity; an unchecked
+caller cannot reuse another caller's checked stride. Different caller bounds produce
 distinct specializations. Unknown effects, absent metadata, negative offsets,
 overflow and byte-reinterpreted views cannot acquire a proof from this analysis.
 Loop analysis has a bounded work budget and falls back to conservative analysis
@@ -1427,10 +1434,12 @@ guards and unchanged inputs. DirectX still diagnoses selected pointer-element
 aliases and element reassignment outside its canonical initialization plan.
 This does not qualify the full upstream row-reduction family or its iterator
 variants, and does not establish complete repository runtime integration. The
-separate checked row demo exercises one unchanged float32 entry with padded
-132-element rows, nested cursor resets, three numerical profiles, output guards
-and unchanged inputs. Metadata uploads and launch geometry are checked before
-dispatch; target compilation alone is not treated as numerical validation.
+separate checked row demo exercises unchanged float32 entries with padded
+132-element rows and nested cursor resets, and 33 contiguous 65-element rows
+with pointer recurrence and a partial final workgroup. Both use three numerical
+profiles, output guards and unchanged-input checks. Metadata uploads and launch
+geometry are checked before dispatch; target compilation alone is not treated
+as numerical validation.
 
 DirectX mutable storage-pointer array helpers write back their logical offsets
 on both fallthrough and explicit returns. Value returns are evaluated once

@@ -9,7 +9,7 @@ import pytest
 
 from crosstl.project import build_native_loader_dispatch_request, translate_project
 from crosstl.project.native_loader_dispatch import NativeLoaderDispatchError
-from crosstl.translator.ast import ForNode, ReturnNode
+from crosstl.translator.ast import ArrayAccessNode, ForNode, IdentifierNode, ReturnNode
 from crosstl.translator.codegen import GLSL_codegen
 from crosstl.translator.dispatch_regions import plan_dispatch_regions
 from tests.runtime_helpers import _validate
@@ -22,6 +22,195 @@ from tests.test_translator.test_metadata_index_bounds import (
 )
 from tests.test_translator.test_project_metadata_entry_scope import _config, _packages
 from tests.test_translator.test_scalar_return_bounds import _generator
+
+
+def _recurrence_source(kind="long", body=None, *, helper=False):
+    if body is None:
+        body = """const device uint* rows[4];
+    rows[0] = values;
+    for (int i = 1; i < 4; ++i) { rows[i] = rows[i - 1] + offset; }
+    result[2] = rows[3][0];"""
+    source = SOURCE.replace("ulong", kind).replace(
+        "result[0] = values[offset + index];", body
+    )
+    if helper:
+        declaration = (
+            f"uint gather(const device uint* values, {kind} offset) {{ "
+            + body.replace("result[2] = rows[3][0];", "return rows[3][0];")
+            + " }\n"
+        )
+        source = source.replace(
+            body, "result[2] = gather(values, offset) + gather(values, offset + 1);"
+        ).replace("kernel void", declaration + "kernel void")
+    return source
+
+
+def _recurrence_config(root, kind="long", target="opengl", *, body=None, helper=False):
+    return _index_config(
+        root,
+        source=_recurrence_source(kind, body, helper=helper),
+        target=target,
+        conditions=(
+            dict(entryPoint="read_value", parameter="index", minimum=0, maximum=1),
+            dict(entryPoint="read_value", parameter="offset", minimum=1, maximum=3),
+        ),
+    )
+
+
+@pytest.mark.parametrize("kind", ["long", "ulong"])
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
+@pytest.mark.parametrize("helper", [False, True])
+def test_pointer_array_recurrence_uses_each_initialized_predecessor(
+    tmp_path, kind, target, helper
+):
+    payload = translate_project(
+        _recurrence_config(tmp_path, kind, target, helper=helper), format_output=False
+    ).to_json()
+    assert payload["summary"]["translatedCount"] == 1, payload["diagnostics"]
+    assert not payload["diagnostics"]
+
+
+@pytest.mark.parametrize("argument", ["index", "2147483647L"])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_pointer_recurrence_helper_cannot_reuse_incompatible_caller_bounds(
+    tmp_path, argument, reverse
+):
+    config = replace(
+        _recurrence_config(tmp_path),
+        metadata_preconditions=(
+            dict(entryPoint="read_value", parameter="offset", minimum=1, maximum=3),
+        ),
+    )
+    source = _recurrence_source(helper=True).replace(
+        "gather(values, offset + 1)", f"gather(values, {argument})"
+    )
+    if reverse:
+        source = source.replace(
+            f"gather(values, offset) + gather(values, {argument})",
+            f"gather(values, {argument}) + gather(values, offset)",
+        )
+    (tmp_path / "multi.metal").write_text(source)
+    payload = translate_project(config, format_output=False).to_json()
+    assert payload["summary"]["translatedCount"] == 0, payload
+    assert any(item["severity"] == "error" for item in payload["diagnostics"])
+    assert not list((tmp_path / config.output_dir).rglob("*.glsl"))
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "rows[i - 1] += 2147483647;",
+        "rows[i - 1] -= 100;",
+        "if (i == 1) { rows[i - 1] += 2147483647; }",
+        "if (i == 3) { rows[i - 1] += 2147483647; }",
+        "if (i == 1) { rows[i - 1] -= 100; }",
+        "if (i == 3) { rows[i - 1] -= 100; }",
+    ],
+)
+def test_pointer_array_recurrence_rejects_any_unsafe_visit(tmp_path, mutation):
+    source = _recurrence_source().replace(
+        "rows[i] = rows[i - 1] + offset;",
+        mutation + " rows[i] = rows[i - 1] + offset;",
+    )
+    config = _recurrence_config(tmp_path)
+    (tmp_path / "multi.metal").write_text(source)
+    payload = translate_project(config, format_output=False).to_json()
+    assert payload["summary"]["translatedCount"] == 0, payload
+    assert any(item["severity"] == "error" for item in payload["diagnostics"])
+    assert not list((tmp_path / config.output_dir).rglob("*.glsl"))
+
+
+def test_pointer_array_recurrence_requires_checked_metadata(tmp_path):
+    config = replace(_recurrence_config(tmp_path), metadata_preconditions=())
+    payload = translate_project(config, format_output=False).to_json()
+    assert payload["summary"]["translatedCount"] == 0, payload
+    assert not list((tmp_path / config.output_dir).rglob("*.glsl"))
+
+
+@pytest.mark.parametrize("initialize", ["", "rows[0] = rows[1];"])
+def test_pointer_array_without_backing_reports_a_diagnostic(tmp_path, initialize):
+    config = _recurrence_config(tmp_path)
+    (tmp_path / "multi.metal").write_text(
+        _recurrence_source().replace("rows[0] = values;", initialize)
+    )
+    payload = translate_project(config, format_output=False).to_json()
+    assert payload["summary"]["translatedCount"] == 0, payload
+    assert payload["diagnostics"][0]["details"]["storagePointer"]["reason"] == (
+        "pointer-array-backing-unresolved"
+    )
+    assert not list((tmp_path / config.output_dir).rglob("*.glsl"))
+
+
+def test_pointer_read_proof_is_typed_local_and_reset_on_reanalysis():
+    generator = _generator("""void run(device int* values, int64_t stride) {
+        device int* rows[4];
+        rows[0] = values;
+        for (int i = 1; i < 4; ++i) { rows[i] = rows[i - 1] + stride; }
+    }""")
+    function = generator.function_definitions["run"]
+    facts = {"values": (0, 0), "stride": (1, 3)}
+    generator.glsl_workgroup_proof_initial_intervals = lambda _: dict(facts)
+    generator.annotate_glsl_control_flow_intervals(function)
+    (read,) = (
+        node
+        for node in generator.walk_ast(function.body)
+        if isinstance(node, ArrayAccessNode) and getattr(node.index, "op", None) == "-"
+    )
+    assert read._glsl_storage_pointer_read_interval == (0, 6)
+    aliases = {
+        "rows": dict(kind="storage-pointer-array", extent=4, offset_array="offsets")
+    }
+    generator.local_variable_source_types.update(offsets="int[4]", i="int")
+    lowered = generator.glsl_storage_pointer_array_element_binding(read, aliases)[
+        "offset"
+    ]
+    assert isinstance(lowered, ArrayAccessNode)
+    assert isinstance(lowered.array, IdentifierNode)
+    assert lowered.array.name == "offsets"
+    assert generator.glsl_private_pointer_interval(lowered, {}, {}) == (0, 6)
+    assert "offset" not in aliases["rows"]
+    facts.pop("stride")
+    generator.annotate_glsl_control_flow_intervals(function)
+    assert read._glsl_storage_pointer_read_interval is None
+    rebound = generator.glsl_storage_pointer_array_element_binding(read, aliases)[
+        "offset"
+    ]
+    assert not hasattr(rebound, "_glsl_lowered_pointer_offset_interval")
+
+
+@pytest.mark.parametrize("kind", ["long", "ulong"])
+@pytest.mark.parametrize("helper", [False, True])
+def test_pointer_array_recurrence_executes_natively(tmp_path, kind, helper):
+    if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":
+        pytest.skip("set CROSTL_REQUIRE_METADATA_PRECONDITIONS=1 for native recurrence")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    _, package, (descriptor,) = _packages(
+        _recurrence_config(tmp_path, kind, target, helper=helper)
+    )
+    for offset in (1, 2, 3):
+        expected = [GUARD] * 8
+        expected[2] = 17 + 13 * (3 * offset)
+        if helper:
+            expected[2] += 17 + 13 * (3 * (offset + 1))
+        request, outputs = _index_request(
+            descriptor, package, 0, offset, expected_words=expected
+        )
+        native = tmp_path / str(offset)
+        native.mkdir()
+        _execute(
+            request,
+            outputs,
+            native,
+            validate=_validate,
+            original_source=_recurrence_source(kind, helper=helper),
+            original_entry="read_value",
+        )
+        evidence = json.loads((native / "evidence.json").read_text())
+        for record in evidence["records"].values():
+            observations = record["details"]["inputObservations"]
+            assert len(observations) == 3
+            assert all(item["unchanged"] for item in observations.values())
+
 
 ARRAY_BOUND_BODIES = {
     "addressed": "rows[0] += 1; return rows[0][0] + rows[0][0];",

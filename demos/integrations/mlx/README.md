@@ -518,8 +518,17 @@ replace trusted index assertions. Each profile checks 32 output guards and
 nine unchanged inputs. Local Metal and software OpenGL execution match the
 independent reference; Metal also matches the original upstream registration.
 The existing platform jobs require these same numerical cases, including
-Windows execution. This covers one float32 entry and geometry, not the complete
-row-reduction family, host routing or upstream test suite.
+Windows execution.
+
+The same module also requires `row_reduce_simple_sumfloat32` on 33 contiguous
+65-element rows. This layout is captured from the pinned MLX host dispatch:
+nine workgroups of 32 threads, with a partial final group and no extra input
+padding. Its pointer-array initialization reads each previously initialized
+slot. Two checked metadata uploads establish the row length and output count;
+three numerical profiles check all 33 results, 32 output guards and three
+unchanged inputs. These cases share the existing checked-reduction CI batch.
+This covers two float32 entries and geometries, not the complete row-reduction
+family, host routing or upstream test suite.
 
 The Metal reference wrapper selects the same registration macro and includes
 the unchanged upstream implementation. It does not rewrite the kernel body.
