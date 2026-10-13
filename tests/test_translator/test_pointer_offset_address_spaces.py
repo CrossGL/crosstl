@@ -1,5 +1,6 @@
 """Pointer offsets preserve storage provenance and execute the original call."""
 
+import json
 import os
 import shutil
 import sys
@@ -388,3 +389,193 @@ def test_pointer_offset_execution_is_required_on_each_target():
         timeout = 1800 if name == "Validate general gather and empty arrays" else 1200
         assert f"--timeout-seconds {timeout}" in step and "-n auto" in step
         assert "if:" not in step and "continue-on-error" not in workflow
+
+
+POINTER_VIEW_CASES = ("read", "advance", "forward", "rebase", "shadow")
+
+
+def _pointer_view_source(case):
+    mutation = "rows[0] += 1;" if case != "read" else ""
+    forward = (
+        """
+void forward(thread uint total[1], const device uint* rows[1]) {
+    consume(total, rows);
+}
+"""
+        if case == "forward"
+        else ""
+    )
+    callee = "forward" if case == "forward" else "consume"
+    rebase = "row += 1;" if case == "rebase" else ""
+    shadow = (
+        """
+    {
+        const device uint* row = values + get_offset(metadata + tid + 3, calls);
+        consume(&total, &row);
+        results[tid * 5 + 4] = total + row[0];
+    }
+"""
+        if case == "shadow"
+        else ""
+    )
+    return f"""#include <metal_stdlib>
+using namespace metal;
+uint get_offset(const constant uint* metadata, thread uint& calls) {{
+    calls += 1;
+    return metadata[0] & 3u;
+}}
+void consume(thread uint total[1], const device uint* rows[1]) {{
+    uint first = rows[0][0];
+    {mutation}
+    total[0] = first + rows[0][0];
+}}
+{forward}
+kernel void pointer_view(const device uint* values [[buffer(0)]],
+                         const constant uint* metadata [[buffer(1)]],
+                         device uint* results [[buffer(2)]],
+                         uint tid [[thread_position_in_grid]]) {{
+    uint calls = 0;
+    const device uint* row = values + get_offset(metadata + tid, calls);
+    uint total = 0;
+    {shadow}
+    {rebase}
+    {callee}(&total, &row);
+    results[tid * 5 + 1] = total;
+    results[tid * 5 + 2] = row[0];
+    results[tid * 5 + 3] = calls;
+}}
+"""
+
+
+@pytest.mark.parametrize("case", POINTER_VIEW_CASES)
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+@pytest.mark.parametrize("scoped", (False, True))
+def test_project_preserves_helper_computed_pointer_views(
+    tmp_path, case, target, scoped
+):
+    (tmp_path / "view.metal").write_text(_pointer_view_source(case), encoding="utf-8")
+    payload = translate_project(
+        ProjectConfig(
+            root=tmp_path,
+            include_patterns=("view.metal",),
+            targets=(target,),
+            entry_points={"view.metal": ("pointer_view",)} if scoped else {},
+            workgroup_size=(1, 1, 1),
+            output_dir="out",
+        ),
+        format_output=False,
+    ).to_json()
+    assert payload["summary"]["translatedCount"] == 1, payload["diagnostics"]
+    assert not payload["diagnostics"]
+
+
+@pytest.mark.parametrize("case", ("read", "advance", "forward"))
+def test_helper_computed_pointer_view_rejects_wide_offset(tmp_path, case):
+    source = _pointer_view_source(case).replace("uint get_offset", "ulong get_offset")
+    source = source.replace("metadata[0] & 3u", "4294967296ul + metadata[0]")
+    (tmp_path / "view.metal").write_text(source, encoding="utf-8")
+    payload = translate_project(
+        ProjectConfig(
+            root=tmp_path,
+            include_patterns=("view.metal",),
+            targets=("opengl",),
+            output_dir="out",
+            workgroup_size=(1, 1, 1),
+        ),
+        format_output=False,
+    ).to_json()
+    assert payload["summary"]["translatedCount"] == 0, payload
+    assert any(
+        item["code"] == "project.translate.opengl-index-type-unsupported"
+        for item in payload["diagnostics"]
+    ), payload
+    assert not list((tmp_path / "out").rglob("*.glsl"))
+
+
+def _pointer_view_request(root, target, case):
+    original, descriptor, package = _package(
+        root,
+        target,
+        "uint",
+        (1, 1, 1),
+        source=_pointer_view_source(case),
+        software_subgroups=False,
+    )
+    values = [17 + 13 * index for index in range(8)]
+    metadata = [0, 1, 3, 2, 0, 1]
+    guard = 0xDEADBEEF
+    result = [guard] * 47
+    expected_words = result.copy()
+    for tid in range(3):
+        base = metadata[tid] + (case == "rebase")
+        advanced = base + (case != "read")
+        expected_words[tid * 5 + 1] = values[base] + values[advanced]
+        expected_words[tid * 5 + 2] = values[advanced]
+        expected_words[tid * 5 + 3] = 2 if case == "shadow" else 1
+        if case == "shadow":
+            inner = metadata[tid + 3]
+            expected_words[tid * 5 + 4] = values[inner] + 2 * values[inner + 1]
+    inputs = _bound_values(
+        descriptor,
+        {
+            name: {"dtype": "uint32", "shape": [len(words)], "values": words}
+            for name, words in (
+                ("values", values),
+                ("metadata", metadata),
+                ("results", result),
+            )
+        },
+    )
+    expected = _bound_values(
+        descriptor,
+        {
+            "results": {
+                "dtype": "uint32",
+                "shape": [len(result)],
+                "values": expected_words,
+            },
+        },
+    )
+    observed = [name for name in inputs if name not in expected]
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        expected,
+        {"workgroupCount": [3, 1, 1], "workgroupSize": [1, 1, 1]},
+        expected_target=target,
+        observe_inputs=observed,
+    )
+    assert not request.execution_plan.diagnostics
+    return original, request, expected
+
+
+@pytest.mark.parametrize("case", POINTER_VIEW_CASES)
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+def test_helper_computed_pointer_views_compile(tmp_path, case, target):
+    tool = {"metal": "xcrun", "directx": "dxc", "opengl": "glslangValidator"}[target]
+    if not shutil.which(tool):
+        pytest.skip(f"{tool} is not installed")
+    _, request, _ = _pointer_view_request(tmp_path, target, case)
+    _, module = _compile(request.artifact_path.read_text(), target, tmp_path)
+    assert module.is_file() and module.stat().st_size
+
+
+@pytest.mark.parametrize("case", POINTER_VIEW_CASES)
+def test_helper_computed_pointer_views_execute_natively(tmp_path, case):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required pointer-offset execution")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    original, request, expected = _pointer_view_request(tmp_path, target, case)
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=original,
+        original_entry="pointer_view",
+    )
+    evidence = json.loads((tmp_path / "evidence.json").read_text())
+    for record in evidence["records"].values():
+        observations = record["details"]["inputObservations"]
+        assert len(observations) == 2
+        assert all(item["unchanged"] for item in observations.values())

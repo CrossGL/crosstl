@@ -1395,6 +1395,15 @@ first-pass partial sums, with upload-checked metadata, unchanged inputs and
 output guards. This does not establish general pointer escape support or
 complete application runtime coverage.
 
+Addressed storage pointers passed to extent-one pointer-array helpers retain
+their offset expressions during OpenGL specialization discovery. Rendering is
+deferred until the caller's buffer bindings are available, including when an
+offset is computed by another storage-reading helper. Read-only views and
+mutable offset writeback preserve single evaluation, forwarding and lexical
+shadowing. The existing native pointer controls check these cases on each target
+without adding a CI job. Unproven wide offsets remain structured failures; this
+does not establish bounds for an entire upstream reduction kernel.
+
 Ordinary arithmetic uses each operand's lexical source type, including promoted
 byte and short operands mixed with 32-bit or 64-bit locals. Stored integer facts
 apply the destination conversion before subsequent bounds checks; the range of

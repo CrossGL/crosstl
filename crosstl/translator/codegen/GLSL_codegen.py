@@ -16217,6 +16217,9 @@ class GLSLCodeGen:
                 {},
             ).get(index)
             for offset in offsets:
+                offset = self.glsl_workgroup_pointer_offset_expression(
+                    {**binding, "offset": offset}
+                )
                 if offset_direction is not None:
                     if not self.glsl_storage_pointer_offset_lvalue(offset):
                         raise OpenGLStoragePointerError(
@@ -24502,9 +24505,9 @@ class GLSLCodeGen:
                 **scalar_binding,
                 "kind": "storage-pointer-array",
                 "extent": 1,
-                "offset_expressions": [
-                    self.glsl_workgroup_pointer_offset_expression(scalar_binding)
-                ],
+                # Discovery has lexical bindings, not an emission context.
+                # Keep helper calls and source range facts until call emission.
+                "offset_expressions": [scalar_binding.get("offset", "0")],
                 "offset_array": None,
                 "resource_root": False,
             }

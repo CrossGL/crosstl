@@ -3,7 +3,7 @@
 import pytest
 
 from crosstl.project import build_native_loader_dispatch_request, translate_project
-from crosstl.translator.ast import IdentifierNode, UnaryOpNode
+from crosstl.translator.ast import FunctionCallNode, IdentifierNode, UnaryOpNode
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from tests.test_translator.test_metadata_index_bounds import (
     CONDITIONS,
@@ -181,7 +181,7 @@ def test_generated_offset_bounds_belong_to_one_source_occurrence():
     assert offset._glsl_control_flow_intervals == {"input_offset": (2, 4)}
 
 
-def test_addressed_pointer_view_renders_occurrence_bound_offset():
+def test_addressed_pointer_view_preserves_occurrence_bound_offset():
     generator = GLSLCodeGen()
     generator.local_variable_source_types["input_offset"] = "int"
     expression = IdentifierNode("input")
@@ -192,12 +192,32 @@ def test_addressed_pointer_view_renders_occurrence_bound_offset():
     binding = generator.glsl_storage_pointer_array_binding(
         UnaryOpNode("&", expression), aliases
     )
-    assert binding["offset_expressions"] == ["input_offset"]
-    assert generator.glsl_storage_pointer_offset_lvalue(
-        binding["offset_expressions"][0]
-    )
+    (offset,) = binding["offset_expressions"]
+    assert offset is binding["offset"]
+    assert isinstance(offset, IdentifierNode)
+    rendered = generator.glsl_workgroup_pointer_offset_expression(binding)
+    assert rendered == "input_offset"
+    assert generator.glsl_storage_pointer_offset_lvalue(rendered)
     assert binding["offset"]._glsl_control_flow_intervals == {"input_offset": (2, 4)}
     assert aliases["input"]["offset"] == "input_offset"
+
+
+def test_addressed_pointer_discovery_does_not_emit_helper_offset(monkeypatch):
+    generator = GLSLCodeGen()
+    offset = FunctionCallNode("read_offset", [IdentifierNode("metadata")])
+    aliases = {"input": {"kind": "storage-pointer", "root": "values", "offset": offset}}
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("binding discovery must preserve offset expressions, not emit them")
+
+    monkeypatch.setattr(generator, "generate_expression", unexpected)
+    binding = generator.glsl_storage_pointer_array_binding(
+        UnaryOpNode("&", IdentifierNode("input")), aliases
+    )
+    assert binding["offset_expressions"] == [offset]
+    assert binding["offset_expressions"][0] is offset
+    assert binding["root"] == "values"
+    assert aliases["input"]["kind"] == "storage-pointer"
 
 
 @pytest.mark.parametrize("offset", [0, "0", "offsets[0]", "base + 1"])
