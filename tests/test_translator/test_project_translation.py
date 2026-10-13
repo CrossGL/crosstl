@@ -621,6 +621,8 @@ def test_project_package_exposes_public_api_surface():
         "ReflectionDiagnostic",
         "DirectXComputeRuntime",
         "DirectXRuntimeParityAdapter",
+        "MetalComputeRuntime",
+        "MetalRuntimeParityAdapter",
         "NativeRuntimeBufferBinding",
         "NativeRuntimeConstantBinding",
         "NativeRuntimeDispatchRequest",
@@ -42784,7 +42786,7 @@ def test_inspect_runtime_package_reports_entry_point_parameter_resources(tmp_pat
 
     host_interface = payload["bindings"][0]["hostInterface"]
     assert host_interface["status"] == "ready"
-    assert host_interface["parser"] == "metal"
+    assert host_interface["parser"] == "metal-reflection"
     assert host_interface["entryPoints"] == [
         {
             "name": "fragment_main",
@@ -42796,18 +42798,20 @@ def test_inspect_runtime_package_reports_entry_point_parameter_resources(tmp_pat
         {
             "name": "camera",
             "kind": "constant-buffer",
-            "type": "Camera&",
-            "set": None,
+            "type": "constant Camera&",
+            "set": 0,
             "binding": 0,
             "access": "read",
+            "metadata": {"entryPoint": "fragment_main"},
         },
         {
             "name": "sourceTexture",
             "kind": "texture",
             "type": "texture2d<float>",
-            "set": None,
+            "set": 0,
             "binding": 0,
-            "access": None,
+            "access": "read",
+            "metadata": {"entryPoint": "fragment_main"},
         },
     ]
     assert host_interface["diagnostics"] == []

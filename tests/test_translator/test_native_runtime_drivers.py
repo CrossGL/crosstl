@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -2763,7 +2764,16 @@ class _FakeOpenGLSPIRVBuffer:
         self.released = True
 
 
-class _FakeOpenGLSPIRVContext:
+class _OpenGLTestCapabilities:
+    info = {
+        "GL_MAX_COMPUTE_WORK_GROUP_COUNT": (65535, 65535, 65535),
+        "GL_MAX_COMPUTE_WORK_GROUP_SIZE": (1024, 1024, 64),
+        "GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS": 1024,
+    }
+    error = "GL_NO_ERROR"
+
+
+class _FakeOpenGLSPIRVContext(_OpenGLTestCapabilities):
     version_code = 450
 
     def __init__(self, *, extensions=("GL_ARB_gl_spirv",)):
@@ -2949,7 +2959,7 @@ def test_opengl_compute_runtime_reports_missing_python_binding(tmp_path):
 
 
 def test_opengl_compute_runtime_probes_and_releases_headless_context(tmp_path):
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
 
         def __init__(self):
@@ -2979,7 +2989,7 @@ def test_opengl_compute_runtime_probes_and_releases_headless_context(tmp_path):
 def test_opengl_compute_runtime_probes_exact_subgroup_width(
     tmp_path, reported_width, available
 ):
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
         extensions = {"GL_KHR_shader_subgroup"}
 
@@ -3043,7 +3053,7 @@ def test_opengl_compute_runtime_probes_exact_subgroup_width(
 
 
 def test_opengl_compute_runtime_probe_preserves_caller_owned_context(tmp_path):
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
 
         def __init__(self):
@@ -3074,7 +3084,7 @@ def test_opengl_compute_runtime_probe_preserves_caller_owned_context(tmp_path):
 def test_opengl_compute_runtime_rejects_unknown_or_old_context_version(
     tmp_path, version_code, reported_version
 ):
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         def __init__(self):
             self.version_code = version_code
             self.released = False
@@ -3098,7 +3108,7 @@ def test_opengl_compute_runtime_rejects_unknown_or_old_context_version(
 
 
 def test_opengl_compute_runtime_rechecks_context_version_at_dispatch(tmp_path):
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 420
 
         def __init__(self):
@@ -3128,7 +3138,7 @@ def test_opengl_compute_runtime_rechecks_context_version_at_dispatch(tmp_path):
 def test_opengl_compute_runtime_rejects_subgroup_mismatch_before_setup(tmp_path):
     events = []
 
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
         extensions = {"GL_KHR_shader_subgroup"}
 
@@ -3722,7 +3732,7 @@ def test_opengl_compute_runtime_zero_pads_scalar_uniform_block_allocation():
         def bind_to_uniform_block(self, binding, offset=0, size=-1):
             self.uniform_binding = binding
 
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         def __init__(self):
             self.received_payload = None
 
@@ -3911,7 +3921,7 @@ def test_opengl_compute_runtime_dispatches_and_reads_storage_buffer(tmp_path):
         def release(self):
             self.released = True
 
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
 
         def __init__(self):
@@ -4036,7 +4046,7 @@ def test_opengl_compute_runtime_dispatch_preserves_caller_owned_context(tmp_path
         def release(self):
             self.released = True
 
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
 
         def __init__(self):
@@ -4126,9 +4136,12 @@ def test_opengl_compute_runtime_reuses_shared_allocation_subviews(tmp_path):
         def release(self):
             self.released = True
 
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
-        info = {"GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT": 4}
+        info = {
+            **_OpenGLTestCapabilities.info,
+            "GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT": 4,
+        }
 
         def __init__(self):
             self.buffers = []
@@ -4324,7 +4337,7 @@ def test_opengl_compute_runtime_releases_buffer_when_binding_fails(tmp_path):
         def release(self):
             self.released = True
 
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
 
         def __init__(self):
@@ -4380,7 +4393,7 @@ def test_opengl_compute_runtime_reports_synchronization_failure(tmp_path):
         def release(self):
             self.released = True
 
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
 
         def __init__(self):
@@ -4442,7 +4455,7 @@ def test_opengl_compute_runtime_rejects_short_output_readback(tmp_path):
         def release(self):
             self.released = True
 
-    class FakeContext:
+    class FakeContext(_OpenGLTestCapabilities):
         version_code = 460
 
         def __init__(self):
@@ -5358,8 +5371,10 @@ def test_mapped_memory_helpers_use_buffer_protocol():
     assert _read_mapped_memory(mapped, 6) == b"abcd\x00\x00"
 
 
+@pytest.mark.parametrize("axis", [0, 1, 2])
 def test_runtime_parity_vulkan_compute_runtime_executes_vector_add_on_device(
     tmp_path,
+    axis,
 ):
     if os.environ.get("CROSTL_RUN_VULKAN_DEVICE_TEST") != "1":
         pytest.skip("set CROSTL_RUN_VULKAN_DEVICE_TEST=1 to run Vulkan device test")
@@ -5386,6 +5401,7 @@ layout(set = 0, binding = 2) writeonly buffer Out {
 } out_buffer;
 void main() {
     uint index = gl_GlobalInvocationID.x;
+    if (index >= 2u) return;
     out_buffer.values[index] = lhs_buffer.values[index] + rhs_buffer.values[index];
 }
 """.lstrip(),
@@ -5398,6 +5414,12 @@ void main() {
         text=True,
     )
 
+    class CapturingRuntime(VulkanComputeRuntime):
+        def dispatch(self, state, buffers, request):
+            self.request = request
+            return super().dispatch(state, buffers, request)
+
+    runtime = CapturingRuntime()
     report = verify_runtime_test_manifest(
         {
             "kind": "crosstl-project-portability-report",
@@ -5460,7 +5482,7 @@ void main() {
         },
         executors={
             "vulkan": VulkanRuntimeParityAdapter(
-                runtime=VulkanComputeRuntime(),
+                runtime=runtime,
                 required_tools=("spirv-val",),
             )
         },
@@ -5471,6 +5493,31 @@ void main() {
     assert report["success"] is True, failure_context
     assert result["status"] == "passed"
     assert result["comparisons"][0]["status"] == "passed", failure_context
+
+    vk = runtime._load_vulkan()
+    instance = runtime._create_instance(vk)
+    try:
+        device, _ = runtime._select_compute_device(vk, instance)
+        limit = vk.vkGetPhysicalDeviceProperties(
+            device
+        ).limits.maxComputeWorkGroupCount[axis]
+    finally:
+        runtime._destroy_instance(vk, instance)
+    counts = [1, 1, 1]
+    counts[axis] = limit + 1
+    request = replace(
+        runtime.request,
+        dispatch=RuntimeDispatchGeometry(workgroup_count=tuple(counts)),
+    )
+    with pytest.raises(RuntimeAdapterSetupError) as caught:
+        runtime.dispatch(None, None, request)
+    details = caught.value.details
+    assert details["reasonKind"] == "dispatch-limit-exceeded"
+    assert details["axis"] == axis and details["maximum"] == limit
+    assert details["requested"] == limit + 1
+    (tmp_path / "dispatch-limit-evidence.json").write_text(
+        json.dumps(details, indent=2), encoding="utf-8"
+    )
 
 
 def _native_dispatch_sequence_requests(tmp_path, target):
@@ -5728,9 +5775,12 @@ class _SequenceOpenGLShader:
         self.release_count += 1
 
 
-class _SequenceOpenGLContext:
+class _SequenceOpenGLContext(_OpenGLTestCapabilities):
     version_code = 460
-    info = {"GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT": 4}
+    info = {
+        **_OpenGLTestCapabilities.info,
+        "GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT": 4,
+    }
 
     def __init__(self):
         self.buffers = []

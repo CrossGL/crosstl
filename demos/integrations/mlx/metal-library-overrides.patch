@@ -1,0 +1,93 @@
+diff --git a/mlx/backend/metal/device.cpp b/mlx/backend/metal/device.cpp
+index 2f25f894..213c47bd 100644
+--- a/mlx/backend/metal/device.cpp
++++ b/mlx/backend/metal/device.cpp
+@@ -11,6 +11,7 @@
+
+ #include "mlx/backend/common/utils.h"
+ #include "mlx/backend/metal/device.h"
++#include "mlx/backend/metal/metal_library_overrides.h"
+ #include "mlx/backend/metal/event.h"
+ #include "mlx/backend/metal/metal.h"
+ #include "mlx/backend/metal/utils.h"
+@@ -405,12 +406,19 @@ void CommandEncoder::maybeInsertBarrier() {
+   next_outputs_.clear();
+ }
+
++void CommandEncoder::set_compute_pipeline_state(MTL::ComputePipelineState* kernel) {
++  runtime_override_entry_ = crosstl::metal_overrides::pipeline_entry(kernel);
++  get_command_encoder()->setComputePipelineState(kernel);
++}
++
+ void CommandEncoder::dispatch_threadgroups(
+     MTL::Size grid_dims,
+     MTL::Size group_dims) {
+   maybeInsertBarrier();
+   buffer_ops_++;
+   get_command_encoder()->dispatchThreadgroups(grid_dims, group_dims);
++  crosstl::metal_overrides::dispatch(
++      runtime_override_entry_, "threadgroups", grid_dims, group_dims);
+ }
+
+ void CommandEncoder::dispatch_threads(
+@@ -419,6 +427,8 @@ void CommandEncoder::dispatch_threads(
+   maybeInsertBarrier();
+   buffer_ops_++;
+   get_command_encoder()->dispatchThreads(grid_dims, group_dims);
++  crosstl::metal_overrides::dispatch(
++      runtime_override_entry_, "threads", grid_dims, group_dims);
+ }
+
+ void CommandEncoder::barrier() {
+@@ -877,6 +887,10 @@ MTL::ComputePipelineState* Device::get_kernel(
+     const std::string& hash_name /* = "" */,
+     const MTLFCList& func_consts /* = {} */,
+     const std::vector<MTL::Function*>& linked_functions /* = {} */) {
++  auto translated = crosstl::metal_overrides::load_library(device_.get(), base_name);
++  if (translated) {
++    mtl_lib = translated.get();
++  }
+   const auto& kname = hash_name.empty() ? base_name : hash_name;
+   {
+     // Multiple readers allowed
+@@ -887,11 +901,15 @@ MTL::ComputePipelineState* Device::get_kernel(
+     if (library_it != library_kernels_.end()) {
+       auto kernel_it = library_it->second.find(kname);
+       if (kernel_it != library_it->second.end()) {
+-        return kernel_it->second.get();
++        return crosstl::metal_overrides::register_pipeline(
++            kernel_it->second.get(), mtl_lib, base_name);
+       }
+     }
+   }
+-  return get_kernel_(base_name, mtl_lib, kname, func_consts, linked_functions);
++  return crosstl::metal_overrides::register_pipeline(
++      get_kernel_(base_name, mtl_lib, kname, func_consts, linked_functions),
++      mtl_lib,
++      base_name);
+ }
+
+ MTL::ComputePipelineState* Device::get_kernel(
+diff --git a/mlx/backend/metal/device.h b/mlx/backend/metal/device.h
+index 2d222833..45138093 100644
+--- a/mlx/backend/metal/device.h
++++ b/mlx/backend/metal/device.h
+@@ -56,9 +56,7 @@ class MLX_API CommandEncoder {
+   void dispatch_threads(MTL::Size grid_dims, MTL::Size group_dims);
+   void maybeInsertBarrier();
+
+-  void set_compute_pipeline_state(MTL::ComputePipelineState* kernel) {
+-    get_command_encoder()->setComputePipelineState(kernel);
+-  }
++  void set_compute_pipeline_state(MTL::ComputePipelineState* kernel);
+
+   template <typename Vec, typename = std::enable_if_t<is_vector_v<Vec>>>
+   void set_vector_bytes(const Vec& vec, size_t nelems, int idx) {
+@@ -101,6 +99,7 @@ class MLX_API CommandEncoder {
+   }
+
+  private:
++  std::string runtime_override_entry_;
+   MTL::ComputeCommandEncoder* get_command_encoder();
+
+   Device& device_;
