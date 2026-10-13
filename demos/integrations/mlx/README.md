@@ -495,10 +495,40 @@ subgroup width. Narrow storage conversions are reflected in subsequent bounds,
 rather than treating pre-conversion values as valid offsets. The unchanged
 `col_reduce_2pass_large_1_32_32_reduce_sumfloat16` probe now retains private cursor
 updates and the `LoopedElemToLoc::location` return range through its strided loop.
-It still rejects the composed address because the generated base offset loses
-its source bounds. A reduced kernel containing only a pointer increment and
-alias construction reproduces this separate limitation. This is translation
-progress, not a passing column-reduction execution or complete reduction coverage.
+Generated pointer offsets now retain the source bounds of each use, without
+reusing facts after mutation or treating byte offsets as element offsets.
+
+`tests/kernels/test_checked_columns.py` exercises the float16 and float32
+first-pass column kernels on 512 and 1,025 rows with 33 columns. Twelve cases
+cover constant, signed and binary-fraction inputs, repeated cursor updates,
+1,056 partial sums, 32 output guards and 11 unchanged inputs. All metadata
+requirements are checked against uploaded values; no index-range assertions
+are used. The existing platform jobs require native execution, with strict
+target compilation and retained packages, descriptors and execution records.
+Local Metal and software OpenGL runs pass these cases; Windows execution must
+pass its separate CI gate.
+
+The Metal reference wrapper selects the same registration macro and includes
+the unchanged upstream implementation. It does not rewrite the kernel body.
+Only the original-header compilation suppresses the C++17-extension warning
+with `-Wno-c++17-extensions`; generated compilation remains warning-strict.
+This proves the selected first-pass partial sums, not second-pass integration,
+complete reduction-family execution or the full upstream suite.
+
+Separate half-sum controls exposed two translator limitations: DirectX rejected
+the software operation ([#2240](https://github.com/CrossGL/crosstl/issues/2240)),
+and OpenGL lost intermediate half rounding
+([#2241](https://github.com/CrossGL/crosstl/issues/2241)). Exact-width software
+sums now round each adjacent-pair combine to binary16. The generic native gate
+covers cancellation, exceptional values and partial groups beyond the column
+demo's exact-value inputs. DirectX's reflected half buffers use encoded
+unsigned 16-bit words; the demo packs those words without changing the source
+resource layout. Native Windows results remain a required separate check.
+
+Conditional half sums remain unsupported until the source active-lane contract
+is established ([#2242](https://github.com/CrossGL/crosstl/issues/2242)). The
+translator reports that limitation rather than substituting a lexical mask
+that may disagree with the original Metal execution.
 
 The following reviews describe earlier artifact revisions, before the checked
 metadata identity refresh. Their Windows numerical results do not qualify the

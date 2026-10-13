@@ -5855,6 +5855,8 @@ class HLSLCodeGen:
                 else self.HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
             )
         )
+        if operation == "WaveActiveSum" and mapped_value_type == "float16_t":
+            valid_type = True
         if (
             operation == "WaveActiveProduct"
             or operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS
@@ -5871,7 +5873,7 @@ class HLSLCodeGen:
         if not valid_type:
             raise self.hlsl_software_subgroup_error(
                 "DirectX software subgroup votes require scalar bool payloads; "
-                "arithmetic supports only 32-bit float, int, and uint; "
+                "arithmetic supports 32-bit float, int, and uint, plus binary16 sums; "
                 "shuffles also support signed and unsigned 16-bit and 64-bit "
                 "integers and two-word uint2 payloads",
                 workgroup_size=self.hlsl_software_subgroup_workgroup_size,
@@ -5904,7 +5906,7 @@ class HLSLCodeGen:
 
     def hlsl_software_subgroup_reduction_body(self, operation, value_type, scratch):
         reducer = self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS[operation]
-        qualifier = "precise " if value_type == "float" else ""
+        qualifier = "precise " if value_type in {"float", "float16_t"} else ""
         partial = (
             self.hlsl_software_subgroup_invocation_count % self.software_subgroup_width
             != 0
@@ -5912,13 +5914,14 @@ class HLSLCodeGen:
         active = "(lane & (2u * stride - 1u)) == 0u"
         if partial:
             active += " && lane + stride < activeCount"
-        if reducer == "product":
+        if reducer == "product" or value_type == "float16_t":
+            operator = "*" if reducer == "product" else "+"
             return (
                 "    [unroll]\n"
                 f"    for (uint stride = 1u; stride < {self.software_subgroup_width}u; stride <<= 1u) {{\n"
                 f"        if ({active}) {{\n"
-                f"            {qualifier}{value_type} product = {scratch}[subgroupBase + lane] * {scratch}[subgroupBase + lane + stride];\n"
-                f"            {scratch}[subgroupBase + lane] = product;\n"
+                f"            {qualifier}{value_type} {reducer} = {scratch}[subgroupBase + lane] {operator} {scratch}[subgroupBase + lane + stride];\n"
+                f"            {scratch}[subgroupBase + lane] = {reducer};\n"
                 "        }\n"
                 "        GroupMemoryBarrierWithGroupSync();\n"
                 "    }\n"

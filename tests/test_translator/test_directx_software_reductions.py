@@ -96,13 +96,26 @@ def test_software_reductions_reject_divergent_barriers(operation, body):
         )
 
 
-@pytest.mark.parametrize("value_type", ["float2", "double", "int64_t", "float16_t"])
+@pytest.mark.parametrize("value_type", ["float2", "double", "int64_t"])
 def test_software_reductions_reject_unsupported_payloads(value_type):
     source = _source(
         "uint",
         f"{value_type} value = {value_type}(1); {value_type} total = WaveActiveSum(value);",
     )
     with pytest.raises(DirectXSoftwareSubgroupError, match="32-bit"):
+        _codegen().generate_stage(parse(source), "compute")
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["WaveActiveMin", "WaveActiveMax", "WaveActiveProduct", "WavePrefixSum"],
+)
+def test_binary16_sum_support_does_not_enable_other_narrow_reductions(operation):
+    source = _source(
+        "uint",
+        f"float16_t value = float16_t(1); float16_t total = {operation}(value);",
+    )
+    with pytest.raises(DirectXSoftwareSubgroupError, match="binary16 sums"):
         _codegen().generate_stage(parse(source), "compute")
 
 

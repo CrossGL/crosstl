@@ -1097,7 +1097,7 @@ jobs:
 
     name: MLX native host (${{ matrix.target }}${{ matrix.warp_qualification && format(', WARP {0} qualification', matrix.warp_qualification) || '' }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 355
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -1846,6 +1846,25 @@ jobs:
           git -C mlx-upstream checkout --detach FETCH_HEAD
           mkdir -p .mlx-portable-host
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-host/adaptation.json
+      - name: Validate pinned checked column reductions
+        if: ${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}
+        env:
+          CROSTL_REQUIRE_MLX_CHECKED_COLUMNS: "1"
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/checked-columns
+          python tools/run_bounded_command.py --timeout-seconds 420 --label "Pinned checked column reductions" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-portable-host/checked-columns/pytest \
+              --junitxml=.mlx-portable-host/checked-columns/results.xml \
+              demos/integrations/mlx/tests/kernels/test_checked_columns.py \
+              2>&1 | tee .mlx-portable-host/checked-columns.log
       - name: Validate pinned gather loops
         if: ${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}
         env:

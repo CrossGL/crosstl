@@ -14,7 +14,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.ci_helpers import assert_paths_covered, assert_workflow_triggers
+from tests.ci_helpers import (
+    assert_paths_covered,
+    assert_workflow_triggers,
+    bounded_step_deadline,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
@@ -3550,6 +3554,30 @@ def test_windows_validator_install_retries_and_uses_direct_lunarg_fallback():
 
 
 @pytest.mark.parametrize(
+    "condition,runner_os,expected",
+    [
+        ("", "Linux", 180),
+        ("runner.os == 'Windows'", "Windows", 180),
+        ("runner.os == 'Windows'", "Linux", 0),
+        ("runner.os != 'Linux'", "macOS", 180),
+        ("runner.os != 'Linux'", "Linux", 0),
+        ("runner.os == 'Windows' || steps.prepare.outcome == 'success'", "Linux", 180),
+    ],
+)
+def test_native_deadline_excludes_only_proven_platform_mismatches(
+    condition, runner_os, expected
+):
+    step = {
+        "if": condition,
+        "run": (
+            "python bounded.py --timeout-seconds 120\n"
+            "python bounded.py --timeout-seconds 60"
+        ),
+    }
+    assert bounded_step_deadline(step, runner_os) == expected
+
+
+@pytest.mark.parametrize(
     "job,overhead,runner_os",
     [
         ("opengl", 300, "Linux"),
@@ -3563,18 +3591,7 @@ def test_project_native_job_deadlines_fit_runner_limit(job, overhead, runner_os)
     definition = workflow["jobs"][job]
 
     def deadline(step):
-        condition = step.get("if", "")
-        # Only exclude explicit platform constraints; count disjunctions conservatively.
-        if "||" not in condition:
-            for operator, platform in re.findall(
-                r"runner\.os (==|!=) '([^']+)'", condition
-            ):
-                if (runner_os == platform) != (operator == "=="):
-                    return 0
-        return sum(
-            int(value)
-            for value in re.findall(r"--timeout-seconds (\d+)", step.get("run", ""))
-        )
+        return bounded_step_deadline(step, runner_os)
 
     steps = definition["steps"]
     failure_steps = [step for step in steps if "failure()" in step.get("if", "")]
@@ -3599,7 +3616,7 @@ def test_project_native_job_deadlines_fit_runner_limit(job, overhead, runner_os)
             for step in steps[failed_index + 1 :]
             if "!cancelled()" in step.get("if", "")
         ]
-        assert len(independent) == 33
+        assert len(independent) == 34
         assert independent == [
             step for step in steps[failed_index + 1 : -1] if step != comparison
         ]

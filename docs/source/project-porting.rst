@@ -662,6 +662,21 @@ native hardware reduction order or denormal mode.
 Narrow products remain diagnostic until their intermediate rounding is
 preserved, even where a target normally uses a 32-bit carrier for that type.
 
+Scalar binary16 sums use the same adjacent-pair tree, rounding every combine
+to binary16 rather than accumulating in binary32 and narrowing only the result.
+DirectX uses native 16-bit scratch and precise arithmetic; OpenGL keeps a
+distinct logical-half helper with explicit binary16 rounding in its float
+carrier. Partial groups include only existing lanes. The existing native
+partial-subgroup gate checks nested helpers, scratch reuse, single operand
+evaluation, cancellation, signed zeros, subnormals, overflow, infinities and
+NaNs, with original Metal comparison and input/output guards. NaNs are compared
+by classification, not payload identity. The software tree's order is explicit;
+this does not establish identical rounding on every possible hardware reduction
+implementation or support for narrow products and prefix scans.
+Lane-masked half sums remain diagnostic: a conditional source call does not
+yet establish which lanes the native source compiler keeps active. This is
+separate from a final partial subgroup caused by the dispatch size.
+
 The same explicit software mode supports inclusive and exclusive prefix sums
 and products for scalar float32, int32 and uint32. Prefixes follow increasing
 logical lane order within each 32-lane partition, including a final partial
@@ -1358,8 +1373,18 @@ The analysis does not replace helper computations or unroll live loops. Aliased
 references, volatile objects, unknown effects, nonlinear field updates and
 overflow cannot establish a range. Native Metal and OpenGL controls check
 per-invocation results, unchanged inputs and output guards; Windows requires
-the same controls through the existing native job. These bounds do not yet
-carry every generated pointer base through subsequent alias construction.
+the same controls through the existing native job.
+
+Generated storage-pointer offsets retain interval facts from the current source
+occurrence through alias construction. The facts belong to a fresh expression,
+not the alias table, so later mutations require a new flow proof. Generated
+name collisions cannot borrow unrelated local bounds. Byte-offset views and
+reinterpreted pointers do not reuse bounds measured in the original element
+units. Native controls cover repeated rebasing, loops, relative offsets and
+saved aliases. The pinned column demo uses this analysis for half and float
+first-pass partial sums, with upload-checked metadata, unchanged inputs and
+output guards. This does not establish general pointer escape support or
+complete application runtime coverage.
 
 Ordinary arithmetic uses each operand's lexical source type, including promoted
 byte and short operands mixed with 32-bit or 64-bit locals. Stored integer facts

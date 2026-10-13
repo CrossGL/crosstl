@@ -29,6 +29,30 @@ ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW_DIR = ROOT / ".github/workflows"
 
 
+def test_checked_columns_require_native_execution_on_existing_platform_jobs():
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    job = yaml.safe_load(workflow)["jobs"]["portable-host"]
+    step = next(
+        item
+        for item in job["steps"]
+        if item.get("name") == "Validate pinned checked column reductions"
+    )
+    assert (
+        step["if"]
+        == "${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}"
+    )
+    assert step["env"]["CROSTL_REQUIRE_MLX_CHECKED_COLUMNS"] == "1"
+    assert step["env"]["CROSTL_MLX_CURRENT_TARGET"] == "${{ matrix.target }}"
+    assert "--timeout-seconds 420" in step["run"]
+    assert "pytest -q -n auto" in step["run"]
+    assert "demos/integrations/mlx/tests/kernels/test_checked_columns.py" in step["run"]
+    assert "continue-on-error" not in step
+    assert not re.search(
+        r"(?:^|\s)(?:-k|-m|--maxfail)(?:\s|=)", step["run"].split("pytest", 1)[1]
+    )
+    assert "--junitxml=.mlx-portable-host/checked-columns/results.xml" in step["run"]
+
+
 def _assert_workflow_triggers(workflow, path):
     assert (ROOT / path).is_file(), path
     for event in ("pull_request", "push"):
@@ -185,7 +209,7 @@ def test_windows_host_qualification_preserves_required_workloads():
     }
     assert job["strategy"]["fail-fast"] is False
     assert "continue-on-error" not in job
-    assert job["timeout-minutes"] == 355
+    assert job["timeout-minutes"] == 360
     assert "WARP {0} qualification" in job["name"]
     assert job["env"]["MLX_COMMIT"] == "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
     assert not any("warp_qualification" in str(value) for value in job["env"].values())
@@ -343,6 +367,7 @@ def test_independent_native_batches_require_setup_not_other_numerical_results():
         steps.index(prepare) + 1 : steps.index(by_name["Build adapted upstream MLX"])
     ]
     selected = {
+        "Validate pinned checked column reductions": None,
         "Validate pinned gather loops": None,
         "Compile pinned DirectX gated-delta backward entry": "Windows",
         "Execute pinned DirectX gated-delta gradients": "Windows",

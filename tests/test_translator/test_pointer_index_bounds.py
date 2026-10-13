@@ -545,6 +545,26 @@ OPERAND_TYPES = {
 }
 
 STORED_OPERANDS = {
+    "rebased-alias": ("input += 2;", "1l", 3),
+    "repeated-rebase": ("input += 1; input += 2;", "1l", 4),
+    "loop-rebase": ("for (int i = 0; i < 3; ++i) input += 2;", "1l", 7),
+    "relative-alias": ("input += 4;", "-1l", 3),
+    "branch-rebase": (
+        "if (input[0] != 0) { input += 2; } else { input += 4; }",
+        "1l",
+        3,
+    ),
+    "saved-pointer": (
+        "const device uint* saved = input; input += 4; input = saved + 2;",
+        "1l",
+        3,
+    ),
+    "offset-name-collision": ("long input_offset = 1; input += 2;", "input_offset", 3),
+    "nested-alias": (
+        "input += 2; const device uint* intermediate = input + 1l; input = intermediate;",
+        "1l",
+        4,
+    ),
     "helper-char": ("int groups = 257;", "typed_offset(groups)", 1),
     "helper-uchar": ("int groups = 257;", "typed_offset(groups)", 1),
     "helper-short": ("int groups = 65537;", "typed_offset(groups)", 1),

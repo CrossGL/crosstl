@@ -12286,7 +12286,7 @@ def test_opengl_storage_pointer_source_range_assertion_propagates_to_offset(
         "row",
         "values",
     )
-    assert "int row_offset = int(int((values_offset + offset)));" in generated
+    assert "int row_offset = int(int((uint64_t(values_offset) + offset)));" in generated
     assert_glsl_compute_validates_if_available(
         generated,
         tmp_path,

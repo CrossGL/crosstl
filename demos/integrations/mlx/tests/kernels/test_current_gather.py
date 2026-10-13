@@ -16,7 +16,11 @@ from crosstl.project import (
 )
 from crosstl.project.runtime_value_encoding import FLOAT32_BITS
 from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
-from tests.ci_helpers import assert_native_step_prerequisites, assert_paths_covered
+from tests.ci_helpers import (
+    assert_native_step_prerequisites,
+    assert_paths_covered,
+    bounded_step_deadline,
+)
 from tests.runtime_helpers import _prepare_native_package, _validate
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_float_storage_encoding import WORDS
@@ -259,8 +263,6 @@ def test_pinned_gather_front_native_parity(gather_source, tmp_path, width, strid
 
 
 def test_gather_native_gate_is_required():
-    import re
-
     import yaml
 
     from tools import ci_coverage
@@ -290,10 +292,10 @@ def test_gather_native_gate_is_required():
     job = yaml.safe_load(workflow)["jobs"]["portable-host"]
     # The failure-only runtime comparison cannot run on the successful gather path.
     # tests/test_ci_workflows.py separately checks both complete path budgets.
-    deadlines = [
-        int(value)
-        for item in job["steps"]
-        if "failure()" not in item.get("if", "")
-        for value in re.findall(r"--timeout-seconds (\d+)", item.get("run", ""))
-    ]
-    assert sum(deadlines) + 1800 < job["timeout-minutes"] * 60 <= 360 * 60
+    for runner_os in ("Linux", "macOS", "Windows"):
+        deadlines = [
+            bounded_step_deadline(item, runner_os)
+            for item in job["steps"]
+            if "failure()" not in item.get("if", "")
+        ]
+        assert sum(deadlines) + 1800 < job["timeout-minutes"] * 60 <= 360 * 60

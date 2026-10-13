@@ -1904,6 +1904,7 @@ class GLSLCodeGen:
     GLSL_SOFTWARE_SUBGROUP_TYPE_SUFFIXES = {
         "bool": "Bool",
         "float": "Float",
+        "half": "Half",
         "int": "Int",
         "uint": "Uint",
         "uvec2": "Uvec2",
@@ -24501,7 +24502,9 @@ class GLSLCodeGen:
                 **scalar_binding,
                 "kind": "storage-pointer-array",
                 "extent": 1,
-                "offset_expressions": [scalar_binding.get("offset", 0)],
+                "offset_expressions": [
+                    self.glsl_workgroup_pointer_offset_expression(scalar_binding)
+                ],
                 "offset_array": None,
                 "resource_root": False,
             }
@@ -25609,7 +25612,29 @@ class GLSLCodeGen:
                 if candidate and candidate in aliases:
                     binding = aliases[candidate]
                     if binding.get("kind") == "storage-pointer":
-                        return dict(binding)
+                        binding = dict(binding)
+                        offset = binding.get("offset")
+                        bounds = getattr(
+                            expression, "_glsl_control_flow_intervals", {}
+                        ).get(raw_name)
+                        if (
+                            isinstance(expression, IdentifierNode)
+                            and isinstance(offset, str)
+                            and offset.isidentifier()
+                            and bounds is not None
+                            and -(1 << 31) <= bounds[0] <= bounds[1] < (1 << 31)
+                            and "pointer_reinterpretation" not in binding
+                            and "byte_offset" not in binding
+                        ):
+                            # Keep source facts on this use, never on the alias
+                            # table: later mutations require a fresh flow proof.
+                            lowered = IdentifierNode(offset)
+                            lowered._glsl_control_flow_intervals = {offset: bounds}
+                            lowered.source_location = getattr(
+                                expression, "source_location", None
+                            )
+                            binding["offset"] = lowered
+                        return binding
             return None
 
         if isinstance(expression, TernaryOpNode):
@@ -38597,6 +38622,12 @@ complex64_t crossgl_complex64_mod_assign(
             return "0", "1"
         return "0.0", "1.0"
 
+    def glsl_software_subgroup_payload_type(self, operation, source_type):
+        if operation == "WaveActiveSum" and self.glsl_half_width(source_type) == 1:
+            self.glsl_apply_half_contract("value", "half", None)
+            return "half"
+        return self.map_type(source_type)
+
     def glsl_software_subgroup_scratch_name(self, value_type):
         suffix = self.GLSL_SOFTWARE_SUBGROUP_TYPE_SUFFIXES[value_type]
         return self.glsl_generated_module_identifier(
@@ -38693,7 +38724,7 @@ complex64_t crossgl_complex64_mod_assign(
                     self.required_glsl_software_subgroup_helpers
                 )
                 if value_type in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
-                or value_type == "bool"
+                or value_type in {"bool", "half"}
                 or (_operation == "WaveShuffleAndFillUp" and value_type == "uvec2")
             },
             key=lambda value_type: self.GLSL_SOFTWARE_SUBGROUP_TYPE_SUFFIXES[
@@ -38701,9 +38732,12 @@ complex64_t crossgl_complex64_mod_assign(
             ],
         )
         code = ""
+        if "half" in value_types:
+            code += f"float {self.glsl_half_helper_names[1]}(float value);\n"
         for value_type in value_types:
             scratch = self.glsl_software_subgroup_scratch_name(value_type)
-            code += f"shared {value_type} {scratch}[{invocation_count}];\n"
+            storage_type = "float" if value_type == "half" else value_type
+            code += f"shared {storage_type} {scratch}[{invocation_count}];\n"
         code += "\n"
 
         operation_order = {
@@ -38753,6 +38787,9 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 continue
             scratch = self.glsl_software_subgroup_scratch_name(value_type)
+            half_sum = value_type == "half"
+            if half_sum:
+                value_type = "float"
             if operation == "WaveShuffleAndFillUp":
                 width = self.software_subgroup_width
                 code += (
@@ -38835,16 +38872,25 @@ complex64_t crossgl_complex64_mod_assign(
                 # Explicit shared-memory ordering preserves scratch reuse through
                 # helper calls in dynamically uniform branches on Mesa drivers.
                 product = operation == "WaveActiveProduct"
+                adjacent_pairs = product or half_sum
                 loop = (
                     f"for (uint stride = 1u; stride < {self.software_subgroup_width}u; stride <<= 1u)"
-                    if product
+                    if adjacent_pairs
                     else "for (uint stride = 16u; stride > 0u; stride >>= 1u)"
                 )
                 active = (
-                    "(lane & (2u * stride - 1u)) == 0u" if product else "lane < stride"
+                    "(lane & (2u * stride - 1u)) == 0u"
+                    if adjacent_pairs
+                    else "lane < stride"
                 )
                 if partial:
                     active += " && lane + stride < activeCount"
+                combine = f"            {left} = {reduction(left, right)};\n"
+                if half_sum:
+                    combine = (
+                        f"            precise float sum = {reduction(left, right)};\n"
+                        f"            {left} = {self.glsl_half_helper_names[1]}(sum);\n"
+                    )
                 code += (
                     f"{value_type} {helper}({value_type} value) {{\n"
                     f"{lane_setup}"
@@ -38853,7 +38899,7 @@ complex64_t crossgl_complex64_mod_assign(
                     "    barrier();\n"
                     f"    {loop} {{\n"
                     f"        if ({active}) {{\n"
-                    f"            {left} = {reduction(left, right)};\n"
+                    f"{combine}"
                     "        }\n"
                     "        memoryBarrierShared();\n"
                     "        barrier();\n"
@@ -38942,6 +38988,13 @@ complex64_t crossgl_complex64_mod_assign(
         mapped_target_type = (
             self.map_type(target_type) if target_type is not None else None
         )
+        if operation == "WaveActiveSum" and self.glsl_half_width(value_type) == 1:
+            raise self.glsl_software_subgroup_error(
+                "OpenGL masked binary16 sums require an established source active-lane contract",
+                operation=operation,
+                reason="half-masked-participation-unproven",
+                source_location=getattr(operation_node, "source_location", None),
+            )
         if (
             mapped_value_type not in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
             or mapped_target_type != mapped_value_type
@@ -39171,8 +39224,9 @@ complex64_t crossgl_complex64_mod_assign(
 
         if vector_shuffle_type is not None:
             self.required_glsl_software_subgroup_helpers.add((operation, "uint"))
-        self.required_glsl_software_subgroup_helpers.add((operation, mapped_value_type))
-        helper = self.glsl_software_subgroup_helper_name(operation, mapped_value_type)
+        helper_type = self.glsl_software_subgroup_payload_type(operation, value_type)
+        self.required_glsl_software_subgroup_helpers.add((operation, helper_type))
+        helper = self.glsl_software_subgroup_helper_name(operation, helper_type)
         value = self.generate_expression_with_expected(arguments[0], mapped_value_type)
         if operation in {"WaveShuffleDown", "WaveReadLaneAt"}:
             delta = self.generate_expression(arguments[1])

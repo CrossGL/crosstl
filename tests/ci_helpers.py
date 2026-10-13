@@ -1,5 +1,6 @@
 """Assertions for workflow coverage and required execution prerequisites."""
 
+import re
 from fnmatch import fnmatchcase
 from pathlib import Path
 
@@ -8,6 +9,22 @@ import yaml
 from tools import ci_coverage
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def bounded_step_deadline(step, runner_os):
+    """Count literal command deadlines, excluding explicit platform mismatches."""
+    condition = step.get("if", "")
+    # Count disjunctions conservatively rather than interpreting arbitrary expressions.
+    if "||" not in condition:
+        for operator, platform in re.findall(
+            r"runner\.os (==|!=) '([^']+)'", condition
+        ):
+            if (runner_os == platform) != (operator == "=="):
+                return 0
+    return sum(
+        int(value)
+        for value in re.findall(r"--timeout-seconds (\d+)", step.get("run", ""))
+    )
 
 
 def assert_native_step_prerequisites(step, *, job, pinned=False):

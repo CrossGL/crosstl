@@ -11,10 +11,15 @@ from pathlib import Path
 
 import pytest
 
-from crosstl.project import build_native_loader_dispatch_request
+from crosstl.project import (
+    ProjectConfig,
+    build_native_loader_dispatch_request,
+    translate_project,
+)
 from crosstl.translator import parse
 from tests.ci_helpers import assert_native_step_prerequisites, assert_paths_covered
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
+from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_native_runtime import _native_request
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
@@ -332,3 +337,220 @@ def test_partial_native_gate_is_required_on_every_target():
             ci_coverage.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_software_subgroup_partial.py",
         )
+
+
+def _half_word(value):
+    try:
+        return int.from_bytes(struct.pack("<e", value), "little")
+    except OverflowError:
+        return 0xFC00 if value < 0 else 0x7C00
+
+
+def _half_value(word):
+    return struct.unpack("<e", word.to_bytes(2, "little"))[0]
+
+
+def _half_sum_reference(words):
+    lanes = list(words)
+    while len(lanes) > 1:
+        lanes = [
+            (
+                _half_word(_half_value(lanes[index]) + _half_value(lanes[index + 1]))
+                if index + 1 < len(lanes)
+                else lanes[index]
+            )
+            for index in range(0, len(lanes), 2)
+        ]
+    result = lanes[0]
+    return 0x7E00 if result & 0x7FFF > 0x7C00 else result
+
+
+def _half_sum_source(size):
+    return f"""#include <metal_stdlib>
+using namespace metal;
+half sum_value(half value) {{ return simd_sum(value); }}
+half wrapped_sum(half value) {{ return sum_value(value); }}
+uint half_bits(half value) {{
+    return isnan(value) ? 0x7e00u : uint(as_type<ushort>(value));
+}}
+kernel void half_sums(const device uint* inputs [[buffer(0)]],
+                     device uint* outputs [[buffer(1)]],
+                     uint invocation [[thread_index_in_threadgroup]],
+                     uint3 group [[threadgroup_position_in_grid]]) {{
+    uint index = group.x * {size}u + invocation;
+    half value = as_type<half>(ushort(inputs[index]));
+    uint counter = 0u;
+    half first = wrapped_sum(counter++ == 0u ? value : half(0));
+    half second = wrapped_sum(counter++ == 1u ? value : half(0));
+    outputs[index * 3u] = half_bits(first);
+    outputs[index * 3u + 1u] = half_bits(second);
+    outputs[index * 3u + 2u] = counter;
+}}
+"""
+
+
+def test_half_sum_reference_rounds_intermediate_results():
+    assert _half_sum_reference([_half_word(0.1)] * 32) == 0x4266
+    assert (
+        _half_sum_reference([_half_word(value) for value in [2048, 1, -2048, 1] * 8])
+        == 0x4800
+    )
+    assert _half_sum_reference([0x8000] * 31) == 0x8000
+    assert _half_sum_reference([1] * 32) == 32
+    assert _half_sum_reference([0x7BFF] * 32) == 0x7C00
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_half_and_float_sums_keep_separate_helpers(tmp_path, target):
+    source = _canonical(
+        (32, 1, 1),
+        """
+        half narrow = half(invocation);
+        float wide = float(invocation);
+        half first = WaveActiveSum(narrow);
+        float second = WaveActiveSum(wide);
+        outputs[invocation] = uint(first) + uint(second);
+    """,
+    )
+    generated = _codegen(target).generate_stage(parse(source), "compute")
+    assert (
+        "scratch_float16_t" in generated
+        if target == "directx"
+        else "ScratchHalf" in generated
+    )
+    assert (
+        "scratch_float[" in generated
+        if target == "directx"
+        else "ScratchFloat[" in generated
+    )
+    _compile(generated, target, tmp_path)
+
+
+def test_masked_half_sum_requires_source_participation_contract():
+    source = _canonical(
+        (32, 1, 1),
+        """
+        half value = half(0.1);
+        if (invocation < 16u) { value = WaveActiveSum(value); }
+        outputs[invocation] = uint(value);
+    """,
+    )
+    with pytest.raises(ValueError) as caught:
+        _codegen("opengl").generate_stage(parse(source), "compute")
+    assert caught.value.reason == "half-masked-participation-unproven"
+
+
+def test_project_reports_unproven_masked_half_participation(tmp_path):
+    source = """#include <metal_stdlib>
+using namespace metal;
+kernel void masked_half(const device uint* inputs [[buffer(0)]],
+                        device uint* outputs [[buffer(1)]],
+                        uint invocation [[thread_index_in_threadgroup]]) {
+    half value = as_type<half>(ushort(inputs[invocation]));
+    if (invocation % 32u < 16u) { value = simd_sum(value); }
+    outputs[invocation] = uint(as_type<ushort>(value));
+}
+"""
+    (tmp_path / "masked.metal").write_text(source, encoding="utf-8")
+    config = ProjectConfig(
+        root=tmp_path,
+        targets=("opengl",),
+        output_dir="out",
+        workgroup_size=(32, 3, 1),
+        source_options={
+            "metal": {"target_options": {"opengl": {"software_subgroup_width": 32}}}
+        },
+    )
+    payload = translate_project(config, format_output=False).to_json()
+    assert payload["summary"]["translatedCount"] == 0
+    (diagnostic,) = payload["diagnostics"]
+    assert diagnostic["code"] == "project.translate.opengl-software-subgroup-invalid"
+    assert (
+        diagnostic["details"]["executionSpecialization"]["reason"]
+        == "half-masked-participation-unproven"
+    )
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize("shape", [(32, 1, 1), (7, 5, 1), (32, 4, 1)])
+def test_half_sum_package_preserves_typed_scratch_and_rounding(tmp_path, target, shape):
+    _, descriptor, package = _package(
+        tmp_path, target, "float", shape, source=_half_sum_source(math.prod(shape))
+    )
+    generated = (package / descriptor["artifact"]["packagePath"]).read_text()
+    assert "simd_sum(" not in generated and "WaveActiveSum(" not in generated
+    if target == "directx":
+        assert "groupshared float16_t" in generated
+        assert "precise float16_t sum" in generated
+    else:
+        assert "crossglSoftwareSubgroupSumHalf" in generated
+        assert "precise float sum" in generated
+        assert "= crossgl_round_half1(sum);" in generated
+    assert "stride <<= 1u" in generated
+    compiled = tmp_path / "compiled"
+    compiled.mkdir()
+    _compile(generated, target, compiled)
+
+
+@pytest.mark.parametrize(
+    "shape", [(1, 1, 1), (5, 1, 1), (31, 1, 1), (32, 1, 1), (7, 5, 1), (32, 4, 1)]
+)
+def test_half_sums_execute_with_partial_groups_and_scratch_reuse(tmp_path, shape):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required partial subgroup readbacks")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    size = math.prod(shape)
+    patterns = (
+        [1.0] * 32,
+        [0.1] * 32,
+        [0.0] * 32,
+        [-0.0] * 32,
+        [2**-24] * 32,
+        [-(2**-24)] * 32,
+        [65504.0] * 32,
+        [-65504.0] * 32,
+        [math.inf, -math.inf] + [0.0] * 30,
+        [math.nan] + [1.0] * 31,
+        [2048.0, 1.0, -2048.0, 1.0] * 8,
+        [float(lane - 16) / 16 for lane in range(32)],
+    )
+    words, wanted = [], []
+    for pattern in patterns:
+        group = [_half_word(pattern[index % 32]) for index in range(size)]
+        words.extend(group)
+        for start in range(0, size, 32):
+            lanes = group[start : start + 32]
+            result = _half_sum_reference(lanes)
+            wanted.extend([result, result, 2] * len(lanes))
+    wanted.extend([0xDEAD] * 32)
+    source, descriptor, package = _package(
+        tmp_path, target, "float", shape, source=_half_sum_source(size)
+    )
+
+    def payload(data):
+        return dict(dtype="uint32", shape=[len(data)], values=data)
+
+    inputs = _bound_values(
+        descriptor,
+        {"inputs": payload(words), "outputs": payload([0xDEAD] * len(wanted))},
+    )
+    expected = _bound_values(descriptor, {"outputs": payload(wanted)})
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        expected,
+        dict(workgroupCount=[len(patterns), 1, 1], workgroupSize=list(shape)),
+        observe_inputs=[name for name in inputs if name not in expected],
+    )
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source if target == "metal" else None,
+        original_entry="half_sums",
+    )
+    evidence = json.loads((tmp_path / "evidence.json").read_text())
+    observations = evidence["records"]["generated"]["details"]["inputObservations"]
+    assert len(observations) == 1
+    assert all(item["unchanged"] for item in observations.values())
